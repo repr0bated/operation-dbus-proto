@@ -1,0 +1,29 @@
+[Unit]
+Description=Antigravity Wayland IDE Base
+After=network-online.target systemd-logind.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=antigravity
+Group=antigravity
+
+Environment=XDG_RUNTIME_DIR=/run/user/%U
+Environment=WAYLAND_DISPLAY=wayland-1
+Environment=GDK_BACKEND=wayland
+Environment=QT_QPA_PLATFORM=wayland
+
+Environment=GOOGLE_APPLICATION_CREDENTIALS=/etc/gcloud/code-assist-only.json
+Environment=GCLOUD_SCOPES=https://www.googleapis.com/auth/cloudcode.completions
+
+ExecStart=/usr/local/bin/antigravity-session
+Restart=on-failure
+RestartSec=5
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

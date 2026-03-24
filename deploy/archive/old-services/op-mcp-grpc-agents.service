@@ -1,0 +1,43 @@
+[Unit]
+Description=OP MCP gRPC Agents Server (Run-on-Connection)
+After=network.target dbus.service
+Wants=dbus.service
+Documentation=https://github.com/ghostbridgetech/op-dbus
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/op-dbus
+
+# Environment
+EnvironmentFile=-/etc/op-dbus/environment
+EnvironmentFile=-/etc/op-dbus/secrets.env
+
+# gRPC agents server on port 50052
+ExecStart=/usr/local/sbin/op-mcp-server --mode grpc-agents --grpc-port 50052 --log-level info
+
+# Restart policy
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=op-mcp-grpc-agents
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+ReadWritePaths=/var/lib/op-dbus /var/log/op-dbus
+
+# Resource limits
+LimitNOFILE=65535
+MemoryMax=2G
+
+[Install]
+WantedBy=multi-user.target

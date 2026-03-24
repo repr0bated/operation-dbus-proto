@@ -1,0 +1,27 @@
+[Unit]
+Description=OP-MCP Compact Server
+Documentation=https://github.com/repr0bated/operation-dbus
+After=network.target op-dbus.service
+Wants=op-dbus.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/op-mcp-compact
+Restart=always
+RestartSec=5s
+
+# Environment
+EnvironmentFile=-/etc/op-dbus/environment
+Environment="RUST_LOG=info"
+WorkingDirectory=/var/lib/op-dbus
+
+# Data directories
+ReadWritePaths=/var/lib/op-dbus /var/log/op-dbus
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=op-mcp-compact
+
+[Install]
+WantedBy=multi-user.target

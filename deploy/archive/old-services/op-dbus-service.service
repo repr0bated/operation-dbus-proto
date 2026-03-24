@@ -1,0 +1,68 @@
+[Unit]
+Description=op-dbus D-Bus Service and Agent Registry
+Documentation=https://github.com/ghostbridgetech/op-dbus
+After=network.target dbus.service
+Requires=dbus.service
+Before=op-web.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/op-dbus-service
+EnvironmentFile=-/etc/op-dbus/environment
+EnvironmentFile=-/etc/op-dbus/secrets.env
+
+# Restart policy
+Restart=always
+RestartSec=3
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+# ============================================================================
+# MEMORY LIMITS - Critical for D-Bus stability
+# ============================================================================
+MemoryMax=1G
+MemoryHigh=768M
+MemorySwapMax=256M
+
+# ============================================================================
+# CPU LIMITS
+# ============================================================================
+CPUQuota=100%
+Nice=-5
+
+# ============================================================================
+# FILE DESCRIPTOR LIMITS - D-Bus needs many
+# ============================================================================
+LimitNOFILE=65536
+LimitNPROC=4096
+
+# ============================================================================
+# SECURITY HARDENING
+# ============================================================================
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ReadWritePaths=/var/lib/op-dbus /var/log/op-dbus /tmp /run/dbus
+
+# D-Bus needs access to system bus
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+# ============================================================================
+# WATCHDOG
+# ============================================================================
+WatchdogSec=30
+TimeoutStopSec=20
+
+# ============================================================================
+# LOGGING
+# ============================================================================
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=op-dbus-service
+
+[Install]
+WantedBy=multi-user.target

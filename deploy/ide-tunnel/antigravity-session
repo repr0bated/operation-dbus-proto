@@ -1,0 +1,11 @@
+#!/bin/bash
+set -e
+
+mkdir -p "$XDG_RUNTIME_DIR"
+chmod 700 "$XDG_RUNTIME_DIR"
+
+exec cage -- \
+  antigravity \
+    --profile ide \
+    --wayland-only \
+    --enable-extension googlecloudtools.cloudcode

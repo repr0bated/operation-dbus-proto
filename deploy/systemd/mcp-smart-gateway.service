@@ -1,0 +1,16 @@
+[Unit]
+Description=MCP Smart Gateway (HTTP Service)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+# Run in HTTP mode on port 3011
+ExecStart=/usr/local/sbin/mcp-smart-gateway --http
+Restart=always
+RestartSec=5
+Environment=WIREGUARD_KEY=wg-secret-key-12345
+Environment=PATH=/snap/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+[Install]
+WantedBy=multi-user.target

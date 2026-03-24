@@ -1,0 +1,27 @@
+[package]
+name = "op-state-store"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "MCP Execution State Store - Persistent job ledger and state tracking"
+
+[dependencies]
+tokio = { workspace = true, features = ["full"] }
+sqlx = { workspace = true, features = ["sqlite", "runtime-tokio", "chrono", "json"] }
+redis = { workspace = true, features = ["tokio-comp"] }
+serde = { workspace = true }
+simd-json = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+tracing = { workspace = true }
+md5 = "0.7"
+opentelemetry = { workspace = true }
+prometheus = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+regex = { workspace = true }
+lazy_static = { workspace = true }
+zbus = { workspace = true }
+serde_json = { workspace = true }
+jsonschema = { version = "0.29", default-features = false }

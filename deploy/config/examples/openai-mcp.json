@@ -1,0 +1,29 @@
+{
+    "servers": [
+        {
+            "name": "op-dbus-compact",
+            "transport": {
+                "type": "sse",
+                "url": "https://op-dbus.ghostbridge.tech/mcp/compact"
+            },
+            "description": "Compact op-dbus MCP with meta-tools for efficient tool discovery"
+        },
+        {
+            "name": "op-dbus-standard",
+            "transport": {
+                "type": "sse",
+                "url": "https://op-dbus.ghostbridge.tech/mcp/sse"
+            },
+            "description": "Standard op-dbus MCP server with all tools exposed"
+        },
+        {
+            "name": "op-dbus-agents",
+            "transport": {
+                "type": "sse",
+                "url": "https://op-dbus.ghostbridge.tech/mcp/agents"
+            },
+            "description": "Critical agents MCP - memory, context, sequential thinking, deployment, debugging"
+        }
+    ],
+    "_note": "OpenAI MCP integration may vary by product. Check documentation for your specific OpenAI tool's MCP config format."
+}

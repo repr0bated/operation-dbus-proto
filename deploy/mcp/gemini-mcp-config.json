@@ -1,0 +1,20 @@
+{
+  "$schema": "https://spec.modelcontextprotocol.io/schemas/mcp-config.json",
+  "mcpServers": {
+    "op-dbus": {
+      "url": "http://localhost:8080/mcp/sse",
+      "transport": "sse",
+      "description": "op-dbus system administration tools"
+    },
+    "op-dbus-compact": {
+      "url": "http://localhost:8080/mcp/compact",
+      "transport": "sse",
+      "description": "op-dbus compact mode (4 meta-tools for efficient discovery)"
+    },
+    "op-dbus-agents": {
+      "url": "http://localhost:8080/mcp/agents",
+      "transport": "sse",
+      "description": "op-dbus AI agents (memory, context, thinking, etc.)"
+    }
+  }
+}

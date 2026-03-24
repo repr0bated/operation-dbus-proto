@@ -1,0 +1,706 @@
+{
+  "success": [
+    {
+      "repo_name": "branch-bestie-sync",
+      "repo_path": "/home/jeremy/git/branch-bestie-sync",
+      "origin": "https://github.com/repr0bated/branch-bestie-sync.git",
+      "branch_pattern": "main",
+      "link_id": "repr0bated-branch-bestie-sync",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/repr0bated-branch-bestie-sync",
+      "status": "created",
+      "message": ""
+    },
+    {
+      "repo_name": "gemini-work",
+      "repo_path": "/home/jeremy/git/gemini-work",
+      "origin": "https://github.com/repr0bated/operation-dbus.git",
+      "branch_pattern": "schema-consolidation",
+      "link_id": "repr0bated-operation-dbus",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/repr0bated-operation-dbus",
+      "status": "existing",
+      "message": ""
+    }
+  ],
+  "failed": [
+    {
+      "repo_name": "admyral",
+      "repo_path": "/home/jeremy/git/admyral",
+      "origin": "https://github.com/Admyral-Technologies/admyral.git",
+      "branch_pattern": "main",
+      "link_id": "admyral-technologies-admyral",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/admyral-technologies-admyral",
+      "status": "failed",
+      "message": "Create request issued for: [admyral-technologies-admyral] | Waiting for operation [projects/dbus-enterprise-2026/locations/us-central1/operations/operation-1774008420677-64d7385be3767-9c1c49ce-29167640] to complete... | ......failed. | ERROR: (gcloud.developer-connect.connections.git-repository-links.create) { |   \"code\": 9, |   \"message\": \"Invalid resource state for \\\"https://github.com/Admyral-Technologies/admyral.git\\\": repository Admyral-Technologies/admyral does not exist or is not accessible to the (installation ID 97598204)\" | }"
+    },
+    {
+      "repo_name": "automated-security-helper",
+      "repo_path": "/home/jeremy/git/automated-security-helper",
+      "origin": "https://github.com/awslabs/automated-security-helper.git",
+      "branch_pattern": "main",
+      "link_id": "awslabs-automated-security-helper",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/awslabs-automated-security-helper",
+      "status": "failed",
+      "message": "Create request issued for: [awslabs-automated-security-helper] | Waiting for operation [projects/dbus-enterprise-2026/locations/us-central1/operations/operation-1774008423454-64d7385e895bc-c54aef1f-58287965] to complete... | ......failed. | ERROR: (gcloud.developer-connect.connections.git-repository-links.create) { |   \"code\": 9, |   \"message\": \"Invalid resource state for \\\"https://github.com/awslabs/automated-security-helper.git\\\": repository awslabs/automated-security-helper does not exist or is not accessible to the (installation ID 97598204)\" | }"
+    },
+    {
+      "repo_name": "cloud-custodian",
+      "repo_path": "/home/jeremy/git/cloud-custodian",
+      "origin": "https://github.com/cloud-custodian/cloud-custodian",
+      "branch_pattern": "main",
+      "link_id": "cloud-custodian-cloud-custodian",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/cloud-custodian-cloud-custodian",
+      "status": "failed",
+      "message": "ERROR: (gcloud.developer-connect.connections.git-repository-links.create) INVALID_ARGUMENT: The request was invalid: repository clone_uri must be in the format https://github.com/{owner}/{repo}.git | - '@type': type.googleapis.com/google.rpc.BadRequest |   fieldViolations: |   - field: clone_uri | - '@type': type.googleapis.com/google.rpc.RequestInfo |   requestId: c908c05394432fbe"
+    },
+    {
+      "repo_name": "content",
+      "repo_path": "/home/jeremy/git/content",
+      "origin": "https://github.com/ComplianceAsCode/content",
+      "branch_pattern": "master",
+      "link_id": "complianceascode-content",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/complianceascode-content",
+      "status": "failed",
+      "message": "ERROR: (gcloud.developer-connect.connections.git-repository-links.create) INVALID_ARGUMENT: The request was invalid: repository clone_uri must be in the format https://github.com/{owner}/{repo}.git | - '@type': type.googleapis.com/google.rpc.BadRequest |   fieldViolations: |   - field: clone_uri | - '@type': type.googleapis.com/google.rpc.RequestInfo |   requestId: 2a78ad9ca1f62783"
+    },
+    {
+      "repo_name": "core",
+      "repo_path": "/home/jeremy/git/core",
+      "origin": "https://github.com/theopenlane/core.git",
+      "branch_pattern": "main",
+      "link_id": "theopenlane-core",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/theopenlane-core",
+      "status": "failed",
+      "message": "Create request issued for: [theopenlane-core] | Waiting for operation [projects/dbus-enterprise-2026/locations/us-central1/operations/operation-1774008431852-64d738668bb72-b5807a4d-33a87f80] to complete... | ......failed. | ERROR: (gcloud.developer-connect.connections.git-repository-links.create) { |   \"code\": 9, |   \"message\": \"Invalid resource state for \\\"https://github.com/theopenlane/core.git\\\": repository theopenlane/core does not exist or is not accessible to the (installation ID 97598204)\" | }"
+    },
+    {
+      "repo_name": "cports",
+      "repo_path": "/home/jeremy/git/cports",
+      "origin": "https://github.com/chimera-linux/cports",
+      "branch_pattern": "master",
+      "link_id": "chimera-linux-cports",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/chimera-linux-cports",
+      "status": "failed",
+      "message": "ERROR: (gcloud.developer-connect.connections.git-repository-links.create) INVALID_ARGUMENT: The request was invalid: repository clone_uri must be in the format https://github.com/{owner}/{repo}.git | - '@type': type.googleapis.com/google.rpc.BadRequest |   fieldViolations: |   - field: clone_uri | - '@type': type.googleapis.com/google.rpc.RequestInfo |   requestId: 2934b9e6f1f355cb"
+    },
+    {
+      "repo_name": "datahub",
+      "repo_path": "/home/jeremy/git/datahub",
+      "origin": "https://github.com/datahub-project/datahub",
+      "branch_pattern": "master",
+      "link_id": "datahub-project-datahub",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/datahub-project-datahub",
+      "status": "failed",
+      "message": "ERROR: (gcloud.developer-connect.connections.git-repository-links.create) INVALID_ARGUMENT: The request was invalid: repository clone_uri must be in the format https://github.com/{owner}/{repo}.git | - '@type': type.googleapis.com/google.rpc.BadRequest |   fieldViolations: |   - field: clone_uri | - '@type': type.googleapis.com/google.rpc.RequestInfo |   requestId: ec984d3b00093f86"
+    },
+    {
+      "repo_name": "fides",
+      "repo_path": "/home/jeremy/git/fides",
+      "origin": "https://github.com/ethyca/fides.git",
+      "branch_pattern": "main",
+      "link_id": "ethyca-fides",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/ethyca-fides",
+      "status": "failed",
+      "message": "Create request issued for: [ethyca-fides] | Waiting for operation [projects/dbus-enterprise-2026/locations/us-central1/operations/operation-1774008436960-64d7386b6adab-0bb12f3e-d98ad6be] to complete... | ......failed. | ERROR: (gcloud.developer-connect.connections.git-repository-links.create) { |   \"code\": 9, |   \"message\": \"Invalid resource state for \\\"https://github.com/ethyca/fides.git\\\": repository ethyca/fides does not exist or is not accessible to the (installation ID 97598204)\" | }"
+    },
+    {
+      "repo_name": "fideslang",
+      "repo_path": "/home/jeremy/git/fideslang",
+      "origin": "https://github.com/ethyca/fideslang.git",
+      "branch_pattern": "main",
+      "link_id": "ethyca-fideslang",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/ethyca-fideslang",
+      "status": "failed",
+      "message": "Create request issued for: [ethyca-fideslang] | Waiting for operation [projects/dbus-enterprise-2026/locations/us-central1/operations/operation-1774008439617-64d7386df3733-73206eb9-21707f12] to complete... | ......failed. | ERROR: (gcloud.developer-connect.connections.git-repository-links.create) { |   \"code\": 9, |   \"message\": \"Invalid resource state for \\\"https://github.com/ethyca/fideslang.git\\\": repository ethyca/fideslang does not exist or is not accessible to the (installation ID 97598204)\" | }"
+    },
+    {
+      "repo_name": "firecracker",
+      "repo_path": "/home/jeremy/git/firecracker",
+      "origin": "https://github.com/firecracker-microvm/firecracker",
+      "branch_pattern": "main",
+      "link_id": "firecracker-microvm-firecracker",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/firecracker-microvm-firecracker",
+      "status": "failed",
+      "message": "ERROR: (gcloud.developer-connect.connections.git-repository-links.create) INVALID_ARGUMENT: The request was invalid: repository clone_uri must be in the format https://github.com/{owner}/{repo}.git | - '@type': type.googleapis.com/google.rpc.BadRequest |   fieldViolations: |   - field: clone_uri | - '@type': type.googleapis.com/google.rpc.RequestInfo |   requestId: 0ccab3e6024e68c8"
+    },
+    {
+      "repo_name": "freeipa",
+      "repo_path": "/home/jeremy/git/freeipa",
+      "origin": "https://github.com/freeipa/freeipa",
+      "branch_pattern": "master",
+      "link_id": "freeipa-freeipa",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/freeipa-freeipa",
+      "status": "failed",
+      "message": "ERROR: (gcloud.developer-connect.connections.git-repository-links.create) INVALID_ARGUMENT: The request was invalid: repository clone_uri must be in the format https://github.com/{owner}/{repo}.git | - '@type': type.googleapis.com/google.rpc.BadRequest |   fieldViolations: |   - field: clone_uri | - '@type': type.googleapis.com/google.rpc.RequestInfo |   requestId: 41d8b74868ac3241"
+    },
+    {
+      "repo_name": "iam",
+      "repo_path": "/home/jeremy/git/iam",
+      "origin": "https://github.com/theopenlane/iam.git",
+      "branch_pattern": "main",
+      "link_id": "theopenlane-iam",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/theopenlane-iam",
+      "status": "failed",
+      "message": "Create request issued for: [theopenlane-iam] | Waiting for operation [projects/dbus-enterprise-2026/locations/us-central1/operations/operation-1774008445013-64d7387318fe4-24c522ae-eddffef4] to complete... | ......failed. | ERROR: (gcloud.developer-connect.connections.git-repository-links.create) { |   \"code\": 9, |   \"message\": \"Invalid resource state for \\\"https://github.com/theopenlane/iam.git\\\": repository theopenlane/iam does not exist or is not accessible to the (installation ID 97598204)\" | }"
+    },
+    {
+      "repo_name": "CheatSheetSeries",
+      "repo_path": "/home/jeremy/git/indexed-repos/CheatSheetSeries",
+      "origin": "https://github.com/OWASP/CheatSheetSeries",
+      "branch_pattern": "master",
+      "link_id": "owasp-cheatsheetseries",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/owasp-cheatsheetseries",
+      "status": "failed",
+      "message": "ERROR: (gcloud.developer-connect.connections.git-repository-links.create) INVALID_ARGUMENT: The request was invalid: repository clone_uri must be in the format https://github.com/{owner}/{repo}.git | - '@type': type.googleapis.com/google.rpc.BadRequest |   fieldViolations: |   - field: clone_uri | - '@type': type.googleapis.com/google.rpc.RequestInfo |   requestId: 90ad046f73ce0aea"
+    },
+    {
+      "repo_name": "checkov",
+      "repo_path": "/home/jeremy/git/indexed-repos/checkov",
+      "origin": "https://github.com/bridgecrewio/checkov",
+      "branch_pattern": "main",
+      "link_id": "bridgecrewio-checkov",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/bridgecrewio-checkov",
+      "status": "failed",
+      "message": "ERROR: (gcloud.developer-connect.connections.git-repository-links.create) INVALID_ARGUMENT: The request was invalid: repository clone_uri must be in the format https://github.com/{owner}/{repo}.git | - '@type': type.googleapis.com/google.rpc.BadRequest |   fieldViolations: |   - field: clone_uri | - '@type': type.googleapis.com/google.rpc.RequestInfo |   requestId: 552ebdbdc0bae046"
+    },
+    {
+      "repo_name": "crossbeam",
+      "repo_path": "/home/jeremy/git/indexed-repos/crossbeam",
+      "origin": "https://github.com/crossbeam-rs/crossbeam",
+      "branch_pattern": "master",
+      "link_id": "crossbeam-rs-crossbeam",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/crossbeam-rs-crossbeam",
+      "status": "failed",
+      "message": "ERROR: (gcloud.developer-connect.connections.git-repository-links.create) INVALID_ARGUMENT: The request was invalid: repository clone_uri must be in the format https://github.com/{owner}/{repo}.git | - '@type': type.googleapis.com/google.rpc.BadRequest |   fieldViolations: |   - field: clone_uri | - '@type': type.googleapis.com/google.rpc.RequestInfo |   requestId: 737c7378f4b433e7"
+    },
+    {
+      "repo_name": "cti",
+      "repo_path": "/home/jeremy/git/indexed-repos/cti",
+      "origin": "https://github.com/mitre/cti",
+      "branch_pattern": "master",
+      "link_id": "mitre-cti",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/mitre-cti",
+      "status": "failed",
+      "message": "ERROR: (gcloud.developer-connect.connections.git-repository-links.create) INVALID_ARGUMENT: The request was invalid: repository clone_uri must be in the format https://github.com/{owner}/{repo}.git | - '@type': type.googleapis.com/google.rpc.BadRequest |   fieldViolations: |   - field: clone_uri | - '@type': type.googleapis.com/google.rpc.RequestInfo |   requestId: 7a86297776aae22b"
+    },
+    {
+      "repo_name": "dbus",
+      "repo_path": "/home/jeremy/git/indexed-repos/dbus",
+      "origin": "https://github.com/d-bus/dbus",
+      "branch_pattern": "github-placeholder",
+      "link_id": "d-bus-dbus",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/d-bus-dbus",
+      "status": "failed",
+      "message": "ERROR: (gcloud.developer-connect.connections.git-repository-links.create) INVALID_ARGUMENT: The request was invalid: repository clone_uri must be in the format https://github.com/{owner}/{repo}.git | - '@type': type.googleapis.com/google.rpc.BadRequest |   fieldViolations: |   - field: clone_uri | - '@type': type.googleapis.com/google.rpc.RequestInfo |   requestId: 9db5ab27f3bd775c"
+    },
+    {
+      "repo_name": "dbus-broker",
+      "repo_path": "/home/jeremy/git/indexed-repos/dbus-broker",
+      "origin": "https://github.com/bus1/dbus-broker",
+      "branch_pattern": "main",
+      "link_id": "bus1-dbus-broker",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/bus1-dbus-broker",
+      "status": "failed",
+      "message": "ERROR: (gcloud.developer-connect.connections.git-repository-links.create) INVALID_ARGUMENT: The request was invalid: repository clone_uri must be in the format https://github.com/{owner}/{repo}.git | - '@type': type.googleapis.com/google.rpc.BadRequest |   fieldViolations: |   - field: clone_uri | - '@type': type.googleapis.com/google.rpc.RequestInfo |   requestId: 3dd6725749938811"
+    },
+    {
+      "repo_name": "dex",
+      "repo_path": "/home/jeremy/git/indexed-repos/dex",
+      "origin": "https://github.com/dexidp/dex",
+      "branch_pattern": "master",
+      "link_id": "dexidp-dex",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/dexidp-dex",
+      "status": "failed",
+      "message": "ERROR: (gcloud.developer-connect.connections.git-repository-links.create) INVALID_ARGUMENT: The request was invalid: repository clone_uri must be in the format https://github.com/{owner}/{repo}.git | - '@type': type.googleapis.com/google.rpc.BadRequest |   fieldViolations: |   - field: clone_uri | - '@type': type.googleapis.com/google.rpc.RequestInfo |   requestId: 0a51268ec2471c1d"
+    },
+    {
+      "repo_name": "dinit",
+      "repo_path": "/home/jeremy/git/indexed-repos/dinit",
+      "origin": "https://github.com/davmac314/dinit",
+      "branch_pattern": "master",
+      "link_id": "davmac314-dinit",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/davmac314-dinit",
+      "status": "failed",
+      "message": "ERROR: (gcloud.developer-connect.connections.git-repository-links.create) INVALID_ARGUMENT: The request was invalid: repository clone_uri must be in the format https://github.com/{owner}/{repo}.git | - '@type': type.googleapis.com/google.rpc.BadRequest |   fieldViolations: |   - field: clone_uri | - '@type': type.googleapis.com/google.rpc.RequestInfo |   requestId: 62450c04b344caab"
+    },
+    {
+      "repo_name": "dinit-chimera",
+      "repo_path": "/home/jeremy/git/indexed-repos/dinit-chimera",
+      "origin": "https://github.com/chimera-linux/dinit-chimera",
+      "branch_pattern": "master",
+      "link_id": "chimera-linux-dinit-chimera",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/chimera-linux-dinit-chimera",
+      "status": "failed",
+      "message": "ERROR: (gcloud.developer-connect.connections.git-repository-links.create) INVALID_ARGUMENT: The request was invalid: repository clone_uri must be in the format https://github.com/{owner}/{repo}.git | - '@type': type.googleapis.com/google.rpc.BadRequest |   fieldViolations: |   - field: clone_uri | - '@type': type.googleapis.com/google.rpc.RequestInfo |   requestId: 22adf23fd8268803"
+    },
+    {
+      "repo_name": "falco",
+      "repo_path": "/home/jeremy/git/indexed-repos/falco",
+      "origin": "https://github.com/falcosecurity/falco",
+      "branch_pattern": "master",
+      "link_id": "falcosecurity-falco",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/falcosecurity-falco",
+      "status": "failed",
+      "message": "ERROR: (gcloud.developer-connect.connections.git-repository-links.create) INVALID_ARGUMENT: The request was invalid: repository clone_uri must be in the format https://github.com/{owner}/{repo}.git | - '@type': type.googleapis.com/google.rpc.BadRequest |   fieldViolations: |   - field: clone_uri | - '@type': type.googleapis.com/google.rpc.RequestInfo |   requestId: 94666d363796ff47"
+    },
+    {
+      "repo_name": "flatpak",
+      "repo_path": "/home/jeremy/git/indexed-repos/flatpak",
+      "origin": "https://github.com/flatpak/flatpak",
+      "branch_pattern": "main",
+      "link_id": "flatpak-flatpak",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/flatpak-flatpak",
+      "status": "failed",
+      "message": "ERROR: (gcloud.developer-connect.connections.git-repository-links.create) INVALID_ARGUMENT: The request was invalid: repository clone_uri must be in the format https://github.com/{owner}/{repo}.git | - '@type': type.googleapis.com/google.rpc.BadRequest |   fieldViolations: |   - field: clone_uri | - '@type': type.googleapis.com/google.rpc.RequestInfo |   requestId: 1a8334d1b3f52c19"
+    },
+    {
+      "repo_name": "gatekeeper",
+      "repo_path": "/home/jeremy/git/indexed-repos/gatekeeper",
+      "origin": "https://github.com/open-policy-agent/gatekeeper",
+      "branch_pattern": "master",
+      "link_id": "open-policy-agent-gatekeeper",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/open-policy-agent-gatekeeper",
+      "status": "failed",
+      "message": "ERROR: (gcloud.developer-connect.connections.git-repository-links.create) INVALID_ARGUMENT: The request was invalid: repository clone_uri must be in the format https://github.com/{owner}/{repo}.git | - '@type': type.googleapis.com/google.rpc.BadRequest |   fieldViolations: |   - field: clone_uri | - '@type': type.googleapis.com/google.rpc.RequestInfo |   requestId: 1557090b27d5e463"
+    },
+    {
+      "repo_name": "grpc",
+      "repo_path": "/home/jeremy/git/indexed-repos/grpc",
+      "origin": "https://github.com/grpc/grpc",
+      "branch_pattern": "master",
+      "link_id": "grpc-grpc",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/grpc-grpc",
+      "status": "failed",
+      "message": "ERROR: (gcloud.developer-connect.connections.git-repository-links.create) INVALID_ARGUMENT: The request was invalid: repository clone_uri must be in the format https://github.com/{owner}/{repo}.git | - '@type': type.googleapis.com/google.rpc.BadRequest |   fieldViolations: |   - field: clone_uri | - '@type': type.googleapis.com/google.rpc.RequestInfo |   requestId: d89b249d939f5ed1"
+    },
+    {
+      "repo_name": "guide",
+      "repo_path": "/home/jeremy/git/indexed-repos/guide",
+      "origin": "https://github.com/uber-go/guide",
+      "branch_pattern": "master",
+      "link_id": "uber-go-guide",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/uber-go-guide",
+      "status": "failed",
+      "message": "ERROR: (gcloud.developer-connect.connections.git-repository-links.create) INVALID_ARGUMENT: The request was invalid: repository clone_uri must be in the format https://github.com/{owner}/{repo}.git | - '@type': type.googleapis.com/google.rpc.BadRequest |   fieldViolations: |   - field: clone_uri | - '@type': type.googleapis.com/google.rpc.RequestInfo |   requestId: d50fbe702f13096e"
+    },
+    {
+      "repo_name": "hyper",
+      "repo_path": "/home/jeremy/git/indexed-repos/hyper",
+      "origin": "https://github.com/hyperium/hyper",
+      "branch_pattern": "master",
+      "link_id": "hyperium-hyper",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/hyperium-hyper",
+      "status": "failed",
+      "message": "ERROR: (gcloud.developer-connect.connections.git-repository-links.create) INVALID_ARGUMENT: The request was invalid: repository clone_uri must be in the format https://github.com/{owner}/{repo}.git | - '@type': type.googleapis.com/google.rpc.BadRequest |   fieldViolations: |   - field: clone_uri | - '@type': type.googleapis.com/google.rpc.RequestInfo |   requestId: 34254f0dae331726"
+    },
+    {
+      "repo_name": "incus",
+      "repo_path": "/home/jeremy/git/indexed-repos/incus",
+      "origin": "https://github.com/lxc/incus",
+      "branch_pattern": "main",
+      "link_id": "lxc-incus",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/lxc-incus",
+      "status": "failed",
+      "message": "ERROR: (gcloud.developer-connect.connections.git-repository-links.create) INVALID_ARGUMENT: The request was invalid: repository clone_uri must be in the format https://github.com/{owner}/{repo}.git | - '@type': type.googleapis.com/google.rpc.BadRequest |   fieldViolations: |   - field: clone_uri | - '@type': type.googleapis.com/google.rpc.RequestInfo |   requestId: 67028ece5f28a3b0"
+    },
+    {
+      "repo_name": "javascript",
+      "repo_path": "/home/jeremy/git/indexed-repos/javascript",
+      "origin": "https://github.com/airbnb/javascript",
+      "branch_pattern": "master",
+      "link_id": "airbnb-javascript",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/airbnb-javascript",
+      "status": "failed",
+      "message": "ERROR: (gcloud.developer-connect.connections.git-repository-links.create) INVALID_ARGUMENT: The request was invalid: repository clone_uri must be in the format https://github.com/{owner}/{repo}.git | - '@type': type.googleapis.com/google.rpc.BadRequest |   fieldViolations: |   - field: clone_uri | - '@type': type.googleapis.com/google.rpc.RequestInfo |   requestId: 39e5d18e5b9d21f2"
+    },
+    {
+      "repo_name": "json-typedef-spec",
+      "repo_path": "/home/jeremy/git/indexed-repos/json-typedef-spec",
+      "origin": "https://github.com/jsontypedef/json-typedef-spec",
+      "branch_pattern": "master",
+      "link_id": "jsontypedef-json-typedef-spec",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/jsontypedef-json-typedef-spec",
+      "status": "failed",
+      "message": "ERROR: (gcloud.developer-connect.connections.git-repository-links.create) INVALID_ARGUMENT: The request was invalid: repository clone_uri must be in the format https://github.com/{owner}/{repo}.git | - '@type': type.googleapis.com/google.rpc.BadRequest |   fieldViolations: |   - field: clone_uri | - '@type': type.googleapis.com/google.rpc.RequestInfo |   requestId: ff34b245e199b9c6"
+    },
+    {
+      "repo_name": "keycloak",
+      "repo_path": "/home/jeremy/git/indexed-repos/keycloak",
+      "origin": "https://github.com/keycloak/keycloak",
+      "branch_pattern": "main",
+      "link_id": "keycloak-keycloak",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/keycloak-keycloak",
+      "status": "failed",
+      "message": "ERROR: (gcloud.developer-connect.connections.git-repository-links.create) INVALID_ARGUMENT: The request was invalid: repository clone_uri must be in the format https://github.com/{owner}/{repo}.git | - '@type': type.googleapis.com/google.rpc.BadRequest |   fieldViolations: |   - field: clone_uri | - '@type': type.googleapis.com/google.rpc.RequestInfo |   requestId: 52bd944d2f9ce69a"
+    },
+    {
+      "repo_name": "lynis",
+      "repo_path": "/home/jeremy/git/indexed-repos/lynis",
+      "origin": "https://github.com/CISOfy/lynis",
+      "branch_pattern": "master",
+      "link_id": "cisofy-lynis",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/cisofy-lynis",
+      "status": "failed",
+      "message": "ERROR: (gcloud.developer-connect.connections.git-repository-links.create) INVALID_ARGUMENT: The request was invalid: repository clone_uri must be in the format https://github.com/{owner}/{repo}.git | - '@type': type.googleapis.com/google.rpc.BadRequest |   fieldViolations: |   - field: clone_uri | - '@type': type.googleapis.com/google.rpc.RequestInfo |   requestId: 102296aa97bbe508"
+    },
+    {
+      "repo_name": "novnc",
+      "repo_path": "/home/jeremy/git/indexed-repos/novnc",
+      "origin": "https://github.com/vishvananda/novnc.git",
+      "branch_pattern": "master",
+      "link_id": "vishvananda-novnc",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/vishvananda-novnc",
+      "status": "failed",
+      "message": "Create request issued for: [vishvananda-novnc] | Waiting for operation [projects/dbus-enterprise-2026/locations/us-central1/operations/operation-1774008473870-64d7388e9e20d-507e0cd3-4f222498] to complete... | ......failed. | ERROR: (gcloud.developer-connect.connections.git-repository-links.create) { |   \"code\": 9, |   \"message\": \"Invalid resource state for \\\"https://github.com/vishvananda/novnc.git\\\": repository vishvananda/novnc does not exist or is not accessible to the (installation ID 97598204)\" | }"
+    },
+    {
+      "repo_name": "oauth2-proxy",
+      "repo_path": "/home/jeremy/git/indexed-repos/oauth2-proxy",
+      "origin": "https://github.com/oauth2-proxy/oauth2-proxy",
+      "branch_pattern": "master",
+      "link_id": "oauth2-proxy-oauth2-proxy",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/oauth2-proxy-oauth2-proxy",
+      "status": "failed",
+      "message": "ERROR: (gcloud.developer-connect.connections.git-repository-links.create) INVALID_ARGUMENT: The request was invalid: repository clone_uri must be in the format https://github.com/{owner}/{repo}.git | - '@type': type.googleapis.com/google.rpc.BadRequest |   fieldViolations: |   - field: clone_uri | - '@type': type.googleapis.com/google.rpc.RequestInfo |   requestId: 7b769a286284bd49"
+    },
+    {
+      "repo_name": "opa",
+      "repo_path": "/home/jeremy/git/indexed-repos/opa",
+      "origin": "https://github.com/open-policy-agent/opa",
+      "branch_pattern": "main",
+      "link_id": "open-policy-agent-opa",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/open-policy-agent-opa",
+      "status": "failed",
+      "message": "ERROR: (gcloud.developer-connect.connections.git-repository-links.create) INVALID_ARGUMENT: The request was invalid: repository clone_uri must be in the format https://github.com/{owner}/{repo}.git | - '@type': type.googleapis.com/google.rpc.BadRequest |   fieldViolations: |   - field: clone_uri | - '@type': type.googleapis.com/google.rpc.RequestInfo |   requestId: d5ceca494f7c2c1e"
+    },
+    {
+      "repo_name": "openclaw",
+      "repo_path": "/home/jeremy/git/indexed-repos/openclaw",
+      "origin": "https://github.com/openclaw/openclaw.git",
+      "branch_pattern": "main",
+      "link_id": "openclaw-openclaw",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/openclaw-openclaw",
+      "status": "failed",
+      "message": "Create request issued for: [openclaw-openclaw] | Waiting for operation [projects/dbus-enterprise-2026/locations/us-central1/operations/operation-1774008478979-64d738937d5b2-b8352068-e589d451] to complete... | ......failed. | ERROR: (gcloud.developer-connect.connections.git-repository-links.create) { |   \"code\": 9, |   \"message\": \"Invalid resource state for \\\"https://github.com/openclaw/openclaw.git\\\": repository openclaw/openclaw does not exist or is not accessible to the (installation ID 97598204)\" | }"
+    },
+    {
+      "repo_name": "osv.dev",
+      "repo_path": "/home/jeremy/git/indexed-repos/osv.dev",
+      "origin": "https://github.com/google/osv.dev",
+      "branch_pattern": "master",
+      "link_id": "google-osv-dev",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/google-osv-dev",
+      "status": "failed",
+      "message": "ERROR: (gcloud.developer-connect.connections.git-repository-links.create) INVALID_ARGUMENT: The request was invalid: repository clone_uri must be in the format https://github.com/{owner}/{repo}.git | - '@type': type.googleapis.com/google.rpc.BadRequest |   fieldViolations: |   - field: clone_uri | - '@type': type.googleapis.com/google.rpc.RequestInfo |   requestId: fd21cb3f9ab56299"
+    },
+    {
+      "repo_name": "ovs",
+      "repo_path": "/home/jeremy/git/indexed-repos/ovs",
+      "origin": "https://github.com/openvswitch/ovs",
+      "branch_pattern": "main",
+      "link_id": "openvswitch-ovs",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/openvswitch-ovs",
+      "status": "failed",
+      "message": "ERROR: (gcloud.developer-connect.connections.git-repository-links.create) INVALID_ARGUMENT: The request was invalid: repository clone_uri must be in the format https://github.com/{owner}/{repo}.git | - '@type': type.googleapis.com/google.rpc.BadRequest |   fieldViolations: |   - field: clone_uri | - '@type': type.googleapis.com/google.rpc.RequestInfo |   requestId: 0b632f0a25ed6250"
+    },
+    {
+      "repo_name": "podman",
+      "repo_path": "/home/jeremy/git/indexed-repos/podman",
+      "origin": "https://github.com/containers/podman",
+      "branch_pattern": "main",
+      "link_id": "containers-podman",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/containers-podman",
+      "status": "failed",
+      "message": "ERROR: (gcloud.developer-connect.connections.git-repository-links.create) INVALID_ARGUMENT: The request was invalid: repository clone_uri must be in the format https://github.com/{owner}/{repo}.git | - '@type': type.googleapis.com/google.rpc.BadRequest |   fieldViolations: |   - field: clone_uri | - '@type': type.googleapis.com/google.rpc.RequestInfo |   requestId: 21a2647f6fe1f8af"
+    },
+    {
+      "repo_name": "presidio",
+      "repo_path": "/home/jeremy/git/indexed-repos/presidio",
+      "origin": "https://github.com/microsoft/presidio",
+      "branch_pattern": "main",
+      "link_id": "microsoft-presidio",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/microsoft-presidio",
+      "status": "failed",
+      "message": "ERROR: (gcloud.developer-connect.connections.git-repository-links.create) INVALID_ARGUMENT: The request was invalid: repository clone_uri must be in the format https://github.com/{owner}/{repo}.git | - '@type': type.googleapis.com/google.rpc.BadRequest |   fieldViolations: |   - field: clone_uri | - '@type': type.googleapis.com/google.rpc.RequestInfo |   requestId: 3389484b90694f2e"
+    },
+    {
+      "repo_name": "price-transparency-guide",
+      "repo_path": "/home/jeremy/git/indexed-repos/price-transparency-guide",
+      "origin": "https://github.com/CMSgov/price-transparency-guide.git",
+      "branch_pattern": "master",
+      "link_id": "cmsgov-price-transparency-guide",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/cmsgov-price-transparency-guide",
+      "status": "failed",
+      "message": "Create request issued for: [cmsgov-price-transparency-guide] | Waiting for operation [projects/dbus-enterprise-2026/locations/us-central1/operations/operation-1774008486974-64d7389b1d4bd-1e2a3734-4a2aba09] to complete... | ......failed. | ERROR: (gcloud.developer-connect.connections.git-repository-links.create) { |   \"code\": 9, |   \"message\": \"Invalid resource state for \\\"https://github.com/CMSgov/price-transparency-guide.git\\\": repository CMSgov/price-transparency-guide does not exist or is not accessible to the (installation ID 97598204)\" | }"
+    },
+    {
+      "repo_name": "prost",
+      "repo_path": "/home/jeremy/git/indexed-repos/prost",
+      "origin": "https://github.com/tokio-rs/prost",
+      "branch_pattern": "master",
+      "link_id": "tokio-rs-prost",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/tokio-rs-prost",
+      "status": "failed",
+      "message": "ERROR: (gcloud.developer-connect.connections.git-repository-links.create) INVALID_ARGUMENT: The request was invalid: repository clone_uri must be in the format https://github.com/{owner}/{repo}.git | - '@type': type.googleapis.com/google.rpc.BadRequest |   fieldViolations: |   - field: clone_uri | - '@type': type.googleapis.com/google.rpc.RequestInfo |   requestId: bc46a37e08012dc0"
+    },
+    {
+      "repo_name": "rtnetlink",
+      "repo_path": "/home/jeremy/git/indexed-repos/rtnetlink",
+      "origin": "https://github.com/rust-netlink/rtnetlink",
+      "branch_pattern": "main",
+      "link_id": "rust-netlink-rtnetlink",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/rust-netlink-rtnetlink",
+      "status": "failed",
+      "message": "ERROR: (gcloud.developer-connect.connections.git-repository-links.create) INVALID_ARGUMENT: The request was invalid: repository clone_uri must be in the format https://github.com/{owner}/{repo}.git | - '@type': type.googleapis.com/google.rpc.BadRequest |   fieldViolations: |   - field: clone_uri | - '@type': type.googleapis.com/google.rpc.RequestInfo |   requestId: 9a154f08ccc217b2"
+    },
+    {
+      "repo_name": "rust",
+      "repo_path": "/home/jeremy/git/indexed-repos/rust",
+      "origin": "https://github.com/rust-lang/rust.git",
+      "branch_pattern": "main",
+      "link_id": "rust-lang-rust",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/rust-lang-rust",
+      "status": "failed",
+      "message": "Create request issued for: [rust-lang-rust] | Waiting for operation [projects/dbus-enterprise-2026/locations/us-central1/operations/operation-1774008492150-64d738a00cf3a-89fa87bd-ed95086d] to complete... | ......failed. | ERROR: (gcloud.developer-connect.connections.git-repository-links.create) { |   \"code\": 9, |   \"message\": \"Invalid resource state for \\\"https://github.com/rust-lang/rust.git\\\": repository rust-lang/rust does not exist or is not accessible to the (installation ID 97598204)\" | }"
+    },
+    {
+      "repo_name": "schema-registry",
+      "repo_path": "/home/jeremy/git/indexed-repos/schema-registry",
+      "origin": "https://github.com/confluentinc/schema-registry",
+      "branch_pattern": "master",
+      "link_id": "confluentinc-schema-registry",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/confluentinc-schema-registry",
+      "status": "failed",
+      "message": "ERROR: (gcloud.developer-connect.connections.git-repository-links.create) INVALID_ARGUMENT: The request was invalid: repository clone_uri must be in the format https://github.com/{owner}/{repo}.git | - '@type': type.googleapis.com/google.rpc.BadRequest |   fieldViolations: |   - field: clone_uri | - '@type': type.googleapis.com/google.rpc.RequestInfo |   requestId: 3fd13c3a7c0ae0e0"
+    },
+    {
+      "repo_name": "schema-repo",
+      "repo_path": "/home/jeremy/git/indexed-repos/schema-repo",
+      "origin": "https://github.com/schema-repo/schema-repo.git",
+      "branch_pattern": "master",
+      "link_id": "schema-repo-schema-repo",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/schema-repo-schema-repo",
+      "status": "failed",
+      "message": "Create request issued for: [schema-repo-schema-repo] | Waiting for operation [projects/dbus-enterprise-2026/locations/us-central1/operations/operation-1774008496029-64d738a3bff6c-d11110e9-3f2f4444] to complete... | ......failed. | ERROR: (gcloud.developer-connect.connections.git-repository-links.create) { |   \"code\": 9, |   \"message\": \"Invalid resource state for \\\"https://github.com/schema-repo/schema-repo.git\\\": repository schema-repo/schema-repo does not exist or is not accessible to the (installation ID 97598204)\" | }"
+    },
+    {
+      "repo_name": "schemars",
+      "repo_path": "/home/jeremy/git/indexed-repos/schemars",
+      "origin": "https://github.com/GREsau/schemars",
+      "branch_pattern": "master",
+      "link_id": "gresau-schemars",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/gresau-schemars",
+      "status": "failed",
+      "message": "ERROR: (gcloud.developer-connect.connections.git-repository-links.create) INVALID_ARGUMENT: The request was invalid: repository clone_uri must be in the format https://github.com/{owner}/{repo}.git | - '@type': type.googleapis.com/google.rpc.BadRequest |   fieldViolations: |   - field: clone_uri | - '@type': type.googleapis.com/google.rpc.RequestInfo |   requestId: ae0549f3c3cd1d99"
+    },
+    {
+      "repo_name": "serde",
+      "repo_path": "/home/jeremy/git/indexed-repos/serde",
+      "origin": "https://github.com/serde-rs/serde",
+      "branch_pattern": "master",
+      "link_id": "serde-rs-serde",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/serde-rs-serde",
+      "status": "failed",
+      "message": "ERROR: (gcloud.developer-connect.connections.git-repository-links.create) INVALID_ARGUMENT: The request was invalid: repository clone_uri must be in the format https://github.com/{owner}/{repo}.git | - '@type': type.googleapis.com/google.rpc.BadRequest |   fieldViolations: |   - field: clone_uri | - '@type': type.googleapis.com/google.rpc.RequestInfo |   requestId: f42f04d4db60b9e0"
+    },
+    {
+      "repo_name": "serde_json_path",
+      "repo_path": "/home/jeremy/git/indexed-repos/serde_json_path",
+      "origin": "https://github.com/hiltontj/serde_json_path",
+      "branch_pattern": "main",
+      "link_id": "hiltontj-serde-json-path",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/hiltontj-serde-json-path",
+      "status": "failed",
+      "message": "ERROR: (gcloud.developer-connect.connections.git-repository-links.create) INVALID_ARGUMENT: The request was invalid: repository clone_uri must be in the format https://github.com/{owner}/{repo}.git | - '@type': type.googleapis.com/google.rpc.BadRequest |   fieldViolations: |   - field: clone_uri | - '@type': type.googleapis.com/google.rpc.RequestInfo |   requestId: 0be7930c989048ee"
+    },
+    {
+      "repo_name": "servers",
+      "repo_path": "/home/jeremy/git/indexed-repos/servers",
+      "origin": "https://github.com/modelcontextprotocol/servers",
+      "branch_pattern": "main",
+      "link_id": "modelcontextprotocol-servers",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/modelcontextprotocol-servers",
+      "status": "failed",
+      "message": "ERROR: (gcloud.developer-connect.connections.git-repository-links.create) INVALID_ARGUMENT: The request was invalid: repository clone_uri must be in the format https://github.com/{owner}/{repo}.git | - '@type': type.googleapis.com/google.rpc.BadRequest |   fieldViolations: |   - field: clone_uri | - '@type': type.googleapis.com/google.rpc.RequestInfo |   requestId: 3c0344e5096c4671"
+    },
+    {
+      "repo_name": "sgCheckup",
+      "repo_path": "/home/jeremy/git/indexed-repos/sgCheckup",
+      "origin": "https://github.com/goldfiglabs/sgCheckup.git",
+      "branch_pattern": "main",
+      "link_id": "goldfiglabs-sgcheckup",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/goldfiglabs-sgcheckup",
+      "status": "failed",
+      "message": "Create request issued for: [goldfiglabs-sgcheckup] | Waiting for operation [projects/dbus-enterprise-2026/locations/us-central1/operations/operation-1774008503649-64d738ab04386-d01fcb99-34248f7c] to complete... | ......failed. | ERROR: (gcloud.developer-connect.connections.git-repository-links.create) { |   \"code\": 9, |   \"message\": \"Invalid resource state for \\\"https://github.com/goldfiglabs/sgCheckup.git\\\": repository goldfiglabs/sgCheckup does not exist or is not accessible to the (installation ID 97598204)\" | }"
+    },
+    {
+      "repo_name": "specification",
+      "repo_path": "/home/jeremy/git/indexed-repos/specification",
+      "origin": "https://github.com/modelcontextprotocol/specification",
+      "branch_pattern": "main",
+      "link_id": "modelcontextprotocol-specification",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/modelcontextprotocol-specification",
+      "status": "failed",
+      "message": "ERROR: (gcloud.developer-connect.connections.git-repository-links.create) INVALID_ARGUMENT: The request was invalid: repository clone_uri must be in the format https://github.com/{owner}/{repo}.git | - '@type': type.googleapis.com/google.rpc.BadRequest |   fieldViolations: |   - field: clone_uri | - '@type': type.googleapis.com/google.rpc.RequestInfo |   requestId: 10a3ff158dcdbe0c"
+    },
+    {
+      "repo_name": "spire",
+      "repo_path": "/home/jeremy/git/indexed-repos/spire",
+      "origin": "https://github.com/spiffe/spire",
+      "branch_pattern": "main",
+      "link_id": "spiffe-spire",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/spiffe-spire",
+      "status": "failed",
+      "message": "ERROR: (gcloud.developer-connect.connections.git-repository-links.create) INVALID_ARGUMENT: The request was invalid: repository clone_uri must be in the format https://github.com/{owner}/{repo}.git | - '@type': type.googleapis.com/google.rpc.BadRequest |   fieldViolations: |   - field: clone_uri | - '@type': type.googleapis.com/google.rpc.RequestInfo |   requestId: 452f7d60b1a99deb"
+    },
+    {
+      "repo_name": "sqlx",
+      "repo_path": "/home/jeremy/git/indexed-repos/sqlx",
+      "origin": "https://github.com/launchbadge/sqlx",
+      "branch_pattern": "main",
+      "link_id": "launchbadge-sqlx",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/launchbadge-sqlx",
+      "status": "failed",
+      "message": "ERROR: (gcloud.developer-connect.connections.git-repository-links.create) INVALID_ARGUMENT: The request was invalid: repository clone_uri must be in the format https://github.com/{owner}/{repo}.git | - '@type': type.googleapis.com/google.rpc.BadRequest |   fieldViolations: |   - field: clone_uri | - '@type': type.googleapis.com/google.rpc.RequestInfo |   requestId: 444e8208183f13c0"
+    },
+    {
+      "repo_name": "styleguide",
+      "repo_path": "/home/jeremy/git/indexed-repos/styleguide",
+      "origin": "https://github.com/google/styleguide",
+      "branch_pattern": "gh-pages",
+      "link_id": "google-styleguide",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/google-styleguide",
+      "status": "failed",
+      "message": "ERROR: (gcloud.developer-connect.connections.git-repository-links.create) INVALID_ARGUMENT: The request was invalid: repository clone_uri must be in the format https://github.com/{owner}/{repo}.git | - '@type': type.googleapis.com/google.rpc.BadRequest |   fieldViolations: |   - field: clone_uri | - '@type': type.googleapis.com/google.rpc.RequestInfo |   requestId: 27e27074aab708b1"
+    },
+    {
+      "repo_name": "temporal",
+      "repo_path": "/home/jeremy/git/indexed-repos/temporal",
+      "origin": "https://github.com/temporalio/temporal",
+      "branch_pattern": "main",
+      "link_id": "temporalio-temporal",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/temporalio-temporal",
+      "status": "failed",
+      "message": "ERROR: (gcloud.developer-connect.connections.git-repository-links.create) INVALID_ARGUMENT: The request was invalid: repository clone_uri must be in the format https://github.com/{owner}/{repo}.git | - '@type': type.googleapis.com/google.rpc.BadRequest |   fieldViolations: |   - field: clone_uri | - '@type': type.googleapis.com/google.rpc.RequestInfo |   requestId: df156c5f4e7c4df7"
+    },
+    {
+      "repo_name": "titan",
+      "repo_path": "/home/jeremy/git/indexed-repos/titan",
+      "origin": "https://github.com/Titan-Systems/titan.git",
+      "branch_pattern": "main",
+      "link_id": "titan-systems-titan",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/titan-systems-titan",
+      "status": "failed",
+      "message": "Create request issued for: [titan-systems-titan] | Waiting for operation [projects/dbus-enterprise-2026/locations/us-central1/operations/operation-1774008512790-64d738b3bbfb5-f2f98f9b-cb0e90fa] to complete... | ......failed. | ERROR: (gcloud.developer-connect.connections.git-repository-links.create) { |   \"code\": 9, |   \"message\": \"Invalid resource state for \\\"https://github.com/Titan-Systems/titan.git\\\": repository Titan-Systems/titan does not exist or is not accessible to the (installation ID 97598204)\" | }"
+    },
+    {
+      "repo_name": "tokio",
+      "repo_path": "/home/jeremy/git/indexed-repos/tokio",
+      "origin": "https://github.com/tokio-rs/tokio",
+      "branch_pattern": "master",
+      "link_id": "tokio-rs-tokio",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/tokio-rs-tokio",
+      "status": "failed",
+      "message": "ERROR: (gcloud.developer-connect.connections.git-repository-links.create) INVALID_ARGUMENT: The request was invalid: repository clone_uri must be in the format https://github.com/{owner}/{repo}.git | - '@type': type.googleapis.com/google.rpc.BadRequest |   fieldViolations: |   - field: clone_uri | - '@type': type.googleapis.com/google.rpc.RequestInfo |   requestId: 262120b5e2e03a38"
+    },
+    {
+      "repo_name": "tonic",
+      "repo_path": "/home/jeremy/git/indexed-repos/tonic",
+      "origin": "https://github.com/hyperium/tonic",
+      "branch_pattern": "master",
+      "link_id": "hyperium-tonic",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/hyperium-tonic",
+      "status": "failed",
+      "message": "ERROR: (gcloud.developer-connect.connections.git-repository-links.create) INVALID_ARGUMENT: The request was invalid: repository clone_uri must be in the format https://github.com/{owner}/{repo}.git | - '@type': type.googleapis.com/google.rpc.BadRequest |   fieldViolations: |   - field: clone_uri | - '@type': type.googleapis.com/google.rpc.RequestInfo |   requestId: 28cfa682f232cf14"
+    },
+    {
+      "repo_name": "tower",
+      "repo_path": "/home/jeremy/git/indexed-repos/tower",
+      "origin": "https://github.com/tower-rs/tower",
+      "branch_pattern": "master",
+      "link_id": "tower-rs-tower",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/tower-rs-tower",
+      "status": "failed",
+      "message": "ERROR: (gcloud.developer-connect.connections.git-repository-links.create) INVALID_ARGUMENT: The request was invalid: repository clone_uri must be in the format https://github.com/{owner}/{repo}.git | - '@type': type.googleapis.com/google.rpc.BadRequest |   fieldViolations: |   - field: clone_uri | - '@type': type.googleapis.com/google.rpc.RequestInfo |   requestId: 07045ecd782aa539"
+    },
+    {
+      "repo_name": "trivy",
+      "repo_path": "/home/jeremy/git/indexed-repos/trivy",
+      "origin": "https://github.com/aquasecurity/trivy",
+      "branch_pattern": "main",
+      "link_id": "aquasecurity-trivy",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/aquasecurity-trivy",
+      "status": "failed",
+      "message": "ERROR: (gcloud.developer-connect.connections.git-repository-links.create) INVALID_ARGUMENT: The request was invalid: repository clone_uri must be in the format https://github.com/{owner}/{repo}.git | - '@type': type.googleapis.com/google.rpc.BadRequest |   fieldViolations: |   - field: clone_uri | - '@type': type.googleapis.com/google.rpc.RequestInfo |   requestId: 71ec6257f0144962"
+    },
+    {
+      "repo_name": "turbo-whisper",
+      "repo_path": "/home/jeremy/git/indexed-repos/turbo-whisper",
+      "origin": "https://github.com/knowall-ai/turbo-whisper.git",
+      "branch_pattern": "main",
+      "link_id": "knowall-ai-turbo-whisper",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/knowall-ai-turbo-whisper",
+      "status": "failed",
+      "message": "Create request issued for: [knowall-ai-turbo-whisper] | Waiting for operation [projects/dbus-enterprise-2026/locations/us-central1/operations/operation-1774008520351-64d738baf1f53-7ff2e44e-399b4572] to complete... | ......failed. | ERROR: (gcloud.developer-connect.connections.git-repository-links.create) { |   \"code\": 9, |   \"message\": \"Invalid resource state for \\\"https://github.com/knowall-ai/turbo-whisper.git\\\": repository knowall-ai/turbo-whisper does not exist or is not accessible to the (installation ID 97598204)\" | }"
+    },
+    {
+      "repo_name": "turnstile",
+      "repo_path": "/home/jeremy/git/indexed-repos/turnstile",
+      "origin": "https://github.com/chimera-linux/turnstile",
+      "branch_pattern": "master",
+      "link_id": "chimera-linux-turnstile",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/chimera-linux-turnstile",
+      "status": "failed",
+      "message": "ERROR: (gcloud.developer-connect.connections.git-repository-links.create) INVALID_ARGUMENT: The request was invalid: repository clone_uri must be in the format https://github.com/{owner}/{repo}.git | - '@type': type.googleapis.com/google.rpc.BadRequest |   fieldViolations: |   - field: clone_uri | - '@type': type.googleapis.com/google.rpc.RequestInfo |   requestId: 70d14a46ae8f2a5a"
+    },
+    {
+      "repo_name": "typify",
+      "repo_path": "/home/jeremy/git/indexed-repos/typify",
+      "origin": "https://github.com/oxidecomputer/typify",
+      "branch_pattern": "main",
+      "link_id": "oxidecomputer-typify",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/oxidecomputer-typify",
+      "status": "failed",
+      "message": "ERROR: (gcloud.developer-connect.connections.git-repository-links.create) INVALID_ARGUMENT: The request was invalid: repository clone_uri must be in the format https://github.com/{owner}/{repo}.git | - '@type': type.googleapis.com/google.rpc.BadRequest |   fieldViolations: |   - field: clone_uri | - '@type': type.googleapis.com/google.rpc.RequestInfo |   requestId: 13744012ae64b6e6"
+    },
+    {
+      "repo_name": "udisks",
+      "repo_path": "/home/jeremy/git/indexed-repos/udisks",
+      "origin": "https://github.com/storaged-project/udisks",
+      "branch_pattern": "master",
+      "link_id": "storaged-project-udisks",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/storaged-project-udisks",
+      "status": "failed",
+      "message": "ERROR: (gcloud.developer-connect.connections.git-repository-links.create) INVALID_ARGUMENT: The request was invalid: repository clone_uri must be in the format https://github.com/{owner}/{repo}.git | - '@type': type.googleapis.com/google.rpc.BadRequest |   fieldViolations: |   - field: clone_uri | - '@type': type.googleapis.com/google.rpc.RequestInfo |   requestId: 4612fdba85e45415"
+    },
+    {
+      "repo_name": "vault",
+      "repo_path": "/home/jeremy/git/indexed-repos/vault",
+      "origin": "https://github.com/hashicorp/vault",
+      "branch_pattern": "main",
+      "link_id": "hashicorp-vault",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/hashicorp-vault",
+      "status": "failed",
+      "message": "ERROR: (gcloud.developer-connect.connections.git-repository-links.create) INVALID_ARGUMENT: The request was invalid: repository clone_uri must be in the format https://github.com/{owner}/{repo}.git | - '@type': type.googleapis.com/google.rpc.BadRequest |   fieldViolations: |   - field: clone_uri | - '@type': type.googleapis.com/google.rpc.RequestInfo |   requestId: f6234f1710e39da5"
+    },
+    {
+      "repo_name": "zbus",
+      "repo_path": "/home/jeremy/git/indexed-repos/zbus",
+      "origin": "https://github.com/z-galaxy/zbus",
+      "branch_pattern": "main",
+      "link_id": "z-galaxy-zbus",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/z-galaxy-zbus",
+      "status": "failed",
+      "message": "ERROR: (gcloud.developer-connect.connections.git-repository-links.create) INVALID_ARGUMENT: The request was invalid: repository clone_uri must be in the format https://github.com/{owner}/{repo}.git | - '@type': type.googleapis.com/google.rpc.BadRequest |   fieldViolations: |   - field: clone_uri | - '@type': type.googleapis.com/google.rpc.RequestInfo |   requestId: 3421cbd6ebe89cb3"
+    },
+    {
+      "repo_name": "zeroclaw",
+      "repo_path": "/home/jeremy/git/zeroclaw",
+      "origin": "https://github.com/zeroclaw-labs/zeroclaw.git",
+      "branch_pattern": "main",
+      "link_id": "zeroclaw-labs-zeroclaw",
+      "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/zeroclaw-labs-zeroclaw",
+      "status": "failed",
+      "message": "Create request issued for: [zeroclaw-labs-zeroclaw] | Waiting for operation [projects/dbus-enterprise-2026/locations/us-central1/operations/operation-1774008529400-64d738c3933af-fbfec36b-d228602a] to complete... | ......failed. | ERROR: (gcloud.developer-connect.connections.git-repository-links.create) { |   \"code\": 9, |   \"message\": \"Invalid resource state for \\\"https://github.com/zeroclaw-labs/zeroclaw.git\\\": repository zeroclaw-labs/zeroclaw does not exist or is not accessible to the (installation ID 97598204)\" | }"
+    }
+  ]
+}

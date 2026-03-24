@@ -1,0 +1,21 @@
+[Unit]
+Description=IAP Tunnel for Antigravity IDE
+After=network-online.target
+
+[Service]
+Type=simple
+User=antigravity
+Environment=GOOGLE_APPLICATION_CREDENTIALS=/etc/gcloud/code-assist-only.json
+
+ExecStart=/usr/bin/gcloud compute start-iap-tunnel \
+  antigravity-vm 3389 \
+  --zone=us-central1-a \
+  --project=YOUR_PROJECT \
+  --local-host-port=localhost:13389
+
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+

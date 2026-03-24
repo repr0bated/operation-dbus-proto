@@ -1,0 +1,23 @@
+[package]
+name = "op-ml"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "ML/Embedding support: model management, text embedder, vector storage"
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+simd-json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+reqwest = { workspace = true }
+log = { workspace = true }
+num_cpus = { workspace = true }
+sha2 = { workspace = true }
+
+[features]
+default = []
+ml = []

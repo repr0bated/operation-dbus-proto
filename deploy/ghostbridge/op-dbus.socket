@@ -1,0 +1,12 @@
+[Unit]
+Description=GhostBridge Session Socket (fixes session crashes/orphans)
+PartOf=openbox.target
+After=openbox.target
+
+[Socket]
+ListenStream=%t/op-dbus.sock
+# %t expands to /run/user/$UID for user services
+SocketMode=0600
+
+[Install]
+WantedBy=sockets.target

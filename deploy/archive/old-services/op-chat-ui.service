@@ -1,0 +1,41 @@
+[Unit]
+Description=HuggingFace Chat UI
+Documentation=https://github.com/huggingface/chat-ui
+After=network-online.target op-web.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jeremy
+Group=jeremy
+WorkingDirectory=/home/jeremy/op-dbus-v2/chat-ui
+
+# Environment (EnvironmentFile first, then overrides)
+EnvironmentFile=-/home/jeremy/op-dbus-v2/chat-ui/.env
+Environment="NODE_ENV=development"
+Environment="PORT=5173"
+Environment="APP_BASE="
+
+# Start the dev server (or use build + preview for production)
+ExecStart=/usr/bin/npm run dev -- --host 0.0.0.0
+
+# Restart policy
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+# Security
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+ReadWritePaths=/home/jeremy/op-dbus-v2/chat-ui
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=op-chat-ui
+
+[Install]
+WantedBy=multi-user.target

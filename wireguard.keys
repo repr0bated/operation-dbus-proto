@@ -1,0 +1,7 @@
+ow tell Gemini on the server to add this peer:  
+                                                                                                                                       
+  sudo wg set wg0 peer zyOysuhAyQI9DHL2i/Mw+U9p6F4m8ntkRCrzjU4Uei0= allowed-ips 10.0.0.2/32                                            
+   
+  Our public key is: zyOysuhAyQI9DHL2i/Mw+U9p6F4m8ntkRCrzjU4Uei0=                                                                      
+                                                                                         
+  You'll need to type it into the noVNC console. Let me know when it's done and I'll test.

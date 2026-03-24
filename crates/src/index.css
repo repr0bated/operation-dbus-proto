@@ -1,0 +1,159 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 220 20% 97%;
+    --foreground: 220 25% 10%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 220 25% 10%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 220 25% 10%;
+
+    --primary: 142 60% 45%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 220 15% 92%;
+    --secondary-foreground: 220 25% 10%;
+
+    --muted: 220 15% 94%;
+    --muted-foreground: 220 10% 45%;
+
+    --accent: 200 80% 50%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 220 15% 88%;
+    --input: 220 15% 88%;
+    --ring: 142 60% 45%;
+
+    --radius: 0.5rem;
+
+    --sidebar-background: 220 20% 95%;
+    --sidebar-foreground: 220 15% 25%;
+    --sidebar-primary: 142 60% 45%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 220 15% 90%;
+    --sidebar-accent-foreground: 220 15% 25%;
+    --sidebar-border: 220 15% 88%;
+    --sidebar-ring: 142 60% 45%;
+
+    /* Custom semantic tokens */
+    --warning: 38 92% 50%;
+    --warning-foreground: 0 0% 100%;
+    --success: 142 60% 45%;
+    --success-foreground: 0 0% 100%;
+    --info: 200 80% 50%;
+    --info-foreground: 0 0% 100%;
+
+    /* Log severity colors */
+    --log-info: 200 80% 50%;
+    --log-warn: 38 92% 50%;
+    --log-error: 0 72% 51%;
+    --log-critical: 280 70% 55%;
+    --log-debug: 220 10% 55%;
+
+    /* Status colors */
+    --status-online: 142 60% 45%;
+    --status-offline: 0 72% 51%;
+    --status-degraded: 38 92% 50%;
+    --status-unknown: 220 10% 55%;
+  }
+
+  .dark {
+    --background: 225 25% 8%;
+    --foreground: 210 20% 90%;
+
+    --card: 225 22% 11%;
+    --card-foreground: 210 20% 90%;
+
+    --popover: 225 22% 11%;
+    --popover-foreground: 210 20% 90%;
+
+    --primary: 142 60% 50%;
+    --primary-foreground: 225 25% 8%;
+
+    --secondary: 225 18% 16%;
+    --secondary-foreground: 210 20% 90%;
+
+    --muted: 225 18% 14%;
+    --muted-foreground: 215 15% 55%;
+
+    --accent: 200 80% 55%;
+    --accent-foreground: 225 25% 8%;
+
+    --destructive: 0 62% 45%;
+    --destructive-foreground: 210 20% 90%;
+
+    --border: 225 18% 18%;
+    --input: 225 18% 18%;
+    --ring: 142 60% 50%;
+
+    --sidebar-background: 225 25% 6%;
+    --sidebar-foreground: 210 15% 75%;
+    --sidebar-primary: 142 60% 50%;
+    --sidebar-primary-foreground: 225 25% 8%;
+    --sidebar-accent: 225 20% 12%;
+    --sidebar-accent-foreground: 210 15% 75%;
+    --sidebar-border: 225 18% 15%;
+    --sidebar-ring: 142 60% 50%;
+
+    --warning: 38 92% 50%;
+    --warning-foreground: 225 25% 8%;
+    --success: 142 60% 50%;
+    --success-foreground: 225 25% 8%;
+    --info: 200 80% 55%;
+    --info-foreground: 225 25% 8%;
+
+    --log-info: 200 80% 55%;
+    --log-warn: 38 92% 50%;
+    --log-error: 0 62% 55%;
+    --log-critical: 280 70% 60%;
+    --log-debug: 215 15% 55%;
+
+    --status-online: 142 60% 50%;
+    --status-offline: 0 62% 55%;
+    --status-degraded: 38 92% 50%;
+    --status-unknown: 215 15% 55%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+@layer utilities {
+  .font-mono-code {
+    font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace;
+  }
+
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--muted-foreground) / 0.3) transparent;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background: hsl(var(--muted-foreground) / 0.3);
+    border-radius: 3px;
+  }
+}

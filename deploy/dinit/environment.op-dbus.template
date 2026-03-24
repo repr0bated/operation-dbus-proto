@@ -1,0 +1,49 @@
+# op-dbus runtime environment for dinit
+# Adjust HOME and credential paths for your deployment user.
+HOME=/home/jeremy
+GOOGLE_CLOUD_PROJECT=dbus-enterprise-2026
+GOOGLE_APPLICATION_CREDENTIALS=/home/jeremy/.config/gcloud/application_default_credentials.json
+SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+
+ENABLE_MCP_PROXY_PROVIDER=true
+LLM_PROVIDER=mcp-proxy
+LLM_MODEL=auto
+OP_MCP_PROXY_BIN=/usr/local/bin/op-mcp-proxy-select3
+OP_MCP_PROXY_REAL_BIN=/usr/local/bin/op-mcp-proxy
+
+# Constrain auto-selection to Gemini 3 family.
+MCP_PROXY_AUTO_FLASH_MODEL=gemini-3-flash
+MCP_PROXY_AUTO_PRO_MODEL=gemini-3-pro
+MCP_PROXY_AUTO_PRO_THRESHOLD_CHARS=6000
+# Force preview model routing (gemini-3-*-preview). If unset, selector follows ~/.gemini/settings.json previewFeatures.
+MCP_PROXY_EXPERIMENTAL=true
+
+OP_DBUS_ENABLE_WEB=1
+OP_DBUS_WEB_HOST=127.0.0.1
+OP_DBUS_WEB_PORT=7010
+OP_DBUS_LISTEN=none
+
+# Shared session bus endpoint for op-* services.
+DBUS_SESSION_BUS_ADDRESS=unix:path=/run/op-dbus/session-bus
+
+# System-wide WireGuard + registration defaults.
+OP_WEB_TOOL_SOURCE=op-dbus
+OP_WEB_REMOTE_TOOL_URL=http://127.0.0.1:8081
+PRIVACY_CONTAINER_STORAGE_POOL=registration
+WG_SERVER_PUBKEY=+7AlLRCx0cqWwV+cgP7UwA6i//7v0YqA32f8Rbo07zE=
+WG_SERVER_ENDPOINT=148.113.204.83:51820
+WG_INTERFACE=wg0
+
+# OVS bridge boot bring-up via org.opdbus (no direct ip/ovs-* commands).
+PRIVACY_BRIDGE_NAME=ovsbr0
+PRIVACY_UPLINK_PORT=ens3
+OP_DBUS_RTNET_PATH=/org/opdbus/rtnetlink
+OP_DBUS_RTNET_IFACE=org.opdbus.RtnetlinkV1
+OP_DBUS_MIRROR_DEST=org.opdbus.v1
+OP_DBUS_MIRROR_PATH=/org/opdbus/v1
+OP_DBUS_MIRROR_IFACE=org.opdbus.MirrorV1
+OP_DBUS_BUSCTL_TIMEOUT_SECS=3
+
+# L3 is owned by systemd-networkd on the restored OVS internal interface.
+# Ship /etc/systemd/network/10-ens3.network and /etc/systemd/network/20-ovsbr0.network,
+# then review the public IPv4, MAC, DNS, and gateway values before activation.

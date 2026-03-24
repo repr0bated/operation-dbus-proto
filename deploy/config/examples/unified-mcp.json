@@ -1,0 +1,62 @@
+{
+  "_comment": "Unified MCP configuration for all modes",
+  "mcpServers": {
+    "op-compact": {
+      "serverUrl": "https://op-dbus.ghostbridge.tech/mcp/compact",
+      "transport": "sse",
+      "description": "Compact MCP - 4 meta-tools for discovering 148+ tools. Recommended for LLMs."
+    },
+    "op-agents": {
+      "serverUrl": "https://op-dbus.ghostbridge.tech/mcp/agents",
+      "transport": "sse",
+      "description": "Always-on cognitive agents: sequential_thinking, memory, context_manager, mem0, etc."
+    },
+    "op-full": {
+      "serverUrl": "https://op-dbus.ghostbridge.tech/mcp/sse",
+      "transport": "sse",
+      "description": "Full MCP - All tools directly exposed. May hit client tool limits."
+    }
+  },
+  "_usage": {
+    "recommended": [
+      "Use 'op-agents' for always-available cognitive tools",
+      "Use 'op-compact' for discovering and using other tools",
+      "Both can be active simultaneously on different ports"
+    ],
+    "workflow": [
+      "1. Use sequential_thinking_think for complex reasoning",
+      "2. Use memory_remember to store important context",
+      "3. Use list_tools to discover available capabilities",
+      "4. Use get_tool_schema then execute_tool for specific tasks"
+    ]
+  },
+  "_always_on_agents": {
+    "cognitive": [
+      "sequential_thinking - Step-by-step reasoning (think, plan, analyze, conclude)",
+      "memory - Key-value session state (remember, recall, forget, list)",
+      "context_manager - Persistent context (save, load, list, delete)",
+      "mem0 - Semantic vector memory (add, search, get_all, delete, update)"
+    ],
+    "development": [
+      "python_pro - Python analysis/execution",
+      "debugger - Error analysis and tracing",
+      "search_specialist - Code/docs/web search"
+    ],
+    "operations": [
+      "deployment - Service deployment/rollback",
+      "prompt_engineer - Prompt optimization"
+    ]
+  },
+  "_discoverable_tools": {
+    "categories": [
+      "language: python, rust, golang, javascript, typescript, etc.",
+      "infrastructure: kubernetes, terraform, docker, systemd",
+      "database: sql, postgres, mysql, mongodb",
+      "analysis: code_review, security_audit, performance",
+      "content: docs, api_docs, tutorials",
+      "specialty: blockchain, ml, quant, arm_cortex"
+    ],
+    "count": "148+ agents and tools",
+    "access_pattern": "list_tools → get_tool_schema → execute_tool"
+  }
+}

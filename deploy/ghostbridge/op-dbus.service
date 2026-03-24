@@ -1,0 +1,12 @@
+[Unit]
+Description=GhostBridge D-Bus Operation Backend
+
+[Service]
+ExecStart=/usr/local/bin/op-dbus
+Restart=on-failure
+Environment=OP_DBUS_WEB_PORT=8089
+Environment=RUST_LOG=info
+Environment=OP_DBUS_SOCKET=%t/op-dbus.sock
+
+[Install]
+WantedBy=default.target

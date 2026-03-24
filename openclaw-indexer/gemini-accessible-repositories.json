@@ -1,0 +1,10 @@
+[
+  {
+    "branchPattern": "main",
+    "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/repr0bated-branch-bestie-sync"
+  },
+  {
+    "branchPattern": "schema-consolidation",
+    "resource": "developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/repr0bated-operation-dbus"
+  }
+]

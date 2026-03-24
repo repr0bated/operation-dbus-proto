@@ -1,0 +1,4 @@
+type = process
+command = /usr/local/sbin/op-session-bus
+log-type = buffer
+smooth-recovery = true

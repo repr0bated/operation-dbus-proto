@@ -1,0 +1,39 @@
+{
+  "$schema": "https://spec.modelcontextprotocol.io/schemas/mcp-config.json",
+  "name": "op-dbus",
+  "description": "op-dbus MCP Server - System administration tools",
+  "version": "2.0.0",
+  
+  "endpoints": {
+    "sse": {
+      "url": "http://localhost:8080/mcp/sse",
+      "description": "SSE transport for LLM clients (Gemini CLI, Claude, etc.)"
+    },
+    "compact": {
+      "url": "http://localhost:8080/mcp/compact",
+      "description": "Compact mode - 4 meta-tools for efficient discovery"
+    },
+    "agents": {
+      "url": "http://localhost:8080/mcp/agents",
+      "description": "AI agents endpoint"
+    }
+  },
+  
+  "tools_summary": {
+    "total": 145,
+    "categories": {
+      "dbus_systemd": "Service management (start, stop, restart, status)",
+      "dbus_packagekit": "Package installation",
+      "ovs": "Open vSwitch bridge/port management",
+      "openflow": "OpenFlow rule management",
+      "rtnetlink": "Kernel network interface configuration",
+      "lxc": "Container management",
+      "file": "File operations"
+    }
+  },
+  
+  "authentication": {
+    "type": "none",
+    "note": "Add Bearer token auth for production"
+  }
+}

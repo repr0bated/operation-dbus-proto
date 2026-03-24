@@ -1,0 +1,114 @@
+[
+  {
+    "name": "op-dbus",
+    "description": "System automation tools via op-dbus (Default Profile)",
+    "serverUrl": "http://127.0.0.1:8080/mcp/custom/default",
+    "enabled": true
+  },
+  {
+    "name": "filesystem",
+    "description": "File system access for reading and writing files",
+    "command": "npx",
+    "args": [
+      "-y",
+      "@modelcontextprotocol/server-filesystem",
+      "/home",
+      "/etc",
+      "/var/log",
+      "/opt"
+    ],
+    "auth_method": "none",
+    "enabled": true
+  },
+  {
+    "name": "memory",
+    "description": "Persistent memory for storing context across sessions",
+    "command": "npx",
+    "args": [
+      "-y",
+      "@modelcontextprotocol/server-memory"
+    ],
+    "auth_method": "none",
+    "enabled": true
+  },
+  {
+    "name": "sequential-thinking",
+    "description": "Enhanced reasoning through step-by-step thinking",
+    "command": "npx",
+    "args": [
+      "-y",
+      "@modelcontextprotocol/server-sequential-thinking"
+    ],
+    "auth_method": "none",
+    "enabled": true
+  },
+  {
+    "name": "fetch",
+    "description": "HTTP request capabilities for web APIs",
+    "command": "npx",
+    "args": [
+      "-y",
+      "@modelcontextprotocol/server-fetch"
+    ],
+    "auth_method": "none",
+    "enabled": true
+  },
+  {
+    "name": "github",
+    "description": "GitHub repository operations",
+    "command": "npx",
+    "args": [
+      "-y",
+      "@modelcontextprotocol/server-github"
+    ],
+    "api_key_env": "GITHUB_PERSONAL_ACCESS_TOKEN",
+    "auth_method": "env_var",
+    "enabled": false,
+    "enable_instructions": "Set GITHUB_PERSONAL_ACCESS_TOKEN in /etc/op-dbus/secrets.env"
+  },
+  {
+    "name": "brave-search",
+    "description": "Web search via Brave Search API",
+    "command": "npx",
+    "args": [
+      "-y",
+      "@modelcontextprotocol/server-brave-search"
+    ],
+    "api_key_env": "BRAVE_API_KEY",
+    "auth_method": "env_var",
+    "enabled": false,
+    "enable_instructions": "Set BRAVE_API_KEY in /etc/op-dbus/secrets.env"
+  },
+  {
+    "name": "puppeteer",
+    "description": "Browser automation for web scraping and testing",
+    "command": "npx",
+    "args": [
+      "-y",
+      "@modelcontextprotocol/server-puppeteer"
+    ],
+    "auth_method": "none",
+    "enabled": false,
+    "enable_instructions": "Requires headless Chrome - enable manually if needed"
+  },
+  {
+    "name": "postgres",
+    "description": "PostgreSQL database operations",
+    "command": "npx",
+    "args": [
+      "-y",
+      "@modelcontextprotocol/server-postgres"
+    ],
+    "auth_method": "none",
+    "enabled": false,
+    "enable_instructions": "Configure connection string in args"
+  },
+  {
+    "name": "op-cognitive-mcp",
+    "description": "Cognitive memory and context tools",
+    "command": "/usr/local/bin/op-cognitive-mcp",
+    "args": [],
+    "transport": "stdio",
+    "enabled": true
+  }
+]

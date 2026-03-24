@@ -1,0 +1,4 @@
+type = process
+command = /usr/local/sbin/op-networkd-dinit.sh
+smooth-recovery = true
+depends-on = op-ovsdb-bridge

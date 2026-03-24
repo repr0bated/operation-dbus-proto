@@ -1,0 +1,16 @@
+[Unit]
+Description=Op-DBus Complete Stack
+Documentation=https://github.com/jeremytodd/op-dbus-v2
+After=network-online.target dbus.service
+Wants=network-online.target
+
+# Core services that should start with this target
+Wants=op-web.service
+Wants=op-mcp.service
+
+# Optional services (uncomment as needed)
+#Wants=op-web-hf.service
+#Wants=op-agents.service
+
+[Install]
+WantedBy=multi-user.target

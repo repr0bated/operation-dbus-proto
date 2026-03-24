@@ -1,0 +1,10 @@
+{
+    "window.title": "⚠️ INFRASTRUCTURE - DO NOT MODIFY PLUGINS ⚠️ ${dirty}${activeEditorShort}${separator}${rootName}",
+    "workbench.colorCustomizations": {
+        "titleBar.activeBackground": "#8B0000",
+        "titleBar.activeForeground": "#FFFFFF",
+        "titleBar.inactiveBackground": "#5C0000",
+        "titleBar.inactiveForeground": "#CCCCCC"
+    },
+    "window.titleBarStyle": "custom"
+}

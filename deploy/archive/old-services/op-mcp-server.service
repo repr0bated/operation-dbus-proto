@@ -1,0 +1,47 @@
+[Unit]
+Description=OP-DBUS MCP Protocol Server
+Documentation=https://github.com/ghostbridgetech/op-dbus
+After=network.target
+
+[Service]
+Type=simple
+User=op-dbus
+Group=op-dbus
+EnvironmentFile=-/etc/op-dbus/environment
+EnvironmentFile=-/etc/op-dbus/secrets.env
+WorkingDirectory=/opt/op-dbus
+ExecStart=/usr/local/sbin/op-mcp-server
+Restart=always
+RestartSec=5
+
+# Resource limits
+LimitNOFILE=4096
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+MemoryDenyWriteExecute=yes
+LockPersonality=yes
+
+# Allow network and D-Bus
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallFilter=@system-service
+
+# Read-write paths
+ReadWritePaths=/var/lib/op-dbus /var/log/op-dbus
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=op-mcp-server
+
+[Install]
+WantedBy=multi-user.target

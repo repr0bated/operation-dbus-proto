@@ -1,0 +1,12 @@
+target/
+grpc-gateway/
+
+# Nested git repos (whole directories)
+branch-bestie-sync/
+
+# Local SDK payloads accidentally copied into the repo
+google-cloud-sdk/
+**/google-cloud-sdk/
+
+# Local built artifacts
+deploy/bin/op-dbus

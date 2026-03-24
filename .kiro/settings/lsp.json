@@ -1,0 +1,16 @@
+{
+  "name": "operation-dbus",
+  "languages": {
+    "rust": {
+      "server": "rust-analyzer"
+    }
+  },
+  "servers": {
+    "rust-analyzer": {
+      "name": "rust-analyzer",
+      "command": "rust-analyzer",
+      "args": [],
+      "filetypes": ["rust"]
+    }
+  }
+}

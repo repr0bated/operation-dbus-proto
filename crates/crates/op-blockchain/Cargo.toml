@@ -1,0 +1,25 @@
+[package]
+name = "op-blockchain"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Streaming blockchain with BTRFS subvolumes for op-dbus-v2"
+
+[dependencies]
+op-core = { workspace = true }
+op-cache = { path = "../op-cache" }
+tokio = { workspace = true }
+serde = { workspace = true }
+simd-json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+sha2 = { workspace = true }
+gethostname = { workspace = true }
+
+[features]
+default = []
+ml = []

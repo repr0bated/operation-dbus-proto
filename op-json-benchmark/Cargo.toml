@@ -1,0 +1,22 @@
+[package]
+name = "json-benchmark"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+simd-json = { version = "0.13", features = ["serde", "serde_impl"] }
+sonic-rs = "0.3"  # Kept as fallback option
+tokio = { version = "1.0", features = ["full"] }
+reqwest = { version = "0.11", features = ["json"] }
+
+# Removed serde_json from main dependencies
+# It's only kept as a dev dependency for comparison benchmarks
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+simd-json = { workspace = true }  # Only for benchmarking comparisons
+
+[[bench]]
+name = "json_benchmark"
+harness = false

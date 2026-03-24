@@ -1,0 +1,35 @@
+[Unit]
+Description=OP-Web Server (MCP Control Center)
+Documentation=https://github.com/ghostbridge/operation-dbus
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+Environment="RUST_LOG=info"
+Environment="PORT=8080"
+Environment="OP_WEB_STATIC_DIR=/git/operation-dbus/crates/op-web/static"
+
+# Binary location
+ExecStart=/usr/local/sbin/op-web-server
+
+# Restart policy
+Restart=always
+RestartSec=5
+StartLimitInterval=60s
+StartLimitBurst=3
+
+# Security hardening (adjust as needed)
+NoNewPrivileges=false
+ProtectSystem=false
+ProtectHome=false
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=op-web
+
+[Install]
+WantedBy=multi-user.target

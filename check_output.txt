@@ -1,0 +1,708 @@
+warning: field `numa_stats` is never read
+  --> crates/op-cache/src/btrfs_cache.rs:59:5
+   |
+50 | pub struct BtrfsCache {
+   |            ---------- field in this struct
+...
+59 |     numa_stats: Mutex<NumaStats>,
+   |     ^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `numa_topology` is never read
+  --> crates/op-cache/src/orchestrator.rs:74:5
+   |
+68 | pub struct Orchestrator {
+   |            ------------ field in this struct
+...
+74 |     numa_topology: NumaTopology,
+   |     ^^^^^^^^^^^^^
+
+warning: fields `input_hash`, `timestamp`, and `latency_ms` are never read
+  --> crates/op-cache/src/workflow_tracker.rs:90:5
+   |
+88 | struct AgentCall {
+   |        --------- fields in this struct
+89 |     agent_id: String,
+90 |     input_hash: String,
+   |     ^^^^^^^^^^
+91 |     timestamp: i64,
+   |     ^^^^^^^^^
+92 |     latency_ms: u64,
+   |     ^^^^^^^^^^
+   |
+   = note: `AgentCall` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: field `endpoint` is never read
+  --> crates/op-cache/src/grpc/agent_service.rs:28:5
+   |
+25 | struct RegisteredAgent {
+   |        --------------- field in this struct
+...
+28 |     endpoint: Option<String>,
+   |     ^^^^^^^^
+
+warning: field `compressed` is never read
+  --> crates/op-cache/src/grpc/cache_service.rs:28:5
+   |
+22 | struct CachedEntry {
+   |        ----------- field in this struct
+...
+28 |     compressed: bool,
+   |     ^^^^^^^^^^
+
+warning: field `first_seen` is never read
+  --> crates/op-cache/src/grpc/orchestrator_service.rs:31:5
+   |
+26 | struct TrackedPattern {
+   |        -------------- field in this struct
+...
+31 |     first_seen: Instant,
+   |     ^^^^^^^^^^
+   |
+   = note: `TrackedPattern` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+
+warning: `op-cache` (lib) generated 6 warnings
+warning: unused import: `simd_json::ValueBuilder`
+  --> crates/op-state-store/src/disaster_recovery.rs:12:5
+   |
+12 | use simd_json::ValueBuilder;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `simd_json::ValueBuilder`
+  --> crates/op-state-store/src/schema_validator.rs:11:5
+   |
+11 | use simd_json::ValueBuilder;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `simd_json::ValueBuilder`
+  --> crates/op-state-store/src/event_chain.rs:28:5
+   |
+28 | use simd_json::ValueBuilder;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `simd_json::ValueBuilder`
+  --> crates/op-state-store/src/plugin_schema.rs:13:5
+   |
+13 | use simd_json::ValueBuilder;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `op-state-store` (lib) generated 4 warnings (run `cargo fix --lib -p op-state-store` to apply 2 suggestions)
+warning: unused import: `simd_json::ValueBuilder`
+  --> crates/op-inspector/src/introspective_gadget.rs:29:5
+   |
+29 | use simd_json::ValueBuilder;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `op-inspector` (lib) generated 1 warning (run `cargo fix --lib -p op-inspector` to apply 1 suggestion)
+warning: unused import: `simd_json::OwnedValue`
+   --> crates/op-state/src/dbus_plugin_base.rs:239:9
+    |
+239 |     use simd_json::OwnedValue;
+    |         ^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `interface`
+  --> crates/op-state/src/dbus_server.rs:14:33
+   |
+14 | use zbus::{connection::Builder, interface, Connection};
+   |                                 ^^^^^^^^^
+
+warning: unused import: `async_trait::async_trait`
+ --> crates/op-state/src/plugin.rs:3:5
+  |
+3 | use async_trait::async_trait;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `simd_json::prelude::*`
+ --> crates/op-state/src/plugin.rs:5:5
+  |
+5 | use simd_json::prelude::*;
+  |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `std::collections::HashMap`
+ --> crates/op-state/src/plugin.rs:7:5
+  |
+7 | use std::collections::HashMap;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::manager::StateManager`
+ --> crates/op-state/src/plugin_workflow.rs:7:5
+  |
+7 | use crate::manager::StateManager;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `std::collections::HashMap`
+  --> crates/op-state/src/plugin_workflow.rs:16:5
+   |
+16 | use std::collections::HashMap;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `std::collections::HashMap`
+  --> crates/op-state/src/plugtree.rs:20:5
+   |
+20 | use std::collections::HashMap;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `simd_json::prelude`
+  --> crates/op-state/src/crypto.rs:11:5
+   |
+11 | use simd_json::prelude::*;
+   |     ^^^^^^^^^^^^^^^^^^
+
+warning: variable does not need to be mutable
+   --> crates/op-state/src/crypto.rs:216:13
+    |
+216 |         let mut contents = std::fs::read_to_string(path).context("Failed to read state file")?;
+    |             ----^^^^^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `async_trait::async_trait`
+ --> crates/op-network/src/plugin.rs:7:5
+  |
+7 | use async_trait::async_trait;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused imports: `ObjectSchemaRef`, `ServiceInfo`, `ToolDefinition`, and `ToolResult`
+ --> crates/op-network/src/plugin.rs:8:22
+  |
+8 | use op_core::types::{ObjectSchemaRef, ServiceInfo, ToolDefinition, ToolResult};
+  |                      ^^^^^^^^^^^^^^^  ^^^^^^^^^^^  ^^^^^^^^^^^^^^  ^^^^^^^^^^
+
+warning: unused import: `std::collections::HashMap`
+  --> crates/op-network/src/plugin.rs:12:5
+   |
+12 | use std::collections::HashMap;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `std::sync::Arc`
+  --> crates/op-network/src/plugin.rs:13:5
+   |
+13 | use std::sync::Arc;
+   |     ^^^^^^^^^^^^^^
+
+warning: unused import: `netlink_packet_route::route::RouteAttribute`
+ --> crates/op-network/src/rtnetlink.rs:7:5
+  |
+7 | use netlink_packet_route::route::RouteAttribute;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `simd_json::prelude`
+  --> crates/op-network/src/plugin.rs:10:5
+   |
+10 | use simd_json::prelude::*;
+   |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `simd_json::prelude`
+  --> crates/op-network/src/proxmox.rs:21:5
+   |
+21 | use simd_json::prelude::*;
+   |     ^^^^^^^^^^^^^^^^^^
+
+warning: `op-state` (lib) generated 10 warnings (run `cargo fix --lib -p op-state` to apply 9 suggestions)
+warning: `op-network` (lib) generated 7 warnings (run `cargo fix --lib -p op-network` to apply 5 suggestions)
+warning: unused import: `Serialize`
+  --> crates/op-tools/src/builtin/agent_tool.rs:13:26
+   |
+13 | use serde::{Deserialize, Serialize};
+   |                          ^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `error`
+  --> crates/op-tools/src/builtin/agent_tool.rs:20:22
+   |
+20 | use tracing::{debug, error, info, warn};
+   |                      ^^^^^
+
+warning: unused import: `std::collections::HashMap`
+  --> crates/op-tools/src/builtin/response_tools.rs:20:5
+   |
+20 | use std::collections::HashMap;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `std::collections::HashMap`
+  --> crates/op-tools/src/builtin/gcloud_tools.rs:12:5
+   |
+12 | use std::collections::HashMap;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `debug` and `info`
+  --> crates/op-tools/src/builtin/file.rs:18:15
+   |
+18 | use tracing::{debug, info};
+   |               ^^^^^  ^^^^
+
+warning: unused import: `SecurityValidator`
+  --> crates/op-tools/src/builtin/shell.rs:29:47
+   |
+29 | use crate::security::{get_security_validator, SecurityValidator};
+   |                                               ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `stream::iter`
+ --> crates/op-tools/src/discovery/projection_engine.rs:7:15
+  |
+7 | use futures::{stream::iter, StreamExt};
+  |               ^^^^^^^^^^^^
+
+warning: unused import: `simd_json::OwnedValue as Value`
+ --> crates/op-tools/src/discovery/projection_engine.rs:9:5
+  |
+9 | use simd_json::OwnedValue as Value;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `std::collections::HashMap`
+  --> crates/op-tools/src/discovery/projection_engine.rs:10:5
+   |
+10 | use std::collections::HashMap;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::registry::ToolDefinition`
+  --> crates/op-tools/src/discovery/projection_engine.rs:15:5
+   |
+15 | use crate::registry::ToolDefinition;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `ToolDefinition`
+ --> crates/op-tools/src/discovery/sources/dbus.rs:7:51
+  |
+7 | use op_core::{BusType as CoreBusType, MethodInfo, ToolDefinition};
+  |                                                   ^^^^^^^^^^^^^^
+
+warning: unused import: `simd_json::ValueBuilder`
+  --> crates/op-tools/src/mcptools.rs:24:5
+   |
+24 | use simd_json::ValueBuilder;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `anyhow::Result`
+  --> crates/op-tools/src/orchestration_plugin.rs:30:5
+   |
+30 | use anyhow::Result;
+   |     ^^^^^^^^^^^^^^
+
+warning: unused import: `std::collections::HashMap`
+  --> crates/op-tools/src/orchestration_plugin.rs:36:5
+   |
+36 | use std::collections::HashMap;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `anyhow`
+ --> crates/op-tools/src/registry.rs:5:14
+  |
+5 | use anyhow::{anyhow, Result};
+  |              ^^^^^^
+
+warning: unused import: `async_trait::async_trait`
+ --> crates/op-tools/src/registry.rs:6:5
+  |
+6 | use async_trait::async_trait;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `info`
+  --> crates/op-tools/src/registry.rs:13:22
+   |
+13 | use tracing::{debug, info};
+   |                      ^^^^
+
+warning: unused imports: `debug` and `warn`
+  --> crates/op-tools/src/security.rs:38:15
+   |
+38 | use tracing::{debug, info, warn};
+   |               ^^^^^        ^^^^
+
+warning: unused import: `simd_json::prelude::*`
+ --> crates/op-tools/src/tool.rs:8:5
+  |
+8 | use simd_json::prelude::*;
+  |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `ValidationError`
+  --> crates/op-tools/src/validation.rs:10:30
+   |
+10 | use jsonschema::{JSONSchema, ValidationError};
+   |                              ^^^^^^^^^^^^^^^
+
+warning: unused import: `debug`
+  --> crates/op-tools/src/validation.rs:15:15
+   |
+15 | use tracing::{debug, error, warn};
+   |               ^^^^^
+
+warning: unused import: `Deserialize`
+  --> crates/op-tools/src/builtin/agent_tool.rs:13:13
+   |
+13 | use serde::{Deserialize, Serialize};
+   |             ^^^^^^^^^^^
+
+warning: unused import: `StreamExt`
+ --> crates/op-tools/src/discovery/projection_engine.rs:7:29
+  |
+7 | use futures::{stream::iter, StreamExt};
+  |                             ^^^^^^^^^
+
+warning: unused import: `Tool`
+  --> crates/op-tools/src/registry.rs:15:30
+   |
+15 | use crate::tool::{BoxedTool, Tool};
+   |                              ^^^^
+
+warning: unused import: `simd_json::prelude`
+ --> crates/op-tools/src/registry.rs:8:5
+  |
+8 | use simd_json::prelude::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused variable: `bridge`
+    --> crates/op-tools/src/builtin/ovs_tools.rs:1028:13
+     |
+1028 |         let bridge = input.get("bridge")
+     |             ^^^^^^ help: if this is intentional, prefix it with an underscore: `_bridge`
+     |
+     = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `agent_name` is never read
+   --> crates/op-tools/src/builtin/agent_tool.rs:366:5
+    |
+364 | pub struct AgentTool {
+    |            --------- field in this struct
+365 |     name: String,
+366 |     agent_name: String,
+    |     ^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `op-tools` (lib) generated 27 warnings (run `cargo fix --lib -p op-tools` to apply 22 suggestions)
+warning: unused import: `Context`
+ --> crates/op-plugins/src/auto_create.rs:6:14
+  |
+6 | use anyhow::{Context, Result};
+  |              ^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused imports: `ApplyResult`, `Checkpoint`, `DiffMetadata`, `PluginCapabilities`, `StateAction`, and `StateDiff`
+ --> crates/op-plugins/src/auto_create.rs:9:5
+  |
+9 |     ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
+  |     ^^^^^^^^^^^  ^^^^^^^^^^  ^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^  ^^^^^^^^^
+
+warning: unused import: `Context`
+ --> crates/op-plugins/src/registry.rs:5:22
+  |
+5 | use anyhow::{anyhow, Context, Result};
+  |                      ^^^^^^^
+
+warning: unused import: `async_trait::async_trait`
+ --> crates/op-plugins/src/registry.rs:6:5
+  |
+6 | use async_trait::async_trait;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `Deserialize` and `Serialize`
+ --> crates/op-plugins/src/registry.rs:7:13
+  |
+7 | use serde::{Deserialize, Serialize};
+  |             ^^^^^^^^^^^  ^^^^^^^^^
+
+warning: unused import: `simd_json::OwnedValue as Value`
+ --> crates/op-plugins/src/registry.rs:9:5
+  |
+9 | use simd_json::OwnedValue as Value;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `debug` and `info`
+  --> crates/op-plugins/src/registry.rs:15:15
+   |
+15 | use tracing::{debug, info, warn};
+   |               ^^^^^  ^^^^
+
+warning: unused import: `anyhow::Result`
+ --> crates/op-plugins/src/state.rs:3:5
+  |
+3 | use anyhow::Result;
+  |     ^^^^^^^^^^^^^^
+
+warning: unused import: `std::collections::HashMap`
+ --> crates/op-plugins/src/state.rs:9:5
+  |
+9 | use std::collections::HashMap;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `Context`
+ --> crates/op-plugins/src/service_def.rs:5:14
+  |
+5 | use anyhow::{Context, Result};
+  |              ^^^^^^^
+
+warning: unused imports: `OwnedValue as Value` and `json`
+ --> crates/op-plugins/src/service_def.rs:7:17
+  |
+7 | use simd_json::{json, OwnedValue as Value};
+  |                 ^^^^  ^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::registry::PluginRegistry`
+ --> crates/op-plugins/src/default_registry.rs:6:5
+  |
+6 | use crate::registry::PluginRegistry;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `op_state::StatePlugin`
+ --> crates/op-plugins/src/default_registry.rs:8:5
+  |
+8 | use op_state::StatePlugin;
+  |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `simd_json::OwnedValue as Value`
+  --> crates/op-plugins/src/default_registry.rs:11:5
+   |
+11 | use simd_json::OwnedValue as Value;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `json`
+  --> crates/op-plugins/src/state_plugins/net.rs:12:17
+   |
+12 | use simd_json::{json, OwnedValue as Value};
+   |                 ^^^^
+
+warning: unused import: `Context`
+ --> crates/op-plugins/src/state_plugins/adc.rs:1:14
+  |
+1 | use anyhow::{Context, Result};
+  |              ^^^^^^^
+
+warning: unused import: `StateAction`
+ --> crates/op-plugins/src/state_plugins/adc.rs:3:85
+  |
+3 | use op_state::{ApplyResult, Checkpoint, PluginCapabilities, StateDiff, StatePlugin, StateAction, DiffMetadata};
+  |                                                                                     ^^^^^^^^^^^
+
+warning: unused import: `Context`
+ --> crates/op-plugins/src/state_plugins/endpoint.rs:1:14
+  |
+1 | use anyhow::{Context, Result};
+  |              ^^^^^^^
+
+warning: unused import: `StateAction`
+ --> crates/op-plugins/src/state_plugins/endpoint.rs:3:85
+  |
+3 | use op_state::{ApplyResult, Checkpoint, PluginCapabilities, StateDiff, StatePlugin, StateAction, DiffMetadata};
+  |                                                                                     ^^^^^^^^^^^
+
+warning: unused import: `Context`
+ --> crates/op-plugins/src/state_plugins/gcloud_adc.rs:1:14
+  |
+1 | use anyhow::{Context, Result};
+  |              ^^^^^^^
+
+warning: unused import: `StateAction`
+ --> crates/op-plugins/src/state_plugins/gcloud_adc.rs:3:85
+  |
+3 | use op_state::{ApplyResult, Checkpoint, PluginCapabilities, StateDiff, StatePlugin, StateAction, DiffMetadata};
+  |                                                                                     ^^^^^^^^^^^
+
+warning: unused import: `Context`
+ --> crates/op-plugins/src/state_plugins/keypair.rs:1:14
+  |
+1 | use anyhow::{Context, Result};
+  |              ^^^^^^^
+
+warning: unused import: `StateAction`
+ --> crates/op-plugins/src/state_plugins/keypair.rs:3:85
+  |
+3 | use op_state::{ApplyResult, Checkpoint, PluginCapabilities, StateDiff, StatePlugin, StateAction, DiffMetadata};
+  |                                                                                     ^^^^^^^^^^^
+
+warning: unused import: `Context`
+ --> crates/op-plugins/src/state_plugins/proxy_server.rs:1:14
+  |
+1 | use anyhow::{Context, Result};
+  |              ^^^^^^^
+
+warning: unused import: `StateAction`
+ --> crates/op-plugins/src/state_plugins/proxy_server.rs:3:85
+  |
+3 | use op_state::{ApplyResult, Checkpoint, PluginCapabilities, StateDiff, StatePlugin, StateAction, DiffMetadata};
+  |                                                                                     ^^^^^^^^^^^
+
+warning: unused import: `Context`
+ --> crates/op-plugins/src/state_plugins/service.rs:3:14
+  |
+3 | use anyhow::{Context, Result};
+  |              ^^^^^^^
+
+warning: unused import: `StateAction`
+ --> crates/op-plugins/src/state_plugins/service.rs:6:75
+  |
+6 | use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin};
+  |                                                                           ^^^^^^^^^^^
+
+warning: unused import: `Context`
+ --> crates/op-plugins/src/state_plugins/sessdecl.rs:1:14
+  |
+1 | use anyhow::{Context, Result};
+  |              ^^^^^^^
+
+warning: unused import: `StateAction`
+ --> crates/op-plugins/src/state_plugins/sessdecl.rs:3:85
+  |
+3 | use op_state::{ApplyResult, Checkpoint, PluginCapabilities, StateDiff, StatePlugin, StateAction, DiffMetadata};
+  |                                                                                     ^^^^^^^^^^^
+
+warning: unused import: `Context`
+ --> crates/op-plugins/src/state_plugins/agent_config.rs:1:14
+  |
+1 | use anyhow::{Context, Result};
+  |              ^^^^^^^
+
+warning: unused import: `StateAction`
+ --> crates/op-plugins/src/state_plugins/agent_config.rs:3:85
+  |
+3 | use op_state::{ApplyResult, Checkpoint, PluginCapabilities, StateDiff, StatePlugin, StateAction, DiffMetadata};
+  |                                                                                     ^^^^^^^^^^^
+
+warning: unused import: `Context`
+ --> crates/op-plugins/src/state_plugins/hardware.rs:1:14
+  |
+1 | use anyhow::{Context, Result};
+  |              ^^^^^^^
+
+warning: unused import: `StateAction`
+ --> crates/op-plugins/src/state_plugins/hardware.rs:3:85
+  |
+3 | use op_state::{ApplyResult, Checkpoint, PluginCapabilities, StateDiff, StatePlugin, StateAction, DiffMetadata};
+  |                                                                                     ^^^^^^^^^^^
+
+warning: unused import: `Context`
+ --> crates/op-plugins/src/state_plugins/proxmox.rs:1:14
+  |
+1 | use anyhow::{Context, Result};
+  |              ^^^^^^^
+
+warning: unused import: `StateAction`
+ --> crates/op-plugins/src/state_plugins/proxmox.rs:3:85
+  |
+3 | use op_state::{ApplyResult, Checkpoint, PluginCapabilities, StateDiff, StatePlugin, StateAction, DiffMetadata};
+  |                                                                                     ^^^^^^^^^^^
+
+warning: unused import: `Context`
+ --> crates/op-plugins/src/state_plugins/software.rs:1:14
+  |
+1 | use anyhow::{Context, Result};
+  |              ^^^^^^^
+
+warning: unused import: `StateAction`
+ --> crates/op-plugins/src/state_plugins/software.rs:3:85
+  |
+3 | use op_state::{ApplyResult, Checkpoint, PluginCapabilities, StateDiff, StatePlugin, StateAction, DiffMetadata};
+  |                                                                                     ^^^^^^^^^^^
+
+warning: unused import: `Context`
+ --> crates/op-plugins/src/state_plugins/users.rs:1:14
+  |
+1 | use anyhow::{Context, Result};
+  |              ^^^^^^^
+
+warning: unused import: `StateAction`
+ --> crates/op-plugins/src/state_plugins/users.rs:3:85
+  |
+3 | use op_state::{ApplyResult, Checkpoint, PluginCapabilities, StateDiff, StatePlugin, StateAction, DiffMetadata};
+  |                                                                                     ^^^^^^^^^^^
+
+warning: unused import: `Context`
+ --> crates/op-plugins/src/state_plugins/wireguard.rs:1:14
+  |
+1 | use anyhow::{Context, Result};
+  |              ^^^^^^^
+
+warning: unused import: `StateAction`
+ --> crates/op-plugins/src/state_plugins/wireguard.rs:3:85
+  |
+3 | use op_state::{ApplyResult, Checkpoint, PluginCapabilities, StateDiff, StatePlugin, StateAction, DiffMetadata};
+  |                                                                                     ^^^^^^^^^^^
+
+warning: variable does not need to be mutable
+   --> crates/op-plugins/src/state_plugins/hardware.rs:102:28
+    |
+102 |                  if let Ok(mut val) = simd_json::to_owned_value(&mut json_str.as_bytes().to_vec()) {
+    |                            ----^^^
+    |                            |
+    |                            help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `simd_json::prelude`
+  --> crates/op-plugins/src/auto_create.rs:11:5
+   |
+11 | use simd_json::prelude::*;
+   |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `simd_json::prelude`
+ --> crates/op-plugins/src/builtin.rs:5:5
+  |
+5 | use simd_json::prelude::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `simd_json::prelude`
+ --> crates/op-plugins/src/registry.rs:8:5
+  |
+8 | use simd_json::prelude::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `simd_json::prelude`
+ --> crates/op-plugins/src/state.rs:7:5
+  |
+7 | use simd_json::prelude::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `simd_json::prelude`
+  --> crates/op-plugins/src/state_plugins/mcp.rs:12:5
+   |
+12 | use simd_json::prelude::*;
+   |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `simd_json::prelude`
+ --> crates/op-plugins/src/state_plugins/config.rs:7:5
+  |
+7 | use simd_json::prelude::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `simd_json::prelude`
+ --> crates/op-plugins/src/state_plugins/dinit.rs:9:5
+  |
+9 | use simd_json::prelude::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused variable: `desired`
+  --> crates/op-plugins/src/state_plugins/gcloud_adc.rs:83:54
+   |
+83 |     async fn calculate_diff(&self, _current: &Value, desired: &Value) -> Result<StateDiff> {
+   |                                                      ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_desired`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `category` is never read
+  --> crates/op-plugins/src/auto_create.rs:47:5
+   |
+45 | pub struct AutoPlugin {
+   |            ---------- field in this struct
+46 |     name: String,
+47 |     category: String,
+   |     ^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `op-plugins` (lib) generated 51 warnings (run `cargo fix --lib -p op-plugins` to apply 43 suggestions)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.75s
+warning: the following packages contain code that will be rejected by a future version of Rust: redis v0.25.4
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 3`

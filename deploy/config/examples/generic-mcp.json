@@ -1,0 +1,76 @@
+{
+    "version": "1.0.0",
+    "description": "op-dbus MCP Server Configuration",
+    "servers": {
+        "op-dbus-compact": {
+            "name": "op-dbus-compact",
+            "description": "Compact mode with 4 meta-tools: list_tools, search_tools, get_tool_schema, execute_tool. Recommended for AI clients with limited context windows.",
+            "transport": {
+                "type": "sse",
+                "url": "https://op-dbus.ghostbridge.tech/mcp/compact",
+                "messageEndpoint": "https://op-dbus.ghostbridge.tech/mcp/compact/message"
+            },
+            "capabilities": {
+                "tools": true,
+                "resources": false,
+                "prompts": false
+            }
+        },
+        "op-dbus-standard": {
+            "name": "op-dbus-standard",
+            "description": "Standard mode exposing all tools directly via tools/list. Provides full tool access without meta-tool indirection.",
+            "transport": {
+                "type": "sse",
+                "url": "https://op-dbus.ghostbridge.tech/mcp/sse",
+                "messageEndpoint": "https://op-dbus.ghostbridge.tech/mcp/message"
+            },
+            "capabilities": {
+                "tools": true,
+                "resources": true,
+                "prompts": true
+            }
+        },
+        "op-dbus-agents": {
+            "name": "op-dbus-agents",
+            "description": "Critical Agents MCP with specialized AI agents: memory, context_manager, sequential_thinking, mem0 (semantic memory), search_specialist, deployment, python_pro, debugger, prompt_engineer.",
+            "transport": {
+                "type": "sse",
+                "url": "https://op-dbus.ghostbridge.tech/mcp/agents",
+                "messageEndpoint": "https://op-dbus.ghostbridge.tech/mcp/agents/message"
+            },
+            "capabilities": {
+                "tools": true,
+                "resources": false,
+                "prompts": false
+            }
+        }
+    },
+    "endpoints": {
+        "sse": {
+            "compact": "https://op-dbus.ghostbridge.tech/mcp/compact",
+            "standard": "https://op-dbus.ghostbridge.tech/mcp/sse",
+            "agents": "https://op-dbus.ghostbridge.tech/mcp/agents"
+        },
+        "post": {
+            "compact": "https://op-dbus.ghostbridge.tech/mcp/compact/message",
+            "standard": "https://op-dbus.ghostbridge.tech/mcp/message",
+            "agents": "https://op-dbus.ghostbridge.tech/mcp/agents/message",
+            "direct": "https://op-dbus.ghostbridge.tech/mcp/"
+        },
+        "discovery": {
+            "config": "https://op-dbus.ghostbridge.tech/api/mcp/_config",
+            "tools": "https://op-dbus.ghostbridge.tech/api/tools",
+            "health": "https://op-dbus.ghostbridge.tech/api/health"
+        }
+    },
+    "defaults": {
+        "host": "op-dbus.ghostbridge.tech",
+        "port": 443,
+        "protocol": "https"
+    },
+    "_usage": {
+        "cursor": "Copy mcpServers to ~/.cursor/mcp.json or project .cursor/mcp.json",
+        "vscode": "Add mcp.servers to VS Code settings.json",
+        "claude_desktop": "Use stdio transport with op-mcp-server binary, or SSE with mcp-proxy bridge"
+    }
+}

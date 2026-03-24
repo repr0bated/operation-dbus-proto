@@ -1,0 +1,23 @@
+#!/bin/bash
+# Load sessions from disk on startup
+# Called by: ExecStartPost in ghostbridge-session@.service
+
+SESSIONS_DIR="/var/lib/ghostbridge/sessions"
+BACKUP_DIR="/var/lib/ghostbridge/backups"
+
+mkdir -p "$SESSIONS_DIR"
+
+echo "$(date): Loading sessions from disk..."
+
+# Find most recent backup
+LATEST_BACKUP=$(ls -t "$BACKUP_DIR"/sessions-*.tar.gz 2>/dev/null | head -1)
+
+if [ -n "$LATEST_BACKUP" ] && [ -f "$LATEST_BACKUP" ]; then
+    echo "$(date): Restoring from $LATEST_BACKUP"
+    tar -xzf "$LATEST_BACKUP" -C "$SESSIONS_DIR" 2>/dev/null || true
+    echo "$(date): Sessions restored"
+else
+    echo "$(date): No backup found, starting fresh"
+fi
+
+echo "$(date): Session load complete"

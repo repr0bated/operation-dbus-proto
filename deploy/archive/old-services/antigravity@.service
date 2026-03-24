@@ -1,0 +1,32 @@
+[Unit]
+Description=Antigravity IDE with Virtual Display (Instance %i)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=%i
+Group=%i
+
+# Dynamic runtime dir based on user
+Environment=XDG_RUNTIME_DIR=/run/user/%U
+Environment=WAYLAND_DISPLAY=antigravity-%i
+Environment=WLR_BACKENDS=headless
+Environment=WLR_LIBINPUT_NO_DEVICES=1
+Environment=WLR_RENDERER=pixman
+Environment=LIBGL_ALWAYS_SOFTWARE=1
+
+Environment=ELECTRON_DISABLE_GPU=1
+
+# The %h expands to home directory
+ExecStart=/usr/bin/cage -s -- /usr/bin/antigravity --tunnel --disable-gpu
+
+Restart=always
+RestartSec=10
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=antigravity-%i
+
+[Install]
+WantedBy=multi-user.target

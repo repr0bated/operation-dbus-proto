@@ -1,0 +1,80 @@
+{
+  "_comment": "MCP Server Configuration for Cursor/Claude Desktop",
+  
+  "mcpServers": {
+    "op-agents": {
+      "serverUrl": "https://op-dbus.ghostbridge.tech/mcp/agents",
+      "transport": "sse",
+      "description": "Run-on-connection agents: rust_pro, backend_architect, sequential_thinking, memory, context_manager"
+    },
+    "op-compact": {
+      "serverUrl": "https://op-dbus.ghostbridge.tech/mcp/compact",
+      "transport": "sse",
+      "description": "Compact mode with 4 meta-tools for discovering 148+ tools"
+    }
+  },
+  
+  "_run_on_connection": {
+    "comment": "These agents START IMMEDIATELY when you connect to op-agents",
+    "agents": [
+      {
+        "id": "rust_pro",
+        "priority": 100,
+        "tools": ["rust_pro_check", "rust_pro_build", "rust_pro_test", "rust_pro_clippy", "rust_pro_format", "rust_pro_run", "rust_pro_doc", "rust_pro_bench"]
+      },
+      {
+        "id": "backend_architect",
+        "priority": 99,
+        "tools": ["backend_architect_analyze", "backend_architect_design", "backend_architect_review", "backend_architect_suggest", "backend_architect_document"]
+      },
+      {
+        "id": "sequential_thinking",
+        "priority": 98,
+        "tools": ["sequential_thinking_think", "sequential_thinking_plan", "sequential_thinking_analyze", "sequential_thinking_conclude", "sequential_thinking_reflect"]
+      },
+      {
+        "id": "memory",
+        "priority": 97,
+        "tools": ["memory_remember", "memory_recall", "memory_forget", "memory_list", "memory_search"]
+      },
+      {
+        "id": "context_manager",
+        "priority": 96,
+        "tools": ["context_manager_save", "context_manager_load", "context_manager_list", "context_manager_delete", "context_manager_export", "context_manager_import", "context_manager_clear"]
+      }
+    ]
+  },
+  
+  "_compact_tools": {
+    "comment": "These 4 tools are exposed by op-compact for discovering 148+ other tools",
+    "tools": [
+      {
+        "name": "list_tools",
+        "description": "List available tools, filter by category"
+      },
+      {
+        "name": "search_tools",
+        "description": "Search tools by keyword"
+      },
+      {
+        "name": "get_tool_schema",
+        "description": "Get input schema for a tool before calling"
+      },
+      {
+        "name": "execute_tool",
+        "description": "Execute any discovered tool"
+      }
+    ]
+  },
+  
+  "_recommended_workflow": [
+    "1. Connect to op-agents (run-on-connection agents start automatically)",
+    "2. Use memory_recall to check for previous session context",
+    "3. Use context_manager_load to restore saved context",
+    "4. Use rust_pro_check to verify project compiles",
+    "5. Use sequential_thinking_plan for complex tasks",
+    "6. Connect to op-compact if you need to discover additional tools",
+    "7. Use memory_remember to save important facts during work",
+    "8. Use context_manager_save before ending session"
+  ]
+}

@@ -1,0 +1,20 @@
+{
+    "mcpServers": {
+        "op-dbus-compact": {
+            "command": "curl",
+            "args": [
+                "-N",
+                "-H",
+                "Accept: text/event-stream",
+                "https://op-dbus.ghostbridge.tech/mcp/compact"
+            ],
+            "description": "Compact op-dbus MCP with meta-tools - NOTE: Claude Desktop prefers stdio. Use op-mcp-server binary for native support."
+        },
+        "op-dbus-stdio": {
+            "command": "/usr/local/bin/op-mcp-server",
+            "args": [],
+            "description": "op-dbus MCP via stdio (recommended for Claude Desktop)"
+        }
+    },
+    "_note": "Claude Desktop natively supports stdio-based MCP servers. For SSE-based servers, you may need mcp-proxy or similar bridge. The op-mcp-server binary provides native stdio support."
+}

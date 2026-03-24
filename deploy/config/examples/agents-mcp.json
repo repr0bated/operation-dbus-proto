@@ -1,0 +1,92 @@
+{
+  "_comment": "Agents MCP configuration - run-on-connection cognitive agents",
+  "mcpServers": {
+    "op-agents": {
+      "serverUrl": "https://op-dbus.ghostbridge.tech/mcp/agents",
+      "transport": "sse",
+      "description": "Always-on cognitive agents with run-on-connection support"
+    }
+  },
+  "_run_on_connection_agents": {
+    "description": "These agents start automatically when you connect",
+    "agents": {
+      "rust_pro": {
+        "description": "Rust development environment",
+        "operations": ["check", "build", "test", "clippy", "format", "run"],
+        "use_cases": [
+          "Run `rust_pro_check` to check compilation",
+          "Run `rust_pro_test` to execute tests",
+          "Run `rust_pro_clippy` for linting"
+        ]
+      },
+      "backend_architect": {
+        "description": "System design and architecture",
+        "operations": ["analyze", "design", "review", "suggest", "document"],
+        "use_cases": [
+          "Run `backend_architect_analyze` to analyze architecture",
+          "Run `backend_architect_review` for design review",
+          "Run `backend_architect_suggest` for improvement suggestions"
+        ]
+      },
+      "sequential_thinking": {
+        "description": "Step-by-step reasoning",
+        "operations": ["think", "plan", "analyze", "conclude"],
+        "use_cases": [
+          "Use for complex multi-step reasoning",
+          "Break down problems into steps",
+          "Track reasoning progress"
+        ]
+      },
+      "memory": {
+        "description": "Session memory",
+        "operations": ["remember", "recall", "forget", "list"],
+        "use_cases": [
+          "Remember important facts with `memory_remember`",
+          "Recall stored information with `memory_recall`"
+        ]
+      },
+      "context_manager": {
+        "description": "Persistent context",
+        "operations": ["save", "load", "list", "delete", "export", "import"],
+        "use_cases": [
+          "Save context for future sessions",
+          "Load previous session context",
+          "Export/import context between environments"
+        ]
+      }
+    }
+  },
+  "_available_agents": {
+    "description": "These agents are available on-demand (started on first call)",
+    "agents": [
+      "mem0 - Semantic vector memory",
+      "search_specialist - Code/docs/web search",
+      "python_pro - Python development",
+      "debugger - Error analysis",
+      "deployment - Service deployment",
+      "prompt_engineer - Prompt optimization"
+    ]
+  },
+  "_workflow": {
+    "recommended_startup": [
+      "1. Connect to agents MCP (run-on-connection agents start automatically)",
+      "2. Use memory_recall to check for previous context",
+      "3. Use context_manager_load to restore session state",
+      "4. Use rust_pro_check to verify project compiles",
+      "5. Use sequential_thinking_plan for complex tasks"
+    ],
+    "rust_development": [
+      "rust_pro_check - Quick compilation check",
+      "rust_pro_build - Full build",
+      "rust_pro_test - Run tests",
+      "rust_pro_clippy - Lint code",
+      "rust_pro_format - Check formatting"
+    ],
+    "architecture_review": [
+      "backend_architect_analyze - Analyze codebase structure",
+      "backend_architect_review - Review design decisions",
+      "backend_architect_suggest - Get improvement suggestions",
+      "backend_architect_document - Generate documentation"
+    ]
+  }
+}

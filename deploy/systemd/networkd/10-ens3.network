@@ -1,0 +1,7 @@
+# ens3 remains an unmanaged OVS system port.
+# Bridge membership is restored from persistent OVSDB state, not by networkd.
+[Match]
+Name=ens3
+
+[Link]
+Unmanaged=yes
