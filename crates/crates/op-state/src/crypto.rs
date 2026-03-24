@@ -8,7 +8,6 @@ use anyhow::{bail, Context, Result};
 use argon2::{password_hash::SaltString, Argon2};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use serde::{Deserialize, Serialize};
-use simd_json::prelude::*;
 use std::path::Path;
 
 const NONCE_SIZE: usize = 12;

@@ -9,6 +9,7 @@
 //! - Session keys rotate per-login using SERVER NONCE (not timestamp)
 //! - See `SECURITY-MODEL.md` in this crate for full details
 
+use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use std::collections::HashMap;
@@ -568,7 +569,7 @@ impl WireGuardAuthManager {
 
         if let Ok(stored_psk) = key_storage.retrieve_key(&psk_key_id).await {
             if stored_psk.len() == 32 {
-                return Ok(base64::encode(&stored_psk));
+                return Ok(base64::engine::general_purpose::STANDARD.encode(stored_psk));
             }
         }
 
@@ -584,7 +585,7 @@ impl WireGuardAuthManager {
                 warn!("Failed to store PSK in encrypted storage: {}", e);
             }
 
-            Ok(base64::encode(psk))
+            Ok(base64::engine::general_purpose::STANDARD.encode(psk))
         } else {
             Err(anyhow::anyhow!("Failed to derive PSK"))
         }
@@ -624,7 +625,7 @@ impl WireGuardAuthManager {
             .derive_session_keys(&[peer_key_bytes], &[server_nonce]);
 
         if let Some((session_key, _)) = session_keys.first() {
-            Ok(base64::encode(session_key))
+            Ok(base64::engine::general_purpose::STANDARD.encode(session_key))
         } else {
             Err(anyhow::anyhow!("Failed to derive session key"))
         }

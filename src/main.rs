@@ -2,7 +2,6 @@
 //!
 //! Production entry point with all components wired together.
 
-use simd_json::prelude::*;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;

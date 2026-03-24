@@ -98,7 +98,7 @@ message NetStateChange {
     tonic_build::configure()
         .build_server(true)
         .build_client(true)
-        .compile(&[proto_path], &[out_dir])?;
+        .compile_protos(&[proto_path], &[out_dir])?;
 
     Ok(())
 }

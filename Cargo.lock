@@ -3332,6 +3332,7 @@ dependencies = [
  "axum",
  "chrono",
  "clap",
+ "futures",
  "op-cache",
  "op-core",
  "op-dynamic-loader",

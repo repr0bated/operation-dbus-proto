@@ -22,7 +22,6 @@ use anyhow::Result;
 use chrono::Utc;
 use op_execution_tracker::{ExecutionContext, ExecutionResult, ExecutionTracker};
 use op_tools::ToolRegistry;
-use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};

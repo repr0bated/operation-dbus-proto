@@ -3,7 +3,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
 
 /// Desired state configuration

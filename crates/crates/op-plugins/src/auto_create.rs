@@ -6,7 +6,6 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use op_state::StatePlugin;
-use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
 use std::sync::Arc;
 use tokio::sync::RwLock;

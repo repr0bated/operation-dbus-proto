@@ -5,7 +5,6 @@ use anyhow::Result;
 use async_trait::async_trait;
 use pocketflow_rs::{Context, Flow, Node, ProcessResult, ProcessState};
 use serde_json;
-use simd_json::prelude::*;
 use std::sync::Arc;
 
 /// Workflow states for MCP operations

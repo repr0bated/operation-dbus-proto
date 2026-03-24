@@ -4,14 +4,13 @@
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::debug;
 
-use crate::tool::{BoxedTool, Tool};
+use crate::tool::BoxedTool;
 
 /// Tool definition metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]

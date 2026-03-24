@@ -3,7 +3,6 @@
 //! Provides a durable, NUMA-aware, BTRFS-integrated registry for all plugins.
 
 use anyhow::{anyhow, Result};
-use simd_json::prelude::*;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

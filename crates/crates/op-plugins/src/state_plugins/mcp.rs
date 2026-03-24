@@ -8,7 +8,6 @@ use op_state::{
 };
 use op_state_store::{ExecutionJob, ExecutionStatus, StateStore};
 use serde::{Deserialize, Serialize};
-use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
 use std::collections::HashMap;
 use std::sync::Arc;

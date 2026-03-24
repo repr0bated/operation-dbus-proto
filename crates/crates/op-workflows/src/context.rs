@@ -6,7 +6,6 @@
 //! - Tool execution
 //! - Logging and metrics
 
-use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
 use std::collections::HashMap;
 use std::sync::Arc;

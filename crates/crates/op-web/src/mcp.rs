@@ -51,7 +51,6 @@ impl SseBroadcaster {
     }
 }
 
-/// Global SSE broadcaster
 lazy_static::lazy_static! {
     static ref GLOBAL_BROADCASTER: SseBroadcaster = SseBroadcaster::new();
 }

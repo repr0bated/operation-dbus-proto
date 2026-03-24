@@ -3,7 +3,6 @@
 //! This module provides secure storage for WireGuard private keys and session data
 //! using encrypted Btrfs subvolumes with native encryption (experimental) or LUKS.
 
-use blake2::Digest;
 use chacha20poly1305::{AeadInPlace, ChaCha20Poly1305, Key, KeyInit, Nonce};
 use ring::rand::{SecureRandom, SystemRandom};
 use serde::{Deserialize, Serialize};

@@ -4,7 +4,6 @@
 //! interfaces as executable tools in the registry.
 
 use anyhow::Result;
-use futures::StreamExt;
 use simd_json::prelude::*;
 use std::future::Future;
 use std::pin::Pin;

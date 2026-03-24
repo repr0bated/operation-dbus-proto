@@ -9,7 +9,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 
 use crate::mcp::{McpRequest, McpResponse, McpError, PROTOCOL_VERSION, SERVER_VERSION};
-use op_tools::{Tool, ToolRegistry};
+use op_tools::ToolRegistry;
 
 // ============================================================================
 // LIVE AGENT

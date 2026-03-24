@@ -1,7 +1,6 @@
 use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use simd_json::OwnedValue as Value;
-use simd_json::prelude::*;
 use crate::mcp::McpCompactDispatcher;
 use super::session::ChatSession;
 use crate::error::Result;

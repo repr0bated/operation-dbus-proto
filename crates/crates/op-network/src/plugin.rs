@@ -5,7 +5,6 @@
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
 use std::time::Duration;
 use tokio::time::sleep;

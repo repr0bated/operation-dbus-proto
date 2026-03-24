@@ -6,6 +6,7 @@ use crate::memory_store::{CognitiveMemoryStore, MemoryEntry, MemoryType, MemoryQ
 use op_mcp::tool_registry::{Tool, ToolContent, ToolResult, ToolMetadata, SecurityLevel};
 use simd_json::OwnedValue as Value;
 use simd_json::prelude::*;
+use futures::executor;
 use std::sync::Arc;
 use uuid::Uuid;
 use chrono::Utc;
@@ -106,7 +107,9 @@ pub struct CognitiveToolRegistry {
 impl CognitiveToolRegistry {
     pub fn new(memory_store: Arc<CognitiveMemoryStore>) -> Self {
         let registry = ToolRegistry::new();
-        registry.register(Arc::new(MemoryTool::new(memory_store)));
+        let _ = executor::block_on(
+            registry.register(Arc::new(MemoryTool::new(memory_store)))
+        );
         Self { registry }
     }
 

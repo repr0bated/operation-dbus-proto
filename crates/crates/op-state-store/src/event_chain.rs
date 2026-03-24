@@ -23,9 +23,7 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
-use simd_json::ValueBuilder;
 use std::collections::HashMap;
 
 use crate::schema_validator::canonicalize_json;

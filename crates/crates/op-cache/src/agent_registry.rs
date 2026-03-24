@@ -113,7 +113,7 @@ impl AgentCapability {
             Self::DatabaseQuery => "database_query",
             Self::FileOperation => "file_operation",
             Self::ShellExecution => "shell_execution",
-            Self::Custom(id) => {
+            Self::Custom(_id) => {
                 // Return static str for known custom IDs, or generic
                 "custom"
             }
