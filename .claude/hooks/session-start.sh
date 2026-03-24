@@ -10,10 +10,14 @@ PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." &
 
 echo "==> Installing frontend dependencies (crates/)..."
 cd "$PROJECT_DIR/crates"
-npm install
+if ! npm install; then
+  echo "Warning: Failed to install npm dependencies"
+fi
 
 echo "==> Fetching Rust dependencies..."
 cd "$PROJECT_DIR"
-cargo fetch
+if ! cargo fetch; then
+  echo "Warning: Failed to fetch Rust dependencies"
+fi
 
 echo "==> Session setup complete."
