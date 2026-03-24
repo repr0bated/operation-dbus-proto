@@ -19,7 +19,6 @@ use op_agents::agent_registry::AgentRegistry;
 use op_grpc_bridge::{GrpcClientPool, RemoteOperationClient};
 use op_llm::chat::ChatManager;
 use op_llm::provider::ChatMessage;
-use op_state::manager::StateManager;
 use op_state_store::{SqliteStore, StateStore};
 use op_tools::registry::ToolDefinition;
 use op_tools::tool::{BoxedTool, Tool};

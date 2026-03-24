@@ -20,6 +20,8 @@ write_resolvconf() {
 
   if [ "$found_dns" -eq 1 ]; then
     mv "$tmp_file" /run/resolvconf/resolv.conf
+    chown root:root /run/resolvconf/resolv.conf
+    chmod 0644 /run/resolvconf/resolv.conf
   else
     rm -f "$tmp_file"
   fi
