@@ -846,47 +846,60 @@ impl StatePlugin for PrivacyRouterPlugin {
             .await
             .unwrap_or(PrivacyRoutesState { routes: Vec::new() });
 
-        let mut state = json!({
-            "config": self.config,
-            "components": {}
-        });
+        let mut components = simd_json::owned::Object::new();
 
         if self.config.wireguard.enabled {
-            state["components"]["wireguard"] = json!({
-                "enabled": true,
-                "container_id": self.config.wireguard.container_id,
-                "socket_port": self.config.wireguard.socket_port,
-            });
+            components.insert(
+                "wireguard".to_string(),
+                json!({
+                    "enabled": true,
+                    "container_id": self.config.wireguard.container_id,
+                    "socket_port": self.config.wireguard.socket_port,
+                }),
+            );
         }
         if self.config.warp.enabled {
-            state["components"]["warp"] = json!({
-                "enabled": true,
-                "bridge_interface": self.config.warp.bridge_interface,
-                "wgcf_config": self.config.warp.wgcf_config,
-            });
+            components.insert(
+                "warp".to_string(),
+                json!({
+                    "enabled": true,
+                    "bridge_interface": self.config.warp.bridge_interface,
+                    "wgcf_config": self.config.warp.wgcf_config,
+                }),
+            );
         }
         if self.config.xray.enabled {
-            state["components"]["xray"] = json!({
-                "enabled": true,
-                "container_id": self.config.xray.container_id,
-                "socket_port": self.config.xray.socket_port,
-                "upstream_server": self.config.vps.xray_server,
-                "upstream_port": self.config.vps.xray_port,
-            });
+            components.insert(
+                "xray".to_string(),
+                json!({
+                    "enabled": true,
+                    "container_id": self.config.xray.container_id,
+                    "socket_port": self.config.xray.socket_port,
+                    "upstream_server": self.config.vps.xray_server,
+                    "upstream_port": self.config.vps.xray_port,
+                }),
+            );
         }
         if self.config.openflow.enabled {
-            state["components"]["openflow"] = json!({
-                "enabled": true,
-                "enable_security_flows": self.config.openflow.enable_security_flows,
-                "obfuscation_level": self.config.openflow.obfuscation_level,
-                "privacy_flows": self.config.openflow.privacy_flows.len(),
-                "function_routes": self.config.openflow.function_routing.len(),
-                "published_routes": privacy_routes.routes.len(),
-                "shared_ingress_ports": Self::unique_ingress_ports(&privacy_routes.routes),
-            });
+            components.insert(
+                "openflow".to_string(),
+                json!({
+                    "enabled": true,
+                    "enable_security_flows": self.config.openflow.enable_security_flows,
+                    "obfuscation_level": self.config.openflow.obfuscation_level,
+                    "privacy_flows": self.config.openflow.privacy_flows.len(),
+                    "function_routes": self.config.openflow.function_routing.len(),
+                    "published_routes": privacy_routes.routes.len(),
+                    "shared_ingress_ports": Self::unique_ingress_ports(&privacy_routes.routes),
+                }),
+            );
         }
-        state["components"]["containers"] = json!(self.config.containers);
-        Ok(state)
+        components.insert("containers".to_string(), json!(self.config.containers));
+
+        Ok(json!({
+            "config": self.config,
+            "components": components
+        }))
     }
 
     async fn calculate_diff(&self, current: &Value, desired: &Value) -> Result<StateDiff> {

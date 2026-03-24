@@ -100,9 +100,19 @@ fn start_privacy_router_bootstrap(state_manager: Arc<op_state::manager::StateMan
         loop {
             interval.tick().await;
 
+            let desired_config = match simd_json::serde::to_owned_value(
+                op_plugins::state_plugins::privacy_router::PrivacyRouterConfig::default(),
+            ) {
+                Ok(config) => config,
+                Err(e) => {
+                    tracing::warn!("Failed to encode default privacy_router config: {}", e);
+                    continue;
+                }
+            };
+
             let desired = op_state::manager::DesiredState {
                 version: 1,
-                plugins: HashMap::from([("privacy_router".to_string(), simd_json::json!({}))]),
+                plugins: HashMap::from([("privacy_router".to_string(), desired_config)]),
             };
 
             match state_manager
