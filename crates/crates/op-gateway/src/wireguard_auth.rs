@@ -10,21 +10,17 @@
 //! - See `SECURITY-MODEL.md` in this crate for full details
 
 use serde::{Deserialize, Serialize};
-use simd_json::{owned::Object as SimdObject, OwnedValue};
 use sqlx::Row;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{Mutex, RwLock};
 use tokio::time::interval;
-use tracing::{debug, error, info, warn};
-use uuid::Uuid;
+use tracing::{debug, info, warn};
 
 use argon2::Argon2;
 use blake2::{Blake2s256, Digest};
-use chacha20poly1305::{AeadInPlace, ChaCha20Poly1305, Key};
-use ring::{digest, hkdf, rand::SystemRandom};
-use x25519_dalek::{PublicKey, SharedSecret};
+use ring::rand::SystemRandom;
 
 use crate::encrypted_storage::{EncryptedKeyStorage, EncryptedStorageConfig, KeyType};
 use anyhow::Result;
@@ -875,7 +871,7 @@ impl SimdCryptoEngine {
             {
                 // Derive session ID from session key
                 let mut hasher = Blake2s256::new();
-                hasher.update(&session_key);
+                hasher.update(session_key);
                 let hash = hasher.finalize();
                 let session_id: [u8; 16] = hash[..16].try_into().unwrap();
 

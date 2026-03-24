@@ -2,7 +2,6 @@
 //!
 //! Universal object inspector that analyzes data structures and generates schemas.
 
-use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -152,11 +151,7 @@ impl IntrospectiveGadget {
                 }
             }
             Value::Array(arr) => {
-                let item_schema = if let Some(first) = arr.first() {
-                    Some(Box::new(self.analyze_json_schema(first)))
-                } else {
-                    None
-                };
+                let item_schema = arr.first().map(|first| Box::new(self.analyze_json_schema(first)));
 
                 ObjectSchema {
                     schema_type: "array".to_string(),

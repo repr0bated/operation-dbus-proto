@@ -30,17 +30,14 @@ pub struct MemoryEntry {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+#[derive(Default)]
 pub enum MemoryType {
     Ephemeral,  // Session-based, may expire
+    #[default]
     Persistent, // Permanent storage
     Shared,     // Cross-session shared
 }
 
-impl Default for MemoryType {
-    fn default() -> Self {
-        MemoryType::Persistent
-    }
-}
 
 fn now_ts() -> u64 {
     SystemTime::now()
@@ -68,7 +65,7 @@ impl MemoryEntry {
 
     /// Check if entry has expired
     pub fn is_expired(&self) -> bool {
-        self.expires_at.map_or(false, |exp| now_ts() > exp)
+        self.expires_at.is_some_and(|exp| now_ts() > exp)
     }
 }
 
@@ -103,7 +100,7 @@ impl MemoryAgent {
 
     fn persist(&self) -> Result<(), String> {
         let cache = self.cache.read().map_err(|_| "Failed to acquire lock")?;
-        let content = Self::serialize_memory_entries(&*cache)?;
+        let content = Self::serialize_memory_entries(&cache)?;
         fs::write(&self.memory_path, content).map_err(|e| e.to_string())?;
         Ok(())
     }

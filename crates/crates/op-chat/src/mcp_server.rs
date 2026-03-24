@@ -372,7 +372,7 @@ impl McpService for ChatMcpServer {
         &self,
         _request: Request<HealthRequest>,
     ) -> std::result::Result<Response<HealthResponse>, Status> {
-        let tool_count = self.chat_actor.tool_registry().list().await.len();
+        let _tool_count = self.chat_actor.tool_registry().list().await.len();
         Ok(Response::new(HealthResponse {
             healthy: true,
             version: "1.0.0".to_string(),
@@ -454,7 +454,7 @@ impl McpService for ChatMcpServer {
                     success: tracked.success(),
                     result: result_struct,
                     error: tracked.error().cloned(),
-                    duration_ms: tracked.result.duration_ms as u64,
+                    duration_ms: tracked.result.duration_ms,
                 }))
             }
             Err(e) => Ok(Response::new(CallToolResponse {

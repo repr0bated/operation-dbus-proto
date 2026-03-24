@@ -7,10 +7,8 @@
 //!
 //! Dependencies are first-class objects in the state store.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use zbus::Connection;
 
 use crate::error::{OpDbusError, Result};
@@ -303,7 +301,7 @@ impl DependencyManager {
     }
 
     /// Check kernel capability
-    async fn check_kernel_capability(&self, name: &str, method: &CapabilityCheckMethod) -> Result<DependencyState> {
+    async fn check_kernel_capability(&self, _name: &str, method: &CapabilityCheckMethod) -> Result<DependencyState> {
         match method {
             CapabilityCheckMethod::SysfsPath(path) => {
                 if std::path::Path::new(path).exists() {
@@ -329,9 +327,9 @@ impl DependencyManager {
                     Err(_) => Ok(DependencyState::Unknown),
                 }
             }
-            CapabilityCheckMethod::KernelConfig(config) => {
+            CapabilityCheckMethod::KernelConfig(_config) => {
                 // Check /boot/config-* or /proc/config.gz
-                let config_path = format!("/proc/config.gz");
+                let config_path = "/proc/config.gz".to_string();
                 if std::path::Path::new(&config_path).exists() {
                     // Would need to decompress and search
                     Ok(DependencyState::Unknown)

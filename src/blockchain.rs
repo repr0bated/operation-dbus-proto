@@ -117,17 +117,17 @@ impl BlockchainStream {
     pub async fn new(base_path: PathBuf) -> Result<Self> {
         // Create directories
         tokio::fs::create_dir_all(&base_path).await
-            .map_err(|e| OpDbusError::IoError(e))?;
+            .map_err(OpDbusError::IoError)?;
         
         let timing_dir = base_path.join("timing");
         let vector_dir = base_path.join("vectors");
         let state_dir = base_path.join("state");
         let snapshots_dir = base_path.join("snapshots");
 
-        tokio::fs::create_dir_all(&timing_dir).await.map_err(|e| OpDbusError::IoError(e))?;
-        tokio::fs::create_dir_all(&vector_dir).await.map_err(|e| OpDbusError::IoError(e))?;
-        tokio::fs::create_dir_all(&state_dir).await.map_err(|e| OpDbusError::IoError(e))?;
-        tokio::fs::create_dir_all(&snapshots_dir).await.map_err(|e| OpDbusError::IoError(e))?;
+        tokio::fs::create_dir_all(&timing_dir).await.map_err(OpDbusError::IoError)?;
+        tokio::fs::create_dir_all(&vector_dir).await.map_err(OpDbusError::IoError)?;
+        tokio::fs::create_dir_all(&state_dir).await.map_err(OpDbusError::IoError)?;
+        tokio::fs::create_dir_all(&snapshots_dir).await.map_err(OpDbusError::IoError)?;
 
         // Try to create BTRFS subvolumes (falls back silently)
         Self::try_create_subvolume(&timing_dir).await;
@@ -237,7 +237,7 @@ impl BlockchainStream {
             .map_err(|e| OpDbusError::Serialization(e.to_string()))?;
         
         tokio::fs::write(&file_path, data).await
-            .map_err(|e| OpDbusError::IoError(e))?;
+            .map_err(OpDbusError::IoError)?;
 
         Ok(())
     }
@@ -249,7 +249,7 @@ impl BlockchainStream {
         let bytes: Vec<u8> = vector.iter().flat_map(|f| f.to_le_bytes()).collect();
         
         tokio::fs::write(&file_path, bytes).await
-            .map_err(|e| OpDbusError::IoError(e))?;
+            .map_err(OpDbusError::IoError)?;
 
         Ok(())
     }
@@ -263,7 +263,7 @@ impl BlockchainStream {
             .map_err(|e| OpDbusError::Serialization(e.to_string()))?;
         
         tokio::fs::write(&file_path, data).await
-            .map_err(|e| OpDbusError::IoError(e))?;
+            .map_err(OpDbusError::IoError)?;
 
         Ok(())
     }
@@ -317,7 +317,7 @@ impl BlockchainStream {
         let file_path = state_dir.join(format!("{}.json", key));
         
         let mut data = tokio::fs::read_to_string(&file_path).await
-            .map_err(|e| OpDbusError::IoError(e))?;
+            .map_err(OpDbusError::IoError)?;
         
         unsafe { simd_json::from_str(&mut data) }
             .map_err(|e| OpDbusError::Serialization(e.to_string()))
@@ -369,7 +369,7 @@ impl BlockchainStream {
             _ => {
                 // Fall back to copy
                 tokio::fs::create_dir_all(&snapshot_path).await
-                    .map_err(|e| OpDbusError::IoError(e))?;
+                    .map_err(OpDbusError::IoError)?;
                 
                 Self::copy_dir(&state_dir, &snapshot_path).await?;
                 tracing::info!("Created copy snapshot: {}", snapshot_name);
@@ -381,19 +381,19 @@ impl BlockchainStream {
 
     async fn copy_dir(src: &Path, dst: &Path) -> Result<()> {
         let mut entries = tokio::fs::read_dir(src).await
-            .map_err(|e| OpDbusError::IoError(e))?;
+            .map_err(OpDbusError::IoError)?;
 
-        while let Some(entry) = entries.next_entry().await.map_err(|e| OpDbusError::IoError(e))? {
+        while let Some(entry) = entries.next_entry().await.map_err(OpDbusError::IoError)? {
             let src_path = entry.path();
             let dst_path = dst.join(entry.file_name());
 
-            if entry.file_type().await.map_err(|e| OpDbusError::IoError(e))?.is_dir() {
+            if entry.file_type().await.map_err(OpDbusError::IoError)?.is_dir() {
                 tokio::fs::create_dir_all(&dst_path).await
-                    .map_err(|e| OpDbusError::IoError(e))?;
+                    .map_err(OpDbusError::IoError)?;
                 Box::pin(Self::copy_dir(&src_path, &dst_path)).await?;
             } else {
                 tokio::fs::copy(&src_path, &dst_path).await
-                    .map_err(|e| OpDbusError::IoError(e))?;
+                    .map_err(OpDbusError::IoError)?;
             }
         }
 
@@ -404,10 +404,10 @@ impl BlockchainStream {
     pub async fn list_snapshots(&self) -> Result<Vec<String>> {
         let snapshots_dir = self.base_path.join("snapshots");
         let mut entries = tokio::fs::read_dir(&snapshots_dir).await
-            .map_err(|e| OpDbusError::IoError(e))?;
+            .map_err(OpDbusError::IoError)?;
 
         let mut snapshots = Vec::new();
-        while let Some(entry) = entries.next_entry().await.map_err(|e| OpDbusError::IoError(e))? {
+        while let Some(entry) = entries.next_entry().await.map_err(OpDbusError::IoError)? {
             snapshots.push(entry.file_name().to_string_lossy().to_string());
         }
 

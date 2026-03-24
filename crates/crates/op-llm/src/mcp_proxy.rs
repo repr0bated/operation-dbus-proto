@@ -5,10 +5,10 @@ use async_trait::async_trait;
 use simd_json::prelude::*;
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tracing::{debug, warn};
+use tracing::debug;
 
 use crate::provider::{
-    ChatMessage, ChatRequest, ChatResponse, LlmProvider, ModelInfo, ProviderType, ToolChoice,
+    ChatMessage, ChatRequest, ChatResponse, LlmProvider, ModelInfo, ProviderType,
 };
 
 pub struct McpProxyProvider {

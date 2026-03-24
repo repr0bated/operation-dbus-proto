@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 use super::{DinitProxy, ProcessManager};
 use crate::schema::{ManagerState, ServiceDef, ServiceName, ServiceStatus};

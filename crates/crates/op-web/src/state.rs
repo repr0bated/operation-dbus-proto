@@ -110,21 +110,19 @@ impl AppState {
         let tool_registry = if let Some(registry) = tool_registry {
             info!("Using shared tool registry from main binary (projection already complete)");
             registry
+        } else if let Some(remote_url) = remote_tool_source_url() {
+            info!("Creating tool registry from op-dbus at {}", remote_url);
+            let registry = Arc::new(ToolRegistry::new());
+            register_remote_tools(&registry, &remote_url).await?;
+            registry
         } else {
-            if let Some(remote_url) = remote_tool_source_url() {
-                info!("Creating tool registry from op-dbus at {}", remote_url);
-                let registry = Arc::new(ToolRegistry::new());
-                register_remote_tools(&registry, &remote_url).await?;
-                registry
-            } else {
-                info!("Creating new tool registry (standalone mode)");
-                let registry = Arc::new(ToolRegistry::new());
+            info!("Creating new tool registry (standalone mode)");
+            let registry = Arc::new(ToolRegistry::new());
 
-                // Register ALL tools (including D-Bus projection) - only in standalone mode
-                register_all_tools(&registry).await?;
+            // Register ALL tools (including D-Bus projection) - only in standalone mode
+            register_all_tools(&registry).await?;
 
-                registry
-            }
+            registry
         };
 
         // Log tool count

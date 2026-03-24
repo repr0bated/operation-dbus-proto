@@ -26,7 +26,6 @@ use base64::Engine;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
-use simd_json::ValueBuilder;
 use simd_json::{json, OwnedValue as Value};
 use std::collections::HashMap;
 use std::path::Path;
@@ -119,9 +118,8 @@ impl IntrospectiveGadget {
         if results.is_empty() {
             for (format_name, parser) in self.parsers.read().unwrap().iter() {
                 if format_name != &detected_format && format_name != "auto" {
-                    match parser.parse(&input).await {
-                        Ok(result) => results.push(result),
-                        Err(_) => {} // Don't log errors for fallback attempts
+                    if let Ok(result) = parser.parse(&input).await {
+                        results.push(result);
                     }
                 }
             }
@@ -171,7 +169,7 @@ impl IntrospectiveGadget {
     ) -> Result<ContainerInspectionWithKnowledge> {
         // Get container info
         let inspect_output = tokio::process::Command::new("docker")
-            .args(&["inspect", container_name])
+            .args(["inspect", container_name])
             .output()
             .await
             .context("Failed to run docker inspect")?;
@@ -199,7 +197,7 @@ impl IntrospectiveGadget {
 
         // Get running processes
         let top_output = tokio::process::Command::new("docker")
-            .args(&["top", container_name])
+            .args(["top", container_name])
             .output()
             .await;
 
@@ -884,11 +882,7 @@ impl JsonParser {
                 object_patterns: vec![],
             }
         } else if let Some(arr) = value.as_array() {
-            let item_schema = if let Some(first) = arr.first() {
-                Some(Box::new(self.analyze_json_schema(first)))
-            } else {
-                None
-            };
+            let item_schema = arr.first().map(|first| Box::new(self.analyze_json_schema(first)));
 
             ObjectSchema {
                 schema_type: "array".to_string(),
@@ -984,7 +978,7 @@ impl ObjectParser for DockerParser {
         if let InspectionSource::DockerContainer(name) = &input.source {
             // Run docker inspect
             let output = tokio::process::Command::new("docker")
-                .args(&["inspect", name])
+                .args(["inspect", name])
                 .output()
                 .await?;
 

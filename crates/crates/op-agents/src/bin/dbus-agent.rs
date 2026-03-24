@@ -193,11 +193,11 @@ async fn main() -> anyhow::Result<()> {
         .with_env_filter(EnvFilter::from_default_env().add_directive("op_agents=info".parse()?))
         .init();
 
-    let mut args = env::args().skip(1);
+    let args = env::args().skip(1);
     let mut use_system = false;
 
     let mut raw = Vec::new();
-    while let Some(arg) = args.next() {
+    for arg in args {
         match arg.as_str() {
             "--system" => use_system = true,
             "--list" => {

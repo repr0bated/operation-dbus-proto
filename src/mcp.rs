@@ -8,16 +8,13 @@
 //!
 //! This saves ~95% of context tokens compared to exposing all tools directly.
 
-use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use simd_json::{json, OwnedValue as Value};
 use simd_json::prelude::*;
 use std::sync::Arc;
 
-use crate::error::{OpDbusError, Result};
 use op_tools::registry::ToolRegistry;
-use op_core::ToolRequest as ToolContext;
-use crate::json_rpc::{JsonRpcRequest, JsonRpcResponse, JsonRpcError, error_codes};
+use crate::json_rpc::{JsonRpcRequest, JsonRpcError, error_codes};
 
 /// MCP Protocol version
 pub const PROTOCOL_VERSION: &str = "2024-11-05";

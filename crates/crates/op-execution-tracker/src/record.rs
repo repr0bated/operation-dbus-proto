@@ -21,8 +21,10 @@ use uuid::Uuid;
 /// Execution status
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum ExecutionStatus {
     /// Request received, not yet started
+    #[default]
     Pending,
     /// Currently executing
     Running,
@@ -36,11 +38,6 @@ pub enum ExecutionStatus {
     Timeout,
 }
 
-impl Default for ExecutionStatus {
-    fn default() -> Self {
-        ExecutionStatus::Pending
-    }
-}
 
 // ============================================================================
 // EXECUTION TIMING

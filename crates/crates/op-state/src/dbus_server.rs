@@ -14,7 +14,7 @@ use std::collections::{HashSet, VecDeque};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio_stream::StreamExt;
-use zbus::{connection::Builder, interface, Connection};
+use zbus::{connection::Builder, Connection};
 
 /// D-Bus interface for the state manager
 pub struct StateManagerDBus {

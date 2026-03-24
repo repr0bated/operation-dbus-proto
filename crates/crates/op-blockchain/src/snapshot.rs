@@ -6,6 +6,7 @@ use tracing::warn;
 
 /// Snapshot interval options
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum SnapshotInterval {
     /// Snapshot after every operation
     PerOperation,
@@ -14,6 +15,7 @@ pub enum SnapshotInterval {
     /// Snapshot every 5 minutes
     Every5Minutes,
     /// Snapshot every 15 minutes
+    #[default]
     Every15Minutes,
     /// Snapshot every 30 minutes
     Every30Minutes,
@@ -25,11 +27,6 @@ pub enum SnapshotInterval {
     Weekly,
 }
 
-impl Default for SnapshotInterval {
-    fn default() -> Self {
-        SnapshotInterval::Every15Minutes
-    }
-}
 
 impl SnapshotInterval {
     /// Parse from environment variable

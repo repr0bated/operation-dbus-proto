@@ -1178,7 +1178,7 @@ impl Tool for OvsApplyObfuscationTool {
     }
 
     async fn execute(&self, input: Value) -> Result<Value> {
-        let bridge = input
+        let _bridge = input
             .get("bridge")
             .and_then(|v| v.as_str())
             .unwrap_or("ovs-br0");

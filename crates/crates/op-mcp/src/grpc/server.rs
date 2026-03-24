@@ -202,7 +202,7 @@ pub async fn run_grpc_server(config: GrpcConfig) -> Result<()> {
 
 #[cfg(feature = "grpc")]
 pub async fn run_grpc_server_lightweight(address: SocketAddr, mode: ServerMode) -> Result<()> {
-    let config = GrpcConfig::default()
+    let _config = GrpcConfig::default()
         .with_address(address)
         .with_mode(mode)
         .without_infrastructure();

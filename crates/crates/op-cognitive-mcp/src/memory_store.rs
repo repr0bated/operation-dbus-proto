@@ -26,14 +26,14 @@ pub struct MemoryEntry {
     pub last_accessed: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum MemoryType {
     Ephemeral,
     Persistent,
     Shared,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct MemoryQuery {
     pub key_pattern: Option<String>,
     pub memory_type: Option<MemoryType>,
@@ -117,7 +117,7 @@ impl CognitiveMemoryStore {
         let initial_len = memory.len();
 
         memory.retain(|_, entry| {
-            entry.expires_at.map_or(true, |expires| expires > now)
+            entry.expires_at.is_none_or(|expires| expires > now)
         });
 
         initial_len - memory.len()

@@ -3,13 +3,13 @@
 //! A Workflow is a directed graph of nodes connected by edges.
 //! Data flows from output ports to input ports.
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
 use std::collections::HashMap;
 
-use crate::node::{NodeConnection, NodePort, NodeResult, NodeState};
+use crate::node::{NodeConnection, NodePort, NodeState};
 
 /// Workflow definition (serializable)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -68,8 +68,10 @@ pub struct Workflow {
 /// Overall workflow state
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum WorkflowState {
     /// Not started
+    #[default]
     Idle,
     /// Currently executing
     Running,
@@ -83,11 +85,6 @@ pub enum WorkflowState {
     Cancelled,
 }
 
-impl Default for WorkflowState {
-    fn default() -> Self {
-        Self::Idle
-    }
-}
 
 impl Workflow {
     /// Create a new workflow from definition

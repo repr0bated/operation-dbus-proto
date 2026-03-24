@@ -312,7 +312,7 @@ impl NetworkConfig {
         let octets: Vec<&str> = network.split('.').collect();
 
         match mask {
-            0..=8 => octets.get(0).map(|s| format!("{}.", s)).unwrap_or_default(),
+            0..=8 => octets.first().map(|s| format!("{}.", s)).unwrap_or_default(),
             9..=16 => {
                 if octets.len() >= 2 {
                     format!("{}.{}.", octets[0], octets[1])

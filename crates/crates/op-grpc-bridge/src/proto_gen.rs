@@ -331,7 +331,7 @@ impl ProtoGenerator {
 
 /// Convert string to PascalCase
 fn to_pascal_case(s: &str) -> String {
-    s.split(|c: char| c == '_' || c == '-' || c == ' ')
+    s.split(['_', '-', ' '])
         .map(|word| {
             let mut chars = word.chars();
             match chars.next() {

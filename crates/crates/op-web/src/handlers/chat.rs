@@ -15,7 +15,7 @@ use std::convert::Infallible;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use tracing::{error, info};
+use tracing::info;
 
 use crate::orchestrator::OrchestratorEvent;
 use crate::state::AppState;

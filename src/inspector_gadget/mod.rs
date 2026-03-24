@@ -29,9 +29,8 @@ use crate::error::{OpDbusError, Result};
 use op_core::BusType;
 use op_introspection::IntrospectionService;
 use op_state_store::StateStore;
-use op_plugins::plugin::PluginMetadata as PluginCore;
 use op_plugins::registry::PluginRegistry;
-use crate::work_stack::{WorkStack, WorkStackBuilder};
+use crate::work_stack::WorkStack;
 use op_tools::ToolRegistry;
 
 pub mod introspective;
@@ -266,7 +265,7 @@ impl InspectorGadget {
         tracing::info!("Starting one-shot discovery: {}", discovery_id);
 
         let mut objects: HashMap<String, Vec<DiscoveredObject>> = HashMap::new();
-        let mut schemas = Vec::new();
+        let schemas = Vec::new();
         let mut warnings = Vec::new();
 
         // Discover network interfaces
@@ -596,7 +595,7 @@ impl InspectorGadget {
             _ => vec![],
         };
 
-        let registered = schemas.len();
+        let _registered = schemas.len();
 
         let registered = schemas.len();
         let any_schemas = !schemas.is_empty();

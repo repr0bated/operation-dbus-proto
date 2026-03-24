@@ -2,7 +2,6 @@
 //!
 //! Production entry point with all components wired together.
 
-use parking_lot::RwLock;
 use simd_json::prelude::*;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -17,7 +16,7 @@ use op_blockchain::StreamingBlockchain;
 use op_core::config::load_environment;
 use op_core::types::BusType;
 use op_introspection::projection::DbusProjection;
-use op_plugins::plugin::{PluginMetadata as PluginCore, PluginTunables};
+use op_plugins::plugin::PluginMetadata as PluginCore;
 use op_plugins::registry::PluginRegistry;
 use op_state_store::{SqliteStore, StateStore};
 use op_tools::{register_builtin_tools, ToolRegistry};
@@ -33,13 +32,12 @@ use op_dbus::{
     error::Result,
     inspector_gadget::{InspectorConfig, InspectorGadget},
     json_rpc::{JsonRpcError, JsonRpcRequest, JsonRpcResponse},
-    mcp::{McpCompactDispatcher, McpError, McpRequest, McpResponse},
+    mcp::{McpCompactDispatcher, McpRequest},
     mcp_live::McpLiveDispatcher,
     numa_cache::NumaOptimizer,
     policy::PolicyEngine,
     vectorization::FootprintGenerator,
 };
-use op_dbus_model;
 use op_jsonrpc::nonnet::NonNetDb;
 use op_jsonrpc::ovsdb::OvsdbClient;
 
@@ -341,10 +339,10 @@ async fn main() -> Result<()> {
     let blockchain = Arc::new(parking_lot::RwLock::new(blockchain_stream));
 
     // Initialize cache
-    let cache = Arc::new(BtrfsCache::new(PathBuf::from(&config.cache_dir)).await?);
+    let _cache = Arc::new(BtrfsCache::new(PathBuf::from(&config.cache_dir)).await?);
 
     // Create orchestrator
-    let orchestrator = Arc::new(Orchestrator::new(
+    let _orchestrator = Arc::new(Orchestrator::new(
         OrchestratorConfig::default(),
         tool_registry.clone(),
         plugin_registry.clone(),

@@ -9,10 +9,10 @@ use async_stream::stream;
 use chrono::{DateTime, Utc};
 use prost_types::{Struct as ProstStruct, Timestamp as ProstTimestamp, Value as ProstValue};
 use simd_json::prelude::{ValueAsContainer, ValueAsScalar};
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::broadcast;
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status};
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 use crate::proto::{
     event_chain_service_server::EventChainService, ovsdb_mirror_server::OvsdbMirror,
@@ -43,7 +43,7 @@ use crate::proto::{
     VerifyChainResponse,
 };
 use crate::sync_engine::{ChangeType, SyncEngine};
-use op_state_store::{Decision, DenyReason, EventChain, MerkleProof, OperationType};
+use op_state_store::{Decision, DenyReason, MerkleProof};
 use zbus::zvariant::{Array as ZArray, OwnedValue as ZOwnedValue, Str as ZStr, Value as ZValue};
 use zbus::{Connection, Proxy};
 
@@ -458,7 +458,7 @@ impl EventChainService for OperationGrpcServer {
         let chain = self.sync_engine.event_chain();
         let chain = chain.read().await;
 
-        let mut events: Vec<ProtoChainEvent> = chain
+        let events: Vec<ProtoChainEvent> = chain
             .events()
             .iter()
             .filter(|e| req.from_event_id == 0 || e.event_id >= req.from_event_id)
@@ -1341,7 +1341,6 @@ impl RuntimeMirror for OperationGrpcServer {
                 .split(']')
                 .nth(1)
                 .unwrap_or("")
-                .trim()
                 .split_whitespace()
                 .next()
                 .unwrap_or("")

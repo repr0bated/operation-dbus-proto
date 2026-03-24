@@ -15,13 +15,12 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
-use simd_json::OwnedValue;
 use simd_json::OwnedValue as Value;
 use tokio::sync::{mpsc, RwLock};
-use tracing::{debug, error, info, instrument, warn, Span};
+use tracing::{debug, error, info, instrument, warn};
 
 use super::error::{ErrorCode, OrchestrationError, OrchestrationResult};
-use super::grpc_pool::{GrpcAgentPool, StreamChunk, StreamType};
+use super::grpc_pool::{GrpcAgentPool, StreamChunk};
 
 // ============================================================================
 // WORKSTACK TYPES

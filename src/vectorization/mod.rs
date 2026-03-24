@@ -7,7 +7,6 @@
 //! - High: MPNet-base-v2 (best quality)
 
 use serde::{Deserialize, Serialize};
-use simd_json::OwnedValue as Value;
 use simd_json::prelude::*;
 use sha2::{Sha256, Digest};
 
@@ -15,18 +14,15 @@ use op_execution_tracker::ExecutionRecord;
 
 /// Vectorization level
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+#[derive(Default)]
 pub enum VectorLevel {
+    #[default]
     None,
     Low,
     Medium,
     High,
 }
 
-impl Default for VectorLevel {
-    fn default() -> Self {
-        VectorLevel::None
-    }
-}
 
 impl VectorLevel {
     /// Parse from environment or string

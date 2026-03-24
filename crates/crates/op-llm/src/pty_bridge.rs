@@ -24,7 +24,7 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, Command};
+use tokio::process::Command;
 use tokio::sync::{broadcast, RwLock};
 use tracing::{debug, info, warn};
 
@@ -170,7 +170,7 @@ impl PtyAuthBridge {
     }
 
     /// Mark an auth as completed
-    pub async fn complete_auth(&self, auth_id: &str, response: Option<&str>) -> Result<()> {
+    pub async fn complete_auth(&self, auth_id: &str, _response: Option<&str>) -> Result<()> {
         let mut auths = self.pending_auths.write().await;
         if let Some(auth) = auths.get_mut(auth_id) {
             auth.completed = true;
@@ -245,7 +245,7 @@ impl PtyAuthBridge {
         let mut auth_details = None;
 
         // Read output with timeout
-        let result = tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), async {
+        let _result = tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), async {
             loop {
                 tokio::select! {
                     line = stdout_reader.next_line() => {
@@ -413,7 +413,7 @@ fn extract_url(line: &str) -> Option<String> {
         let url = &rest[..end];
         // Clean up trailing punctuation
         let url =
-            url.trim_end_matches(|c| c == '.' || c == ',' || c == ')' || c == '"' || c == '\'');
+            url.trim_end_matches(['.', ',', ')', '"', '\'']);
         return Some(url.to_string());
     }
 
@@ -422,7 +422,7 @@ fn extract_url(line: &str) -> Option<String> {
         let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
         let url = &rest[..end];
         let url =
-            url.trim_end_matches(|c| c == '.' || c == ',' || c == ')' || c == '"' || c == '\'');
+            url.trim_end_matches(['.', ',', ')', '"', '\'']);
         return Some(url.to_string());
     }
 

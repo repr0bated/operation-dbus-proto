@@ -2,17 +2,14 @@
 //!
 //! Provides a durable, NUMA-aware, BTRFS-integrated registry for all plugins.
 
-use anyhow::{anyhow, Context, Result};
-use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
+use anyhow::{anyhow, Result};
 use simd_json::prelude::*;
-use simd_json::OwnedValue as Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::process::Command;
 use tokio::sync::RwLock;
-use tracing::{debug, info, warn};
+use tracing::warn;
 
 use op_state::StatePlugin;
 

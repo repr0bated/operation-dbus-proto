@@ -7,12 +7,12 @@
 //! compatibility with the existing serde_json ecosystem.
 
 use anyhow::{anyhow, Result};
-use jsonschema::{JSONSchema, ValidationError};
+use jsonschema::JSONSchema;
 use serde_json::Value; // Keep for compatibility with existing code
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tracing::{debug, error, warn};
+use tracing::{error, warn};
 
 /// Characters forbidden in user input to prevent injection
 pub const FORBIDDEN_CHARS: &[char] = &[
@@ -399,6 +399,12 @@ impl InputValidator {
         }
 
         Ok(())
+    }
+}
+
+impl Default for InputValidator {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

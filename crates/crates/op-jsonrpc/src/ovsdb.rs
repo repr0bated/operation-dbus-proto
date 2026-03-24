@@ -492,10 +492,8 @@ impl OvsdbClient {
                 if let Ok(update) = unsafe { simd_json::from_str::<Value>(line_clone.as_mut_str()) }
                 {
                     if let Some(method) = update.get("method").and_then(|m| m.as_str()) {
-                        if method == "update" {
-                            if let Err(_) = tx.send(update).await {
-                                break;
-                            }
+                        if method == "update" && tx.send(update).await.is_err() {
+                            break;
                         }
                     }
                 }

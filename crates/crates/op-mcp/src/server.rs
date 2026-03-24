@@ -335,7 +335,7 @@ impl McpServer {
             );
         }
 
-        let mut arguments = params
+        let arguments = params
             .as_object()
             .and_then(|obj| obj.get("arguments"))
             .cloned()

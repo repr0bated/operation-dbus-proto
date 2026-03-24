@@ -123,7 +123,7 @@ impl WorkflowPlanner {
 
         // Always end with user.respond to report results
         let needs_respond = !steps.iter().any(|s| s.tool_name == "user.respond");
-        if needs_respond && steps.len() > 0 {
+        if needs_respond && !steps.is_empty() {
             let last_order = steps.len() as u32;
             steps.push(PlanStep {
                 order: last_order,

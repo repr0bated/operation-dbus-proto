@@ -138,7 +138,7 @@ impl PolicyRule {
             }
             RuleType::ParameterConstraint { param_path, constraint } => {
                 if let Some(value) = self.get_param_value(params, param_path) {
-                    if constraint.check(&value) {
+                    if constraint.check(value) {
                         RuleResult::Allow
                     } else {
                         RuleResult::Deny(format!("Parameter {} violates constraint", param_path))
@@ -549,7 +549,7 @@ impl PolicyEngine {
     async fn evaluate_control(&self, control: &ComplianceControl) -> Result<ControlStatus> {
         // Simplified evaluation
         match &control.check_type {
-            ComplianceCheckType::ObjectExists { object_type, filter } => {
+            ComplianceCheckType::ObjectExists { object_type: _, filter: _ } => {
                 // Would query state_store
                 Ok(ControlStatus::Pass)
             }

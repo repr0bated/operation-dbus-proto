@@ -1,5 +1,6 @@
 // OpenFlow Controller Plugin - Flow-based networking for containerless communication
 // Manages OpenFlow flows for socket-based container networking without veth interfaces
+#![allow(clippy::vec_init_then_push)]
 
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
@@ -9,7 +10,7 @@ use op_state::{
 };
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
-use simd_json::{json, OwnedValue as Value};
+use simd_json::OwnedValue as Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -210,6 +211,12 @@ const OPENFLOW_PROTOCOL: &str = "OpenFlow13";
 pub struct OpenFlowPlugin {
     /// OVSDB client for OVS operations
     ovsdb_client: Arc<op_network::ovsdb::OvsdbClient>,
+}
+
+impl Default for OpenFlowPlugin {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl OpenFlowPlugin {

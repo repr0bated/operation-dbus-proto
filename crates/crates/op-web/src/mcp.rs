@@ -30,6 +30,12 @@ pub struct SseBroadcaster {
     tx: broadcast::Sender<String>,
 }
 
+impl Default for SseBroadcaster {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SseBroadcaster {
     pub fn new() -> Self {
         let (tx, _) = broadcast::channel(100);

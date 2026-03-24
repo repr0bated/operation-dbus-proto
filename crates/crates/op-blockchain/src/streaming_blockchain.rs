@@ -29,10 +29,12 @@ pub struct BlockEvent {
 }
 
 #[derive(Debug, Clone, Copy)]
+#[derive(Default)]
 pub enum SnapshotInterval {
     PerOperation,
     EveryMinute,
     Every5Minutes,
+    #[default]
     Every15Minutes,
     Every30Minutes,
     Hourly,
@@ -148,11 +150,6 @@ impl SnapshotInterval {
     }
 }
 
-impl Default for SnapshotInterval {
-    fn default() -> Self {
-        SnapshotInterval::Every15Minutes // Default to every 15 minutes for production
-    }
-}
 
 pub struct StreamingBlockchain {
     base_path: PathBuf,

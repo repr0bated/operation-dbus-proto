@@ -18,7 +18,7 @@ use op_agents::{
 use op_core::BusType;
 use std::collections::HashMap;
 use tokio::signal;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 use zbus::Connection;
 
 /// Agent configuration

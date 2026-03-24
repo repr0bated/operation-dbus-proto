@@ -49,7 +49,7 @@ pub async fn vpn_status_handler(Extension(_state): Extension<Arc<AppState>>) -> 
 
     // Check if WireGuard is running by trying to get interface info
     let running = Command::new("wg")
-        .args(&["show", interface])
+        .args(["show", interface])
         .output()
         .map(|output| output.status.success())
         .unwrap_or(false);
@@ -66,7 +66,7 @@ pub async fn vpn_status_handler(Extension(_state): Extension<Arc<AppState>>) -> 
 
     // Parse wg show output to get peer count and bandwidth
     let output = Command::new("wg")
-        .args(&["show", interface, "dump"])
+        .args(["show", interface, "dump"])
         .output();
 
     let (peer_count, total_rx, total_tx) = match output {
@@ -113,7 +113,7 @@ pub async fn vpn_config_handler(Extension(_state): Extension<Arc<AppState>>) -> 
 
     // Get server public key
     let server_public_key = Command::new("wg")
-        .args(&["show", interface, "public-key"])
+        .args(["show", interface, "public-key"])
         .output()
         .ok()
         .and_then(|output| {

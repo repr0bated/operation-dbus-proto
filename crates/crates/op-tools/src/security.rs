@@ -35,7 +35,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use thiserror::Error;
 use tokio::sync::RwLock;
-use tracing::{debug, info, warn};
+use tracing::info;
 
 // ============================================================================
 // SECURITY ERRORS

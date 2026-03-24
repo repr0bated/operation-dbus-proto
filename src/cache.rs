@@ -103,14 +103,14 @@ impl BtrfsCache {
     pub async fn new(cache_dir: PathBuf) -> Result<Self> {
         // Create directory structure
         tokio::fs::create_dir_all(&cache_dir).await
-            .map_err(|e| OpDbusError::IoError(e))?;
+            .map_err(OpDbusError::IoError)?;
         
         tokio::fs::create_dir_all(cache_dir.join("embeddings")).await
-            .map_err(|e| OpDbusError::IoError(e))?;
+            .map_err(OpDbusError::IoError)?;
         tokio::fs::create_dir_all(cache_dir.join("blocks")).await
-            .map_err(|e| OpDbusError::IoError(e))?;
+            .map_err(OpDbusError::IoError)?;
         tokio::fs::create_dir_all(cache_dir.join("snapshots")).await
-            .map_err(|e| OpDbusError::IoError(e))?;
+            .map_err(OpDbusError::IoError)?;
 
         // Try to create BTRFS subvolumes (silent fallback)
         Self::try_create_subvolume(&cache_dir.join("embeddings")).await;
@@ -193,10 +193,10 @@ impl BtrfsCache {
         let file_path = self.key_to_path(key);
         if let Some(parent) = file_path.parent() {
             tokio::fs::create_dir_all(parent).await
-                .map_err(|e| OpDbusError::IoError(e))?;
+                .map_err(OpDbusError::IoError)?;
         }
         tokio::fs::write(&file_path, &data).await
-            .map_err(|e| OpDbusError::IoError(e))?;
+            .map_err(OpDbusError::IoError)?;
 
         // Add to in-memory cache
         let entry = CacheEntry::new(key.to_string(), data);
@@ -220,7 +220,7 @@ impl BtrfsCache {
         let file_path = self.key_to_path(key);
         if file_path.exists() {
             tokio::fs::remove_file(&file_path).await
-                .map_err(|e| OpDbusError::IoError(e))?;
+                .map_err(OpDbusError::IoError)?;
         }
 
         Ok(existed)
@@ -301,9 +301,9 @@ impl BtrfsCache {
         let blocks_dir = self.cache_dir.join("blocks");
         if blocks_dir.exists() {
             tokio::fs::remove_dir_all(&blocks_dir).await
-                .map_err(|e| OpDbusError::IoError(e))?;
+                .map_err(OpDbusError::IoError)?;
             tokio::fs::create_dir_all(&blocks_dir).await
-                .map_err(|e| OpDbusError::IoError(e))?;
+                .map_err(OpDbusError::IoError)?;
         }
 
         tracing::info!("Cache cleared");
@@ -319,7 +319,7 @@ impl BtrfsCache {
         // Try BTRFS snapshot
         let result = tokio::process::Command::new("btrfs")
             .args(["subvolume", "snapshot", "-r"])
-            .arg(&self.cache_dir.join("blocks"))
+            .arg(self.cache_dir.join("blocks"))
             .arg(&snapshot_path)
             .output()
             .await;
@@ -331,7 +331,7 @@ impl BtrfsCache {
             _ => {
                 // Fall back to directory copy
                 tokio::fs::create_dir_all(&snapshot_path).await
-                    .map_err(|e| OpDbusError::IoError(e))?;
+                    .map_err(OpDbusError::IoError)?;
                 tracing::info!("Created copy snapshot: {}", snapshot_name);
             }
         }
@@ -343,10 +343,10 @@ impl BtrfsCache {
     pub async fn list_snapshots(&self) -> Result<Vec<String>> {
         let snapshots_dir = self.cache_dir.join("snapshots");
         let mut entries = tokio::fs::read_dir(&snapshots_dir).await
-            .map_err(|e| OpDbusError::IoError(e))?;
+            .map_err(OpDbusError::IoError)?;
 
         let mut snapshots = Vec::new();
-        while let Some(entry) = entries.next_entry().await.map_err(|e| OpDbusError::IoError(e))? {
+        while let Some(entry) = entries.next_entry().await.map_err(OpDbusError::IoError)? {
             snapshots.push(entry.file_name().to_string_lossy().to_string());
         }
 

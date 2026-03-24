@@ -14,10 +14,12 @@ use std::time::Duration;
 /// Agent security profile categories
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum ProfileCategory {
     /// Code execution agents (language pros, shell agents)
     CodeExecution,
     /// Analysis agents (reviewers, auditors)
+    #[default]
     ReadOnlyAnalysis,
     /// Content generation agents (docs, tutorials)
     ContentGeneration,
@@ -25,11 +27,6 @@ pub enum ProfileCategory {
     Orchestration,
 }
 
-impl Default for ProfileCategory {
-    fn default() -> Self {
-        Self::ReadOnlyAnalysis
-    }
-}
 
 /// Security profile configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]

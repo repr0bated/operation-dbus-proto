@@ -317,7 +317,7 @@ impl StatePlugin for McpStatePlugin {
     }
 
     async fn query_current_state(&self) -> Result<Value> {
-        let config = self.load_config().await.unwrap_or_else(|_| McpConfig {
+        let config = self.load_config().await.unwrap_or(McpConfig {
             servers: None,
             tool_groups: None,
             compact_mode: None,

@@ -8,7 +8,7 @@ use anyhow::Result;
 use prost_types::{ListValue as ProstListValue, Struct as ProstStruct, Value as ProstValue};
 use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::time::Duration;
 #[cfg(feature = "grpc")]
 use tonic::transport::{Channel, Endpoint};

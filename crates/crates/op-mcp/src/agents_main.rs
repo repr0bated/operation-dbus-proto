@@ -8,7 +8,7 @@
 //!
 //! The server reads JSON-RPC requests from stdin and writes responses to stdout.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};

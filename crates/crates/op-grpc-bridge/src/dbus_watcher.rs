@@ -10,7 +10,7 @@ use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 use zbus::{Connection, MatchRule, MessageStream};
 
-use crate::sync_engine::{ChangeSource, ChangeType, StateChange, SyncEngine};
+use crate::sync_engine::{ChangeType, SyncEngine};
 
 /// Configuration for D-Bus watching
 #[derive(Debug, Clone)]
@@ -82,7 +82,7 @@ impl DbusWatcher {
         let connection = self
             .connection
             .as_ref()
-            .ok_or_else(|| WatcherError::NotConnected)?;
+            .ok_or(WatcherError::NotConnected)?;
 
         // Set up PropertiesChanged signal matching
         let rule = MatchRule::builder()
@@ -138,7 +138,7 @@ impl DbusWatcher {
         let connection = self
             .connection
             .as_ref()
-            .ok_or_else(|| WatcherError::NotConnected)?;
+            .ok_or(WatcherError::NotConnected)?;
 
         let mut stream = MessageStream::from(connection);
 
@@ -356,7 +356,7 @@ fn zvariant_to_json(value: &zbus::zvariant::OwnedValue) -> simd_json::OwnedValue
                 let items: Vec<simd_json::OwnedValue> = arr
                     .iter()
                     .filter_map(|item| {
-                        let owned = zbus::zvariant::OwnedValue::try_from(item.clone()).ok()?;
+                        let owned = zbus::zvariant::OwnedValue::try_from(item).ok()?;
                         Some(zvariant_to_json(&owned))
                     })
                     .collect();
@@ -366,7 +366,7 @@ fn zvariant_to_json(value: &zbus::zvariant::OwnedValue) -> simd_json::OwnedValue
                 let mut map = simd_json::value::owned::Object::new();
                 for (k, v) in dict.iter() {
                     if let Ok(key) = k.downcast_ref::<&str>() {
-                        let owned = zbus::zvariant::OwnedValue::try_from(v.clone()).ok();
+                        let owned = zbus::zvariant::OwnedValue::try_from(v).ok();
                         if let Some(owned) = owned {
                             map.insert(key.to_string(), zvariant_to_json(&owned));
                         }

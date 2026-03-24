@@ -67,7 +67,7 @@ pub async fn chat_message(
     ];
 
     // Send to LLM
-    let result = if let (Some(pt), Some(ref model)) = (provider_type.as_ref(), req.model.as_ref()) {
+    let result = if let (Some(pt), Some(model)) = (provider_type.as_ref(), req.model.as_ref()) {
         // Use specified provider and model
         state.chat_manager.chat_with(pt, model, messages).await
     } else {

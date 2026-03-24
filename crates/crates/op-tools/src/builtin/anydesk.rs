@@ -405,7 +405,7 @@ fn get_anydesk_id() -> Result<String> {
 
     // Fallback: check systemd service and extract from logs or process
     match Command::new("systemctl")
-        .args(&["show", "anydesk", "--property=MainPID"])
+        .args(["show", "anydesk", "--property=MainPID"])
         .output()
     {
         Ok(output) if output.status.success() => {
@@ -437,16 +437,12 @@ fn get_anydesk_status() -> Result<Value> {
     });
 
     // Check systemd service status
-    match Command::new("systemctl")
-        .args(&["is-active", "anydesk"])
-        .output()
-    {
-        Ok(output) => {
-            let state_str = String::from_utf8_lossy(&output.stdout);
-            let state = state_str.trim();
-            status["service_running"] = json!(state == "active");
-        }
-        _ => {}
+    if let Ok(output) = Command::new("systemctl")
+        .args(["is-active", "anydesk"])
+        .output() {
+        let state_str = String::from_utf8_lossy(&output.stdout);
+        let state = state_str.trim();
+        status["service_running"] = json!(state == "active");
     }
 
     // Check if anydesk process is running
@@ -483,7 +479,7 @@ fn control_anydesk_service(action: &str) -> Result<String> {
     };
 
     let output = Command::new("sudo")
-        .args(&["systemctl", systemctl_action, "anydesk"])
+        .args(["systemctl", systemctl_action, "anydesk"])
         .output()?;
 
     if output.status.success() {
@@ -505,7 +501,7 @@ fn get_anydesk_connections() -> Result<Vec<Value>> {
     // Check for any active connections by looking at network connections
     // or AnyDesk process status
 
-    match Command::new("netstat").args(&["-tuln"]).output() {
+    match Command::new("netstat").args(["-tuln"]).output() {
         Ok(output) if output.status.success() => {
             let netstat_output = String::from_utf8_lossy(&output.stdout);
             // Look for AnyDesk-related ports (typically 7070, 6568, etc.)
@@ -563,7 +559,7 @@ fn check_x11_display_environment() -> Result<Value> {
 
     // Check AnyDesk service environment
     match Command::new("systemctl")
-        .args(&["show", "anydesk", "--property=Environment"])
+        .args(["show", "anydesk", "--property=Environment"])
         .output()
     {
         Ok(output) if output.status.success() => {
@@ -584,7 +580,7 @@ fn check_x11_display_environment() -> Result<Value> {
 
     // Check X11 authentication
     if let Ok(display) = std::env::var("DISPLAY") {
-        match Command::new("xauth").args(&["list", &display]).output() {
+        match Command::new("xauth").args(["list", &display]).output() {
             Ok(output) if output.status.success() => {
                 let auth_output = String::from_utf8_lossy(&output.stdout);
                 if !auth_output.trim().is_empty() {
@@ -606,7 +602,7 @@ fn diagnose_x11_access_issues() -> Result<Value> {
 
     // Check if AnyDesk service is running
     match Command::new("systemctl")
-        .args(&["is-active", "anydesk"])
+        .args(["is-active", "anydesk"])
         .output()
     {
         Ok(output) => {
@@ -626,7 +622,7 @@ fn diagnose_x11_access_issues() -> Result<Value> {
 
     // Check DISPLAY environment for AnyDesk service
     match Command::new("systemctl")
-        .args(&["show", "anydesk", "--property=Environment"])
+        .args(["show", "anydesk", "--property=Environment"])
         .output()
     {
         Ok(output) if output.status.success() => {
@@ -673,7 +669,7 @@ fn diagnose_x11_access_issues() -> Result<Value> {
 
     // Check X11 authentication
     if let Ok(display) = std::env::var("DISPLAY") {
-        match Command::new("xauth").args(&["list", &display]).output() {
+        match Command::new("xauth").args(["list", &display]).output() {
             Ok(output) if output.status.success() => {
                 let auth_output = String::from_utf8_lossy(&output.stdout);
                 if auth_output.trim().is_empty() {

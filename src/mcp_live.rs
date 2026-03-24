@@ -3,19 +3,13 @@
 //! Provides live agent capabilities with streaming responses
 
 use serde::{Deserialize, Serialize};
-use anyhow::{anyhow, Result};
-use async_trait::async_trait;
 use simd_json::{json, OwnedValue as Value};
 use simd_json::prelude::*;
-use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::{debug, info};
 
-use crate::error::OpDbusError;
 use crate::mcp::{McpRequest, McpResponse, McpError, PROTOCOL_VERSION, SERVER_VERSION};
 use op_tools::{Tool, ToolRegistry};
-use op_core::ToolRequest as ToolContext;
 
 // ============================================================================
 // LIVE AGENT

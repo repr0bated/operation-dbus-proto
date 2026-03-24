@@ -12,8 +12,10 @@ use std::str::FromStr;
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum VectorizationLevel {
     /// No vectorization (zero overhead)
+    #[default]
     None,
     /// Basic keyword embedding - MiniLM-L3-v2 (384-dim, ~61MB, ~19k/s)
     Low,
@@ -69,11 +71,6 @@ impl VectorizationLevel {
     }
 }
 
-impl Default for VectorizationLevel {
-    fn default() -> Self {
-        Self::None
-    }
-}
 
 impl FromStr for VectorizationLevel {
     type Err = anyhow::Error;
@@ -114,8 +111,10 @@ impl std::fmt::Display for VectorizationLevel {
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum ExecutionProvider {
     /// CPU execution (default)
+    #[default]
     Cpu,
     /// CUDA GPU execution (NVIDIA)
     Cuda,
@@ -127,11 +126,6 @@ pub enum ExecutionProvider {
     CoreML,
 }
 
-impl Default for ExecutionProvider {
-    fn default() -> Self {
-        Self::Cpu
-    }
-}
 
 impl FromStr for ExecutionProvider {
     type Err = anyhow::Error;

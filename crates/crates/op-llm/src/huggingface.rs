@@ -5,10 +5,8 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
-use std::collections::HashMap;
 use std::time::Duration;
 use tracing::{debug, info, warn};
 

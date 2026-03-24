@@ -14,7 +14,7 @@ use std::time::Instant;
 use tokio::sync::RwLock;
 
 use op_core::error::Result;
-use op_execution_tracker::{ExecutionRecord, ExecutionTracker};
+use op_execution_tracker::ExecutionTracker;
 use op_plugins::registry::PluginRegistry;
 use op_tools::registry::ToolRegistry;
 

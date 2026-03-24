@@ -132,8 +132,8 @@ impl ProfileManager {
         }
 
         // Check tool name include filter
-        if !profile.include_tools.is_empty() {
-            if !profile.include_tools.iter().any(|t| {
+        if !profile.include_tools.is_empty()
+            && !profile.include_tools.iter().any(|t| {
                 // Support wildcards like "github_*"
                 if t.ends_with('*') {
                     tool.name.starts_with(&t[..t.len() - 1])
@@ -143,7 +143,6 @@ impl ProfileManager {
             }) {
                 return false;
             }
-        }
 
         // Check tool name exclude filter
         if profile.exclude_tools.iter().any(|t| {

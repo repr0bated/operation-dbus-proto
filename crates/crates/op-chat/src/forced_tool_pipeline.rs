@@ -29,7 +29,7 @@
 //! 5. Extracts user response from respond_to_user tool only
 
 use anyhow::{Context, Result};
-use simd_json::{json, OwnedValue as Value};
+use simd_json::json;
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
@@ -40,7 +40,7 @@ use op_tools::ToolRegistry;
 
 use crate::agent_tools::register_context_agents;
 use crate::forced_execution::{
-    detect_raw_text_output, parse_tool_calls, ForcedExecutionOrchestrator, HallucinationCheck,
+    detect_raw_text_output, ForcedExecutionOrchestrator, HallucinationCheck,
     ToolCall,
 };
 use crate::tool_executor::TrackedToolExecutor;

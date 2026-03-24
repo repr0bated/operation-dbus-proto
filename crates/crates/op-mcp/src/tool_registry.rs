@@ -22,6 +22,62 @@ use tracing::debug;
 
 use crate::server::{ToolExecutor, ToolInfo};
 use op_core::ToolDefinition;
+pub use op_core::SecurityLevel;
+
+/// Content returned by a tool execution
+#[derive(Debug, Clone)]
+pub enum ToolContent {
+    Text(String),
+    Json(Value),
+}
+
+impl ToolContent {
+    pub fn text(s: impl Into<String>) -> Self {
+        ToolContent::Text(s.into())
+    }
+    pub fn json(v: Value) -> Self {
+        ToolContent::Json(v)
+    }
+}
+
+/// Result of a tool execution
+#[derive(Debug, Clone)]
+pub struct ToolResult {
+    pub content: Vec<ToolContent>,
+    pub is_error: bool,
+}
+
+impl ToolResult {
+    pub fn success(content: ToolContent) -> Self {
+        ToolResult { content: vec![content], is_error: false }
+    }
+    pub fn error(content: ToolContent) -> Self {
+        ToolResult { content: vec![content], is_error: true }
+    }
+}
+
+impl From<ToolResult> for Value {
+    fn from(r: ToolResult) -> Value {
+        match r.content.into_iter().next() {
+            Some(ToolContent::Text(s)) => Value::String(s),
+            Some(ToolContent::Json(v)) => v,
+            None => Value::Static(simd_json::StaticNode::Null),
+        }
+    }
+}
+
+/// Metadata describing a tool
+#[derive(Debug, Clone)]
+pub struct ToolMetadata {
+    pub name: String,
+    pub description: String,
+    pub category: String,
+    pub tags: Vec<String>,
+    pub author: Option<String>,
+    pub version: String,
+    pub security_level: SecurityLevel,
+    pub requires_auth: bool,
+}
 
 /// Tool trait - same as op_tools::Tool but standalone
 #[async_trait]
@@ -37,6 +93,18 @@ pub trait Tool: Send + Sync {
     }
     fn tags(&self) -> Vec<String> {
         vec![]
+    }
+    fn metadata(&self) -> ToolMetadata {
+        ToolMetadata {
+            name: self.name().to_string(),
+            description: self.description().to_string(),
+            category: self.category().to_string(),
+            tags: self.tags(),
+            author: None,
+            version: "1.0.0".to_string(),
+            security_level: SecurityLevel::Public,
+            requires_auth: false,
+        }
     }
     async fn execute(&self, input: Value) -> Result<Value>;
 }
@@ -110,7 +178,7 @@ impl ToolRegistry {
 
         let filtered: Vec<_> = defs
             .values()
-            .filter(|d| category.map_or(true, |c| d.category == c))
+            .filter(|d| category.is_none_or(|c| d.category == c))
             .cloned()
             .collect();
 
@@ -131,8 +199,7 @@ impl ToolRegistry {
                         .iter()
                         .any(|t| t.to_lowercase().contains(&query_lower))
             })
-            .cloned()
-            .take(50) // Reasonable limit for search results
+            .take(50).cloned() // Reasonable limit for search results
             .collect()
     }
 

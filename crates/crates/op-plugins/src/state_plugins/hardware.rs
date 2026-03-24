@@ -1,7 +1,7 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use async_trait::async_trait;
 use op_state::{
-    ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
+    ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin,
 };
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
@@ -105,13 +105,13 @@ impl HardwarePlugin {
         let mut disks = Vec::new();
         // Use lsblk -J for json output
         let output = Command::new("lsblk")
-            .args(&["-J", "-o", "NAME,SIZE,MOUNTPOINT,BYTES"])
+            .args(["-J", "-o", "NAME,SIZE,MOUNTPOINT,BYTES"])
             .output()
             .await;
 
         if let Ok(output) = output {
             if let Ok(json_str) = std::str::from_utf8(&output.stdout) {
-                if let Ok(mut val) = simd_json::to_owned_value(&mut json_str.as_bytes().to_vec()) {
+                if let Ok(val) = simd_json::to_owned_value(&mut json_str.as_bytes().to_vec()) {
                     if let Some(blockdevices) = val.get("blockdevices").and_then(|v| v.as_array()) {
                         for dev in blockdevices {
                             let name = dev

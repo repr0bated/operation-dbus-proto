@@ -14,6 +14,12 @@ pub struct ProcessManager {
     processes: RwLock<HashMap<ServiceName, u32>>,
 }
 
+impl Default for ProcessManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ProcessManager {
     pub fn new() -> Self {
         Self {

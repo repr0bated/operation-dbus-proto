@@ -141,11 +141,10 @@ impl PluginSchema {
 
         // Check required fields
         for (field_name, field_schema) in &self.fields {
-            if field_schema.required {
-                if state.get(field_name).is_none() {
+            if field_schema.required
+                && state.get(field_name).is_none() {
                     errors.push(format!("Missing required field: {}", field_name));
                 }
-            }
         }
 
         // Validate present fields

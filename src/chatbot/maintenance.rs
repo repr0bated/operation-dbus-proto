@@ -3,14 +3,10 @@
 //! Handles system maintenance tasks like cleanup, optimization, and health checks.
 
 use anyhow::Result;
-use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use simd_json::{json, OwnedValue as Value};
+use simd_json::OwnedValue as Value;
 use simd_json::prelude::*;
-use std::collections::HashMap;
-use std::sync::Arc;
-use tracing::{debug, info};
 
 // ============================================================================
 // MAINTENANCE TASK

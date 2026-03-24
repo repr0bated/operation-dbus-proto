@@ -4,10 +4,9 @@
 
 use crate::memory_store::CognitiveMemoryStore;
 use crate::cognitive_tools::MemoryTool;
-use op_mcp::{McpServer, McpServerConfig, ServerMode, Transport};
-use op_mcp::tool_registry::{ToolRegistry, Tool};
+use op_mcp::{McpServer, McpServerConfig, Transport};
+use op_mcp::tool_registry::ToolRegistry;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 
 pub struct CognitiveMcpServer {
     memory_store: Arc<CognitiveMemoryStore>,
@@ -21,7 +20,7 @@ impl CognitiveMcpServer {
 
         // Register cognitive tools
         let memory_tool = MemoryTool::new(memory_store.clone());
-        tool_registry.register(Box::new(memory_tool)).await?;
+        tool_registry.register(Arc::new(memory_tool)).await?;
 
         // TODO: Add more cognitive tools
         // - Dynamic content loader
@@ -53,7 +52,7 @@ impl CognitiveMcpServer {
         println!("  - Dynamic Content Loading");
         println!("  - Context-Aware Tool Discovery");
 
-        transport.serve(Arc::new(mcp_server)).await?;
+        transport.serve(mcp_server).await?;
         Ok(())
     }
 

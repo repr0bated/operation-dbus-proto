@@ -1,7 +1,7 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use async_trait::async_trait;
 use op_state::{
-    ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
+    ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin,
 };
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
@@ -41,7 +41,7 @@ impl GcloudAdcPlugin {
 
         // Try to get active account and project from gcloud config
         let output = Command::new("gcloud")
-            .args(&["config", "list", "--format=json"])
+            .args(["config", "list", "--format=json"])
             .output()
             .await;
 
@@ -90,7 +90,7 @@ impl StatePlugin for GcloudAdcPlugin {
         Ok(simd_json::serde::to_owned_value(state)?)
     }
 
-    async fn calculate_diff(&self, _current: &Value, desired: &Value) -> Result<StateDiff> {
+    async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {
         // For now, no-op diff calculation
         Ok(StateDiff {
             plugin: self.name().to_string(),

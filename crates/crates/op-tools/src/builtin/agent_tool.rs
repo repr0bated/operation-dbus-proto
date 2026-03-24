@@ -26,16 +26,13 @@ use crate::tool::{BoxedTool, Tool};
 // =============================================================================
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum BusType {
+    #[default]
     System,
     Session,
 }
 
-impl Default for BusType {
-    fn default() -> Self {
-        Self::System
-    }
-}
 
 // =============================================================================
 // AGENT CONNECTION REGISTRY
@@ -78,9 +75,9 @@ impl AgentConnectionRegistry {
             .get_or_init(|| {
                 let bus_type = std::env::var("OP_AGENT_BUS")
                     .ok()
-                    .and_then(|v| match v.to_lowercase().as_str() {
-                        "session" => Some(BusType::Session),
-                        _ => Some(BusType::System),
+                    .map(|v| match v.to_lowercase().as_str() {
+                        "session" => BusType::Session,
+                        _ => BusType::System,
                     })
                     .unwrap_or(BusType::System);
                 info!("AgentConnectionRegistry: using {:?} bus", bus_type);
@@ -361,9 +358,9 @@ impl DbusAgentExecutor {
     pub fn new() -> Self {
         let bus_type = std::env::var("OP_AGENT_BUS")
             .ok()
-            .and_then(|v| match v.to_lowercase().as_str() {
-                "session" => Some(BusType::Session),
-                _ => Some(BusType::System),
+            .map(|v| match v.to_lowercase().as_str() {
+                "session" => BusType::Session,
+                _ => BusType::System,
             })
             .unwrap_or(BusType::System);
         Self { bus_type }

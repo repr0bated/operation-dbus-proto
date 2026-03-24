@@ -18,15 +18,10 @@ pub mod session;
 pub mod maintenance;
 pub mod cognitive;
 
-use anyhow::anyhow;
-use async_trait::async_trait;
-use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use simd_json::{json, OwnedValue as Value};
+use simd_json::OwnedValue as Value;
 use simd_json::prelude::*;
-use std::collections::HashMap;
 use std::sync::Arc;
-use tracing::{debug, info, warn};
 
 use crate::error::{OpDbusError, Result};
 use crate::mcp::McpCompactDispatcher;
@@ -218,7 +213,7 @@ impl Chatbot {
         session_id: &str,
         message: &str,
     ) -> Result<CognitiveStream> {
-        let session = self.session(session_id);
+        let _session = self.session(session_id);
 
         // Create a stream channel - the actual implementation would use the live dispatcher
         let (tx, rx) = tokio::sync::mpsc::channel(100);
@@ -687,7 +682,7 @@ Type `approve workflow` to execute.",
     async fn handle_unknown(
         &self,
         raw: &str,
-        session: &ChatSession,
+        _session: &ChatSession,
     ) -> Result<ChatResponse> {
         // Fallback to Antigravity Bridge if available
         #[cfg(feature = "dev-antigravity")]

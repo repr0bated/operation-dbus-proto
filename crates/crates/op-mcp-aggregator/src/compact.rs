@@ -500,7 +500,7 @@ impl Tool for SearchToolsTool {
             .iter()
             .filter_map(|t| {
                 let name_lower = t.name.to_lowercase();
-                let desc_lower = Some(t.description.as_str()).unwrap_or("").to_lowercase();
+                let desc_lower = t.description.as_str().to_lowercase();
 
                 let mut score = 0;
 

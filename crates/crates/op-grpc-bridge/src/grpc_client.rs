@@ -47,6 +47,12 @@ pub struct GrpcClientPool {
     default_config: RemoteEndpoint,
 }
 
+impl Default for GrpcClientPool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GrpcClientPool {
     pub fn new() -> Self {
         Self {

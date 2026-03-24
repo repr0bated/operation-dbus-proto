@@ -520,7 +520,7 @@ fn decode_jwt_payload(token: &str) -> Result<Value> {
 
 fn decode_base64url(input: &str) -> Result<Vec<u8>> {
     let mut padded = input.to_string();
-    while padded.len() % 4 != 0 {
+    while !padded.len().is_multiple_of(4) {
         padded.push('=');
     }
 

@@ -12,11 +12,9 @@
 use std::sync::Arc;
 use std::path::Path;
 use serde::{Deserialize, Serialize};
-use simd_json::OwnedValue as Value;
 use simd_json::prelude::*;
 
 use crate::error::{OpDbusError, Result};
-use crate::mcp::McpCompactDispatcher;
 use op_state_store::{StateStore, StoredObject};
 use op_execution_tracker::ExecutionRecord;
 use crate::blockchain::ChainBlock;

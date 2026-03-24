@@ -115,9 +115,7 @@ impl AgentCapability {
             Self::ShellExecution => "shell_execution",
             Self::Custom(id) => {
                 // Return static str for known custom IDs, or generic
-                match id {
-                    _ => "custom",
-                }
+                "custom"
             }
         }
     }
@@ -125,20 +123,17 @@ impl AgentCapability {
 
 /// Agent execution priority
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum AgentPriority {
     /// Execute first (e.g., validation, security)
     High = 0,
     /// Normal execution order
+    #[default]
     Normal = 1,
     /// Execute last (e.g., formatting, cleanup)
     Low = 2,
 }
 
-impl Default for AgentPriority {
-    fn default() -> Self {
-        Self::Normal
-    }
-}
 
 /// Agent definition with capabilities
 #[derive(Debug, Clone, Serialize, Deserialize)]

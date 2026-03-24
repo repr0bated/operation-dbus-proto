@@ -84,8 +84,8 @@ impl AggregatorConfig {
             serde_yaml::from_str(&content).with_context(|| "Failed to parse YAML config")?
         } else {
             let mut content = content;
-            let mut content_bytes = unsafe { content.as_bytes_mut() };
-            simd_json::from_slice(&mut content_bytes)
+            let content_bytes = unsafe { content.as_bytes_mut() };
+            simd_json::from_slice(content_bytes)
                 .with_context(|| "Failed to parse JSON config")?
         };
 

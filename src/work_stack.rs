@@ -6,7 +6,6 @@
 
 use serde::{Deserialize, Serialize};
 use simd_json::OwnedValue as Value;
-use simd_json::OwnedValue;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -392,7 +391,7 @@ impl WorkStackBuilder {
 
     /// Topological sort of nodes based on edges
     fn topological_sort(&self) -> Vec<String> {
-        use std::collections::{HashSet, VecDeque};
+        use std::collections::VecDeque;
 
         let mut in_degree: HashMap<&str, usize> = HashMap::new();
         let mut adjacency: HashMap<&str, Vec<&str>> = HashMap::new();

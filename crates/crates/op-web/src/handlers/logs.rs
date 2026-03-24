@@ -7,7 +7,7 @@ use axum::{
         Json,
     },
 };
-use futures::stream::{self, Stream};
+use futures::stream::Stream;
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use std::process::Command;
@@ -40,7 +40,7 @@ pub async fn logs_handler(Extension(_state): Extension<Arc<AppState>>) -> Json<V
     ];
 
     for (log_path, component) in log_files {
-        if let Ok(output) = Command::new("tail").args(&["-n", "50", log_path]).output() {
+        if let Ok(output) = Command::new("tail").args(["-n", "50", log_path]).output() {
             if output.status.success() {
                 let data = String::from_utf8_lossy(&output.stdout);
                 logs.extend(parse_logs(&data, component));

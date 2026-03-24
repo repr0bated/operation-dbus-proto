@@ -1,7 +1,7 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use async_trait::async_trait;
 use op_state::{
-    ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
+    ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin,
 };
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
@@ -36,7 +36,7 @@ impl SoftwarePlugin {
     async fn scan_dpkg() -> Vec<PackageInfo> {
         let mut packages = Vec::new();
         let output = Command::new("dpkg-query")
-            .args(&["-W", "-f=${Package} ${Version}\n"])
+            .args(["-W", "-f=${Package} ${Version}\n"])
             .output()
             .await;
 

@@ -4,7 +4,6 @@
 
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 use uuid::Uuid;
 
 use super::ChatResponse;

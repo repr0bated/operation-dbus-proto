@@ -1,7 +1,6 @@
 use super::types::ToolResult;
 use super::UnifiedOrchestrator;
 use simd_json::prelude::*;
-use simd_json::OwnedValue;
 use simd_json::OwnedValue as Value;
 
 impl UnifiedOrchestrator {
@@ -226,12 +225,12 @@ impl UnifiedOrchestrator {
         }
 
         // Remove tool_name({...})
-        if let Ok(re) = regex::Regex::new(r"\w+\(\s*\{{[^}}]*\}}\s*\)") {
+        if let Ok(re) = regex::Regex::new(r"\w+\(\s*\{[^}]*\}\s*\)") {
             cleaned = re.replace_all(&cleaned, "").to_string();
         }
 
         // Clean multiple newlines
-        if let Ok(re) = regex::Regex::new(r"\n{{3,}}") {
+        if let Ok(re) = regex::Regex::new(r"\n{3,}") {
             cleaned = re.replace_all(&cleaned, "\n\n").to_string();
         }
 

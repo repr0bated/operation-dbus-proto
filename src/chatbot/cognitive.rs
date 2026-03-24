@@ -287,7 +287,7 @@ impl CognitiveEngine {
     /// Discover available tools via MCP
     async fn discover_tools(
         &self,
-        mcp: &McpCompactDispatcher,
+        _mcp: &McpCompactDispatcher,
         trace: &mut ReasoningTrace,
     ) -> Result<Vec<ToolDefinition>> {
         // Use MCP compact mode to discover tools

@@ -4,7 +4,6 @@ use axum::{extract::Extension, response::Json};
 use serde::{Deserialize, Serialize};
 use std::process::Command;
 use std::sync::Arc;
-use tracing::error;
 
 use crate::state::AppState;
 
@@ -45,7 +44,7 @@ pub async fn dashboard_metrics_handler(
 
 fn get_vpn_peer_count() -> usize {
     Command::new("wg")
-        .args(&["show", "wg0", "peers"])
+        .args(["show", "wg0", "peers"])
         .output()
         .ok()
         .map(|output| {

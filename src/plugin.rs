@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::error::{OpDbusError, Result};
+use crate::error::Result;
 
 // ============================================================================
 // MIRROR STATE

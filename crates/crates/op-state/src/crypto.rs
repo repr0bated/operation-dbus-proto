@@ -213,7 +213,7 @@ pub mod state_file {
 
     /// Check if a state file is encrypted
     pub fn is_encrypted(path: &Path) -> Result<bool> {
-        let mut contents = std::fs::read_to_string(path).context("Failed to read state file")?;
+        let contents = std::fs::read_to_string(path).context("Failed to read state file")?;
 
         // Try to parse as encrypted state
         let mut c1 = contents.clone();

@@ -3,11 +3,9 @@
 //! This module provides the capability to automatically discover system services
 //! and create corresponding state plugins.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use async_trait::async_trait;
-use op_state::{
-    ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
-};
+use op_state::StatePlugin;
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
 use std::sync::Arc;
@@ -118,7 +116,7 @@ impl StatePlugin for AutoPlugin {
 
     async fn verify_state(&self, desired: &Value) -> Result<bool> {
         let current = self.current_state.read().await;
-        Ok(&*current == desired)
+        Ok(*current == desired)
     }
 
     async fn create_checkpoint(&self) -> Result<op_state::Checkpoint> {

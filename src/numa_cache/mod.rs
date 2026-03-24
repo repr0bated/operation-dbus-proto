@@ -98,10 +98,10 @@ impl NumaTopology {
 
         // Find all node directories (node0, node1, etc.)
         let entries = fs::read_dir(sys_node_path)
-            .map_err(|e| OpDbusError::IoError(e))?;
+            .map_err(OpDbusError::IoError)?;
 
         for entry in entries {
-            let entry = entry.map_err(|e| OpDbusError::IoError(e))?;
+            let entry = entry.map_err(OpDbusError::IoError)?;
             let name = entry.file_name();
             let name_str = name.to_string_lossy();
 
@@ -179,7 +179,7 @@ impl NumaTopology {
         }
 
         let content = fs::read_to_string(&cpulist_path)
-            .map_err(|e| OpDbusError::IoError(e))?;
+            .map_err(OpDbusError::IoError)?;
 
         let content = content.trim();
         if content.is_empty() {
@@ -228,7 +228,7 @@ impl NumaTopology {
         }
 
         let content = fs::read_to_string(&meminfo_path)
-            .map_err(|e| OpDbusError::IoError(e))?;
+            .map_err(OpDbusError::IoError)?;
 
         let mut total_kb = 0u64;
         let mut free_kb = 0u64;
@@ -263,7 +263,7 @@ impl NumaTopology {
         }
 
         let content = fs::read_to_string(&distance_path)
-            .map_err(|e| OpDbusError::IoError(e))?;
+            .map_err(OpDbusError::IoError)?;
 
         let mut distances = HashMap::new();
         let values: Vec<&str> = content.split_whitespace().collect();
@@ -341,7 +341,7 @@ impl NumaTopology {
     /// Read total system memory from /proc/meminfo
     fn read_system_memory() -> Result<(u64, u64)> {
         let content = fs::read_to_string("/proc/meminfo")
-            .map_err(|e| OpDbusError::IoError(e))?;
+            .map_err(OpDbusError::IoError)?;
 
         let mut total_kb = 0u64;
         let mut free_kb = 0u64;
@@ -488,8 +488,10 @@ impl NumaStats {
 
 /// NUMA placement strategy
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+#[derive(Default)]
 pub enum NumaStrategy {
     /// Use local node for all operations
+    #[default]
     LocalNode,
     /// Round-robin across nodes
     RoundRobin,
@@ -510,11 +512,6 @@ impl NumaStrategy {
     }
 }
 
-impl Default for NumaStrategy {
-    fn default() -> Self {
-        NumaStrategy::LocalNode
-    }
-}
 
 /// Memory policy for NUMA allocation
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Default)]

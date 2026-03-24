@@ -3,11 +3,9 @@
 //! This module defines which plugins are loaded by default when the system starts.
 //! Plugins can be enabled/disabled via configuration.
 
-use crate::registry::PluginRegistry;
 use anyhow::Result;
 use op_state_store::StateStore;
 use simd_json::prelude::*;
-use simd_json::OwnedValue as Value;
 use std::sync::Arc;
 
 use crate::state_plugins::{

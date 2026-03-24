@@ -4,15 +4,12 @@
 //! interfaces as executable tools in the registry.
 
 use anyhow::Result;
-use futures::{stream::iter, StreamExt};
+use futures::StreamExt;
 use simd_json::prelude::*;
-use simd_json::OwnedValue as Value;
-use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use crate::registry::ToolDefinition;
 use crate::tool::Tool;
 use op_core::BusType;
 use op_introspection::IntrospectionService;
@@ -106,7 +103,7 @@ impl ProjectionEngine {
             for path in &paths {
                 if let Ok(info) = self
                     .introspection
-                    .introspect(bus_type, &service, &path)
+                    .introspect(bus_type, &service, path)
                     .await
                 {
                     for iface in info.interfaces {
@@ -150,9 +147,10 @@ impl ProjectionEngine {
                                 ],
                             };
 
-                            if let Ok(_) = registry
+                            if registry
                                 .register(tool.name.clone().into(), Arc::new(tool), definition)
                                 .await
+                                .is_ok()
                             {
                                 service_tools += 1;
                             }

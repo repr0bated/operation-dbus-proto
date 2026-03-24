@@ -1,6 +1,5 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use simd_json::prelude::*;
-use simd_json::{json, OwnedValue as Value};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
@@ -45,7 +44,7 @@ impl UnifiedOrchestrator {
 
         // Direct tool execution: "run tool_name {args}"
         if input_trimmed.starts_with("run ") {
-            return self.execute_direct_tool(&input_trimmed[4..]).await;
+            return self.execute_direct_tool(input_trimmed.strip_prefix("run ").unwrap_or_default()).await;
         }
 
         // Natural language → LLM with tools
@@ -140,7 +139,7 @@ The following tools are available via execute_tool():
         let mut all_tools = Vec::new();
         let mut all_forbidden = Vec::new();
         let mut final_response_text = String::new();
-        let mut finished_with_response_tool = false;
+        let _finished_with_response_tool = false;
 
         // Orchestration loop
         for turn in 0..MAX_TURNS {

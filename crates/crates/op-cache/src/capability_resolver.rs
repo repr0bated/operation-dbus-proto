@@ -4,6 +4,7 @@
 //! to an ordered sequence of agents.
 
 use anyhow::Result;
+use std::cmp::Reverse;
 use std::collections::HashSet;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
@@ -302,7 +303,7 @@ impl CapabilityResolver {
             s
         };
 
-        viable.sort_by(|a, b| score(b).cmp(&score(a)));
+        viable.sort_by_key(|a| Reverse(score(a)));
 
         viable.first().map(|a| (*a).clone())
     }

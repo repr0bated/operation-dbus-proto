@@ -4,7 +4,8 @@
 
 use crate::memory_store::{CognitiveMemoryStore, MemoryEntry, MemoryType, MemoryQuery};
 use op_mcp::tool_registry::{Tool, ToolContent, ToolResult, ToolMetadata, SecurityLevel};
-use simd_json::OwnedValue;
+use simd_json::OwnedValue as Value;
+use simd_json::prelude::*;
 use std::sync::Arc;
 use uuid::Uuid;
 use chrono::Utc;
@@ -64,11 +65,11 @@ impl Tool for MemoryTool {
         })
     }
 
-    async fn execute(&self, params: Value) -> Result<ToolResult, anyhow::Error> {
+    async fn execute(&self, params: Value) -> Result<Value, anyhow::Error> {
         let operation = params["operation"].as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing operation parameter"))?;
 
-        match operation {
+        let result = match operation {
             "store" => self.store_memory(params).await,
             "retrieve" => self.retrieve_memory(params).await,
             "query" => self.query_memory(params).await,
@@ -76,10 +77,13 @@ impl Tool for MemoryTool {
             "cleanup" => self.cleanup_memory().await,
             "stats" => self.get_memory_stats().await,
             _ => Err(anyhow::anyhow!("Unknown operation: {}", operation)),
-        }
+        }?;
+        Ok(Value::from(result))
     }
+}
 
-    fn metadata(&self) -> ToolMetadata {
+impl MemoryTool {
+    pub fn metadata(&self) -> ToolMetadata {
         ToolMetadata {
             name: "cognitive_memory".to_string(),
             description: "Advanced memory management for cognitive operations".to_string(),
@@ -87,7 +91,7 @@ impl Tool for MemoryTool {
             tags: vec!["memory".to_string(), "cognitive".to_string(), "storage".to_string()],
             author: Some("op-dbus".to_string()),
             version: "1.0.0".to_string(),
-            security_level: SecurityLevel::Medium,
+            security_level: SecurityLevel::Elevated,
             requires_auth: true,
         }
     }

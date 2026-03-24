@@ -1124,7 +1124,7 @@ impl LlmProvider for GeminiClient {
             generation_config: Some(GenerationConfig {
                 temperature: request.temperature,
                 top_p: request.top_p,
-                max_output_tokens: request.max_tokens.map(|t| t as u32),
+                max_output_tokens: request.max_tokens,
                 routing_config,
             }),
             tools,

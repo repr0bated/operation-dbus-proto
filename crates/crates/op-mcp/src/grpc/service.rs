@@ -20,7 +20,6 @@ use tokio::sync::{mpsc, RwLock};
 use tokio_stream::{wrappers::ReceiverStream, Stream, StreamExt};
 #[cfg(feature = "grpc")]
 use tonic::{Request, Response, Status};
-use tracing::warn;
 use uuid::Uuid;
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
@@ -38,6 +37,7 @@ struct Session {
 }
 
 /// Infrastructure integrations
+#[derive(Default)]
 pub struct GrpcInfrastructure {
     pub cache_path: Option<PathBuf>,
     pub state_db_path: Option<PathBuf>,
@@ -56,16 +56,6 @@ impl Clone for GrpcInfrastructure {
     }
 }
 
-impl Default for GrpcInfrastructure {
-    fn default() -> Self {
-        Self {
-            cache_path: None,
-            state_db_path: None,
-            blockchain_path: None,
-            tool_registry: None,
-        }
-    }
-}
 
 impl GrpcInfrastructure {
     pub fn new() -> Self {
@@ -283,7 +273,7 @@ impl McpService for McpGrpcService {
         request: Request<SubscribeRequest>,
     ) -> Result<Response<Self::SubscribeStream>, Status> {
         let req = request.into_inner();
-        let session_id = req.session_id.unwrap_or_else(|| Uuid::new_v4().to_string());
+        let _session_id = req.session_id.unwrap_or_else(|| Uuid::new_v4().to_string());
         let (tx, rx) = mpsc::channel(32);
 
         tokio::spawn(async move {

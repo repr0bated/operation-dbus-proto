@@ -8,8 +8,7 @@ use axum::{
     response::{Html, Json, Redirect},
 };
 use oauth2::{
-    AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, PkceCodeChallenge,
-    PkceCodeVerifier, RedirectUrl, Scope, TokenResponse, TokenUrl,
+    AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, PkceCodeChallenge, RedirectUrl, Scope, TokenResponse, TokenUrl,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -594,7 +593,7 @@ pub async fn google_auth(
     .set_redirect_uri(RedirectUrl::new(config.redirect_url.clone()).unwrap());
 
     // Generate PKCE challenge
-    let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
+    let (pkce_challenge, _pkce_verifier) = PkceCodeChallenge::new_random_sha256();
 
     // Generate the authorization URL
     let (auth_url, csrf_token) = client
@@ -608,7 +607,7 @@ pub async fn google_auth(
     // Store PKCE verifier and CSRF token for later use
     // For now, we'll use a simple in-memory store. In production, use a proper session store.
     // TODO: Implement proper session management
-    let session_key = csrf_token.secret().clone();
+    let _session_key = csrf_token.secret().clone();
     // Note: This is a simplified implementation. In production, use proper session storage.
 
     info!("Initiating Google OAuth login: {}", auth_url);

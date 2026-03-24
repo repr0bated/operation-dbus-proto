@@ -8,7 +8,6 @@
 use crate::plugin_schema::{PluginSchema, SchemaRegistry, DEFAULT_SCHEMA_DIALECT};
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
-use simd_json::ValueBuilder;
 use simd_json::{json, OwnedValue as Value};
 use std::collections::HashMap;
 

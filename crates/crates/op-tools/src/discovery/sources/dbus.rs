@@ -4,7 +4,7 @@
 //! Uses op-introspection crate for actual D-Bus scanning.
 
 use async_trait::async_trait;
-use op_core::{BusType as CoreBusType, MethodInfo, ToolDefinition};
+use op_core::{BusType as CoreBusType, MethodInfo};
 use op_introspection::IntrospectionService;
 use simd_json::json;
 use std::collections::HashSet;
@@ -236,8 +236,8 @@ impl DbusDiscoverySource {
     ) -> anyhow::Result<RegistryToolDefinition> {
         let tool_name = format!(
             "dbus_{}_{}_{}",
-            service.split('.').last().unwrap_or(service),
-            interface.name.split('.').last().unwrap_or(&interface.name),
+            service.split('.').next_back().unwrap_or(service),
+            interface.name.split('.').next_back().unwrap_or(&interface.name),
             method.name
         );
 

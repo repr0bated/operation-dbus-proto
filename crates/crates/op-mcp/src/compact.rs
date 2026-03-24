@@ -14,7 +14,7 @@ use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 /// Session context passed through from gateway
 #[derive(Debug, Clone, Default)]
