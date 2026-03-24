@@ -3980,11 +3980,11 @@ fn create_privacy_router_schema() -> PluginSchema {
         fields.insert(
             "container_id".to_string(),
             FieldSchema {
-                field_type: FieldType::String,
+                field_type: FieldType::Integer,
                 required: false,
                 description: "Container VMID for WireGuard".to_string(),
-                default: Some(json!("100")),
-                example: Some(json!("100")),
+                default: Some(json!(100)),
+                example: Some(json!(100)),
                 constraints: Vec::new(),
                 read_only: false,
                 // Container ID becomes immutable when enabled
@@ -4091,11 +4091,11 @@ fn create_privacy_router_schema() -> PluginSchema {
         fields.insert(
             "container_id".to_string(),
             FieldSchema {
-                field_type: FieldType::String,
+                field_type: FieldType::Integer,
                 required: false,
                 description: "Container VMID for the local XRay client".to_string(),
-                default: Some(json!("101")),
-                example: Some(json!("101")),
+                default: Some(json!(101)),
+                example: Some(json!(101)),
                 constraints: Vec::new(),
                 read_only: false,
                 read_only_when: Some(ReadOnlyCondition {
@@ -4229,7 +4229,7 @@ fn create_privacy_router_schema() -> PluginSchema {
             "bridge_name": "ovsbr0",
             "wireguard": {
                 "enabled": true,
-                "container_id": "100",
+                "container_id": 100,
                 "socket_port": "priv_wg",
                 "listen_port": 51820
             },
@@ -4240,7 +4240,7 @@ fn create_privacy_router_schema() -> PluginSchema {
             },
             "xray": {
                 "enabled": true,
-                "container_id": "101",
+                "container_id": 101,
                 "socket_port": "priv_xray",
                 "socks_port": 1080,
                 "vps_address": "vps.example.com",
@@ -4928,6 +4928,79 @@ mod tests {
             assert!(contract["properties"]["immutable"].is_object());
             assert!(contract["properties"]["tunable"].is_object());
         }
+    }
+
+    #[test]
+    fn test_privacy_router_container_ids_are_integers() {
+        let registry = SchemaRegistry::new();
+        let schema = registry.get("privacy_router").unwrap();
+
+        let valid_state = json!({
+            "bridge_name": "ovsbr0",
+            "wireguard": {
+                "enabled": true,
+                "container_id": 100,
+                "socket_port": "priv_wg",
+                "listen_port": 51820,
+                "resources": {
+                    "vcpus": 1,
+                    "memory_mb": 512,
+                    "disk_gb": 4,
+                    "os_template": "images:debian/13",
+                    "swap_mb": 0,
+                    "unprivileged": true
+                }
+            },
+            "warp": {
+                "enabled": true,
+                "bridge_interface": "wgcf",
+                "wgcf_config": "/etc/wireguard/wgcf.conf"
+            },
+            "xray": {
+                "enabled": true,
+                "container_id": 101,
+                "socket_port": "priv_xray",
+                "socks_port": 1080,
+                "vps_address": "vps.example.com",
+                "vps_port": 443,
+                "resources": {
+                    "vcpus": 1,
+                    "memory_mb": 512,
+                    "disk_gb": 4,
+                    "os_template": "images:debian/13",
+                    "swap_mb": 0,
+                    "unprivileged": true
+                }
+            },
+            "vps": {
+                "xray_server": "vps.example.com",
+                "xray_port": 443
+            },
+            "socket_networking": {
+                "enabled": true,
+                "privacy_sockets": [
+                    {
+                        "name": "priv_wg",
+                        "container_id": 100
+                    },
+                    {
+                        "name": "priv_xray",
+                        "container_id": 101
+                    }
+                ]
+            },
+            "openflow": {
+                "enabled": true,
+                "enable_security_flows": true,
+                "obfuscation_level": 2,
+                "privacy_flows": [],
+                "function_routing": []
+            },
+            "containers": []
+        });
+
+        let result = schema.validate(&valid_state);
+        assert!(result.valid, "Errors: {:?}", result.errors);
     }
 
     #[test]
