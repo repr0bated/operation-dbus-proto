@@ -1,0 +1,47 @@
+[Unit]
+Description=Antigravity IDE with Virtual Wayland Display
+After=network-online.target dbus.service
+Wants=network-online.target
+Documentation=https://antigravity.google/docs/home
+
+[Service]
+Type=simple
+User=jeremy
+Group=jeremy
+
+# Environment for headless Wayland
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+Environment=WAYLAND_DISPLAY=wayland-0
+Environment=WLR_BACKENDS=headless
+Environment=WLR_HEADLESS_OUTPUTS=1
+Environment=WLR_LIBINPUT_NO_DEVICES=1
+Environment=WLR_RENDERER=pixman
+Environment=WLR_RENDERER_ALLOW_SOFTWARE=1
+Environment=LIBGL_ALWAYS_SOFTWARE=1
+Environment=XDG_SESSION_TYPE=wayland
+
+# Electron/Antigravity settings
+Environment=ELECTRON_DISABLE_GPU=1
+Environment=ELECTRON_ENABLE_LOGGING=1
+Environment=ELECTRON_OZONE_PLATFORM=wayland
+Environment=ELECTRON_OZONE_PLATFORM_HINT=wayland
+Environment=DISPLAY=
+
+# mutter provides a full compositor for multi-window apps
+ExecStart=/usr/bin/mutter --headless --virtual-monitor 1920x1080 --wayland-display=wayland-0
+ExecStartPost=/bin/sh -c 'sleep 2 && WAYLAND_DISPLAY=wayland-0 /usr/bin/antigravity --tunnel --disable-gpu --disable-chromium-sandbox --new-window /home/jeremy/git/op-dbus-v2 &'
+
+Restart=always
+RestartSec=10
+
+# Ensure XDG_RUNTIME_DIR exists
+ExecStartPre=/bin/mkdir -p /run/user/1000
+ExecStartPre=/bin/chown jeremy:jeremy /run/user/1000
+ExecStartPre=/bin/chmod 700 /run/user/1000
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=antigravity-display
+
+[Install]
+WantedBy=multi-user.target

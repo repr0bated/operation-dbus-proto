@@ -1,0 +1,31 @@
+[Unit]
+Description=Antigravity VS Code Server (Tunnel)
+PartOf=openbox.target
+After=openbox.target network.target
+
+[Service]
+Type=simple
+
+# Antigravity tunnel with MCP servers and profile
+# Using system antigravity binary for tunnel mode
+# First run (extension install) complete.
+ExecStart=/usr/bin/antigravity \
+    tunnel serve-web \
+    --accept-server-license-terms \
+    --user-data-dir=/var/lib/ghostbridge/.antigravity-data \
+    --profile operation-dbus-main \
+    --no-sandbox \
+    --add-mcp '{"name":"op-dbus","command":"/usr/local/bin/op-dbus","args":["--stdio"]}' \
+    --add-mcp '{"name":"op-dbus-web","url":"http://localhost:8089/mcp","transport":"sse"}'
+
+Restart=on-failure
+RestartSec=5
+
+Environment=DISPLAY=:99
+Environment=HOME=/var/lib/ghostbridge
+Environment=ELECTRON_RUN_AS_NODE=1
+Environment=XDG_CACHE_HOME=/var/lib/ghostbridge/.cache
+Environment=XDG_CONFIG_HOME=/var/lib/ghostbridge/.config
+
+[Install]
+WantedBy=default.target

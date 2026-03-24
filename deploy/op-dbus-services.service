@@ -1,0 +1,32 @@
+[Unit]
+Description=Operation D-Bus Custom Services
+Documentation=https://github.com/ghostbridgetech/op-dbus
+After=dbus.service network.target
+Requires=dbus.service
+
+[Service]
+Type=dbus
+BusName=org.opdbus.hardware
+ExecStart=/opt/op-dbus/bin/op-dbus-services
+Restart=on-failure
+RestartSec=5
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+ReadWritePaths=/var/lib/op-dbus /var/log/op-dbus /etc/op-dbus
+
+# Allow hardware access for sensors
+DeviceAllow=/dev/ipmi* rw
+DeviceAllow=/dev/mem r
+DeviceAllow=/dev/port r
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=op-dbus-services
+
+[Install]
+WantedBy=multi-user.target

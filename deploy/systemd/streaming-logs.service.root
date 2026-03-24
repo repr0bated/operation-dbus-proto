@@ -1,0 +1,14 @@
+[Unit]
+Description=Streaming Logs Admin Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/jeremy/git/op-dbus-p1/streaming-logs
+ExecStart=/home/jeremy/git/op-dbus-p1/streaming-logs/target/release/streaming-logs-admin
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

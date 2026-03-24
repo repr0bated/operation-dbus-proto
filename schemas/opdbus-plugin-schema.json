@@ -1,0 +1,49 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "OP-DBUS Plugin Schema",
+  "description": "Schema for all OP-DBUS plugins - services, network, storage, etc.",
+  "type": "object",
+  "required": ["name", "version", "plugin_type"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z0-9_-]+$",
+      "maxLength": 64
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "plugin_type": {
+      "type": "string",
+      "enum": ["service", "network", "storage", "system", "custom"]
+    },
+    "capabilities": {
+      "type": "object",
+      "properties": {
+        "can_read": {"type": "boolean", "default": true},
+        "can_write": {"type": "boolean", "default": true},
+        "can_delete": {"type": "boolean", "default": false},
+        "supports_rollback": {"type": "boolean", "default": false},
+        "supports_checkpoints": {"type": "boolean", "default": false},
+        "requires_root": {"type": "boolean", "default": false}
+      }
+    },
+    "dependencies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": {"type": "string"},
+          "version": {"type": "string"},
+          "required": {"type": "boolean", "default": true}
+        }
+      }
+    },
+    "schema": {
+      "type": "object",
+      "description": "Plugin-specific configuration schema"
+    }
+  }
+}

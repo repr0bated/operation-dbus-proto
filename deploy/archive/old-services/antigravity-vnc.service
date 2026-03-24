@@ -1,0 +1,29 @@
+[Unit]
+Description=WayVNC for Antigravity Remote Access
+After=antigravity-display.service
+BindsTo=antigravity-display.service
+PartOf=antigravity-display.service
+
+[Service]
+Type=simple
+User=jeremy
+Group=jeremy
+
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+Environment=WAYLAND_DISPLAY=wayland-0
+
+# Wait for Wayland socket to appear
+ExecStartPre=/bin/bash -c 'for i in $(seq 1 30); do [ -S /run/user/1000/wayland-0 ] && exit 0; sleep 1; done; echo "Timeout waiting for Wayland socket"; exit 1'
+
+# wayvnc - listen on all interfaces, disable input for headless operation
+ExecStart=/usr/bin/wayvnc --disable-input -D 0.0.0.0 5901
+
+Restart=always
+RestartSec=5
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=antigravity-vnc
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,44 @@
+name: op-web production build
+
+on:
+  pull_request:
+    paths:
+      - "crates/op-web/**"
+      - ".github/workflows/op-web-production.yml"
+      - "scripts/install-wasm-pack.sh"
+  push:
+    branches: [main]
+    paths:
+      - "crates/op-web/**"
+      - ".github/workflows/op-web-production.yml"
+      - "scripts/install-wasm-pack.sh"
+  workflow_dispatch:
+
+jobs:
+  build-op-web-production:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: crates/op-web/ui/package-lock.json
+
+      - name: Install wasm-pack
+        run: ./scripts/install-wasm-pack.sh
+
+      - name: Build UI (strict production mode)
+        working-directory: crates/op-web/ui
+        run: |
+          npm ci
+          npm run build:prod
+
+      - name: Build op-web release
+        run: cargo build -p op-web --release

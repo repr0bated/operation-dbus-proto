@@ -1,0 +1,20 @@
+# ovsbr0 is the OVS local/internal interface restored from persistent OVSDB.
+# OVS owns the bridge MAC via Bridge.other-config:hwaddr; networkd only owns L3.
+[Match]
+Name=ovsbr0
+
+[Link]
+ActivationPolicy=up
+
+[Network]
+DHCP=no
+LinkLocalAddressing=no
+IPv6AcceptRA=no
+ConfigureWithoutCarrier=yes
+Address=148.113.204.83/32
+DNS=1.1.1.1
+DNS=8.8.8.8
+
+[Route]
+Gateway=148.113.204.1
+GatewayOnLink=yes

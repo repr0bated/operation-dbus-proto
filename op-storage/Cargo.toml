@@ -1,0 +1,12 @@
+[package]
+name = "op-storage"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+simd-json = { version = "0.13", features = ["serde", "serde_impl"] }
+tokio = { version = "1.0", features = ["fs", "rt-multi-thread"] }
+rocksdb = "0.21"
+
+# Removed serde_json - now using simd-json for all JSON operations

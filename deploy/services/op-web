@@ -1,0 +1,8 @@
+type = process
+command = /home/jeremy/git/operation-dbus/deploy/bin/op-web-server
+log-type = buffer
+smooth-recovery = true
+env = OP_DBUS_DATABASE_URL=sqlite:///home/jeremy/git/operation-dbus/deploy/data/state.db
+env = OP_DBUS_CACHE_DIR=/home/jeremy/git/operation-dbus/deploy/data/cache
+env = OP_DBUS_WEB_PORT=8081
+env = OP_DBUS_SESSION_BUS=1

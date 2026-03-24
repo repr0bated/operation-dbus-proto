@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Antigravity Tools
+Comment=Start Antigravity API proxy and account manager
+Exec=/home/jeremy/.antigravity_tools/bin/antigravity-tools
+Terminal=false
+Hidden=false
+X-GNOME-Autostart-enabled=true
+StartupNotify=false

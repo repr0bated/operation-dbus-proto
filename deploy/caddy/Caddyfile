@@ -1,0 +1,125 @@
+# Caddyfile for op-web Chat Server
+# Automatic HTTPS with Let's Encrypt
+
+# Main op-web instance
+localhost, op-web.ghostbridge.tech, op-dbus.ghostbridge.tech {
+    # Automatic HTTPS (Let's Encrypt)
+    # Caddy handles SSL certificates automatically!
+    
+    # All requests go to op-web on port 8080
+
+
+    # Security headers
+    header {
+        # Enable HSTS
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        # Prevent clickjacking
+        X-Frame-Options "SAMEORIGIN"
+        # Prevent MIME sniffing
+        X-Content-Type-Options "nosniff"
+        # XSS Protection
+        X-XSS-Protection "1; mode=block"
+        # Referrer Policy
+        Referrer-Policy "strict-origin-when-cross-origin"
+        # Prevent caching of HTML/API responses
+        Cache-Control "no-store, no-cache, must-revalidate, proxy-revalidate"
+        # Remove server info
+        -Server
+    }
+
+    # Logging
+    log {
+        output file /var/log/caddy/op-web-access.log
+        format json
+    }
+
+    # Reverse proxy to op-web-server
+    reverse_proxy localhost:8080 {
+        # Health check
+        health_uri /api/health
+        health_interval 30s
+        health_timeout 5s
+        
+        # WebSocket support
+        header_up X-Real-IP {remote_host}
+        
+    }
+
+    # Enable compression
+    encode gzip zstd
+}
+
+# Main MCP Server (op-mcp-aggregator)
+# This points to the same backend as op-web.ghostbridge.tech
+mcp.ghostbridge.tech {
+    reverse_proxy localhost:8080
+}
+
+# MCP Chunk Servers
+mcp-chunk-1.ghostbridge.tech {
+    reverse_proxy localhost:8181
+}
+
+mcp-chunk-2.ghostbridge.tech {
+    reverse_proxy localhost:8191
+}
+
+# MCP Tools Server
+mcp-tools.ghostbridge.tech {
+    reverse_proxy localhost:8082
+}
+
+# MCP Agents Server (op-agents-server)
+agents.ghostbridge.tech {
+    reverse_proxy localhost:8083
+}
+
+# MCP Specialized Servers (systemd, login, core)
+mcp-servers.ghostbridge.tech {
+    # Default to systemd service
+    reverse_proxy localhost:8091
+
+    # Route by path for different services
+    handle_path /systemd/* {
+        uri strip_prefix /systemd
+        reverse_proxy localhost:8091
+    }
+
+    handle_path /login/* {
+        uri strip_prefix /login
+        reverse_proxy localhost:8092
+    }
+
+    handle_path /core/* {
+        uri strip_prefix /core
+        reverse_proxy localhost:8093
+    }
+}
+
+# Proxmox VE Web Interface
+# Using HTTP backend workaround due to Proxmox certificate issue
+proxmox.ghostbridge.tech {
+    # Strip /pve2 path if accessing root
+    @root path /
+    redir @root /pve2/ permanent
+
+    # Reverse proxy with WebSocket support
+    reverse_proxy localhost:8006 {
+        transport http {
+            tls
+            tls_insecure_skip_verify
+        }
+        header_up Host {host}
+        header_up X-Real-IP {remote}
+        header_up X-Forwarded-For {remote}
+        header_up X-Forwarded-Proto https
+    }
+
+    # Logging
+    log {
+        output file /var/log/caddy/proxmox-access.log
+        format json
+    }
+}
+
+# HTTP to HTTPS redirect (automatic with Caddy)

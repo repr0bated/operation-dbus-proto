@@ -1,0 +1,25 @@
+[Unit]
+Description=op-dbus Web Server
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+EnvironmentFile=/etc/op-dbus/op-web.env
+ExecStart=/usr/local/sbin/op-web-server
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/log/op-dbus /var/lib/op-dbus
+
+[Install]
+WantedBy=multi-user.target

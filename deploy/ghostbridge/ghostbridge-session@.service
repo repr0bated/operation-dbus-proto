@@ -1,0 +1,34 @@
+[Unit]
+Description=GhostBridge Session for %i
+After=network.target systemd-logind.service
+Requires=systemd-logind.service
+
+[Service]
+Type=simple
+User=%i
+Group=%i
+
+# THIS creates a real logind session (not just runs as user)
+PAMName=login
+
+# Session gets real XDG_RUNTIME_DIR and D-Bus session bus
+Environment=XDG_SESSION_TYPE=x11
+
+# Start session with OpenBox + MCP
+ExecStart=/usr/local/bin/ghostbridge-session %i
+ExecStartPost=/usr/local/bin/load-sessions
+
+# Save sessions on stop
+ExecStop=/usr/local/bin/save-sessions
+KillMode=mixed
+
+# Session isolation
+PrivateTmp=false
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/%i
+ReadWritePaths=/var/lib/ghostbridge/workspaces/%i
+
+[Install]
+WantedBy=multi-user.target
+

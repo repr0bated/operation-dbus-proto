@@ -1,0 +1,66 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Service Plugin Schema",
+  "description": "Schema for service definitions (dinit/systemd)",
+  "type": "object",
+  "required": ["name", "exec_start"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9_.-]+$",
+      "maxLength": 64
+    },
+    "exec_start": {
+      "type": "object",
+      "required": ["program"],
+      "properties": {
+        "program": {
+          "type": "string",
+          "pattern": "^/"
+        },
+        "args": {
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      }
+    },
+    "exec_stop": {
+      "type": "object",
+      "properties": {
+        "program": {"type": "string", "pattern": "^/"},
+        "args": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "working_dir": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "user": {
+      "type": "string"
+    },
+    "group": {
+      "type": "string"
+    },
+    "depends_on": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": {"type": "string"}
+    },
+    "enabled": {
+      "type": "boolean",
+      "default": false
+    },
+    "lifecycle": {
+      "type": "object",
+      "properties": {
+        "last_active": {"type": "integer"},
+        "days_since_active": {"type": "integer"},
+        "is_orphaned": {"type": "boolean"},
+        "orphan_reason": {"type": "string"}
+      }
+    }
+  }
+}

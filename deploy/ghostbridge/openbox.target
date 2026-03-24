@@ -1,0 +1,10 @@
+[Unit]
+Description=Openbox Window Manager Session
+Documentation=man:openbox(1)
+# This target is reached when openbox starts
+# Services can bind with: PartOf=openbox.target, After=openbox.target
+BindsTo=graphical-session.target
+After=graphical-session-pre.target
+
+[Install]
+WantedBy=graphical-session.target

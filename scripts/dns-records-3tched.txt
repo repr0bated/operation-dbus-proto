@@ -1,0 +1,69 @@
+DNS Records for 3tched.com Mail Server
+======================================
+
+Replace <CONTAINER_IP> with your Incus container IP address
+Replace <YOUR_IPV4> with your public IPv4 address (if different)
+
+1. A Record (Mail Server)
+--------------------------
+Type: A
+Name: mail
+Value: <CONTAINER_IP>
+TTL: 3600
+
+2. MX Record (Mail Exchange)
+-----------------------------
+Type: MX
+Name: @
+Value: mail.3tched.com
+Priority: 10
+TTL: 3600
+
+3. SPF Record (Sender Policy Framework)
+----------------------------------------
+Type: TXT
+Name: @
+Value: v=spf1 mx ~all
+TTL: 3600
+
+4. DMARC Record
+---------------
+Type: TXT
+Name: _dmarc
+Value: v=DMARC1; p=quarantine; rua=mailto:admin@3tched.com
+TTL: 3600
+
+5. DKIM Record
+--------------
+After Maddy generates DKIM keys, you'll get a record like:
+
+Type: TXT
+Name: default._domainkey
+Value: (will be provided by Maddy after setup)
+TTL: 3600
+
+To get DKIM record after setup:
+  incus exec mail-3tched -- maddyctl dkim show default 3tched.com
+
+6. Optional: Webmail A Record
+------------------------------
+Type: A
+Name: webmail
+Value: <CONTAINER_IP>
+TTL: 3600
+
+Testing
+-------
+After DNS propagation (can take up to 48 hours, usually minutes):
+
+1. Test MX record:
+   dig MX 3tched.com
+
+2. Test SPF:
+   dig TXT 3tched.com
+
+3. Send test email to:
+   https://www.mail-tester.com/
+
+4. Check DKIM/SPF/DMARC:
+   https://mxtoolbox.com/

@@ -1,0 +1,43 @@
+[Unit]
+Description=op-web Chat Server (HuggingFace SSE + tool execution)
+After=network-online.target op-agent@bash-pro.service
+Wants=network-online.target op-agent@bash-pro.service
+
+[Service]
+Type=simple
+User=jeremy
+Group=jeremy
+WorkingDirectory=/usr/local/sbin
+
+# Core runtime env
+Environment="PORT=8080"
+Environment="STATIC_DIR=/usr/local/share/op-dbus/static"
+Environment="RUST_LOG=info"
+
+# LLM config (token/model/base-url pulled from optional env file)
+EnvironmentFile=-/home/jeremy/.huggingface.env
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/op-dbus
+CapabilityBoundingSet=
+
+# Start chat server (builds on first run if binary missing)
+ExecStart=/usr/local/sbin/op-web-server
+
+# Restart policy
+Restart=always
+RestartSec=10s
+StartLimitInterval=5min
+StartLimitBurst=3
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=op-web-hf
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,4 @@
+{
+    "gemini-cli.debug.logging.enabled": true,
+    "git.ignoreLimitWarning": true
+}

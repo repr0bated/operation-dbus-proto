@@ -1,0 +1,29 @@
+[Unit]
+Description=OP-DBUS Main Service
+Documentation=https://github.com/repr0bated/operation-dbus
+After=network.target dbus.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/op-dbus
+Restart=on-failure
+RestartSec=5s
+
+# Environment
+EnvironmentFile=-/etc/op-dbus/environment
+WorkingDirectory=/var/lib/op-dbus
+
+# Security
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/op-dbus /var/log/op-dbus
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=op-dbus
+
+[Install]
+WantedBy=multi-user.target

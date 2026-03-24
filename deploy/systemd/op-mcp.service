@@ -1,0 +1,30 @@
+[Unit]
+Description=OP-MCP Server (Full Protocol)
+Documentation=https://github.com/repr0bated/operation-dbus
+After=network.target op-dbus.service
+Requires=op-dbus.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/op-mcp-server --mode full --http 0.0.0.0:3001 --log-level debug
+Restart=on-failure
+RestartSec=5s
+
+# Environment
+EnvironmentFile=-/etc/op-dbus/environment
+WorkingDirectory=/var/lib/op-dbus
+
+# Security
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/op-dbus /var/log/op-dbus
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=op-mcp-server
+
+[Install]
+WantedBy=multi-user.target

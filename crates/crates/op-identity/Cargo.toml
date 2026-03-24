@@ -1,0 +1,21 @@
+[package]
+name = "op-identity"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+simd-json = { workspace = true }
+zbus = { version = "5.12", features = ["tokio"] }
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.6", features = ["v4", "serde"] }
+tracing = "0.1"
+keyring = "2"
+rusqlite = { workspace = true }
+dirs = "5"
+hostname = "0.4"
+rand = { workspace = true }
+base64 = { workspace = true }
+x25519-dalek = { version = "2", features = ["static_secrets"] }

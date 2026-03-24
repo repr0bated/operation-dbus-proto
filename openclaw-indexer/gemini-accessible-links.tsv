@@ -1,0 +1,3 @@
+repo_name	repo_path	origin	branch_pattern	link_id	resource
+branch-bestie-sync	/home/jeremy/git/branch-bestie-sync	https://github.com/repr0bated/branch-bestie-sync.git	main	repr0bated-branch-bestie-sync	developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/repr0bated-branch-bestie-sync
+gemini-work	/home/jeremy/git/gemini-work	https://github.com/repr0bated/operation-dbus.git	schema-consolidation	repr0bated-operation-dbus	developerconnect.googleapis.com/projects/dbus-enterprise-2026/locations/us-central1/connections/GithubDevConnectCentral/gitRepositoryLinks/repr0bated-operation-dbus

@@ -1,0 +1,35 @@
+[Unit]
+Description=OP-DBUS Agent Manager - D-Bus Agent Services
+Documentation=https://github.com/ghostbridge/op-dbus
+After=dbus.service network.target
+Requires=dbus.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+
+# Environment
+EnvironmentFile=-/etc/op-dbus/environment
+EnvironmentFile=-/etc/op-dbus/secrets.env
+
+# The agent manager starts all agents as D-Bus services
+ExecStart=/usr/local/sbin/dbus-agent-manager
+
+# Restart on failure
+Restart=on-failure
+RestartSec=5
+
+# Allow time for agents to register
+TimeoutStartSec=60
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=op-dbus-agents
+
+# D-Bus access
+BusName=org.dbusmcp.AgentManager
+
+[Install]
+WantedBy=multi-user.target

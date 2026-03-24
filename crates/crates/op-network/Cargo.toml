@@ -1,0 +1,36 @@
+[package]
+name = "op-network"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Native networking: OpenFlow (all versions, pure Rust), OVSDB JSON-RPC, rtnetlink, Proxmox API, container networking"
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+simd-json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+futures = "0.3"
+rtnetlink = { workspace = true }
+log = { workspace = true }
+
+# HTTP client for Proxmox API
+reqwest = { workspace = true }
+
+# Netlink (Generic Netlink for OVS)
+netlink-sys = "0.8"
+netlink-packet-core = "0.7"
+netlink-packet-generic = "0.3"
+netlink-packet-utils = "0.5"
+netlink-packet-route = "0.19"
+byteorder = "1.5"
+
+# Internal
+op-core = { path = "../op-core" }
+
+# Root privilege checking
+libc = { workspace = true }

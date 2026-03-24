@@ -1,0 +1,43 @@
+#!/bin/bash
+# GhostBridge Session Startup
+# Called by systemctl start ghostbridge-session@{user}.service
+# 
+# This script represents a LOGIN - session starts here
+# Session ends when systemctl stop is called
+
+set -e
+
+USER_ID="$1"
+WORKSPACE="/var/lib/ghostbridge/workspaces/${USER_ID}"
+LOG_DIR="${WORKSPACE}/.ghostbridge/logs"
+
+# Create workspace if needed
+mkdir -p "${WORKSPACE}/.ghostbridge/logs"
+mkdir -p "${WORKSPACE}/.ghostbridge/sockets"
+
+# Log session start
+echo "$(date): Session started for ${USER_ID}" >> "${LOG_DIR}/session.log"
+
+# Export session info
+export GHOSTBRIDGE_USER="${USER_ID}"
+export GHOSTBRIDGE_WORKSPACE="${WORKSPACE}"
+export GHOSTBRIDGE_SESSION_ID="$$"
+
+# Start Compact MCP (the core identity service)
+# This will be uncommented when op-mcp-compact is ready
+# /usr/local/bin/op-mcp-compact \
+#     --user "${USER_ID}" \
+#     --workspace "${WORKSPACE}" \
+#     >> "${LOG_DIR}/mcp.log" 2>&1 &
+# echo $! > "${WORKSPACE}/.ghostbridge/mcp.pid"
+
+echo "$(date): Compact MCP would start here" >> "${LOG_DIR}/session.log"
+
+# Keep session alive until stopped
+# systemctl stop will send SIGTERM
+trap 'echo "$(date): Session ended for ${USER_ID}" >> "${LOG_DIR}/session.log"; exit 0' SIGTERM SIGINT
+
+while true; do
+    sleep 60
+    echo "$(date): Session heartbeat" >> "${LOG_DIR}/session.log"
+done

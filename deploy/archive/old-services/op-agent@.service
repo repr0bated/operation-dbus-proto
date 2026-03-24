@@ -1,0 +1,51 @@
+# op-agent@.service - Template for running op-dbus agents as D-Bus services
+#
+# This is a systemd template unit that can run any agent type.
+# The agent type is specified as the instance name.
+#
+# Usage:
+#   systemctl start op-agent@python-pro.service
+#   systemctl start op-agent@rust-pro.service
+#   systemctl enable op-agent@code-reviewer.service
+#
+# Or run multiple agents:
+#   systemctl start op-agent@{python-pro,rust-pro,code-reviewer}.service
+
+[Unit]
+Description=op-dbus Agent (%i)
+Documentation=https://github.com/your-repo/op-dbus-v2
+After=dbus.service
+Requires=dbus.service
+
+[Service]
+Type=simple
+# Agent registers itself on D-Bus as org.dbusmcp.Agent.<name>
+
+# Run the agent with the instance name as the agent type
+ExecStart=/usr/local/sbin/dbus-agent --system %i
+
+# Restart on failure
+Restart=on-failure
+RestartSec=5
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=false
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+
+# Allow read access to common directories for code analysis
+ReadOnlyPaths=/home /opt
+
+# Run as service user
+User=jeremy
+Group=jeremy
+
+# Environment
+Environment=RUST_LOG=info,op_agents=debug
+Environment="PATH=/home/jeremy/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+[Install]
+WantedBy=multi-user.target

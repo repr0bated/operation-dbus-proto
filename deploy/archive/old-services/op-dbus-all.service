@@ -1,0 +1,25 @@
+[Unit]
+Description=Op-DBus All Services
+Documentation=https://github.com/jeremytodd/op-dbus-v2
+After=network-online.target dbus.service
+Wants=network-online.target dbus.service
+
+# Dependencies - these will be started/stopped together
+Requires=op-web.service
+Requires=op-mcp.service
+After=op-web.service op-mcp.service
+
+# Bind lifecycle to the core services
+BindsTo=op-web.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/true
+ExecStop=/bin/true
+
+# Also start chat-ui if needed (uncomment)
+#ExecStartPost=/bin/systemctl start op-web-hf.service
+
+[Install]
+WantedBy=multi-user.target
