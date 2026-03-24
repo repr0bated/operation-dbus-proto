@@ -902,6 +902,9 @@ impl SchemaRegistry {
         // LXC Container Schema
         self.register(create_lxc_schema());
         self.register(create_incus_schema());
+        self.register(create_incus_wireguard_ingress_schema());
+        self.register(create_incus_xray_reality_client_schema());
+        self.register(create_incus_xray_reality_server_schema());
 
         // Network Schema
         self.register(create_net_schema());
@@ -950,6 +953,9 @@ impl SchemaRegistry {
 
     fn canonical_name(name: &str) -> &str {
         match name {
+            "incus_wireguard_ingress" => "incus-wireguard-ingress",
+            "incus_xray_reality_client" => "incus-xray-reality-client",
+            "incus_xray_reality_server" => "incus-xray-reality-server",
             "systemd" => "dinit",
             "web-ui" => "web_ui",
             other => other,
@@ -1837,6 +1843,1596 @@ fn create_incus_schema() -> PluginSchema {
         .build()
 }
 
+fn create_incus_wireguard_ingress_schema() -> PluginSchema {
+    let container_fields = {
+        let mut fields = HashMap::new();
+        fields.insert(
+            "image".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "Incus image alias for the WireGuard ingress container".to_string(),
+                default: Some(json!("images:alpine/edge")),
+                example: Some(json!("images:alpine/edge")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "profiles".to_string(),
+            FieldSchema {
+                field_type: FieldType::Array(Box::new(FieldType::String)),
+                required: true,
+                description: "Incus profiles applied to the container".to_string(),
+                default: Some(json!(["default"])),
+                example: Some(json!(["default", "privacy-system"])),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "devices".to_string(),
+            any_field(
+                false,
+                "Incus device overrides such as NICs and disks",
+                Some(json!({})),
+            ),
+        );
+        fields
+    };
+
+    let peer_fields = {
+        let mut fields = HashMap::new();
+        fields.insert(
+            "public_key".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "Peer public key".to_string(),
+                default: None,
+                example: Some(json!("base64publickey")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "allowed_ips".to_string(),
+            FieldSchema {
+                field_type: FieldType::Array(Box::new(FieldType::String)),
+                required: true,
+                description: "Allowed IP ranges for the peer".to_string(),
+                default: Some(json!(["0.0.0.0/0"])),
+                example: Some(json!(["10.0.0.2/32"])),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "endpoint".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Optional peer endpoint host:port".to_string(),
+                default: None,
+                example: Some(json!("vpn.example.com:51820")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "persistent_keepalive".to_string(),
+            FieldSchema {
+                field_type: FieldType::Integer,
+                required: false,
+                description: "Persistent keepalive interval in seconds".to_string(),
+                default: None,
+                example: Some(json!(25)),
+                constraints: vec![
+                    Constraint::Min { value: 0.0 },
+                    Constraint::Max { value: 65535.0 },
+                ],
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields
+    };
+
+    let wireguard_fields = {
+        let mut fields = HashMap::new();
+        fields.insert(
+            "interface".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "WireGuard interface name inside the container".to_string(),
+                default: Some(json!("wg0")),
+                example: Some(json!("wg0")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "listen_port".to_string(),
+            FieldSchema {
+                field_type: FieldType::Integer,
+                required: true,
+                description: "WireGuard listen port".to_string(),
+                default: Some(json!(51820)),
+                example: Some(json!(51820)),
+                constraints: vec![
+                    Constraint::Min { value: 1.0 },
+                    Constraint::Max { value: 65535.0 },
+                ],
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "private_key_env".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "Environment variable name holding the private key".to_string(),
+                default: Some(json!("WIREGUARD_PRIVATE_KEY")),
+                example: Some(json!("WIREGUARD_PRIVATE_KEY")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "address".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "CIDR address assigned to the WireGuard interface".to_string(),
+                default: None,
+                example: Some(json!("10.0.0.1/24")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "dns".to_string(),
+            FieldSchema {
+                field_type: FieldType::Array(Box::new(FieldType::String)),
+                required: false,
+                description: "DNS resolvers pushed to clients".to_string(),
+                default: Some(json!([])),
+                example: Some(json!(["1.1.1.1", "1.0.0.1"])),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "peers".to_string(),
+            FieldSchema {
+                field_type: FieldType::Array(Box::new(FieldType::Object(peer_fields))),
+                required: true,
+                description: "WireGuard peers served by the ingress gateway".to_string(),
+                default: Some(json!([])),
+                example: Some(json!([{
+                    "public_key": "base64publickey",
+                    "allowed_ips": ["10.0.0.2/32"]
+                }])),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields
+    };
+
+    let capability_fields = {
+        let mut fields = HashMap::new();
+        fields.insert(
+            "requires_root".to_string(),
+            FieldSchema {
+                field_type: FieldType::Boolean,
+                required: false,
+                description: "Whether the container requires root privileges".to_string(),
+                default: Some(json!(true)),
+                example: Some(json!(true)),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "supports_rollback".to_string(),
+            FieldSchema {
+                field_type: FieldType::Boolean,
+                required: false,
+                description: "Whether the deployment supports rollback".to_string(),
+                default: Some(json!(false)),
+                example: Some(json!(false)),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields
+    };
+
+    PluginSchema::builder("incus-wireguard-ingress")
+        .version("1.0.0")
+        .description("Incus system container declaration for the WireGuard ingress gateway")
+        .field(
+            "name",
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "Schema object name".to_string(),
+                default: Some(json!("incus-wireguard-ingress")),
+                example: Some(json!("incus-wireguard-ingress")),
+                constraints: vec![
+                    Constraint::Pattern {
+                        regex: "^[a-z0-9_-]+$".to_string(),
+                    },
+                    Constraint::Max { value: 64.0 },
+                ],
+                read_only: false,
+                read_only_when: None,
+            },
+        )
+        .field(
+            "version",
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "Schema version".to_string(),
+                default: Some(json!("1.0.0")),
+                example: Some(json!("1.0.0")),
+                constraints: vec![Constraint::Pattern {
+                    regex: "^\\d+\\.\\d+\\.\\d+$".to_string(),
+                }],
+                read_only: false,
+                read_only_when: None,
+            },
+        )
+        .field(
+            "plugin_type",
+            FieldSchema {
+                field_type: FieldType::Enum(vec!["network".to_string()]),
+                required: true,
+                description: "Container schema category".to_string(),
+                default: Some(json!("network")),
+                example: Some(json!("network")),
+                constraints: Vec::new(),
+                read_only: true,
+                read_only_when: None,
+            },
+        )
+        .object_field(
+            "container",
+            container_fields,
+            true,
+            "Incus container image, profiles, and device overrides",
+        )
+        .object_field(
+            "wireguard",
+            wireguard_fields,
+            true,
+            "WireGuard ingress service configuration",
+        )
+        .object_field(
+            "capabilities",
+            capability_fields,
+            false,
+            "Operational capabilities for the container implementation",
+        )
+        .field(
+            "service",
+            any_field(false, "Optional service declaration", Some(json!({}))),
+        )
+        .example(json!({
+            "name": "incus-wireguard-ingress",
+            "version": "1.0.0",
+            "plugin_type": "network",
+            "container": {
+                "image": "images:alpine/edge",
+                "profiles": ["default", "privacy-system"],
+                "devices": {}
+            },
+            "wireguard": {
+                "interface": "wg0",
+                "listen_port": 51820,
+                "private_key_env": "WIREGUARD_PRIVATE_KEY",
+                "address": "10.0.0.1/24",
+                "dns": ["1.1.1.1", "1.0.0.1"],
+                "peers": [{
+                    "public_key": "base64publickey",
+                    "allowed_ips": ["10.0.0.2/32"]
+                }]
+            },
+            "capabilities": {
+                "requires_root": true,
+                "supports_rollback": false
+            },
+            "service": {}
+        }))
+        .build()
+}
+
+fn create_incus_xray_reality_client_schema() -> PluginSchema {
+    let container_fields = {
+        let mut fields = HashMap::new();
+        fields.insert(
+            "image".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "Incus image alias for the Xray client container".to_string(),
+                default: Some(json!("images:debian/13")),
+                example: Some(json!("images:debian/13")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "profiles".to_string(),
+            FieldSchema {
+                field_type: FieldType::Array(Box::new(FieldType::String)),
+                required: true,
+                description: "Incus profiles applied to the container".to_string(),
+                default: Some(json!(["default"])),
+                example: Some(json!(["default", "privacy-system"])),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "devices".to_string(),
+            any_field(
+                false,
+                "Incus device overrides such as NICs and disks",
+                Some(json!({})),
+            ),
+        );
+        fields
+    };
+
+    let inbound_fields = {
+        let mut fields = HashMap::new();
+        fields.insert(
+            "tag".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Optional Xray inbound tag".to_string(),
+                default: None,
+                example: Some(json!("socks-in")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "protocol".to_string(),
+            FieldSchema {
+                field_type: FieldType::Enum(vec![
+                    "socks".to_string(),
+                    "http".to_string(),
+                    "dokodemo-door".to_string(),
+                ]),
+                required: true,
+                description: "Inbound protocol".to_string(),
+                default: Some(json!("socks")),
+                example: Some(json!("socks")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "port".to_string(),
+            FieldSchema {
+                field_type: FieldType::Integer,
+                required: true,
+                description: "Listener port".to_string(),
+                default: Some(json!(1080)),
+                example: Some(json!(1080)),
+                constraints: vec![
+                    Constraint::Min { value: 1.0 },
+                    Constraint::Max { value: 65535.0 },
+                ],
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "listen".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Listener bind address".to_string(),
+                default: Some(json!("127.0.0.1")),
+                example: Some(json!("127.0.0.1")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "sniffing".to_string(),
+            FieldSchema {
+                field_type: FieldType::Boolean,
+                required: false,
+                description: "Enable protocol sniffing".to_string(),
+                default: Some(json!(true)),
+                example: Some(json!(true)),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields
+    };
+
+    let vnext_user_fields = {
+        let mut fields = HashMap::new();
+        fields.insert(
+            "id".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "User UUID".to_string(),
+                default: None,
+                example: Some(json!("00000000-0000-0000-0000-000000000000")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "flow".to_string(),
+            FieldSchema {
+                field_type: FieldType::Enum(vec!["xtls-rprx-vision".to_string()]),
+                required: true,
+                description: "REALITY flow".to_string(),
+                default: Some(json!("xtls-rprx-vision")),
+                example: Some(json!("xtls-rprx-vision")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "encryption".to_string(),
+            FieldSchema {
+                field_type: FieldType::Enum(vec!["none".to_string()]),
+                required: false,
+                description: "Encryption mode".to_string(),
+                default: Some(json!("none")),
+                example: Some(json!("none")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields
+    };
+
+    let vnext_fields = {
+        let mut fields = HashMap::new();
+        fields.insert(
+            "address".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "Remote Xray server hostname or IP".to_string(),
+                default: None,
+                example: Some(json!("vps.example.com")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "port".to_string(),
+            FieldSchema {
+                field_type: FieldType::Integer,
+                required: true,
+                description: "Remote Xray server port".to_string(),
+                default: Some(json!(443)),
+                example: Some(json!(443)),
+                constraints: vec![
+                    Constraint::Min { value: 1.0 },
+                    Constraint::Max { value: 65535.0 },
+                ],
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "users".to_string(),
+            FieldSchema {
+                field_type: FieldType::Array(Box::new(FieldType::Object(vnext_user_fields))),
+                required: true,
+                description: "Authorized VLESS users".to_string(),
+                default: Some(json!([])),
+                example: Some(json!([{
+                    "id": "00000000-0000-0000-0000-000000000000",
+                    "flow": "xtls-rprx-vision",
+                    "encryption": "none"
+                }])),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields
+    };
+
+    let outbound_settings_fields = {
+        let mut fields = HashMap::new();
+        fields.insert(
+            "vnext".to_string(),
+            FieldSchema {
+                field_type: FieldType::Array(Box::new(FieldType::Object(vnext_fields))),
+                required: true,
+                description: "Remote VLESS upstream definitions".to_string(),
+                default: Some(json!([])),
+                example: Some(json!([{
+                    "address": "vps.example.com",
+                    "port": 443,
+                    "users": [{
+                        "id": "00000000-0000-0000-0000-000000000000",
+                        "flow": "xtls-rprx-vision",
+                        "encryption": "none"
+                    }]
+                }])),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields
+    };
+
+    let reality_fields = {
+        let mut fields = HashMap::new();
+        fields.insert(
+            "server_name".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "TLS server name to mimic".to_string(),
+                default: None,
+                example: Some(json!("www.microsoft.com")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "public_key".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "Server public key".to_string(),
+                default: None,
+                example: Some(json!("base64publickey")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "short_id".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "REALITY short ID".to_string(),
+                default: None,
+                example: Some(json!("1234abcd")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "fingerprint".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Client fingerprint".to_string(),
+                default: Some(json!("chrome")),
+                example: Some(json!("chrome")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields
+    };
+
+    let stream_settings_fields = {
+        let mut fields = HashMap::new();
+        fields.insert(
+            "network".to_string(),
+            FieldSchema {
+                field_type: FieldType::Enum(vec!["tcp".to_string()]),
+                required: true,
+                description: "Transport network".to_string(),
+                default: Some(json!("tcp")),
+                example: Some(json!("tcp")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "security".to_string(),
+            FieldSchema {
+                field_type: FieldType::Enum(vec!["reality".to_string()]),
+                required: true,
+                description: "Transport security".to_string(),
+                default: Some(json!("reality")),
+                example: Some(json!("reality")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "reality_settings".to_string(),
+            FieldSchema {
+                field_type: FieldType::Object(reality_fields),
+                required: true,
+                description: "REALITY transport settings".to_string(),
+                default: Some(json!({})),
+                example: Some(json!({
+                    "server_name": "www.microsoft.com",
+                    "public_key": "base64publickey",
+                    "short_id": "1234abcd",
+                    "fingerprint": "chrome"
+                })),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields
+    };
+
+    let outbound_fields = {
+        let mut fields = HashMap::new();
+        fields.insert(
+            "tag".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Optional Xray outbound tag".to_string(),
+                default: None,
+                example: Some(json!("reality-out")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "protocol".to_string(),
+            FieldSchema {
+                field_type: FieldType::Enum(vec!["vless".to_string()]),
+                required: true,
+                description: "Outbound protocol".to_string(),
+                default: Some(json!("vless")),
+                example: Some(json!("vless")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "settings".to_string(),
+            FieldSchema {
+                field_type: FieldType::Object(outbound_settings_fields),
+                required: true,
+                description: "Outbound server settings".to_string(),
+                default: Some(json!({})),
+                example: Some(json!({
+                    "vnext": [{
+                        "address": "vps.example.com",
+                        "port": 443,
+                        "users": [{
+                            "id": "00000000-0000-0000-0000-000000000000",
+                            "flow": "xtls-rprx-vision",
+                            "encryption": "none"
+                        }]
+                    }]
+                })),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "stream_settings".to_string(),
+            FieldSchema {
+                field_type: FieldType::Object(stream_settings_fields),
+                required: true,
+                description: "REALITY transport settings".to_string(),
+                default: Some(json!({})),
+                example: Some(json!({
+                    "network": "tcp",
+                    "security": "reality",
+                    "reality_settings": {
+                        "server_name": "www.microsoft.com",
+                        "public_key": "base64publickey",
+                        "short_id": "1234abcd",
+                        "fingerprint": "chrome"
+                    }
+                })),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields
+    };
+
+    let xray_fields = {
+        let mut fields = HashMap::new();
+        fields.insert(
+            "log_level".to_string(),
+            FieldSchema {
+                field_type: FieldType::Enum(vec![
+                    "debug".to_string(),
+                    "info".to_string(),
+                    "warning".to_string(),
+                    "error".to_string(),
+                    "none".to_string(),
+                ]),
+                required: false,
+                description: "Xray log level".to_string(),
+                default: Some(json!("warning")),
+                example: Some(json!("warning")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "inbounds".to_string(),
+            FieldSchema {
+                field_type: FieldType::Array(Box::new(FieldType::Object(inbound_fields))),
+                required: true,
+                description: "Local proxy listeners".to_string(),
+                default: Some(json!([])),
+                example: Some(json!([{
+                    "tag": "socks-in",
+                    "protocol": "socks",
+                    "port": 1080,
+                    "listen": "127.0.0.1",
+                    "sniffing": true
+                }])),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "outbounds".to_string(),
+            FieldSchema {
+                field_type: FieldType::Array(Box::new(FieldType::Object(outbound_fields))),
+                required: true,
+                description: "REALITY egress definitions".to_string(),
+                default: Some(json!([])),
+                example: Some(json!([{
+                    "tag": "reality-out",
+                    "protocol": "vless",
+                    "settings": {
+                        "vnext": [{
+                            "address": "vps.example.com",
+                            "port": 443,
+                            "users": [{
+                                "id": "00000000-0000-0000-0000-000000000000",
+                                "flow": "xtls-rprx-vision",
+                                "encryption": "none"
+                            }]
+                        }]
+                    },
+                    "stream_settings": {
+                        "network": "tcp",
+                        "security": "reality",
+                        "reality_settings": {
+                            "server_name": "www.microsoft.com",
+                            "public_key": "base64publickey",
+                            "short_id": "1234abcd",
+                            "fingerprint": "chrome"
+                        }
+                    }
+                }])),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields
+    };
+
+    let capability_fields = {
+        let mut fields = HashMap::new();
+        fields.insert(
+            "requires_root".to_string(),
+            FieldSchema {
+                field_type: FieldType::Boolean,
+                required: false,
+                description: "Whether the container requires root privileges".to_string(),
+                default: Some(json!(false)),
+                example: Some(json!(false)),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "supports_rollback".to_string(),
+            FieldSchema {
+                field_type: FieldType::Boolean,
+                required: false,
+                description: "Whether the deployment supports rollback".to_string(),
+                default: Some(json!(false)),
+                example: Some(json!(false)),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields
+    };
+
+    PluginSchema::builder("incus-xray-reality-client")
+        .version("1.0.0")
+        .description("Incus system container declaration for the Xray REALITY outbound client")
+        .field(
+            "name",
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "Schema object name".to_string(),
+                default: Some(json!("incus-xray-reality-client")),
+                example: Some(json!("incus-xray-reality-client")),
+                constraints: vec![
+                    Constraint::Pattern {
+                        regex: "^[a-z0-9_-]+$".to_string(),
+                    },
+                    Constraint::Max { value: 64.0 },
+                ],
+                read_only: false,
+                read_only_when: None,
+            },
+        )
+        .field(
+            "version",
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "Schema version".to_string(),
+                default: Some(json!("1.0.0")),
+                example: Some(json!("1.0.0")),
+                constraints: vec![Constraint::Pattern {
+                    regex: "^\\d+\\.\\d+\\.\\d+$".to_string(),
+                }],
+                read_only: false,
+                read_only_when: None,
+            },
+        )
+        .field(
+            "plugin_type",
+            FieldSchema {
+                field_type: FieldType::Enum(vec!["network".to_string()]),
+                required: true,
+                description: "Container schema category".to_string(),
+                default: Some(json!("network")),
+                example: Some(json!("network")),
+                constraints: Vec::new(),
+                read_only: true,
+                read_only_when: None,
+            },
+        )
+        .object_field(
+            "container",
+            container_fields,
+            true,
+            "Incus container image, profiles, and device overrides",
+        )
+        .object_field(
+            "xray",
+            xray_fields,
+            true,
+            "Xray REALITY client configuration",
+        )
+        .object_field(
+            "capabilities",
+            capability_fields,
+            false,
+            "Operational capabilities for the container implementation",
+        )
+        .field(
+            "service",
+            any_field(false, "Optional service declaration", Some(json!({}))),
+        )
+        .example(json!({
+            "name": "incus-xray-reality-client",
+            "version": "1.0.0",
+            "plugin_type": "network",
+            "container": {
+                "image": "images:debian/13",
+                "profiles": ["default", "privacy-system"],
+                "devices": {}
+            },
+            "xray": {
+                "log_level": "warning",
+                "inbounds": [{
+                    "tag": "socks-in",
+                    "protocol": "socks",
+                    "port": 1080,
+                    "listen": "127.0.0.1",
+                    "sniffing": true
+                }],
+                "outbounds": [{
+                    "tag": "reality-out",
+                    "protocol": "vless",
+                    "settings": {
+                        "vnext": [{
+                            "address": "vps.example.com",
+                            "port": 443,
+                            "users": [{
+                                "id": "00000000-0000-0000-0000-000000000000",
+                                "flow": "xtls-rprx-vision",
+                                "encryption": "none"
+                            }]
+                        }]
+                    },
+                    "stream_settings": {
+                        "network": "tcp",
+                        "security": "reality",
+                        "reality_settings": {
+                            "server_name": "www.microsoft.com",
+                            "public_key": "base64publickey",
+                            "short_id": "1234abcd",
+                            "fingerprint": "chrome"
+                        }
+                    }
+                }]
+            },
+            "capabilities": {
+                "requires_root": false,
+                "supports_rollback": false
+            },
+            "service": {}
+        }))
+        .build()
+}
+
+fn create_incus_xray_reality_server_schema() -> PluginSchema {
+    let container_fields = {
+        let mut fields = HashMap::new();
+        fields.insert(
+            "image".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "Incus image alias for the Xray server container".to_string(),
+                default: Some(json!("images:debian/13")),
+                example: Some(json!("images:debian/13")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "profiles".to_string(),
+            FieldSchema {
+                field_type: FieldType::Array(Box::new(FieldType::String)),
+                required: true,
+                description: "Incus profiles applied to the container".to_string(),
+                default: Some(json!(["default"])),
+                example: Some(json!(["default", "privacy-system"])),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "devices".to_string(),
+            any_field(
+                false,
+                "Incus device overrides such as NICs and disks",
+                Some(json!({})),
+            ),
+        );
+        fields
+    };
+
+    let client_fields = {
+        let mut fields = HashMap::new();
+        fields.insert(
+            "id".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "Authorized user UUID".to_string(),
+                default: None,
+                example: Some(json!("00000000-0000-0000-0000-000000000000")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "flow".to_string(),
+            FieldSchema {
+                field_type: FieldType::Enum(vec!["xtls-rprx-vision".to_string()]),
+                required: true,
+                description: "REALITY flow".to_string(),
+                default: Some(json!("xtls-rprx-vision")),
+                example: Some(json!("xtls-rprx-vision")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "email".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Optional client label".to_string(),
+                default: None,
+                example: Some(json!("user@example.com")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields
+    };
+
+    let inbound_settings_fields = {
+        let mut fields = HashMap::new();
+        fields.insert(
+            "clients".to_string(),
+            FieldSchema {
+                field_type: FieldType::Array(Box::new(FieldType::Object(client_fields))),
+                required: true,
+                description: "Authorized inbound clients".to_string(),
+                default: Some(json!([])),
+                example: Some(json!([{
+                    "id": "00000000-0000-0000-0000-000000000000",
+                    "flow": "xtls-rprx-vision",
+                    "email": "user@example.com"
+                }])),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "decryption".to_string(),
+            FieldSchema {
+                field_type: FieldType::Enum(vec!["none".to_string()]),
+                required: false,
+                description: "VLESS decryption mode".to_string(),
+                default: Some(json!("none")),
+                example: Some(json!("none")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields
+    };
+
+    let reality_fields = {
+        let mut fields = HashMap::new();
+        fields.insert(
+            "show".to_string(),
+            FieldSchema {
+                field_type: FieldType::Boolean,
+                required: false,
+                description: "Enable REALITY debug output".to_string(),
+                default: Some(json!(false)),
+                example: Some(json!(false)),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "dest".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "Fallback destination for non-REALITY traffic".to_string(),
+                default: None,
+                example: Some(json!("www.microsoft.com:443")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "server_names".to_string(),
+            FieldSchema {
+                field_type: FieldType::Array(Box::new(FieldType::String)),
+                required: true,
+                description: "Allowed SNI values".to_string(),
+                default: Some(json!([])),
+                example: Some(json!(["www.microsoft.com"])),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "private_key_env".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Environment variable name holding the private key".to_string(),
+                default: None,
+                example: Some(json!("XRAY_PRIVATE_KEY")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "private_key".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Inline x25519 private key".to_string(),
+                default: None,
+                example: Some(json!("base64privatekey")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "short_ids".to_string(),
+            FieldSchema {
+                field_type: FieldType::Array(Box::new(FieldType::String)),
+                required: true,
+                description: "Allowed REALITY short IDs".to_string(),
+                default: Some(json!([])),
+                example: Some(json!(["1234abcd"])),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields
+    };
+
+    let stream_settings_fields = {
+        let mut fields = HashMap::new();
+        fields.insert(
+            "network".to_string(),
+            FieldSchema {
+                field_type: FieldType::Enum(vec!["tcp".to_string()]),
+                required: true,
+                description: "Transport network".to_string(),
+                default: Some(json!("tcp")),
+                example: Some(json!("tcp")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "security".to_string(),
+            FieldSchema {
+                field_type: FieldType::Enum(vec!["reality".to_string()]),
+                required: true,
+                description: "Transport security".to_string(),
+                default: Some(json!("reality")),
+                example: Some(json!("reality")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "reality_settings".to_string(),
+            FieldSchema {
+                field_type: FieldType::Object(reality_fields),
+                required: true,
+                description: "REALITY listener settings".to_string(),
+                default: Some(json!({})),
+                example: Some(json!({
+                    "show": false,
+                    "dest": "www.microsoft.com:443",
+                    "server_names": ["www.microsoft.com"],
+                    "private_key_env": "XRAY_PRIVATE_KEY",
+                    "short_ids": ["1234abcd"]
+                })),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields
+    };
+
+    let inbound_fields = {
+        let mut fields = HashMap::new();
+        fields.insert(
+            "tag".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Optional Xray inbound tag".to_string(),
+                default: None,
+                example: Some(json!("reality-in")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "protocol".to_string(),
+            FieldSchema {
+                field_type: FieldType::Enum(vec!["vless".to_string()]),
+                required: true,
+                description: "Inbound protocol".to_string(),
+                default: Some(json!("vless")),
+                example: Some(json!("vless")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "port".to_string(),
+            FieldSchema {
+                field_type: FieldType::Integer,
+                required: true,
+                description: "Listener port".to_string(),
+                default: Some(json!(443)),
+                example: Some(json!(443)),
+                constraints: vec![
+                    Constraint::Min { value: 1.0 },
+                    Constraint::Max { value: 65535.0 },
+                ],
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "listen".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Listener bind address".to_string(),
+                default: Some(json!("0.0.0.0")),
+                example: Some(json!("0.0.0.0")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "settings".to_string(),
+            FieldSchema {
+                field_type: FieldType::Object(inbound_settings_fields),
+                required: true,
+                description: "Inbound client settings".to_string(),
+                default: Some(json!({})),
+                example: Some(json!({
+                    "clients": [{
+                        "id": "00000000-0000-0000-0000-000000000000",
+                        "flow": "xtls-rprx-vision",
+                        "email": "user@example.com"
+                    }],
+                    "decryption": "none"
+                })),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "stream_settings".to_string(),
+            FieldSchema {
+                field_type: FieldType::Object(stream_settings_fields),
+                required: true,
+                description: "REALITY transport settings".to_string(),
+                default: Some(json!({})),
+                example: Some(json!({
+                    "network": "tcp",
+                    "security": "reality",
+                    "reality_settings": {
+                        "show": false,
+                        "dest": "www.microsoft.com:443",
+                        "server_names": ["www.microsoft.com"],
+                        "private_key_env": "XRAY_PRIVATE_KEY",
+                        "short_ids": ["1234abcd"]
+                    }
+                })),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields
+    };
+
+    let outbound_fields = {
+        let mut fields = HashMap::new();
+        fields.insert(
+            "tag".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Optional Xray outbound tag".to_string(),
+                default: None,
+                example: Some(json!("direct")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "protocol".to_string(),
+            FieldSchema {
+                field_type: FieldType::Enum(vec!["freedom".to_string(), "blackhole".to_string()]),
+                required: true,
+                description: "Outbound protocol".to_string(),
+                default: Some(json!("freedom")),
+                example: Some(json!("freedom")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields
+    };
+
+    let xray_fields = {
+        let mut fields = HashMap::new();
+        fields.insert(
+            "log_level".to_string(),
+            FieldSchema {
+                field_type: FieldType::Enum(vec![
+                    "debug".to_string(),
+                    "info".to_string(),
+                    "warning".to_string(),
+                    "error".to_string(),
+                    "none".to_string(),
+                ]),
+                required: false,
+                description: "Xray log level".to_string(),
+                default: Some(json!("warning")),
+                example: Some(json!("warning")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "inbounds".to_string(),
+            FieldSchema {
+                field_type: FieldType::Array(Box::new(FieldType::Object(inbound_fields))),
+                required: true,
+                description: "REALITY server listeners".to_string(),
+                default: Some(json!([])),
+                example: Some(json!([{
+                    "tag": "reality-in",
+                    "protocol": "vless",
+                    "port": 443,
+                    "listen": "0.0.0.0",
+                    "settings": {
+                        "clients": [{
+                            "id": "00000000-0000-0000-0000-000000000000",
+                            "flow": "xtls-rprx-vision",
+                            "email": "user@example.com"
+                        }],
+                        "decryption": "none"
+                    },
+                    "stream_settings": {
+                        "network": "tcp",
+                        "security": "reality",
+                        "reality_settings": {
+                            "show": false,
+                            "dest": "www.microsoft.com:443",
+                            "server_names": ["www.microsoft.com"],
+                            "private_key_env": "XRAY_PRIVATE_KEY",
+                            "short_ids": ["1234abcd"]
+                        }
+                    }
+                }])),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "outbounds".to_string(),
+            FieldSchema {
+                field_type: FieldType::Array(Box::new(FieldType::Object(outbound_fields))),
+                required: true,
+                description: "Server-side outbounds, typically direct or blackhole".to_string(),
+                default: Some(json!([{"protocol": "freedom"}])),
+                example: Some(json!([{
+                    "tag": "direct",
+                    "protocol": "freedom"
+                }])),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields
+    };
+
+    let capability_fields = {
+        let mut fields = HashMap::new();
+        fields.insert(
+            "requires_root".to_string(),
+            FieldSchema {
+                field_type: FieldType::Boolean,
+                required: false,
+                description: "Whether the container requires root privileges".to_string(),
+                default: Some(json!(false)),
+                example: Some(json!(false)),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "supports_rollback".to_string(),
+            FieldSchema {
+                field_type: FieldType::Boolean,
+                required: false,
+                description: "Whether the deployment supports rollback".to_string(),
+                default: Some(json!(false)),
+                example: Some(json!(false)),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields
+    };
+
+    PluginSchema::builder("incus-xray-reality-server")
+        .version("1.0.0")
+        .description("Incus system container declaration for the Xray REALITY inbound server")
+        .field(
+            "name",
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "Schema object name".to_string(),
+                default: Some(json!("incus-xray-reality-server")),
+                example: Some(json!("incus-xray-reality-server")),
+                constraints: vec![
+                    Constraint::Pattern {
+                        regex: "^[a-z0-9_-]+$".to_string(),
+                    },
+                    Constraint::Max { value: 64.0 },
+                ],
+                read_only: false,
+                read_only_when: None,
+            },
+        )
+        .field(
+            "version",
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "Schema version".to_string(),
+                default: Some(json!("1.0.0")),
+                example: Some(json!("1.0.0")),
+                constraints: vec![Constraint::Pattern {
+                    regex: "^\\d+\\.\\d+\\.\\d+$".to_string(),
+                }],
+                read_only: false,
+                read_only_when: None,
+            },
+        )
+        .field(
+            "plugin_type",
+            FieldSchema {
+                field_type: FieldType::Enum(vec!["network".to_string()]),
+                required: true,
+                description: "Container schema category".to_string(),
+                default: Some(json!("network")),
+                example: Some(json!("network")),
+                constraints: Vec::new(),
+                read_only: true,
+                read_only_when: None,
+            },
+        )
+        .object_field(
+            "container",
+            container_fields,
+            true,
+            "Incus container image, profiles, and device overrides",
+        )
+        .object_field(
+            "xray",
+            xray_fields,
+            true,
+            "Xray REALITY server configuration",
+        )
+        .object_field(
+            "capabilities",
+            capability_fields,
+            false,
+            "Operational capabilities for the container implementation",
+        )
+        .field(
+            "service",
+            any_field(false, "Optional service declaration", Some(json!({}))),
+        )
+        .example(json!({
+            "name": "incus-xray-reality-server",
+            "version": "1.0.0",
+            "plugin_type": "network",
+            "container": {
+                "image": "images:debian/13",
+                "profiles": ["default", "privacy-system"],
+                "devices": {}
+            },
+            "xray": {
+                "log_level": "warning",
+                "inbounds": [{
+                    "tag": "reality-in",
+                    "protocol": "vless",
+                    "port": 443,
+                    "listen": "0.0.0.0",
+                    "settings": {
+                        "clients": [{
+                            "id": "00000000-0000-0000-0000-000000000000",
+                            "flow": "xtls-rprx-vision",
+                            "email": "user@example.com"
+                        }],
+                        "decryption": "none"
+                    },
+                    "stream_settings": {
+                        "network": "tcp",
+                        "security": "reality",
+                        "reality_settings": {
+                            "show": false,
+                            "dest": "www.microsoft.com:443",
+                            "server_names": ["www.microsoft.com"],
+                            "private_key_env": "XRAY_PRIVATE_KEY",
+                            "short_ids": ["1234abcd"]
+                        }
+                    }
+                }],
+                "outbounds": [{
+                    "tag": "direct",
+                    "protocol": "freedom"
+                }]
+            },
+            "capabilities": {
+                "requires_root": false,
+                "supports_rollback": false
+            },
+            "service": {}
+        }))
+        .build()
+}
+
 fn create_net_schema() -> PluginSchema {
     let interface_fields = {
         let mut fields = HashMap::new();
@@ -2414,6 +4010,20 @@ fn create_privacy_router_schema() -> PluginSchema {
                 read_only_when: None,
             },
         );
+        fields.insert(
+            "socket_port".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Host-side bridge port name for the WireGuard ingress container"
+                    .to_string(),
+                default: Some(json!("priv_wg")),
+                example: Some(json!("priv_wg")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
         fields
     };
 
@@ -2433,19 +4043,31 @@ fn create_privacy_router_schema() -> PluginSchema {
             },
         );
         fields.insert(
-            "container_id".to_string(),
+            "bridge_interface".to_string(),
             FieldSchema {
                 field_type: FieldType::String,
                 required: false,
-                description: "Container VMID for WARP".to_string(),
-                default: Some(json!("101")),
-                example: Some(json!("101")),
+                description: "Host WireGuard interface bridged into OVS for WARP egress"
+                    .to_string(),
+                default: Some(json!("wgcf")),
+                example: Some(json!("wgcf")),
                 constraints: Vec::new(),
                 read_only: false,
-                read_only_when: Some(ReadOnlyCondition {
-                    property: "enabled".to_string(),
-                    value: "true".to_string(),
-                }),
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "wgcf_config".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Path to wgcf WireGuard config used to create the host interface"
+                    .to_string(),
+                default: Some(json!("/etc/wireguard/wgcf.conf")),
+                example: Some(json!("/etc/wireguard/wgcf.conf")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
             },
         );
         fields
@@ -2458,7 +4080,7 @@ fn create_privacy_router_schema() -> PluginSchema {
             FieldSchema {
                 field_type: FieldType::Boolean,
                 required: true,
-                description: "Enable XRay tunnel".to_string(),
+                description: "Enable system XRay client tunnel".to_string(),
                 default: Some(json!(true)),
                 example: Some(json!(true)),
                 constraints: Vec::new(),
@@ -2471,9 +4093,9 @@ fn create_privacy_router_schema() -> PluginSchema {
             FieldSchema {
                 field_type: FieldType::String,
                 required: false,
-                description: "Container VMID for XRay".to_string(),
-                default: Some(json!("102")),
-                example: Some(json!("102")),
+                description: "Container VMID for the local XRay client".to_string(),
+                default: Some(json!("101")),
+                example: Some(json!("101")),
                 constraints: Vec::new(),
                 read_only: false,
                 read_only_when: Some(ReadOnlyCondition {
@@ -2483,18 +4105,93 @@ fn create_privacy_router_schema() -> PluginSchema {
             },
         );
         fields.insert(
-            "protocol".to_string(),
+            "socket_port".to_string(),
             FieldSchema {
-                field_type: FieldType::Enum(vec![
-                    "vless".to_string(),
-                    "vmess".to_string(),
-                    "trojan".to_string(),
-                ]),
+                field_type: FieldType::String,
                 required: false,
-                description: "XRay protocol".to_string(),
-                default: Some(json!("vless")),
-                example: Some(json!("vless")),
+                description: "Host-side bridge port for the local XRay client".to_string(),
+                default: Some(json!("priv_xray")),
+                example: Some(json!("priv_xray")),
                 constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "socks_port".to_string(),
+            FieldSchema {
+                field_type: FieldType::Integer,
+                required: false,
+                description: "SOCKS listener port exposed by the local XRay client".to_string(),
+                default: Some(json!(1080)),
+                example: Some(json!(1080)),
+                constraints: vec![
+                    Constraint::Min { value: 1.0 },
+                    Constraint::Max { value: 65535.0 },
+                ],
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "vps_address".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Remote XRay server hostname or IP".to_string(),
+                default: Some(json!("vps.example.com")),
+                example: Some(json!("vps.example.com")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "vps_port".to_string(),
+            FieldSchema {
+                field_type: FieldType::Integer,
+                required: false,
+                description: "Remote XRay server port".to_string(),
+                default: Some(json!(443)),
+                example: Some(json!(443)),
+                constraints: vec![
+                    Constraint::Min { value: 1.0 },
+                    Constraint::Max { value: 65535.0 },
+                ],
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields
+    };
+
+    let vps_fields = {
+        let mut fields = HashMap::new();
+        fields.insert(
+            "xray_server".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "Remote XRay server hostname or IP".to_string(),
+                default: Some(json!("vps.example.com")),
+                example: Some(json!("vps.example.com")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "xray_port".to_string(),
+            FieldSchema {
+                field_type: FieldType::Integer,
+                required: true,
+                description: "Remote XRay server port".to_string(),
+                default: Some(json!(443)),
+                example: Some(json!(443)),
+                constraints: vec![
+                    Constraint::Min { value: 1.0 },
+                    Constraint::Max { value: 65535.0 },
+                ],
                 read_only: false,
                 read_only_when: None,
             },
@@ -2503,8 +4200,8 @@ fn create_privacy_router_schema() -> PluginSchema {
     };
 
     PluginSchema::builder("privacy_router")
-        .version("1.0.0")
-        .description("Multi-hop privacy tunnel chain (WireGuard → WARP → XRay)")
+        .version("1.1.0")
+        .description("System privacy fabric (WireGuard/XRay ingress, WARP bridge, XRay egress)")
         .dependency("incus")
         .dependency("openflow")
         .dependency("privacy_routes")
@@ -2515,23 +4212,43 @@ fn create_privacy_router_schema() -> PluginSchema {
             true,
             "WireGuard tunnel config",
         )
-        .object_field("warp", warp_fields, true, "Cloudflare WARP config")
-        .object_field("xray", xray_fields, true, "XRay tunnel config")
+        .object_field("warp", warp_fields, true, "Cloudflare WARP bridge config")
+        .object_field(
+            "xray",
+            xray_fields,
+            true,
+            "XRay REALITY egress client config",
+        )
+        .object_field(
+            "vps",
+            vps_fields,
+            true,
+            "Remote XRay server endpoint config",
+        )
         .example(json!({
-            "bridge_name": "ovs-br0",
+            "bridge_name": "ovsbr0",
             "wireguard": {
                 "enabled": true,
                 "container_id": "100",
+                "socket_port": "priv_wg",
                 "listen_port": 51820
             },
             "warp": {
                 "enabled": true,
-                "container_id": "101"
+                "bridge_interface": "wgcf",
+                "wgcf_config": "/etc/wireguard/wgcf.conf"
             },
             "xray": {
                 "enabled": true,
-                "container_id": "102",
-                "protocol": "vless"
+                "container_id": "101",
+                "socket_port": "priv_xray",
+                "socks_port": 1080,
+                "vps_address": "vps.example.com",
+                "vps_port": 443
+            },
+            "vps": {
+                "xray_server": "vps.example.com",
+                "xray_port": 443
             }
         }))
         .build()
@@ -2777,51 +4494,7 @@ fn create_netmaker_schema() -> PluginSchema {
 // ============================================================================
 
 fn validate_field(name: &str, value: &Value, schema: &FieldSchema) -> Result<(), String> {
-    match &schema.field_type {
-        FieldType::String => {
-            if !value.is_str() {
-                return Err(format!("Field '{}' must be a string", name));
-            }
-        }
-        FieldType::Integer => {
-            if !value.is_i64() && !value.is_u64() {
-                return Err(format!("Field '{}' must be an integer", name));
-            }
-        }
-        FieldType::Float => {
-            if !value.is_f64() && !value.is_i64() {
-                return Err(format!("Field '{}' must be a number", name));
-            }
-        }
-        FieldType::Boolean => {
-            if !value.is_bool() {
-                return Err(format!("Field '{}' must be a boolean", name));
-            }
-        }
-        FieldType::Array(_) => {
-            if !value.is_array() {
-                return Err(format!("Field '{}' must be an array", name));
-            }
-        }
-        FieldType::Object(_) => {
-            if !value.is_object() {
-                return Err(format!("Field '{}' must be an object", name));
-            }
-        }
-        FieldType::Enum(valid_values) => {
-            if let Some(s) = value.as_str() {
-                if !valid_values.contains(&s.to_string()) {
-                    return Err(format!(
-                        "Field '{}' must be one of: {:?}",
-                        name, valid_values
-                    ));
-                }
-            } else {
-                return Err(format!("Field '{}' must be a string enum value", name));
-            }
-        }
-        FieldType::Any => {}
-    }
+    validate_value_against_type(name, value, &schema.field_type)?;
 
     // Validate constraints
     for constraint in &schema.constraints {
@@ -2865,6 +4538,100 @@ fn validate_field(name: &str, value: &Value, schema: &FieldSchema) -> Result<(),
                 }
             }
             _ => {}
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_value_against_type(
+    name: &str,
+    value: &Value,
+    field_type: &FieldType,
+) -> Result<(), String> {
+    match field_type {
+        FieldType::String => {
+            if !value.is_str() {
+                return Err(format!("Field '{}' must be a string", name));
+            }
+        }
+        FieldType::Integer => {
+            if !value.is_i64() && !value.is_u64() {
+                return Err(format!("Field '{}' must be an integer", name));
+            }
+        }
+        FieldType::Float => {
+            if !value.is_f64() && !value.is_i64() {
+                return Err(format!("Field '{}' must be a number", name));
+            }
+        }
+        FieldType::Boolean => {
+            if !value.is_bool() {
+                return Err(format!("Field '{}' must be a boolean", name));
+            }
+        }
+        FieldType::Array(_) => {
+            if !value.is_array() {
+                return Err(format!("Field '{}' must be an array", name));
+            }
+            if let Some(items) = value.as_array() {
+                if let FieldType::Array(item_type) = field_type {
+                    for (index, item) in items.iter().enumerate() {
+                        validate_value_against_type(
+                            &format!("{}[{}]", name, index),
+                            item,
+                            item_type,
+                        )?;
+                    }
+                }
+            }
+        }
+        FieldType::Object(fields) => {
+            if !value.is_object() {
+                return Err(format!("Field '{}' must be an object", name));
+            }
+            validate_object_fields(name, value, fields)?;
+        }
+        FieldType::Enum(valid_values) => {
+            if let Some(s) = value.as_str() {
+                if !valid_values.contains(&s.to_string()) {
+                    return Err(format!(
+                        "Field '{}' must be one of: {:?}",
+                        name, valid_values
+                    ));
+                }
+            } else {
+                return Err(format!("Field '{}' must be a string enum value", name));
+            }
+        }
+        FieldType::Any => {}
+    }
+
+    Ok(())
+}
+
+fn validate_object_fields(
+    name: &str,
+    value: &Value,
+    fields: &HashMap<String, FieldSchema>,
+) -> Result<(), String> {
+    let Some(obj) = value.as_object() else {
+        return Err(format!("Field '{}' must be an object", name));
+    };
+
+    for (field_name, field_schema) in fields {
+        if field_schema.required && obj.get(field_name).is_none() {
+            return Err(format!("Missing required field: {}.{}", name, field_name));
+        }
+    }
+
+    for (field_name, field_value) in obj {
+        if let Some(field_schema) = fields.get(field_name) {
+            validate_field(
+                &format!("{}.{}", name, field_name),
+                field_value,
+                field_schema,
+            )?;
         }
     }
 
@@ -2971,12 +4738,23 @@ mod tests {
         let registry = SchemaRegistry::new();
         assert!(registry.get("lxc").is_some());
         assert!(registry.get("incus").is_some());
+        assert!(registry.get("incus-wireguard-ingress").is_some());
+        assert!(registry.get("incus-xray-reality-client").is_some());
+        assert!(registry.get("incus-xray-reality-server").is_some());
         assert!(registry.get("net").is_some());
         assert!(registry.get("openflow").is_some());
         assert!(registry.get("systemd").is_some());
         assert!(registry.get("privacy_routes").is_some());
         assert!(registry.get("privacy_router").is_some());
         assert!(registry.get("netmaker").is_some());
+    }
+
+    #[test]
+    fn test_schema_registry_aliases() {
+        let registry = SchemaRegistry::new();
+        assert!(registry.get("incus_wireguard_ingress").is_some());
+        assert!(registry.get("incus_xray_reality_client").is_some());
+        assert!(registry.get("incus_xray_reality_server").is_some());
     }
 
     #[test]
@@ -3079,6 +4857,80 @@ mod tests {
     }
 
     #[test]
+    fn test_nested_required_fields_for_wireguard_ingress() {
+        let registry = SchemaRegistry::new();
+        let schema = registry.get("incus-wireguard-ingress").unwrap();
+
+        let invalid_state = json!({
+            "name": "incus-wireguard-ingress",
+            "version": "1.0.0",
+            "plugin_type": "network",
+            "container": {
+                "profiles": ["default"]
+            },
+            "wireguard": {
+                "private_key_env": "WIREGUARD_PRIVATE_KEY",
+                "peers": []
+            }
+        });
+
+        let result = schema.validate(&invalid_state);
+        assert!(!result.valid);
+        assert!(result
+            .errors
+            .iter()
+            .any(|error| error.contains("container.image")));
+    }
+
+    #[test]
+    fn test_nested_required_fields_for_xray_client() {
+        let registry = SchemaRegistry::new();
+        let schema = registry.get("incus-xray-reality-client").unwrap();
+
+        let invalid_state = json!({
+            "name": "incus-xray-reality-client",
+            "version": "1.0.0",
+            "plugin_type": "network",
+            "container": {
+                "image": "images:debian/13",
+                "profiles": ["default"]
+            },
+            "xray": {
+                "outbounds": []
+            }
+        });
+
+        let result = schema.validate(&invalid_state);
+        assert!(!result.valid);
+        assert!(result
+            .errors
+            .iter()
+            .any(|error| error.contains("xray.inbounds")));
+    }
+
+    #[test]
+    fn test_contract_schema_sections_for_incus_components() {
+        let registry = SchemaRegistry::new();
+
+        for schema_name in [
+            "incus-wireguard-ingress",
+            "incus-xray-reality-client",
+            "incus-xray-reality-server",
+        ] {
+            let schema = registry.get(schema_name).unwrap();
+            let contract = schema.to_contract_json_schema();
+            let required = contract["required"].as_array().unwrap();
+
+            assert!(required.iter().any(|value| value == "stub"));
+            assert!(required.iter().any(|value| value == "immutable"));
+            assert!(required.iter().any(|value| value == "tunable"));
+            assert!(contract["properties"]["stub"].is_object());
+            assert!(contract["properties"]["immutable"].is_object());
+            assert!(contract["properties"]["tunable"].is_object());
+        }
+    }
+
+    #[test]
     fn test_json_schema_immutable_paths() {
         let schema = PluginSchema::builder("test")
             .version("1.0.0")
@@ -3089,14 +4941,15 @@ mod tests {
             .build();
 
         let json_schema = schema.to_json_schema();
+        let properties = json_schema["properties"].as_object().unwrap();
 
         // Check that id has readOnly
-        assert!(json_schema["properties"]["id"]["readOnly"]
-            .as_bool()
-            .unwrap_or(false));
+        assert!(properties["id"]["readOnly"].as_bool().unwrap_or(false));
         // name should not be readOnly
-        assert!(!json_schema["properties"]["name"]["readOnly"]
-            .as_bool()
+        assert!(!properties
+            .get("name")
+            .and_then(|value| value.get("readOnly"))
+            .and_then(|value| value.as_bool())
             .unwrap_or(false));
     }
 

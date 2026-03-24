@@ -57,6 +57,7 @@ fn default_auto_load() -> Vec<String> {
         "net".to_string(),
         "openflow".to_string(),
         "ovsdb_bridge".to_string(),
+        "privacy_router".to_string(),
         "privacy_routes".to_string(),
         "rtnetlink".to_string(),
     ]

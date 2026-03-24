@@ -291,10 +291,14 @@ impl NetStatePlugin {
             if let Some(ref port_list) = ports {
                 let mut tags: HashMap<String, String> = HashMap::new();
                 for p in port_list {
-                    let role = if p.starts_with("vi") {
+                    let role = if p == "wgcf" {
+                        "warp"
+                    } else if p.starts_with("wg") {
+                        "wireguard"
+                    } else if p.starts_with("vi") {
                         // vi{VMID}
                         "container"
-                    } else if p.starts_with("nm") || p.contains("wg") {
+                    } else if p.starts_with("nm") {
                         "netmaker"
                     } else if p.starts_with("eth") || p.starts_with("en") {
                         "uplink"

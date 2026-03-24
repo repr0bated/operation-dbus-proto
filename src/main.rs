@@ -4,6 +4,7 @@
 
 use parking_lot::RwLock;
 use simd_json::prelude::*;
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -91,6 +92,36 @@ struct Config {
     antigravity_listen: String,
     #[cfg(feature = "dev-antigravity")]
     antigravity_transport: String,
+}
+
+fn start_privacy_router_bootstrap(state_manager: Arc<op_state::manager::StateManager>) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+        loop {
+            interval.tick().await;
+
+            let desired = op_state::manager::DesiredState {
+                version: 1,
+                plugins: HashMap::from([("privacy_router".to_string(), simd_json::json!({}))]),
+            };
+
+            match state_manager
+                .apply_state_single_plugin(desired, "privacy_router")
+                .await
+            {
+                Ok(report) => {
+                    tracing::debug!(
+                        "privacy_router bootstrap applied: success={}, results={}",
+                        report.success,
+                        report.results.len()
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to bootstrap privacy_router from op-dbus: {}", e);
+                }
+            }
+        }
+    });
 }
 
 impl Default for Config {
@@ -373,6 +404,7 @@ async fn main() -> Result<()> {
                 for plugin in plugins {
                     state_manager.register_plugin(plugin).await;
                 }
+                start_privacy_router_bootstrap(state_manager.clone());
             }
             Err(e) => {
                 tracing::warn!("Failed to load state plugins: {}", e);
