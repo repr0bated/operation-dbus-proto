@@ -1,5 +1,5 @@
-# ovsbr0 is the OVS local/internal interface restored from persistent OVSDB.
-# OVS owns the bridge MAC via Bridge.other-config:hwaddr; networkd only owns L3.
+# ovsbr0 carries the host L3 configuration.
+# OVS owns bridge switching, port membership, MAC, and fail_mode.
 [Match]
 Name=ovsbr0
 

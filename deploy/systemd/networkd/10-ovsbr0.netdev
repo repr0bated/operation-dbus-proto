@@ -1,0 +1,5 @@
+# Define the OVS bridge as a dummy netdev so systemd-networkd manages
+# the interface lifecycle while OVS owns switching and port membership.
+[NetDev]
+Name=ovsbr0
+Kind=dummy
