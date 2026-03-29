@@ -134,6 +134,12 @@ fn start_privacy_router_bootstrap(state_manager: Arc<op_state::manager::StateMan
     });
 }
 
+fn privacy_router_bootstrap_enabled() -> bool {
+    std::env::var("OP_DBUS_ENABLE_PRIVACY_ROUTER_BOOTSTRAP")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -414,7 +420,11 @@ async fn main() -> Result<()> {
                 for plugin in plugins {
                     state_manager.register_plugin(plugin).await;
                 }
-                start_privacy_router_bootstrap(state_manager.clone());
+                if privacy_router_bootstrap_enabled() {
+                    start_privacy_router_bootstrap(state_manager.clone());
+                } else {
+                    tracing::info!("privacy_router bootstrap disabled");
+                }
             }
             Err(e) => {
                 tracing::warn!("Failed to load state plugins: {}", e);

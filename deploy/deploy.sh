@@ -57,23 +57,44 @@ enable_boot() {
     ln -sfn "../$service" "$SERVICE_DIR/boot.d/$service"
 }
 
+ensure_resolver_manager() {
+    [ "$EUID" -eq 0 ] || return 0
+    command -v apk >/dev/null 2>&1 || return 0
+
+    if ! apk info -e resolvconf >/dev/null 2>&1; then
+        log "Installing resolvconf..."
+        apk add resolvconf
+    fi
+    if ! apk info -e resolvconf-openresolv >/dev/null 2>&1; then
+        log "Installing resolvconf-openresolv..."
+        apk add resolvconf-openresolv
+    fi
+}
+
 ensure_system_runtime_units() {
     [ "$EUID" -eq 0 ] || return 0
 
     log "Installing D-Bus runtime units..."
     install -d "$SERVICE_DIR" "$SERVICE_DIR/boot.d" "$SERVICE_DIR/scripts" /etc/systemd/network /usr/local/sbin
+    find /etc/systemd/network -maxdepth 1 -type f \
+        \( -name '*.network' -o -name '*.netdev' -o -name '*.link' \) -delete
+    ensure_resolver_manager
     install -m 0755 "$PROJECT_ROOT/deploy/dinit/op-session-bus.sh" /usr/local/sbin/op-session-bus
     install -m 0755 "$PROJECT_ROOT/deploy/dinit/op-dbus-dinit.sh" /usr/local/sbin/op-dbus-dinit.sh
-    install -m 0755 "$PROJECT_ROOT/deploy/dinit/op-networkd-dinit.sh" /usr/local/sbin/op-networkd-dinit.sh
+    rm -f /usr/local/sbin/op-networkd-dinit.sh
     install -m 0755 "$PROJECT_ROOT/deploy/dinit/op-web-dinit.sh" /usr/local/sbin/op-web-dinit.sh
     install -m 0644 "$PROJECT_ROOT/deploy/dinit/op-session-bus" "$SERVICE_DIR/op-session-bus"
+    install -m 0644 "$PROJECT_ROOT/deploy/dinit/op-ovsdb-seed" "$SERVICE_DIR/op-ovsdb-seed"
     install -m 0644 "$PROJECT_ROOT/deploy/dinit/op-ovsdb-bridge" "$SERVICE_DIR/op-ovsdb-bridge"
     install -m 0644 "$PROJECT_ROOT/deploy/dinit/systemd-networkd" "$SERVICE_DIR/systemd-networkd"
+    install -m 0755 "$PROJECT_ROOT/deploy/dinit/op-ovsdb-seed.sh" "$SERVICE_DIR/scripts/op-ovsdb-seed.sh"
     install -m 0755 "$PROJECT_ROOT/deploy/dinit/op-ovsdb-bridge-start.sh" "$SERVICE_DIR/scripts/op-ovsdb-bridge-start.sh"
-    install -m 0644 "$PROJECT_ROOT/deploy/systemd/networkd/10-ens3.network" /etc/systemd/network/10-ens3.network
-    install -m 0644 "$PROJECT_ROOT/deploy/systemd/networkd/20-ovsbr0.network" /etc/systemd/network/20-ovsbr0.network
+    for network_file in "$PROJECT_ROOT"/deploy/systemd/networkd/*; do
+        install -m 0644 "$network_file" "/etc/systemd/network/$(basename "$network_file")"
+    done
 
     enable_boot op-session-bus
+    enable_boot op-ovsdb-seed
     enable_boot op-ovsdb-bridge
     enable_boot systemd-networkd
 
