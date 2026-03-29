@@ -253,7 +253,7 @@ fn default_resources() -> ContainerResources {
         disk_gb: 4,
         os_template: "images:debian/13".to_string(),
         swap_mb: 0,
-        unprivileged: true,
+        unprivileged: false,
     }
 }
 
@@ -298,6 +298,23 @@ impl PrivacyRouterPlugin {
         Ok(simd_json::serde::from_owned_value(state)?)
     }
 
+    async fn query_incus_state(&self) -> Result<IncusState> {
+        let state = IncusPlugin::new().query_current_state().await?;
+        Ok(simd_json::serde::from_owned_value(state)?)
+    }
+
+    async fn query_openflow_state(&self) -> Result<OpenFlowConfig> {
+        let state = OpenFlowPlugin::new().query_current_state().await?;
+        Ok(simd_json::serde::from_owned_value(state)?)
+    }
+
+    async fn query_bridge_ports(&self, bridge_name: &str) -> Result<Vec<String>> {
+        OvsdbClient::new()
+            .list_bridge_ports(bridge_name)
+            .await
+            .with_context(|| format!("list ports on {}", bridge_name))
+    }
+
     fn unique_ingress_ports(routes: &[PrivacyRoute]) -> Vec<String> {
         let mut ingress_ports: HashSet<String> = routes
             .iter()
@@ -320,6 +337,80 @@ impl PrivacyRouterPlugin {
             }
         }
         Ok(simd_json::serde::from_owned_value(merged)?)
+    }
+
+    fn expected_system_container_names(config: &PrivacyRouterConfig) -> Vec<&'static str> {
+        let mut names = Vec::new();
+        if config.wireguard.enabled {
+            names.push("privacy-wireguard-ingress");
+        }
+        if config.xray.enabled {
+            names.push("privacy-xray-egress");
+        }
+        names
+    }
+
+    fn actual_system_containers(
+        &self,
+        config: &PrivacyRouterConfig,
+        incus: &IncusState,
+    ) -> Vec<String> {
+        let expected: HashSet<&str> = Self::expected_system_container_names(config)
+            .into_iter()
+            .collect();
+        let mut containers = incus
+            .instances
+            .iter()
+            .filter(|instance| {
+                expected.contains(instance.name.as_str())
+                    && instance.status.eq_ignore_ascii_case("running")
+            })
+            .map(|instance| instance.name.clone())
+            .collect::<Vec<_>>();
+        containers.sort();
+        containers
+    }
+
+    fn required_system_flow_count(&self, config: &PrivacyRouterConfig) -> usize {
+        self.chain_ports(config).windows(2).count() * 2
+    }
+
+    async fn runtime_needs_reconcile(&self, config: &PrivacyRouterConfig) -> Result<bool> {
+        if config.warp.enabled {
+            match self.query_bridge_ports(&config.bridge_name).await {
+                Ok(ports) => {
+                    if !ports.iter().any(|port| port == &config.warp.bridge_interface) {
+                        return Ok(true);
+                    }
+                }
+                Err(_) => {
+                    // Treat a missing bridge as drift so apply_state can build it.
+                    return Ok(true);
+                }
+            }
+        }
+
+        let incus_state = self.query_incus_state().await?;
+        let actual_containers = self.actual_system_containers(config, &incus_state);
+        if actual_containers.len() != Self::expected_system_container_names(config).len() {
+            return Ok(true);
+        }
+
+        let openflow_state = self.query_openflow_state().await?;
+        let actual_flow_count = openflow_state
+            .bridges
+            .iter()
+            .find(|bridge| bridge.name == config.bridge_name)
+            .map(|bridge| {
+                bridge
+                    .flows
+                    .iter()
+                    .filter(|flow| flow.cookie.is_some_and(is_system_cookie))
+                    .count()
+            })
+            .unwrap_or_default();
+
+        Ok(config.openflow.enabled && actual_flow_count < self.required_system_flow_count(config))
     }
 
     fn deep_merge(target: &mut Value, source: &Value) {
@@ -651,6 +742,11 @@ impl PrivacyRouterPlugin {
             profiles: Vec::new(),
             config: Some(HashMap::from([
                 ("boot.autostart".to_string(), "true".to_string()),
+                ("security.nesting".to_string(), "true".to_string()),
+                (
+                    "security.privileged".to_string(),
+                    (!spec.resources.unprivileged).to_string(),
+                ),
                 ("user.opdbus.scope".to_string(), "system".to_string()),
                 (
                     "user.opdbus.component".to_string(),
@@ -845,6 +941,18 @@ impl StatePlugin for PrivacyRouterPlugin {
             .query_privacy_routes()
             .await
             .unwrap_or(PrivacyRoutesState { routes: Vec::new() });
+        let incus_state = self
+            .query_incus_state()
+            .await
+            .unwrap_or(IncusState { instances: Vec::new() });
+        let openflow_state = self.query_openflow_state().await.unwrap_or(OpenFlowConfig {
+            bridges: Vec::new(),
+            controller_endpoint: None,
+            flow_policies: None,
+            auto_discover_containers: false,
+            enable_security_flows: false,
+            obfuscation_level: 0,
+        });
 
         let mut components = simd_json::owned::Object::new();
 
@@ -881,20 +989,35 @@ impl StatePlugin for PrivacyRouterPlugin {
             );
         }
         if self.config.openflow.enabled {
+            let system_flow_count = openflow_state
+                .bridges
+                .iter()
+                .find(|bridge| bridge.name == self.config.bridge_name)
+                .map(|bridge| {
+                    bridge
+                        .flows
+                        .iter()
+                        .filter(|flow| flow.cookie.is_some_and(is_system_cookie))
+                        .count()
+                })
+                .unwrap_or_default();
             components.insert(
                 "openflow".to_string(),
                 json!({
                     "enabled": true,
                     "enable_security_flows": self.config.openflow.enable_security_flows,
                     "obfuscation_level": self.config.openflow.obfuscation_level,
-                    "privacy_flows": self.config.openflow.privacy_flows.len(),
+                    "privacy_flows": system_flow_count,
                     "function_routes": self.config.openflow.function_routing.len(),
                     "published_routes": privacy_routes.routes.len(),
                     "shared_ingress_ports": Self::unique_ingress_ports(&privacy_routes.routes),
                 }),
             );
         }
-        components.insert("containers".to_string(), json!(self.config.containers));
+        components.insert(
+            "containers".to_string(),
+            json!(self.actual_system_containers(&self.config, &incus_state)),
+        );
 
         Ok(json!({
             "config": self.config,
@@ -906,8 +1029,10 @@ impl StatePlugin for PrivacyRouterPlugin {
         let mut actions = Vec::new();
         let current_config = current.get("config").unwrap_or(current);
         let desired_config = desired.get("config").unwrap_or(desired);
+        let desired_runtime: PrivacyRouterConfig =
+            simd_json::serde::from_owned_value(desired_config.clone())?;
 
-        if current_config != desired_config {
+        if current_config != desired_config || self.runtime_needs_reconcile(&desired_runtime).await? {
             actions.push(StateAction::Modify {
                 resource: "privacy_router_config".to_string(),
                 changes: desired.clone(),
@@ -1057,5 +1182,54 @@ mod tests {
                 config.xray.socket_port.clone(),
             ]
         );
+    }
+
+    #[test]
+    fn desired_system_instance_sets_privileged_system_container_flags() {
+        let plugin = PrivacyRouterPlugin::new(PrivacyRouterConfig::default());
+        let config = PrivacyRouterConfig::default();
+        let spec = SystemContainerSpec {
+            name: "privacy-wireguard-ingress",
+            role: "wireguard_ingress",
+            socket_port: &config.wireguard.socket_port,
+            resources: &config.wireguard.resources,
+        };
+
+        let instance = plugin.desired_system_instance(&config, &spec);
+        let config = instance.config.expect("instance config");
+
+        assert_eq!(config.get("security.nesting"), Some(&"true".to_string()));
+        assert_eq!(config.get("security.privileged"), Some(&"true".to_string()));
+    }
+
+    #[test]
+    fn actual_system_containers_require_running_status() {
+        let plugin = PrivacyRouterPlugin::new(PrivacyRouterConfig::default());
+        let config = PrivacyRouterConfig::default();
+        let instances = vec![
+            IncusInstance {
+                name: "privacy-wireguard-ingress".to_string(),
+                status: "Stopped".to_string(),
+                instance_type: "container".to_string(),
+                image: None,
+                storage_pool: None,
+                profiles: Vec::new(),
+                config: None,
+                devices: None,
+            },
+            IncusInstance {
+                name: "privacy-xray-egress".to_string(),
+                status: "Running".to_string(),
+                instance_type: "container".to_string(),
+                image: None,
+                storage_pool: None,
+                profiles: Vec::new(),
+                config: None,
+                devices: None,
+            },
+        ];
+
+        let actual = plugin.actual_system_containers(&config, &IncusState { instances });
+        assert_eq!(actual, vec!["privacy-xray-egress".to_string()]);
     }
 }

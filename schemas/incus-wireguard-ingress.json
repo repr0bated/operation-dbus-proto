@@ -1,0 +1,69 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Incus Container: WireGuard Ingress",
+  "description": "Schema for a WireGuard ingress container managed by op-dbus",
+  "type": "object",
+  "required": ["name", "version", "plugin_type", "container", "wireguard"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z0-9_-]+$",
+      "maxLength": 64
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "plugin_type": {
+      "type": "string",
+      "const": "network"
+    },
+    "container": {
+      "type": "object",
+      "required": ["image", "profiles"],
+      "properties": {
+        "image": { "type": "string", "description": "Incus image alias, e.g. images:alpine/edge" },
+        "profiles": { "type": "array", "items": { "type": "string" } },
+        "devices": {
+          "type": "object",
+          "description": "Incus device overrides (nic, disk, etc.)",
+          "additionalProperties": { "type": "object" }
+        }
+      }
+    },
+    "wireguard": {
+      "type": "object",
+      "required": ["listen_port", "private_key_env", "peers"],
+      "properties": {
+        "interface": { "type": "string", "default": "wg0" },
+        "listen_port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "private_key_env": { "type": "string", "description": "Env var name holding the private key" },
+        "address": { "type": "string", "description": "CIDR address for this node, e.g. 10.0.0.1/24" },
+        "dns": { "type": "array", "items": { "type": "string" } },
+        "peers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["public_key", "allowed_ips"],
+            "properties": {
+              "public_key": { "type": "string" },
+              "allowed_ips": { "type": "array", "items": { "type": "string" } },
+              "endpoint": { "type": "string" },
+              "persistent_keepalive": { "type": "integer" }
+            }
+          }
+        }
+      }
+    },
+    "capabilities": {
+      "type": "object",
+      "properties": {
+        "requires_root": { "type": "boolean", "default": true },
+        "supports_rollback": { "type": "boolean", "default": false }
+      }
+    },
+    "service": {
+      "$ref": "service-plugin-schema.json"
+    }
+  }
+}
