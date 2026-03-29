@@ -1,7 +1,11 @@
-# ens3 is brought up by systemd-networkd without any L3 configuration.
-# OVS attaches it to ovsbr0 from persistent OVSDB state.
+# ens3 is the physical uplink attached to ovsbr0 by persistent OVSDB state.
+# Create a separate secondary interface (uplink1) as an ipvlan child so
+# secondary routing stays independent from ovsbr0 while sharing ens3 L2.
 [Match]
 Name=ens3
+
+[Link]
+ActivationPolicy=up
 
 [Network]
 DHCP=no
@@ -9,3 +13,4 @@ LinkLocalAddressing=no
 LLMNR=no
 MulticastDNS=no
 IPv6AcceptRA=no
+IPVLAN=uplink1

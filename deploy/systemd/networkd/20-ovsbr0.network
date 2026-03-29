@@ -18,3 +18,4 @@ DNS=8.8.8.8
 [Route]
 Gateway=148.113.204.1
 GatewayOnLink=yes
+Metric=100
