@@ -116,10 +116,10 @@ ensure_system_runtime_units() {
     # Install wgcf private key for networkd WireGuard tunnel.
     # Always refresh it from wgcf-profile.conf so profile rotations are applied.
     install -d -m 750 -o root -g systemd-network /etc/wireguard
+    umask 077
     grep '^PrivateKey' "$PROJECT_ROOT/wgcf-profile.conf" | awk '{print $3}' \
         > /tmp/wgcf.key.tmp
     install -m 640 -o root -g systemd-network /tmp/wgcf.key.tmp /etc/wireguard/wgcf.key
-    rm -f /tmp/wgcf.key.tmp
     log "Installed /etc/wireguard/wgcf.key for networkd"
 
     # Install Xray client config if not already present
