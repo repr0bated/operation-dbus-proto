@@ -157,7 +157,7 @@ build_and_install() {
     # Use /var/cache/op-dbus-build as CARGO_TARGET_DIR since the repo is on a
     # noexec btrfs subvolume that prevents build script execution.
     local build_user
-    build_user=$(stat -f "%Su" "$PROJECT_ROOT" 2>/dev/null || echo "")
+    build_user=$(stat -c "%U" "$PROJECT_ROOT" 2>/dev/null || stat -f "%Su" "$PROJECT_ROOT" 2>/dev/null || echo "")
     local cargo_target="/var/cache/op-dbus-build"
     mkdir -p "$cargo_target"
     chown "${build_user:-root}:${build_user:-root}" "$cargo_target" 2>/dev/null || true
