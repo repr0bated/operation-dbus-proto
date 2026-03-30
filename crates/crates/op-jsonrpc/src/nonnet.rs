@@ -21,6 +21,7 @@ const NONNET_DB_NAME: &str = "OpNonNet";
 /// NonNet update event
 #[derive(Debug, Clone)]
 pub struct NonNetUpdate {
+    pub db_name: String,
     pub table: String,
     pub rows: Vec<Value>,
 }
@@ -92,6 +93,7 @@ impl NonNetDb {
 
             // Broadcast initial load as update
             let _ = self.update_tx.send(NonNetUpdate {
+                db_name: NONNET_DB_NAME.to_string(),
                 table: name.clone(),
                 rows,
             });
@@ -123,6 +125,7 @@ impl NonNetDb {
         });
 
         let _ = self.update_tx.send(NonNetUpdate {
+            db_name: NONNET_DB_NAME.to_string(),
             table: name.to_string(),
             rows,
         });

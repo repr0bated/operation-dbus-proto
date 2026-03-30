@@ -12,6 +12,7 @@ use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
 use sqlx::{sqlite::SqlitePool, Row};
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use zbus::{connection::Builder, Connection};
 
@@ -32,6 +33,8 @@ pub struct DbusMirror {
     published_objects: DashMap<String, ()>,
     /// Enterprise state database pool
     db_pool: Option<SqlitePool>,
+    /// Monotonic counter for generating unique fallback IDs when rows lack a UUID.
+    fallback_id: AtomicU64,
 }
 
 impl DbusMirror {
@@ -60,6 +63,7 @@ impl DbusMirror {
             connection,
             published_objects: DashMap::new(),
             db_pool,
+            fallback_id: AtomicU64::new(0),
         })
     }
 
@@ -130,16 +134,17 @@ impl DbusMirror {
             for (table_name, rows) in tables.iter() {
                 if let Some(row_arr) = rows.as_array() {
                     for row in row_arr {
-                        let uuid = self
-                            .extract_uuid(row)
-                            .unwrap_or_else(|| "unknown".to_string());
+                        let uuid = self.extract_uuid(row);
                         let path = format!(
                             "/org/opdbus/v1/ovsdb/{}/{}",
                             table_name,
                             uuid.replace('-', "_")
                         );
 
-                        self.publish_object(&path, row.clone()).await?;
+                        if let Err(e) = self.publish_object(&path, row.clone()).await {
+                            tracing::warn!("Failed to publish OVSDB object {}: {}", path, e);
+                            continue;
+                        }
                         active_paths.insert(path);
                     }
                 }
@@ -195,9 +200,7 @@ impl DbusMirror {
                                         .and_then(|v: &Value| v.as_array())
                                     {
                                         for row in rows {
-                                            let uuid = self
-                                                .extract_uuid(row)
-                                                .unwrap_or_else(|| "unknown".to_string());
+                                            let uuid = self.extract_uuid(row);
                                             let path = format!(
                                                 "/org/opdbus/v1/nonnet/{}/{}/{}",
                                                 db_name,
@@ -253,14 +256,12 @@ impl DbusMirror {
         Ok(())
     }
 
-    async fn publish_nonnet_table(&self, table: &str, rows: Vec<Value>) -> Result<()> {
-        let prefix = format!("/org/opdbus/v1/nonnet/OpNonNet/{}/", table);
+    async fn publish_nonnet_table(&self, db_name: &str, table: &str, rows: Vec<Value>) -> Result<()> {
+        let prefix = format!("/org/opdbus/v1/nonnet/{}/{}/", db_name, table);
         let mut active_paths = HashSet::new();
 
         for row in rows {
-            let uuid = self
-                .extract_uuid(&row)
-                .unwrap_or_else(|| "unknown".to_string());
+            let uuid = self.extract_uuid(&row);
             let path = format!("{prefix}{}", uuid.replace('-', "_"));
             self.publish_object(&path, row).await?;
             active_paths.insert(path);
@@ -329,23 +330,28 @@ impl DbusMirror {
         Ok(())
     }
 
-    fn extract_uuid(&self, row: &Value) -> Option<String> {
+    fn extract_uuid(&self, row: &Value) -> String {
         // OVSDB rows usually have a _uuid field which is ["uuid", "actual-uuid-string"]
         if let Some(uuid_val) = row.get("_uuid") {
             if let Some(arr) = uuid_val.as_array() {
                 if arr.len() == 2 && arr[0] == "uuid" {
-                    return arr[1].as_str().map(|s: &str| s.to_string());
+                    if let Some(s) = arr[1].as_str() {
+                        return s.to_string();
+                    }
                 }
             }
             if let Some(s) = uuid_val.as_str() {
-                return Some(s.to_string());
+                return s.to_string();
             }
         }
 
-        // Fallback to 'name' or other identity fields if _uuid is missing
-        row.get("name")
-            .and_then(|v: &Value| v.as_str())
-            .map(|s: &str| s.to_string())
+        // Fallback to 'name' if _uuid is missing
+        if let Some(s) = row.get("name").and_then(|v: &Value| v.as_str()) {
+            return s.to_string();
+        }
+
+        // Last resort: unique monotonic ID so rows don't collide
+        format!("anon_{}", self.fallback_id.fetch_add(1, Ordering::Relaxed))
     }
 
     pub fn published_count(&self) -> usize {
@@ -410,7 +416,7 @@ impl DbusMirror {
         tokio::spawn(async move {
             while let Ok(update) = nonnet_rx.recv().await {
                 if let Err(e) = mirror_clone
-                    .publish_nonnet_table(&update.table, update.rows)
+                    .publish_nonnet_table(&update.db_name, &update.table, update.rows)
                     .await
                 {
                     tracing::error!(
