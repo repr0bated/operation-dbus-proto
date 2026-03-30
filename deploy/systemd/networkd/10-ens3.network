@@ -1,6 +1,5 @@
-# ens3 is the physical uplink attached to ovsbr0 by persistent OVSDB state.
-# Create a separate secondary interface (uplink1) as an ipvlan child so
-# secondary routing stays independent from ovsbr0 while sharing ens3 L2.
+# ens3 is the standalone DHCP uplink.
+# Not enslaved to OVS — purely for host management/SSH connectivity.
 [Match]
 Name=ens3
 
@@ -8,9 +7,13 @@ Name=ens3
 ActivationPolicy=up
 
 [Network]
-DHCP=no
+DHCP=yes
 LinkLocalAddressing=no
 LLMNR=no
 MulticastDNS=no
 IPv6AcceptRA=no
-IPVLAN=uplink1
+
+[DHCPv4]
+UseDNS=yes
+UseRoutes=yes
+RouteMetric=100

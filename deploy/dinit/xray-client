@@ -1,0 +1,5 @@
+type = process
+command = /usr/local/bin/xray run -c /etc/xray/client.json
+log-type = buffer
+smooth-recovery = true
+depends-on = ovs-attach-ports

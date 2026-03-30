@@ -1,8 +1,0 @@
-# uplink1 is a dedicated secondary uplink interface independent from ovsbr0.
-# IPVLAN L2 keeps the ens3 MAC identity for providers that pin to the NIC MAC.
-[NetDev]
-Name=uplink1
-Kind=ipvlan
-
-[IPVLAN]
-Mode=l2

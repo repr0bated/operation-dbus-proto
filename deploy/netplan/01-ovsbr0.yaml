@@ -1,0 +1,47 @@
+# OVS bridge — netplan apply is the execution path.
+# wgcf WireGuard tunnel created by networkd renderer, then attached to OVS
+# by ovs-attach-ports.sh via native OVSDB JSON-RPC.
+# No wg-quick needed.
+network:
+  version: 2
+  renderer: openvswitch
+
+  tunnels:
+    wgcf:
+      mode: wireguard
+      addresses:
+        - 172.16.0.2/32
+        - 2606:4700:110:8d19:963e:37c5:b986:171/128
+      mtu: 1280
+      key: /etc/wireguard/wgcf.key
+      nameservers:
+        addresses:
+          - 1.1.1.1
+          - 1.0.0.1
+          - 2606:4700:4700::1111
+          - 2606:4700:4700::1001
+      peers:
+        - keys:
+            public: bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=
+          allowed-ips:
+            - 0.0.0.0/0
+            - ::/0
+          endpoint: engage.cloudflareclient.com:2408
+          keepalive: 25
+
+  bridges:
+    ovsbr0:
+      dhcp4: false
+      dhcp6: false
+      addresses:
+        - 10.88.88.1/24
+      mtu: 1500
+      openvswitch:
+        fail-mode: standalone
+        mcast-snooping: false
+        rstp: false
+        controller:
+          addresses:
+            - tcp:127.0.0.1:6653
+        protocols:
+          - OpenFlow13

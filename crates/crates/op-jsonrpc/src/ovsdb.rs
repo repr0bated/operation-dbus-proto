@@ -412,28 +412,29 @@ impl OvsdbClient {
             .and_then(|v| v.as_object())
             .ok_or_else(|| anyhow::anyhow!("Invalid schema: missing tables"))?;
 
-        let mut ops = Vec::new();
-        let mut order = Vec::new();
-
-        for (name, _) in tables {
-            ops.push(json!({
-                "op": "select",
-                "table": name,
-                "where": []
-            }));
-            order.push(name.clone());
-        }
-
-        let result = self.transact(db, json!(ops)).await?;
-
+        let table_names: Vec<String> = tables.keys().cloned().collect();
         let mut out = simd_json::value::owned::Object::new();
-        for (i, name) in order.into_iter().enumerate() {
-            let rows = result
-                .as_array()
-                .and_then(|a| a.get(i))
-                .and_then(|r| r.get("rows"))
-                .cloned()
-                .unwrap_or_else(|| json!([]));
+
+        for name in table_names {
+            // Select each table independently so one failure doesn't abort the whole dump.
+            let result = self
+                .rpc_call(
+                    "transact",
+                    json!([db, {"op": "select", "table": name, "where": []}]),
+                )
+                .await;
+            let rows = match result {
+                Ok(r) => r
+                    .as_array()
+                    .and_then(|a| a.first())
+                    .and_then(|r| r.get("rows"))
+                    .cloned()
+                    .unwrap_or_else(|| json!([])),
+                Err(e) => {
+                    tracing::warn!("dump_db: skipping table {}: {}", name, e);
+                    json!([])
+                }
+            };
             out.insert(name, rows);
         }
 

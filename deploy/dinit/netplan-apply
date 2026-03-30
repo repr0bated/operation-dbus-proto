@@ -1,0 +1,4 @@
+type = scripted
+command = /usr/sbin/netplan apply
+depends-on = ovsdb-server
+depends-on = ovs-vswitchd
