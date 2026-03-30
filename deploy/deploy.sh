@@ -128,6 +128,11 @@ ensure_system_runtime_units() {
         install -m 0600 "$PROJECT_ROOT/deploy/xray/client.json" /etc/xray/client.json
         log "Installed Xray client config — edit /etc/xray/client.json with server details"
     fi
+    
+    # Validate Xray config has been customized
+    if grep -q "REPLACE_WITH_" /etc/xray/client.json; then
+        warn "Xray config contains placeholder values - service will not start correctly"
+    fi
 
     # Remove stale wg-quick-era dinit service if present.
     rm -f "$SERVICE_DIR/wgcf" "$SERVICE_DIR/boot.d/wgcf"
