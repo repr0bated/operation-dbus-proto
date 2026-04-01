@@ -11,7 +11,7 @@ use simd_json::prelude::{ValueAsContainer, ValueAsScalar};
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::sync::Arc;
-use tokio::sync::{broadcast, mpsc, OnceCell, RwLock, Semaphore};
+use tokio::sync::{broadcast, OnceCell, RwLock, Semaphore};
 use tracing::{debug, info, warn};
 use zbus::zvariant::{Array as ZArray, OwnedValue as ZOwnedValue, Str as ZStr, Value as ZValue};
 use zbus::{Connection, Proxy};
