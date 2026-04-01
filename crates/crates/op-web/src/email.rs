@@ -60,10 +60,15 @@ impl EmailSender {
     /// Send a magic link email
     pub async fn send_magic_link(&self, to_email: &str, token: &str) -> Result<()> {
         if !self.config.is_configured() {
-            warn!(
-                "Email not configured - magic link: {}/privacy/verify?token={}",
-                self.config.base_url, token
-            );
+            // For testing: show magic link in console when email is not configured
+            info!("🔗 MAGIC LINK (no SMTP configured):");
+            info!("   To: {}", to_email);
+            info!("   URL: {}", magic_url);
+            info!("   Token: {}", token);
+            println!("\n=== MAGIC LINK FOR TESTING ===");
+            println!("Email: {}", to_email);
+            println!("Link: {}", magic_url);
+            println!("==============================\n");
             return Ok(());
         }
 

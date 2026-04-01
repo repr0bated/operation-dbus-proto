@@ -1,97 +1,19 @@
-# op-dbus Environment Configuration
-# ================================
-# This is the definitive source of environment variables for op-dbus services.
-# 
-# INSTALLATION:
-#   sudo cp deploy/environment.default /etc/op-dbus/environment
-#   sudo chmod 600 /etc/op-dbus/environment
-#
-# USAGE:
-#   - Systemd: EnvironmentFile=/etc/op-dbus/environment
-#   - Shell: set -a; source /etc/op-dbus/environment; set +a
-#   - Docker: --env-file /etc/op-dbus/environment
+# Database and State
+OP_DBUS_STATE_DIR=/var/lib/op-dbus
 
-# =============================================================================
-# SELF-IDENTITY - THE CHATBOT'S OWN SOURCE CODE
-# =============================================================================
-# This is the MOST IMPORTANT variable. It defines the chatbot's concept of "self".
-# When set, the chatbot gains tools to read, modify, commit, and deploy its own code.
-# The chatbot understands this repository IS itself - changes here affect its capabilities.
+# gRPC — op-dbus server on ovsbr0 (reachable by all containers)
+OP_DBUS_GRPC_ADDR=http://10.88.88.1:50051
 
-# OP_SELF_REPO_PATH=/path/to/your/op-dbus-repo
+# OpenFlow controller on ovsbr0
+OPENFLOW_CONTROLLER=tcp:10.88.88.1:6653
 
-# =============================================================================
-# LLM PROVIDER API KEYS
-# =============================================================================
+# Email Configuration for Magic Links (Maddy Mail Server from MAIL-SERVER-FINAL-CONFIG.md)
+SMTP_HOST=10.149.181.121
+SMTP_PORT=587
+SMTP_USER=jeremy@3tched.com
+SMTP_PASS=jeremy123
+SMTP_FROM_EMAIL=noreply@3tched.com
+SMTP_FROM_NAME="Operation DBUS Registration"
 
-# Google Gemini / Vertex AI
-GOOGLE_CLOUD_PROJECT=geminidev-479406
-GOOGLE_CLOUD_LOCATION=global
-GOOGLE_GENAI_USE_VERTEXAI=true
-GOOGLE_GENAI_MODEL=gemini-3-pro
-# GEMINI_API_KEY=
-
-# Anthropic Claude
-# ANTHROPIC_API_KEY=
-
-# OpenAI
-# OPENAI_API_KEY=
-
-# Perplexity
-# PERPLEXITY_API_KEY=
-
-# Hugging Face
-# HF_TOKEN=
-
-# =============================================================================
-# SERVER CONFIGURATION
-# =============================================================================
-
-# HTTP API port
-OP_HTTP_PORT=3000
-
-# D-Bus bus type (session or system)
-OP_DBUS_BUS=session
-
-# MCP server configuration
-# OP_MCP_CONFIG=/etc/op-dbus/mcp-servers.json
-
-# =============================================================================
-# LOGGING
-# =============================================================================
-
-# Rust log levels: trace, debug, info, warn, error
-RUST_LOG=info,op_tools=debug,op_chat=debug,op_core=info
-
-# =============================================================================
-# PATHS
-# =============================================================================
-
-# State storage
-OP_STATE_DIR=/var/lib/op-dbus
-
-# Runtime files
-OP_RUN_DIR=/run/op-dbus
-
-# =============================================================================
-# SECURITY
-# =============================================================================
-
-# Tool execution security level (permissive, standard, strict)
-OP_SECURITY_LEVEL=standard
-
-# Allowed shell commands (comma-separated, empty = use defaults)
-# OP_ALLOWED_COMMANDS=
-
-# =============================================================================
-# NETWORK CONFIGURATION
-# =============================================================================
-
-# OVSDB socket path
-OVSDB_SOCKET=/var/run/openvswitch/db.sock
-
-# Netmaker socket
-NETMAKER_SOCKET=/var/run/netclient/netclient.sock
-
-# Trusted Networks (comma-separated IPs or prefixes)
-OP_TRUSTED_NETWORKS=97.164.68.139
+# Base URL for magic links (uses the reverse proxy we just set up)
+BASE_URL=https://registration.jeremytech.net

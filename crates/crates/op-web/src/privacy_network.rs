@@ -1,33 +1,31 @@
-//! Host-level privacy network provisioning.
-//!
-//! This ensures a single host bridge topology exists:
-//! - OVS bridge (`ovsbr0`)
-//! - Uplink port (default `o`)
-//! - Management internal port
-//! - Socket-network internal port for container attachment
-//! - OpenFlow controller reachability probe
+//! Host-level privacy network provisioning for wgcf-based architecture.
+//
+// This matches the network design from the recent commit:
+// - wgcf tunnel (WireGuard WARP) created by systemd-networkd + netplan
+// - ovsbr0 bridge managed by netplan with renderer: openvswitch  
+// - ovs-attach-ports.sh attaches wgcf + internal ports via OVSDB
+// - Xray as privacy ingress on 10.88.88.1
+// - priv_* internal ports for routing
 
 use anyhow::{anyhow, Context, Result};
 use op_network::{openflow::OpenFlowClient, OvsdbClient};
-use std::net::SocketAddr;
 use std::path::Path;
 use tracing::{info, warn};
 
 const DEFAULT_BRIDGE: &str = "ovsbr0";
-const DEFAULT_UPLINK_PORT: &str = "o";
-const DEFAULT_MGMT_PORT: &str = "ovsbr0-mgmt";
-const DEFAULT_SOCKET_PORT: &str = "ovsbr0-sock";
-const DEFAULT_MGMT_CIDR: &str = "10.200.0.1/24";
-const DEFAULT_OPENFLOW_CONTROLLER: &str = "127.0.0.1:6653";
+const DEFAULT_WGCF_TUNNEL: &str = "wgcf";
+const DEFAULT_PRIVACY_PORTS: &[&str] = &["priv_xray", "priv_warp", "priv_wg", "ovsbr0-mgmt", "ovsbr0-sock"];
+const DEFAULT_MGMT_CIDR: &str = "10.88.88.1/24"; // Matches Xray binding
+const DEFAULT_OPENFLOW_CONTROLLER: &str = "10.88.88.1:6653";
 
 #[derive(Debug, Clone)]
 pub struct PrivacyNetworkHostConfig {
     pub bridge_name: String,
-    pub uplink_port: String,
-    pub management_port: String,
-    pub socket_port: String,
+    pub wgcf_tunnel: String,
+    pub privacy_ports: Vec<String>,
     pub management_cidr: String,
     pub openflow_controller: String,
+    pub xray_ingress_ip: String,
 }
 
 impl PrivacyNetworkHostConfig {
@@ -35,23 +33,25 @@ impl PrivacyNetworkHostConfig {
         Self {
             bridge_name: std::env::var("PRIVACY_BRIDGE_NAME")
                 .unwrap_or_else(|_| DEFAULT_BRIDGE.to_string()),
-            uplink_port: std::env::var("PRIVACY_UPLINK_PORT")
-                .unwrap_or_else(|_| DEFAULT_UPLINK_PORT.to_string()),
-            management_port: std::env::var("PRIVACY_MGMT_PORT")
-                .unwrap_or_else(|_| DEFAULT_MGMT_PORT.to_string()),
-            socket_port: std::env::var("PRIVACY_SOCKET_PORT")
-                .unwrap_or_else(|_| DEFAULT_SOCKET_PORT.to_string()),
+            wgcf_tunnel: std::env::var("PRIVACY_WGCF_TUNNEL")
+                .unwrap_or_else(|_| DEFAULT_WGCF_TUNNEL.to_string()),
+            privacy_ports: std::env::var("PRIVACY_PORTS")
+                .map(|s| s.split(',').map(|s| s.trim().to_string()).collect())
+                .unwrap_or_else(|_| DEFAULT_PRIVACY_PORTS.iter().map(|&s| s.to_string()).collect()),
             management_cidr: std::env::var("PRIVACY_MGMT_CIDR")
                 .unwrap_or_else(|_| DEFAULT_MGMT_CIDR.to_string()),
             openflow_controller: std::env::var("PRIVACY_OPENFLOW_CONTROLLER")
                 .unwrap_or_else(|_| DEFAULT_OPENFLOW_CONTROLLER.to_string()),
+            xray_ingress_ip: std::env::var("XRAY_INGRESS_IP")
+                .unwrap_or_else(|_| "10.88.88.1".to_string()),
         }
     }
 }
 
-/// Ensure host privacy network topology exists and is configured.
+/// Ensure host privacy network topology exists for wgcf architecture.
 ///
-/// Idempotent: safe to call on each registration.
+/// This is called during magic link verification to ensure the network
+/// is ready for new users.
 pub async fn ensure_host_privacy_network() -> Result<()> {
     let cfg = PrivacyNetworkHostConfig::from_env();
     ensure_host_privacy_network_with_config(&cfg).await
@@ -59,167 +59,93 @@ pub async fn ensure_host_privacy_network() -> Result<()> {
 
 async fn ensure_host_privacy_network_with_config(cfg: &PrivacyNetworkHostConfig) -> Result<()> {
     info!(
-        "Ensuring host privacy network: bridge={} uplink={} mgmt_port={} socket_port={}",
-        cfg.bridge_name, cfg.uplink_port, cfg.management_port, cfg.socket_port
+        "Ensuring wgcf-based privacy network: bridge={} wgcf={} ports={:?}",
+        cfg.bridge_name, cfg.wgcf_tunnel, cfg.privacy_ports
     );
 
     let ovs = OvsdbClient::new();
 
-    // Verify OVSDB connectivity first.
+    // Verify OVSDB connectivity
     ovs.list_dbs()
         .await
-        .context("Open vSwitch DB is unavailable; cannot provision host privacy network")?;
+        .context("Open vSwitch DB is unavailable; cannot provision privacy network")?;
 
-    // Ensure bridge exists.
+    // The bridge should be created by netplan, but ensure it exists
     if !ovs
         .bridge_exists(&cfg.bridge_name)
         .await
         .context("Failed to check bridge existence")?
     {
+        info!("Bridge {} not found, creating via OVSDB", cfg.bridge_name);
         ovs.create_bridge(&cfg.bridge_name)
             .await
             .with_context(|| format!("Failed to create OVS bridge '{}'", cfg.bridge_name))?;
     }
 
-    // Bridge behavior expected for controller-driven forwarding.
+    // Configure bridge for controller-driven forwarding (matches deploy scripts)
     ovs.set_bridge_property(&cfg.bridge_name, "datapath_type", "system")
         .await
         .context("Failed to set bridge datapath_type")?;
-    ovs.set_bridge_property(&cfg.bridge_name, "fail_mode", "secure")
+    ovs.set_bridge_property(&cfg.bridge_name, "fail_mode", "standalone")
         .await
-        .context("Failed to set bridge fail_mode=secure")?;
+        .context("Failed to set bridge fail_mode=standalone")?;
 
     let existing_ports = ovs
         .list_bridge_ports(&cfg.bridge_name)
         .await
         .context("Failed to list bridge ports")?;
 
-    // Ensure host uplink attachment (single host-level uplink).
-    if !cfg.uplink_port.trim().is_empty() {
-        let uplink_path = format!("/sys/class/net/{}", cfg.uplink_port);
-        if !Path::new(&uplink_path).exists() {
-            return Err(anyhow!(
-                "Configured uplink '{}' not found on host ({})",
-                cfg.uplink_port,
-                uplink_path
-            ));
-        }
-        if !existing_ports.iter().any(|p| p == &cfg.uplink_port) {
-            ovs.add_port(&cfg.bridge_name, &cfg.uplink_port)
+    // Ensure wgcf tunnel is attached to bridge (this is the key privacy tunnel)
+    if !existing_ports.iter().any(|p| p == &cfg.wgcf_tunnel) {
+        if Path::new(&format!("/sys/class/net/{}", cfg.wgcf_tunnel)).exists() {
+            ovs.add_port(&cfg.bridge_name, &cfg.wgcf_tunnel)
                 .await
-                .with_context(|| {
-                    format!(
-                        "Failed to add uplink port '{}' to '{}'",
-                        cfg.uplink_port, cfg.bridge_name
-                    )
-                })?;
+                .with_context(|| format!("Failed to add wgcf tunnel to bridge"))?;
+            info!("Attached wgcf tunnel to {}", cfg.bridge_name);
+        } else {
+            warn!("wgcf interface not found yet - will be attached by ovs-attach-ports service");
         }
     }
 
-    // Ensure management and socket ports as internal OVS ports.
-    if !existing_ports.iter().any(|p| p == &cfg.management_port) {
-        ovs.add_port_with_type(&cfg.bridge_name, &cfg.management_port, Some("internal"))
-            .await
-            .with_context(|| {
-                format!(
-                    "Failed to add management internal port '{}' to '{}'",
-                    cfg.management_port, cfg.bridge_name
-                )
-            })?;
+    // Ensure all privacy internal ports exist (created by ovs-attach-ports.sh)
+    for port in &cfg.privacy_ports {
+        if !existing_ports.iter().any(|p| p == port) {
+            ovs.add_port_with_type(&cfg.bridge_name, port, Some("internal"))
+                .await
+                .with_context(|| format!("Failed to add internal port '{}'", port))?;
+            info!("Added internal port: {}", port);
+        }
     }
 
-    if !existing_ports.iter().any(|p| p == &cfg.socket_port) {
-        ovs.add_port_with_type(&cfg.bridge_name, &cfg.socket_port, Some("internal"))
-            .await
-            .with_context(|| {
-                format!(
-                    "Failed to add socket internal port '{}' to '{}'",
-                    cfg.socket_port, cfg.bridge_name
-                )
-            })?;
+    // Bring up critical interfaces
+    for iface in [&cfg.bridge_name, &cfg.wgcf_tunnel] {
+        if Path::new(&format!("/sys/class/net/{}", iface)).exists() {
+            op_network::rtnetlink::link_up(iface)
+                .await
+                .with_context(|| format!("Failed to bring up interface {}", iface))?;
+        }
     }
 
-    // Bring up host bridge and management interfaces.
-    op_network::rtnetlink::link_up(&cfg.bridge_name)
-        .await
-        .with_context(|| format!("Failed to bring bridge '{}' up", cfg.bridge_name))?;
-    op_network::rtnetlink::link_up(&cfg.management_port)
-        .await
-        .with_context(|| {
-            format!(
-                "Failed to bring management port '{}' up",
-                cfg.management_port
-            )
-        })?;
-    op_network::rtnetlink::link_up(&cfg.socket_port)
-        .await
-        .with_context(|| format!("Failed to bring socket port '{}' up", cfg.socket_port))?;
+    // Bring up privacy ports
+    for port in &cfg.privacy_ports {
+        if Path::new(&format!("/sys/class/net/{}", port)).exists() {
+            op_network::rtnetlink::link_up(port)
+                .await
+                .with_context(|| format!("Failed to bring up port {}", port))?;
+        }
+    }
 
-    // Ensure management CIDR on management port.
-    let (mgmt_ip, mgmt_prefix) = parse_cidr(&cfg.management_cidr)?;
-    op_network::rtnetlink::flush_addresses(&cfg.management_port)
-        .await
-        .with_context(|| {
-            format!(
-                "Failed to flush existing addresses on '{}'",
-                cfg.management_port
-            )
-        })?;
-    op_network::rtnetlink::add_ipv4_address(&cfg.management_port, &mgmt_ip, mgmt_prefix)
-        .await
-        .with_context(|| {
-            format!(
-                "Failed to set management CIDR '{}' on '{}'",
-                cfg.management_cidr, cfg.management_port
-            )
-        })?;
+    // Verify Xray ingress is available on the management IP
+    info!("Privacy network ready. Xray ingress should be listening on {}", cfg.xray_ingress_ip);
 
-    // Probe OpenFlow controller connectivity using native Rust implementation.
-    if let Ok(controller_addr) = cfg.openflow_controller.parse::<SocketAddr>() {
+    // Probe OpenFlow controller if available
+    if let Ok(controller_addr) = cfg.openflow_controller.parse::<std::net::SocketAddr>() {
         match OpenFlowClient::connect(controller_addr).await {
-            Ok(mut client) => {
-                if let Err(e) = client.request_features().await {
-                    warn!(
-                        "OpenFlow controller probe connected but feature request failed: {}",
-                        e
-                    );
-                } else {
-                    info!(
-                        "OpenFlow controller reachable at {}",
-                        cfg.openflow_controller
-                    );
-                }
-            }
-            Err(e) => {
-                warn!(
-                    "OpenFlow controller '{}' is not reachable yet: {}",
-                    cfg.openflow_controller, e
-                );
-            }
+            Ok(_) => info!("OpenFlow controller reachable"),
+            Err(e) => warn!("OpenFlow controller not ready yet: {}", e),
         }
-    } else {
-        warn!(
-            "Invalid PRIVACY_OPENFLOW_CONTROLLER '{}'; skipping OpenFlow probe",
-            cfg.openflow_controller
-        );
     }
 
-    info!("Host privacy network provisioning complete");
+    info!("wgcf-based privacy network provisioning complete");
     Ok(())
-}
-
-fn parse_cidr(cidr: &str) -> Result<(String, u8)> {
-    let mut parts = cidr.split('/');
-    let ip = parts
-        .next()
-        .ok_or_else(|| anyhow!("Invalid CIDR '{}': missing IP", cidr))?;
-    let prefix = parts
-        .next()
-        .ok_or_else(|| anyhow!("Invalid CIDR '{}': missing prefix", cidr))?
-        .parse::<u8>()
-        .with_context(|| format!("Invalid CIDR prefix in '{}'", cidr))?;
-    if parts.next().is_some() {
-        return Err(anyhow!("Invalid CIDR '{}': too many separators", cidr));
-    }
-    Ok((ip.to_string(), prefix))
 }

@@ -1,6 +1,6 @@
 //! gRPC Server - Implements the Operation gRPC services (shared-server topology)
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::convert::TryFrom;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -13,11 +13,13 @@ use tokio::sync::{broadcast, RwLock};
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status};
 use tracing::{debug, info, warn};
+use uuid::Uuid;
 
 use crate::proto::{
-    event_chain_service_server::EventChainService, ovsdb_mirror_server::OvsdbMirror,
-    plugin_service_server::PluginService, runtime_mirror_server::RuntimeMirror,
-    state_sync_server::StateSync, BatchMutateRequest, BatchMutateResponse, CallMethodRequest,
+    event_chain_service_server::EventChainService,
+    ovsdb_mirror_server::OvsdbMirror, plugin_service_server::PluginService,
+    runtime_mirror_server::RuntimeMirror, state_sync_server::StateSync, BatchMutateRequest,
+    BatchMutateResponse, CallMethodRequest,
     CallMethodResponse, CapabilityMissing as ProtoCapabilityMissing, ChainEvent as ProtoChainEvent,
     ChangeType as ProtoChangeType, ConstraintFail as ProtoConstraintFail, CreateSnapshotRequest,
     CreateSnapshotResponse, Decision as ProtoDecision, DenyReason as ProtoDenyReason,
@@ -65,22 +67,58 @@ impl PluginSchemaProvider for EmptyPluginProvider {
     }
 }
 
-/// gRPC server implementation for operation services
+// =============================================================================
+// Registry State
+// =============================================================================
+
+/// In-memory component registry backing ComponentRegistry gRPC service.
+/// Shared via Arc across all clones of OperationGrpcServer.
+struct RegistryInner {
+    /// component_id → ComponentInfo
+    components: HashMap<String, crate::proto::registry::ComponentInfo>,
+    /// component_id → lease_token
+    leases: HashMap<String, String>,
+    /// Broadcast channel for Watch stream
+    watch_tx: broadcast::Sender<crate::proto::registry::RegistryEvent>,
+}
+
+impl RegistryInner {
+    fn new() -> (Self, broadcast::Sender<crate::proto::registry::RegistryEvent>) {
+        let (tx, _) = broadcast::channel(256);
+        (
+            Self {
+                components: HashMap::new(),
+                leases: HashMap::new(),
+                watch_tx: tx.clone(),
+            },
+            tx,
+        )
+    }
+}
+
+// =============================================================================
+// gRPC server implementation for operation services
+// =============================================================================
+
 #[derive(Clone)]
 pub struct OperationGrpcServer {
     sync_engine: Arc<SyncEngine>,
     plugin_provider: Arc<dyn PluginSchemaProvider>,
     /// Broadcast channel for chain events
     chain_events: broadcast::Sender<ProtoChainEvent>,
+    /// Component registry state (shared across clones)
+    registry: Arc<RwLock<RegistryInner>>,
 }
 
 impl OperationGrpcServer {
     pub fn new(sync_engine: Arc<SyncEngine>) -> Self {
-        let (tx, _) = broadcast::channel(1024);
+        let (chain_tx, _) = broadcast::channel(1024);
+        let (registry, _) = RegistryInner::new();
         Self {
             sync_engine,
             plugin_provider: Arc::new(EmptyPluginProvider),
-            chain_events: tx,
+            chain_events: chain_tx,
+            registry: Arc::new(RwLock::new(registry)),
         }
     }
 
@@ -88,16 +126,28 @@ impl OperationGrpcServer {
         sync_engine: Arc<SyncEngine>,
         plugin_provider: Arc<dyn PluginSchemaProvider>,
     ) -> Self {
-        let (tx, _) = broadcast::channel(1024);
+        let (chain_tx, _) = broadcast::channel(1024);
+        let (registry, _) = RegistryInner::new();
         Self {
             sync_engine,
             plugin_provider,
-            chain_events: tx,
+            chain_events: chain_tx,
+            registry: Arc::new(RwLock::new(registry)),
         }
     }
 }
 
-/// Run gRPC server for StateSync + PluginService + EventChainService
+/// Run gRPC server for all Operation services.
+///
+/// Includes:
+///   - StateSync, PluginService, EventChainService, OvsdbMirror, RuntimeMirror
+///   - gRPC server reflection (all protos in combined descriptor)
+///   - gRPC health protocol (liveness for deploy verification and load balancers)
+///
+/// Adding a new domain service:
+///   1. Add the generated server import below
+///   2. Add `.add_service(...)` to the builder chain
+///   3. Mark it serving via health_reporter
 pub async fn run_grpc_server(
     addr: std::net::SocketAddr,
     sync_engine: Arc<SyncEngine>,
@@ -106,6 +156,7 @@ pub async fn run_grpc_server(
     use crate::proto::event_chain_service_server::EventChainServiceServer;
     use crate::proto::ovsdb_mirror_server::OvsdbMirrorServer;
     use crate::proto::plugin_service_server::PluginServiceServer;
+    use crate::proto::registry::component_registry_server::ComponentRegistryServer;
     use crate::proto::runtime_mirror_server::RuntimeMirrorServer;
     use crate::proto::state_sync_server::StateSyncServer;
 
@@ -115,12 +166,45 @@ pub async fn run_grpc_server(
         OperationGrpcServer::new(sync_engine)
     };
 
+    // Reflection — exposes combined FileDescriptorSet covering all domain protos.
+    // Enables grpcurl discovery and drives MCP tool auto-registration in op-chat.
+    let reflection = tonic_reflection::server::Builder::configure()
+        .register_encoded_file_descriptor_set(crate::proto::FILE_DESCRIPTOR_SET)
+        .build_v1()
+        .expect("failed to build reflection service");
+
+    // Health — standard gRPC health protocol for deploy verification and LB probes.
+    let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
+    health_reporter
+        .set_serving::<StateSyncServer<OperationGrpcServer>>()
+        .await;
+    health_reporter
+        .set_serving::<PluginServiceServer<OperationGrpcServer>>()
+        .await;
+    health_reporter
+        .set_serving::<EventChainServiceServer<OperationGrpcServer>>()
+        .await;
+    health_reporter
+        .set_serving::<OvsdbMirrorServer<OperationGrpcServer>>()
+        .await;
+    health_reporter
+        .set_serving::<RuntimeMirrorServer<OperationGrpcServer>>()
+        .await;
+    health_reporter
+        .set_serving::<ComponentRegistryServer<OperationGrpcServer>>()
+        .await;
+
+    info!(addr = %addr, "gRPC server starting (reflection + health enabled)");
+
     tonic::transport::Server::builder()
         .add_service(StateSyncServer::new(server.clone()))
         .add_service(PluginServiceServer::new(server.clone()))
         .add_service(EventChainServiceServer::new(server.clone()))
         .add_service(OvsdbMirrorServer::new(server.clone()))
-        .add_service(RuntimeMirrorServer::new(server))
+        .add_service(RuntimeMirrorServer::new(server.clone()))
+        .add_service(ComponentRegistryServer::new(server.clone()))
+        .add_service(reflection)
+        .add_service(health_service)
         .serve(addr)
         .await
 }
@@ -1555,5 +1639,305 @@ impl OperationGrpcServer {
                     .and_then(|s| s.parse::<u64>().ok())
             })
             .unwrap_or(0)
+    }
+
+    fn now_ts() -> prost_types::Timestamp {
+        let now = Utc::now();
+        prost_types::Timestamp {
+            seconds: now.timestamp(),
+            nanos: now.timestamp_subsec_nanos() as i32,
+        }
+    }
+}
+
+// =============================================================================
+// ComponentRegistry Service
+// =============================================================================
+
+use crate::proto::registry::{
+    component_registry_server::ComponentRegistry, ComponentInfo, ComponentStatus,
+    DeregisterRequest, DeregisterResponse, DiscoverRequest, DiscoverResponse,
+    GetComponentRequest, GetComponentResponse, HeartbeatRequest, HeartbeatResponse,
+    RegisterRequest, RegisterResponse, RegistryEvent, RegistryEventType, WatchRequest,
+};
+
+#[tonic::async_trait]
+impl ComponentRegistry for OperationGrpcServer {
+    type WatchStream =
+        Pin<Box<dyn Stream<Item = Result<RegistryEvent, Status>> + Send + 'static>>;
+
+    async fn register(
+        &self,
+        request: Request<RegisterRequest>,
+    ) -> Result<Response<RegisterResponse>, Status> {
+        let req = request.into_inner();
+        if req.component_id.is_empty() {
+            return Err(Status::invalid_argument("component_id must not be empty"));
+        }
+
+        let lease_token = Uuid::new_v4().to_string();
+        let now = OperationGrpcServer::now_ts();
+
+        let mut inner = self.registry.write().await;
+
+        let is_update = inner.components.contains_key(&req.component_id);
+        let info = ComponentInfo {
+            component_id: req.component_id.clone(),
+            component_type: req.component_type.clone(),
+            name: req.name.clone(),
+            description: req.description.clone(),
+            schema_json: req.schema_json.clone(),
+            metadata: req.metadata.clone(),
+            capabilities: req.capabilities.clone(),
+            endpoint: req.endpoint.clone(),
+            version: req.version.clone(),
+            status: ComponentStatus::ComponentStatusActive as i32,
+            registered_at: Some(now.clone()),
+            last_heartbeat: Some(now.clone()),
+        };
+
+        inner.components.insert(req.component_id.clone(), info.clone());
+        inner.leases.insert(req.component_id.clone(), lease_token.clone());
+
+        let event_type = if is_update {
+            RegistryEventType::RegistryEventUpdated
+        } else {
+            RegistryEventType::RegistryEventRegistered
+        };
+        let event = RegistryEvent {
+            event_type: event_type as i32,
+            component: Some(info),
+            timestamp: Some(now.clone()),
+        };
+        // Ignore send error — no active watchers is fine.
+        let _ = inner.watch_tx.send(event);
+
+        info!(
+            component_id = %req.component_id,
+            component_type = %req.component_type,
+            update = is_update,
+            "component registered"
+        );
+
+        Ok(Response::new(RegisterResponse {
+            success: true,
+            message: if is_update {
+                "updated".to_string()
+            } else {
+                "registered".to_string()
+            },
+            lease_token,
+            registered_at: Some(now),
+        }))
+    }
+
+    async fn deregister(
+        &self,
+        request: Request<DeregisterRequest>,
+    ) -> Result<Response<DeregisterResponse>, Status> {
+        let req = request.into_inner();
+        let mut inner = self.registry.write().await;
+
+        match inner.leases.get(&req.component_id) {
+            None => {
+                return Ok(Response::new(DeregisterResponse {
+                    success: false,
+                    message: "component not found".to_string(),
+                }))
+            }
+            Some(stored) if stored != &req.lease_token => {
+                return Err(Status::permission_denied("invalid lease token"))
+            }
+            _ => {}
+        }
+
+        let info = inner.components.remove(&req.component_id);
+        inner.leases.remove(&req.component_id);
+
+        if let Some(mut component) = info {
+            component.status = ComponentStatus::ComponentStatusDeregistered as i32;
+            let event = RegistryEvent {
+                event_type: RegistryEventType::RegistryEventDeregistered as i32,
+                component: Some(component),
+                timestamp: Some(OperationGrpcServer::now_ts()),
+            };
+            let _ = inner.watch_tx.send(event);
+        }
+
+        info!(component_id = %req.component_id, "component deregistered");
+
+        Ok(Response::new(DeregisterResponse {
+            success: true,
+            message: "deregistered".to_string(),
+        }))
+    }
+
+    async fn discover(
+        &self,
+        request: Request<DiscoverRequest>,
+    ) -> Result<Response<DiscoverResponse>, Status> {
+        let req = request.into_inner();
+        let inner = self.registry.read().await;
+
+        let components: Vec<ComponentInfo> = inner
+            .components
+            .values()
+            .filter(|c| {
+                // Type filter
+                if !req.component_type.is_empty() && c.component_type != req.component_type {
+                    return false;
+                }
+                // Capability filter
+                if !req.capability.is_empty() && !c.capabilities.contains(&req.capability) {
+                    return false;
+                }
+                // Metadata filter
+                if !req.metadata_key.is_empty() {
+                    match c.metadata.get(&req.metadata_key) {
+                        Some(v) if req.metadata_value.is_empty() || v == &req.metadata_value => {}
+                        _ => return false,
+                    }
+                }
+                // Stale filter
+                if !req.include_stale
+                    && c.status == ComponentStatus::ComponentStatusStale as i32
+                {
+                    return false;
+                }
+                true
+            })
+            .cloned()
+            .collect();
+
+        let total = components.len() as u32;
+        Ok(Response::new(DiscoverResponse {
+            components,
+            total_count: total,
+        }))
+    }
+
+    async fn get_component(
+        &self,
+        request: Request<GetComponentRequest>,
+    ) -> Result<Response<GetComponentResponse>, Status> {
+        let req = request.into_inner();
+        let inner = self.registry.read().await;
+        let component = inner.components.get(&req.component_id).cloned();
+        let found = component.is_some();
+        Ok(Response::new(GetComponentResponse { component, found }))
+    }
+
+    async fn watch(
+        &self,
+        request: Request<WatchRequest>,
+    ) -> Result<Response<Self::WatchStream>, Status> {
+        let req = request.into_inner();
+        let type_filter: Vec<String> = req.component_types.clone();
+
+        let inner = self.registry.read().await;
+        let mut rx = inner.watch_tx.subscribe();
+
+        // Collect existing components to replay if requested.
+        let existing: Vec<ComponentInfo> = if req.include_existing {
+            inner.components.values().cloned().collect()
+        } else {
+            Vec::new()
+        };
+        drop(inner);
+
+        let output = stream! {
+            // Replay existing registrations first.
+            for info in existing {
+                if type_filter.is_empty() || type_filter.contains(&info.component_type) {
+                    yield Ok(RegistryEvent {
+                        event_type: RegistryEventType::RegistryEventRegistered as i32,
+                        component: Some(info),
+                        timestamp: Some(OperationGrpcServer::now_ts()),
+                    });
+                }
+            }
+            // Stream live events.
+            loop {
+                match rx.recv().await {
+                    Ok(event) => {
+                        let passes_filter = type_filter.is_empty()
+                            || event
+                                .component
+                                .as_ref()
+                                .map(|c| type_filter.contains(&c.component_type))
+                                .unwrap_or(false);
+                        if passes_filter {
+                            yield Ok(event);
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        warn!(skipped = n, "Watch stream lagged — skipping events");
+                        // Continue rather than closing the stream.
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        };
+
+        Ok(Response::new(Box::pin(output)))
+    }
+
+    async fn heartbeat(
+        &self,
+        request: Request<HeartbeatRequest>,
+    ) -> Result<Response<HeartbeatResponse>, Status> {
+        let req = request.into_inner();
+        let mut inner = self.registry.write().await;
+
+        match inner.leases.get(&req.component_id) {
+            None => {
+                // Component not known — tell it to re-register.
+                return Ok(Response::new(HeartbeatResponse {
+                    acknowledged: false,
+                    reregister_required: true,
+                    server_time: Some(OperationGrpcServer::now_ts()),
+                }));
+            }
+            Some(stored) if stored != &req.lease_token => {
+                return Err(Status::permission_denied("invalid lease token"))
+            }
+            _ => {}
+        }
+
+        let now = OperationGrpcServer::now_ts();
+        let was_stale;
+        if let Some(info) = inner.components.get_mut(&req.component_id) {
+            was_stale = info.status == ComponentStatus::ComponentStatusStale as i32;
+            info.last_heartbeat = Some(now.clone());
+            if was_stale {
+                info.status = ComponentStatus::ComponentStatusActive as i32;
+            }
+        } else {
+            return Ok(Response::new(HeartbeatResponse {
+                acknowledged: false,
+                reregister_required: true,
+                server_time: Some(now),
+            }));
+        }
+
+        if was_stale {
+            if let Some(info) = inner.components.get(&req.component_id).cloned() {
+                let event = RegistryEvent {
+                    event_type: RegistryEventType::RegistryEventRecovered as i32,
+                    component: Some(info),
+                    timestamp: Some(now.clone()),
+                };
+                let _ = inner.watch_tx.send(event);
+                info!(component_id = %req.component_id, "component recovered from stale");
+            }
+        }
+
+        debug!(component_id = %req.component_id, "heartbeat acknowledged");
+
+        Ok(Response::new(HeartbeatResponse {
+            acknowledged: true,
+            reregister_required: false,
+            server_time: Some(now),
+        }))
     }
 }

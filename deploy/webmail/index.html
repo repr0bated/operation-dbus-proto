@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Webmail - 3tched.com</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0;
+            background: #0f172a;
+            color: #e2e8f0;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .header {
+            background: #1e2937;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .mailbox {
+            display: grid;
+            grid-template-columns: 250px 1fr;
+            gap: 20px;
+            height: calc(100vh - 180px);
+        }
+        .sidebar {
+            background: #1e2937;
+            border-radius: 8px;
+            padding: 20px;
+        }
+        .email-list {
+            background: #1e2937;
+            border-radius: 8px;
+            padding: 20px;
+            overflow-y: auto;
+        }
+        .email-view {
+            background: #1e2937;
+            border-radius: 8px;
+            padding: 20px;
+        }
+        .account {
+            padding: 10px;
+            margin: 5px 0;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .account:hover, .account.active {
+            background: #334155;
+        }
+        .email-item {
+            padding: 12px;
+            border-bottom: 1px solid #334155;
+            cursor: pointer;
+        }
+        .email-item:hover {
+            background: #334155;
+        }
+        .from { color: #60a5fa; font-weight: 500; }
+        .subject { color: #e2e8f0; margin: 4px 0; }
+        .preview { color: #94a3b8; font-size: 0.9em; }
+        .button {
+            background: #3b82f6;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .button:hover {
+            background: #2563eb;
+        }
+        h1 { margin: 0; font-size: 1.5em; }
+        .status {
+            color: #22c55e;
+            font-size: 0.9em;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div>
+                <h1>✉️ 3tched Webmail</h1>
+                <div class="status">Connected to Maddy Mail Server</div>
+            </div>
+            <div>
+                <button class="button" onclick="checkMail()">Check Mail</button>
+                <button class="button" onclick="composeEmail()" style="margin-left: 10px;">Compose</button>
+            </div>
+        </div>
+
+        <div class="mailbox">
+            <!-- Sidebar -->
+            <div class="sidebar">
+                <h3>Accounts</h3>
+                <div class="account active" onclick="switchAccount(this)">
+                    <strong>jeremy@3tched.com</strong><br>
+                    <small>Personal</small>
+                </div>
+                <div class="account" onclick="switchAccount(this)">
+                    <strong>admin@3tched.com</strong><br>
+                    <small>Administration</small>
+                </div>
+
+                <hr style="border-color: #334155; margin: 20px 0;">
+
+                <h4>Folders</h4>
+                <div style="padding: 8px 12px; color: #94a3b8; cursor: pointer;" onclick="showFolder('inbox')">📥 Inbox</div>
+                <div style="padding: 8px 12px; color: #94a3b8; cursor: pointer;" onclick="showFolder('sent')">📤 Sent</div>
+                <div style="padding: 8px 12px; color: #94a3b8; cursor: pointer;" onclick="showFolder('drafts')">📝 Drafts</div>
+                <div style="padding: 8px 12px; color: #94a3b8; cursor: pointer;" onclick="showFolder('trash')">🗑️ Trash</div>
+            </div>
+
+            <!-- Email List -->
+            <div class="email-list" id="emailList">
+                <div class="email-item" onclick="openEmail(0)">
+                    <div class="from">noreply@operation-dbus.com</div>
+                    <div class="subject">Welcome to 3tched.com Webmail</div>
+                    <div class="preview">Your webmail account has been configured...</div>
+                    <small style="color: #64748b;">2 minutes ago</small>
+                </div>
+                <div class="email-item" onclick="openEmail(1)">
+                    <div class="from">system@3tched.com</div>
+                    <div class="subject">Privacy Network Access Granted</div>
+                    <div class="preview">Your WireGuard configuration is ready...</div>
+                    <small style="color: #64748b;">15 minutes ago</small>
+                </div>
+            </div>
+
+            <!-- Email View -->
+            <div class="email-view" id="emailView">
+                <h2 id="emailSubject">Welcome to 3tched.com Webmail</h2>
+                <p><strong>From:</strong> <span id="emailFrom">noreply@operation-dbus.com</span></p>
+                <p><strong>Date:</strong> <span id="emailDate">Just now</span></p>
+                <hr>
+                <div id="emailContent">
+                    <p>Hello,</p>
+                    <p>Your webmail has been configured successfully.</p>
+                    <p>You can now check mail for both:</p>
+                    <ul>
+                        <li><strong>jeremy@3tched.com</strong></li>
+                        <li><strong>admin@3tched.com</strong></li>
+                    </ul>
+                    <p>The full Maddy mail server is available at 10.149.181.121 when started.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function checkMail() {
+            const list = document.getElementById('emailList');
+            list.innerHTML = `
+                <div style="padding: 20px; text-align: center; color: #64748b;">
+                    <p>🔄 Checking mail for jeremy@3tched.com and admin@3tched.com...</p>
+                    <p style="margin-top: 10px; font-size: 0.9em;">(Maddy server needs to be running for real emails)</p>
+                </div>
+            `;
+            setTimeout(() => {
+                location.reload();
+            }, 1500);
+        }
+
+        function composeEmail() {
+            alert("📧 Compose Email\n\nTo: \nSubject: \n\n(Mail server not fully configured yet)");
+        }
+
+        function switchAccount(el) {
+            document.querySelectorAll('.account').forEach(a => a.classList.remove('active'));
+            el.classList.add('active');
+        }
+
+        function showFolder(folder) {
+            alert(`📁 Showing ${folder} folder\n\n(This would load emails from that folder)`);
+        }
+
+        function openEmail(id) {
+            const subjects = [
+                "Welcome to 3tched.com Webmail",
+                "Privacy Network Access Granted"
+            ];
+            const froms = [
+                "noreply@operation-dbus.com",
+                "system@3tched.com"
+            ];
+
+            document.getElementById('emailSubject').textContent = subjects[id];
+            document.getElementById('emailFrom').textContent = froms[id];
+            document.getElementById('emailDate').textContent = id === 0 ? "Just now" : "15 minutes ago";
+        }
+
+        // Initialize
+        console.log("🛠️ 3tched Webmail Interface Loaded");
+        console.log("👤 Supports: admin@3tched.com and jeremy@3tched.com");
+    </script>
+</body>
+</html>

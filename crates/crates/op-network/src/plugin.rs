@@ -88,7 +88,7 @@ pub struct OpenFlowConfig {
 }
 
 fn default_controller() -> String {
-    "tcp:127.0.0.1:6653".to_string()
+    "tcp:10.88.88.1:6653".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -434,9 +434,9 @@ impl NetworkPlugin {
             let addr_str = config.controller.trim_start_matches("tcp:");
             addr_str
                 .parse()
-                .unwrap_or_else(|_| std::net::SocketAddr::from(([127, 0, 0, 1], 6653)))
+                .unwrap_or_else(|_| std::net::SocketAddr::from(([10, 88, 88, 1], 6653)))
         } else {
-            std::net::SocketAddr::from(([127, 0, 0, 1], 6653))
+            std::net::SocketAddr::from(([10, 88, 88, 1], 6653))
         };
 
         // Connect to OpenFlow switch

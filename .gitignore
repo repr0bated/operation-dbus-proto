@@ -10,3 +10,6 @@ google-cloud-sdk/
 
 # Local built artifacts
 deploy/bin/op-dbus
+
+# Local WARP premium credentials
+wgcf-profile.conf

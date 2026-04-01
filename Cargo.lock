@@ -3301,6 +3301,7 @@ dependencies = [
  "op-agents",
  "op-core",
  "op-execution-tracker",
+ "op-grpc-bridge",
  "op-introspection",
  "op-llm",
  "op-mcp",
@@ -3317,6 +3318,7 @@ dependencies = [
  "tokio-test",
  "tonic",
  "tonic-build 0.11.0",
+ "tonic-reflection",
  "tracing",
  "tracing-subscriber",
  "uuid",
@@ -3542,6 +3544,8 @@ dependencies = [
  "base64 0.21.7",
  "chrono",
  "futures",
+ "op-identity",
+ "op-network",
  "op-state-store",
  "prost 0.13.5",
  "prost-types 0.13.5",
@@ -3554,6 +3558,7 @@ dependencies = [
  "tokio-test",
  "tonic",
  "tonic-build 0.12.3",
+ "tonic-health",
  "tonic-reflection",
  "tracing",
  "uuid",
@@ -6378,6 +6383,19 @@ dependencies = [
  "prost-types 0.13.5",
  "quote",
  "syn 2.0.114",
+]
+
+[[package]]
+name = "tonic-health"
+version = "0.12.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1eaf34ddb812120f5c601162d5429933c9b527d901ab0e7f930d3147e33a09b2"
+dependencies = [
+ "async-stream",
+ "prost 0.13.5",
+ "tokio",
+ "tokio-stream",
+ "tonic",
 ]
 
 [[package]]

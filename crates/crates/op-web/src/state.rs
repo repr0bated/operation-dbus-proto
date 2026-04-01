@@ -237,7 +237,7 @@ impl AppState {
 
         // Initialize gRPC client for remote operations
         let grpc_addr = std::env::var("OP_DBUS_GRPC_ADDR")
-            .unwrap_or_else(|_| "http://127.0.0.1:50051".to_string());
+            .unwrap_or_else(|_| "http://10.88.88.1:50051".to_string());
         let pool = Arc::new(GrpcClientPool::new());
         let grpc_client = Arc::new(RemoteOperationClient::new(pool, &grpc_addr, "op-web"));
 
