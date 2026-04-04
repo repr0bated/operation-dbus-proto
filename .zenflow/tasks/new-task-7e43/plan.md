@@ -25,7 +25,7 @@ Focus on **what** the feature should do and **why**, not **how** it should be bu
 
 Save the PRD to `{@artifacts_path}/requirements.md`.
 
-### [-] Step: Technical Specification
+### [x] Step: Technical Specification
 
 Create a technical specification based on the PRD in `{@artifacts_path}/requirements.md`.
 
@@ -41,7 +41,7 @@ Save to `{@artifacts_path}/spec.md` with:
 - Data model / API / interface changes
 - Verification approach using project lint/test commands
 
-### [ ] Step: Planning
+### [x] Step: Planning
 
 Create a detailed implementation plan based on `{@artifacts_path}/spec.md`.
 
@@ -57,7 +57,24 @@ If the feature is trivial and doesn't warrant full specification, update this wo
 
 Save to `{@artifacts_path}/plan.md`.
 
-### [ ] Step: Implementation
+### [x] Step: Generate op-introspection specifications
+Analyze `crates/op-introspection` and create `requirements.md`, `design.md`, and `tasks.md` in `.kiro/specs/op-introspection/`.
+
+1. Review source code for D-Bus introspection logic and event handling.
+2. Define the architectural layout in `design.md`.
+3. List implementation tasks in `tasks.md`.
+
+### [x] Step: Generate specifications for other key crates
+Identify other core crates (e.g., `op-storage`, `op-worker`, `op-state-store`) and generate specs if they are missing or significantly outdated.
+
+1. Scan the `crates/` directory for high-impact components.
+2. Create respective spec directories and files.
+
+### [x] Step: Review and Finalize
+Perform a final consistency check across all generated specifications in `.kiro/specs/`.
+
+1. Ensure common patterns and cross-references are accurate.
+2. Verify that all specifications follow the `.kiro/specs/op-services/` template.
 
 This step should be replaced with detailed implementation tasks from the Planning step.
 
