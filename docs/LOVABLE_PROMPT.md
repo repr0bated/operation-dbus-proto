@@ -94,11 +94,33 @@ Refactor the Inspector page from a simple JSON text parser into a live D-Bus Obj
 - **Left Pane:** Hierarchical D-Bus tree browser.
 - **Right Pane:** When an object is selected, render its full schema. Use `<JsonRenderer />` to render mutable properties as form inputs. For Methods, add an "Execute" button that passes the method's exact argument schema (e.g., `["s", "b"]`) into `<JsonRenderer />` to auto-generate a perfectly typed execution form.
 
-**16. Create the Connected Peers Monitor**
-Add a live "Connected Peers" table to the **Overview Page** or **Security Page** to monitor active gRPC and MCP connections.
-- Use a Shadcn `<Table>` to display active connections (e.g., containers, agents, external clients).
-- Render metrics like connection duration, client ID, and active streams.
-- **Generative Expansion:** Make rows expandable to view the specific connection state or configuration schema for that peer, passed through the `<JsonRenderer />`.
+**16. Upgrade the LLM Provider View (`src/pages/LlmPage.tsx`)**
+Refactor the LLM configuration page to manage the `LlmStatus`, models, and authentication proxies.
+- **Top Section:** Show the currently `active_provider` and `active_model`. Use a `<Select>` to switch models.
+- **Provider Grid:** Render cards for all available providers (Gemini, Anthropic, etc.).
+- **Generative Config:** Add a "Configure" button that passes the provider's configuration schema into `<JsonRenderer />` to dynamically render API key and project settings fields.
+
+**17. Create the Active Sessions View (`src/pages/openclaw/SessionsPage.tsx`)**
+Build a dashboard to monitor active chat and agent sessions.
+- **Session Ledger:** Fetch live sessions (ID, exchange count, tools used, uptime).
+- **Interactive Controls:** Implement "Verbose" and "Thinking" mode toggles.
+- **Generative Deep-Dive:** "Inspect Context" action that passes the session's memory/context payload into `<JsonRenderer />` to see the AI's current state.
+
+**18. Upgrade the Global Configuration View (`src/pages/ConfigPage.tsx`)**
+Refactor the Config page to use Generative UI instead of raw JSON text areas.
+- **Sectioned Navigation:** (General, D-Bus, LLM, Agents, Security, Network).
+- **Structured Editor:** Pass the section's backend schema and current values into `<JsonRenderer />` to generate a perfectly typed form.
+
+**19. Upgrade the Security & Audit View (`src/pages/SecurityPage.tsx`)**
+Transform this page into a dashboard for the Blockchain Audit Trail and Semantic Search.
+- **Semantic Search:** Add a search bar that targets the vectorized Qdrant audit logs.
+- **Blockchain Ledger:** Render audit events as a list. Each row is expandable (`<Collapsible>`).
+- **Audit Detail:** When expanded, pass the block's payload (LLM reasoning + tool call + state mutation) into `<JsonRenderer />`.
+
+**20. Create the Connected Peers Monitor**
+Add a live "Connected Peers" table to the **Overview Page** to monitor active gRPC and MCP connections.
+- Show connection duration, client ID, and active streams.
+- **Generative Expansion:** Expand rows to view the specific peer's state or configuration via `<JsonRenderer />`.
 
 **Constraints:**
 - Strictly use the existing Shadcn components in `src/components/ui/`.
