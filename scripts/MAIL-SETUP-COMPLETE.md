@@ -39,36 +39,35 @@ Your existing code in `crates/op-web/src/email.rs` will automatically use these 
 
 Add these DNS records for 3tched.com (see `scripts/dns-records-3tched.txt` for full details):
 
-### MX Record
-```
-Type: MX
-Name: @
-Value: mail.3tched.com
-Priority: 10
-```
+### Mail Routing
 
-### A Record
+Preserve the current Cloudflare-managed apex MX if it already resolves to a
+`_dc-mx...` hostname. That is the current authoritative inbound-mail path.
+
+### Webmail Hostname
 ```
 Type: A
 Name: mail
-Value: 10.149.181.121  (or your public IP)
+Value: <PUBLIC_IPV4>
+Proxy: Proxied through Cloudflare
 ```
 
 ### SPF Record
 ```
 Type: TXT
 Name: @
-Value: v=spf1 mx ~all
+Value: v=spf1 ip4:<PUBLIC_IPV4> ~all
 ```
 
 ### DKIM Record
-See `/var/lib/maddy/dkim_keys/3tched.com_default.dns` in the container for the full record.
+Preserve the live selectors already present in Cloudflare unless you are
+rotating mail keys.
 
 ### DMARC Record
 ```
 Type: TXT
 Name: _dmarc
-Value: v=DMARC1; p=quarantine; rua=mailto:admin@3tched.com
+Value: v=DMARC1; p=quarantine; rua=mailto:admin@3tched.com; ruf=mailto:admin@3tched.com; fo=1
 ```
 
 ## Using the Webmail

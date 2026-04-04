@@ -16,8 +16,19 @@ else
 fi
 
 DOMAIN="registration.3tched.com"
-PROXY_IP="15.235.37.41"  # Your public IP from priv_xray
 WEB_PORT="7010"
+
+detect_public_ipv4() {
+    ip -4 route get 1.1.1.1 2>/dev/null | awk '/src/ {for (i = 1; i <= NF; i++) if ($i == "src") {print $(i + 1); exit}}'
+}
+
+PROXY_IP="${1:-$(detect_public_ipv4)}"
+
+if [ -z "$PROXY_IP" ]; then
+    echo "❌ Could not detect public IPv4 automatically"
+    echo "   Pass the desired origin IP as the first argument"
+    exit 1
+fi
 
 echo "Domain: $DOMAIN"
 echo "Proxy IP: $PROXY_IP"
@@ -30,6 +41,8 @@ sudo mkdir -p /etc/nginx/http.d
 # Install nginx config
 echo "📋 Installing nginx reverse proxy config..."
 sudo cp deploy/nginx/registration-3tched.conf /etc/nginx/http.d/registration-3tched.conf
+sudo install -d /var/www/registration
+sudo install -m 0644 deploy/registration/index.html /var/www/registration/index.html
 
 # Test nginx config
 echo "🔧 Testing nginx configuration..."

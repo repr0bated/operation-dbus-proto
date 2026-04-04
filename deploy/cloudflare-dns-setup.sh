@@ -13,7 +13,18 @@ fi
 
 CF_TOKEN="${CF_DNS_ZONE_TOKEN}"
 ZONE_ID="${CF_ZONEID_3TCHEDCOM:-${CF_ZONE_ID_3TCHED:-${CF_ZONEID_3TCHED:-}}}"
-SERVER_IP="${1:-15.235.37.41}"
+
+detect_public_ipv4() {
+    ip -4 route get 1.1.1.1 2>/dev/null | awk '/src/ {for (i = 1; i <= NF; i++) if ($i == "src") {print $(i + 1); exit}}'
+}
+
+SERVER_IP="${1:-$(detect_public_ipv4)}"
+
+if [ -z "$SERVER_IP" ]; then
+    echo "❌ Could not detect public IPv4 automatically"
+    echo "   Pass the desired origin IP as the first argument"
+    exit 1
+fi
 
 if [ -z "$ZONE_ID" ]; then
     echo "❌ Could not find 3tched.com zone ID in ~/.bash_secrets"

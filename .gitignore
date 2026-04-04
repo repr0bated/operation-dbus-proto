@@ -13,3 +13,6 @@ deploy/bin/op-dbus
 
 # Local WARP premium credentials
 wgcf-profile.conf
+
+# Operation Dashboard UI submodule (if excluded)
+operation-dashboard-ui/

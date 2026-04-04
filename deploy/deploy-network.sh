@@ -425,6 +425,31 @@ ensure_container_config() {
     esac
 }
 
+ensure_proxy_device() {
+    local container=$1
+    local device_name=$2
+    local listen=$3
+    local connect=$4
+    local current_type
+    local current_listen
+    local current_connect
+
+    current_type="$(incus config device get "$container" "$device_name" type 2>/dev/null || true)"
+    current_listen="$(incus config device get "$container" "$device_name" listen 2>/dev/null || true)"
+    current_connect="$(incus config device get "$container" "$device_name" connect 2>/dev/null || true)"
+
+    if [[ "$current_type" == "proxy" && "$current_listen" == "$listen" && "$current_connect" == "$connect" ]]; then
+        log "Proxy device ${container}/${device_name} already present (${listen} -> ${connect})"
+        return
+    fi
+
+    incus config device remove "$container" "$device_name" 2>/dev/null || true
+    incus config device add "$container" "$device_name" proxy \
+        listen="$listen" \
+        connect="$connect"
+    log "Proxy device ${container}/${device_name} configured (${listen} -> ${connect})"
+}
+
 ensure_container() {
     local name=$1
     local ip=$2
@@ -473,6 +498,7 @@ PRIV_XRAY_STATE="UNKNOWN"
 XRAY_SERVER_STATE="SKIPPED"
 
 ensure_container services              10.149.181.188
+ensure_proxy_device services smtp25 tcp:0.0.0.0:25 tcp:10.149.181.188:25
 SERVICES_STATE="RUNNING"
 
 ensure_container privacy-xray-ingress  10.149.181.167

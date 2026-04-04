@@ -87,7 +87,6 @@ add_internal_port priv_warp
 add_internal_port priv_wg
 add_internal_port ovsbr0-mgmt
 add_internal_port ovsbr0-sock
-add_internal_port ovsbr0-uplink
 
 # --- Bring up internal ports and assign IPs ---
 for port in priv_xray priv_warp priv_wg ovsbr0-mgmt ovsbr0-sock; do

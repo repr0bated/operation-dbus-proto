@@ -6,7 +6,7 @@ Follow these strictly to maintain consistency, pass CI, and adhere to team stand
 ## Project Structure & Module Organization
 
 - `src/`: Root `op-dbus` binary and legacy glue modules.
-- `crates/crates/op-*`: Active Rust workspace crates:
+- `crates/op-*`: Active Rust workspace crates:
   - `op-core`: Core logic, shared utilities.
   - `op-plugins`: Plugin system.
   - `op-state-store`: State management (SQLite, etc.).
