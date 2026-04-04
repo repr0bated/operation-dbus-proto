@@ -250,31 +250,31 @@ run_network_bootstrap() {
 # Uncomment this section once deploy-network.sh has been verified on the VPS.
 # ---------------------------------------------------------------------------
 
-# build_and_install() {
-#     local crate=$1 binary=$2
-#
-#     log "Building ${crate}..."
-#     # stat -c "%U" gives owner username on Linux (Chimera). stat -f is BSD only.
-#     local build_user
-#     build_user=$(stat -c "%U" "$PROJECT_ROOT" 2>/dev/null || echo "")
-#     local cargo_target="/var/cache/op-dbus-build"
-#     mkdir -p "$cargo_target"
-#     chown "${build_user:-root}:${build_user:-root}" "$cargo_target" 2>/dev/null || true
-#
-#     if [[ "$EUID" -eq 0 && -n "$build_user" && "$build_user" != "root" ]]; then
-#         su -l "$build_user" -c \
-#             "cd '${PROJECT_ROOT}' && CARGO_TARGET_DIR='${cargo_target}' cargo build --release -p '${crate}'" \
-#             || error "Build failed for ${crate}"
-#     else
-#         CARGO_TARGET_DIR="$cargo_target" cargo build --release -p "$crate" \
-#             || error "Build failed for ${crate}"
-#     fi
-#
-#     local staged="${INSTALL_DIR}/${binary}.new.$$"
-#     install -m 755 "${cargo_target}/release/${binary}" "$staged"
-#     mv -f "$staged" "${INSTALL_DIR}/${binary}"
-#     log "Installed ${binary} → ${INSTALL_DIR}/${binary}"
-# }
+build_and_install() {
+    local crate=$1 binary=$2
+
+    log "Building ${crate}..."
+    # stat -c "%U" gives owner username on Linux (Chimera). stat -f is BSD only.
+    local build_user
+    build_user=$(stat -c "%U" "$PROJECT_ROOT" 2>/dev/null || echo "")
+    local cargo_target="/var/cache/op-dbus-build"
+    mkdir -p "$cargo_target"
+    chown "${build_user:-root}:${build_user:-root}" "$cargo_target" 2>/dev/null || true
+
+    if [[ "$EUID" -eq 0 && -n "$build_user" && "$build_user" != "root" ]]; then
+        su -l "$build_user" -c \
+            "cd '${PROJECT_ROOT}' && CARGO_TARGET_DIR='${cargo_target}' cargo build --release -p '${crate}'" \
+            || error "Build failed for ${crate}"
+    else
+        CARGO_TARGET_DIR="$cargo_target" cargo build --release -p "$crate" \
+            || error "Build failed for ${crate}"
+    fi
+
+    local staged="${INSTALL_DIR}/${binary}.new.$$"
+    install -m 755 "${cargo_target}/release/${binary}" "$staged"
+    mv -f "$staged" "${INSTALL_DIR}/${binary}"
+    log "Installed ${binary} → ${INSTALL_DIR}/${binary}"
+}
 #
 # generate_service_file() {
 #     local binary=$1 service=$2
@@ -329,7 +329,7 @@ run_network_bootstrap() {
 # env = OP_DBUS_WEB_PORT=8081
 # env = OP_DBUS_SESSION_BUS=1
 # EOF
-#     fi
+    fi
 # }
 #
 # deploy_service() {
@@ -365,13 +365,13 @@ run_network_bootstrap() {
 #         $DINITCTL restart "$service"
 #     else
 #         $DINITCTL start "$service"
-#     fi
+    fi
 #
 #     if [[ "${#stopped_dependents[@]}" -gt 0 ]]; then
 #         for dep in ovs-attach-ports op-ovsdb-bridge systemd-networkd op-web op-services op-chat; do
 #             was_stopped "$dep" && $DINITCTL start "$dep"
 #         done
-#     fi
+    fi
 #     log "✅ ${service} deployed"
 # }
 
@@ -386,12 +386,12 @@ install_system_files
 run_network_bootstrap
 
 # --- App services: uncomment after network is verified on VPS ---
-# command -v cargo >/dev/null || error "Cargo not found — cannot build services"
-# for entry in "${SERVICES[@]}"; do
-#     IFS=':' read -r crate binary service <<< "$entry"
-#     if [[ -z "$TARGET" || "$TARGET" == "all" || "$TARGET" == "$crate" ]]; then
-#         deploy_service "$crate" "$binary" "$service"
-#     fi
-# done
+command -v cargo >/dev/null || error "Cargo not found — cannot build services"
+for entry in "${SERVICES[@]}"; do
+    IFS=':' read -r crate binary service <<< "$entry"
+    if [[ -z "$TARGET" || "$TARGET" == "all" || "$TARGET" == "$crate" ]]; then
+        deploy_service "$crate" "$binary" "$service"
+    fi
+done
 
 log "Deployment complete."

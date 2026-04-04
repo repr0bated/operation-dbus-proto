@@ -1,0 +1,26 @@
+[package]
+name = "op-cognitive-mcp"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+op-core = { path = "../op-core" }
+op-mcp = { path = "../op-mcp" }
+op-state-store = { path = "../op-state-store" }
+op-dynamic-loader = { path = "../op-dynamic-loader" }
+op-cache = { path = "../op-cache" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { workspace = true }
+simd-json = { workspace = true }
+tokio = { version = "1.0", features = ["full"] }
+anyhow = { workspace = true }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+axum = { version = "0.7", features = ["json", "http2"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors"] }
+uuid = { version = "1.0", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+async-trait = "0.1"
+clap = { workspace = true }
+sqlx = { workspace = true, features = ["sqlite", "runtime-tokio", "chrono", "json"] }

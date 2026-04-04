@@ -15,8 +15,19 @@ else
 fi
 
 DOMAIN="mail.3tched.com"
-PROXY_IP="${1:-15.235.37.41}"  # Pass server IP as first arg, or set here
 NGINX_CONF="$(dirname "$0")/nginx/mail-webmail-complete.conf"
+
+detect_public_ipv4() {
+    ip -4 route get 1.1.1.1 2>/dev/null | awk '/src/ {for (i = 1; i <= NF; i++) if ($i == "src") {print $(i + 1); exit}}'
+}
+
+PROXY_IP="${1:-$(detect_public_ipv4)}"
+
+if [ -z "$PROXY_IP" ]; then
+    echo "❌ Could not detect public IPv4 automatically"
+    echo "   Pass the desired origin IP as the first argument"
+    exit 1
+fi
 
 echo "Domain: $DOMAIN"
 echo "Server IP: $PROXY_IP"

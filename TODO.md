@@ -33,9 +33,21 @@
 - [ ] **UI Polish (Lovable):**
     - [ ] Connect React hooks to the new gRPC status endpoints.
     - [ ] Implement real-time updates via D-Bus signals projected to SSE.
+- [ ] **Schema-Driven D-Bus UI Rendering:**
+    - [ ] Evaluate `json-render` as the dynamic renderer for D-Bus object views in the dashboard.
+    - [ ] Keep navigation, search, selection, and virtualization in deterministic React code.
+    - [ ] Define typed view-model schemas for D-Bus object detail, interface panels, tree node summaries, agent status, and orchestration views.
+    - [ ] Render inspector/detail panes dynamically from route, selection, and task/use-case state instead of hand-building per-object UI variants.
+    - [ ] Validate performance and UX for high-cardinality D-Bus object sets before widening usage beyond detail panes.
 - [ ] **D-Bus Signals:**
     - [ ] Emit D-Bus signals from `MirrorObject` when properties change.
     - [ ] Bridge D-Bus signals to gRPC streaming for UI "hotwire" updates.
+- [ ] **Schema-Driven Mutation Routing:**
+    - [ ] Extend plugin and network schemas with per-field ownership metadata (`dbus`, `ovsdb`, other authoritative backend).
+    - [ ] Extend schemas with per-field mutability metadata (`read_only`, `create_only`, `mutable`).
+    - [ ] Validate D-Bus object creation and update paths against schema mutability and ownership rules.
+    - [ ] Route writes from schema metadata, preferring D-Bus for D-Bus-owned fields and OVSDB JSON-RPC only for OVS-owned fields.
+    - [ ] Generate or enforce writable versus read-only behavior from schema and introspection instead of ad hoc command choice.
 
 ---
 
