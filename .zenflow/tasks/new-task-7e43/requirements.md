@@ -21,7 +21,13 @@ The current codebase has several core crates that lack detailed, manually-curate
 - **`op-gateway`**: Authentication (WireGuard), MCP routing, and encrypted storage.
 - **`op-mcp`**: Unified MCP server, multiple transports, and tool registry.
 - **`op-dbus-model`**: Database schema, plugin registration, and schema persistence.
-- **`op-introspection`**: (Optional) D-Bus interface discovery and mapping.
+- **`op-introspection`**: D-Bus interface discovery, XML parsing, and FTS5 indexing.
+- **`op-state-store`**: Job ledger, plugin state, and verifiable audit trail.
+- **`op-core`**: Common types, errors, security models, and utilities.
+- **Root `op-*` components**: `op-api`, `op-worker`, `op-cli`, `op-storage`, `op-parser`.
+- **`op-execution-tracker`**: Lightweight execution monitoring and telemetry.
+- **`op-plugins`**: Modular plugin system, domain-specific logic, and blockchain footprints.
+- **`op-identity`**: Service and user identity management, tokens, and cryptographic keys.
 
 ### Excluded Components
 - External dependencies and libraries (unless their integration is a core part of the component's design).
@@ -55,7 +61,7 @@ The current codebase has several core crates that lack detailed, manually-curate
 
 ## Success Criteria
 
-1.  Detailed `.kiro/specs` directories created for `op-gateway`, `op-mcp`, and `op-dbus-model`.
+1.  Detailed `.kiro/specs` directories created for all core components (gateway, mcp, model, introspection, state-store, core, api, worker, cli, storage, parser, execution-tracker, plugins, identity).
 2.  Each directory contains valid `requirements.md`, `design.md`, and `tasks.md` files.
 3.  The generated specifications provide a clear roadmap for further development and security audits.
 4.  The task's PRD and implementation plan are updated to reflect the completed work.

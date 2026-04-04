@@ -76,6 +76,21 @@ Perform a final consistency check across all generated specifications in `.kiro/
 1. Ensure common patterns and cross-references are accurate.
 2. Verify that all specifications follow the `.kiro/specs/op-services/` template.
 
+### [x] Step: Generate specifications for op-core
+Analyze `crates/op-core` and create `requirements.md`, `design.md`, and `tasks.md` in `.kiro/specs/op-core/`.
+
+### [x] Step: Generate specifications for root op-* components
+Analyze `op-api`, `op-worker`, `op-cli`, `op-storage`, `op-parser` and create specs in respective `.kiro/specs/` directories.
+
+### [x] Step: Generate specifications for op-execution-tracker
+Analyze `crates/op-execution-tracker` and create specs in `.kiro/specs/op-execution-tracker/`.
+
+### [x] Step: Generate specifications for op-plugins
+Analyze `crates/op-plugins` and create specs in `.kiro/specs/op-plugins/`.
+
+### [x] Step: Final Review and Task Completion
+Perform a final review of all new specifications and mark the task as done.
+
 This step should be replaced with detailed implementation tasks from the Planning step.
 
 If Planning didn't replace this step, execute the tasks in `{@artifacts_path}/plan.md`, updating checkboxes as you go. Run planned tests/lint and record results in plan.md.

@@ -77,6 +77,61 @@
       "stop_after_completion": false,
       "created_at": "2026-04-04T11:46:02.446821033Z",
       "updated_at": "2026-04-04T11:46:11.105813890Z"
+    },
+    {
+      "id": "720e2e4e-428f-4968-8e14-533c525f9adb",
+      "name": "Generate specifications for op-core",
+      "description": "Analyze crates/op-core and create requirements.md, design.md, and tasks.md in .kiro/specs/op-core/.",
+      "status": "Completed",
+      "sort_order": 7,
+      "start_new_chat": false,
+      "stop_after_completion": false,
+      "created_at": "2026-04-04T11:52:16.797300811Z",
+      "updated_at": "2026-04-04T11:52:37.798449477Z"
+    },
+    {
+      "id": "797f3c1d-05e6-4660-9ce2-7e36abdb348c",
+      "name": "Generate specifications for root op-* components",
+      "description": "Analyze op-api, op-worker, op-cli, op-storage, op-parser and create specs in respective .kiro/specs/ directories.",
+      "status": "Completed",
+      "sort_order": 8,
+      "start_new_chat": false,
+      "stop_after_completion": false,
+      "created_at": "2026-04-04T11:52:16.797300811Z",
+      "updated_at": "2026-04-04T11:54:17.079634660Z"
+    },
+    {
+      "id": "0a56f417-0eed-4cb7-977f-b3ff78b66e82",
+      "name": "Generate specifications for op-execution-tracker",
+      "description": "Analyze crates/op-execution-tracker and create specs in .kiro/specs/op-execution-tracker/.",
+      "status": "Completed",
+      "sort_order": 9,
+      "start_new_chat": false,
+      "stop_after_completion": false,
+      "created_at": "2026-04-04T11:52:16.797300811Z",
+      "updated_at": "2026-04-04T11:54:34.672270630Z"
+    },
+    {
+      "id": "5a873049-cc1f-4e01-a131-3d80a75ac007",
+      "name": "Generate specifications for op-plugins",
+      "description": "Analyze crates/op-plugins and create specs in .kiro/specs/op-plugins/.",
+      "status": "Completed",
+      "sort_order": 10,
+      "start_new_chat": false,
+      "stop_after_completion": false,
+      "created_at": "2026-04-04T11:52:16.797300811Z",
+      "updated_at": "2026-04-04T11:54:52.776963146Z"
+    },
+    {
+      "id": "34acd910-f3a3-4c59-b97a-8515a9af1efc",
+      "name": "Final Review and Task Completion",
+      "description": "Perform a final review of all new specifications and mark the task as done.",
+      "status": "Completed",
+      "sort_order": 11,
+      "start_new_chat": false,
+      "stop_after_completion": false,
+      "created_at": "2026-04-04T11:52:16.797300811Z",
+      "updated_at": "2026-04-04T11:55:13.665428729Z"
     }
   ]
 }
