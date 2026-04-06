@@ -152,7 +152,7 @@ impl DbusProjection {
 
         // Persist root
         if let Ok(schema) = self.introspect_and_persist(bus_type, service, "/").await {
-            schemas.lock().push(schema);
+            schemas.lock().await.push(schema);
         }
 
         let self_clone = self.clone();
