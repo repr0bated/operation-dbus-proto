@@ -28,11 +28,12 @@ pub struct BlockEvent {
     pub vector: Vec<f32>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub enum SnapshotInterval {
     PerOperation,
     EveryMinute,
     Every5Minutes,
+    #[default]
     Every15Minutes,
     Every30Minutes,
     Hourly,
@@ -145,12 +146,6 @@ impl SnapshotInterval {
                 SnapshotInterval::Every15Minutes
             }
         }
-    }
-}
-
-impl Default for SnapshotInterval {
-    fn default() -> Self {
-        SnapshotInterval::Every15Minutes // Default to every 15 minutes for production
     }
 }
 

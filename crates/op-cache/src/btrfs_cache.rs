@@ -56,6 +56,7 @@ pub struct BtrfsCache {
     memory_policy: MemoryPolicy,
     cpu_affinity: Vec<u32>, // CPU cores for affinity binding
     current_node_index: AtomicUsize,
+    #[allow(dead_code)]
     numa_stats: Mutex<NumaStats>,
 }
 

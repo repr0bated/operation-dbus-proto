@@ -35,7 +35,9 @@ async fn main() -> anyhow::Result<()> {
 
     // Start gRPC server
     let grpc_server = GrpcServer::new(manager);
-    let addr = "[::]:50051".parse()?;
+    let addr = std::env::var("OP_SERVICES_GRPC_ADDR")
+        .unwrap_or_else(|_| "[::]:50053".to_string())
+        .parse()?;
 
     info!("gRPC server listening on {}", addr);
 

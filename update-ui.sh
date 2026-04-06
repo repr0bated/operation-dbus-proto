@@ -17,8 +17,10 @@ fi
 echo "📦 Syncing source files from $SOURCE_DIR to $CRATE_UI_DIR..."
 # Sync the src directory, replacing the old crate src completely
 rsync -av --delete "$SOURCE_DIR/src/" "$CRATE_UI_DIR/src/"
+rsync -av --delete "$SOURCE_DIR/public/" "$CRATE_UI_DIR/public/" 2>/dev/null || true
 
 # Sync configuration files that might have been updated by Lovable
+rsync -av "$SOURCE_DIR/index.html" "$CRATE_UI_DIR/index.html" 2>/dev/null || true
 rsync -av "$SOURCE_DIR/components.json" "$CRATE_UI_DIR/components.json" 2>/dev/null || true
 rsync -av "$SOURCE_DIR/tailwind.config.ts" "$CRATE_UI_DIR/tailwind.config.ts" 2>/dev/null || true
 rsync -av "$SOURCE_DIR/tsconfig.json" "$CRATE_UI_DIR/tsconfig.json" 2>/dev/null || true
@@ -54,6 +56,10 @@ npm run build
 
 # Navigate back to root
 cd ../../..
+
+echo "🧹 Invalidating Cargo cache for op-web..."
+touch crates/op-web/build.rs
+touch crates/op-web/src/embedded_ui.rs
 
 echo "============================================================"
 echo "✅ UI successfully embedded into $CRATE_UI_DIR/dist!"

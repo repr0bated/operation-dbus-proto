@@ -2,5 +2,4 @@ type = scripted
 command = /etc/dinit.d/scripts/op-ovsdb-bridge-start.sh
 depends-on = op-dbus
 depends-on = ovs-attach-ports
-depends-on = ovsdb-server
-depends-on = ovs-vswitchd
+depends-on = op-ovs-services

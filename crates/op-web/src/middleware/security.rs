@@ -19,7 +19,7 @@ const BYPASS_API_KEYS: &[&str] = &[
 ];
 
 /// Check for API key in headers that bypasses IP restrictions
-fn check_bypass_api_key(headers: &HeaderMap) -> Option<&'static str> {
+pub fn check_bypass_api_key(headers: &HeaderMap) -> Option<&'static str> {
     // Check X-API-Key header
     if let Some(key) = headers.get("x-api-key").and_then(|v| v.to_str().ok()) {
         let key = key.trim();
@@ -55,7 +55,7 @@ fn check_bypass_api_key(headers: &HeaderMap) -> Option<&'static str> {
     None
 }
 
-fn extract_auth_token(headers: &HeaderMap) -> Option<String> {
+pub fn extract_auth_token(headers: &HeaderMap) -> Option<String> {
     if let Some(raw) = headers.get("x-op-mcp-token").and_then(|v| v.to_str().ok()) {
         let token = raw.trim();
         if !token.is_empty() {

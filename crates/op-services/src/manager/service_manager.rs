@@ -116,6 +116,55 @@ impl ServiceManager {
             }))
     }
 
+    pub async fn get(&self, name: &ServiceName) -> anyhow::Result<Option<ServiceDef>> {
+        self.store.get_service(name).await
+    }
+
+    pub async fn create(&self, service: &ServiceDef) -> anyhow::Result<()> {
+        // Persist to the store and install the dinit service file
+        self.store.save_service(service).await?;
+        if let Err(e) = service.install() {
+            warn!("Failed to install dinit service file for {}: {}", service.name, e);
+        }
+        Ok(())
+    }
+
+    pub async fn delete(&self, name: &ServiceName) -> anyhow::Result<()> {
+        // Best-effort stop before removal
+        if let Err(e) = self.stop(name).await {
+            warn!("Failed to stop service {} before deletion: {}", name, e);
+        }
+
+        // Remove from store
+        self.store.delete_service(name).await?;
+
+        // Remove the dinit service file if it exists
+        let path = format!("/etc/dinit.d/{}", name);
+        if let Err(e) = tokio::fs::remove_file(&path).await {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                warn!("Failed to remove dinit service file {}: {}", path, e);
+            }
+        }
+
+        // Clear runtime status
+        let mut statuses = self.statuses.write().await;
+        statuses.remove(name);
+
+        Ok(())
+    }
+
+    pub async fn set_enabled(&self, name: &ServiceName, enabled: bool) -> anyhow::Result<()> {
+        let mut service = self
+            .store
+            .get_service(name)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("service not found: {}", name))?;
+
+        service.enabled = enabled;
+        self.store.save_service(&service).await?;
+        Ok(())
+    }
+
     pub async fn list(&self) -> anyhow::Result<Vec<ServiceDef>> {
         self.store.list_services().await
     }

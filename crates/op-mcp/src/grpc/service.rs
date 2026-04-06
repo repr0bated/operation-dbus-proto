@@ -15,7 +15,7 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{broadcast, mpsc, RwLock};
 #[cfg(feature = "grpc")]
 use tokio_stream::{wrappers::ReceiverStream, Stream, StreamExt};
 #[cfg(feature = "grpc")]
@@ -93,10 +93,13 @@ pub struct McpGrpcService {
     request_counter: AtomicU64,
     error_counter: AtomicU64,
     infrastructure: GrpcInfrastructure,
+    /// Broadcast channel for subscription events (tool executions, state changes)
+    event_tx: broadcast::Sender<McpEvent>,
 }
 
 impl McpGrpcService {
     pub fn new(mode: ServerMode) -> Self {
+        let (event_tx, _) = broadcast::channel(256);
         Self {
             mode,
             sessions: RwLock::new(HashMap::new()),
@@ -104,10 +107,12 @@ impl McpGrpcService {
             request_counter: AtomicU64::new(0),
             error_counter: AtomicU64::new(0),
             infrastructure: GrpcInfrastructure::default(),
+            event_tx,
         }
     }
 
     pub fn with_infrastructure(mode: ServerMode, infrastructure: GrpcInfrastructure) -> Self {
+        let (event_tx, _) = broadcast::channel(256);
         Self {
             mode,
             sessions: RwLock::new(HashMap::new()),
@@ -115,6 +120,7 @@ impl McpGrpcService {
             request_counter: AtomicU64::new(0),
             error_counter: AtomicU64::new(0),
             infrastructure,
+            event_tx,
         }
     }
 
@@ -139,6 +145,29 @@ impl McpGrpcService {
             ServerMode::Agents => 2,
             ServerMode::Full => 3,
         }
+    }
+
+    /// Build an McpServer instance using the current tool registry.
+    fn build_mcp_server(&self) -> crate::server::McpServer {
+        crate::server::McpServer::with_executor(
+            crate::server::McpServerConfig::default(),
+            Arc::new(crate::server::DefaultToolExecutor::new(
+                self.infrastructure
+                    .tool_registry
+                    .clone()
+                    .unwrap_or_else(|| Arc::new(op_tools::ToolRegistry::new())),
+            )),
+        )
+    }
+
+    /// Emit an event to all active subscribers. Failures (no receivers) are silently ignored.
+    fn emit_event(&self, event_type: &str, data_json: String) {
+        let _ = self.event_tx.send(McpEvent {
+            event_type: event_type.to_string(),
+            data_json,
+            timestamp: chrono::Utc::now().timestamp(),
+            sequence: 0, // subscribers track their own sequence
+        });
     }
 }
 
@@ -283,23 +312,55 @@ impl McpService for McpGrpcService {
         request: Request<SubscribeRequest>,
     ) -> Result<Response<Self::SubscribeStream>, Status> {
         let req = request.into_inner();
-        let session_id = req.session_id.unwrap_or_else(|| Uuid::new_v4().to_string());
+        let _session_id = req.session_id.unwrap_or_else(|| Uuid::new_v4().to_string());
+        let event_filter: Vec<String> = req.event_types;
         let (tx, rx) = mpsc::channel(32);
+        let mut event_rx = self.event_tx.subscribe();
 
         tokio::spawn(async move {
             let mut sequence = 0u32;
-            let mut interval = tokio::time::interval(Duration::from_secs(30));
+            let mut heartbeat = tokio::time::interval(Duration::from_secs(30));
+
             loop {
-                interval.tick().await;
-                let event = McpEvent {
-                    event_type: "ping".to_string(),
-                    data_json: String::new(),
-                    timestamp: chrono::Utc::now().timestamp(),
-                    sequence,
-                };
-                sequence += 1;
-                if tx.send(Ok(event)).await.is_err() {
-                    break;
+                tokio::select! {
+                    // Forward real events from the broadcast channel
+                    recv_result = event_rx.recv() => {
+                        match recv_result {
+                            Ok(mut event) => {
+                                // Filter by requested event_types (empty = accept all)
+                                if !event_filter.is_empty()
+                                    && !event_filter.iter().any(|t| t == &event.event_type)
+                                {
+                                    continue;
+                                }
+                                event.sequence = sequence;
+                                sequence += 1;
+                                if tx.send(Ok(event)).await.is_err() {
+                                    break; // client disconnected
+                                }
+                            }
+                            Err(broadcast::error::RecvError::Lagged(n)) => {
+                                warn!("Subscription lagged, dropped {} events", n);
+                                // Continue receiving, don't kill the stream
+                            }
+                            Err(broadcast::error::RecvError::Closed) => {
+                                break; // sender side dropped
+                            }
+                        }
+                    }
+                    // Periodic heartbeat so the client knows the stream is alive
+                    _ = heartbeat.tick() => {
+                        let ping = McpEvent {
+                            event_type: "ping".to_string(),
+                            data_json: String::new(),
+                            timestamp: chrono::Utc::now().timestamp(),
+                            sequence,
+                        };
+                        sequence += 1;
+                        if tx.send(Ok(ping)).await.is_err() {
+                            break;
+                        }
+                    }
                 }
             }
         });
@@ -317,19 +378,57 @@ impl McpService for McpGrpcService {
     ) -> Result<Response<Self::StreamStream>, Status> {
         let mut stream = request.into_inner();
         let (tx, rx) = mpsc::channel(32);
+        let mcp_server = self.build_mcp_server();
+
         tokio::spawn(async move {
-            while let Some(Ok(proto_req)) = stream.next().await {
+            while let Some(msg) = stream.next().await {
+                let proto_req = match msg {
+                    Ok(r) => r,
+                    Err(e) => {
+                        warn!("Stream recv error: {}", e);
+                        break;
+                    }
+                };
+
+                // Convert proto McpRequest -> internal McpRequest (same as `call`)
+                let params_simd = proto_req.params.map(|p| {
+                    let obj: HashMap<String, Value> = p
+                        .fields
+                        .into_iter()
+                        .map(|(k, v)| (k, prost_to_simd_value(&v)))
+                        .collect();
+                    Value::from(obj)
+                });
+
+                let internal_req = crate::protocol::McpRequest {
+                    jsonrpc: "2.0".to_string(),
+                    id: proto_req.id.as_ref().map(|v| simd_json::json!(v)),
+                    method: proto_req.method.clone(),
+                    params: params_simd,
+                };
+
+                // Route through the MCP handler
+                let internal_resp = mcp_server.handle_request(internal_req).await;
+
                 let proto_resp = McpResponse {
                     jsonrpc: "2.0".to_string(),
                     id: proto_req.id,
-                    result: None,
-                    error: None,
+                    result: internal_resp
+                        .result
+                        .and_then(|v| simd_to_prost_struct(&v).ok()),
+                    error: internal_resp.error.map(|e| McpError {
+                        code: e.code,
+                        message: e.message,
+                        data: e.data.and_then(|v| simd_to_prost_struct(&v).ok()),
+                    }),
                 };
+
                 if tx.send(Ok(proto_resp)).await.is_err() {
-                    break;
+                    break; // client disconnected
                 }
             }
         });
+
         Ok(Response::new(
             Box::pin(ReceiverStream::new(rx)) as Self::StreamStream
         ))
@@ -444,9 +543,107 @@ impl McpService for McpGrpcService {
 
     async fn call_tool_streaming(
         &self,
-        _request: Request<CallToolRequest>,
+        request: Request<CallToolRequest>,
     ) -> Result<Response<Self::CallToolStreamingStream>, Status> {
-        Err(Status::unimplemented("Streaming tool call not implemented"))
+        let req = request.into_inner();
+        let tool_name = req.tool_name.clone();
+
+        let arguments = if let Some(ToolArguments {
+            args: Some(tool_arguments::Args::Generic(s)),
+        }) = req.arguments
+        {
+            let obj: HashMap<String, Value> = s
+                .fields
+                .into_iter()
+                .map(|(k, v)| (k, prost_to_simd_value(&v)))
+                .collect();
+            Value::from(obj)
+        } else {
+            json!({})
+        };
+
+        let registry = self
+            .infrastructure
+            .tool_registry
+            .clone()
+            .ok_or_else(|| Status::internal("No tool registry"))?;
+        let tool = registry
+            .get(&tool_name)
+            .await
+            .ok_or_else(|| Status::not_found(format!("Tool not found: {}", tool_name)))?;
+
+        let event_tx = self.event_tx.clone();
+        let (tx, rx) = mpsc::channel(32);
+
+        tokio::spawn(async move {
+            // Send a progress message indicating execution has started
+            let start_msg = ToolOutput {
+                output_type: OutputType::Progress as i32,
+                content: format!("Executing tool: {}", tool_name),
+                sequence: 0,
+                is_final: false,
+                exit_code: None,
+            };
+            if tx.send(Ok(start_msg)).await.is_err() {
+                return;
+            }
+
+            // Execute the tool
+            match tool.execute(arguments).await {
+                Ok(result) => {
+                    let result_json =
+                        simd_json::to_string_pretty(&result).unwrap_or_else(|_| "{}".to_string());
+
+                    // Send the final result
+                    let output = ToolOutput {
+                        output_type: OutputType::Result as i32,
+                        content: result_json.clone(),
+                        sequence: 1,
+                        is_final: true,
+                        exit_code: Some(0),
+                    };
+                    let _ = tx.send(Ok(output)).await;
+
+                    // Emit event for subscribers
+                    let _ = event_tx.send(McpEvent {
+                        event_type: "tool.completed".to_string(),
+                        data_json: simd_json::to_string(&simd_json::json!({
+                            "tool": tool_name,
+                            "success": true
+                        }))
+                        .unwrap_or_default(),
+                        timestamp: chrono::Utc::now().timestamp(),
+                        sequence: 0,
+                    });
+                }
+                Err(e) => {
+                    let error_output = ToolOutput {
+                        output_type: OutputType::Error as i32,
+                        content: e.to_string(),
+                        sequence: 1,
+                        is_final: true,
+                        exit_code: Some(1),
+                    };
+                    let _ = tx.send(Ok(error_output)).await;
+
+                    // Emit failure event for subscribers
+                    let _ = event_tx.send(McpEvent {
+                        event_type: "tool.failed".to_string(),
+                        data_json: simd_json::to_string(&simd_json::json!({
+                            "tool": tool_name,
+                            "error": e.to_string()
+                        }))
+                        .unwrap_or_default(),
+                        timestamp: chrono::Utc::now().timestamp(),
+                        sequence: 0,
+                    });
+                }
+            }
+        });
+
+        Ok(Response::new(
+            Box::pin(ReceiverStream::new(rx)) as Self::CallToolStreamingStream
+        ))
     }
 
     async fn get_tool_schema(

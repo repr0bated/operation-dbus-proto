@@ -331,7 +331,7 @@ impl ImageManager {
                 let metadata_path = path.join(".image-metadata.json");
                 if metadata_path.exists() {
                     let mut content = async_fs::read_to_string(&metadata_path).await?;
-                    if let Ok(metadata) = simd_json::from_str::<ImageMetadata>(&mut content) {
+                    if let Ok(metadata) = unsafe { simd_json::from_str::<ImageMetadata>(&mut content) } {
                         images.push(metadata);
                     }
                 }
@@ -350,7 +350,7 @@ impl ImageManager {
         let metadata_path = image_path.join(".image-metadata.json");
 
         let mut content = async_fs::read_to_string(&metadata_path).await?;
-        let metadata: ImageMetadata = simd_json::from_str(&mut content)?;
+        let metadata: ImageMetadata = unsafe { simd_json::from_str(&mut content)? };
         Ok(metadata)
     }
 

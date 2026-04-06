@@ -13,6 +13,10 @@
 pub mod json_rpc;
 // pub mod execution;
 // pub mod tool;
+//
+// Legacy compatibility module. New runtime plugin authority lives in
+// `op_plugins::PluginCatalog`; this root module remains only for older
+// root-crate types that have not been fully collapsed yet.
 pub mod plugin;
 pub mod work_stack;
 // pub mod orchestrator;
@@ -55,7 +59,7 @@ pub use op_tools::{Tool, ToolRegistry};
 pub use op_core::{ToolResult, ToolRequest as ToolContext}; // Adjusted names for compatibility
 pub use op_core::types::BusType;
 pub use crate::plugin::{MirrorState, StateChange, ValidationResult, StateSource, ChangeOperation, ValidationError};
-pub use op_plugins::registry::PluginRegistry;
+pub use op_plugins::{PluginCatalog, PluginRegistry};
 pub use op_plugins::plugin::{PluginMetadata as PluginCore, BoxedPlugin as EffectivePlugin}; // Adjusted for naming compatibility
 pub use work_stack::{WorkStack, WorkStackNode, WorkStackExecution, VectorClock};
 pub use op_workflows::orchestrator::Orchestrator;

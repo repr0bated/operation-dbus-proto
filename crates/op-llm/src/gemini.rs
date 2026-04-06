@@ -126,7 +126,7 @@ struct TokenResponse {
     access_token: String,
     expires_in: u64,
     #[serde(default)]
-    token_type: Option<String>,
+    _token_type: Option<String>,
 }
 
 /// JWT Claims for service account (used by jsonwebtoken)
@@ -550,9 +550,9 @@ pub struct GeminiClient {
     /// Whether using Vertex AI mode
     use_vertex_ai: bool,
     /// Project ID (for Vertex AI)
-    project: Option<String>,
+    _project: Option<String>,
     /// Location (for Vertex AI)
-    location: Option<String>,
+    _location: Option<String>,
     models: Vec<GeminiModel>,
 }
 
@@ -567,8 +567,8 @@ impl GeminiClient {
             auth: GeminiAuth::ApiKey(api_key.into()),
             api_url: endpoints::GOOGLE_AI_BASE_URL.to_string(),
             use_vertex_ai: false,
-            project: None,
-            location: None,
+            _project: None,
+            _location: None,
             models: get_gemini_models(),
         }
     }
@@ -603,8 +603,8 @@ impl GeminiClient {
             auth: GeminiAuth::ServiceAccount(creds),
             api_url,
             use_vertex_ai: true,
-            project: Some(project),
-            location: Some(location),
+            _project: Some(project),
+            _location: Some(location),
             models: get_gemini_models(),
         }
     }
@@ -627,8 +627,8 @@ impl GeminiClient {
             auth: GeminiAuth::OAuthRefreshToken(creds),
             api_url,
             use_vertex_ai: true,
-            project: Some(project),
-            location: Some(location),
+            _project: Some(project),
+            _location: Some(location),
             models: get_gemini_models(),
         }
     }
@@ -1124,7 +1124,7 @@ impl LlmProvider for GeminiClient {
             generation_config: Some(GenerationConfig {
                 temperature: request.temperature,
                 top_p: request.top_p,
-                max_output_tokens: request.max_tokens.map(|t| t as u32),
+                max_output_tokens: request.max_tokens,
                 routing_config,
             }),
             tools,

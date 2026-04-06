@@ -27,7 +27,7 @@ pub struct PluginStateTool {
     operation: PluginOperation,
     plugin_name: String,
     capabilities: PluginCapabilities,
-    /// Reference to the plugin registry for executing operations
+    /// Reference to the plugin catalog executor for executing operations
     plugin_executor: Arc<dyn PluginExecutor + Send + Sync>,
 }
 
@@ -157,8 +157,9 @@ pub fn create_plugin_state_tool(
     operation: PluginOperation,
     capabilities: &PluginCapabilities,
 ) -> Result<BoxedTool> {
-    // Create a default executor that returns an error
-    // In production, this would be replaced with a real plugin registry
+    // Create a default executor that returns an error.
+    // In production, this should be replaced with the shared plugin catalog
+    // path rather than a local ad hoc plugin map.
     let executor = Arc::new(DefaultPluginExecutor::new());
     
     Ok(Arc::new(PluginStateTool::new(
@@ -187,9 +188,12 @@ pub fn create_plugin_state_tool_with_executor(
     )))
 }
 
-/// Default plugin executor that delegates to the plugin registry
+/// Default plugin executor that delegates to a local compatibility map.
+///
+/// This is intentionally not authoritative. Real deployments should delegate
+/// to the canonical plugin catalog / plugin document path.
 pub struct DefaultPluginExecutor {
-    /// Plugin registry reference (would be set in production)
+    /// Local compatibility map used by older tool plumbing.
     plugins: Arc<RwLock<std::collections::HashMap<String, Arc<dyn StatePluginAdapter + Send + Sync>>>>,
 }
 

@@ -25,6 +25,7 @@ pub type AgentExecutor = Arc<dyn Fn(&[u8]) -> Result<Vec<u8>, String> + Send + S
 struct RegisteredAgent {
     definition: Agent,
     executor: Option<AgentExecutor>,
+    #[allow(dead_code)]
     endpoint: Option<String>,
     registered_at: std::time::Instant,
 }
@@ -239,9 +240,9 @@ impl AgentService for AgentServiceImpl {
                         Ok(output) => {
                             // Send output in chunks
                             let chunk_size = 64 * 1024; // 64KB chunks
-                            let mut sequence = 0u64;
 
-                            for chunk in output.chunks(chunk_size) {
+                            for (sequence, chunk) in output.chunks(chunk_size).enumerate() {
+                                let sequence = sequence as u64;
                                 let is_final = sequence * chunk_size as u64 + chunk.len() as u64
                                     >= output.len() as u64;
 
@@ -251,8 +252,6 @@ impl AgentService for AgentServiceImpl {
                                         is_final,
                                     }))
                                     .await;
-
-                                sequence += 1;
                             }
                         }
                         Err(e) => {

@@ -4,7 +4,7 @@
 //! - StatePlugin trait for pluggable state management
 //! - State manager for coordinating plugins
 //! - Crypto utilities for state hashing/signing
-//! - Schema validation
+//! - Schema-catalog-backed validation
 //! - Plugin tree for hierarchical state
 //! - Persistent storage via op-state-store
 //! - Auto-plugin generation
@@ -20,7 +20,7 @@ pub mod plugin_workflow;
 pub mod plugtree;
 pub mod schema_validator;
 
-pub use manager::{FootprintSender, StateManager};
+pub use manager::StateManager;
 pub use plugin::{
     ApplyResult, ChangeOperation, Checkpoint, DesiredState, DiffMetadata, PluginCapabilities,
     StateAction, StateChange, StateDiff, StatePlugin, StateSource, ValidationError,
@@ -30,8 +30,8 @@ pub use plugtree::PlugTree;
 
 // Re-export state store types
 pub use op_state_store::{
-    ExecutionJob, ExecutionResult, ExecutionStatus, PluginSchema, SchemaRegistry, SqliteStore,
-    StateStore, StateStoreError,
+    ExecutionJob, ExecutionResult, ExecutionStatus, PluginSchema, SchemaCatalog, SchemaRegistry,
+    SqliteStore, StateStore, StateStoreError,
 };
 
 /// Prelude for convenient imports
@@ -44,6 +44,7 @@ pub mod prelude {
     pub use super::plugtree::PlugTree;
     // State store types
     pub use op_state_store::{
-        ExecutionJob, ExecutionStatus, PluginSchema, SchemaRegistry, SqliteStore, StateStore,
+        ExecutionJob, ExecutionStatus, PluginSchema, SchemaCatalog, SchemaRegistry, SqliteStore,
+        StateStore,
     };
 }

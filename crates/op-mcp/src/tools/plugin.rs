@@ -43,7 +43,8 @@ impl Tool for PluginQueryTool {
     fn input_schema(&self) -> Value { json!({"type": "object", "properties": {"filter": {"type": "object"}}}) }
 
     async fn execute(&self, _input: Value) -> Result<Value> {
-        // TODO: Integrate with actual plugin registry
+        // TODO: Integrate with the authoritative plugin catalog / canonical
+        // plugin document path instead of inventing plugin state locally.
         Ok(json!({"success": true, "plugin": self.plugin, "operation": "query", "state": {}}))
     }
 }

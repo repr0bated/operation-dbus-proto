@@ -15,7 +15,7 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let mut client = ServiceManagerClient::connect("http://[::1]:50051").await?;
+    let mut client = ServiceManagerClient::connect("http://[::1]:50053").await?;
 
     match args[1].as_str() {
         "start" => {

@@ -1,0 +1,643 @@
+warning: this `if` statement can be collapsed
+   --> crates/op-jsonrpc/src/ovsdb.rs:496:25
+    |
+496 | /                         if method == "update" {
+497 | |                             if tx.send(update).await.is_err() {
+498 | |                                 break;
+499 | |                             }
+500 | |                         }
+    | |_________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#collapsible_if
+    = note: `#[warn(clippy::collapsible_if)]` on by default
+help: collapse nested if block
+    |
+496 ~                         if method == "update"
+497 ~                             && tx.send(update).await.is_err() {
+498 |                                 break;
+499 ~                             }
+    |
+
+
+warning: unused imports: `Algorithm`, `Argon2`, `Params`, and `Version`
+ --> crates/op-gateway/src/encrypted_storage.rs:6:14
+  |
+6 | use argon2::{Algorithm, Argon2, Params, Version};
+  |              ^^^^^^^^^  ^^^^^^  ^^^^^^  ^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+
+warning: unused import: `Blake2s256`
+ --> crates/op-gateway/src/encrypted_storage.rs:7:14
+  |
+7 | use blake2::{Blake2s256, Digest};
+  |              ^^^^^^^^^^
+
+
+warning: unused import: `std::fs`
+  --> crates/op-gateway/src/encrypted_storage.rs:11:5
+   |
+11 | use std::fs;
+   |     ^^^^^^^
+
+
+warning: unused import: `error`
+  --> crates/op-gateway/src/encrypted_storage.rs:15:22
+   |
+15 | use tracing::{debug, error, info, warn};
+   |                      ^^^^^
+
+
+warning: unused imports: `error` and `warn`
+  --> crates/op-gateway/src/mcp_gateway.rs:11:22
+   |
+11 | use tracing::{debug, error, info, warn};
+   |                      ^^^^^        ^^^^
+
+
+warning: unused imports: `ClientInfo` and `WireGuardSession`
+  --> crates/op-gateway/src/mcp_gateway.rs:14:29
+   |
+14 | ...::{ClientInfo, SessionFilter, WireGuardAuthManager, WireGuardSession};
+   |       ^^^^^^^^^^                                       ^^^^^^^^^^^^^^^^
+
+
+warning: unused imports: `OwnedValue` and `owned::Object as SimdObject`
+  --> crates/op-gateway/src/wireguard_auth.rs:13:17
+   |
+13 | use simd_json::{owned::Object as SimdObject, OwnedValue};
+   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^
+
+
+warning: unused import: `error`
+  --> crates/op-gateway/src/wireguard_auth.rs:20:22
+   |
+20 | use tracing::{debug, error, info, warn};
+   |                      ^^^^^
+
+
+warning: unused import: `uuid::Uuid`
+  --> crates/op-gateway/src/wireguard_auth.rs:21:5
+   |
+21 | use uuid::Uuid;
+   |     ^^^^^^^^^^
+
+
+warning: unused imports: `AeadInPlace`, `ChaCha20Poly1305`, and `Key`
+  --> crates/op-gateway/src/wireguard_auth.rs:25:24
+   |
+25 | use chacha20poly1305::{AeadInPlace, ChaCha20Poly1305, Key};
+   |                        ^^^^^^^^^^^  ^^^^^^^^^^^^^^^^  ^^^
+
+
+warning: unused imports: `digest` and `hkdf`
+  --> crates/op-gateway/src/wireguard_auth.rs:26:12
+   |
+26 | use ring::{digest, hkdf, rand::SystemRandom};
+   |            ^^^^^^  ^^^^
+
+
+warning: unused imports: `PublicKey` and `SharedSecret`
+  --> crates/op-gateway/src/wireguard_auth.rs:27:20
+   |
+27 | use x25519_dalek::{PublicKey, SharedSecret};
+   |                    ^^^^^^^^^  ^^^^^^^^^^^^
+
+
+warning: use of deprecated function `base64::encode`: Use Engine::encode
+   --> crates/op-gateway/src/wireguard_auth.rs:575:35
+    |
+575 |                 return Ok(base64::encode(&stored_psk));
+    |                                   ^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+
+warning: use of deprecated function `base64::encode`: Use Engine::encode
+   --> crates/op-gateway/src/wireguard_auth.rs:591:24
+    |
+591 |             Ok(base64::encode(psk))
+    |                        ^^^^^^
+
+
+warning: use of deprecated function `base64::encode`: Use Engine::encode
+   --> crates/op-gateway/src/wireguard_auth.rs:631:24
+    |
+631 |             Ok(base64::encode(session_key))
+    |                        ^^^^^^
+
+
+warning: unused import: `Digest`
+ --> crates/op-gateway/src/encrypted_storage.rs:7:26
+  |
+7 | use blake2::{Blake2s256, Digest};
+  |                          ^^^^^^
+
+
+warning: unused variable: `metadata`
+   --> crates/op-gateway/src/encrypted_storage.rs:515:13
+    |
+515 |         let metadata = async_fs::metadata(&self.storage_path).await?;
+    |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_metadata`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+
+warning: associated function `load_or_generate_master_key` is never used
+   --> crates/op-gateway/src/wireguard_auth.rs:681:14
+    |
+254 | impl WireGuardAuthManager {
+    | ------------------------- associated function in this implementation
+...
+681 |     async fn load_or_generate_master_key() -> anyhow::Result<Arc<[u8; 3...
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+
+warning: field `rng` is never read
+   --> crates/op-gateway/src/wireguard_auth.rs:807:5
+    |
+806 | pub struct SimdCryptoEngine {
+    |            ---------------- field in this struct
+807 |     rng: SystemRandom,
+    |     ^^^
+
+
+warning: the borrowed expression implements the required traits
+   --> crates/op-gateway/src/encrypted_storage.rs:158:19
+    |
+158 |               .args(&[
+    |  ___________________^
+159 | |                 "subvolume",
+160 | |                 "create",
+161 | |                 "-e", // Enable encryption (experimental)
+162 | |                 self.storage_path.to_str().unwrap(),
+163 | |             ])
+    | |_____________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#needless_borrows_for_generic_args
+    = note: `#[warn(clippy::needless_borrows_for_generic_args)]` on by default
+help: change this to
+    |
+158 ~             .args([
+159 +                 "subvolume",
+160 +                 "create",
+161 +                 "-e", // Enable encryption (experimental)
+162 +                 self.storage_path.to_str().unwrap(),
+163 ~             ])
+    |
+
+
+warning: the borrowed expression implements the required traits
+   --> crates/op-gateway/src/encrypted_storage.rs:221:23
+    |
+221 |                   .args(&[
+    |  _______________________^
+222 | |                     "if=/dev/zero",
+223 | |                     &format!("of={}", container_path.display()),
+224 | |                     "bs=1M",
+225 | |                     "count=100",
+226 | |                 ])
+    | |_________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#needless_borrows_for_generic_args
+help: change this to
+    |
+221 ~                 .args([
+222 +                     "if=/dev/zero",
+223 +                     &format!("of={}", container_path.display()),
+224 +                     "bs=1M",
+225 +                     "count=100",
+226 ~                 ])
+    |
+
+
+warning: the borrowed expression implements the required traits
+   --> crates/op-gateway/src/encrypted_storage.rs:253:19
+    |
+253 | ...gs(&["subvolume", "create", self.storage_path.to_str().unwrap()])
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: change this to: `["subvolume", "create", self.storage_path.to_str().unwrap()]`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#needless_borrows_for_generic_args
+
+
+warning: the borrowed expression implements the required traits
+   --> crates/op-gateway/src/encrypted_storage.rs:272:19
+    |
+272 |             .args(&[device_path, self.storage_path.to_str().unwrap()])
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: change this to: `[device_path, self.storage_path.to_str().unwrap()]`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#needless_borrows_for_generic_args
+
+
+warning: this expression creates a reference which is immediately dereferenced by the compiler
+   --> crates/op-gateway/src/encrypted_storage.rs:404:31
+    |
+404 | ...encrypt_in_place(&Nonce::from_slice(&nonce), b"", &mut encrypted_data)
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^ help: change this to: `Nonce::from_slice(&nonce)`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#needless_borrow
+    = note: `#[warn(clippy::needless_borrow)]` on by default
+
+
+warning: this expression creates a reference which is immediately dereferenced by the compiler
+   --> crates/op-gateway/src/encrypted_storage.rs:460:31
+    |
+460 | ...crypt_in_place(&Nonce::from_slice(&entry.nonce), b"", &mut decrypted...
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: change this to: `Nonce::from_slice(&entry.nonce)`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#needless_borrow
+
+
+warning: the borrowed expression implements the required traits
+   --> crates/op-gateway/src/encrypted_storage.rs:540:19
+    |
+540 |             .args(&["-T", self.storage_path.to_str().unwrap()])
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: change this to: `["-T", self.storage_path.to_str().unwrap()]`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#needless_borrows_for_generic_args
+
+
+warning: the borrowed expression implements the required traits
+   --> crates/op-gateway/src/wireguard_auth.rs:878:31
+    |
+878 |                 hasher.update(&session_key);
+    |                               ^^^^^^^^^^^^ help: change this to: `session_key`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#needless_borrows_for_generic_args
+
+
+warning: this `MutexGuard` is held across an await point
+   --> crates/op-introspection/src/projection.rs:116:17
+    |
+116 |             let bc = blockchain.read();
+    |                 ^^
+    |
+    = help: consider using an async-aware `Mutex` type or ensuring the `MutexGuard` is dropped before calling `await`
+note: these are all the await points this lock is held through
+   --> crates/op-introspection/src/projection.rs:119:47
+    |
+119 |             bc.write_state(&state_key, &json).await?;
+    |                                               ^^^^^
+...
+127 |             .await?;
+    |              ^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#await_holding_lock
+    = note: `#[warn(clippy::await_holding_lock)]` on by default
+
+
+warning: unused import: `simd_json::ValueBuilder`
+  --> crates/op-inspector/src/introspective_gadget.rs:29:5
+   |
+29 | use simd_json::ValueBuilder;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+
+warning: compiling a regex in a loop
+   --> crates/op-inspector/src/gcloud.rs:212:37
+    |
+212 |                 if let Some(caps) = Regex::new(r"^\s{4,8}(\w[\w-]*)\s")
+    |                                     ^^^^^^^^^^
+    |
+help: move the regex construction outside this loop
+   --> crates/op-inspector/src/gcloud.rs:197:9
+    |
+197 |         for line in help.lines() {
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#regex_creation_in_loops
+    = note: `#[warn(clippy::regex_creation_in_loops)]` on by default
+
+
+warning: compiling a regex in a loop
+   --> crates/op-inspector/src/gcloud.rs:244:37
+    |
+244 |                 if let Some(caps) = Regex::new(r"^\s{4,8}(\w[\w-]*)\s")
+    |                                     ^^^^^^^^^^
+    |
+help: move the regex construction outside this loop
+   --> crates/op-inspector/src/gcloud.rs:231:9
+    |
+231 |         for line in help.lines() {
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#regex_creation_in_loops
+
+
+warning: this `MutexGuard` is held across an await point
+   --> crates/op-inspector/src/introspective_gadget.rs:101:31
+    |
+101 | ...   if let Some(parser) = self.parsers.read().unwrap().get(&detected_...
+    |                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: consider using an async-aware `Mutex` type or ensuring the `MutexGuard` is dropped before calling `await`
+note: these are all the await points this lock is held through
+   --> crates/op-inspector/src/introspective_gadget.rs:102:40
+    |
+102 |             match parser.parse(&input).await {
+    |                                        ^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#await_holding_lock
+    = note: `#[warn(clippy::await_holding_lock)]` on by default
+
+
+warning: this `MutexGuard` is held across an await point
+   --> crates/op-inspector/src/introspective_gadget.rs:110:40
+    |
+110 | ...   if let Some(auto_parser) = self.parsers.read().unwrap().get("auto...
+    |                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: consider using an async-aware `Mutex` type or ensuring the `MutexGuard` is dropped before calling `await`
+note: these are all the await points this lock is held through
+   --> crates/op-inspector/src/introspective_gadget.rs:111:49
+    |
+111 |                 match auto_parser.parse(&input).await {
+    |                                                 ^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#await_holding_lock
+
+
+warning: this `MutexGuard` is held across an await point
+   --> crates/op-inspector/src/introspective_gadget.rs:120:42
+    |
+120 | ...   for (format_name, parser) in self.parsers.read().unwrap().iter() {
+    |                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: consider using an async-aware `Mutex` type or ensuring the `MutexGuard` is dropped before calling `await`
+note: these are all the await points this lock is held through
+   --> crates/op-inspector/src/introspective_gadget.rs:122:48
+    |
+122 |                     match parser.parse(&input).await {
+    |                                                ^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#await_holding_lock
+
+
+warning: you seem to be trying to use `match` for destructuring a single pattern. Consider using `if let`
+   --> crates/op-inspector/src/introspective_gadget.rs:122:21
+    |
+122 | /                     match parser.parse(&input).await {
+123 | |                         Ok(result) => results.push(result),
+124 | |                         Err(_) => {} // Don't log errors for fallback...
+125 | |                     }
+    | |_____________________^ help: try: `if let Ok(result) = parser.parse(&input).await { results.push(result) }`
+    |
+    = note: you might want to preserve the comments from inside the `match`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#single_match
+    = note: `#[warn(clippy::single_match)]` on by default
+
+
+warning: the borrowed expression implements the required traits
+   --> crates/op-inspector/src/introspective_gadget.rs:174:19
+    |
+174 |             .args(&["inspect", container_name])
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: change this to: `["inspect", container_name]`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#needless_borrows_for_generic_args
+    = note: `#[warn(clippy::needless_borrows_for_generic_args)]` on by default
+
+
+warning: the borrowed expression implements the required traits
+   --> crates/op-inspector/src/introspective_gadget.rs:202:19
+    |
+202 |             .args(&["top", container_name])
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^^ help: change this to: `["top", container_name]`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#needless_borrows_for_generic_args
+
+
+warning: manual implementation of `Option::map`
+   --> crates/op-inspector/src/introspective_gadget.rs:887:31
+    |
+887 |               let item_schema = if let Some(first) = arr.first() {
+    |  _______________________________^
+888 | |                 Some(Box::new(self.analyze_json_schema(first)))
+889 | |             } else {
+890 | |                 None
+891 | |             };
+    | |_____________^ help: try: `arr.first().map(|first| Box::new(self.analyze_json_schema(first)))`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#manual_map
+    = note: `#[warn(clippy::manual_map)]` on by default
+
+
+warning: the borrowed expression implements the required traits
+   --> crates/op-inspector/src/introspective_gadget.rs:987:23
+    |
+987 |                 .args(&["inspect", name])
+    |                       ^^^^^^^^^^^^^^^^^^ help: change this to: `["inspect", name]`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#needless_borrows_for_generic_args
+
+
+warning: unused import: `json`
+  --> crates/op-llm/src/anthropic.rs:22:17
+   |
+22 | use simd_json::{json, OwnedValue as Value};
+   |                 ^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+
+warning: unused import: `std::collections::HashMap`
+  --> crates/op-llm/src/anthropic.rs:23:5
+   |
+23 | use std::collections::HashMap;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+warning: unused import: `chrono::Utc`
+  --> crates/op-llm/src/antigravity.rs:28:5
+   |
+28 | use chrono::Utc;
+   |     ^^^^^^^^^^^
+
+
+warning: unused imports: `Deserialize` and `Serialize`
+  --> crates/op-llm/src/antigravity.rs:30:13
+   |
+30 | use serde::{Deserialize, Serialize};
+   |             ^^^^^^^^^^^  ^^^^^^^^^
+
+
+warning: unused import: `std::collections::HashMap`
+  --> crates/op-llm/src/antigravity.rs:33:5
+   |
+33 | use std::collections::HashMap;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+warning: unused imports: `Deserialize` and `Serialize`
+ --> crates/op-llm/src/gcloud_adc.rs:9:13
+  |
+9 | use serde::{Deserialize, Serialize};
+  |             ^^^^^^^^^^^  ^^^^^^^^^
+
+
+warning: unused imports: `Deserialize` and `Serialize`
+  --> crates/op-llm/src/gemini_cli.rs:23:13
+   |
+23 | use serde::{Deserialize, Serialize};
+   |             ^^^^^^^^^^^  ^^^^^^^^^
+
+
+warning: unused import: `debug`
+  --> crates/op-llm/src/gemini_cli.rs:26:15
+   |
+26 | use tracing::{debug, info, warn};
+   |               ^^^^^
+
+
+warning: unused import: `TokenUsage`
+  --> crates/op-llm/src/gemini_cli.rs:29:70
+   |
+29 | ...er, ModelInfo, ProviderType, TokenUsage,
+   |                                 ^^^^^^^^^^
+
+
+warning: unused imports: `Deserialize` and `Serialize`
+ --> crates/op-llm/src/huggingface.rs:8:13
+  |
+8 | use serde::{Deserialize, Serialize};
+  |             ^^^^^^^^^^^  ^^^^^^^^^
+
+
+warning: unused import: `std::collections::HashMap`
+  --> crates/op-llm/src/huggingface.rs:11:5
+   |
+11 | use std::collections::HashMap;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+warning: unused import: `warn`
+ --> crates/op-llm/src/mcp_proxy.rs:8:22
+  |
+8 | use tracing::{debug, warn};
+  |                      ^^^^
+
+
+warning: unused import: `ToolChoice`
+  --> crates/op-llm/src/mcp_proxy.rs:11:83
+   |
+11 | ...er, ModelInfo, ProviderType, ToolChoice,
+   |                                 ^^^^^^^^^^
+
+
+warning: unused import: `Child`
+  --> crates/op-llm/src/pty_bridge.rs:27:22
+   |
+27 | use tokio::process::{Child, Command};
+   |                      ^^^^^
+
+
+warning: unused import: `simd_json::prelude`
+ --> crates/op-llm/src/provider.rs:9:5
+  |
+9 | use simd_json::prelude::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+
+warning: unused import: `AsyncWriteExt`
+  --> crates/op-llm/src/pty_bridge.rs:26:34
+   |
+26 | use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+   |                                  ^^^^^^^^^^^^^
+
+
+warning: unused variable: `result`
+   --> crates/op-llm/src/pty_bridge.rs:248:13
+    |
+248 |         let result = tokio::time::timeout(std::time::Duration::from_sec...
+    |             ^^^^^^ help: if this is intentional, prefix it with an underscore: `_result`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+
+warning: unused variable: `response`
+   --> crates/op-llm/src/pty_bridge.rs:173:54
+    |
+173 | ...(&self, auth_id: &str, response: Option<&str>) -> Result<()> {
+    |                           ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_response`
+
+
+warning: field `token_type` is never read
+   --> crates/op-llm/src/gemini.rs:129:5
+    |
+125 | struct TokenResponse {
+    |        ------------- field in this struct
+...
+129 |     token_type: Option<String>,
+    |     ^^^^^^^^^^
+    |
+    = note: `TokenResponse` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+
+warning: fields `project` and `location` are never read
+   --> crates/op-llm/src/gemini.rs:553:5
+    |
+545 | pub struct GeminiClient {
+    |            ------------ fields in this struct
+...
+553 |     project: Option<String>,
+    |     ^^^^^^^
+554 |     /// Location (for Vertex AI)
+555 |     location: Option<String>,
+    |     ^^^^^^^^
+
+
+warning: method `setup_gcloud_env` is never used
+  --> crates/op-llm/src/gemini_cli.rs:64:8
+   |
+51 | impl GeminiCliProvider {
+   | ---------------------- method in this implementation
+...
+64 |     fn setup_gcloud_env(&self) -> std::collections::HashMap<String, Stri...
+   |        ^^^^^^^^^^^^^^^^
+
+
+warning: constant `GOOGLE_USERINFO_URL` is never used
+  --> crates/op-llm/src/headless_oauth.rs:29:7
+   |
+29 | const GOOGLE_USERINFO_URL: &str = "https://www.googleapis.com/oauth2/v2/...
+   |       ^^^^^^^^^^^^^^^^^^^
+
+
+warning: field `session_store` is never read
+   --> crates/op-llm/src/pty_bridge.rs:138:5
+    |
+130 | pub struct PtyAuthBridge {
+    |            ------------- field in this struct
+...
+138 |     session_store: PathBuf,
+    |     ^^^^^^^^^^^^^
+
+
+warning: casting to the same type is unnecessary (`u32` -> `u32`)
+    --> crates/op-llm/src/gemini.rs:1127:63
+     |
+1127 |                 max_output_tokens: request.max_tokens.map(|t| t as u32),
+     |                                                               ^^^^^^^^ help: try: `t`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#unnecessary_cast
+     = note: `#[warn(clippy::unnecessary_cast)]` on by default
+
+
+warning: this manual char comparison can be written more succinctly
+   --> crates/op-llm/src/pty_bridge.rs:416:34
+    |
+416 | ...es(|c| c == '.' || c == ',' || c == ')' || c == '"' || c == '\'');
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: consider using an array of `char`: `['.', ',', ')', '"', '\'']`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#manual_pattern_char_comparison
+    = note: `#[warn(clippy::manual_pattern_char_comparison)]` on by default
+
+
+warning: this manual char comparison can be written more succinctly
+   --> crates/op-llm/src/pty_bridge.rs:425:34
+    |
+425 | ...es(|c| c == '.' || c == ',' || c == ')' || c == '"' || c == '\'');
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: consider using an array of `char`: `['.', ',', ')', '"', '\'']`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#manual_pattern_char_comparison
+
+

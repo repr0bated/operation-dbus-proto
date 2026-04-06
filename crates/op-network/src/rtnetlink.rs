@@ -4,7 +4,6 @@ use anyhow::{Context, Result};
 use futures::TryStreamExt;
 use netlink_packet_route::address::AddressAttribute;
 use netlink_packet_route::link::LinkAttribute;
-use netlink_packet_route::route::RouteAttribute;
 use rtnetlink::{new_connection, IpVersion};
 use serde::{Deserialize, Serialize};
 use std::net::Ipv4Addr;

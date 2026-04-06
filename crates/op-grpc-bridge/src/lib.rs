@@ -21,18 +21,16 @@
 //!     └─────────────────┘            └─────────────────┘
 //! ```
 
-pub mod dbus_watcher;
 pub mod grpc_client;
 pub mod grpc_server;
 pub mod proto_gen;
-pub mod sync_engine;
+pub mod schema_engine;
 
 // Re-export main types
-pub use dbus_watcher::{DbusWatcher, WatchConfig};
 pub use grpc_client::{GrpcClientPool, RemoteEndpoint, RemoteOperationClient};
 pub use grpc_server::{run_grpc_server, OperationGrpcServer, PluginSchemaProvider};
 pub use proto_gen::{ProtoGenConfig, ProtoGenerator};
-pub use sync_engine::{ChangeSource, ChangeType, StateChange, SyncEngine};
+pub use schema_engine::{ChangeSource, ChangeType, SchemaEngine, StateChange};
 
 /// Generated protobuf types — one sub-module per domain proto.
 /// All are compiled into the combined operation_descriptor.bin for reflection.

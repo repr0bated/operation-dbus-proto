@@ -443,7 +443,13 @@ impl Default for EffectivePlugin {
 // PLUGIN REGISTRY
 // ============================================================================
 
-/// Thread-safe plugin registry
+/// Legacy in-process plugin registry.
+///
+/// This type predates the plugin-catalog refactor and should not be treated as
+/// the authoritative runtime source of plugin/schema truth. It is kept only
+/// for older root-crate code paths that still compose `PluginCore` plus
+/// tunables locally. New runtime authority lives in `op_plugins::PluginCatalog`
+/// backed by canonical persisted plugin documents.
 pub struct PluginRegistry {
     cores: DashMap<String, Arc<PluginCore>>,
     tunables: DashMap<(String, TunableScope), PluginTunables>,
@@ -509,6 +515,13 @@ impl Default for PluginRegistry {
         Self::new()
     }
 }
+
+/// Preferred descriptive alias for the legacy root-crate registry.
+///
+/// Keeping this alias makes the file's role explicit during the crate-by-crate
+/// cleanup: this is a local compatibility catalog, not the authoritative
+/// plugin/schema/footprint store.
+pub type LegacyPluginCatalog = PluginRegistry;
 
 // ============================================================================
 // PLUGIN TRAIT

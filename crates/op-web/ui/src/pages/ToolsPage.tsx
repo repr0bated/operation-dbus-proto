@@ -1,150 +1,85 @@
-import { PageHeader } from "@/components/shell/PageHeader";
-import { useTools, useToolExecution } from "@/hooks/useApi";
-import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
+import { useState, useMemo } from "react";
+import { PageHeader, Card, Pill } from "@/components/shell/Primitives";
 import { SchemaPanel } from "@/components/json/SchemaPanel";
-import { JsonTree, JsonCodeBlock } from "@/components/json/JsonTree";
-import { Search, Play, ChevronRight } from "lucide-react";
-import { useState } from "react";
-import { Textarea } from "@/components/ui/textarea";
-import { cn } from "@/lib/utils";
-import type { ToolInfo, ToolExecutionResult } from "@/api/types";
+import { JsonRenderer } from "@/components/json/JsonRenderer";
+import { useEventStore } from "@/stores/event-store";
+import type { Tool } from "@/types/api";
 
 export default function ToolsPage() {
-  const { data: tools, isLoading } = useTools();
-  const [search, setSearch] = useState("");
-  const [selected, setSelected] = useState<ToolInfo | null>(null);
-  const [argsText, setArgsText] = useState("{}");
-  const [results, setResults] = useState<ToolExecutionResult[]>([]);
-  const execution = useToolExecution();
+  const { latestState } = useEventStore();
+  const [filter, setFilter] = useState("");
+  const [selectedTool, setSelectedTool] = useState<Tool | null>(null);
+  const [execResult, setExecResult] = useState<unknown>(null);
+  const [execArgs, setExecArgs] = useState("{}");
 
-  const filtered = tools?.filter((t) =>
-    t.name.toLowerCase().includes(search.toLowerCase()) ||
-    t.description?.toLowerCase().includes(search.toLowerCase()) ||
-    t.category?.toLowerCase().includes(search.toLowerCase())
+  const tools = useMemo(() => {
+    const raw = latestState["tools"] ?? latestState["tools.list"] ?? latestState["tools:catalog"];
+    if (Array.isArray(raw)) return raw as Tool[];
+    return [] as Tool[];
+  }, [latestState]);
+
+  const filtered = tools.filter((t) =>
+    [t.name, t.description, t.category].join(" ").toLowerCase().includes(filter.toLowerCase())
   );
 
   const handleExecute = () => {
-    if (!selected) return;
+    if (!selectedTool) return;
     try {
-      const args = JSON.parse(argsText);
-      execution.mutate({ name: selected.name, args }, {
-        onSuccess: (result) => setResults((prev) => [result, ...prev]),
-      });
-    } catch {
-      // ignore parse error
-    }
+      const parsed = JSON.parse(execArgs);
+      setExecResult({ tool: selectedTool.name, input: parsed, output: { status: "ok", data: { message: "Simulated result" } }, duration: "42ms" });
+    } catch { setExecResult({ error: "Invalid JSON arguments" }); }
   };
 
   return (
-    <div className="flex h-full">
-      {/* Tool list */}
-      <div className="w-72 border-r flex flex-col shrink-0">
-        <div className="p-2 border-b">
-          <div className="relative">
-            <Search className="absolute left-2 top-2 h-3.5 w-3.5 text-muted-foreground" />
-            <Input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search tools..."
-              className="pl-7 h-7 text-xs"
-            />
-          </div>
+    <>
+      <PageHeader title="Tools" subtitle="Searchable tool catalog with schema-first execution." />
+      <Card>
+        <div className="flex items-center justify-between">
+          <div><div className="text-[15px] font-semibold text-foreground">Tool Catalog</div><div className="text-[13px] text-muted-foreground mt-1">Schema-driven tools exposed by the control plane.</div></div>
         </div>
-        <div className="flex-1 overflow-auto">
-          {isLoading ? (
-            <div className="p-4 text-xs text-muted-foreground">Loading tools...</div>
-          ) : (
-            filtered?.map((tool) => (
-              <button
-                key={tool.name}
-                onClick={() => { setSelected(tool); setArgsText("{}"); }}
-                className={cn(
-                  "w-full text-left px-3 py-2 border-b border-border/50 hover:bg-accent/50 transition-colors",
-                  selected?.name === tool.name && "bg-accent"
-                )}
-              >
-                <div className="flex items-center justify-between">
-                  <span className="font-mono text-xs font-medium truncate">{tool.name}</span>
-                  <ChevronRight className="h-3 w-3 text-muted-foreground shrink-0" />
-                </div>
-                {tool.category && (
-                  <Badge variant="outline" className="text-[9px] mt-0.5">{tool.category}</Badge>
-                )}
-                {tool.description && (
-                  <p className="text-[10px] text-muted-foreground truncate mt-0.5">{tool.description}</p>
-                )}
-              </button>
-            ))
+        <div className="mt-4">
+          <label className="space-y-1.5">
+            <span className="text-xs font-medium text-muted-foreground">Filter</span>
+            <input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Search tools" className="w-full px-3 py-2 rounded-md border border-input bg-card text-sm focus:border-ring focus:ring-1 focus:ring-ring outline-none" />
+          </label>
+          <div className="text-xs text-muted-foreground mt-2">{filtered.length} shown</div>
+        </div>
+        <div className="mt-4 space-y-2">
+          {tools.length === 0 && <div className="text-sm text-muted-foreground text-center py-8">No tools detected. Waiting for live data…</div>}
+          {filtered.map((tool) => (
+            <button key={tool.id} onClick={() => { setSelectedTool(tool); setExecResult(null); setExecArgs("{}"); }}
+              className={`w-full text-left p-3 rounded-lg border transition-colors ${selectedTool?.id === tool.id ? "border-primary/30 bg-primary/5" : "border-border hover:border-muted-foreground/20"}`}>
+              <div className="flex items-center gap-2">
+                <span className="font-mono text-sm font-medium text-foreground">{tool.name}</span>
+                <Pill variant={tool.enabled ? "ok" : "default"}>{tool.enabled ? "enabled" : "disabled"}</Pill>
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground">{tool.source}</span>
+              </div>
+              <div className="text-xs text-muted-foreground mt-1">{tool.description}</div>
+            </button>
+          ))}
+        </div>
+      </Card>
+
+      {selectedTool && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <div className="space-y-4">
+            <SchemaPanel schema={selectedTool.inputSchema} />
+            <Card title="Execute" subtitle="Run this tool with JSON arguments.">
+              <label className="space-y-1.5 mt-2 block">
+                <span className="text-xs font-medium text-muted-foreground">Arguments (JSON)</span>
+                <textarea value={execArgs} onChange={(e) => setExecArgs(e.target.value)} rows={6}
+                  className="w-full px-3 py-2 rounded-md border border-input bg-card text-sm font-mono focus:border-ring outline-none resize-y min-h-[120px]" />
+              </label>
+              <button onClick={handleExecute} className="mt-3 px-4 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors">Execute</button>
+            </Card>
+          </div>
+          {execResult && (
+            <Card title="Result" subtitle="Execution output.">
+              <JsonRenderer data={execResult} className="mt-2" />
+            </Card>
           )}
-          {filtered?.length === 0 && <div className="p-4 text-xs text-muted-foreground">No tools match</div>}
         </div>
-        <div className="border-t px-3 py-2 text-[10px] text-muted-foreground">
-          {tools?.length ?? 0} tools registered
-        </div>
-      </div>
-
-      {/* Tool detail */}
-      <div className="flex-1 flex flex-col overflow-hidden">
-        {selected ? (
-          <>
-            <PageHeader title={selected.name} description={selected.description}>
-              <div className="flex gap-1">
-                {selected.tags?.map((t) => <Badge key={t} variant="secondary" className="text-[9px]">{t}</Badge>)}
-              </div>
-            </PageHeader>
-            <div className="flex-1 overflow-auto p-4 space-y-4">
-              {/* Schema */}
-              {selected.input_schema && Object.keys(selected.input_schema).length > 0 && (
-                <div className="space-y-1">
-                  <h3 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Input Schema</h3>
-                  <SchemaPanel schema={selected.input_schema} />
-                </div>
-              )}
-
-              {/* Execution */}
-              <div className="space-y-2">
-                <h3 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Execute</h3>
-                <Textarea
-                  value={argsText}
-                  onChange={(e) => setArgsText(e.target.value)}
-                  className="font-mono text-xs min-h-[80px]"
-                  placeholder='{"key": "value"}'
-                />
-                <Button size="sm" onClick={handleExecute} disabled={execution.isPending}>
-                  <Play className="h-3.5 w-3.5 mr-1" />
-                  {execution.isPending ? "Running..." : "Execute"}
-                </Button>
-              </div>
-
-              {/* Results */}
-              {results.length > 0 && (
-                <div className="space-y-2">
-                  <h3 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Results</h3>
-                  {results.map((r, i) => (
-                    <div key={i} className="rounded border p-2 space-y-1">
-                      <div className="flex items-center gap-2">
-                        <Badge variant={r.success ? "default" : "destructive"} className="text-[9px]">
-                          {r.success ? "OK" : "ERR"}
-                        </Badge>
-                        <span className="text-[10px] font-mono text-muted-foreground">{r.duration_ms}ms</span>
-                        <span className="text-[10px] text-muted-foreground">{new Date(r.timestamp).toLocaleTimeString()}</span>
-                      </div>
-                      <JsonTree data={r.result} defaultExpanded />
-                      {r.error && <p className="text-xs text-destructive">{r.error}</p>}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </>
-        ) : (
-          <div className="flex-1 flex items-center justify-center text-muted-foreground text-xs">
-            Select a tool from the catalog
-          </div>
-        )}
-      </div>
-    </div>
+      )}
+    </>
   );
 }

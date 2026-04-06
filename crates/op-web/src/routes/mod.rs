@@ -206,6 +206,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
     let ws_route = Router::new().route("/ws", get(websocket::websocket_handler));
 
     // Main router - agents_mcp_route FIRST so it takes precedence
+    let static_dir = std::env::var("OP_WEB_STATIC_DIR").ok();
     let mut router = Router::new()
         .nest("/api", api_routes)
         // Human-facing privacy verification flow (magic-link target)

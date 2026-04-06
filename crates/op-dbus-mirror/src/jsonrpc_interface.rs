@@ -2,21 +2,25 @@
 //!
 //! Exposes OVSDB and NonNet JSON-RPC methods as D-Bus interfaces
 //! for a true 1:1 mirror of the JSON-RPC API.
+//!
+//! Authoritative Path: D-Bus method → SchemaEngine.mutate → RCP Database → EventChain
 
 use op_jsonrpc::nonnet::NonNetDb;
-use op_jsonrpc::ovsdb::OvsdbClient;
+use op_network::ovsdb::OvsdbClient;
 use op_jsonrpc::protocol::JsonRpcRequest;
+use op_grpc_bridge::{SchemaEngine, ChangeType};
 use std::sync::Arc;
 use zbus::interface;
 
 /// OVSDB D-Bus interface - mirrors JSON-RPC methods
 pub struct OvsdbInterface {
     pub client: Arc<OvsdbClient>,
+    pub schema_engine: Option<Arc<SchemaEngine>>,
 }
 
 impl OvsdbInterface {
-    pub fn new(client: Arc<OvsdbClient>) -> Self {
-        Self { client }
+    pub fn new(client: Arc<OvsdbClient>, schema_engine: Option<Arc<SchemaEngine>>) -> Self {
+        Self { client, schema_engine }
     }
 }
 
@@ -24,18 +28,35 @@ impl OvsdbInterface {
 impl OvsdbInterface {
     /// Execute JSON-RPC transact on OVSDB
     async fn transact(&self, operations: String) -> zbus::fdo::Result<String> {
-        let ops: simd_json::OwnedValue = unsafe { simd_json::from_str(&mut operations.clone()) }
+        let mut operations_mut = operations.clone();
+        let ops: simd_json::OwnedValue = unsafe { simd_json::from_str(&mut operations_mut) }
             .map_err(|e| zbus::fdo::Error::InvalidArgs(e.to_string()))?;
 
-        match self.client.transact("Open_vSwitch", ops).await {
-            Ok(result) => Ok(simd_json::to_string(&result).unwrap_or_default()),
-            Err(e) => Err(zbus::fdo::Error::Failed(e.to_string())),
+        // Route through SchemaEngine for authoritative recording if available
+        if let Some(engine) = &self.schema_engine {
+            match engine.mutate(
+                "net".to_string(),
+                "/org/opdbus/v1/ovsdb".to_string(),
+                ChangeType::MethodCall,
+                Some("transact".to_string()),
+                ops,
+                "dbus-client".to_string(),
+                None
+            ).await {
+                Ok(result) => Ok(simd_json::to_string(&result.result).unwrap_or_default()),
+                Err(e) => Err(zbus::fdo::Error::Failed(e.to_string())),
+            }
+        } else {
+            match self.client.transact(ops).await {
+                Ok(result) => Ok(simd_json::to_string(&result).unwrap_or_default()),
+                Err(e) => Err(zbus::fdo::Error::Failed(e.to_string())),
+            }
         }
     }
 
     /// Get OVSDB schema
     async fn get_schema(&self) -> zbus::fdo::Result<String> {
-        match self.client.get_schema("Open_vSwitch").await {
+        match self.client.get_schema().await {
             Ok(result) => Ok(simd_json::to_string(&result).unwrap_or_default()),
             Err(e) => Err(zbus::fdo::Error::Failed(e.to_string())),
         }
@@ -59,10 +80,24 @@ impl OvsdbInterface {
 
     /// Create bridge
     async fn create_bridge(&self, name: String) -> zbus::fdo::Result<()> {
-        self.client
-            .create_bridge(&name)
-            .await
-            .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
+        if let Some(engine) = &self.schema_engine {
+            engine.mutate(
+                "net".to_string(),
+                "/org/opdbus/v1/ovsdb".to_string(),
+                ChangeType::MethodCall,
+                Some("create_bridge".to_string()),
+                simd_json::json!(name),
+                "dbus-client".to_string(),
+                None
+            ).await
+            .map(|_| ())
+            .map_err(|e: anyhow::Error| zbus::fdo::Error::Failed(e.to_string()))
+        } else {
+            self.client
+                .create_bridge(&name)
+                .await
+                .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
+        }
     }
 
     /// Delete bridge
@@ -75,10 +110,24 @@ impl OvsdbInterface {
 
     /// Add port to bridge
     async fn add_port(&self, bridge: String, port: String) -> zbus::fdo::Result<()> {
-        self.client
-            .add_port(&bridge, &port)
-            .await
-            .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
+        if let Some(engine) = &self.schema_engine {
+            engine.mutate(
+                "net".to_string(),
+                "/org/opdbus/v1/ovsdb".to_string(),
+                ChangeType::MethodCall,
+                Some("add_port".to_string()),
+                simd_json::json!([bridge, port]),
+                "dbus-client".to_string(),
+                None
+            ).await
+            .map(|_| ())
+            .map_err(|e: anyhow::Error| zbus::fdo::Error::Failed(e.to_string()))
+        } else {
+            self.client
+                .add_port(&bridge, &port)
+                .await
+                .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
+        }
     }
 
     /// List bridges
@@ -91,7 +140,7 @@ impl OvsdbInterface {
 
     /// List ports on a bridge
     async fn list_ports(&self, bridge: String) -> zbus::fdo::Result<String> {
-        match self.client.list_ports(&bridge).await {
+        match self.client.list_bridge_ports(&bridge).await {
             Ok(ports) => Ok(simd_json::to_string(&ports).unwrap_or_default()),
             Err(e) => Err(zbus::fdo::Error::Failed(e.to_string())),
         }
@@ -101,11 +150,12 @@ impl OvsdbInterface {
 /// NonNet D-Bus interface - mirrors JSON-RPC methods
 pub struct NonNetInterface {
     pub nonnet: Arc<NonNetDb>,
+    pub schema_engine: Option<Arc<SchemaEngine>>,
 }
 
 impl NonNetInterface {
-    pub fn new(nonnet: Arc<NonNetDb>) -> Self {
-        Self { nonnet }
+    pub fn new(nonnet: Arc<NonNetDb>, schema_engine: Option<Arc<SchemaEngine>>) -> Self {
+        Self { nonnet, schema_engine }
     }
 }
 
@@ -113,14 +163,35 @@ impl NonNetInterface {
 impl NonNetInterface {
     /// Execute JSON-RPC transact on NonNet
     async fn transact(&self, request: String) -> zbus::fdo::Result<String> {
-        let req: simd_json::OwnedValue = unsafe { simd_json::from_str(&mut request.clone()) }
+        let mut request_mut = request.clone();
+        let req: simd_json::OwnedValue = unsafe { simd_json::from_str(&mut request_mut) }
             .map_err(|e| zbus::fdo::Error::InvalidArgs(e.to_string()))?;
 
-        let json_req: JsonRpcRequest = simd_json::serde::from_owned_value(req)
+        let json_req: JsonRpcRequest = simd_json::serde::from_owned_value(req.clone())
             .map_err(|e| zbus::fdo::Error::InvalidArgs(e.to_string()))?;
 
-        let response = self.nonnet.handle_request(json_req).await;
-        Ok(simd_json::to_string(&response).unwrap_or_default())
+        if json_req.method == "mutate" || json_req.method == "update" || json_req.method == "insert" || json_req.method == "delete" {
+            if let Some(engine) = &self.schema_engine {
+                match engine.mutate(
+                    "nonnet".to_string(), // Generic nonnet namespace
+                    "/org/opdbus/v1/nonnet".to_string(),
+                    ChangeType::MethodCall,
+                    Some(json_req.method.clone()),
+                    req,
+                    "dbus-client".to_string(),
+                    None
+                ).await {
+                    Ok(result) => Ok(simd_json::to_string(&result.result).unwrap_or_default()),
+                    Err(e) => Err(zbus::fdo::Error::Failed(e.to_string())),
+                }
+            } else {
+                let response = self.nonnet.handle_request(json_req).await;
+                Ok(simd_json::to_string(&response).unwrap_or_default())
+            }
+        } else {
+            let response = self.nonnet.handle_request(json_req).await;
+            Ok(simd_json::to_string(&response).unwrap_or_default())
+        }
     }
 
     /// Get NonNet schema

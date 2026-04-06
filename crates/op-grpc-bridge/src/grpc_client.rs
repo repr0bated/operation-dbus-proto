@@ -47,6 +47,12 @@ pub struct GrpcClientPool {
     default_config: RemoteEndpoint,
 }
 
+impl Default for GrpcClientPool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GrpcClientPool {
     pub fn new() -> Self {
         Self {
@@ -126,6 +132,7 @@ impl GrpcClientPool {
 }
 
 /// High-level client for remote Operation services
+#[allow(dead_code)]
 pub struct RemoteOperationClient {
     pool: Arc<GrpcClientPool>,
     default_address: String,
@@ -212,6 +219,7 @@ impl RemoteOperationClient {
     }
 
     /// Call a method on a remote endpoint
+    #[allow(clippy::too_many_arguments)]
     pub async fn call_method(
         &self,
         plugin_id: &str,

@@ -26,7 +26,6 @@ use base64::Engine;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
-use simd_json::ValueBuilder;
 use simd_json::{json, OwnedValue as Value};
 use std::collections::HashMap;
 use std::path::Path;
@@ -59,7 +58,7 @@ pub struct SchemaDefinition {
 pub struct IntrospectiveGadget {
     knowledge_base: std::sync::Arc<tokio::sync::RwLock<KnowledgeBase>>,
     parsers:
-        std::sync::Arc<std::sync::RwLock<HashMap<String, Box<dyn ObjectParser + Send + Sync>>>>,
+        std::sync::Arc<std::sync::RwLock<HashMap<String, std::sync::Arc<dyn ObjectParser + Send + Sync>>>>,
 }
 
 impl IntrospectiveGadget {
@@ -67,16 +66,16 @@ impl IntrospectiveGadget {
     pub async fn new(
         knowledge_base: std::sync::Arc<tokio::sync::RwLock<KnowledgeBase>>,
     ) -> Result<Self> {
-        let mut parsers: HashMap<String, Box<dyn ObjectParser + Send + Sync>> = HashMap::new();
+        let mut parsers: HashMap<String, std::sync::Arc<dyn ObjectParser + Send + Sync>> = HashMap::new();
 
         // Register all built-in parsers
-        parsers.insert("json".to_string(), Box::new(JsonParser));
-        parsers.insert("xml".to_string(), Box::new(XmlParser));
-        parsers.insert("yaml".to_string(), Box::new(YamlParser));
-        parsers.insert("docker".to_string(), Box::new(DockerParser));
-        parsers.insert("binary".to_string(), Box::new(BinaryParser));
-        parsers.insert("text".to_string(), Box::new(TextParser));
-        parsers.insert("auto".to_string(), Box::new(AutoParser));
+        parsers.insert("json".to_string(), std::sync::Arc::new(JsonParser));
+        parsers.insert("xml".to_string(), std::sync::Arc::new(XmlParser));
+        parsers.insert("yaml".to_string(), std::sync::Arc::new(YamlParser));
+        parsers.insert("docker".to_string(), std::sync::Arc::new(DockerParser));
+        parsers.insert("binary".to_string(), std::sync::Arc::new(BinaryParser));
+        parsers.insert("text".to_string(), std::sync::Arc::new(TextParser));
+        parsers.insert("auto".to_string(), std::sync::Arc::new(AutoParser));
 
         Ok(Self {
             knowledge_base,
@@ -98,7 +97,8 @@ impl IntrospectiveGadget {
         let mut errors = Vec::new();
 
         // Try the detected format first
-        if let Some(parser) = self.parsers.read().unwrap().get(&detected_format) {
+        let parser_opt = self.parsers.read().unwrap().get(&detected_format).cloned();
+        if let Some(parser) = parser_opt {
             match parser.parse(&input).await {
                 Ok(result) => results.push(result),
                 Err(e) => errors.push(format!("{} parser failed: {}", detected_format, e)),
@@ -107,7 +107,8 @@ impl IntrospectiveGadget {
 
         // If that didn't work, try auto-detection
         if results.is_empty() {
-            if let Some(auto_parser) = self.parsers.read().unwrap().get("auto") {
+            let auto_parser_opt = self.parsers.read().unwrap().get("auto").cloned();
+            if let Some(auto_parser) = auto_parser_opt {
                 match auto_parser.parse(&input).await {
                     Ok(result) => results.push(result),
                     Err(e) => errors.push(format!("Auto parser failed: {}", e)),
@@ -117,11 +118,18 @@ impl IntrospectiveGadget {
 
         // Try all parsers if still no results
         if results.is_empty() {
-            for (format_name, parser) in self.parsers.read().unwrap().iter() {
-                if format_name != &detected_format && format_name != "auto" {
-                    match parser.parse(&input).await {
-                        Ok(result) => results.push(result),
-                        Err(_) => {} // Don't log errors for fallback attempts
+            let all_parsers: Vec<(String, std::sync::Arc<dyn ObjectParser + Send + Sync>)> = self
+                .parsers
+                .read()
+                .unwrap()
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            
+            for (format_name, parser) in all_parsers {
+                if format_name != detected_format && format_name != "auto" {
+                    if let Ok(result) = parser.parse(&input).await {
+                        results.push(result);
                     }
                 }
             }
@@ -171,7 +179,7 @@ impl IntrospectiveGadget {
     ) -> Result<ContainerInspectionWithKnowledge> {
         // Get container info
         let inspect_output = tokio::process::Command::new("docker")
-            .args(&["inspect", container_name])
+            .args(["inspect", container_name])
             .output()
             .await
             .context("Failed to run docker inspect")?;
@@ -199,7 +207,7 @@ impl IntrospectiveGadget {
 
         // Get running processes
         let top_output = tokio::process::Command::new("docker")
-            .args(&["top", container_name])
+            .args(["top", container_name])
             .output()
             .await;
 
@@ -884,11 +892,7 @@ impl JsonParser {
                 object_patterns: vec![],
             }
         } else if let Some(arr) = value.as_array() {
-            let item_schema = if let Some(first) = arr.first() {
-                Some(Box::new(self.analyze_json_schema(first)))
-            } else {
-                None
-            };
+            let item_schema = arr.first().map(|first| Box::new(self.analyze_json_schema(first)));
 
             ObjectSchema {
                 schema_type: "array".to_string(),
@@ -984,7 +988,7 @@ impl ObjectParser for DockerParser {
         if let InspectionSource::DockerContainer(name) = &input.source {
             // Run docker inspect
             let output = tokio::process::Command::new("docker")
-                .args(&["inspect", name])
+                .args(["inspect", name])
                 .output()
                 .await?;
 

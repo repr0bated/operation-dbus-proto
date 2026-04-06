@@ -53,6 +53,8 @@
 
 pub mod error;
 pub mod grpc_pool;
+pub mod proto;
+pub mod services;
 pub mod skills;
 pub mod workstack_executor;
 

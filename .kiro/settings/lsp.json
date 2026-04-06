@@ -1,16 +1,30 @@
 {
-  "name": "operation-dbus",
   "languages": {
     "rust": {
-      "server": "rust-analyzer"
-    }
-  },
-  "servers": {
-    "rust-analyzer": {
       "name": "rust-analyzer",
-      "command": "rust-analyzer",
+      "command": "/home/jeremy/.cargo/bin/rust-analyzer",
       "args": [],
-      "filetypes": ["rust"]
+      "file_extensions": [
+        "rs"
+      ],
+      "project_patterns": [
+        "Cargo.toml"
+      ],
+      "exclude_patterns": [
+        "**/target/**"
+      ],
+      "multi_workspace": false,
+      "initialization_options": {
+        "cargo": {
+          "buildScripts": {
+            "enable": true
+          }
+        },
+        "diagnostics": {
+          "enable": true
+        }
+      },
+      "request_timeout_secs": 60
     }
   }
 }

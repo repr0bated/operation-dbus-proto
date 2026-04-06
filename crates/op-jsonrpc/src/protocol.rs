@@ -112,6 +112,7 @@ pub mod error_codes {
 }
 
 /// Parse a JSON-RPC request from a JSON value
+#[allow(clippy::result_large_err)]
 pub fn parse_request(value: Value) -> Result<JsonRpcRequest, JsonRpcResponse> {
     simd_json::serde::from_owned_value(value.clone()).map_err(|e| {
         JsonRpcResponse::error(

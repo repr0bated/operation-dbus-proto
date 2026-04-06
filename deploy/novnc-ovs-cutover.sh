@@ -43,6 +43,68 @@ die() {
     exit 1
 }
 
+start_service_via_dinit_dbus() {
+    local service="$1"
+    local output
+
+    if command -v gdbus >/dev/null 2>&1; then
+        if output="$(gdbus call \
+            --system \
+            --dest org.chimera.dinit \
+            --object-path /org/chimera/dinit \
+            --method org.chimera.dinit.Manager.StartService \
+            "$service" \
+            false 2>&1)"; then
+            return 0
+        fi
+
+        if printf '%s' "$output" | grep -q 'org.chimera.dinit.Error.ServiceAlready'; then
+            return 0
+        fi
+    fi
+
+    if command -v dinitctl >/dev/null 2>&1; then
+        dinitctl start "$service" >/dev/null 2>&1 && return 0
+    fi
+
+    return 1
+}
+
+stop_service_via_dinit_dbus() {
+    local service="$1"
+    local output
+
+    if command -v gdbus >/dev/null 2>&1; then
+        if output="$(gdbus call \
+            --system \
+            --dest org.chimera.dinit \
+            --object-path /org/chimera/dinit \
+            --method org.chimera.dinit.Manager.StopService \
+            "$service" \
+            false \
+            false \
+            false 2>&1)"; then
+            return 0
+        fi
+
+        if printf '%s' "$output" | grep -q 'org.chimera.dinit.Error.ServiceAlready'; then
+            return 0
+        fi
+    fi
+
+    if command -v dinitctl >/dev/null 2>&1; then
+        dinitctl stop "$service" >/dev/null 2>&1 && return 0
+    fi
+
+    return 1
+}
+
+restart_service_via_dinit_dbus() {
+    local service="$1"
+    stop_service_via_dinit_dbus "$service" || true
+    start_service_via_dinit_dbus "$service"
+}
+
 cleanup() {
     if [ -n "${BATCH_FILE:-}" ] && [ -f "$BATCH_FILE" ]; then
         rm -f "$BATCH_FILE"
@@ -195,9 +257,7 @@ atomic_ip_migration() {
 }
 
 activate_networkd() {
-    if command -v dinitctl >/dev/null 2>&1; then
-        dinitctl restart systemd-networkd >/dev/null 2>&1 || dinitctl start systemd-networkd >/dev/null 2>&1 || true
-    fi
+    restart_service_via_dinit_dbus systemd-networkd || start_service_via_dinit_dbus systemd-networkd || true
 
     if command -v networkctl >/dev/null 2>&1; then
         if busctl --system status org.freedesktop.network1 >/dev/null 2>&1; then

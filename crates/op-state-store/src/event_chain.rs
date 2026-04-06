@@ -25,7 +25,6 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
-use simd_json::ValueBuilder;
 use std::collections::HashMap;
 
 use crate::schema_validator::canonicalize_json;
@@ -171,6 +170,7 @@ pub struct ChainEvent {
 
 impl ChainEvent {
     /// Create a new event with computed hash
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         event_id: u64,
         prev_hash: String,
@@ -522,6 +522,7 @@ impl EventChain {
     }
 
     /// Create a new event and append it
+    #[allow(clippy::too_many_arguments)]
     pub fn record(
         &mut self,
         actor_id: String,
@@ -776,8 +777,8 @@ fn compute_merkle_proof(hashes: &[&str], index: usize) -> Vec<(String, bool)> {
     let mut idx = index;
 
     while level.len() > 1 {
-        let sibling_idx = if idx % 2 == 0 { idx + 1 } else { idx - 1 };
-        let is_right = idx % 2 == 0;
+        let sibling_idx = if idx.is_multiple_of(2) { idx + 1 } else { idx - 1 };
+        let is_right = idx.is_multiple_of(2);
 
         if sibling_idx < level.len() {
             siblings.push((level[sibling_idx].clone(), is_right));

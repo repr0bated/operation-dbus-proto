@@ -1,0 +1,16 @@
+# Privacy chain egress socket. Addressing is injected by ovs-attach-ports.sh.
+[Match]
+Name=priv_xray
+
+[Link]
+ActivationPolicy=up
+RequiredForOnline=no
+
+[Network]
+DHCP=no
+LinkLocalAddressing=no
+LLMNR=no
+MulticastDNS=no
+IPv6AcceptRA=no
+ConfigureWithoutCarrier=yes
+KeepConfiguration=static

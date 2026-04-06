@@ -49,6 +49,7 @@ pub struct PrivacyUser {
 /// User-specific API credentials for AI services
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserApiCredentials {
+    pub token: String,
     pub gemini_api_key: Option<String>,
     pub anthropic_api_key: Option<String>,
     pub openai_api_key: Option<String>,
@@ -362,9 +363,17 @@ impl UserStore {
         user_id: &str,
         credentials: UserApiCredentials,
     ) -> Result<()> {
-        let mut users = self.users.write().await;
-        if let Some(user) = users.get_mut(user_id) {
-            user.api_credentials = Some(credentials);
+        let user_exists = {
+            let mut users = self.users.write().await;
+            if let Some(user) = users.get_mut(user_id) {
+                user.api_credentials = Some(credentials);
+                true
+            } else {
+                false
+            }
+        };
+
+        if user_exists {
             self.save().await?;
             info!("Updated API credentials for user {}", user_id);
             Ok(())

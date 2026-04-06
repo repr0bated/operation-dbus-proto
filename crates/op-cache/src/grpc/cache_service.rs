@@ -25,6 +25,7 @@ struct CachedEntry {
     expires_at: u64,
     access_count: u32,
     size_bytes: u64,
+    #[allow(dead_code)]
     compressed: bool,
 }
 

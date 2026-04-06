@@ -1,5 +1,6 @@
 //! gRPC server implementation
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -8,7 +9,7 @@ use tonic::{Request, Response, Status};
 use super::proto::service_manager_server::ServiceManager as ServiceManagerTrait;
 use super::proto::*;
 use crate::manager::ServiceManager;
-use crate::schema::ServiceName;
+use crate::schema::{self, ServiceName};
 
 pub struct GrpcServer {
     manager: Arc<ServiceManager>,
@@ -72,27 +73,84 @@ impl ServiceManagerTrait for GrpcServer {
 
     async fn reload(
         &self,
-        _req: Request<ReloadRequest>,
+        req: Request<ReloadRequest>,
     ) -> Result<Response<ReloadResponse>, Status> {
-        Err(Status::unimplemented("reload not yet implemented"))
+        let name = ServiceName::new(&req.get_ref().name)
+            .map_err(|e| Status::invalid_argument(e.to_string()))?;
+
+        // Reload by performing a stop + start cycle, since neither dinit proxy
+        // nor the process manager exposes a dedicated reload operation.
+        let status = self
+            .manager
+            .restart(&name)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        Ok(Response::new(ReloadResponse {
+            status: Some(status.into()),
+        }))
     }
 
     async fn create(
         &self,
-        _req: Request<CreateRequest>,
+        req: Request<CreateRequest>,
     ) -> Result<Response<CreateResponse>, Status> {
-        Err(Status::unimplemented("create not yet implemented"))
+        let proto_def = req
+            .get_ref()
+            .service
+            .as_ref()
+            .ok_or_else(|| Status::invalid_argument("missing service definition"))?;
+
+        let service_def =
+            proto_to_schema_def(proto_def).map_err(|e| Status::invalid_argument(e.to_string()))?;
+
+        // Persist the service definition in the store
+        self.manager
+            .create(&service_def)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        Ok(Response::new(CreateResponse {
+            service: Some(service_def.into()),
+        }))
     }
 
     async fn delete(
         &self,
-        _req: Request<DeleteRequest>,
+        req: Request<DeleteRequest>,
     ) -> Result<Response<DeleteResponse>, Status> {
-        Err(Status::unimplemented("delete not yet implemented"))
+        let name = ServiceName::new(&req.get_ref().name)
+            .map_err(|e| Status::invalid_argument(e.to_string()))?;
+
+        self.manager
+            .delete(&name)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        Ok(Response::new(DeleteResponse {}))
     }
 
-    async fn get(&self, _req: Request<GetRequest>) -> Result<Response<GetResponse>, Status> {
-        Err(Status::unimplemented("get not yet implemented"))
+    async fn get(&self, req: Request<GetRequest>) -> Result<Response<GetResponse>, Status> {
+        let name = ServiceName::new(&req.get_ref().name)
+            .map_err(|e| Status::invalid_argument(e.to_string()))?;
+
+        let service_def = self
+            .manager
+            .get(&name)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?
+            .ok_or_else(|| Status::not_found(format!("service not found: {}", name)))?;
+
+        let status = self
+            .manager
+            .get_status(&name)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        Ok(Response::new(GetResponse {
+            service: Some(service_def.into()),
+            status: Some(status.into()),
+        }))
     }
 
     async fn list(&self, _req: Request<ListRequest>) -> Result<Response<ListResponse>, Status> {
@@ -109,16 +167,32 @@ impl ServiceManagerTrait for GrpcServer {
 
     async fn enable(
         &self,
-        _req: Request<EnableRequest>,
+        req: Request<EnableRequest>,
     ) -> Result<Response<EnableResponse>, Status> {
-        Err(Status::unimplemented("enable not yet implemented"))
+        let name = ServiceName::new(&req.get_ref().name)
+            .map_err(|e| Status::invalid_argument(e.to_string()))?;
+
+        self.manager
+            .set_enabled(&name, true)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        Ok(Response::new(EnableResponse {}))
     }
 
     async fn disable(
         &self,
-        _req: Request<DisableRequest>,
+        req: Request<DisableRequest>,
     ) -> Result<Response<DisableResponse>, Status> {
-        Err(Status::unimplemented("disable not yet implemented"))
+        let name = ServiceName::new(&req.get_ref().name)
+            .map_err(|e| Status::invalid_argument(e.to_string()))?;
+
+        self.manager
+            .set_enabled(&name, false)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        Ok(Response::new(DisableResponse {}))
     }
 
     type WatchStatusStream = ReceiverStream<Result<ServiceEvent, Status>>;
@@ -140,6 +214,93 @@ impl ServiceManagerTrait for GrpcServer {
 
         Ok(Response::new(ReceiverStream::new(rx)))
     }
+}
+
+/// Convert a proto ServiceDef into the internal schema ServiceDef.
+fn proto_to_schema_def(proto: &ServiceDef) -> anyhow::Result<schema::ServiceDef> {
+    let name = ServiceName::new(&proto.name)?;
+
+    let exec = proto
+        .exec
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("missing exec config"))?;
+
+    let exec_start = schema::ExecCommand::new(
+        PathBuf::from(&exec.start_program),
+        exec.start_args.clone(),
+    )?;
+
+    let exec_stop = match &exec.stop_program {
+        Some(prog) if !prog.is_empty() => Some(schema::ExecCommand::new(
+            PathBuf::from(prog),
+            exec.stop_args.clone(),
+        )?),
+        _ => None,
+    };
+
+    let working_dir = exec.working_dir.as_deref().map(PathBuf::from);
+    let user = exec.user.clone();
+    let group = exec.group.clone();
+
+    let service_type = match proto.r#type {
+        t if t == ServiceType::Simple as i32 => schema::ServiceType::Simple,
+        t if t == ServiceType::Forking as i32 => schema::ServiceType::Forking { pid_file: None },
+        t if t == ServiceType::Oneshot as i32 => schema::ServiceType::Oneshot,
+        t if t == ServiceType::Notify as i32 => schema::ServiceType::Notify,
+        _ => schema::ServiceType::Simple,
+    };
+
+    let restart = match &proto.restart {
+        Some(rp) => {
+            let condition = match rp.condition {
+                c if c == RestartCondition::RestartAlways as i32 => {
+                    schema::RestartCondition::Always
+                }
+                c if c == RestartCondition::RestartOnFailure as i32 => {
+                    schema::RestartCondition::OnFailure
+                }
+                _ => schema::RestartCondition::Never,
+            };
+            let delay_secs = rp
+                .delay
+                .as_ref()
+                .map(|d| d.seconds as u64)
+                .unwrap_or(1);
+            schema::RestartPolicy {
+                condition,
+                delay_secs,
+                max_retries: rp.max_retries,
+            }
+        }
+        None => schema::RestartPolicy::default(),
+    };
+
+    let depends_on: Vec<ServiceName> = proto
+        .depends_on
+        .iter()
+        .map(|n| ServiceName::new(n))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(schema::ServiceDef {
+        name,
+        service_type,
+        exec_start,
+        exec_stop,
+        working_dir,
+        user,
+        group,
+        depends_on,
+        waits_for: Vec::new(),
+        restart,
+        environment: proto.environment.clone(),
+        env_file: None,
+        resources: None,
+        log_type: schema::LogType::default(),
+        ready_notification: schema::ReadyNotification::default(),
+        chain_to: None,
+        smooth_recovery: false,
+        enabled: proto.enabled,
+    })
 }
 
 // Conversions

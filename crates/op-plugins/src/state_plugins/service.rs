@@ -1,18 +1,17 @@
-//! Service plugin - auto-generating, validating, init-agnostic service management
+//! Service plugin - auto-generating, validating, init-agnostic service management.
 
 use crate::service_def::{
     ExecCommand, LogType, ReadyNotification, RestartPolicy, ServiceDef, ServiceName, ServiceType,
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use op_state::{
-    ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
-};
+use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
 use serde::{Deserialize, Serialize};
 use simd_json::{json, OwnedValue as Value};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+use zbus::{proxy, Connection};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceLifecycle {
@@ -31,9 +30,32 @@ enum ServiceBackend {
     Systemd,
 }
 
+type DinitFlags = HashMap<String, bool>;
+type DinitServiceRecord = (
+    String,
+    String,
+    String,
+    String,
+    String,
+    DinitFlags,
+    u32,
+    i32,
+    i32,
+);
+
+#[proxy(
+    interface = "org.chimera.dinit.Manager",
+    default_service = "org.chimera.dinit",
+    default_path = "/org/chimera/dinit"
+)]
+trait DinitManager {
+    #[zbus(name = "ListServices")]
+    fn list_services(&self) -> zbus::Result<Vec<DinitServiceRecord>>;
+}
+
 impl ServicePlugin {
     pub fn new() -> Self {
-        let backend = if Path::new("/run/dinitctl").exists() {
+        let backend = if Path::new("/etc/dinit.d").exists() {
             ServiceBackend::Dinit
         } else {
             ServiceBackend::Systemd
@@ -196,6 +218,21 @@ impl ServicePlugin {
         Ok(())
     }
 
+    async fn list_dinit_services(&self) -> Result<Vec<String>> {
+        let conn = Connection::system()
+            .await
+            .context("failed to connect to system D-Bus for dinit service enumeration")?;
+        let proxy = DinitManagerProxy::new(&conn)
+            .await
+            .context("failed to create dinit D-Bus proxy for service enumeration")?;
+        let services = proxy
+            .list_services()
+            .await
+            .context("failed to list dinit services over D-Bus")?;
+
+        Ok(services.into_iter().map(|service| service.0).collect())
+    }
+
     async fn check_lifecycle(&self, name: &str) -> Result<ServiceLifecycle> {
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
 
@@ -268,16 +305,7 @@ impl StatePlugin for ServicePlugin {
                     .filter_map(|l| l.split_whitespace().next().map(String::from))
                     .collect::<Vec<_>>()
             }
-            ServiceBackend::Dinit => {
-                let out = tokio::process::Command::new("dinitctl")
-                    .args(["list"])
-                    .output()
-                    .await?;
-                String::from_utf8_lossy(&out.stdout)
-                    .lines()
-                    .filter_map(|l| l.split_whitespace().next().map(String::from))
-                    .collect::<Vec<_>>()
-            }
+            ServiceBackend::Dinit => self.list_dinit_services().await?,
         };
 
         for svc_name in service_list {

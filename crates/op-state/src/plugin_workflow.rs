@@ -4,7 +4,6 @@
 //! This module enables plugins to participate in flow-based workflows using PocketFlow.
 //! Each plugin becomes a node that can be connected to other plugins in complex pipelines.
 
-use crate::manager::StateManager;
 use crate::plugin::StatePlugin;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -13,7 +12,6 @@ use pocketflow_rs::node::{Node, ProcessResult, ProcessState};
 use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
 use simd_json::ValueBuilder;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Workflow states for plugin execution

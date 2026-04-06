@@ -1,100 +1,169 @@
-import { PageHeader } from "@/components/shell/PageHeader";
-import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { useState, useMemo } from "react";
+import { PageHeader, Card, Pill } from "@/components/shell/Primitives";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { SchemaRenderer } from "@/components/json/SchemaRenderer";
+import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Search, Copy, Check } from "lucide-react";
-import { useState, useCallback } from "react";
 import { cn } from "@/lib/utils";
+import { useEventStore } from "@/stores/event-store";
+import { ChevronRight, Wrench, AlertTriangle } from "lucide-react";
+import type { LogLevel, JsonSchema } from "@/types/api";
 
-const levelColors: Record<string, string> = {
-  error: "bg-destructive/20 text-destructive border-destructive/30",
-  warn: "bg-warning/20 text-warning border-warning/30",
-  info: "bg-info/20 text-info border-info/30",
-  debug: "bg-muted text-muted-foreground border-border",
-  trace: "bg-muted text-muted-foreground border-border",
-};
+const LEVELS: LogLevel[] = ["trace", "debug", "info", "warn", "error", "fatal"];
+
+interface LogEntry {
+  id: string;
+  time: string;
+  level: LogLevel;
+  subsystem: string;
+  message: string;
+  raw: string;
+  metadata?: {
+    schema?: JsonSchema;
+    payload?: Record<string, unknown>;
+    actions?: Array<{ label: string; action: string; variant?: "default" | "outline" | "destructive" }>;
+  };
+}
 
 export default function LogsPage() {
-  const [search, setSearch] = useState("");
-  const [level, setLevel] = useState("all");
+  const { latestState, logs } = useEventStore();
+  const [filterText, setFilterText] = useState("");
+  const [levelFilters, setLevelFilters] = useState<Record<LogLevel, boolean>>(
+    Object.fromEntries(LEVELS.map((l) => [l, true])) as Record<LogLevel, boolean>
+  );
+  const [autoFollow, setAutoFollow] = useState(true);
 
-  const { data: logs, isLoading } = useQuery({
-    queryKey: ["logs-page", level],
-    queryFn: async () => {
-      let q = supabase.from("logs").select("*, nodes(hostname)").order("timestamp", { ascending: false }).limit(300);
-      if (level !== "all") q = q.eq("level", level);
-      const { data, error } = await q;
-      if (error) throw error;
-      return data;
-    },
+  const logEntries = useMemo(() => {
+    const raw = latestState["logs"] ?? latestState["logs.entries"] ?? latestState["logs:entries"];
+    if (Array.isArray(raw)) return raw as LogEntry[];
+    // Fall back to event store logs
+    return logs.map((l, i) => ({
+      id: `log-${i}`,
+      time: (l as any).timestamp ?? new Date().toISOString(),
+      level: ((l as any).level ?? "info") as LogLevel,
+      subsystem: (l as any).source ?? (l as any).subsystem ?? "",
+      message: (l as any).message ?? String(l),
+      raw: JSON.stringify(l),
+      metadata: (l as any).metadata,
+    })) as LogEntry[];
+  }, [latestState, logs]);
+
+  const toggleLevel = (level: LogLevel) => {
+    setLevelFilters((prev) => ({ ...prev, [level]: !prev[level] }));
+  };
+
+  const needle = filterText.trim().toLowerCase();
+  const filtered = logEntries.filter((entry) => {
+    if (!levelFilters[entry.level]) return false;
+    if (!needle) return true;
+    return [entry.message, entry.subsystem, entry.raw].join(" ").toLowerCase().includes(needle);
   });
 
-  const filtered = logs?.filter((l) =>
-    l.message.toLowerCase().includes(search.toLowerCase()) ||
-    (l.source?.toLowerCase().includes(search.toLowerCase()) ?? false)
-  );
-
-  const [copiedId, setCopiedId] = useState<string | null>(null);
-  const copyLine = useCallback((id: string, msg: string) => {
-    navigator.clipboard.writeText(msg);
-    setCopiedId(id);
-    setTimeout(() => setCopiedId(null), 1200);
-  }, []);
+  const levelColor = (level: LogLevel) => {
+    switch (level) {
+      case "error": case "fatal": return "text-danger";
+      case "warn": return "text-warn";
+      case "info": return "text-ok";
+      case "debug": return "text-info";
+      default: return "text-muted-foreground";
+    }
+  };
 
   return (
-    <div className="flex flex-col h-full">
-      <PageHeader title="Logs" description="Live system and application logs">
+    <>
+      <PageHeader title="Logs" subtitle="Live tail of gateway file logs." actions={
         <div className="flex gap-2">
-          <Select value={level} onValueChange={setLevel}>
-            <SelectTrigger className="w-28 h-7 text-xs">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All</SelectItem>
-              <SelectItem value="error">Error</SelectItem>
-              <SelectItem value="warn">Warning</SelectItem>
-              <SelectItem value="info">Info</SelectItem>
-              <SelectItem value="debug">Debug</SelectItem>
-            </SelectContent>
-          </Select>
-          <div className="relative w-56">
-            <Search className="absolute left-2 top-2 h-3.5 w-3.5 text-muted-foreground" />
-            <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search logs..." className="pl-7 h-7 text-xs" />
-          </div>
+          <button className="px-3 py-1.5 rounded-md border border-border text-xs font-medium hover:bg-muted/30 transition-colors">Refresh</button>
+          <button className="px-3 py-1.5 rounded-md border border-border text-xs font-medium hover:bg-muted/30 transition-colors">Export</button>
         </div>
-      </PageHeader>
-      <div className="flex-1 overflow-auto font-mono text-xs">
-        {isLoading ? (
-          <div className="p-4 text-muted-foreground text-center">Loading logs...</div>
-        ) : filtered?.length === 0 ? (
-          <div className="p-4 text-muted-foreground text-center">No logs found</div>
-        ) : (
-          filtered?.map((log) => (
-            <div
-              key={log.id}
-              className="flex items-start gap-2 px-3 py-1 border-b border-border/30 hover:bg-accent/30 group"
-            >
-              <span className="text-muted-foreground shrink-0 w-[72px] tabular-nums">
-                {new Date(log.timestamp).toLocaleTimeString()}
-              </span>
-              <span className={cn("inline-flex items-center rounded-sm border px-1 py-0 text-[9px] font-medium shrink-0 w-10 justify-center", levelColors[log.level] || levelColors.debug)}>
-                {log.level}
-              </span>
-              <span className="text-muted-foreground shrink-0 w-20 truncate">{log.source ?? "—"}</span>
-              <span className="text-muted-foreground shrink-0 w-16 truncate">{(log as any).nodes?.hostname ?? ""}</span>
-              <span className="flex-1 whitespace-pre-wrap break-all">{log.message}</span>
-              <button
-                onClick={() => copyLine(log.id, log.message)}
-                className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-foreground shrink-0"
-              >
-                {copiedId === log.id ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-              </button>
-            </div>
-          ))
-        )}
+      } />
+      <Card>
+        <div className="flex items-center gap-4 flex-wrap">
+          <label className="space-y-1.5 min-w-[220px]">
+            <span className="text-xs font-medium text-muted-foreground">Filter</span>
+            <input value={filterText} onChange={(e) => setFilterText(e.target.value)} placeholder="Search logs"
+              className="w-full px-3 py-2 rounded-md border border-input bg-card text-sm focus:border-ring focus:ring-1 focus:ring-ring outline-none" />
+          </label>
+          <label className="flex items-center gap-2 mt-5">
+            <input type="checkbox" checked={autoFollow} onChange={(e) => setAutoFollow(e.target.checked)} className="accent-primary" />
+            <span className="text-xs text-muted-foreground">Auto-follow</span>
+          </label>
+        </div>
+        <div className="flex gap-1.5 mt-3 flex-wrap">
+          {LEVELS.map((level) => (
+            <label key={level} className={cn(
+              "flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-medium cursor-pointer transition-colors",
+              levelFilters[level] ? "border-border bg-muted/30 text-foreground" : "border-transparent text-muted-foreground opacity-50",
+            )}>
+              <input type="checkbox" checked={levelFilters[level]} onChange={() => toggleLevel(level)} className="hidden" />
+              <span className={levelColor(level)}>●</span>
+              {level}
+            </label>
+          ))}
+        </div>
+        <div className="mt-4 rounded-lg border border-border overflow-hidden max-h-[500px] overflow-y-auto bg-background" style={{ scrollbarWidth: "thin" }}>
+          {filtered.length === 0 ? (
+            <div className="p-4 text-sm text-muted-foreground">{logEntries.length === 0 ? "No log entries. Waiting for live data…" : "No log entries match filters."}</div>
+          ) : filtered.map((entry) => (
+            <LogRow key={entry.id} entry={entry} levelColor={levelColor} />
+          ))}
+        </div>
+      </Card>
+    </>
+  );
+}
+
+function LogRow({ entry, levelColor }: { entry: LogEntry; levelColor: (l: LogLevel) => string }) {
+  const hasExpandable = entry.metadata && (entry.metadata.schema || entry.metadata.actions);
+
+  if (!hasExpandable) {
+    return (
+      <div className="flex items-baseline gap-3 px-3 py-1.5 border-b border-border/50 last:border-0 hover:bg-muted/10 transition-colors font-mono text-xs">
+        <span className="text-muted-foreground w-20 shrink-0">{new Date(entry.time).toLocaleTimeString()}</span>
+        <span className={cn("w-12 shrink-0 font-medium", levelColor(entry.level))}>{entry.level}</span>
+        <span className="text-muted-foreground w-16 shrink-0 truncate">{entry.subsystem}</span>
+        <span className="text-foreground flex-1 truncate">{entry.message}</span>
       </div>
-    </div>
+    );
+  }
+
+  return (
+    <Collapsible className="border-b border-border/50 last:border-0">
+      <CollapsibleTrigger asChild>
+        <button className="w-full flex items-baseline gap-3 px-3 py-1.5 hover:bg-muted/10 transition-colors font-mono text-xs text-left group">
+          <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground group-data-[state=open]:rotate-90 transition-transform mt-0.5" />
+          <span className="text-muted-foreground w-20 shrink-0">{new Date(entry.time).toLocaleTimeString()}</span>
+          <span className={cn("w-12 shrink-0 font-medium", levelColor(entry.level))}>{entry.level}</span>
+          <span className="text-muted-foreground w-16 shrink-0 truncate">{entry.subsystem}</span>
+          <span className="text-foreground flex-1 truncate">{entry.message}</span>
+          {entry.metadata?.schema && <Wrench className="h-3 w-3 text-primary/50 shrink-0" />}
+          {entry.metadata?.actions && <AlertTriangle className="h-3 w-3 text-warn/50 shrink-0" />}
+        </button>
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <div className="px-4 pb-3 pt-1 ml-6 border-l-2 border-primary/20 space-y-3">
+          {entry.metadata?.schema && entry.metadata.payload && (
+            <SchemaRenderer schema={entry.metadata.schema} data={entry.metadata.payload} readOnly />
+          )}
+          {entry.metadata?.actions && (
+            <div className="flex items-center gap-2">
+              {entry.metadata.actions.map((act) => (
+                <Button key={act.action} size="sm"
+                  variant={act.variant === "destructive" ? "destructive" : act.variant === "outline" ? "outline" : "default"}
+                  className="h-7 text-xs gap-1.5"
+                  onClick={(e) => { e.stopPropagation(); console.log("Action:", act.action, entry.metadata?.payload); }}>
+                  {act.label}
+                </Button>
+              ))}
+            </div>
+          )}
+          {!entry.metadata?.schema && entry.metadata?.payload && (
+            <pre className="font-mono text-[11px] text-muted-foreground bg-muted/20 rounded-md p-2 whitespace-pre-wrap break-all">
+              {JSON.stringify(entry.metadata.payload, null, 2)}
+            </pre>
+          )}
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }

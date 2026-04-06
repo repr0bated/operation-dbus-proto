@@ -28,6 +28,7 @@ struct TrackedPattern {
     agent_sequence: Vec<String>,
     call_count: u32,
     total_latency_ms: u64,
+    #[allow(dead_code)]
     first_seen: Instant,
     last_called: Instant,
     promoted: bool,

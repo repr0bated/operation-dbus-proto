@@ -5,7 +5,7 @@ use std::time::Duration;
 use tracing::warn;
 
 /// Snapshot interval options
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum SnapshotInterval {
     /// Snapshot after every operation
     PerOperation,
@@ -14,6 +14,7 @@ pub enum SnapshotInterval {
     /// Snapshot every 5 minutes
     Every5Minutes,
     /// Snapshot every 15 minutes
+    #[default]
     Every15Minutes,
     /// Snapshot every 30 minutes
     Every30Minutes,
@@ -23,12 +24,6 @@ pub enum SnapshotInterval {
     Daily,
     /// Snapshot every week
     Weekly,
-}
-
-impl Default for SnapshotInterval {
-    fn default() -> Self {
-        SnapshotInterval::Every15Minutes
-    }
 }
 
 impl SnapshotInterval {
@@ -55,7 +50,7 @@ impl SnapshotInterval {
     }
 
     /// Parse from string
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "per-op" | "per-operation" | "per_operation" => Some(SnapshotInterval::PerOperation),
             "every-minute" | "1-minute" | "1min" | "minute" => Some(SnapshotInterval::EveryMinute),
@@ -133,13 +128,13 @@ mod tests {
     #[test]
     fn test_from_str() {
         assert_eq!(
-            SnapshotInterval::from_str("hourly"),
+            SnapshotInterval::parse("hourly"),
             Some(SnapshotInterval::Hourly)
         );
         assert_eq!(
-            SnapshotInterval::from_str("15min"),
+            SnapshotInterval::parse("15min"),
             Some(SnapshotInterval::Every15Minutes)
         );
-        assert_eq!(SnapshotInterval::from_str("invalid"), None);
+        assert_eq!(SnapshotInterval::parse("invalid"), None);
     }
 }

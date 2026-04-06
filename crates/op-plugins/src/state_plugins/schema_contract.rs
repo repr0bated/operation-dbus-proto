@@ -1,21 +1,28 @@
 //! Compatibility adapter for legacy contract-style plugin schemas.
 //!
-//! The canonical schema source of truth is `op_state_store::SchemaRegistry`.
+//! Dead-path note:
+//! this module exists only to keep legacy contract consumers alive while the
+//! workspace is migrated to canonical plugin documents plus a schema catalog.
+//! It must not be treated as a source of schema truth.
+//!
+//! The canonical schema source of truth is the plugin-owned canonical document,
+//! resolved through `op_state_store::SchemaCatalog`.
 //! This module preserves the old `schema_for_plugin()` / `all_contract_schemas()`
-//! API surface by wrapping registry schemas in the legacy contract envelope.
+//! API surface by wrapping catalog-resolved schemas in the legacy contract
+//! envelope.
 
-use op_state_store::SchemaRegistry;
+use op_state_store::SchemaCatalog;
 use simd_json::OwnedValue as Value;
 use std::collections::HashMap;
 
 /// Get contract schema for a single plugin.
-pub fn schema_for_plugin(plugin: &str) -> Option<Value> {
-    SchemaRegistry::new().export_contract_for(plugin)
+pub fn schema_for_plugin(catalog: &SchemaCatalog, plugin: &str) -> Option<Value> {
+    catalog.export_contract_for(plugin)
 }
 
 /// Get all contract schemas keyed by canonical plugin name.
-pub fn all_contract_schemas() -> HashMap<String, Value> {
-    SchemaRegistry::new().export_all_contract()
+pub fn all_contract_schemas(catalog: &SchemaCatalog) -> HashMap<String, Value> {
+    catalog.export_all_contract()
 }
 
 #[cfg(test)]
@@ -26,13 +33,15 @@ mod tests {
 
     #[test]
     fn test_all_plugins_have_contract_schema() {
-        let schemas = all_contract_schemas();
+        let catalog = SchemaCatalog::with_builtin_schemas();
+        let schemas = all_contract_schemas(&catalog);
         assert_eq!(schemas.len(), 34);
     }
 
     #[test]
     fn test_contract_shape_has_required_sections() {
-        let schema = schema_for_plugin("net").expect("net schema");
+        let catalog = SchemaCatalog::with_builtin_schemas();
+        let schema = schema_for_plugin(&catalog, "net").expect("net schema");
         let required = schema
             .get("required")
             .and_then(|v| v.as_array())
@@ -55,9 +64,10 @@ mod tests {
 
     #[test]
     fn test_dependency_targets_are_known_plugins() {
-        let known: HashSet<String> = all_contract_schemas().keys().cloned().collect();
+        let catalog = SchemaCatalog::with_builtin_schemas();
+        let known: HashSet<String> = all_contract_schemas(&catalog).keys().cloned().collect();
 
-        for (plugin, schema) in all_contract_schemas() {
+        for (plugin, schema) in all_contract_schemas(&catalog) {
             let empty: Vec<Value> = Vec::new();
             let deps = schema
                 .get("properties")
@@ -81,6 +91,8 @@ mod tests {
 
     #[test]
     fn test_uniform_index_paths_use_absolute_json_paths() {
+        let catalog = SchemaCatalog::with_builtin_schemas();
+
         fn validate_path_array(paths: Option<&Vec<Value>>, context: &str) {
             if let Some(arr) = paths {
                 for path in arr.iter().filter_map(|v| v.as_str()) {
@@ -94,7 +106,7 @@ mod tests {
             }
         }
 
-        for (plugin, schema) in all_contract_schemas() {
+        for (plugin, schema) in all_contract_schemas(&catalog) {
             let semantic = schema
                 .get("properties")
                 .and_then(|v| v.get("semantic_index"))
@@ -141,7 +153,9 @@ mod tests {
 
     #[test]
     fn test_recovery_priority_is_bounded() {
-        for (plugin, schema) in all_contract_schemas() {
+        let catalog = SchemaCatalog::with_builtin_schemas();
+
+        for (plugin, schema) in all_contract_schemas(&catalog) {
             let priority = schema
                 .get("properties")
                 .and_then(|v| v.get("meta"))
@@ -162,8 +176,10 @@ mod tests {
 
     #[test]
     fn test_aliases_resolve_from_registry() {
-        assert!(schema_for_plugin("systemd").is_some());
-        assert!(schema_for_plugin("web-ui").is_some());
-        assert!(schema_for_plugin("incus").is_some());
+        let catalog = SchemaCatalog::with_builtin_schemas();
+
+        assert!(schema_for_plugin(&catalog, "systemd").is_some());
+        assert!(schema_for_plugin(&catalog, "web-ui").is_some());
+        assert!(schema_for_plugin(&catalog, "incus").is_some());
     }
 }

@@ -10,7 +10,7 @@ use tracing::info;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
 use op_grpc_bridge::run_grpc_server;
-use op_grpc_bridge::SyncEngine;
+use op_grpc_bridge::SchemaEngine;
 use op_state_store::{ChainConfig, EventChain};
 use tokio::sync::RwLock;
 
@@ -30,7 +30,7 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|_| "10.88.88.1:50051".parse().unwrap());
 
     let chain = Arc::new(RwLock::new(EventChain::new(ChainConfig::default())));
-    let engine = Arc::new(SyncEngine::new(chain));
+    let engine = Arc::new(SchemaEngine::new(chain));
 
     info!(addr = %addr, "op-dbus starting");
     run_grpc_server(addr, engine, None).await?;

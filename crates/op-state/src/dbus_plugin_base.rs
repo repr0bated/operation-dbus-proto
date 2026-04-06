@@ -236,7 +236,6 @@ pub trait DbusStatePluginBase: StatePlugin {
 pub mod conversion {
     use super::Value;
     use simd_json::prelude::*;
-    use simd_json::OwnedValue;
     use simd_json::ValueBuilder;
     use zbus::zvariant;
 

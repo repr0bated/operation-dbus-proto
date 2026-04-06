@@ -17,6 +17,12 @@ pub struct CachedToken {
 /// Thin wrapper around gcloud/ADC that caches the token in the system keyring.
 pub struct TokenManager;
 
+impl Default for TokenManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TokenManager {
     pub fn new() -> Self {
         Self

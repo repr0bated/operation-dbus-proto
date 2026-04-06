@@ -340,7 +340,7 @@ impl SqliteStore {
     ) -> Result<()> {
         let state_json = simd_json::to_string(state_snapshot)?;
         let backend_json = backend_checkpoint
-            .map(|v| simd_json::to_string(v))
+            .map(simd_json::to_string)
             .transpose()?;
         let now = Utc::now().to_rfc3339();
 
@@ -621,7 +621,7 @@ impl StateStore for SqliteStore {
         let result_json = job
             .result
             .as_ref()
-            .map(|r| simd_json::to_string(r))
+            .map(simd_json::to_string)
             .transpose()?;
         let status_str = status_to_string(&job.status);
 
@@ -664,7 +664,7 @@ impl StateStore for SqliteStore {
         let result_json = job
             .result
             .as_ref()
-            .map(|r| simd_json::to_string(r))
+            .map(simd_json::to_string)
             .transpose()?;
         let status_str = status_to_string(&job.status);
 

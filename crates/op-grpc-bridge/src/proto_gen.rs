@@ -3,7 +3,7 @@
 //! Converts operation-dbus plugin schemas to protobuf message and service
 //! definitions, enabling dynamic schema-driven gRPC.
 
-use op_state_store::{FieldType, PluginSchema, SchemaRegistry};
+use op_state_store::{FieldType, PluginSchema, SchemaCatalog, SchemaRegistry};
 use std::fmt::Write;
 
 /// Configuration for protobuf generation
@@ -69,9 +69,11 @@ impl ProtoGenerator {
         output
     }
 
-    /// Generate proto file content for all schemas in a registry
-    pub fn generate_for_registry(&self, registry: &SchemaRegistry) -> String {
+    /// Generate proto file content for all schemas in a catalog.
+    pub fn generate_for_catalog(&self, catalog: &SchemaCatalog) -> String {
         let mut output = String::new();
+        let mut schema_names: Vec<&str> = catalog.list();
+        schema_names.sort_unstable();
 
         // Header
         writeln!(output, "syntax = \"proto3\";").unwrap();
@@ -86,8 +88,8 @@ impl ProtoGenerator {
         writeln!(output).unwrap();
 
         // Generate messages for each schema
-        for schema_name in registry.list() {
-            let Some(schema) = registry.get(schema_name) else {
+        for schema_name in schema_names {
+            let Some(schema) = catalog.get(schema_name) else {
                 continue;
             };
             writeln!(output, "// =============================================").unwrap();
@@ -106,9 +108,14 @@ impl ProtoGenerator {
         }
 
         // Add unified service
-        self.generate_unified_service(&mut output, registry);
+        self.generate_unified_service(&mut output, catalog);
 
         output
+    }
+
+    /// Compatibility wrapper for older call sites that still say `registry`.
+    pub fn generate_for_registry(&self, registry: &SchemaRegistry) -> String {
+        self.generate_for_catalog(registry)
     }
 
     pub fn generate_message(&self, output: &mut String, schema: &PluginSchema) {
@@ -116,7 +123,14 @@ impl ProtoGenerator {
         writeln!(output, "message {} {{", message_name).unwrap();
 
         let mut field_num = 1;
-        for (field_name, field_schema) in &schema.fields {
+        let mut fields: Vec<(&str, &op_state_store::FieldSchema)> = schema
+            .fields
+            .iter()
+            .map(|(field_name, field_schema)| (field_name.as_str(), field_schema))
+            .collect();
+        fields.sort_unstable_by(|left, right| left.0.cmp(right.0));
+
+        for (field_name, field_schema) in fields {
             let proto_type = self.field_type_to_proto(&field_schema.field_type);
             let optional_marker = if field_schema.required {
                 ""
@@ -247,7 +261,7 @@ impl ProtoGenerator {
         writeln!(output).unwrap();
     }
 
-    fn generate_unified_service(&self, output: &mut String, registry: &SchemaRegistry) {
+    fn generate_unified_service(&self, output: &mut String, catalog: &SchemaCatalog) {
         writeln!(output, "// =============================================").unwrap();
         writeln!(output, "// Unified Operation Service").unwrap();
         writeln!(output, "// =============================================").unwrap();
@@ -297,7 +311,10 @@ impl ProtoGenerator {
         )
         .unwrap();
 
-        for schema_name in registry.list() {
+        let mut schema_names: Vec<&str> = catalog.list();
+        schema_names.sort_unstable();
+
+        for schema_name in schema_names {
             let name = to_pascal_case(schema_name);
             writeln!(
                 output,
@@ -331,7 +348,7 @@ impl ProtoGenerator {
 
 /// Convert string to PascalCase
 fn to_pascal_case(s: &str) -> String {
-    s.split(|c: char| c == '_' || c == '-' || c == ' ')
+    s.split(['_', '-', ' '])
         .map(|word| {
             let mut chars = word.chars();
             match chars.next() {
@@ -343,6 +360,7 @@ fn to_pascal_case(s: &str) -> String {
 }
 
 /// Convert string to snake_case
+#[cfg(test)]
 fn to_snake_case(s: &str) -> String {
     let mut result = String::new();
     for (i, c) in s.chars().enumerate() {
@@ -357,7 +375,7 @@ fn to_snake_case(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use op_state_store::SchemaRegistry;
+    use op_state_store::SchemaCatalog;
 
     #[test]
     fn test_to_pascal_case() {
@@ -373,10 +391,10 @@ mod tests {
     }
 
     #[test]
-    fn test_generate_for_registry() {
-        let registry = SchemaRegistry::new();
+    fn test_generate_for_catalog() {
+        let catalog = SchemaCatalog::with_builtin_schemas();
         let generator = ProtoGenerator::new(ProtoGenConfig::default());
-        let proto = generator.generate_for_registry(&registry);
+        let proto = generator.generate_for_catalog(&catalog);
 
         assert!(proto.contains("syntax = \"proto3\";"));
         assert!(proto.contains("service OperationService"));

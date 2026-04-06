@@ -1,6 +1,6 @@
 use anyhow::Result;
 use futures::{stream::iter, StreamExt};
-use parking_lot::{Mutex, RwLock as SyncRwLock};
+use tokio::sync::RwLock as AsyncRwLock;
 use sha2::{Digest, Sha256};
 use simd_json::OwnedValue as Value;
 use std::sync::Arc;
@@ -25,7 +25,7 @@ use op_core::types::ObjectSchemaRef;
 #[derive(Clone)]
 pub struct DbusProjection {
     introspection: Arc<IntrospectionService>,
-    blockchain: Option<Arc<SyncRwLock<StreamingBlockchain>>>,
+    blockchain: Option<Arc<AsyncRwLock<StreamingBlockchain>>>,
 }
 
 impl DbusProjection {
@@ -47,7 +47,7 @@ impl DbusProjection {
 
     /// Attach a StreamingBlockchain for restorable state persistence
     /// JSON writes go to state_subvol (BTRFS) and trigger blockchain backup
-    pub fn with_blockchain(mut self, blockchain: Arc<SyncRwLock<StreamingBlockchain>>) -> Self {
+    pub fn with_blockchain(mut self, blockchain: Arc<AsyncRwLock<StreamingBlockchain>>) -> Self {
         self.blockchain = Some(blockchain);
         self
     }
@@ -113,7 +113,7 @@ impl DbusProjection {
 
         // Write to BTRFS state subvolume AND trigger blockchain block
         if let Some(blockchain) = &self.blockchain {
-            let bc = blockchain.read();
+            let bc = blockchain.read().await;
 
             // Write JSON to state_subvol (restorable system config)
             bc.write_state(&state_key, &json).await?;
@@ -148,7 +148,7 @@ impl DbusProjection {
         service: &str,
     ) -> Result<Vec<ObjectSchemaRef>> {
         let root_info = self.introspect_object(bus_type, service, "/").await?;
-        let schemas = Arc::new(Mutex::new(Vec::new()));
+        let schemas = Arc::new(tokio::sync::Mutex::new(Vec::new()));
 
         // Persist root
         if let Ok(schema) = self.introspect_and_persist(bus_type, service, "/").await {
@@ -173,7 +173,7 @@ impl DbusProjection {
                         .introspect_and_persist(bus_type, service, &child_path)
                         .await
                     {
-                        schemas.lock().push(schema);
+                        schemas.lock().await.push(schema);
                     }
                 }
             })

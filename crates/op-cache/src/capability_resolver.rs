@@ -49,7 +49,7 @@ impl CapabilityRequest {
     pub fn from_strings(cap_strings: &[&str], input: Vec<u8>) -> Self {
         let capabilities: Vec<AgentCapability> = cap_strings
             .iter()
-            .filter_map(|s| AgentCapability::from_str(s))
+            .filter_map(|s| AgentCapability::parse(s))
             .collect();
 
         Self::new(capabilities, input)
@@ -302,7 +302,7 @@ impl CapabilityResolver {
             s
         };
 
-        viable.sort_by(|a, b| score(b).cmp(&score(a)));
+        viable.sort_by_key(|b| std::cmp::Reverse(score(b)));
 
         viable.first().map(|a| (*a).clone())
     }
