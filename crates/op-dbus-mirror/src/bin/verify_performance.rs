@@ -39,7 +39,7 @@ async fn main() -> Result<()> {
             }
         });
 
-        let obj = MirrorObject::new(data.into());
+        let obj = MirrorObject::new(data);
         conn.object_server().at(dbus_path, obj).await?;
 
         if (i + 1) % 1000 == 0 {

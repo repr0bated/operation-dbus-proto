@@ -9,7 +9,7 @@
 //! - SQLite persistent storage
 //! - Redis real-time stream
 //! - Prometheus metrics
-//! - Plugin schema registry with JSON Schema 2026 support
+//! - Plugin schema catalog with JSON Schema 2026 support
 //! - Disaster recovery export/import
 //! - OpenTelemetry tracing integration
 //! - Blockchain-style event chain for compliance and reproducibility
@@ -37,8 +37,9 @@ pub use event_chain::{
 };
 pub use execution_job::{ExecutionJob, ExecutionResult, ExecutionStatus};
 pub use plugin_schema::{
-    dialects, Constraint, FieldSchema, FieldType, PluginSchema, ReadOnlyCondition, SchemaLoadError,
-    SchemaRegistry, ValidationResult as SchemaValidationResult, DEFAULT_SCHEMA_DIALECT,
+    builtin_plugin_schema, builtin_plugin_schemas, dialects, Constraint, FieldSchema, FieldType,
+    PluginSchema, ReadOnlyCondition, SchemaCatalog, SchemaLoadError, SchemaRegistry,
+    ValidationResult as SchemaValidationResult, DEFAULT_SCHEMA_DIALECT,
 };
 pub use redis_stream::RedisStream;
 pub use schema_validator::{

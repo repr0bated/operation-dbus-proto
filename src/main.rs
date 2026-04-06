@@ -4,7 +4,6 @@
 
 use parking_lot::RwLock;
 use simd_json::prelude::*;
-use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -17,9 +16,9 @@ use op_blockchain::StreamingBlockchain;
 use op_core::config::load_environment;
 use op_core::types::BusType;
 use op_introspection::projection::DbusProjection;
-use op_plugins::plugin::{PluginMetadata as PluginCore, PluginTunables};
-use op_plugins::registry::PluginRegistry;
-use op_state_store::{SqliteStore, StateStore};
+use op_plugins::plugin::PluginMetadata as PluginCore;
+use op_plugins::PluginCatalog;
+use op_state_store::{SchemaCatalog, SqliteStore, StateStore};
 use op_tools::{register_builtin_tools, ToolRegistry};
 use op_workflows::orchestrator::{Orchestrator, OrchestratorConfig};
 
@@ -33,7 +32,7 @@ use op_dbus::{
     error::Result,
     inspector_gadget::{InspectorConfig, InspectorGadget},
     json_rpc::{JsonRpcError, JsonRpcRequest, JsonRpcResponse},
-    mcp::{McpCompactDispatcher, McpError, McpRequest, McpResponse},
+    mcp::{McpCompactDispatcher, McpRequest},
     mcp_live::McpLiveDispatcher,
     numa_cache::NumaOptimizer,
     policy::PolicyEngine,
@@ -51,10 +50,8 @@ use op_grpc_bridge::proto::{
     plugin_service_server::PluginServiceServer, state_sync_server::StateSyncServer,
 };
 #[cfg(feature = "grpc")]
-use op_grpc_bridge::sync_engine::ChangeType;
-#[cfg(feature = "grpc")]
 use op_grpc_bridge::{
-    DbusWatcher, OperationGrpcServer, PluginSchemaProvider, SyncEngine, WatchConfig,
+    ChangeType, OperationGrpcServer, PluginSchemaProvider, SchemaEngine,
 };
 #[cfg(feature = "grpc")]
 use op_mcp::grpc::proto::mcp_service_server::McpServiceServer;
@@ -64,9 +61,7 @@ use op_mcp::grpc::{GrpcInfrastructure, GrpcServerMode, McpGrpcService};
 use op_state_store::ChainConfig;
 use op_web::{routes, AppState};
 #[cfg(feature = "grpc")]
-use serde_json::Value as JsonValue;
-#[cfg(feature = "grpc")]
-static GLOBAL_SYNC_ENGINE: OnceLock<Arc<SyncEngine>> = OnceLock::new();
+static GLOBAL_SCHEMA_ENGINE: OnceLock<Arc<SchemaEngine>> = OnceLock::new();
 
 #[cfg(feature = "dev-antigravity")]
 use op_dbus::antigravity::{
@@ -96,48 +91,68 @@ struct Config {
 
 fn start_privacy_router_bootstrap(state_manager: Arc<op_state::manager::StateManager>) {
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
-        loop {
-            interval.tick().await;
-
-            let desired_config = match simd_json::serde::to_owned_value(
-                op_plugins::state_plugins::privacy_router::PrivacyRouterConfig::default(),
-            ) {
-                Ok(config) => config,
-                Err(e) => {
-                    tracing::warn!("Failed to encode default privacy_router config: {}", e);
-                    continue;
+        let desired = match state_manager.get_plugin("privacy_router") {
+            Some(plugin) => match plugin.query_current_state().await {
+                Ok(current) => current.get("config").cloned().unwrap_or_else(|| {
+                    simd_json::json!(
+                        op_plugins::state_plugins::privacy_router::PrivacyRouterConfig::default()
+                    )
+                }),
+                Err(error) => {
+                    tracing::warn!(
+                        "privacy_router bootstrap could not query current config, using defaults: {}",
+                        error
+                    );
+                    simd_json::json!(
+                        op_plugins::state_plugins::privacy_router::PrivacyRouterConfig::default()
+                    )
                 }
-            };
+            },
+            None => {
+                tracing::warn!("privacy_router bootstrap skipped because the plugin is not loaded");
+                return;
+            }
+        };
 
-            let desired = op_state::manager::DesiredState {
-                version: 1,
-                plugins: HashMap::from([("privacy_router".to_string(), desired_config)]),
-            };
-
+        let mut attempt = 0u32;
+        loop {
+            attempt += 1;
             match state_manager
-                .apply_state_single_plugin(desired, "privacy_router")
+                .apply_plugin_state("privacy_router", desired.clone())
                 .await
             {
-                Ok(report) => {
-                    tracing::debug!(
-                        "privacy_router bootstrap applied: success={}, results={}",
-                        report.success,
-                        report.results.len()
+                Ok(result) if result.success => {
+                    tracing::info!(
+                        attempt,
+                        changes = ?result.changes_applied,
+                        "privacy_router bootstrap applied successfully"
+                    );
+                    break;
+                }
+                Ok(result) => {
+                    tracing::warn!(
+                        attempt,
+                        errors = ?result.errors,
+                        "privacy_router bootstrap reported errors"
                     );
                 }
-                Err(e) => {
-                    tracing::warn!("Failed to bootstrap privacy_router from op-dbus: {}", e);
+                Err(error) => {
+                    tracing::warn!(attempt, "privacy_router bootstrap failed: {}", error);
                 }
             }
+
+            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
         }
     });
 }
 
 fn privacy_router_bootstrap_enabled() -> bool {
     std::env::var("OP_DBUS_ENABLE_PRIVACY_ROUTER_BOOTSTRAP")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
+        .map(|v| {
+            let value = v.trim().to_ascii_lowercase();
+            !(value == "0" || value == "false" || value == "no" || value == "off")
+        })
+        .unwrap_or(true)
 }
 
 impl Default for Config {
@@ -179,55 +194,54 @@ impl Default for Config {
 }
 
 #[cfg(feature = "grpc")]
-struct OpdbusPluginProvider;
+struct OpdbusPluginProvider {
+    catalog: Arc<op_dbus_model::SqlitePluginCatalog>,
+}
 
 #[cfg(feature = "grpc")]
+#[tonic::async_trait]
 impl PluginSchemaProvider for OpdbusPluginProvider {
-    fn list_plugins(&self) -> Vec<PluginInfo> {
-        let mut plugins = Vec::new();
-        for plugin in op_dbus::plugins::plugin_definitions() {
-            let mut description = String::new();
-            let mut dbus_path = String::new();
-            let mut interfaces = Vec::new();
-
-            if let Ok(value) = serde_json::from_str::<JsonValue>(plugin.schema_json) {
-                if let Some(desc) = value.get("description").and_then(|v| v.as_str()) {
-                    description = desc.to_string();
-                }
-                if let Some(object_types) = value.get("object_types").and_then(|v| v.as_object()) {
-                    for (_name, entry) in object_types {
-                        if let Some(path) = entry.get("base_path").and_then(|v| v.as_str()) {
-                            if dbus_path.is_empty() {
-                                dbus_path = path.to_string();
-                            }
-                        }
-                        if let Some(interface) = entry.get("interface").and_then(|v| v.as_str()) {
-                            interfaces.push(interface.to_string());
-                        }
-                    }
-                }
+    async fn list_plugins(&self) -> Vec<PluginInfo> {
+        match self.catalog.list_documents().await {
+            Ok(docs) => {
+                let mut plugins: Vec<PluginInfo> = docs
+                    .into_iter()
+                    .map(|doc| PluginInfo {
+                        id: doc.schema.name.clone(),
+                        name: doc.schema.name.clone(),
+                        version: doc.schema.version.clone(),
+                        description: doc.schema.description.clone(),
+                        dbus_path: format!("/org/opdbus/v1/plugins/{}", doc.schema.name),
+                        interfaces: Vec::new(),
+                        tags: doc.schema.tags.clone(),
+                    })
+                    .collect();
+                plugins.sort_by(|left, right| left.id.cmp(&right.id));
+                plugins
             }
-
-            plugins.push(PluginInfo {
-                id: plugin.name.to_string(),
-                name: plugin.name.to_string(),
-                version: "v1".to_string(),
-                description,
-                dbus_path,
-                interfaces,
-                tags: Vec::new(),
-            });
+            Err(e) => {
+                tracing::error!("Failed to list plugins from DB: {}", e);
+                Vec::new()
+            }
         }
-        plugins
     }
 
-    fn get_schema(&self, plugin_id: &str) -> Option<(String, String, String)> {
-        let schema = op_dbus::plugins::get_plugin_schema_json(plugin_id)?;
-        Some((
-            schema.to_string(),
-            "json-schema-2020-12".to_string(),
-            "v1".to_string(),
-        ))
+    async fn get_schema(&self, plugin_id: &str) -> Option<(String, String, String)> {
+        match self.catalog.get_document(plugin_id).await {
+            Ok(Some(doc)) => {
+                let schema_json = simd_json::to_string(&doc.schema).ok()?;
+                Some((
+                    schema_json,
+                    doc.schema.dialect.clone(),
+                    doc.schema.version.clone(),
+                ))
+            }
+            Ok(None) => None,
+            Err(e) => {
+                tracing::error!("Failed to get schema for {} from DB: {}", plugin_id, e);
+                None
+            }
+        }
     }
 }
 
@@ -292,8 +306,6 @@ async fn main() -> Result<()> {
     let state_store: Arc<dyn StateStore> = Arc::new(sqlite_store);
 
     op_dbus_model::create_schema(&pool).await?;
-    op_dbus::plugins::insert_plugins(&pool).await?;
-    op_dbus::pre_canned::create_pre_canned_schemas(&pool).await?;
     op_dbus::plugins::validate_plugin_schemas_from_repo()?;
 
     // Initialize NUMA optimizer
@@ -323,9 +335,21 @@ async fn main() -> Result<()> {
 
     tracing::info!("Total tools in registry: {}", tool_registry.len().await);
 
-    // Initialize plugin registry
+    // Initialize the plugin catalog.
+    //
+    // The catalog is only the runtime index/cache. Registration persists the
+    // canonical plugin document first, then hydrates this shared in-memory
+    // catalog so D-Bus/gRPC/rendering resolve the same schema/footprint shape.
     let plugin_dir = PathBuf::from(&config.cache_dir).join("plugins");
-    let plugin_registry = Arc::new(PluginRegistry::new(&plugin_dir));
+    let schema_catalog = Arc::new(parking_lot::RwLock::new(SchemaCatalog::empty()));
+    let persisted_plugin_catalog = Arc::new(op_dbus_model::SqlitePluginCatalog::new(pool.clone()));
+    let plugin_catalog = Arc::new(PluginCatalog::with_schema_catalog_and_store(
+        &plugin_dir,
+        schema_catalog.clone(),
+        Some(persisted_plugin_catalog.clone()),
+    ));
+
+    plugin_catalog.hydrate_catalog_from_store().await?;
 
     // Register system plugin metadata (placeholder until full plugin loading is restored)
     let _system_plugin = PluginCore {
@@ -335,10 +359,29 @@ async fn main() -> Result<()> {
         ..Default::default()
     };
 
-    // The new registry requires a BoxedPlugin trait object, not just metadata.
-    // For now, we skip manual registration of "system" plugin as tools are registered directly.
-    // plugin_registry.register_core(system_plugin);
-    // plugin_registry.register_tunables("system", TunableScope::Global, PluginTunables::default());
+    // Initialize authoritative RCP stores
+    let authoritative_ovsdb = Arc::new(op_network::ovsdb::OvsdbClient::new());
+    let authoritative_nonnet = Arc::new(op_jsonrpc::nonnet::NonNetDb::new());
+
+    // Initialize Schema Engine (Single Authoritative Pipeline)
+    #[cfg(feature = "grpc")]
+    let schema_engine = {
+        let chain = Arc::new(tokio::sync::RwLock::new(op_state_store::EventChain::new(
+            ChainConfig::default(),
+        )));
+        let engine = Arc::new(SchemaEngine::new(chain, authoritative_ovsdb.clone(), authoritative_nonnet.clone()));
+        
+        let engine_clone = engine.clone();
+        tokio::spawn(async move {
+            if let Err(e) = engine_clone.start().await {
+                tracing::error!("Schema Engine authoritative pipeline failed to start: {}", e);
+            }
+        });
+        
+        plugin_catalog.set_publisher(engine.clone()).await;
+        let _ = GLOBAL_SCHEMA_ENGINE.set(engine.clone());
+        engine
+    };
 
     // Initialize blockchain (StreamingBlockchain)
     let blockchain_path = PathBuf::from(&config.cache_dir).join("blockchain");
@@ -353,7 +396,7 @@ async fn main() -> Result<()> {
     let orchestrator = Arc::new(Orchestrator::new(
         OrchestratorConfig::default(),
         tool_registry.clone(),
-        plugin_registry.clone(),
+        plugin_catalog.clone(),
     ));
 
     // Create MCP dispatchers
@@ -370,7 +413,7 @@ async fn main() -> Result<()> {
     let inspector = Arc::new(InspectorGadget::new(
         InspectorConfig::default(),
         state_store.clone(),
-        plugin_registry.clone(),
+        plugin_catalog.clone(),
         tool_registry.clone(),
     ));
     tracing::info!("Inspector Gadget ready (one-shot discovery only)");
@@ -384,6 +427,40 @@ async fn main() -> Result<()> {
     dependency_manager.init().await?;
     let dependency_manager = Arc::new(dependency_manager);
     tracing::info!("Dependency manager initialized");
+
+    let state_manager = Arc::new(op_state::manager::StateManager::with_schema_catalog(
+        schema_catalog.clone(),
+    ));
+    let default_plugin_loader = op_plugins::DefaultPluginRegistry::new(state_store.clone());
+    match default_plugin_loader.load_default_plugins().await {
+        Ok(plugins) => {
+            for plugin in plugins {
+                let plugin_name = plugin.name().to_string();
+                state_manager.register_plugin(plugin_name, plugin.clone());
+                if let Err(error) = plugin_catalog.register(plugin).await {
+                    tracing::warn!(
+                        "Failed to register plugin in authoritative catalog: {}",
+                        error
+                    );
+                }
+            }
+            if privacy_router_bootstrap_enabled() {
+                start_privacy_router_bootstrap(state_manager.clone());
+            } else {
+                tracing::info!("privacy_router bootstrap disabled");
+            }
+        }
+        Err(e) => {
+            tracing::warn!("Failed to load state plugins: {}", e);
+        }
+    }
+
+    #[cfg(feature = "grpc")]
+    if let Ok(current_state) = state_manager.query_current_state().await {
+        for (plugin_id, state) in current_state {
+            schema_engine.update_state_cache(plugin_id, state).await;
+        }
+    }
 
     // Create chatbot (cognitive brain - reasons but never executes directly)
     let _chatbot = Arc::new(
@@ -403,40 +480,31 @@ async fn main() -> Result<()> {
     // D-Bus projection for mirrored state persistence paths.
     // Runtime discovery/introspection is migration-only and not executed here.
     if config.enable_dbus {
-        let mirror_ovsdb = Arc::new(OvsdbClient::new());
-        let mirror_nonnet = Arc::new(NonNetDb::new());
+        let dbus_conn = match config.dbus_connection {
+            BusType::System => zbus::Connection::system().await?,
+            BusType::Session => zbus::Connection::session().await?,
+        };
+        plugin_catalog.set_dbus_connection(dbus_conn).await;
+        
         let mirror = Arc::new(
-            op_dbus_mirror::DbusMirror::new(config.dbus_connection, mirror_ovsdb, mirror_nonnet)
+            op_dbus_mirror::DbusMirror::new(
+                config.dbus_connection, 
+                authoritative_ovsdb.clone(), 
+                authoritative_nonnet.clone(),
+                #[cfg(feature = "grpc")]
+                Some(schema_engine.clone()),
+                #[cfg(not(feature = "grpc"))]
+                None,
+            )
                 .await?,
         );
 
-        // Start StateManager + OvsdbV1 D-Bus service on org.opdbus
-        let state_manager = Arc::new(op_state::manager::StateManager::new());
-
-        // Load and register plugins via DefaultPluginRegistry
-        let plugin_registry_state = op_plugins::DefaultPluginRegistry::new(state_store.clone());
-        match plugin_registry_state.load_default_plugins().await {
-            Ok(plugins) => {
-                for plugin in plugins {
-                    state_manager.register_plugin(plugin).await;
-                }
-                if privacy_router_bootstrap_enabled() {
-                    start_privacy_router_bootstrap(state_manager.clone());
-                } else {
-                    tracing::info!("privacy_router bootstrap disabled");
-                }
-            }
-            Err(e) => {
-                tracing::warn!("Failed to load state plugins: {}", e);
-            }
-        }
-
         match state_manager.query_current_state().await {
             Ok(current_state) => {
-                mirror.load_plugin_state(&current_state.plugins).await;
+                mirror.load_plugin_state(&current_state).await;
                 tracing::info!(
                     "Seeded NonNet mirror state from {} plugins",
-                    current_state.plugins.len()
+                    current_state.len()
                 );
             }
             Err(e) => {
@@ -455,8 +523,14 @@ async fn main() -> Result<()> {
 
         let dbus_ovsdb = Arc::new(OvsdbClient::new());
         let sm = state_manager.clone();
+        let dbus_bus = config.dbus_connection;
         tokio::spawn(async move {
-            if let Err(e) = op_state::dbus_server::start_system_bus(sm, dbus_ovsdb).await {
+            let result = match dbus_bus {
+                BusType::System => op_state::dbus_server::start_system_bus(sm, dbus_ovsdb).await,
+                BusType::Session => op_state::dbus_server::start_session_bus(sm, dbus_ovsdb).await,
+            };
+
+            if let Err(e) = result {
                 tracing::error!("D-Bus StateManager service failed: {}", e);
             }
         });
@@ -465,8 +539,13 @@ async fn main() -> Result<()> {
     }
 
     let _dbus_projection = if config.enable_dbus {
+        let dbus_conn = match config.dbus_connection {
+            BusType::System => zbus::Connection::system().await?,
+            BusType::Session => zbus::Connection::session().await?,
+        };
+        plugin_catalog.set_dbus_connection(dbus_conn).await;
         let projection = DbusProjection::new().with_blockchain(blockchain.clone());
-        tracing::info!("Runtime D-Bus introspection disabled; using mirrored state/registry");
+        tracing::info!("Runtime D-Bus introspection disabled; using mirrored state/catalog");
 
         Some(projection)
     } else {
@@ -575,51 +654,11 @@ async fn main() -> Result<()> {
             op_dbus::error::OpDbusError::ConfigError(format!("Invalid OP_DBUS_GRPC_ADDR: {}", e))
         })?;
 
-        let chain = Arc::new(tokio::sync::RwLock::new(op_state_store::EventChain::new(
-            ChainConfig::default(),
-        )));
-        let sync_engine = Arc::new(SyncEngine::new(chain));
-        let _ = GLOBAL_SYNC_ENGINE.set(sync_engine.clone());
-
-        // Start D-Bus watcher to push property changes into the sync engine.
-        let mut watcher = DbusWatcher::new(WatchConfig::default(), sync_engine.clone());
-        if let Err(e) = watcher.connect().await {
-            tracing::warn!("D-Bus watcher connect failed: {}", e);
-        } else if let Err(e) = watcher.start().await {
-            tracing::warn!("D-Bus watcher start failed: {}", e);
-        } else {
-            let watcher = Arc::new(watcher);
-            // Register plugin base paths for routing.
-            for plugin in op_dbus::plugins::plugin_definitions() {
-                let mut schema = plugin.schema_json.to_string();
-                if let Ok(schema_value) =
-                    unsafe { simd_json::from_str::<simd_json::OwnedValue>(&mut schema) }
-                {
-                    if let Some(object_types) = schema_value
-                        .as_object()
-                        .and_then(|o| o.get("object_types"))
-                        .and_then(|v| v.as_object())
-                    {
-                        for (_name, entry_value) in object_types {
-                            if let Some(path) = entry_value
-                                .as_object()
-                                .and_then(|o| o.get("base_path"))
-                                .and_then(|v| v.as_str())
-                            {
-                                watcher
-                                    .register_path(path.to_string(), plugin.name.to_string())
-                                    .await;
-                            }
-                        }
-                    }
-                }
-            }
-            watcher.spawn();
-        }
-
-        let plugin_provider = Arc::new(OpdbusPluginProvider);
+        let plugin_provider = Arc::new(OpdbusPluginProvider {
+            catalog: persisted_plugin_catalog.clone(),
+        });
         let op_grpc_server =
-            OperationGrpcServer::with_plugin_provider(sync_engine, plugin_provider);
+            OperationGrpcServer::with_plugin_provider(schema_engine, plugin_provider);
 
         // Initialize MCP gRPC service with shared tool registry
         let mcp_infra = GrpcInfrastructure::new().with_tool_registry(tool_registry.clone());
@@ -899,16 +938,16 @@ async fn handle_state_mutate_request(request: JsonRpcRequest) -> JsonRpcResponse
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
-    let Some(sync_engine) = GLOBAL_SYNC_ENGINE.get() else {
+    let Some(schema_engine) = GLOBAL_SCHEMA_ENGINE.get() else {
         return JsonRpcResponse::error_with_code(
             id,
             error_codes::INTERNAL_ERROR,
-            "sync engine unavailable; enable grpc bridge first",
+            "schema engine unavailable; enable grpc bridge first",
         );
     };
 
-    match sync_engine
-        .process_jsonrpc_mutation(
+    match schema_engine
+        .mutate(
             plugin_id,
             object_path,
             change_type,

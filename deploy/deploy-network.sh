@@ -75,6 +75,68 @@ die() {
     exit 1
 }
 
+start_service_via_dinit_dbus() {
+    local service="$1"
+
+    if command -v gdbus &>/dev/null; then
+        local output
+        if output="$(gdbus call \
+            --system \
+            --dest org.chimera.dinit \
+            --object-path /org/chimera/dinit \
+            --method org.chimera.dinit.Manager.StartService \
+            "$service" \
+            false 2>&1)"; then
+            return 0
+        fi
+
+        if grep -q 'org.chimera.dinit.Error.ServiceAlready' <<<"$output"; then
+            return 0
+        fi
+    fi
+
+    if command -v dinitctl &>/dev/null; then
+        dinitctl start "$service" 2>/dev/null && return 0
+    fi
+
+    return 1
+}
+
+stop_service_via_dinit_dbus() {
+    local service="$1"
+
+    if command -v gdbus &>/dev/null; then
+        local output
+        if output="$(gdbus call \
+            --system \
+            --dest org.chimera.dinit \
+            --object-path /org/chimera/dinit \
+            --method org.chimera.dinit.Manager.StopService \
+            "$service" \
+            false \
+            false \
+            false 2>&1)"; then
+            return 0
+        fi
+
+        if grep -q 'org.chimera.dinit.Error.ServiceAlready' <<<"$output"; then
+            return 0
+        fi
+    fi
+
+    if command -v dinitctl &>/dev/null; then
+        dinitctl stop "$service" 2>/dev/null && return 0
+    fi
+
+    return 1
+}
+
+restart_service_via_dinit_dbus() {
+    local service="$1"
+    stop_service_via_dinit_dbus "$service" || true
+    start_service_via_dinit_dbus "$service"
+}
+
 # ---------------------------------------------------------------------------
 # 3. PREFLIGHT CHECKS
 # ---------------------------------------------------------------------------
@@ -230,6 +292,46 @@ fi
 # Enable the service with dinitctl if available and daemon is running
 if command -v dinitctl &>/dev/null; then
     dinitctl enable wg-quick-all 2>/dev/null || log "dinitctl enable wg-quick-all: already enabled or daemon not running (non-fatal)"
+fi
+
+# ---------------------------------------------------------------------------
+# 5.5. ENSURE OVS SERVICES ARE RUNNING
+# ---------------------------------------------------------------------------
+# netplan apply fails if ovsdb-server is not already up (it tries to call
+# ovs-vsctl to configure the OVS bridge). Start the repo-managed op-ovs-services
+# unit via dinit D-Bus before calling netplan so OVS comes up through a
+# persistent, declarative service path.
+# ---------------------------------------------------------------------------
+
+log "--- Section 5.5: Ensure ovsdb-server + ovs-vswitchd ---"
+
+OVS_SOCKET=""
+for candidate in /run/openvswitch/db.sock /var/run/openvswitch/db.sock; do
+    if [[ -S "$candidate" ]]; then
+        OVS_SOCKET="$candidate"
+        break
+    fi
+done
+
+if [[ -z "$OVS_SOCKET" ]]; then
+    log "ovsdb-server socket not found — starting OVS services via dinit D-Bus"
+    start_service_via_dinit_dbus op-ovs-services \
+        || log "WARNING: could not start op-ovs-services via dinit D-Bus"
+    # Wait up to 30 s for the socket to appear
+    OVS_WAIT=0
+    until [[ -S /run/openvswitch/db.sock || -S /var/run/openvswitch/db.sock || $OVS_WAIT -ge 30 ]]; do
+        sleep 1
+        ((OVS_WAIT++))
+    done
+    for candidate in /run/openvswitch/db.sock /var/run/openvswitch/db.sock; do
+        if [[ -S "$candidate" ]]; then OVS_SOCKET="$candidate"; break; fi
+    done
+    if [[ -z "$OVS_SOCKET" ]]; then
+        die "ovsdb-server socket still not present after 30 s. Cannot run netplan apply."
+    fi
+    log "ovsdb-server socket available at ${OVS_SOCKET}"
+else
+    log "ovsdb-server socket already present at ${OVS_SOCKET}"
 fi
 
 # ---------------------------------------------------------------------------
@@ -659,20 +761,15 @@ log "--- Section 17: xray-client ---"
 XRAY_CLIENT_STATE="NOT CONFIGURED"
 
 if [[ -f /etc/xray/client.json ]]; then
-    if command -v dinitctl &>/dev/null; then
-        if dinitctl restart xray-client 2>/dev/null; then
-            log "xray-client restarted via dinitctl"
-            XRAY_CLIENT_STATE="RUNNING (restarted)"
-        elif dinitctl start xray-client 2>/dev/null; then
-            log "xray-client started via dinitctl"
-            XRAY_CLIENT_STATE="RUNNING (started)"
-        else
-            log "WARNING: could not start xray-client via dinitctl — start manually with: dinitctl start xray-client"
-            XRAY_CLIENT_STATE="WARNING: could not start"
-        fi
+    if restart_service_via_dinit_dbus xray-client 2>/dev/null; then
+        log "xray-client restarted via dinit D-Bus"
+        XRAY_CLIENT_STATE="RUNNING (restarted)"
+    elif start_service_via_dinit_dbus xray-client 2>/dev/null; then
+        log "xray-client started via dinit D-Bus"
+        XRAY_CLIENT_STATE="RUNNING (started)"
     else
-        log "WARNING: dinitctl not available — cannot start xray-client automatically"
-        XRAY_CLIENT_STATE="WARNING: dinitctl not available"
+        log "WARNING: could not start xray-client via dinit D-Bus"
+        XRAY_CLIENT_STATE="WARNING: could not start"
     fi
 else
     log "WARNING: /etc/xray/client.json not found — skipping xray-client start"

@@ -13,6 +13,7 @@ pub mod error;
 pub mod execution;
 pub mod security;
 pub mod self_identity;
+pub mod state_publisher;
 pub mod types;
 
 // Re-exports

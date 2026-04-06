@@ -18,7 +18,6 @@
 use anyhow::{anyhow, Context, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use simd_json::prelude::*;
 use std::collections::HashMap;
 use std::time::Duration;
 use tracing::{debug, info, warn};

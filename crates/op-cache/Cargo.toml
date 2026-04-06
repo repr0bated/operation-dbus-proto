@@ -16,6 +16,7 @@ prost = { workspace = true }
 prost-types = { workspace = true }
 rusqlite = { workspace = true, features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }
+serde_json = { workspace = true }
 simd-json = { workspace = true }
 sha2 = "0.10"
 tokio = { version = "1.0", features = ["full"] }

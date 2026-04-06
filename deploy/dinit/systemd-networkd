@@ -1,3 +1,5 @@
 type = process
 command = /usr/lib/systemd/systemd-networkd
 smooth-recovery = true
+depends-on = dbus
+depends-on = op-ovs-services

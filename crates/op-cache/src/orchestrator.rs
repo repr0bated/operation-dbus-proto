@@ -71,6 +71,7 @@ pub struct Orchestrator {
     resolver: CapabilityResolver,
     cache: Arc<WorkstackCache>,
     pattern_tracker: Arc<PatternTracker>,
+    #[allow(dead_code)]
     numa_topology: NumaTopology,
 }
 

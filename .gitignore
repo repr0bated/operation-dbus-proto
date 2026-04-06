@@ -1,5 +1,14 @@
 target/
 grpc-gateway/
+node_modules/
+dist/
+build/
+.cache/
+*.log
+coverage/
+*.tmp
+tmp/
+Cargo.lock.bak
 
 # Nested git repos (whole directories)
 branch-bestie-sync/

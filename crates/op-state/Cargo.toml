@@ -7,6 +7,7 @@ license.workspace = true
 description = "State management system with plugin infrastructure, crypto, and schema validation"
 
 [dependencies]
+parking_lot = { workspace = true }
 op-core = { path = "../op-core" }
 op-blockchain = { path = "../op-blockchain" }
 op-jsonrpc = { path = "../op-jsonrpc" }

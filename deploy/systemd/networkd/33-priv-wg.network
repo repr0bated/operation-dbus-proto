@@ -1,0 +1,15 @@
+# Privacy chain ingress socket. OVS/OpenFlow own routing, not networkd.
+[Match]
+Name=priv_wg
+
+[Link]
+ActivationPolicy=up
+RequiredForOnline=no
+
+[Network]
+DHCP=no
+LinkLocalAddressing=no
+LLMNR=no
+MulticastDNS=no
+IPv6AcceptRA=no
+ConfigureWithoutCarrier=yes

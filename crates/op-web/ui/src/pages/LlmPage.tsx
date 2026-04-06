@@ -1,72 +1,54 @@
-import { PageHeader } from "@/components/shell/PageHeader";
-import { useLlmStatus, useLlmModels, useSetLlmModel } from "@/hooks/useApi";
-import { StatusBadge } from "@/components/shell/StatusBadge";
-import { MetricCard } from "@/components/shell/MetricCard";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Brain, CheckCircle } from "lucide-react";
+import { useState, useMemo } from "react";
+import { PageHeader, Card, Pill, StatCard } from "@/components/shell/Primitives";
+import { useEventStore } from "@/stores/event-store";
+
+interface LlmModel {
+  id: string;
+  name: string;
+  provider: string;
+  contextWindow: number;
+  active: boolean;
+}
 
 export default function LlmPage() {
-  const { data: status } = useLlmStatus();
-  const { data: models } = useLlmModels();
-  const setModel = useSetLlmModel();
+  const { latestState } = useEventStore();
+
+  const models = useMemo(() => {
+    const raw = latestState["llm.models"] ?? latestState["llm:models"] ?? latestState["models"];
+    if (Array.isArray(raw)) return raw as LlmModel[];
+    return [] as LlmModel[];
+  }, [latestState]);
+
+  const activeModel = models.find((m) => m.active);
 
   return (
-    <div className="flex flex-col h-full">
-      <PageHeader title="LLM" description="Language model configuration and status" />
-      <div className="flex-1 overflow-auto p-4 space-y-4">
-        {/* Current status */}
-        <div className="rounded border bg-card p-4 space-y-3">
-          <div className="flex items-center gap-3">
-            <Brain className="h-5 w-5 text-primary" />
-            <h2 className="text-sm font-semibold">Active Model</h2>
-            <StatusBadge status={status?.available ? "active" : "offline"} />
-          </div>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <MetricCard label="Provider" value={status?.provider || "—"} />
-            <MetricCard label="Model" value={status?.model || "—"} />
-            <MetricCard label="Route" value={status?.route || "—"} />
-            <MetricCard label="Available" value={status?.available ? "Yes" : "No"} />
-          </div>
-        </div>
-
-        {/* Available models */}
-        <div className="space-y-2">
-          <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Available Models</h2>
-          <div className="grid gap-2">
-            {models?.map((model) => (
-              <div key={model.id} className="rounded border bg-card p-3 flex items-center justify-between">
-                <div className="space-y-1">
-                  <div className="flex items-center gap-2">
-                    <span className="font-mono text-xs font-medium">{model.name}</span>
-                    <Badge variant="outline" className="text-[9px]">{model.provider}</Badge>
-                    {status?.model === model.id && (
-                      <Badge className="text-[9px] bg-success/20 text-success border-success/30">
-                        <CheckCircle className="h-2.5 w-2.5 mr-0.5" /> active
-                      </Badge>
-                    )}
-                  </div>
-                  <div className="flex gap-1">
-                    {model.capabilities.map((c) => (
-                      <Badge key={c} variant="secondary" className="text-[9px]">{c}</Badge>
-                    ))}
-                  </div>
-                  <span className="text-[10px] text-muted-foreground font-mono">ctx: {model.context_length.toLocaleString()}</span>
-                </div>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  disabled={status?.model === model.id || setModel.isPending}
-                  onClick={() => setModel.mutate(model.id)}
-                >
-                  Switch
-                </Button>
-              </div>
-            ))}
-            {!models?.length && <div className="text-xs text-muted-foreground">No models available</div>}
-          </div>
-        </div>
+    <>
+      <PageHeader title="LLM" subtitle="Provider status, available models, and routing." />
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <StatCard label="Active Model" value={activeModel?.id ?? "—"} variant={activeModel ? "ok" : undefined} />
+        <StatCard label="Provider" value={activeModel?.provider ?? "—"} />
+        <StatCard label="Context Window" value={activeModel ? `${(activeModel.contextWindow / 1000)}k` : "—"} />
       </div>
-    </div>
+      <Card title="Models" subtitle="Available models from configured providers.">
+        <div className="space-y-2 mt-3">
+          {models.length === 0 && (
+            <div className="text-sm text-muted-foreground text-center py-8">No models detected. Waiting for live data…</div>
+          )}
+          {models.map((m) => (
+            <div key={m.id} className={`flex items-center justify-between p-3 rounded-lg border transition-colors ${m.active ? "border-primary/30 bg-primary/5" : "border-border"}`}>
+              <div>
+                <div className="text-sm font-medium text-foreground">{m.name}</div>
+                <div className="text-xs text-muted-foreground font-mono">{m.provider} · {(m.contextWindow / 1000)}k context</div>
+              </div>
+              <div className="flex items-center gap-2">
+                {m.active ? <Pill variant="ok">active</Pill> : (
+                  <button className="px-3 py-1.5 rounded-md border border-border text-xs font-medium hover:bg-muted/30 transition-colors">Switch</button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      </Card>
+    </>
   );
 }

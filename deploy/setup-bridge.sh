@@ -5,6 +5,20 @@
 
 set -e
 
+start_service_via_dinit_dbus() {
+    service="$1"
+    output="$(doas -n gdbus call \
+        --system \
+        --dest org.chimera.dinit \
+        --object-path /org/chimera/dinit \
+        --method org.chimera.dinit.Manager.StartService \
+        "$service" \
+        false 2>&1)" && return 0
+
+    printf '%s' "$output" | grep -q 'org.chimera.dinit.Error.ServiceAlready' && return 0
+    return 1
+}
+
 echo "=== Setting up Privacy Network Bridge Infrastructure ==="
 echo "Priority: Bridge → WG Gateway → Xray Client → Ports → Xray Server"
 echo ""
@@ -22,19 +36,20 @@ echo "✅ Netplan applied"
 
 # 3. Start OVS services
 echo "3. Starting OVS services..."
-doas dinitctl start op-ovsdb-seed 2>/dev/null || true
-doas dinitctl start op-ovsdb-bridge 2>/dev/null || true
-doas dinitctl start ovs-attach-ports 2>/dev/null || true
+start_service_via_dinit_dbus op-ovs-services || true
+start_service_via_dinit_dbus op-ovsdb-seed || true
+start_service_via_dinit_dbus op-ovsdb-bridge || true
+start_service_via_dinit_dbus ovs-attach-ports || true
 echo "✅ OVS services started"
 
 # 4. Start wgcf (WARP tunnel)
 echo "4. Starting wgcf WARP tunnel..."
-doas dinitctl start wgcf 2>/dev/null || true
+start_service_via_dinit_dbus wg-quick-all || true
 echo "✅ wgcf started"
 
 # 5. Start Xray client
 echo "5. Starting Xray client..."
-doas dinitctl start xray-client 2>/dev/null || true
+start_service_via_dinit_dbus xray-client || true
 echo "✅ Xray client started"
 
 # 6. Check the bridge status

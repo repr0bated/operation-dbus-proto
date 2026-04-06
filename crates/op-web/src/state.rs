@@ -41,6 +41,7 @@ pub struct GoogleOAuthConfig {
 /// User-specific API credentials
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserApiCredentials {
+    pub token: String,
     pub gemini_api_key: Option<String>,
     pub anthropic_api_key: Option<String>,
     pub openai_api_key: Option<String>,

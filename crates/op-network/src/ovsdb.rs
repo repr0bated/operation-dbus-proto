@@ -553,6 +553,56 @@ impl OvsdbClient {
         Ok(())
     }
 
+    /// Dump the entire database
+    pub async fn dump_db(&self, _db: &str) -> Result<Value> {
+        self.rpc_call("dump", json!(["Open_vSwitch"])).await
+    }
+
+    /// Monitor OVSDB for changes
+    pub async fn monitor_db(&self, _db: &str) -> Result<tokio::sync::mpsc::Receiver<Value>> {
+        let (tx, rx) = tokio::sync::mpsc::channel(100);
+        let socket_path = self.socket_path.clone();
+
+        // Spawn a background task to monitor the socket
+        tokio::spawn(async move {
+            if let Ok(mut stream) = UnixStream::connect(&socket_path).await {
+                // Send monitor request
+                let monitor_req = json!({
+                    "method": "monitor",
+                    "params": ["Open_vSwitch", null, {
+                        "Bridge": {"columns": ["name", "ports", "datapath_type"]},
+                        "Port": {"columns": ["name", "interfaces"]},
+                        "Interface": {"columns": ["name", "type", "options"]}
+                    }],
+                    "id": "monitor"
+                });
+
+                if let Ok(req_str) = simd_json::to_string(&monitor_req) {
+                    let _ = stream.write_all(req_str.as_bytes()).await;
+                    let _ = stream.write_all(b"\n").await;
+                    
+                    let mut buffer = [0u8; 4096];
+                    loop {
+                        match stream.read(&mut buffer).await {
+                            Ok(0) => break, // Connection closed
+                            Ok(n) => {
+                                let mut data = buffer[..n].to_vec();
+                                if let Ok(update) = simd_json::from_slice::<Value>(&mut data) {
+                                    if tx.send(update).await.is_err() {
+                                        break;
+                                    }
+                                }
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                }
+            }
+        });
+
+        Ok(rx)
+    }
+
     /// Set bridge property (datapath_type, fail_mode, etc.)
     pub async fn set_bridge_property(
         &self,

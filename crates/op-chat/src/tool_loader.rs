@@ -2056,13 +2056,14 @@ impl Tool for PluginQueryTool {
     }
 
     async fn execute(&self, _input: Value) -> Result<Value> {
-        // In a real implementation, this would call the plugin registry
+        // In a real implementation, this would call the authoritative plugin
+        // catalog / canonical plugin document path.
         Ok(json!({
             "success": true,
             "plugin": self.plugin_name,
             "operation": "query",
             "state": {},
-            "message": "Plugin query executed (integrate with plugin registry)"
+            "message": "Plugin query executed (integrate with plugin catalog)"
         }))
     }
 }
@@ -2112,7 +2113,7 @@ impl Tool for PluginDiffTool {
             "plugin": self.plugin_name,
             "operation": "diff",
             "changes": [],
-            "message": "Plugin diff executed (integrate with plugin registry)"
+            "message": "Plugin diff executed (integrate with plugin catalog)"
         }))
     }
 }
@@ -2165,7 +2166,7 @@ impl Tool for PluginApplyTool {
             "operation": "apply",
             "dry_run": dry_run,
             "applied": !dry_run,
-            "message": "Plugin apply executed (integrate with plugin registry)"
+            "message": "Plugin apply executed (integrate with plugin catalog)"
         }))
     }
 }

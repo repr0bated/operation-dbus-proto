@@ -24,9 +24,10 @@ use crate::state_plugins::openflow::{
 use crate::state_plugins::privacy_routes::{PrivacyRoute, PrivacyRoutesPlugin, PrivacyRoutesState};
 
 const DEFAULT_BRIDGE_NAME: &str = "ovsbr0";
-const DEFAULT_UPLINK_PORT: &str = "o";
+const DEFAULT_UPLINK_PORT: &str = "ens3";
 const DEFAULT_MGMT_PORT: &str = "ovsbr0-mgmt";
 const DEFAULT_SOCKET_PORT: &str = "ovsbr0-sock";
+const DEFAULT_GRPC_BRIDGE_PORT: &str = "grpc-bridge";
 const DEFAULT_MGMT_CIDR: &str = "10.200.0.1/24";
 const DEFAULT_OPENFLOW_CONTROLLER: &str = "10.88.88.1:6653";
 const DEFAULT_WARP_INTERFACE: &str = "wgcf";
@@ -165,8 +166,10 @@ pub struct ContainerConfig {
 struct PrivacyHostBootstrapConfig {
     bridge_name: String,
     uplink_port: String,
+    attach_uplink_to_bridge: bool,
     management_port: String,
     socket_port: String,
+    grpc_bridge_port: String,
     management_cidr: String,
     openflow_controller: String,
 }
@@ -178,10 +181,13 @@ impl PrivacyHostBootstrapConfig {
                 .unwrap_or_else(|_| bridge_name.to_string()),
             uplink_port: std::env::var("PRIVACY_UPLINK_PORT")
                 .unwrap_or_else(|_| DEFAULT_UPLINK_PORT.to_string()),
+            attach_uplink_to_bridge: bool_env("PRIVACY_ATTACH_UPLINK_TO_BRIDGE", false),
             management_port: std::env::var("PRIVACY_MGMT_PORT")
                 .unwrap_or_else(|_| DEFAULT_MGMT_PORT.to_string()),
             socket_port: std::env::var("PRIVACY_SOCKET_PORT")
                 .unwrap_or_else(|_| DEFAULT_SOCKET_PORT.to_string()),
+            grpc_bridge_port: std::env::var("PRIVACY_GRPC_BRIDGE_PORT")
+                .unwrap_or_else(|_| DEFAULT_GRPC_BRIDGE_PORT.to_string()),
             management_cidr: std::env::var("PRIVACY_MGMT_CIDR")
                 .unwrap_or_else(|_| DEFAULT_MGMT_CIDR.to_string()),
             openflow_controller: std::env::var("PRIVACY_OPENFLOW_CONTROLLER")
@@ -255,6 +261,18 @@ fn default_resources() -> ContainerResources {
         swap_mb: 0,
         unprivileged: false,
     }
+}
+
+fn bool_env(name: &str, default: bool) -> bool {
+    std::env::var(name)
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(default)
 }
 
 fn default_privacy_flows() -> Vec<PrivacyFlowRule> {
@@ -523,7 +541,9 @@ impl PrivacyRouterPlugin {
                     uplink_path
                 );
             }
-            if !existing_ports.iter().any(|port| port == &host.uplink_port) {
+            if host.attach_uplink_to_bridge
+                && !existing_ports.iter().any(|port| port == &host.uplink_port)
+            {
                 ovs.add_port(&host.bridge_name, &host.uplink_port)
                     .await
                     .with_context(|| {
@@ -533,6 +553,9 @@ impl PrivacyRouterPlugin {
                         )
                     })?;
             }
+            op_network::rtnetlink::link_up(&host.uplink_port)
+                .await
+                .with_context(|| format!("bring standalone uplink '{}' up", host.uplink_port))?;
         }
 
         if !existing_ports
@@ -560,6 +583,20 @@ impl PrivacyRouterPlugin {
                 })?;
         }
 
+        if !existing_ports
+            .iter()
+            .any(|port| port == &host.grpc_bridge_port)
+        {
+            ovs.add_port_with_type(&host.bridge_name, &host.grpc_bridge_port, Some("internal"))
+                .await
+                .with_context(|| {
+                    format!(
+                        "add gRPC bridge port '{}' to '{}'",
+                        host.grpc_bridge_port, host.bridge_name
+                    )
+                })?;
+        }
+
         op_network::rtnetlink::link_up(&host.bridge_name)
             .await
             .with_context(|| format!("bring '{}' up", host.bridge_name))?;
@@ -569,6 +606,9 @@ impl PrivacyRouterPlugin {
         op_network::rtnetlink::link_up(&host.socket_port)
             .await
             .with_context(|| format!("bring '{}' up", host.socket_port))?;
+        op_network::rtnetlink::link_up(&host.grpc_bridge_port)
+            .await
+            .with_context(|| format!("bring '{}' up", host.grpc_bridge_port))?;
 
         let (management_ip, management_prefix) = parse_cidr(&host.management_cidr)?;
         op_network::rtnetlink::flush_addresses(&host.management_port)
@@ -1204,6 +1244,21 @@ mod tests {
 
         assert_eq!(config.get("security.nesting"), Some(&"true".to_string()));
         assert_eq!(config.get("security.privileged"), Some(&"true".to_string()));
+    }
+
+    #[test]
+    fn host_bootstrap_defaults_keep_uplink_standalone() {
+        let host = PrivacyHostBootstrapConfig::from_env("ovsbr0");
+        assert_eq!(host.uplink_port, "ens3");
+        assert!(!host.attach_uplink_to_bridge);
+        assert_eq!(host.grpc_bridge_port, "grpc-bridge");
+    }
+
+    #[test]
+    fn bool_env_accepts_common_true_values() {
+        std::env::set_var("PRIVACY_ATTACH_UPLINK_TO_BRIDGE", "yes");
+        assert!(bool_env("PRIVACY_ATTACH_UPLINK_TO_BRIDGE", false));
+        std::env::remove_var("PRIVACY_ATTACH_UPLINK_TO_BRIDGE");
     }
 
     #[test]

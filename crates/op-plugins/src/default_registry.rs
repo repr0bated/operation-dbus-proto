@@ -1,9 +1,8 @@
-//! Default plugin registry - auto-loads essential plugins
+//! Default plugin loader - auto-loads essential plugins
 //!
 //! This module defines which plugins are loaded by default when the system starts.
 //! Plugins can be enabled/disabled via configuration.
 
-use crate::registry::PluginRegistry;
 use anyhow::Result;
 use op_state_store::StateStore;
 use simd_json::prelude::*;
@@ -17,7 +16,7 @@ use crate::state_plugins::{
     RtnetlinkPlugin, SessDeclPlugin, SoftwarePlugin, UsersPlugin, WebUiPlugin, WireGuardPlugin,
 };
 
-/// Plugin registry configuration
+/// Default plugin loader configuration
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PluginRegistryConfig {
     /// Auto-load plugins on startup
@@ -72,14 +71,18 @@ impl Default for PluginRegistryConfig {
     }
 }
 
-/// Default plugin registry
+/// Default plugin loader.
+///
+/// This is intentionally not the authoritative plugin catalog. Its job is to
+/// instantiate the built-in plugin implementations so the real catalog path can
+/// persist their canonical plugin documents during registration.
 pub struct DefaultPluginRegistry {
     config: PluginRegistryConfig,
     state_store: Arc<dyn StateStore>,
 }
 
 impl DefaultPluginRegistry {
-    /// Create a new plugin registry
+    /// Create a new plugin loader
     pub fn new(state_store: Arc<dyn StateStore>) -> Self {
         Self {
             config: PluginRegistryConfig::default(),

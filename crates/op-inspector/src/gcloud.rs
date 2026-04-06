@@ -193,6 +193,7 @@ impl GCloudParser {
     fn parse_groups(&self, help: &str) -> Vec<String> {
         let mut groups = Vec::new();
         let mut in_groups_section = false;
+        let group_regex = Regex::new(r"^\s{4,8}(\w[\w-]*)\s").unwrap();
 
         for line in help.lines() {
             let trimmed = line.trim();
@@ -209,10 +210,7 @@ impl GCloudParser {
                 }
 
                 // Parse group name (indented, followed by description)
-                if let Some(caps) = Regex::new(r"^\s{4,8}(\w[\w-]*)\s")
-                    .ok()
-                    .and_then(|re| re.captures(line))
-                {
+                if let Some(caps) = group_regex.captures(line) {
                     if let Some(name) = caps.get(1) {
                         groups.push(name.as_str().to_string());
                     }
@@ -227,6 +225,7 @@ impl GCloudParser {
     fn parse_commands(&self, help: &str) -> Vec<String> {
         let mut commands = Vec::new();
         let mut in_commands_section = false;
+        let cmd_regex = Regex::new(r"^\s{4,8}(\w[\w-]*)\s").unwrap();
 
         for line in help.lines() {
             let trimmed = line.trim();
@@ -241,10 +240,7 @@ impl GCloudParser {
                     break;
                 }
 
-                if let Some(caps) = Regex::new(r"^\s{4,8}(\w[\w-]*)\s")
-                    .ok()
-                    .and_then(|re| re.captures(line))
-                {
+                if let Some(caps) = cmd_regex.captures(line) {
                     if let Some(name) = caps.get(1) {
                         commands.push(name.as_str().to_string());
                     }

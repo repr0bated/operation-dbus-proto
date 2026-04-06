@@ -9,6 +9,7 @@
 //! - Automatic hash footprints for blockchain audit trail
 //! - Auto-creation of missing plugins
 //! - Lifecycle hooks
+//! - Canonical plugin-document persistence into the schema catalog
 
 pub mod auto_create;
 pub mod builtin;
@@ -26,6 +27,7 @@ pub mod state_plugins;
 pub use auto_create::AutoPlugin;
 pub use default_registry::{DefaultPluginRegistry, PluginRegistryConfig};
 pub use plugin::{Plugin, PluginCapabilities, PluginContext, PluginMetadata};
+pub use registry::PluginRegistry as PluginCatalog;
 pub use registry::{PluginRecord, PluginRegistry};
 pub use state::{ChangeOperation, DesiredState, StateChange, ValidationResult};
 
@@ -37,6 +39,7 @@ pub use chat::{
 /// Prelude for convenient imports
 pub mod prelude {
     pub use super::auto_create::AutoPlugin;
+    pub use super::registry::PluginRegistry as PluginCatalog;
     pub use super::registry::PluginRegistry;
     pub use super::state::{ChangeOperation, DesiredState, StateChange, ValidationResult};
 
@@ -44,3 +47,4 @@ pub mod prelude {
     pub use super::dynamic_loading::DynamicLoadingPlugin;
     pub use super::state_plugins::*;
 }
+pub mod state_publisher;

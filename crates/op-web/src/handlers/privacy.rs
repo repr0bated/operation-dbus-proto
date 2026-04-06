@@ -444,9 +444,38 @@ fn format_quota_gib(bytes: u64) -> String {
 
 /// GET /api/privacy/config/:user_id - Download config for verified user
 pub async fn get_config(
-    Extension(state): Extension<Arc<AppState>>,
-    Path(user_id): Path<String>,
-) -> (StatusCode, Json<VerifyResponse>) {
+    headers: axum::http::HeaderMap,
+    axum::extract::Extension(state): axum::extract::Extension<std::sync::Arc<crate::AppState>>,
+    axum::extract::Path(user_id): axum::extract::Path<String>,
+) -> (axum::http::StatusCode, axum::Json<VerifyResponse>) {
+    let auth_token = crate::middleware::security::extract_auth_token(&headers);
+    let mut is_authorized = false;
+
+    if let Some(token) = auth_token {
+        if crate::middleware::security::check_bypass_api_key(&headers).is_some() {
+            is_authorized = true;
+        } else if let Some(user) = state.user_store.get_user(&user_id).await {
+            if let Some(creds) = &user.api_credentials {
+                if creds.token == token {
+                    is_authorized = true;
+                }
+            }
+        }
+    }
+
+    if !is_authorized {
+        return (
+            axum::http::StatusCode::UNAUTHORIZED,
+            axum::Json(VerifyResponse {
+                success: false,
+                user_id: None,
+                config: None,
+                qr_code: None,
+                message: "Unauthorized".to_string(),
+            }),
+        );
+    }
+
     match state.user_store.get_user(&user_id).await {
         Some(user) if user.email_verified => {
             if !state.server_config.is_configured() {
@@ -526,7 +555,16 @@ pub async fn set_credentials(
 ) -> (StatusCode, Json<SetCredentialsResponse>) {
     use crate::users::UserApiCredentials;
 
+    let existing_token = if let Some(user) = state.user_store.get_user(&request.user_id).await {
+        user.api_credentials.map(|c| c.token)
+    } else {
+        None
+    };
+
+    let token = existing_token.unwrap_or_else(|| op_identity::generate_magic_link_token(32));
+
     let credentials = UserApiCredentials {
+        token,
         gemini_api_key: request.gemini_api_key,
         anthropic_api_key: request.anthropic_api_key,
         openai_api_key: request.openai_api_key,
@@ -593,22 +631,19 @@ pub async fn google_auth(
     )
     .set_redirect_uri(RedirectUrl::new(config.redirect_url.clone()).unwrap());
 
-    // Generate PKCE challenge
-    let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
-
-    // Generate the authorization URL
+    // Generate the authorization URL without PKCE (since we have no session store)
+    // In production, implement a proper session store for CSRF and PKCE.
     let (auth_url, csrf_token) = client
         .authorize_url(CsrfToken::new_random)
         .add_scope(Scope::new("openid".to_string()))
         .add_scope(Scope::new("email".to_string()))
         .add_scope(Scope::new("profile".to_string()))
-        .set_pkce_challenge(pkce_challenge)
         .url();
 
-    // Store PKCE verifier and CSRF token for later use
+    // Store CSRF token for later use
     // For now, we'll use a simple in-memory store. In production, use a proper session store.
     // TODO: Implement proper session management
-    let session_key = csrf_token.secret().clone();
+    let _session_key = csrf_token.secret().clone();
     // Note: This is a simplified implementation. In production, use proper session storage.
 
     info!("Initiating Google OAuth login: {}", auth_url);

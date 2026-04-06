@@ -4,13 +4,8 @@
 //! CRITICAL: Uses OVSDB JSON-RPC to ensure bridges persist in database.
 
 use anyhow::{Context, Result};
-use async_trait::async_trait;
-use op_core::types::{ObjectSchemaRef, ServiceInfo, ToolDefinition, ToolResult};
 use serde::{Deserialize, Serialize};
-use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
-use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
 use tracing::{info, warn};

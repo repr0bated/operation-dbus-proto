@@ -1,4 +1,4 @@
-//! Dinit state plugin - manages services via dinitctl and dinit-dbus conventions.
+//! Dinit state plugin - manages services via Chimera's dinit D-Bus manager.
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -9,7 +9,81 @@ use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
 use std::collections::HashMap;
-use tokio::process::Command;
+use zbus::{proxy, Connection, Error as ZbusError};
+
+type DinitFlags = HashMap<String, bool>;
+type DinitStatusRecord = (String, String, String, String, DinitFlags, u32, i32, i32);
+type DinitServiceRecord = (
+    String,
+    String,
+    String,
+    String,
+    String,
+    DinitFlags,
+    u32,
+    i32,
+    i32,
+);
+
+#[proxy(
+    interface = "org.chimera.dinit.Manager",
+    default_service = "org.chimera.dinit",
+    default_path = "/org/chimera/dinit"
+)]
+trait DinitManager {
+    #[zbus(name = "StartService")]
+    fn start_service(&self, name: &str, wait_for_load: bool) -> zbus::Result<()>;
+
+    #[zbus(name = "StopService")]
+    fn stop_service(
+        &self,
+        name: &str,
+        pin_stopped: bool,
+        gentle: bool,
+        restart: bool,
+    ) -> zbus::Result<()>;
+
+    #[zbus(name = "GetServiceStatus")]
+    fn get_service_status(&self, name: &str) -> zbus::Result<DinitStatusRecord>;
+
+    #[zbus(name = "ListServices")]
+    fn list_services(&self) -> zbus::Result<Vec<DinitServiceRecord>>;
+}
+
+struct DinitDbusClient {
+    conn: Connection,
+}
+
+impl DinitDbusClient {
+    async fn connect() -> Result<Self> {
+        let conn = Connection::system()
+            .await
+            .context("failed to connect to system D-Bus for dinit")?;
+        Ok(Self { conn })
+    }
+
+    async fn proxy(&self) -> Result<DinitManagerProxy<'_>> {
+        DinitManagerProxy::new(&self.conn)
+            .await
+            .context("failed to create dinit D-Bus proxy")
+    }
+}
+
+fn is_service_already(error: &ZbusError) -> bool {
+    matches!(
+        error,
+        ZbusError::MethodError(name, _, _)
+            if name.as_str() == "org.chimera.dinit.Error.ServiceAlready"
+    )
+}
+
+fn map_service_state(current_state: &str) -> String {
+    match current_state {
+        "started" => "active".to_string(),
+        "stopped" => "inactive".to_string(),
+        other => other.to_string(),
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DinitConfig {
@@ -35,40 +109,23 @@ impl DinitStatePlugin {
     }
 
     async fn list_services(&self) -> Result<Vec<String>> {
-        let output = Command::new("dinitctl")
-            .args(["list"])
-            .output()
+        let client = DinitDbusClient::connect().await?;
+        let proxy = client.proxy().await?;
+        let services = proxy
+            .list_services()
             .await
-            .context("failed to execute dinitctl list")?;
-
-        if !output.status.success() {
-            return Ok(Vec::new());
-        }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        Ok(stdout
-            .lines()
-            .filter_map(|line| line.split_whitespace().next().map(|s| s.to_string()))
-            .collect())
+            .context("failed to list dinit services over D-Bus")?;
+        Ok(services.into_iter().map(|service| service.0).collect())
     }
 
     async fn query_service(&self, service: &str) -> Result<DinitServiceConfig> {
-        let output = Command::new("dinitctl")
-            .args(["status", service])
-            .output()
+        let client = DinitDbusClient::connect().await?;
+        let proxy = client.proxy().await?;
+        let status = proxy
+            .get_service_status(service)
             .await
-            .context("failed to execute dinitctl status")?;
-
-        let state = if output.status.success() {
-            let status_text = String::from_utf8_lossy(&output.stdout).to_lowercase();
-            if status_text.contains("started") || status_text.contains("running") {
-                "active".to_string()
-            } else {
-                "inactive".to_string()
-            }
-        } else {
-            "unknown".to_string()
-        };
+            .with_context(|| format!("failed to query dinit status for {service}"))?;
+        let state = map_service_state(&status.0);
 
         Ok(DinitServiceConfig {
             state: Some(state),
@@ -78,28 +135,22 @@ impl DinitStatePlugin {
     }
 
     async fn start_service(&self, service: &str) -> Result<()> {
-        let output = Command::new("dinitctl")
-            .args(["start", service])
-            .output()
-            .await
-            .context("failed to execute dinitctl start")?;
-        if output.status.success() {
-            Ok(())
-        } else {
-            anyhow::bail!("failed to start service {}", service)
+        let client = DinitDbusClient::connect().await?;
+        let proxy = client.proxy().await?;
+        match proxy.start_service(service, false).await {
+            Ok(()) => Ok(()),
+            Err(error) if is_service_already(&error) => Ok(()),
+            Err(error) => anyhow::bail!("failed to start service {service}: {error}"),
         }
     }
 
     async fn stop_service(&self, service: &str) -> Result<()> {
-        let output = Command::new("dinitctl")
-            .args(["stop", service])
-            .output()
-            .await
-            .context("failed to execute dinitctl stop")?;
-        if output.status.success() {
-            Ok(())
-        } else {
-            anyhow::bail!("failed to stop service {}", service)
+        let client = DinitDbusClient::connect().await?;
+        let proxy = client.proxy().await?;
+        match proxy.stop_service(service, false, false, false).await {
+            Ok(()) => Ok(()),
+            Err(error) if is_service_already(&error) => Ok(()),
+            Err(error) => anyhow::bail!("failed to stop service {service}: {error}"),
         }
     }
 
@@ -132,11 +183,11 @@ impl StatePlugin for DinitStatePlugin {
     }
 
     fn is_available(&self) -> bool {
-        std::path::Path::new("/run/dinitctl").exists()
+        std::path::Path::new("/run/dbus/system_bus_socket").exists()
     }
 
     fn unavailable_reason(&self) -> String {
-        "dinitctl socket not found at /run/dinitctl".to_string()
+        "system D-Bus socket not found at /run/dbus/system_bus_socket".to_string()
     }
 
     async fn query_current_state(&self) -> Result<Value> {
@@ -240,5 +291,16 @@ impl StatePlugin for DinitStatePlugin {
             supports_verification: true,
             atomic_operations: false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::map_service_state;
+
+    #[test]
+    fn test_map_service_state_started_to_active() {
+        assert_eq!(map_service_state("started"), "active");
+        assert_eq!(map_service_state("stopped"), "inactive");
     }
 }

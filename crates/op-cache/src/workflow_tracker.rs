@@ -87,8 +87,11 @@ pub struct WorkflowTracker {
 #[derive(Debug, Clone)]
 struct AgentCall {
     agent_id: String,
+    #[allow(dead_code)]
     input_hash: String,
+    #[allow(dead_code)]
     timestamp: i64,
+    #[allow(dead_code)]
     latency_ms: u64,
 }
 

@@ -3,16 +3,13 @@
 //! This module provides secure storage for WireGuard private keys and session data
 //! using encrypted Btrfs subvolumes with native encryption (experimental) or LUKS.
 
-use argon2::{Algorithm, Argon2, Params, Version};
-use blake2::{Blake2s256, Digest};
 use chacha20poly1305::{AeadInPlace, ChaCha20Poly1305, Key, KeyInit, Nonce};
 use ring::rand::{SecureRandom, SystemRandom};
 use serde::{Deserialize, Serialize};
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use tokio::fs as async_fs;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use anyhow::Result;
@@ -155,7 +152,7 @@ impl EncryptedKeyStorage {
         // Create encrypted subvolume using btrfs command
         // Note: This requires kernel support for Btrfs encryption
         let output = Command::new("btrfs")
-            .args(&[
+            .args([
                 "subvolume",
                 "create",
                 "-e", // Enable encryption (experimental)
@@ -218,7 +215,7 @@ impl EncryptedKeyStorage {
 
             // Create 100MB container file
             let output = Command::new("dd")
-                .args(&[
+                .args([
                     "if=/dev/zero",
                     &format!("of={}", container_path.display()),
                     "bs=1M",
@@ -250,7 +247,7 @@ impl EncryptedKeyStorage {
         info!("Creating regular Btrfs subvolume: {:?}", self.storage_path);
 
         let output = Command::new("btrfs")
-            .args(&["subvolume", "create", self.storage_path.to_str().unwrap()])
+            .args(["subvolume", "create", self.storage_path.to_str().unwrap()])
             .output()
             .map_err(|e| anyhow::anyhow!("Failed to execute btrfs command: {}", e))?;
 
@@ -269,7 +266,7 @@ impl EncryptedKeyStorage {
         async_fs::create_dir_all(&self.storage_path).await?;
 
         let output = Command::new("mount")
-            .args(&[device_path, self.storage_path.to_str().unwrap()])
+            .args([device_path, self.storage_path.to_str().unwrap()])
             .output()
             .map_err(|e| anyhow::anyhow!("Failed to mount LUKS device: {}", e))?;
 
@@ -401,7 +398,7 @@ impl EncryptedKeyStorage {
         encrypted_data.reserve(16); // Reserve space for authentication tag
 
         cipher
-            .encrypt_in_place(&Nonce::from_slice(&nonce), b"", &mut encrypted_data)
+            .encrypt_in_place(Nonce::from_slice(&nonce), b"", &mut encrypted_data)
             .map_err(|_| anyhow::anyhow!("Encryption failed"))?;
 
         let entry = EncryptedKeyEntry {
@@ -457,7 +454,7 @@ impl EncryptedKeyStorage {
         let mut decrypted_data = entry.encrypted_data.clone();
 
         cipher
-            .decrypt_in_place(&Nonce::from_slice(&entry.nonce), b"", &mut decrypted_data)
+            .decrypt_in_place(Nonce::from_slice(&entry.nonce), b"", &mut decrypted_data)
             .map_err(|_| anyhow::anyhow!("Decryption failed"))?;
 
         debug!("Retrieved and decrypted key: {}", key_id);
@@ -512,7 +509,7 @@ impl EncryptedKeyStorage {
         }
 
         let keys = self.list_keys().await?;
-        let metadata = async_fs::metadata(&self.storage_path).await?;
+        let _metadata = async_fs::metadata(&self.storage_path).await?;
 
         // Get filesystem info
         let fs_info = self.get_filesystem_info().await?;
@@ -537,7 +534,7 @@ impl EncryptedKeyStorage {
     /// Get filesystem information
     async fn get_filesystem_info(&self) -> anyhow::Result<FilesystemInfo> {
         let output = Command::new("df")
-            .args(&["-T", self.storage_path.to_str().unwrap()])
+            .args(["-T", self.storage_path.to_str().unwrap()])
             .output()
             .map_err(|e| anyhow::anyhow!("Failed to get filesystem info: {}", e))?;
 

@@ -1,12 +1,15 @@
-//! Plugin Schema Registry
+//! Plugin schema catalog and compatibility helpers.
 //!
-//! Provides schema definitions for all state plugins, enabling:
-//! - Validation of plugin state against schemas
-//! - Schema versioning and migration
-//! - Documentation of plugin state structure
-//! - Auto-generation of state templates
-//! - JSON Schema export with propertyDependencies support
-//! - Flexible dialect support (2026 and future versions)
+//! Architectural rule:
+//! - plugin code is the source of schema truth
+//! - that schema is also the footprint and JSON render contract
+//! - this module stores indexed copies of that schema for validation/export
+//!
+//! Compatibility note:
+//! a large amount of built-in schema data still lives in this file. Those
+//! built-ins are intentionally exposed through explicit compatibility helpers
+//! so runtime code can continue to resolve legacy schemas without turning this
+//! catalog back into a second schema authority.
 
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
@@ -101,6 +104,9 @@ pub enum Constraint {
 pub struct PluginSchema {
     /// Plugin name
     pub name: String,
+    /// Logical category used by the registry, renderer, and compliance overlays
+    #[serde(default = "default_category")]
+    pub category: String,
     /// Schema version
     pub version: String,
     /// Description
@@ -128,6 +134,10 @@ fn default_dialect() -> String {
     DEFAULT_SCHEMA_DIALECT.to_string()
 }
 
+fn default_category() -> String {
+    "uncategorized".to_string()
+}
+
 impl PluginSchema {
     /// Create a new plugin schema builder
     pub fn builder(name: &str) -> PluginSchemaBuilder {
@@ -141,10 +151,8 @@ impl PluginSchema {
 
         // Check required fields
         for (field_name, field_schema) in &self.fields {
-            if field_schema.required {
-                if state.get(field_name).is_none() {
-                    errors.push(format!("Missing required field: {}", field_name));
-                }
+            if field_schema.required && state.get(field_name).is_none() {
+                errors.push(format!("Missing required field: {}", field_name));
             }
         }
 
@@ -238,6 +246,7 @@ impl PluginSchema {
             "$schema": &self.dialect,
             "title": self.name,
             "description": self.description,
+            "x-plugin-category": self.category,
             "type": "object",
             "properties": properties,
             "required": required
@@ -418,6 +427,7 @@ impl PluginSchema {
                         "dependencies",
                         "include_in_recovery",
                         "recovery_priority",
+                        "category",
                         "sensitivity",
                         "tags",
                         "enabled"
@@ -430,6 +440,10 @@ impl PluginSchema {
                         },
                         "include_in_recovery": { "type": "boolean", "default": true },
                         "recovery_priority": { "type": "integer", "minimum": 0, "default": 50 },
+                        "category": {
+                            "type": "string",
+                            "default": self.category
+                        },
                         "sensitivity": {
                             "type": "string",
                             "enum": ["public", "internal", "secret"],
@@ -553,6 +567,7 @@ pub struct ValidationResult {
 /// Builder for creating plugin schemas
 pub struct PluginSchemaBuilder {
     name: String,
+    category: String,
     version: String,
     description: String,
     fields: HashMap<String, FieldSchema>,
@@ -567,6 +582,7 @@ impl PluginSchemaBuilder {
     pub fn new(name: &str) -> Self {
         Self {
             name: name.to_string(),
+            category: default_category(),
             version: "1.0.0".to_string(),
             description: String::new(),
             fields: HashMap::new(),
@@ -580,6 +596,11 @@ impl PluginSchemaBuilder {
 
     pub fn version(mut self, version: &str) -> Self {
         self.version = version.to_string();
+        self
+    }
+
+    pub fn category(mut self, category: &str) -> Self {
+        self.category = category.to_string();
         self
     }
 
@@ -728,6 +749,7 @@ impl PluginSchemaBuilder {
     pub fn build(self) -> PluginSchema {
         PluginSchema {
             name: self.name,
+            category: self.category,
             version: self.version,
             description: self.description,
             fields: self.fields,
@@ -740,32 +762,64 @@ impl PluginSchemaBuilder {
     }
 }
 
-/// Registry of all plugin schemas with support for loading from files
+#[derive(Debug, Clone)]
+pub struct StoredSchemaCopies {
+    pub plugin: PluginSchema,
+    pub json_schema: Value,
+    pub contract_schema: Value,
+}
+
+/// In-memory schema catalog.
+///
+/// Compatibility note:
+/// this type is still named `SchemaRegistry` in much of the workspace, but its
+/// architectural role is now a catalog/index over canonical plugin documents.
+/// It stores derived schema copies for lookup, validation, rendering, and
+/// compatibility export. It is not the origin of schema truth.
 pub struct SchemaRegistry {
     schemas: HashMap<String, PluginSchema>,
+    categorized: HashMap<String, HashMap<String, StoredSchemaCopies>>,
     meta_schemas: HashMap<String, Value>,
     spec_base_path: Option<PathBuf>,
 }
 
 impl SchemaRegistry {
-    /// Create a new schema registry with built-in schemas
-    pub fn new() -> Self {
-        let mut registry = Self {
+    /// Create an empty catalog. Runtime code should populate this from plugins
+    /// or from persisted canonical plugin documents.
+    pub fn empty() -> Self {
+        Self {
             schemas: HashMap::new(),
+            categorized: HashMap::new(),
             meta_schemas: HashMap::new(),
             spec_base_path: None,
-        };
+        }
+    }
+
+    /// Create a new runtime catalog.
+    ///
+    /// Plugins are the canonical schema source; runtime code should register
+    /// plugin-provided schemas into this empty catalog.
+    pub fn new() -> Self {
+        Self::empty()
+    }
+
+    /// Create a runtime catalog with a custom spec base path.
+    pub fn with_spec_path(spec_path: impl AsRef<Path>) -> Self {
+        let mut registry = Self::empty();
+        registry.spec_base_path = Some(spec_path.as_ref().to_path_buf());
+        registry
+    }
+
+    /// Create a catalog pre-populated with built-in compatibility schemas.
+    pub fn with_builtin_schemas() -> Self {
+        let mut registry = Self::empty();
         registry.register_builtin_schemas();
         registry
     }
 
-    /// Create a registry with a custom spec base path
-    pub fn with_spec_path(spec_path: impl AsRef<Path>) -> Self {
-        let mut registry = Self {
-            schemas: HashMap::new(),
-            meta_schemas: HashMap::new(),
-            spec_base_path: Some(spec_path.as_ref().to_path_buf()),
-        };
+    /// Create a compatibility catalog with built-ins and a custom spec base path.
+    pub fn with_builtin_schemas_and_spec_path(spec_path: impl AsRef<Path>) -> Self {
+        let mut registry = Self::with_spec_path(spec_path);
         registry.register_builtin_schemas();
         registry
     }
@@ -871,14 +925,32 @@ impl SchemaRegistry {
             .collect()
     }
 
-    /// Register a plugin schema
+    /// Index one plugin schema and cache all derived copies under its category.
     pub fn register(&mut self, schema: PluginSchema) {
+        let copies = StoredSchemaCopies {
+            json_schema: schema.to_json_schema(),
+            contract_schema: schema.to_contract_json_schema(),
+            plugin: schema.clone(),
+        };
+
+        self.categorized
+            .entry(schema.category.clone())
+            .or_default()
+            .insert(schema.name.clone(), copies);
         self.schemas.insert(schema.name.clone(), schema);
     }
 
     /// Get a plugin schema by name
     pub fn get(&self, name: &str) -> Option<&PluginSchema> {
         self.schemas.get(Self::canonical_name(name))
+    }
+
+    /// Get the categorized schema copies stored for a plugin.
+    pub fn get_copies(&self, name: &str) -> Option<&StoredSchemaCopies> {
+        let schema = self.get(name)?;
+        self.categorized
+            .get(&schema.category)
+            .and_then(|schemas| schemas.get(&schema.name))
     }
 
     /// Export one schema as a legacy contract document, preserving alias names.
@@ -892,63 +964,31 @@ impl SchemaRegistry {
         self.schemas.keys().map(|s| s.as_str()).collect()
     }
 
+    /// List all schema categories currently present in the catalog.
+    pub fn categories(&self) -> Vec<&str> {
+        let mut categories: Vec<&str> = self.categorized.keys().map(|s| s.as_str()).collect();
+        categories.sort_unstable();
+        categories
+    }
+
+    /// Return all schema copies stored under one category.
+    pub fn by_category(&self, category: &str) -> Option<&HashMap<String, StoredSchemaCopies>> {
+        self.categorized.get(category)
+    }
+
     /// Validate state for a plugin
     pub fn validate(&self, plugin_name: &str, state: &Value) -> Option<ValidationResult> {
         self.get(plugin_name).map(|schema| schema.validate(state))
     }
 
-    /// Register all built-in plugin schemas
+    /// Register all built-in plugin schemas.
+    ///
+    /// This path is compatibility-only and should not be treated as the
+    /// authoritative runtime source for live plugin documents.
     fn register_builtin_schemas(&mut self) {
-        // LXC Container Schema
-        self.register(create_lxc_schema());
-        self.register(create_incus_schema());
-        self.register(create_incus_wireguard_ingress_schema());
-        self.register(create_incus_xray_reality_client_schema());
-        self.register(create_incus_xray_reality_server_schema());
-
-        // Network Schema
-        self.register(create_net_schema());
-        self.register(create_rtnetlink_schema());
-
-        // OpenFlow Schema
-        self.register(create_openflow_schema());
-
-        // Dinit Schema
-        self.register(create_dinit_schema());
-
-        // Privacy Router Schema
-        self.register(create_privacy_router_schema());
-        self.register(create_privacy_routes_schema());
-
-        // Netmaker Schema
-        self.register(create_netmaker_schema());
-
-        // Additional plugin-specific schemas for full materialization coverage
-        self.register(create_adc_schema());
-        self.register(create_agent_config_schema());
-        self.register(create_config_schema());
-        self.register(create_dnsresolver_schema());
-        self.register(create_endpoint_schema());
-        self.register(create_full_system_schema());
-        self.register(create_gcloud_adc_schema());
-        self.register(create_hardware_schema());
-        self.register(create_keypair_schema());
-        self.register(create_keyring_schema());
-        self.register(create_login1_schema());
-        self.register(create_mcp_schema());
-        self.register(create_openflow_obfuscation_schema());
-        self.register(create_ovsdb_bridge_schema());
-        self.register(create_packagekit_schema());
-        self.register(create_pcidecl_schema());
-        self.register(create_privacy_schema());
-        self.register(create_proxmox_schema());
-        self.register(create_proxy_server_schema());
-        self.register(create_service_schema());
-        self.register(create_sess_decl_schema());
-        self.register(create_software_schema());
-        self.register(create_users_schema());
-        self.register(create_web_ui_schema());
-        self.register(create_wireguard_schema());
+        for schema in builtin_plugin_schemas() {
+            self.register(schema);
+        }
     }
 
     fn canonical_name(name: &str) -> &str {
@@ -956,6 +996,7 @@ impl SchemaRegistry {
             "incus_wireguard_ingress" => "incus-wireguard-ingress",
             "incus_xray_reality_client" => "incus-xray-reality-client",
             "incus_xray_reality_server" => "incus-xray-reality-server",
+            "network" => "net",
             "systemd" => "dinit",
             "web-ui" => "web_ui",
             other => other,
@@ -963,11 +1004,118 @@ impl SchemaRegistry {
     }
 }
 
+/// Compatibility helper for built-in plugin schemas.
+///
+/// Runtime code should still obtain schema through the plugin instance. This
+/// helper exists so legacy built-in plugins can satisfy `StatePlugin::schema()`
+/// without forcing registration code to infer schema from live state again.
+pub fn builtin_plugin_schema(name: &str) -> Option<PluginSchema> {
+    builtin_plugin_schema_from_canonical_name(SchemaRegistry::canonical_name(name))
+}
+
+/// Return the full compatibility set of built-in schemas.
+///
+/// Calling this is an explicit compatibility action. Runtime code should
+/// prefer plugin registration or persisted canonical plugin documents instead.
+pub fn builtin_plugin_schemas() -> Vec<PluginSchema> {
+    [
+        "lxc",
+        "incus",
+        "incus-wireguard-ingress",
+        "incus-xray-reality-client",
+        "incus-xray-reality-server",
+        "net",
+        "rtnetlink",
+        "openflow",
+        "dinit",
+        "privacy_router",
+        "privacy_routes",
+        "netmaker",
+        "adc",
+        "agent_config",
+        "config",
+        "dnsresolver",
+        "endpoint",
+        "full_system",
+        "gcloud_adc",
+        "hardware",
+        "keypair",
+        "keyring",
+        "login1",
+        "mcp",
+        "openflow_obfuscation",
+        "ovsdb_bridge",
+        "packagekit",
+        "pcidecl",
+        "privacy",
+        "proxmox",
+        "proxy_server",
+        "service",
+        "sess_decl",
+        "software",
+        "users",
+        "web_ui",
+        "wireguard",
+    ]
+    .into_iter()
+    .filter_map(builtin_plugin_schema_from_canonical_name)
+    .collect()
+}
+
+fn builtin_plugin_schema_from_canonical_name(name: &str) -> Option<PluginSchema> {
+    Some(match name {
+        "adc" => create_adc_schema(),
+        "agent_config" => create_agent_config_schema(),
+        "config" => create_config_schema(),
+        "dnsresolver" => create_dnsresolver_schema(),
+        "endpoint" => create_endpoint_schema(),
+        "full_system" => create_full_system_schema(),
+        "gcloud_adc" => create_gcloud_adc_schema(),
+        "hardware" => create_hardware_schema(),
+        "keypair" => create_keypair_schema(),
+        "keyring" => create_keyring_schema(),
+        "login1" => create_login1_schema(),
+        "mcp" => create_mcp_schema(),
+        "openflow_obfuscation" => create_openflow_obfuscation_schema(),
+        "ovsdb_bridge" => create_ovsdb_bridge_schema(),
+        "packagekit" => create_packagekit_schema(),
+        "pcidecl" => create_pcidecl_schema(),
+        "privacy" => create_privacy_schema(),
+        "proxmox" => create_proxmox_schema(),
+        "proxy_server" => create_proxy_server_schema(),
+        "service" => create_service_schema(),
+        "sess_decl" => create_sess_decl_schema(),
+        "software" => create_software_schema(),
+        "users" => create_users_schema(),
+        "web_ui" => create_web_ui_schema(),
+        "wireguard" => create_wireguard_schema(),
+        "lxc" => create_lxc_schema(),
+        "incus" => create_incus_schema(),
+        "incus-wireguard-ingress" => create_incus_wireguard_ingress_schema(),
+        "incus-xray-reality-client" => create_incus_xray_reality_client_schema(),
+        "incus-xray-reality-server" => create_incus_xray_reality_server_schema(),
+        "net" => create_net_schema(),
+        "rtnetlink" => create_rtnetlink_schema(),
+        "openflow" => create_openflow_schema(),
+        "dinit" => create_dinit_schema(),
+        "privacy_router" => create_privacy_router_schema(),
+        "privacy_routes" => create_privacy_routes_schema(),
+        "netmaker" => create_netmaker_schema(),
+        _ => return None,
+    })
+}
+
 impl Default for SchemaRegistry {
     fn default() -> Self {
         Self::new()
     }
 }
+
+/// Preferred architectural name for `SchemaRegistry`.
+///
+/// The old name remains for compatibility while the workspace is migrated
+/// crate by crate, but new code should talk in terms of a schema catalog.
+pub type SchemaCatalog = SchemaRegistry;
 
 /// Errors that can occur when loading schemas
 #[derive(Debug, Clone)]
@@ -4734,32 +4882,38 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_schema_registry() {
-        let registry = SchemaRegistry::new();
-        assert!(registry.get("lxc").is_some());
-        assert!(registry.get("incus").is_some());
-        assert!(registry.get("incus-wireguard-ingress").is_some());
-        assert!(registry.get("incus-xray-reality-client").is_some());
-        assert!(registry.get("incus-xray-reality-server").is_some());
-        assert!(registry.get("net").is_some());
-        assert!(registry.get("openflow").is_some());
-        assert!(registry.get("systemd").is_some());
-        assert!(registry.get("privacy_routes").is_some());
-        assert!(registry.get("privacy_router").is_some());
-        assert!(registry.get("netmaker").is_some());
+    fn test_schema_catalog() {
+        let catalog = SchemaCatalog::with_builtin_schemas();
+        assert!(catalog.get("lxc").is_some());
+        assert!(catalog.get("incus").is_some());
+        assert!(catalog.get("incus-wireguard-ingress").is_some());
+        assert!(catalog.get("incus-xray-reality-client").is_some());
+        assert!(catalog.get("incus-xray-reality-server").is_some());
+        assert!(catalog.get("net").is_some());
+        assert!(catalog.get("openflow").is_some());
+        assert!(catalog.get("systemd").is_some());
+        assert!(catalog.get("privacy_routes").is_some());
+        assert!(catalog.get("privacy_router").is_some());
+        assert!(catalog.get("netmaker").is_some());
     }
 
     #[test]
-    fn test_schema_registry_aliases() {
-        let registry = SchemaRegistry::new();
-        assert!(registry.get("incus_wireguard_ingress").is_some());
-        assert!(registry.get("incus_xray_reality_client").is_some());
-        assert!(registry.get("incus_xray_reality_server").is_some());
+    fn test_schema_catalog_aliases() {
+        let catalog = SchemaCatalog::with_builtin_schemas();
+        assert!(catalog.get("incus_wireguard_ingress").is_some());
+        assert!(catalog.get("incus_xray_reality_client").is_some());
+        assert!(catalog.get("incus_xray_reality_server").is_some());
+    }
+
+    #[test]
+    fn test_schema_registry_compatibility_alias() {
+        let registry = SchemaRegistry::with_builtin_schemas();
+        assert!(registry.get("net").is_some());
     }
 
     #[test]
     fn test_lxc_validation() {
-        let registry = SchemaRegistry::new();
+        let registry = SchemaRegistry::with_builtin_schemas();
         let schema = registry.get("lxc").unwrap();
 
         // Valid state
@@ -4784,7 +4938,7 @@ mod tests {
 
     #[test]
     fn test_template_generation() {
-        let registry = SchemaRegistry::new();
+        let registry = SchemaRegistry::with_builtin_schemas();
         let schema = registry.get("lxc").unwrap();
         let template = schema.generate_template();
         assert!(template.get("containers").is_some());
@@ -4792,7 +4946,7 @@ mod tests {
 
     #[test]
     fn test_json_schema_export() {
-        let registry = SchemaRegistry::new();
+        let registry = SchemaRegistry::with_builtin_schemas();
         let schema = registry.get("lxc").unwrap();
         let json_schema = schema.to_json_schema();
         assert_eq!(json_schema["title"], "lxc");
@@ -4801,7 +4955,7 @@ mod tests {
 
     #[test]
     fn test_json_schema_2026_dialect() {
-        let registry = SchemaRegistry::new();
+        let registry = SchemaRegistry::with_builtin_schemas();
         let schema = registry.get("lxc").unwrap();
         let json_schema = schema.to_json_schema();
 
@@ -4858,7 +5012,7 @@ mod tests {
 
     #[test]
     fn test_nested_required_fields_for_wireguard_ingress() {
-        let registry = SchemaRegistry::new();
+        let registry = SchemaRegistry::with_builtin_schemas();
         let schema = registry.get("incus-wireguard-ingress").unwrap();
 
         let invalid_state = json!({
@@ -4884,7 +5038,7 @@ mod tests {
 
     #[test]
     fn test_nested_required_fields_for_xray_client() {
-        let registry = SchemaRegistry::new();
+        let registry = SchemaRegistry::with_builtin_schemas();
         let schema = registry.get("incus-xray-reality-client").unwrap();
 
         let invalid_state = json!({
@@ -4910,7 +5064,7 @@ mod tests {
 
     #[test]
     fn test_contract_schema_sections_for_incus_components() {
-        let registry = SchemaRegistry::new();
+        let registry = SchemaRegistry::with_builtin_schemas();
 
         for schema_name in [
             "incus-wireguard-ingress",
@@ -4932,7 +5086,7 @@ mod tests {
 
     #[test]
     fn test_privacy_router_container_ids_are_integers() {
-        let registry = SchemaRegistry::new();
+        let registry = SchemaRegistry::with_builtin_schemas();
         let schema = registry.get("privacy_router").unwrap();
 
         let valid_state = json!({

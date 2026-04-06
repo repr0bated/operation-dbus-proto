@@ -56,7 +56,7 @@ pub enum AgentCapability {
 
 impl AgentCapability {
     /// Parse capability from string
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "code_analysis" | "analyze_code" => Some(Self::CodeAnalysis),
             "security_audit" | "security" => Some(Self::SecurityAudit),
@@ -113,31 +113,24 @@ impl AgentCapability {
             Self::DatabaseQuery => "database_query",
             Self::FileOperation => "file_operation",
             Self::ShellExecution => "shell_execution",
-            Self::Custom(id) => {
+            Self::Custom(_id) => {
                 // Return static str for known custom IDs, or generic
-                match id {
-                    _ => "custom",
-                }
+                "custom"
             }
         }
     }
 }
 
 /// Agent execution priority
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Default)]
 pub enum AgentPriority {
     /// Execute first (e.g., validation, security)
     High = 0,
     /// Normal execution order
+    #[default]
     Normal = 1,
     /// Execute last (e.g., formatting, cleanup)
     Low = 2,
-}
-
-impl Default for AgentPriority {
-    fn default() -> Self {
-        Self::Normal
-    }
 }
 
 /// Agent definition with capabilities
@@ -541,13 +534,13 @@ mod tests {
     #[tokio::test]
     async fn test_capability_parsing() {
         assert_eq!(
-            AgentCapability::from_str("code_analysis"),
+            AgentCapability::parse("code_analysis"),
             Some(AgentCapability::CodeAnalysis)
         );
         assert_eq!(
-            AgentCapability::from_str("tests"),
+            AgentCapability::parse("tests"),
             Some(AgentCapability::TestGeneration)
         );
-        assert_eq!(AgentCapability::from_str("unknown_capability"), None);
+        assert_eq!(AgentCapability::parse("unknown_capability"), None);
     }
 }

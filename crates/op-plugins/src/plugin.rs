@@ -1,5 +1,4 @@
-//! Core plugin trait and types
-
+/// Core plugin trait and types
 use anyhow::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -11,10 +10,14 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::state::{DesiredState, StateChange, ValidationResult};
+use op_core::state_publisher::StatePublisher;
+pub use op_state::plugin::PluginMetadata;
 
 /// Context provided to plugin during initialization
 #[derive(Debug, Clone)]
 pub struct PluginContext {
+    /// Optional state publisher for authoritative updates
+    pub publisher: Option<std::sync::Arc<dyn StatePublisher>>,
     /// Dedicated BTRFS subvolume path for this plugin's storage
     pub storage_path: PathBuf,
     /// Assigned NUMA node (if available)
@@ -26,6 +29,7 @@ pub struct PluginContext {
 impl Default for PluginContext {
     fn default() -> Self {
         Self {
+            publisher: None,
             storage_path: PathBuf::from("/var/lib/op-dbus/plugins/default"),
             numa_node: None,
             config: Value::null(),
@@ -107,38 +111,6 @@ impl FeatureSchema {
     }
 }
 
-/// Plugin metadata
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PluginMetadata {
-    pub name: String,
-    pub version: String,
-    pub description: String,
-    pub author: Option<String>,
-    pub license: Option<String>,
-    pub dependencies: Vec<String>,
-    pub dbus_services: Vec<String>,
-    pub object_schemas: HashMap<String, Value>,
-    /// Extensible feature schemas
-    #[serde(default)]
-    pub feature_schemas: Vec<FeatureSchema>,
-}
-
-impl Default for PluginMetadata {
-    fn default() -> Self {
-        Self {
-            name: "unknown".to_string(),
-            version: "0.0.0".to_string(),
-            description: "No description".to_string(),
-            author: None,
-            license: None,
-            dependencies: Vec::new(),
-            dbus_services: Vec::new(),
-            object_schemas: HashMap::new(),
-            feature_schemas: Vec::new(),
-        }
-    }
-}
-
 /// Core plugin trait that all plugins must implement
 #[async_trait]
 pub trait Plugin: Send + Sync {
@@ -180,7 +152,12 @@ pub trait Plugin: Send + Sync {
             name: self.name().to_string(),
             version: self.version().to_string(),
             description: self.description().to_string(),
-            ..Default::default()
+            author: None,
+            license: None,
+            dependencies: vec![],
+            dbus_services: vec![],
+            feature_schemas: vec![],
+            object_schemas: HashMap::new(),
         }
     }
 

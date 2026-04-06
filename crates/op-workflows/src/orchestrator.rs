@@ -15,7 +15,7 @@ use tokio::sync::RwLock;
 
 use op_core::error::Result;
 use op_execution_tracker::{ExecutionRecord, ExecutionTracker};
-use op_plugins::registry::PluginRegistry;
+use op_plugins::PluginCatalog;
 use op_tools::registry::ToolRegistry;
 
 // ============================================================================
@@ -234,7 +234,12 @@ pub struct CacheStats {
 pub struct Orchestrator {
     config: OrchestratorConfig,
     tool_registry: Arc<ToolRegistry>,
-    plugin_registry: Arc<PluginRegistry>,
+    /// Shared plugin catalog view used for lookup/routing only.
+    ///
+    /// The orchestrator is not allowed to become a second source of truth for
+    /// plugin schema. It only consumes the already-registered catalog entries.
+    #[allow(dead_code)]
+    plugin_catalog: Arc<PluginCatalog>,
     execution_tracker: Arc<ExecutionTracker>,
     pattern_tracker: Arc<PatternTracker>,
     cache: Arc<IntermediateCache>,
@@ -245,7 +250,7 @@ impl Orchestrator {
     pub fn new(
         config: OrchestratorConfig,
         tool_registry: Arc<ToolRegistry>,
-        plugin_registry: Arc<PluginRegistry>,
+        plugin_catalog: Arc<PluginCatalog>,
     ) -> Self {
         let pattern_tracker = PatternTracker::new(config.promotion_threshold);
         let cache = IntermediateCache::new(1000);
@@ -254,7 +259,7 @@ impl Orchestrator {
         Self {
             config,
             tool_registry,
-            plugin_registry,
+            plugin_catalog,
             execution_tracker: Arc::new(execution_tracker),
             pattern_tracker: Arc::new(pattern_tracker),
             cache: Arc::new(cache),

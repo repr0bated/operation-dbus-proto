@@ -5,10 +5,9 @@
 //! - Instance data against plugin schemas
 //! - Expansion of propertyDependencies to if/then for broader compatibility
 
-use crate::plugin_schema::{PluginSchema, SchemaRegistry, DEFAULT_SCHEMA_DIALECT};
+use crate::plugin_schema::{PluginSchema, SchemaCatalog, DEFAULT_SCHEMA_DIALECT};
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
-use simd_json::ValueBuilder;
 use simd_json::{json, OwnedValue as Value};
 use std::collections::HashMap;
 
@@ -104,7 +103,7 @@ impl SchemaValidator {
     pub fn validate_schema_against_meta(
         &mut self,
         schema: &Value,
-        registry: &SchemaRegistry,
+        schema_catalog: &SchemaCatalog,
     ) -> Result<ValidationReport, ValidatorError> {
         let dialect = schema
             .get("$schema")
@@ -112,7 +111,7 @@ impl SchemaValidator {
             .unwrap_or(DEFAULT_SCHEMA_DIALECT);
 
         // Get or load the meta-schema
-        let meta_schema = registry
+        let meta_schema = schema_catalog
             .get_meta_schema(dialect)
             .ok_or_else(|| ValidatorError::MetaSchemaNotLoaded(dialect.to_string()))?;
 

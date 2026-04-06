@@ -1,0 +1,17 @@
+# ovsbr0 is created by netplan/openvswitch.
+# systemd-networkd only applies the host-side control-plane address here.
+[Match]
+Name=ovsbr0
+
+[Link]
+ActivationPolicy=up
+RequiredForOnline=no
+
+[Network]
+Address=10.88.88.1/24
+LinkLocalAddressing=no
+LLMNR=no
+MulticastDNS=no
+IPv6AcceptRA=no
+ConfigureWithoutCarrier=yes
+KeepConfiguration=static

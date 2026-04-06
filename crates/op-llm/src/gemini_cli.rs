@@ -26,7 +26,7 @@ use std::sync::Arc;
 use tracing::{debug, info, warn};
 
 use crate::provider::{
-    ChatMessage, ChatResponse, LlmProvider, ModelInfo, ProviderType, TokenUsage,
+    ChatMessage, ChatRequest, ChatResponse, LlmProvider, ModelInfo, ProviderType,
 };
 use crate::pty_bridge::PtyAuthBridge;
 
@@ -61,6 +61,7 @@ impl GeminiCliProvider {
 
     /// Configure Gemini CLI to use gcloud credentials
     /// This ensures GOOGLE_APPLICATION_CREDENTIALS is set when executing commands
+    #[allow(dead_code)]
     fn setup_gcloud_env(&self) -> std::collections::HashMap<String, String> {
         let mut env = std::collections::HashMap::new();
 

@@ -43,25 +43,31 @@ use crate::proto::{
     SubscribeRequest, SubscribeSignalsRequest, TagLock as ProtoTagLock, VerifyChainRequest,
     VerifyChainResponse,
 };
-use crate::sync_engine::{ChangeType, SyncEngine};
-use op_state_store::{Decision, DenyReason, EventChain, MerkleProof, OperationType};
+use crate::schema_engine::{ChangeType, SchemaEngine};
+use op_state_store::{Decision, DenyReason, MerkleProof};
 use zbus::zvariant::{Array as ZArray, OwnedValue as ZOwnedValue, Str as ZStr, Value as ZValue};
 use zbus::{Connection, Proxy};
 
-/// Plugin schema provider (source of truth)
+/// Plugin schema provider.
+///
+/// The provider is expected to read from the canonical plugin-document path
+/// and/or its in-memory catalog projection. It is not intended to invent
+/// schema independently of the plugin document.
+#[tonic::async_trait]
 pub trait PluginSchemaProvider: Send + Sync {
-    fn list_plugins(&self) -> Vec<PluginInfo>;
-    fn get_schema(&self, plugin_id: &str) -> Option<(String, String, String)>;
+    async fn list_plugins(&self) -> Vec<PluginInfo>;
+    async fn get_schema(&self, plugin_id: &str) -> Option<(String, String, String)>;
 }
 
 struct EmptyPluginProvider;
 
+#[tonic::async_trait]
 impl PluginSchemaProvider for EmptyPluginProvider {
-    fn list_plugins(&self) -> Vec<PluginInfo> {
+    async fn list_plugins(&self) -> Vec<PluginInfo> {
         Vec::new()
     }
 
-    fn get_schema(&self, _plugin_id: &str) -> Option<(String, String, String)> {
+    async fn get_schema(&self, _plugin_id: &str) -> Option<(String, String, String)> {
         None
     }
 }
@@ -104,7 +110,7 @@ impl RegistryInner {
 
 #[derive(Clone)]
 pub struct OperationGrpcServer {
-    sync_engine: Arc<SyncEngine>,
+    schema_engine: Arc<SchemaEngine>,
     plugin_provider: Arc<dyn PluginSchemaProvider>,
     /// Broadcast channel for chain events
     chain_events: broadcast::Sender<ProtoChainEvent>,
@@ -113,11 +119,11 @@ pub struct OperationGrpcServer {
 }
 
 impl OperationGrpcServer {
-    pub fn new(sync_engine: Arc<SyncEngine>) -> Self {
+    pub fn new(schema_engine: Arc<SchemaEngine>) -> Self {
         let (chain_tx, _) = broadcast::channel(1024);
         let (registry, _) = RegistryInner::new();
         Self {
-            sync_engine,
+            schema_engine,
             plugin_provider: Arc::new(EmptyPluginProvider),
             chain_events: chain_tx,
             registry: Arc::new(RwLock::new(registry)),
@@ -125,13 +131,13 @@ impl OperationGrpcServer {
     }
 
     pub fn with_plugin_provider(
-        sync_engine: Arc<SyncEngine>,
+        schema_engine: Arc<SchemaEngine>,
         plugin_provider: Arc<dyn PluginSchemaProvider>,
     ) -> Self {
         let (chain_tx, _) = broadcast::channel(1024);
         let (registry, _) = RegistryInner::new();
         Self {
-            sync_engine,
+            schema_engine,
             plugin_provider,
             chain_events: chain_tx,
             registry: Arc::new(RwLock::new(registry)),
@@ -143,6 +149,7 @@ impl OperationGrpcServer {
 ///
 /// Includes:
 ///   - StateSync, PluginService, EventChainService, OvsdbMirror, RuntimeMirror
+///   - ComponentRegistry, MailService, PrivacyNetworkService, RegistrationService
 ///   - gRPC server reflection (all protos in combined descriptor)
 ///   - gRPC health protocol (liveness for deploy verification and load balancers)
 ///
@@ -152,20 +159,23 @@ impl OperationGrpcServer {
 ///   3. Mark it serving via health_reporter
 pub async fn run_grpc_server(
     addr: std::net::SocketAddr,
-    sync_engine: Arc<SyncEngine>,
+    schema_engine: Arc<SchemaEngine>,
     plugin_provider: Option<Arc<dyn PluginSchemaProvider>>,
 ) -> Result<(), tonic::transport::Error> {
     use crate::proto::event_chain_service_server::EventChainServiceServer;
+    use crate::proto::mail::mail_service_server::MailServiceServer;
     use crate::proto::ovsdb_mirror_server::OvsdbMirrorServer;
     use crate::proto::plugin_service_server::PluginServiceServer;
+    use crate::proto::privacy::privacy_network_service_server::PrivacyNetworkServiceServer;
+    use crate::proto::registration::registration_service_server::RegistrationServiceServer;
     use crate::proto::registry::component_registry_server::ComponentRegistryServer;
     use crate::proto::runtime_mirror_server::RuntimeMirrorServer;
     use crate::proto::state_sync_server::StateSyncServer;
 
     let server = if let Some(provider) = plugin_provider {
-        OperationGrpcServer::with_plugin_provider(sync_engine, provider)
+        OperationGrpcServer::with_plugin_provider(schema_engine, provider)
     } else {
-        OperationGrpcServer::new(sync_engine)
+        OperationGrpcServer::new(schema_engine)
     };
 
     // Reflection — exposes combined FileDescriptorSet covering all domain protos.
@@ -195,20 +205,42 @@ pub async fn run_grpc_server(
     health_reporter
         .set_serving::<ComponentRegistryServer<OperationGrpcServer>>()
         .await;
+    health_reporter
+        .set_serving::<MailServiceServer<OperationGrpcServer>>()
+        .await;
+    health_reporter
+        .set_serving::<PrivacyNetworkServiceServer<OperationGrpcServer>>()
+        .await;
+    health_reporter
+        .set_serving::<RegistrationServiceServer<OperationGrpcServer>>()
+        .await;
 
-    info!(addr = %addr, "gRPC server starting (reflection + health enabled)");
+    info!(addr = %addr, "FORCE BINDING gRPC server to 0.0.0.0:50051");
 
-    tonic::transport::Server::builder()
-        .add_service(StateSyncServer::new(server.clone()))
-        .add_service(PluginServiceServer::new(server.clone()))
-        .add_service(EventChainServiceServer::new(server.clone()))
-        .add_service(OvsdbMirrorServer::new(server.clone()))
-        .add_service(RuntimeMirrorServer::new(server.clone()))
-        .add_service(ComponentRegistryServer::new(server.clone()))
-        .add_service(reflection)
-        .add_service(health_service)
-        .serve(addr)
-        .await
+    // Wrap services with gRPC-Web support and allow JSON encoding
+    let server = tonic::transport::Server::builder()
+        .accept_http1(true)
+        .add_service(tonic_web::enable(StateSyncServer::new(server.clone())))
+        .add_service(tonic_web::enable(PluginServiceServer::new(server.clone())))
+        .add_service(tonic_web::enable(EventChainServiceServer::new(
+            server.clone(),
+        )))
+        .add_service(tonic_web::enable(OvsdbMirrorServer::new(server.clone())))
+        .add_service(tonic_web::enable(RuntimeMirrorServer::new(server.clone())))
+        .add_service(tonic_web::enable(ComponentRegistryServer::new(
+            server.clone(),
+        )))
+        .add_service(tonic_web::enable(MailServiceServer::new(server.clone())))
+        .add_service(tonic_web::enable(PrivacyNetworkServiceServer::new(
+            server.clone(),
+        )))
+        .add_service(tonic_web::enable(RegistrationServiceServer::new(
+            server.clone(),
+        )))
+        .add_service(tonic_web::enable(reflection))
+        .add_service(tonic_web::enable(health_service));
+
+    server.serve(addr).await
 }
 
 // =============================================================================
@@ -226,7 +258,7 @@ impl StateSync for OperationGrpcServer {
         let req = request.into_inner();
         info!("gRPC Subscribe: plugins={:?}", req.plugin_ids);
 
-        let mut rx = self.sync_engine.change_sender().subscribe();
+        let mut rx = self.schema_engine.change_tx().subscribe();
         let plugin_filters = req.plugin_ids;
         let path_filters = req.path_patterns;
         let tag_filters = req.tags;
@@ -272,8 +304,8 @@ impl StateSync for OperationGrpcServer {
         };
 
         let result = self
-            .sync_engine
-            .process_grpc_mutation(
+            .schema_engine
+            .mutate(
                 req.plugin_id.clone(),
                 req.object_path.clone(),
                 change_type,
@@ -321,7 +353,7 @@ impl StateSync for OperationGrpcServer {
         request: Request<GetStateRequest>,
     ) -> Result<Response<GetStateResponse>, Status> {
         let req = request.into_inner();
-        let state = self.sync_engine.get_state(&req.plugin_id).await;
+        let state = self.schema_engine.get_state(&req.plugin_id).await;
 
         let state_struct = state
             .map(|v| simd_to_prost_struct(&v))
@@ -373,7 +405,7 @@ impl PluginService for OperationGrpcServer {
         _request: Request<ListPluginsRequest>,
     ) -> Result<Response<ListPluginsResponse>, Status> {
         Ok(Response::new(ListPluginsResponse {
-            plugins: self.plugin_provider.list_plugins(),
+            plugins: self.plugin_provider.list_plugins().await,
         }))
     }
 
@@ -383,7 +415,7 @@ impl PluginService for OperationGrpcServer {
     ) -> Result<Response<GetSchemaResponse>, Status> {
         let req = request.into_inner();
         if let Some((schema_json, dialect, version)) =
-            self.plugin_provider.get_schema(&req.plugin_id)
+            self.plugin_provider.get_schema(&req.plugin_id).await
         {
             Ok(Response::new(GetSchemaResponse {
                 schema_json,
@@ -410,16 +442,17 @@ impl PluginService for OperationGrpcServer {
             .map(|v| prost_value_to_simd(&v))
             .collect();
 
+        // New pipeline: Route through SchemaEngine.mutate for authoritative recording.
         let result = self
-            .sync_engine
-            .call_dbus_method(
-                &format!("org.opdbus.{}.v1", req.plugin_id),
-                &req.object_path,
-                &req.interface_name,
-                &req.method_name,
-                args,
-                &req.actor_id,
-                &if req.capability_id.is_empty() {
+            .schema_engine
+            .mutate(
+                req.plugin_id.clone(),
+                req.object_path.clone(),
+                ChangeType::MethodCall,
+                Some(req.method_name.clone()),
+                simd_json::json!(args),
+                req.actor_id.clone(),
+                if req.capability_id.is_empty() {
                     None
                 } else {
                     Some(req.capability_id.clone())
@@ -428,11 +461,11 @@ impl PluginService for OperationGrpcServer {
             .await;
 
         match result {
-            Ok(val) => Ok(Response::new(CallMethodResponse {
-                success: true,
-                result: Some(simd_to_prost_value(&val)),
-                event_id: 0,
-                event_hash: String::new(),
+            Ok(ok) => Ok(Response::new(CallMethodResponse {
+                success: ok.success,
+                result: ok.result.map(|v| simd_to_prost_value(&v)),
+                event_id: ok.event_id,
+                event_hash: ok.event_hash,
                 error: None,
             })),
             Err(e) => Ok(Response::new(CallMethodResponse {
@@ -520,9 +553,58 @@ impl PluginService for OperationGrpcServer {
 
     async fn subscribe_signals(
         &self,
-        _request: Request<SubscribeSignalsRequest>,
+        request: Request<SubscribeSignalsRequest>,
     ) -> Result<Response<Self::SubscribeSignalsStream>, Status> {
-        let stream = tokio_stream::empty::<Result<Signal, Status>>();
+        let req = request.into_inner();
+        let plugin_filter = req.plugin_id;
+        let signal_names = req.signal_names;
+        let path_filter = req.object_path;
+
+        // Subscribe to the schema engine's change broadcast and filter for signals
+        let mut rx = self.schema_engine.change_tx().subscribe();
+
+        let stream = stream! {
+            loop {
+                match rx.recv().await {
+                    Ok(update) => {
+                        // Only emit Signal change types
+                        if update.change_type != ChangeType::Signal {
+                            continue;
+                        }
+                        // Plugin filter
+                        if !plugin_filter.is_empty() && update.plugin_id != plugin_filter {
+                            continue;
+                        }
+                        // Path filter
+                        if !path_filter.is_empty() && !update.object_path.starts_with(&path_filter) {
+                            continue;
+                        }
+                        // Signal name filter
+                        let signal_name = update.member_name.clone().unwrap_or_default();
+                        if !signal_names.is_empty() && !signal_names.contains(&signal_name) {
+                            continue;
+                        }
+
+                        yield Ok(Signal {
+                            plugin_id: update.plugin_id.clone(),
+                            object_path: update.object_path.clone(),
+                            interface_name: String::new(),
+                            signal_name,
+                            arguments: vec![simd_to_prost_value(&update.new_value)],
+                            timestamp: Some(ProstTimestamp {
+                                seconds: update.timestamp.timestamp(),
+                                nanos: update.timestamp.timestamp_subsec_nanos() as i32,
+                            }),
+                        });
+                    }
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        warn!("Signal subscriber lagged, missed {} updates", n);
+                        continue;
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        };
         Ok(Response::new(Box::pin(stream)))
     }
 }
@@ -541,10 +623,10 @@ impl EventChainService for OperationGrpcServer {
         request: Request<GetEventsRequest>,
     ) -> Result<Response<GetEventsResponse>, Status> {
         let req = request.into_inner();
-        let chain = self.sync_engine.event_chain();
+        let chain = self.schema_engine.event_chain.clone();
         let chain = chain.read().await;
 
-        let mut events: Vec<ProtoChainEvent> = chain
+        let events: Vec<ProtoChainEvent> = chain
             .events()
             .iter()
             .filter(|e| req.from_event_id == 0 || e.event_id >= req.from_event_id)
@@ -600,7 +682,7 @@ impl EventChainService for OperationGrpcServer {
         &self,
         _request: Request<VerifyChainRequest>,
     ) -> Result<Response<VerifyChainResponse>, Status> {
-        let chain = self.sync_engine.event_chain();
+        let chain = self.schema_engine.event_chain.clone();
         let chain = chain.read().await;
         let result = chain.verify_chain();
         Ok(Response::new(VerifyChainResponse {
@@ -616,7 +698,7 @@ impl EventChainService for OperationGrpcServer {
         request: Request<GetProofRequest>,
     ) -> Result<Response<GetProofResponse>, Status> {
         let req = request.into_inner();
-        let chain = self.sync_engine.event_chain();
+        let chain = self.schema_engine.event_chain.clone();
         let chain = chain.read().await;
         let proof: Option<MerkleProof> =
             op_state_store::EventBatch::generate_proof(chain.events(), req.event_id);
@@ -644,7 +726,7 @@ impl EventChainService for OperationGrpcServer {
         request: Request<ProveTagImmutabilityRequest>,
     ) -> Result<Response<ProveTagImmutabilityResponse>, Status> {
         let req = request.into_inner();
-        let chain = self.sync_engine.event_chain();
+        let chain = self.schema_engine.event_chain.clone();
         let chain = chain.read().await;
         let proof = chain.prove_tag_immutability(&req.tag);
         Ok(Response::new(ProveTagImmutabilityResponse {
@@ -660,7 +742,7 @@ impl EventChainService for OperationGrpcServer {
         request: Request<GetSnapshotRequest>,
     ) -> Result<Response<GetSnapshotResponse>, Status> {
         let req = request.into_inner();
-        let chain = self.sync_engine.event_chain();
+        let chain = self.schema_engine.event_chain.clone();
         let chain = chain.read().await;
         if let Some(snapshot) = chain.get_snapshot(&req.snapshot_id) {
             Ok(Response::new(GetSnapshotResponse {
@@ -677,11 +759,11 @@ impl EventChainService for OperationGrpcServer {
     ) -> Result<Response<CreateSnapshotResponse>, Status> {
         let req = request.into_inner();
         let state = self
-            .sync_engine
+            .schema_engine
             .get_state(&req.plugin_id)
             .await
             .unwrap_or_else(|| simd_json::json!({}));
-        let chain = self.sync_engine.event_chain();
+        let chain = self.schema_engine.event_chain.clone();
         let mut chain = chain.write().await;
         let snapshot = chain.create_snapshot(req.plugin_id, "1.0.0".to_string(), state);
         Ok(Response::new(CreateSnapshotResponse {
@@ -694,7 +776,7 @@ impl EventChainService for OperationGrpcServer {
 // Helpers
 // =============================================================================
 
-fn proto_state_change(change: &crate::sync_engine::StateChange) -> ProtoStateChange {
+fn proto_state_change(change: &crate::schema_engine::StateChange) -> ProtoStateChange {
     ProtoStateChange {
         change_id: change.change_id.clone(),
         event_id: change.event_id,
@@ -1045,13 +1127,57 @@ impl OvsdbMirror for OperationGrpcServer {
 
     async fn monitor(
         &self,
-        _request: Request<OvsdbMonitorRequest>,
+        request: Request<OvsdbMonitorRequest>,
     ) -> Result<Response<Self::MonitorStream>, Status> {
-        // TODO: Wire to OVSDB monitor via D-Bus mirror's monitor channel
+        let req = request.into_inner();
+        let _database = if req.database.is_empty() {
+            "Open_vSwitch".to_string()
+        } else {
+            req.database
+        };
+
+        // Subscribe to the schema engine's change broadcast and filter for OVSDB paths
+        let mut rx = self.schema_engine.change_tx().subscribe();
+
         let stream = stream! {
-            // Placeholder — will connect to ovsdb monitor_db broadcast
-            tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
-            yield Err(Status::cancelled("Monitor stream ended"));
+            loop {
+                match rx.recv().await {
+                    Ok(update) => {
+                        // Filter to only OVSDB-related path changes
+                        if !update.object_path.starts_with("/org/opdbus/v1/ovsdb") {
+                            continue;
+                        }
+
+                        // Extract table name and UUID from path:
+                        //   /org/opdbus/v1/ovsdb/{table_name}/{uuid}
+                        let parts: Vec<&str> = update.object_path.split('/').collect();
+                        let (table, uuid) = if parts.len() >= 7 {
+                            (parts[5].to_string(), parts[6].to_string())
+                        } else {
+                            continue;
+                        };
+
+                        let new_row = Some(simd_to_prost_struct(&update.new_value));
+                        let old_row = update.old_value.as_ref().map(simd_to_prost_struct);
+
+                        yield Ok(OvsdbUpdate {
+                            table,
+                            uuid,
+                            old_row,
+                            new_row,
+                            timestamp: Some(ProstTimestamp {
+                                seconds: update.timestamp.timestamp(),
+                                nanos: update.timestamp.timestamp_subsec_nanos() as i32,
+                            }),
+                        });
+                    }
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        warn!("OVSDB monitor subscriber lagged, missed {} updates", n);
+                        continue;
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
         };
         Ok(Response::new(Box::pin(stream)))
     }
@@ -1099,7 +1225,7 @@ impl OperationGrpcServer {
     /// Call an OVSDB method via the D-Bus mirror interface
     async fn ovsdb_call(&self, method: &str, args: &str) -> Result<String, Status> {
         let conn = self
-            .sync_engine
+            .schema_engine
             .dbus_connection()
             .await
             .map_err(|e| Status::unavailable(format!("D-Bus not available: {}", e)))?;
@@ -1427,7 +1553,6 @@ impl RuntimeMirror for OperationGrpcServer {
                 .split(']')
                 .nth(1)
                 .unwrap_or("")
-                .trim()
                 .split_whitespace()
                 .next()
                 .unwrap_or("")
@@ -1693,8 +1818,8 @@ impl ComponentRegistry for OperationGrpcServer {
             endpoint: req.endpoint.clone(),
             version: req.version.clone(),
             status: ComponentStatus::Active as i32,
-            registered_at: Some(now.clone()),
-            last_heartbeat: Some(now.clone()),
+            registered_at: Some(now),
+            last_heartbeat: Some(now),
         };
 
         inner
@@ -1712,7 +1837,7 @@ impl ComponentRegistry for OperationGrpcServer {
         let event = RegistryEvent {
             event_type: event_type as i32,
             component: Some(info),
-            timestamp: Some(now.clone()),
+            timestamp: Some(now),
         };
         // Ignore send error — no active watchers is fine.
         let _ = inner.watch_tx.send(event);
@@ -1911,7 +2036,7 @@ impl ComponentRegistry for OperationGrpcServer {
         let was_stale;
         if let Some(info) = inner.components.get_mut(&req.component_id) {
             was_stale = info.status == ComponentStatus::Stale as i32;
-            info.last_heartbeat = Some(now.clone());
+            info.last_heartbeat = Some(now);
             if was_stale {
                 info.status = ComponentStatus::Active as i32;
             }
@@ -1928,7 +2053,7 @@ impl ComponentRegistry for OperationGrpcServer {
                 let event = RegistryEvent {
                     event_type: RegistryEventType::RegistryEventRecovered as i32,
                     component: Some(info),
-                    timestamp: Some(now.clone()),
+                    timestamp: Some(now),
                 };
                 let _ = inner.watch_tx.send(event);
                 info!(component_id = %req.component_id, "component recovered from stale");
@@ -1942,5 +2067,2146 @@ impl ComponentRegistry for OperationGrpcServer {
             reregister_required: false,
             server_time: Some(now),
         }))
+    }
+}
+
+// =============================================================================
+// MailService — Email and Webmail Operations via D-Bus bridge
+// =============================================================================
+
+use crate::proto::mail::{
+    mail_service_server::MailService, AdminMailActionRequest, AdminMailActionResponse,
+    CheckMailServerRequest, CheckMailServerResponse, GetInboxRequest, GetInboxResponse,
+    GetMailStatusRequest, GetMailStatusResponse, GetMessageRequest, GetMessageResponse,
+    ListMailAccountsRequest, ListMailAccountsResponse, SendEmailRequest, SendEmailResponse,
+};
+
+impl OperationGrpcServer {
+    /// Call a MailService method via the D-Bus mail interface.
+    /// Falls back to SchemaEngine state if the D-Bus service is unavailable.
+    async fn mail_dbus_call(&self, method: &str, args: &str) -> Result<String, Status> {
+        let conn = self
+            .schema_engine
+            .dbus_connection()
+            .await
+            .map_err(|e| Status::unavailable(format!("D-Bus not available: {}", e)))?;
+
+        let proxy = Proxy::new(
+            &conn,
+            "org.opdbus.v1",
+            "/org/opdbus/v1/mail",
+            "org.opdbus.MailV1",
+        )
+        .await
+        .map_err(|e| Status::internal(format!("Mail proxy error: {}", e)))?;
+
+        let result: String = proxy
+            .call(method, &(args.to_string(),))
+            .await
+            .map_err(|e| {
+                Status::unavailable(format!(
+                    "Mail D-Bus service unavailable for '{}': {}",
+                    method, e
+                ))
+            })?;
+
+        Ok(result)
+    }
+}
+
+#[tonic::async_trait]
+impl MailService for OperationGrpcServer {
+    async fn send_email(
+        &self,
+        request: Request<SendEmailRequest>,
+    ) -> Result<Response<SendEmailResponse>, Status> {
+        let req = request.into_inner();
+        info!(
+            from = %req.from_email,
+            to = %req.to_email,
+            subject = %req.subject,
+            "gRPC SendEmail"
+        );
+
+        // Try D-Bus mail service first
+        let args = simd_json::json!({
+            "from": req.from_email,
+            "to": req.to_email,
+            "subject": req.subject,
+            "body": req.body,
+            "is_html": req.is_html,
+            "domain": req.domain
+        });
+        let args_str = args.to_string();
+
+        match self.mail_dbus_call("send_email", &args_str).await {
+            Ok(result) => {
+                let parsed: serde_json::Value = serde_json::from_str(&result).unwrap_or_default();
+                Ok(Response::new(SendEmailResponse {
+                    success: parsed
+                        .get("success")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(true),
+                    message: parsed
+                        .get("message")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("sent")
+                        .to_string(),
+                    message_id: parsed
+                        .get("message_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    sent_at: Some(OperationGrpcServer::now_ts()),
+                }))
+            }
+            Err(_dbus_err) => {
+                // Record the send attempt in SchemaEngine state
+                let mutation_value = simd_json::json!({
+                    "from": req.from_email,
+                    "to": req.to_email,
+                    "subject": req.subject,
+                    "status": "queued_no_backend"
+                });
+                let message_id = Uuid::new_v4().to_string();
+                let _ = self
+                    .schema_engine
+                    .process_grpc_mutation(
+                        "mail".to_string(),
+                        format!("/org/opdbus/v1/mail/outbox/{}", message_id),
+                        ChangeType::ObjectAdded,
+                        Some("send_email".to_string()),
+                        mutation_value,
+                        req.from_email.clone(),
+                        None,
+                    )
+                    .await;
+
+                Ok(Response::new(SendEmailResponse {
+                    success: false,
+                    message: "Mail D-Bus service unavailable; email queued in state store"
+                        .to_string(),
+                    message_id,
+                    sent_at: Some(OperationGrpcServer::now_ts()),
+                }))
+            }
+        }
+    }
+
+    async fn get_inbox(
+        &self,
+        request: Request<GetInboxRequest>,
+    ) -> Result<Response<GetInboxResponse>, Status> {
+        let req = request.into_inner();
+        let args = simd_json::json!({
+            "email": req.email,
+            "domain": req.domain,
+            "limit": req.limit,
+            "offset": req.offset,
+            "folder": req.folder
+        });
+
+        match self.mail_dbus_call("get_inbox", &args.to_string()).await {
+            Ok(result) => {
+                let parsed: serde_json::Value = serde_json::from_str(&result).unwrap_or_default();
+                let messages = parsed
+                    .get("messages")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .map(|m| crate::proto::mail::EmailMessage {
+                                message_id: m
+                                    .get("message_id")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                from: m
+                                    .get("from")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                to: m
+                                    .get("to")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                subject: m
+                                    .get("subject")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                preview: m
+                                    .get("preview")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                is_read: m
+                                    .get("is_read")
+                                    .and_then(|v| v.as_bool())
+                                    .unwrap_or(false),
+                                has_attachments: m
+                                    .get("has_attachments")
+                                    .and_then(|v| v.as_bool())
+                                    .unwrap_or(false),
+                                received_at: None,
+                                size_bytes: m
+                                    .get("size_bytes")
+                                    .and_then(|v| v.as_i64())
+                                    .unwrap_or(0)
+                                    as i32,
+                                folder: m
+                                    .get("folder")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                Ok(Response::new(GetInboxResponse {
+                    messages,
+                    total_count: parsed
+                        .get("total_count")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0) as u32,
+                    unread_count: parsed
+                        .get("unread_count")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0) as u32,
+                    folder: req.folder,
+                }))
+            }
+            Err(_) => {
+                // Return empty inbox when backend is unavailable
+                Ok(Response::new(GetInboxResponse {
+                    messages: vec![],
+                    total_count: 0,
+                    unread_count: 0,
+                    folder: if req.folder.is_empty() {
+                        "inbox".to_string()
+                    } else {
+                        req.folder
+                    },
+                }))
+            }
+        }
+    }
+
+    async fn get_message(
+        &self,
+        request: Request<GetMessageRequest>,
+    ) -> Result<Response<GetMessageResponse>, Status> {
+        let req = request.into_inner();
+        let args = simd_json::json!({
+            "message_id": req.message_id,
+            "email": req.email,
+            "domain": req.domain
+        });
+
+        match self.mail_dbus_call("get_message", &args.to_string()).await {
+            Ok(result) => {
+                let parsed: serde_json::Value = serde_json::from_str(&result).unwrap_or_default();
+                Ok(Response::new(GetMessageResponse {
+                    success: parsed
+                        .get("success")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(true),
+                    header: None,
+                    body: parsed
+                        .get("body")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    is_html: parsed
+                        .get("is_html")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false),
+                    attachments: vec![],
+                    raw_content: parsed
+                        .get("raw_content")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                }))
+            }
+            Err(_) => Err(Status::unavailable(
+                "Mail D-Bus service is not available; cannot retrieve message",
+            )),
+        }
+    }
+
+    async fn get_mail_status(
+        &self,
+        request: Request<GetMailStatusRequest>,
+    ) -> Result<Response<GetMailStatusResponse>, Status> {
+        let req = request.into_inner();
+
+        // Try reading status from SchemaEngine state first
+        let state = self.schema_engine.get_state("mail").await;
+        if let Some(ref st) = state {
+            if let Some(status_obj) = st.as_object().and_then(|o| o.get("status")) {
+                return Ok(Response::new(GetMailStatusResponse {
+                    is_configured: status_obj
+                        .as_object()
+                        .and_then(|o| o.get("is_configured"))
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false),
+                    is_running: status_obj
+                        .as_object()
+                        .and_then(|o| o.get("is_running"))
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false),
+                    mail_server_type: "maddy".to_string(),
+                    webmail_url: format!("https://mail.{}", req.domain),
+                    smtp_status: "unknown".to_string(),
+                    imap_status: "unknown".to_string(),
+                    total_accounts: 0,
+                    total_messages: 0,
+                    last_checked: Some(OperationGrpcServer::now_ts()),
+                    message: "Status from state store".to_string(),
+                }));
+            }
+        }
+
+        // Attempt D-Bus call
+        match self
+            .mail_dbus_call(
+                "get_status",
+                &simd_json::json!({"domain": req.domain}).to_string(),
+            )
+            .await
+        {
+            Ok(result) => {
+                let parsed: serde_json::Value = serde_json::from_str(&result).unwrap_or_default();
+                Ok(Response::new(GetMailStatusResponse {
+                    is_configured: parsed
+                        .get("is_configured")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false),
+                    is_running: parsed
+                        .get("is_running")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false),
+                    mail_server_type: parsed
+                        .get("mail_server_type")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("maddy")
+                        .to_string(),
+                    webmail_url: parsed
+                        .get("webmail_url")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    smtp_status: parsed
+                        .get("smtp_status")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown")
+                        .to_string(),
+                    imap_status: parsed
+                        .get("imap_status")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown")
+                        .to_string(),
+                    total_accounts: parsed
+                        .get("total_accounts")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0)
+                        as u32,
+                    total_messages: parsed
+                        .get("total_messages")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0)
+                        as u32,
+                    last_checked: Some(OperationGrpcServer::now_ts()),
+                    message: "ok".to_string(),
+                }))
+            }
+            Err(_) => Ok(Response::new(GetMailStatusResponse {
+                is_configured: false,
+                is_running: false,
+                mail_server_type: String::new(),
+                webmail_url: String::new(),
+                smtp_status: "unavailable".to_string(),
+                imap_status: "unavailable".to_string(),
+                total_accounts: 0,
+                total_messages: 0,
+                last_checked: Some(OperationGrpcServer::now_ts()),
+                message: "Mail D-Bus service is not available".to_string(),
+            })),
+        }
+    }
+
+    async fn list_mail_accounts(
+        &self,
+        request: Request<ListMailAccountsRequest>,
+    ) -> Result<Response<ListMailAccountsResponse>, Status> {
+        let req = request.into_inner();
+        let args = simd_json::json!({
+            "domain": req.domain,
+            "include_inactive": req.include_inactive
+        });
+
+        match self
+            .mail_dbus_call("list_accounts", &args.to_string())
+            .await
+        {
+            Ok(result) => {
+                let parsed: serde_json::Value = serde_json::from_str(&result).unwrap_or_default();
+                let accounts: Vec<_> = parsed
+                    .get("accounts")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .map(|a| crate::proto::mail::MailAccount {
+                                email: a
+                                    .get("email")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                user_id: a
+                                    .get("user_id")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                is_admin: a
+                                    .get("is_admin")
+                                    .and_then(|v| v.as_bool())
+                                    .unwrap_or(false),
+                                is_active: a
+                                    .get("is_active")
+                                    .and_then(|v| v.as_bool())
+                                    .unwrap_or(true),
+                                created_at: None,
+                                message_count: a
+                                    .get("message_count")
+                                    .and_then(|v| v.as_u64())
+                                    .unwrap_or(0)
+                                    as u32,
+                                unread_count: a
+                                    .get("unread_count")
+                                    .and_then(|v| v.as_u64())
+                                    .unwrap_or(0)
+                                    as u32,
+                                last_login: a
+                                    .get("last_login")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                let total = accounts.len() as u32;
+                Ok(Response::new(ListMailAccountsResponse {
+                    accounts,
+                    total_count: total,
+                }))
+            }
+            Err(_) => Ok(Response::new(ListMailAccountsResponse {
+                accounts: vec![],
+                total_count: 0,
+            })),
+        }
+    }
+
+    async fn admin_mail_action(
+        &self,
+        request: Request<AdminMailActionRequest>,
+    ) -> Result<Response<AdminMailActionResponse>, Status> {
+        let req = request.into_inner();
+        info!(
+            action = %req.action,
+            email = %req.email,
+            domain = %req.domain,
+            "gRPC AdminMailAction"
+        );
+
+        let args = simd_json::json!({
+            "action": req.action,
+            "email": req.email,
+            "domain": req.domain
+        });
+
+        match self
+            .mail_dbus_call("admin_action", &args.to_string())
+            .await
+        {
+            Ok(result) => {
+                let parsed: serde_json::Value = serde_json::from_str(&result).unwrap_or_default();
+                Ok(Response::new(AdminMailActionResponse {
+                    success: parsed
+                        .get("success")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(true),
+                    message: parsed
+                        .get("message")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("ok")
+                        .to_string(),
+                    action_id: Uuid::new_v4().to_string(),
+                    timestamp: Some(OperationGrpcServer::now_ts()),
+                    result: req.parameters,
+                }))
+            }
+            Err(_) => {
+                // Record admin action in state store even without backend
+                let mutation_value = simd_json::json!({
+                    "action": req.action,
+                    "email": req.email,
+                    "domain": req.domain,
+                    "status": "pending_no_backend"
+                });
+                let action_id = Uuid::new_v4().to_string();
+                let _ = self
+                    .schema_engine
+                    .process_grpc_mutation(
+                        "mail".to_string(),
+                        format!("/org/opdbus/v1/mail/admin_actions/{}", action_id),
+                        ChangeType::MethodCall,
+                        Some(req.action.clone()),
+                        mutation_value,
+                        "admin".to_string(),
+                        None,
+                    )
+                    .await;
+
+                Ok(Response::new(AdminMailActionResponse {
+                    success: false,
+                    message: "Mail D-Bus service unavailable; action recorded in state store"
+                        .to_string(),
+                    action_id,
+                    timestamp: Some(OperationGrpcServer::now_ts()),
+                    result: None,
+                }))
+            }
+        }
+    }
+
+    async fn check_mail_server(
+        &self,
+        request: Request<CheckMailServerRequest>,
+    ) -> Result<Response<CheckMailServerResponse>, Status> {
+        let req = request.into_inner();
+        let args = simd_json::json!({
+            "domain": req.domain,
+            "check_smtp": req.check_smtp,
+            "check_imap": req.check_imap,
+            "check_webmail": req.check_webmail
+        });
+
+        match self
+            .mail_dbus_call("check_server", &args.to_string())
+            .await
+        {
+            Ok(result) => {
+                let parsed: serde_json::Value = serde_json::from_str(&result).unwrap_or_default();
+                Ok(Response::new(CheckMailServerResponse {
+                    all_healthy: parsed
+                        .get("all_healthy")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false),
+                    smtp_healthy: parsed
+                        .get("smtp_healthy")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false),
+                    imap_healthy: parsed
+                        .get("imap_healthy")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false),
+                    webmail_healthy: parsed
+                        .get("webmail_healthy")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false),
+                    smtp_status: parsed
+                        .get("smtp_status")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unchecked")
+                        .to_string(),
+                    imap_status: parsed
+                        .get("imap_status")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unchecked")
+                        .to_string(),
+                    webmail_status: parsed
+                        .get("webmail_status")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unchecked")
+                        .to_string(),
+                    message: "ok".to_string(),
+                    issues: parsed
+                        .get("issues")
+                        .and_then(|v| v.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|v| v.as_str().map(String::from))
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                }))
+            }
+            Err(_) => Ok(Response::new(CheckMailServerResponse {
+                all_healthy: false,
+                smtp_healthy: false,
+                imap_healthy: false,
+                webmail_healthy: false,
+                smtp_status: "unavailable".to_string(),
+                imap_status: "unavailable".to_string(),
+                webmail_status: "unavailable".to_string(),
+                message: "Mail D-Bus service is not available".to_string(),
+                issues: vec!["Mail D-Bus service (org.opdbus.MailV1) is not running".to_string()],
+            })),
+        }
+    }
+}
+
+// =============================================================================
+// PrivacyNetworkService — wgcf + OVS + Xray Privacy Infrastructure
+// =============================================================================
+
+use crate::proto::privacy::{
+    privacy_network_service_server::PrivacyNetworkService, ConfigurePacketRoutingRequest,
+    ConfigurePacketRoutingResponse, EnsurePrivacyNetworkRequest, EnsurePrivacyNetworkResponse,
+    GenerateWireGuardKeyPairRequest, GenerateWireGuardKeyPairResponse, GetNetworkStatusRequest,
+    GetNetworkStatusResponse, GetNetworkTopologyRequest, GetNetworkTopologyResponse,
+    GetPrivacyWireGuardConfigRequest, GetPrivacyWireGuardConfigResponse, HealthCheckRequest,
+    HealthCheckResponse, ManageComponentRequest, ManageComponentResponse, ProvisionUserRequest,
+    ProvisionUserResponse,
+};
+
+impl OperationGrpcServer {
+    /// Call a PrivacyNetwork method via the D-Bus privacy interface.
+    async fn privacy_dbus_call(&self, method: &str, args: &str) -> Result<String, Status> {
+        let conn = self
+            .schema_engine
+            .dbus_connection()
+            .await
+            .map_err(|e| Status::unavailable(format!("D-Bus not available: {}", e)))?;
+
+        let proxy = Proxy::new(
+            &conn,
+            "org.opdbus.v1",
+            "/org/opdbus/v1/privacy",
+            "org.opdbus.PrivacyV1",
+        )
+        .await
+        .map_err(|e| Status::internal(format!("Privacy proxy error: {}", e)))?;
+
+        let result: String = proxy
+            .call(method, &(args.to_string(),))
+            .await
+            .map_err(|e| {
+                Status::unavailable(format!(
+                    "Privacy D-Bus service unavailable for '{}': {}",
+                    method, e
+                ))
+            })?;
+
+        Ok(result)
+    }
+}
+
+#[tonic::async_trait]
+impl PrivacyNetworkService for OperationGrpcServer {
+    async fn ensure_privacy_network(
+        &self,
+        request: Request<EnsurePrivacyNetworkRequest>,
+    ) -> Result<Response<EnsurePrivacyNetworkResponse>, Status> {
+        let req = request.into_inner();
+        info!(
+            domain = %req.domain,
+            force = req.force_reprovision,
+            "gRPC EnsurePrivacyNetwork"
+        );
+
+        let args = simd_json::json!({
+            "domain": req.domain,
+            "force_reprovision": req.force_reprovision
+        });
+
+        match self
+            .privacy_dbus_call("ensure_network", &args.to_string())
+            .await
+        {
+            Ok(result) => {
+                let parsed: serde_json::Value = serde_json::from_str(&result).unwrap_or_default();
+                Ok(Response::new(EnsurePrivacyNetworkResponse {
+                    success: parsed
+                        .get("success")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(true),
+                    message: parsed
+                        .get("message")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("provisioned")
+                        .to_string(),
+                    bridge_name: parsed
+                        .get("bridge_name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("ovsbr0")
+                        .to_string(),
+                    wgcf_status: parsed
+                        .get("wgcf_status")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown")
+                        .to_string(),
+                    xray_status: parsed
+                        .get("xray_status")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown")
+                        .to_string(),
+                    active_ports: parsed
+                        .get("active_ports")
+                        .and_then(|v| v.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|v| v.as_str().map(String::from))
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                    provisioned_at: Some(OperationGrpcServer::now_ts()),
+                    topology_summary: parsed
+                        .get("topology_summary")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                }))
+            }
+            Err(_) => {
+                // Record provisioning intent in state store
+                let mutation_value = simd_json::json!({
+                    "domain": req.domain,
+                    "status": "pending_no_backend",
+                    "force_reprovision": req.force_reprovision
+                });
+                let _ = self
+                    .schema_engine
+                    .process_grpc_mutation(
+                        "privacy".to_string(),
+                        "/org/opdbus/v1/privacy/network".to_string(),
+                        ChangeType::MethodCall,
+                        Some("ensure_network".to_string()),
+                        mutation_value,
+                        "grpc".to_string(),
+                        None,
+                    )
+                    .await;
+
+                Ok(Response::new(EnsurePrivacyNetworkResponse {
+                    success: false,
+                    message:
+                        "Privacy D-Bus service unavailable; provisioning request recorded in state"
+                            .to_string(),
+                    bridge_name: String::new(),
+                    wgcf_status: "unavailable".to_string(),
+                    xray_status: "unavailable".to_string(),
+                    active_ports: vec![],
+                    provisioned_at: Some(OperationGrpcServer::now_ts()),
+                    topology_summary: String::new(),
+                }))
+            }
+        }
+    }
+
+    async fn get_network_status(
+        &self,
+        request: Request<GetNetworkStatusRequest>,
+    ) -> Result<Response<GetNetworkStatusResponse>, Status> {
+        let req = request.into_inner();
+
+        // Check SchemaEngine state first
+        let state = self.schema_engine.get_state("privacy").await;
+        if let Some(ref st) = state {
+            if let Some(net_status) = st.as_object().and_then(|o| o.get("network_status")) {
+                let components: Vec<_> = net_status
+                    .as_object()
+                    .and_then(|o| o.get("components"))
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .map(|c| crate::proto::privacy::NetworkComponent {
+                                name: c
+                                    .as_object()
+                                    .and_then(|o| o.get("name"))
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                status: c
+                                    .as_object()
+                                    .and_then(|o| o.get("status"))
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("unknown")
+                                    .to_string(),
+                                r#type: c
+                                    .as_object()
+                                    .and_then(|o| o.get("type"))
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                ip_address: String::new(),
+                                details: String::new(),
+                                critical: false,
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                return Ok(Response::new(GetNetworkStatusResponse {
+                    healthy: !components.is_empty(),
+                    overall_status: "from_state_store".to_string(),
+                    components,
+                    message: "Status from state store".to_string(),
+                    last_updated: Some(OperationGrpcServer::now_ts()),
+                }));
+            }
+        }
+
+        let args = simd_json::json!({"component": req.component});
+        match self
+            .privacy_dbus_call("get_status", &args.to_string())
+            .await
+        {
+            Ok(result) => {
+                let parsed: serde_json::Value = serde_json::from_str(&result).unwrap_or_default();
+                let components = parsed
+                    .get("components")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .map(|c| crate::proto::privacy::NetworkComponent {
+                                name: c
+                                    .get("name")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                status: c
+                                    .get("status")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("unknown")
+                                    .to_string(),
+                                r#type: c
+                                    .get("type")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                ip_address: c
+                                    .get("ip_address")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                details: c
+                                    .get("details")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                critical: c
+                                    .get("critical")
+                                    .and_then(|v| v.as_bool())
+                                    .unwrap_or(false),
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                Ok(Response::new(GetNetworkStatusResponse {
+                    healthy: parsed
+                        .get("healthy")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false),
+                    overall_status: parsed
+                        .get("overall_status")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown")
+                        .to_string(),
+                    components,
+                    message: parsed
+                        .get("message")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    last_updated: Some(OperationGrpcServer::now_ts()),
+                }))
+            }
+            Err(_) => Ok(Response::new(GetNetworkStatusResponse {
+                healthy: false,
+                overall_status: "unhealthy".to_string(),
+                components: vec![],
+                message: "Privacy D-Bus service is not available".to_string(),
+                last_updated: Some(OperationGrpcServer::now_ts()),
+            })),
+        }
+    }
+
+    async fn provision_user(
+        &self,
+        request: Request<ProvisionUserRequest>,
+    ) -> Result<Response<ProvisionUserResponse>, Status> {
+        let req = request.into_inner();
+        info!(
+            email = %req.email,
+            container_type = %req.container_type,
+            "gRPC ProvisionUser"
+        );
+
+        let args = simd_json::json!({
+            "email": req.email,
+            "wireguard_public_key": req.wireguard_public_key,
+            "is_admin": req.is_admin,
+            "domain": req.domain,
+            "container_type": req.container_type
+        });
+
+        match self
+            .privacy_dbus_call("provision_user", &args.to_string())
+            .await
+        {
+            Ok(result) => {
+                let parsed: serde_json::Value = serde_json::from_str(&result).unwrap_or_default();
+                Ok(Response::new(ProvisionUserResponse {
+                    success: parsed
+                        .get("success")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(true),
+                    user_id: parsed
+                        .get("user_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    assigned_ip: parsed
+                        .get("assigned_ip")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    privacy_config: parsed
+                        .get("privacy_config")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    message: parsed
+                        .get("message")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("provisioned")
+                        .to_string(),
+                    provisioned_at: Some(OperationGrpcServer::now_ts()),
+                    xray_endpoint: parsed
+                        .get("xray_endpoint")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                }))
+            }
+            Err(_) => {
+                // Record provisioning request in state
+                let user_id = Uuid::new_v4().to_string();
+                let mutation_value = simd_json::json!({
+                    "email": req.email,
+                    "wireguard_public_key": req.wireguard_public_key,
+                    "is_admin": req.is_admin,
+                    "domain": req.domain,
+                    "container_type": req.container_type,
+                    "status": "pending_no_backend"
+                });
+                let _ = self
+                    .schema_engine
+                    .process_grpc_mutation(
+                        "privacy".to_string(),
+                        format!("/org/opdbus/v1/privacy/users/{}", user_id),
+                        ChangeType::ObjectAdded,
+                        Some("provision_user".to_string()),
+                        mutation_value,
+                        req.email.clone(),
+                        None,
+                    )
+                    .await;
+
+                Ok(Response::new(ProvisionUserResponse {
+                    success: false,
+                    user_id,
+                    assigned_ip: String::new(),
+                    privacy_config: String::new(),
+                    message: "Privacy D-Bus service unavailable; provisioning request recorded"
+                        .to_string(),
+                    provisioned_at: Some(OperationGrpcServer::now_ts()),
+                    xray_endpoint: String::new(),
+                }))
+            }
+        }
+    }
+
+    async fn get_privacy_wire_guard_config(
+        &self,
+        request: Request<GetPrivacyWireGuardConfigRequest>,
+    ) -> Result<Response<GetPrivacyWireGuardConfigResponse>, Status> {
+        let req = request.into_inner();
+        let args = simd_json::json!({
+            "email": req.email,
+            "user_id": req.user_id,
+            "include_xray": req.include_xray
+        });
+
+        match self
+            .privacy_dbus_call("get_wireguard_config", &args.to_string())
+            .await
+        {
+            Ok(result) => {
+                let parsed: serde_json::Value = serde_json::from_str(&result).unwrap_or_default();
+                Ok(Response::new(GetPrivacyWireGuardConfigResponse {
+                    success: parsed
+                        .get("success")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(true),
+                    wireguard_config: parsed
+                        .get("wireguard_config")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    public_key: parsed
+                        .get("public_key")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    endpoint: parsed
+                        .get("endpoint")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    assigned_ip: parsed
+                        .get("assigned_ip")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    dns_servers: parsed
+                        .get("dns_servers")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    message: "ok".to_string(),
+                    generated_at: Some(OperationGrpcServer::now_ts()),
+                }))
+            }
+            Err(_) => Err(Status::unavailable(
+                "Privacy D-Bus service is not available; cannot retrieve WireGuard config",
+            )),
+        }
+    }
+
+    async fn manage_component(
+        &self,
+        request: Request<ManageComponentRequest>,
+    ) -> Result<Response<ManageComponentResponse>, Status> {
+        let req = request.into_inner();
+        info!(
+            action = %req.action,
+            component = %req.component,
+            "gRPC ManageComponent"
+        );
+
+        let args = simd_json::json!({
+            "action": req.action,
+            "component": req.component
+        });
+
+        match self
+            .privacy_dbus_call("manage_component", &args.to_string())
+            .await
+        {
+            Ok(result) => {
+                let parsed: serde_json::Value = serde_json::from_str(&result).unwrap_or_default();
+                Ok(Response::new(ManageComponentResponse {
+                    success: parsed
+                        .get("success")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(true),
+                    message: parsed
+                        .get("message")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("ok")
+                        .to_string(),
+                    component: req.component,
+                    status: parsed
+                        .get("status")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown")
+                        .to_string(),
+                    output: parsed
+                        .get("output")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    completed_at: Some(OperationGrpcServer::now_ts()),
+                }))
+            }
+            Err(_) => {
+                let mutation_value = simd_json::json!({
+                    "action": req.action,
+                    "component": req.component,
+                    "status": "pending_no_backend"
+                });
+                let _ = self
+                    .schema_engine
+                    .process_grpc_mutation(
+                        "privacy".to_string(),
+                        format!(
+                            "/org/opdbus/v1/privacy/components/{}",
+                            req.component
+                        ),
+                        ChangeType::MethodCall,
+                        Some("manage_component".to_string()),
+                        mutation_value,
+                        "grpc".to_string(),
+                        None,
+                    )
+                    .await;
+
+                Ok(Response::new(ManageComponentResponse {
+                    success: false,
+                    message: "Privacy D-Bus service unavailable; action recorded in state"
+                        .to_string(),
+                    component: req.component,
+                    status: "unavailable".to_string(),
+                    output: String::new(),
+                    completed_at: Some(OperationGrpcServer::now_ts()),
+                }))
+            }
+        }
+    }
+
+    async fn get_network_topology(
+        &self,
+        request: Request<GetNetworkTopologyRequest>,
+    ) -> Result<Response<GetNetworkTopologyResponse>, Status> {
+        let req = request.into_inner();
+        let args = simd_json::json!({"include_details": req.include_details});
+
+        match self
+            .privacy_dbus_call("get_topology", &args.to_string())
+            .await
+        {
+            Ok(result) => {
+                let parsed: serde_json::Value = serde_json::from_str(&result).unwrap_or_default();
+                let routes = parsed
+                    .get("routes")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .map(|r| crate::proto::privacy::NetworkRoute {
+                                destination: r
+                                    .get("destination")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                gateway: r
+                                    .get("gateway")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                device: r
+                                    .get("device")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                metric: r
+                                    .get("metric")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                let proxy_configs = parsed
+                    .get("proxy_configs")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .map(|p| crate::proto::privacy::ProxyConfig {
+                                container_name: p
+                                    .get("container_name")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                container_type: p
+                                    .get("container_type")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                http_proxy_enabled: p
+                                    .get("http_proxy_enabled")
+                                    .and_then(|v| v.as_bool())
+                                    .unwrap_or(false),
+                                grpc_proxy_enabled: p
+                                    .get("grpc_proxy_enabled")
+                                    .and_then(|v| v.as_bool())
+                                    .unwrap_or(false),
+                                http_port: p
+                                    .get("http_port")
+                                    .and_then(|v| v.as_u64())
+                                    .unwrap_or(0)
+                                    as u32,
+                                grpc_port: p
+                                    .get("grpc_port")
+                                    .and_then(|v| v.as_u64())
+                                    .unwrap_or(0)
+                                    as u32,
+                                proxy_mode: p
+                                    .get("proxy_mode")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                Ok(Response::new(GetNetworkTopologyResponse {
+                    bridge_name: parsed
+                        .get("bridge_name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    wgcf_status: parsed
+                        .get("wgcf_status")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    ports: parsed
+                        .get("ports")
+                        .and_then(|v| v.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|v| v.as_str().map(String::from))
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                    management_ip: parsed
+                        .get("management_ip")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("10.88.88.1")
+                        .to_string(),
+                    xray_config: parsed
+                        .get("xray_config")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    routes,
+                    topology_data: None,
+                    summary: parsed
+                        .get("summary")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    proxy_configs,
+                }))
+            }
+            Err(_) => Ok(Response::new(GetNetworkTopologyResponse {
+                bridge_name: String::new(),
+                wgcf_status: "unavailable".to_string(),
+                ports: vec![],
+                management_ip: String::new(),
+                xray_config: String::new(),
+                routes: vec![],
+                topology_data: None,
+                summary: "Privacy D-Bus service is not available".to_string(),
+                proxy_configs: vec![],
+            })),
+        }
+    }
+
+    async fn health_check(
+        &self,
+        request: Request<HealthCheckRequest>,
+    ) -> Result<Response<HealthCheckResponse>, Status> {
+        let req = request.into_inner();
+        let args = simd_json::json!({
+            "check_wgcf": req.check_wgcf,
+            "check_ovs": req.check_ovs,
+            "check_xray": req.check_xray,
+            "check_ports": req.check_ports
+        });
+
+        match self
+            .privacy_dbus_call("health_check", &args.to_string())
+            .await
+        {
+            Ok(result) => {
+                let parsed: serde_json::Value = serde_json::from_str(&result).unwrap_or_default();
+                let issues = parsed
+                    .get("issues")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .map(|i| crate::proto::privacy::HealthIssue {
+                                component: i
+                                    .get("component")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                severity: i
+                                    .get("severity")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("warning")
+                                    .to_string(),
+                                message: i
+                                    .get("message")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                suggested_fix: i
+                                    .get("suggested_fix")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                Ok(Response::new(HealthCheckResponse {
+                    all_healthy: parsed
+                        .get("all_healthy")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false),
+                    healthy_components: parsed
+                        .get("healthy_components")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0) as u32,
+                    total_components: parsed
+                        .get("total_components")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0) as u32,
+                    issues,
+                    overall_status: parsed
+                        .get("overall_status")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown")
+                        .to_string(),
+                    checked_at: Some(OperationGrpcServer::now_ts()),
+                }))
+            }
+            Err(_) => Ok(Response::new(HealthCheckResponse {
+                all_healthy: false,
+                healthy_components: 0,
+                total_components: 0,
+                issues: vec![crate::proto::privacy::HealthIssue {
+                    component: "dbus".to_string(),
+                    severity: "critical".to_string(),
+                    message: "Privacy D-Bus service (org.opdbus.PrivacyV1) is not running"
+                        .to_string(),
+                    suggested_fix: "Start the privacy-router dinit service".to_string(),
+                }],
+                overall_status: "unhealthy".to_string(),
+                checked_at: Some(OperationGrpcServer::now_ts()),
+            })),
+        }
+    }
+
+    async fn configure_packet_routing(
+        &self,
+        request: Request<ConfigurePacketRoutingRequest>,
+    ) -> Result<Response<ConfigurePacketRoutingResponse>, Status> {
+        let req = request.into_inner();
+        info!(
+            container = %req.container_name,
+            container_type = %req.container_type,
+            "gRPC ConfigurePacketRouting"
+        );
+
+        let args = simd_json::json!({
+            "container_name": req.container_name,
+            "container_type": req.container_type,
+            "enable_http_proxy": req.enable_http_proxy,
+            "enable_grpc_proxy": req.enable_grpc_proxy,
+            "proxy_type": req.proxy_type,
+            "socks_port": req.socks_port,
+            "http_port": req.http_port,
+            "enable_tproxy": req.enable_tproxy
+        });
+
+        match self
+            .privacy_dbus_call("configure_routing", &args.to_string())
+            .await
+        {
+            Ok(result) => {
+                let parsed: serde_json::Value = serde_json::from_str(&result).unwrap_or_default();
+                Ok(Response::new(ConfigurePacketRoutingResponse {
+                    success: parsed
+                        .get("success")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(true),
+                    message: parsed
+                        .get("message")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("configured")
+                        .to_string(),
+                    container_name: req.container_name,
+                    proxy_config_summary: parsed
+                        .get("proxy_config_summary")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    configured_at: Some(OperationGrpcServer::now_ts()),
+                    applied_rules: parsed
+                        .get("applied_rules")
+                        .and_then(|v| v.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|v| v.as_str().map(String::from))
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                }))
+            }
+            Err(_) => {
+                let mutation_value = simd_json::json!({
+                    "container_name": req.container_name,
+                    "container_type": req.container_type,
+                    "proxy_type": req.proxy_type,
+                    "status": "pending_no_backend"
+                });
+                let _ = self
+                    .schema_engine
+                    .process_grpc_mutation(
+                        "privacy".to_string(),
+                        format!(
+                            "/org/opdbus/v1/privacy/routing/{}",
+                            req.container_name
+                        ),
+                        ChangeType::MethodCall,
+                        Some("configure_routing".to_string()),
+                        mutation_value,
+                        "grpc".to_string(),
+                        None,
+                    )
+                    .await;
+
+                Ok(Response::new(ConfigurePacketRoutingResponse {
+                    success: false,
+                    message: "Privacy D-Bus service unavailable; routing config recorded in state"
+                        .to_string(),
+                    container_name: req.container_name,
+                    proxy_config_summary: String::new(),
+                    configured_at: Some(OperationGrpcServer::now_ts()),
+                    applied_rules: vec![],
+                }))
+            }
+        }
+    }
+
+    async fn generate_wire_guard_key_pair(
+        &self,
+        request: Request<GenerateWireGuardKeyPairRequest>,
+    ) -> Result<Response<GenerateWireGuardKeyPairResponse>, Status> {
+        let req = request.into_inner();
+        info!(
+            email = %req.user_email,
+            container_type = %req.container_type,
+            "gRPC GenerateWireGuardKeyPair"
+        );
+
+        let args = simd_json::json!({
+            "user_token": req.user_token,
+            "user_email": req.user_email,
+            "is_admin": req.is_admin,
+            "container_type": req.container_type
+        });
+
+        match self
+            .privacy_dbus_call("generate_keypair", &args.to_string())
+            .await
+        {
+            Ok(result) => {
+                let parsed: serde_json::Value = serde_json::from_str(&result).unwrap_or_default();
+                Ok(Response::new(GenerateWireGuardKeyPairResponse {
+                    success: parsed
+                        .get("success")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(true),
+                    client_public_key: parsed
+                        .get("client_public_key")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    wireguard_config: parsed
+                        .get("wireguard_config")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    assigned_ip: parsed
+                        .get("assigned_ip")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    key_id: parsed
+                        .get("key_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    message: "ok".to_string(),
+                    generated_at: Some(OperationGrpcServer::now_ts()),
+                }))
+            }
+            Err(_) => Err(Status::unavailable(
+                "Privacy D-Bus service is not available; cannot generate WireGuard keypair without backend",
+            )),
+        }
+    }
+}
+
+// =============================================================================
+// RegistrationService — Magic Link + WireGuard Identity Management
+// =============================================================================
+
+use crate::proto::registration::{
+    registration_service_server::RegistrationService, AdminUserActionRequest,
+    AdminUserActionResponse, GetUserStatusRequest, GetUserStatusResponse, GetWireGuardConfigRequest,
+    GetWireGuardConfigResponse, ListUsersRequest, ListUsersResponse, RegisterUserRequest,
+    RegisterUserResponse, SendMagicLinkRequest, SendMagicLinkResponse, VerifyMagicLinkRequest,
+    VerifyMagicLinkResponse,
+};
+
+impl OperationGrpcServer {
+    /// Call a RegistrationService method via the D-Bus registration interface.
+    async fn registration_dbus_call(&self, method: &str, args: &str) -> Result<String, Status> {
+        let conn = self
+            .schema_engine
+            .dbus_connection()
+            .await
+            .map_err(|e| Status::unavailable(format!("D-Bus not available: {}", e)))?;
+
+        let proxy = Proxy::new(
+            &conn,
+            "org.opdbus.v1",
+            "/org/opdbus/v1/registration",
+            "org.opdbus.RegistrationV1",
+        )
+        .await
+        .map_err(|e| Status::internal(format!("Registration proxy error: {}", e)))?;
+
+        let result: String = proxy
+            .call(method, &(args.to_string(),))
+            .await
+            .map_err(|e| {
+                Status::unavailable(format!(
+                    "Registration D-Bus service unavailable for '{}': {}",
+                    method, e
+                ))
+            })?;
+
+        Ok(result)
+    }
+}
+
+#[tonic::async_trait]
+impl RegistrationService for OperationGrpcServer {
+    async fn send_magic_link(
+        &self,
+        request: Request<SendMagicLinkRequest>,
+    ) -> Result<Response<SendMagicLinkResponse>, Status> {
+        let req = request.into_inner();
+        info!(
+            email = %req.email,
+            domain = %req.domain,
+            is_admin = req.is_admin,
+            "gRPC SendMagicLink"
+        );
+
+        let args = simd_json::json!({
+            "email": req.email,
+            "domain": req.domain,
+            "is_admin": req.is_admin
+        });
+
+        match self
+            .registration_dbus_call("send_magic_link", &args.to_string())
+            .await
+        {
+            Ok(result) => {
+                let parsed: serde_json::Value = serde_json::from_str(&result).unwrap_or_default();
+                Ok(Response::new(SendMagicLinkResponse {
+                    success: parsed
+                        .get("success")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(true),
+                    message: parsed
+                        .get("message")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("magic link sent")
+                        .to_string(),
+                    token: parsed
+                        .get("token")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
+                    expires_at: Some(ProstTimestamp {
+                        seconds: chrono::Utc::now().timestamp() + 3600, // 1 hour expiry
+                        nanos: 0,
+                    }),
+                }))
+            }
+            Err(_) => {
+                // Generate a token and record in state store for later verification
+                let token = Uuid::new_v4().to_string();
+                let mutation_value = simd_json::json!({
+                    "email": req.email,
+                    "domain": req.domain,
+                    "is_admin": req.is_admin,
+                    "token": token,
+                    "status": "pending_no_backend",
+                    "created_at": chrono::Utc::now().to_rfc3339()
+                });
+                let _ = self
+                    .schema_engine
+                    .process_grpc_mutation(
+                        "registration".to_string(),
+                        format!("/org/opdbus/v1/registration/magic_links/{}", token),
+                        ChangeType::ObjectAdded,
+                        Some("send_magic_link".to_string()),
+                        mutation_value,
+                        req.email.clone(),
+                        None,
+                    )
+                    .await;
+
+                Ok(Response::new(SendMagicLinkResponse {
+                    success: false,
+                    message: "Registration D-Bus service unavailable; magic link recorded in state store".to_string(),
+                    token: Some(token),
+                    expires_at: Some(ProstTimestamp {
+                        seconds: chrono::Utc::now().timestamp() + 3600,
+                        nanos: 0,
+                    }),
+                }))
+            }
+        }
+    }
+
+    async fn verify_magic_link(
+        &self,
+        request: Request<VerifyMagicLinkRequest>,
+    ) -> Result<Response<VerifyMagicLinkResponse>, Status> {
+        let req = request.into_inner();
+        let args = simd_json::json!({
+            "token": req.token,
+            "domain": req.domain
+        });
+
+        match self
+            .registration_dbus_call("verify_magic_link", &args.to_string())
+            .await
+        {
+            Ok(result) => {
+                let parsed: serde_json::Value = serde_json::from_str(&result).unwrap_or_default();
+                Ok(Response::new(VerifyMagicLinkResponse {
+                    success: parsed
+                        .get("success")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false),
+                    user_id: parsed
+                        .get("user_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    email: parsed
+                        .get("email")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    wireguard_public_key: parsed
+                        .get("wireguard_public_key")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    assigned_ip: parsed
+                        .get("assigned_ip")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    wireguard_config: parsed
+                        .get("wireguard_config")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    message: parsed
+                        .get("message")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("verified")
+                        .to_string(),
+                    is_admin: parsed
+                        .get("is_admin")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false),
+                    verified_at: Some(OperationGrpcServer::now_ts()),
+                }))
+            }
+            Err(_) => {
+                // Check state store for magic link token
+                let state = self.schema_engine.get_state("registration").await;
+                if let Some(ref st) = state {
+                    if let Some(link_data) = st
+                        .as_object()
+                        .and_then(|o| o.get("magic_links"))
+                        .and_then(|o| o.as_object())
+                        .and_then(|o| o.get(&req.token))
+                    {
+                        let email = link_data
+                            .as_object()
+                            .and_then(|o| o.get("email"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let is_admin = link_data
+                            .as_object()
+                            .and_then(|o| o.get("is_admin"))
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
+
+                        return Ok(Response::new(VerifyMagicLinkResponse {
+                            success: true,
+                            user_id: Uuid::new_v4().to_string(),
+                            email,
+                            wireguard_public_key: String::new(),
+                            assigned_ip: String::new(),
+                            wireguard_config: String::new(),
+                            message: "Verified from state store (D-Bus unavailable)".to_string(),
+                            is_admin,
+                            verified_at: Some(OperationGrpcServer::now_ts()),
+                        }));
+                    }
+                }
+
+                Err(Status::unavailable(
+                    "Registration D-Bus service is not available; token not found in state store",
+                ))
+            }
+        }
+    }
+
+    async fn register_user(
+        &self,
+        request: Request<RegisterUserRequest>,
+    ) -> Result<Response<RegisterUserResponse>, Status> {
+        let req = request.into_inner();
+        info!(
+            email = %req.email,
+            domain = %req.domain,
+            is_admin = req.is_admin,
+            "gRPC RegisterUser"
+        );
+
+        let args = simd_json::json!({
+            "email": req.email,
+            "wireguard_public_key": req.wireguard_public_key,
+            "domain": req.domain,
+            "is_admin": req.is_admin
+        });
+
+        match self
+            .registration_dbus_call("register_user", &args.to_string())
+            .await
+        {
+            Ok(result) => {
+                let parsed: serde_json::Value = serde_json::from_str(&result).unwrap_or_default();
+                Ok(Response::new(RegisterUserResponse {
+                    success: parsed
+                        .get("success")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(true),
+                    user_id: parsed
+                        .get("user_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    message: parsed
+                        .get("message")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("registered")
+                        .to_string(),
+                    assigned_ip: parsed
+                        .get("assigned_ip")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    wireguard_config: parsed
+                        .get("wireguard_config")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    registered_at: Some(OperationGrpcServer::now_ts()),
+                }))
+            }
+            Err(_) => {
+                let user_id = Uuid::new_v4().to_string();
+                let mutation_value = simd_json::json!({
+                    "email": req.email,
+                    "wireguard_public_key": req.wireguard_public_key,
+                    "domain": req.domain,
+                    "is_admin": req.is_admin,
+                    "status": "pending_no_backend"
+                });
+                let _ = self
+                    .schema_engine
+                    .process_grpc_mutation(
+                        "registration".to_string(),
+                        format!("/org/opdbus/v1/registration/users/{}", user_id),
+                        ChangeType::ObjectAdded,
+                        Some("register_user".to_string()),
+                        mutation_value,
+                        req.email.clone(),
+                        None,
+                    )
+                    .await;
+
+                Ok(Response::new(RegisterUserResponse {
+                    success: false,
+                    user_id,
+                    message:
+                        "Registration D-Bus service unavailable; user recorded in state store"
+                            .to_string(),
+                    assigned_ip: String::new(),
+                    wireguard_config: String::new(),
+                    registered_at: Some(OperationGrpcServer::now_ts()),
+                }))
+            }
+        }
+    }
+
+    async fn get_user_status(
+        &self,
+        request: Request<GetUserStatusRequest>,
+    ) -> Result<Response<GetUserStatusResponse>, Status> {
+        let req = request.into_inner();
+
+        // Check state store first
+        let state = self.schema_engine.get_state("registration").await;
+        if let Some(ref st) = state {
+            if let Some(users) = st.as_object().and_then(|o| o.get("users")) {
+                // Search by email or user_id
+                if let Some(user_data) = users.as_object().and_then(|o| {
+                    // Try user_id first
+                    if !req.user_id.is_empty() {
+                        o.get(&req.user_id)
+                    } else {
+                        // Search by email
+                        o.iter().find_map(|(_, v)| {
+                            if v.as_object()
+                                .and_then(|u| u.get("email"))
+                                .and_then(|e| e.as_str())
+                                == Some(&req.email)
+                            {
+                                Some(v)
+                            } else {
+                                None
+                            }
+                        })
+                    }
+                }) {
+                    return Ok(Response::new(GetUserStatusResponse {
+                        registered: true,
+                        user_id: user_data
+                            .as_object()
+                            .and_then(|o| o.get("user_id"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or(&req.user_id)
+                            .to_string(),
+                        email: user_data
+                            .as_object()
+                            .and_then(|o| o.get("email"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or(&req.email)
+                            .to_string(),
+                        email_verified: user_data
+                            .as_object()
+                            .and_then(|o| o.get("email_verified"))
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false),
+                        wireguard_public_key: user_data
+                            .as_object()
+                            .and_then(|o| o.get("wireguard_public_key"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        assigned_ip: user_data
+                            .as_object()
+                            .and_then(|o| o.get("assigned_ip"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        is_admin: user_data
+                            .as_object()
+                            .and_then(|o| o.get("is_admin"))
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false),
+                        registered_at: None,
+                        last_active: None,
+                    }));
+                }
+            }
+        }
+
+        let args = simd_json::json!({
+            "email": req.email,
+            "user_id": req.user_id,
+            "domain": req.domain
+        });
+
+        match self
+            .registration_dbus_call("get_user_status", &args.to_string())
+            .await
+        {
+            Ok(result) => {
+                let parsed: serde_json::Value = serde_json::from_str(&result).unwrap_or_default();
+                Ok(Response::new(GetUserStatusResponse {
+                    registered: parsed
+                        .get("registered")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false),
+                    user_id: parsed
+                        .get("user_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    email: parsed
+                        .get("email")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    email_verified: parsed
+                        .get("email_verified")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false),
+                    wireguard_public_key: parsed
+                        .get("wireguard_public_key")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    assigned_ip: parsed
+                        .get("assigned_ip")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    is_admin: parsed
+                        .get("is_admin")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false),
+                    registered_at: None,
+                    last_active: None,
+                }))
+            }
+            Err(_) => Ok(Response::new(GetUserStatusResponse {
+                registered: false,
+                user_id: String::new(),
+                email: req.email,
+                email_verified: false,
+                wireguard_public_key: String::new(),
+                assigned_ip: String::new(),
+                is_admin: false,
+                registered_at: None,
+                last_active: None,
+            })),
+        }
+    }
+
+    async fn list_users(
+        &self,
+        request: Request<ListUsersRequest>,
+    ) -> Result<Response<ListUsersResponse>, Status> {
+        let req = request.into_inner();
+        let args = simd_json::json!({
+            "limit": req.limit,
+            "offset": req.offset,
+            "include_admins_only": req.include_admins_only,
+            "domain_filter": req.domain_filter
+        });
+
+        match self
+            .registration_dbus_call("list_users", &args.to_string())
+            .await
+        {
+            Ok(result) => {
+                let parsed: serde_json::Value = serde_json::from_str(&result).unwrap_or_default();
+                let users: Vec<_> = parsed
+                    .get("users")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .map(|u| crate::proto::registration::UserInfo {
+                                user_id: u
+                                    .get("user_id")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                email: u
+                                    .get("email")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                email_verified: u
+                                    .get("email_verified")
+                                    .and_then(|v| v.as_bool())
+                                    .unwrap_or(false),
+                                wireguard_public_key: u
+                                    .get("wireguard_public_key")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                assigned_ip: u
+                                    .get("assigned_ip")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                is_admin: u
+                                    .get("is_admin")
+                                    .and_then(|v| v.as_bool())
+                                    .unwrap_or(false),
+                                registered_at: None,
+                                last_active: None,
+                                metadata: None,
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                let total = parsed
+                    .get("total_count")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(users.len() as u64) as u32;
+                let filtered = parsed
+                    .get("filtered_count")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(users.len() as u64) as u32;
+
+                Ok(Response::new(ListUsersResponse {
+                    users,
+                    total_count: total,
+                    filtered_count: filtered,
+                }))
+            }
+            Err(_) => Ok(Response::new(ListUsersResponse {
+                users: vec![],
+                total_count: 0,
+                filtered_count: 0,
+            })),
+        }
+    }
+
+    async fn get_wire_guard_config(
+        &self,
+        request: Request<GetWireGuardConfigRequest>,
+    ) -> Result<Response<GetWireGuardConfigResponse>, Status> {
+        let req = request.into_inner();
+        let args = simd_json::json!({
+            "email": req.email,
+            "user_id": req.user_id,
+            "domain": req.domain
+        });
+
+        match self
+            .registration_dbus_call("get_wireguard_config", &args.to_string())
+            .await
+        {
+            Ok(result) => {
+                let parsed: serde_json::Value = serde_json::from_str(&result).unwrap_or_default();
+                Ok(Response::new(GetWireGuardConfigResponse {
+                    success: parsed
+                        .get("success")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(true),
+                    wireguard_config: parsed
+                        .get("wireguard_config")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    public_key: parsed
+                        .get("public_key")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    assigned_ip: parsed
+                        .get("assigned_ip")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    message: "ok".to_string(),
+                    generated_at: Some(OperationGrpcServer::now_ts()),
+                }))
+            }
+            Err(_) => Err(Status::unavailable(
+                "Registration D-Bus service is not available; cannot retrieve WireGuard config",
+            )),
+        }
+    }
+
+    async fn admin_user_action(
+        &self,
+        request: Request<AdminUserActionRequest>,
+    ) -> Result<Response<AdminUserActionResponse>, Status> {
+        let req = request.into_inner();
+        info!(
+            action = %req.action,
+            user_id = %req.user_id,
+            email = %req.email,
+            "gRPC AdminUserAction"
+        );
+
+        let args = simd_json::json!({
+            "action": req.action,
+            "user_id": req.user_id,
+            "email": req.email
+        });
+
+        match self
+            .registration_dbus_call("admin_user_action", &args.to_string())
+            .await
+        {
+            Ok(result) => {
+                let parsed: serde_json::Value = serde_json::from_str(&result).unwrap_or_default();
+                Ok(Response::new(AdminUserActionResponse {
+                    success: parsed
+                        .get("success")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(true),
+                    message: parsed
+                        .get("message")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("ok")
+                        .to_string(),
+                    user_id: req.user_id.clone(),
+                    action_timestamp: Some(OperationGrpcServer::now_ts()),
+                }))
+            }
+            Err(_) => {
+                let mutation_value = simd_json::json!({
+                    "action": req.action,
+                    "user_id": req.user_id,
+                    "email": req.email,
+                    "status": "pending_no_backend"
+                });
+                let _ = self
+                    .schema_engine
+                    .process_grpc_mutation(
+                        "registration".to_string(),
+                        format!(
+                            "/org/opdbus/v1/registration/admin_actions/{}",
+                            Uuid::new_v4()
+                        ),
+                        ChangeType::MethodCall,
+                        Some(req.action.clone()),
+                        mutation_value,
+                        "admin".to_string(),
+                        None,
+                    )
+                    .await;
+
+                Ok(Response::new(AdminUserActionResponse {
+                    success: false,
+                    message:
+                        "Registration D-Bus service unavailable; action recorded in state store"
+                            .to_string(),
+                    user_id: req.user_id,
+                    action_timestamp: Some(OperationGrpcServer::now_ts()),
+                }))
+            }
+        }
     }
 }

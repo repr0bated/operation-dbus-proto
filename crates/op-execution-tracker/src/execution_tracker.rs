@@ -41,7 +41,7 @@ impl ExecutionStats {
 /// Event emitted when execution state changes
 #[derive(Clone, Debug)]
 pub enum ExecutionEvent {
-    Started(ExecutionRecord),
+    Started(Box<ExecutionRecord>),
     Completed(String, bool),                // execution_id, success
     StatusUpdated(String, ExecutionStatus), // execution_id, new_status
 }
@@ -99,7 +99,7 @@ impl ExecutionTracker {
         // Notify subscribers
         let _ = self
             .event_sender
-            .send(ExecutionEvent::Started(record.clone()));
+            .send(ExecutionEvent::Started(Box::new(record.clone())));
 
         info!(execution_id = %record.id, tool = %tool_name, "Execution started");
 

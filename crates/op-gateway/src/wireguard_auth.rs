@@ -10,21 +10,18 @@
 //! - See `SECURITY-MODEL.md` in this crate for full details
 
 use serde::{Deserialize, Serialize};
-use simd_json::{owned::Object as SimdObject, OwnedValue};
+use simd_json::OwnedValue;
 use sqlx::Row;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{Mutex, RwLock};
 use tokio::time::interval;
-use tracing::{debug, error, info, warn};
-use uuid::Uuid;
 
 use argon2::Argon2;
+use base64::{engine::general_purpose, Engine as _};
 use blake2::{Blake2s256, Digest};
-use chacha20poly1305::{AeadInPlace, ChaCha20Poly1305, Key};
-use ring::{digest, hkdf, rand::SystemRandom};
-use x25519_dalek::{PublicKey, SharedSecret};
+use ring::rand::SystemRandom;
 
 use crate::encrypted_storage::{EncryptedKeyStorage, EncryptedStorageConfig, KeyType};
 use anyhow::Result;
@@ -572,7 +569,7 @@ impl WireGuardAuthManager {
 
         if let Ok(stored_psk) = key_storage.retrieve_key(&psk_key_id).await {
             if stored_psk.len() == 32 {
-                return Ok(base64::encode(&stored_psk));
+                return Ok(general_purpose::STANDARD.encode(&stored_psk));
             }
         }
 
@@ -588,7 +585,7 @@ impl WireGuardAuthManager {
                 warn!("Failed to store PSK in encrypted storage: {}", e);
             }
 
-            Ok(base64::encode(psk))
+            Ok(general_purpose::STANDARD.encode(psk))
         } else {
             Err(anyhow::anyhow!("Failed to derive PSK"))
         }
@@ -628,7 +625,7 @@ impl WireGuardAuthManager {
             .derive_session_keys(&[peer_key_bytes], &[server_nonce]);
 
         if let Some((session_key, _)) = session_keys.first() {
-            Ok(base64::encode(session_key))
+            Ok(general_purpose::STANDARD.encode(session_key))
         } else {
             Err(anyhow::anyhow!("Failed to derive session key"))
         }
@@ -678,6 +675,7 @@ impl WireGuardAuthManager {
     }
 
     /// Load or generate master key
+    #[allow(dead_code)]
     async fn load_or_generate_master_key() -> anyhow::Result<Arc<[u8; 32]>> {
         // Try to load from environment or file
         if let Ok(key_hex) = std::env::var("WG_AUTH_MASTER_KEY") {
@@ -804,7 +802,7 @@ impl WireGuardAuthManager {
 
 /// SIMD-optimized cryptographic engine
 pub struct SimdCryptoEngine {
-    rng: SystemRandom,
+    _rng: SystemRandom,
 }
 
 impl SimdCryptoEngine {
@@ -875,7 +873,7 @@ impl SimdCryptoEngine {
             {
                 // Derive session ID from session key
                 let mut hasher = Blake2s256::new();
-                hasher.update(&session_key);
+                hasher.update(session_key);
                 let hash = hasher.finalize();
                 let session_id: [u8; 16] = hash[..16].try_into().unwrap();
 

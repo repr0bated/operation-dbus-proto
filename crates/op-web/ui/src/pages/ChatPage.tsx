@@ -1,133 +1,209 @@
-import { PageHeader } from "@/components/shell/PageHeader";
-import { useState, useRef, useEffect } from "react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { JsonTree, JsonCodeBlock } from "@/components/json/JsonTree";
-import { Badge } from "@/components/ui/badge";
-import { Send, X, PanelRightOpen, Bot, User, Wrench } from "lucide-react";
-import type { ChatMessage } from "@/api/types";
+import { useState, useRef, useEffect, useCallback } from "react";
+import { Callout } from "@/components/shell/Primitives";
+import { JsonRenderer } from "@/components/json/JsonRenderer";
+import { MessageBubble, type LocalMessage } from "@/components/chat/MessageBubble";
+import { SystemPromptEditor } from "@/components/chat/SystemPromptEditor";
+import { useEventStore } from "@/stores/event-store";
 import { cn } from "@/lib/utils";
+import { X, Maximize2, Minimize2, MessageSquare, FileText } from "lucide-react";
+
+type ChatTab = "chat" | "system-prompt";
 
 export default function ChatPage() {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [input, setInput] = useState("");
-  const [sessionId] = useState(() => crypto.randomUUID().slice(0, 8));
-  const [inspectorOpen, setInspectorOpen] = useState(false);
-  const [inspectorData, setInspectorData] = useState<unknown>(null);
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const { connected } = useEventStore();
+  const [activeTab, setActiveTab] = useState<ChatTab>("chat");
+  const [messages, setMessages] = useState<LocalMessage[]>([
+    { id: "sys-1", role: "system", content: "Connected to Operation-DBUS control plane. Ready for commands.", timestamp: Date.now() },
+  ]);
+  const [draft, setDraft] = useState("");
+  const [sessionKey, setSessionKey] = useState("default");
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarContent, setSidebarContent] = useState<unknown>(null);
+  const [focusMode, setFocusMode] = useState(false);
+  const [sending, setSending] = useState(false);
+  const threadRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-  }, [messages]);
+  const scrollToBottom = useCallback(() => {
+    threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight, behavior: "smooth" });
+  }, []);
 
-  const sendMessage = () => {
-    if (!input.trim()) return;
-    const userMsg: ChatMessage = {
-      id: crypto.randomUUID(),
+  useEffect(() => { scrollToBottom(); }, [messages, scrollToBottom]);
+
+  const handleSend = () => {
+    if (!draft.trim() || !connected) return;
+    const userMsg: LocalMessage = {
+      id: `msg-${Date.now()}`,
       role: "user",
-      content: input.trim(),
-      timestamp: new Date().toISOString(),
-      session_id: sessionId,
+      content: draft.trim(),
+      timestamp: Date.now(),
     };
     setMessages((prev) => [...prev, userMsg]);
-    setInput("");
+    setDraft("");
+    setSending(true);
 
-    // Simulate assistant response
     setTimeout(() => {
-      const assistantMsg: ChatMessage = {
-        id: crypto.randomUUID(),
+      const assistantMsg: LocalMessage = {
+        id: `msg-${Date.now()}-resp`,
         role: "assistant",
-        content: "Processing your request...",
-        timestamp: new Date().toISOString(),
-        session_id: sessionId,
-        tool_calls: [{ id: "tc-1", name: "system.inspect", arguments: { target: "org.freedesktop.systemd1" } }],
+        content: `Acknowledged. Processing command: "${userMsg.content}"`,
+        timestamp: Date.now(),
+        toolCalls: userMsg.content.toLowerCase().includes("tool") ? [
+          { id: "tc-1", name: "dbus.list_services", arguments: { bus: "system" }, result: { services: ["org.freedesktop.DBus", "org.freedesktop.systemd1"] }, status: "completed" },
+        ] : undefined,
       };
       setMessages((prev) => [...prev, assistantMsg]);
-    }, 600);
+      setSending(false);
+    }, 800);
   };
 
-  const roleIcon = (role: string) => {
-    switch (role) {
-      case "user": return <User className="h-3.5 w-3.5" />;
-      case "assistant": return <Bot className="h-3.5 w-3.5" />;
-      case "tool": return <Wrench className="h-3.5 w-3.5" />;
-      default: return null;
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handleSend();
     }
   };
 
-  return (
-    <div className="flex h-full">
-      <div className="flex flex-1 flex-col">
-        <PageHeader title="Chat" description={`Session: ${sessionId}`}>
-          <Button variant="ghost" size="sm" onClick={() => setInspectorOpen(!inspectorOpen)}>
-            <PanelRightOpen className="h-4 w-4" />
-          </Button>
-        </PageHeader>
+  const openInSidebar = (data: unknown) => {
+    setSidebarContent(data);
+    setSidebarOpen(true);
+  };
 
-        {/* Transcript */}
-        <div ref={scrollRef} className="flex-1 overflow-auto p-4 space-y-3">
-          {messages.length === 0 && (
-            <div className="text-center text-muted-foreground text-xs py-20">
-              Start a conversation with the control plane
-            </div>
-          )}
-          {messages.map((msg) => (
-            <div key={msg.id} className={cn("flex gap-2 max-w-2xl", msg.role === "user" ? "ml-auto flex-row-reverse" : "")}>
-              <div className={cn("shrink-0 h-6 w-6 rounded flex items-center justify-center text-xs",
-                msg.role === "user" ? "bg-primary/20 text-primary" : "bg-accent text-accent-foreground"
-              )}>
-                {roleIcon(msg.role)}
+  const tabs: { id: ChatTab; label: string; icon: React.ReactNode }[] = [
+    { id: "chat", label: "Chat", icon: <MessageSquare className="h-3.5 w-3.5" /> },
+    { id: "system-prompt", label: "System Prompt", icon: <FileText className="h-3.5 w-3.5" /> },
+  ];
+
+  return (
+    <div className="flex flex-col h-full">
+      {/* Header with tabs */}
+      {!focusMode && (
+        <div className="border-b border-border shrink-0">
+          <div className="flex items-end justify-between gap-4 px-4 py-3">
+            <div className="flex items-center gap-4">
+              <div>
+                <h1 className="text-[26px] font-bold tracking-tight leading-tight text-foreground">Chat</h1>
+                <p className="text-sm text-muted-foreground mt-0.5">Direct gateway chat session for quick interventions.</p>
               </div>
-              <div className={cn("rounded border p-3 space-y-2 text-sm", msg.role === "user" ? "bg-primary/10 border-primary/20" : "bg-card")}>
-                <p className="text-xs whitespace-pre-wrap">{msg.content}</p>
-                {msg.tool_calls?.map((tc) => (
-                  <button
-                    key={tc.id}
-                    onClick={() => { setInspectorData(tc); setInspectorOpen(true); }}
-                    className="flex items-center gap-1.5 rounded border px-2 py-1 text-[10px] font-mono hover:bg-accent transition-colors"
-                  >
-                    <Wrench className="h-3 w-3" />
-                    {tc.name}
+            </div>
+            <div className="flex items-center gap-2">
+              <select
+                value={sessionKey}
+                onChange={(e) => setSessionKey(e.target.value)}
+                className="px-3 py-1.5 rounded-md border border-input bg-card text-sm font-mono focus:border-ring outline-none"
+              >
+                <option value="default">default</option>
+                <option value="agent:main">agent:main</option>
+                <option value="debug">debug</option>
+              </select>
+              <button onClick={() => setFocusMode(!focusMode)} className="p-2 rounded-md hover:bg-muted/30 text-muted-foreground hover:text-foreground transition-colors" title="Toggle focus mode">
+                <Maximize2 className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+          {/* Tab bar */}
+          <div className="flex gap-0 px-4">
+            {tabs.map((tab) => (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={cn(
+                  "inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium border-b-2 transition-colors -mb-px",
+                  activeTab === tab.id
+                    ? "border-primary text-foreground"
+                    : "border-transparent text-muted-foreground hover:text-foreground hover:border-muted-foreground/30"
+                )}
+              >
+                {tab.icon}
+                {tab.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {focusMode && (
+        <button onClick={() => setFocusMode(false)} className="absolute top-2 right-2 z-10 p-2 rounded-full bg-card border border-border hover:bg-muted/30 text-muted-foreground">
+          <X className="h-4 w-4" />
+        </button>
+      )}
+
+      {/* Tab content */}
+      {activeTab === "system-prompt" ? (
+        <SystemPromptEditor />
+      ) : (
+        <div className={cn("flex flex-1 min-h-0", sidebarOpen && "gap-0")}>
+          {/* Thread */}
+          <div className={cn("flex flex-col flex-1 min-w-0", sidebarOpen && "flex-[0_0_60%]")}>
+            <div ref={threadRef} className="flex-1 overflow-y-auto px-4 py-4 space-y-4" role="log">
+              {messages.map((msg) => (
+                <MessageBubble
+                  key={msg.id}
+                  message={msg}
+                  onInspect={openInSidebar}
+                  onAction={(action, payload) => {
+                    const actionMsg: LocalMessage = {
+                      id: `msg-${Date.now()}-action`,
+                      role: "user",
+                      content: `[Action: ${action}] ${JSON.stringify(payload)}`,
+                      timestamp: Date.now(),
+                    };
+                    setMessages((prev) => [...prev, actionMsg]);
+                  }}
+                />
+              ))}
+              {sending && (
+                <div className="flex gap-3">
+                  <div className="h-8 w-8 rounded-full bg-primary/20 flex items-center justify-center text-xs font-bold text-primary shrink-0">AI</div>
+                  <div className="rounded-lg bg-card border border-border px-4 py-3 animate-[pulse-dot_1.5s_ease-in-out_infinite]">
+                    <span className="text-sm text-muted-foreground">Thinking…</span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Composer */}
+            <div className="border-t border-border px-4 py-3 shrink-0 bg-background">
+              {!connected && <Callout variant="danger" className="mb-3">Connect to the gateway to start chatting.</Callout>}
+              <div className="flex gap-2">
+                <div className="flex-1 relative">
+                  <textarea
+                    value={draft}
+                    onChange={(e) => setDraft(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    disabled={!connected}
+                    placeholder={connected ? "Message (↩ to send, Shift+↩ for line breaks)" : "Connect to gateway first…"}
+                    className="w-full px-3 py-2.5 rounded-lg border border-input bg-card text-sm resize-none min-h-[44px] max-h-40 focus:border-ring focus:ring-1 focus:ring-ring outline-none transition-colors font-sans"
+                    rows={1}
+                  />
+                </div>
+                <div className="flex flex-col gap-1.5 shrink-0">
+                  <button onClick={() => setMessages([{ id: "sys-new", role: "system", content: "New session started.", timestamp: Date.now() }])} className="px-3 py-2 rounded-md border border-border bg-[hsl(var(--bg-elevated))] text-xs font-medium hover:bg-muted/30 transition-colors">
+                    New session
                   </button>
-                ))}
-                <div className="text-[10px] text-muted-foreground">
-                  {new Date(msg.timestamp).toLocaleTimeString()}
+                  <button onClick={handleSend} disabled={!connected || !draft.trim()} className="px-3 py-2 rounded-md bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 flex items-center gap-1.5">
+                    {sending ? "Queue" : "Send"}<kbd className="text-[10px] bg-primary-foreground/20 px-1 rounded">↵</kbd>
+                  </button>
                 </div>
               </div>
             </div>
-          ))}
-        </div>
-
-        {/* Composer */}
-        <div className="border-t p-3">
-          <form onSubmit={(e) => { e.preventDefault(); sendMessage(); }} className="flex gap-2">
-            <Input
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder="Send a command or ask a question..."
-              className="font-mono text-xs"
-            />
-            <Button type="submit" size="sm"><Send className="h-4 w-4" /></Button>
-          </form>
-        </div>
-      </div>
-
-      {/* Inspector panel */}
-      {inspectorOpen && (
-        <div className="w-80 border-l bg-card flex flex-col shrink-0">
-          <div className="flex items-center justify-between border-b px-3 py-2">
-            <span className="text-xs font-semibold">Inspector</span>
-            <button onClick={() => setInspectorOpen(false)} className="text-muted-foreground hover:text-foreground">
-              <X className="h-3.5 w-3.5" />
-            </button>
           </div>
-          <div className="flex-1 overflow-auto p-3">
-            {inspectorData ? (
-              <JsonTree data={inspectorData} defaultExpanded />
-            ) : (
-              <p className="text-xs text-muted-foreground">Click a tool call to inspect</p>
-            )}
-          </div>
+
+          {/* Sidebar — tool output inspector */}
+          {sidebarOpen && (
+            <div className="flex-[0_0_40%] border-l border-border bg-card flex flex-col min-w-0">
+              <div className="flex items-center justify-between px-4 py-2 border-b border-border">
+                <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Inspector</span>
+                <button onClick={() => setSidebarOpen(false)} className="p-1 rounded hover:bg-muted/30 text-muted-foreground"><X className="h-3.5 w-3.5" /></button>
+              </div>
+              <div className="flex-1 overflow-auto p-3">
+                {sidebarContent !== null ? (
+                  <JsonRenderer data={sidebarContent} />
+                ) : (
+                  <div className="text-sm text-muted-foreground">Click a tool result to inspect.</div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

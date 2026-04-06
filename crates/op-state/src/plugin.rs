@@ -1,8 +1,8 @@
+use op_state_store::PluginSchema;
 // Core trait for pluggable state management
 use anyhow::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
 use std::collections::HashMap;
 
@@ -89,9 +89,43 @@ pub struct ValidationError {
     pub code: String,
 }
 
+/// Plugin metadata
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PluginMetadata {
+    pub name: String,
+    pub version: String,
+    pub description: String,
+    pub author: Option<String>,
+    pub license: Option<String>,
+    pub dependencies: Vec<String>,
+    pub dbus_services: Vec<String>,
+    pub feature_schemas: Vec<Value>,
+    pub object_schemas: HashMap<String, Value>,
+}
+
 /// Core trait that all state management plugins must implement
-#[async_trait::async_trait]
+#[async_trait]
 pub trait StatePlugin: Send + Sync {
+    /// Get the plugin metadata including description and schemas
+    fn metadata(&self) -> PluginMetadata {
+        PluginMetadata {
+            name: self.name().to_string(),
+            version: self.version().to_string(),
+            description: format!("{} plugin", self.name()),
+            author: None,
+            license: None,
+            dependencies: vec![],
+            dbus_services: vec![],
+            feature_schemas: vec![],
+            object_schemas: HashMap::new(),
+        }
+    }
+
+    /// Get the plugin structured schema if available
+    fn schema(&self) -> Option<PluginSchema> {
+        None
+    }
+
     /// Plugin identifier (e.g., "network", "filesystem", "user")
     fn name(&self) -> &str;
 
@@ -100,14 +134,11 @@ pub trait StatePlugin: Send + Sync {
     fn version(&self) -> &str;
 
     /// Check if this plugin's dependencies are available on the system
-    /// Returns true if the plugin can operate, false if dependencies are missing
-    /// Default implementation returns true (plugin always available)
     fn is_available(&self) -> bool {
         true
     }
 
-    /// Get a message explaining why the plugin is unavailable (if it is)
-    /// Only called if is_available() returns false
+    /// Get a message explaining why the plugin is unavailable
     fn unavailable_reason(&self) -> String {
         format!("Plugin '{}' is not available", self.name())
     }
@@ -118,7 +149,7 @@ pub trait StatePlugin: Send + Sync {
     /// Calculate difference between current and desired state
     async fn calculate_diff(&self, current: &Value, desired: &Value) -> Result<StateDiff>;
 
-    /// Apply the state changes (may be multi-step)
+    /// Apply the state changes
     async fn apply_state(&self, diff: &StateDiff) -> Result<ApplyResult>;
 
     /// Verify that current state matches desired state
@@ -178,7 +209,7 @@ pub struct Checkpoint {
     pub plugin: String,
     pub timestamp: i64,
     pub state_snapshot: Value,
-    pub backend_checkpoint: Option<Value>, // Plugin-specific checkpoint data
+    pub backend_checkpoint: Option<Value>,
 }
 
 /// Plugin capabilities flags

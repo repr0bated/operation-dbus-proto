@@ -26,6 +26,7 @@ use tracing::{debug, info, warn};
 
 /// Google OAuth token endpoints
 const GOOGLE_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
+#[allow(dead_code)]
 const GOOGLE_USERINFO_URL: &str = "https://www.googleapis.com/oauth2/v2/userinfo";
 
 /// Refresh 5 minutes before expiry

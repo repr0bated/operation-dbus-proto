@@ -8,7 +8,6 @@ use anyhow::{bail, Context, Result};
 use argon2::{password_hash::SaltString, Argon2};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use serde::{Deserialize, Serialize};
-use simd_json::prelude::*;
 use std::path::Path;
 
 const NONCE_SIZE: usize = 12;
@@ -182,7 +181,7 @@ impl StateEncryption {
 /// Helper functions for state files  
 pub mod state_file {
     use super::*;
-    use crate::manager::DesiredState as State;
+    use crate::DesiredState as State;
 
     /// Save state with encryption
     pub fn save_encrypted(state: &State, path: &Path, encryption: &StateEncryption) -> Result<()> {
@@ -213,7 +212,7 @@ pub mod state_file {
 
     /// Check if a state file is encrypted
     pub fn is_encrypted(path: &Path) -> Result<bool> {
-        let mut contents = std::fs::read_to_string(path).context("Failed to read state file")?;
+        let contents = std::fs::read_to_string(path).context("Failed to read state file")?;
 
         // Try to parse as encrypted state
         let mut c1 = contents.clone();

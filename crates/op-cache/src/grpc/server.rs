@@ -9,9 +9,11 @@ use tracing::info;
 
 use super::agent_service::AgentServiceImpl;
 use super::cache_service::CacheServiceImpl;
+use super::mcp_service::McpServiceImpl;
 use super::orchestrator_service::OrchestratorServiceImpl;
 use super::proto::{
     agent_service_server::AgentServiceServer, cache_service_server::CacheServiceServer,
+    mcp_service_server::McpServiceServer,
     orchestrator_service_server::OrchestratorServiceServer,
 };
 
@@ -43,6 +45,7 @@ pub struct GrpcServer {
     agent_service: Arc<AgentServiceImpl>,
     cache_service: Arc<CacheServiceImpl>,
     orchestrator_service: Arc<OrchestratorServiceImpl>,
+    mcp_service: Arc<McpServiceImpl>,
 }
 
 impl GrpcServer {
@@ -62,12 +65,17 @@ impl GrpcServer {
             config.enable_caching,
             config.promotion_threshold,
         ));
+        let mcp_service = Arc::new(McpServiceImpl::new(
+            agent_service.clone(),
+            orchestrator_service.clone(),
+        ));
 
         Self {
             config,
             agent_service,
             cache_service,
             orchestrator_service,
+            mcp_service,
         }
     }
 
@@ -86,6 +94,11 @@ impl GrpcServer {
         self.cache_service.clone()
     }
 
+    /// Get MCP service
+    pub fn mcp_service(&self) -> Arc<McpServiceImpl> {
+        self.mcp_service.clone()
+    }
+
     /// Start the gRPC server
     pub async fn serve(self) -> Result<()> {
         let addr = self.config.listen_addr;
@@ -98,6 +111,7 @@ impl GrpcServer {
             .add_service(OrchestratorServiceServer::from_arc(
                 self.orchestrator_service,
             ))
+            .add_service(McpServiceServer::from_arc(self.mcp_service))
             .serve(addr)
             .await?;
 
@@ -119,6 +133,7 @@ impl GrpcServer {
             .add_service(OrchestratorServiceServer::from_arc(
                 self.orchestrator_service,
             ))
+            .add_service(McpServiceServer::from_arc(self.mcp_service))
             .serve_with_shutdown(addr, shutdown)
             .await?;
 
