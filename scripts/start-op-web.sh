@@ -23,7 +23,9 @@ pkill -f op-web-server || true
 sleep 2
 
 # Start op-web server
-cd /home/jeremy/git/operation-dbus/crates/crates/op-web
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$REPO_ROOT/crates/op-web"
 
 echo "🚀 Starting op-web server..."
 echo "   Port: $PORT"

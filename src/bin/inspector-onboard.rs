@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use op_dbus::inspector_gadget::{InspectorConfig, InspectorGadget};
-use op_plugins::registry::PluginRegistry;
+use op_plugins::PluginCatalog;
 use op_state_store::{SqliteStore, StateStore};
 use op_tools::ToolRegistry;
 
@@ -28,14 +28,14 @@ async fn main() -> Result<()> {
 
     let plugin_dir = PathBuf::from(&cache_dir).join("plugins");
     tokio::fs::create_dir_all(&plugin_dir).await?;
-    let plugin_registry = Arc::new(PluginRegistry::new(&plugin_dir));
+    let plugin_catalog = Arc::new(PluginCatalog::new(&plugin_dir));
 
     let tool_registry = Arc::new(ToolRegistry::new());
 
     let inspector = InspectorGadget::new(
         InspectorConfig::default(),
         state_store.clone(),
-        plugin_registry,
+        plugin_catalog,
         tool_registry,
     );
 

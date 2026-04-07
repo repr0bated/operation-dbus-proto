@@ -1,0 +1,15 @@
+# Internal OVS management port. Do not allow link-local fallback.
+[Match]
+Name=ovsbr0-mgmt
+
+[Link]
+ActivationPolicy=up
+RequiredForOnline=no
+
+[Network]
+DHCP=no
+LinkLocalAddressing=no
+LLMNR=no
+MulticastDNS=no
+IPv6AcceptRA=no
+ConfigureWithoutCarrier=yes

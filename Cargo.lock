@@ -3276,6 +3276,7 @@ dependencies = [
  "prost-types 0.13.5",
  "rusqlite",
  "serde",
+ "serde_json",
  "sha2",
  "simd-json",
  "tempfile",
@@ -3301,6 +3302,7 @@ dependencies = [
  "op-agents",
  "op-core",
  "op-execution-tracker",
+ "op-grpc-bridge",
  "op-introspection",
  "op-llm",
  "op-mcp",
@@ -3317,6 +3319,7 @@ dependencies = [
  "tokio-test",
  "tonic",
  "tonic-build 0.11.0",
+ "tonic-reflection",
  "tracing",
  "tracing-subscriber",
  "uuid",
@@ -3331,16 +3334,21 @@ dependencies = [
  "async-trait",
  "axum",
  "chrono",
+ "clap",
  "op-cache",
  "op-core",
  "op-dynamic-loader",
  "op-mcp",
+ "op-state-store",
  "serde",
+ "serde_json",
  "simd-json",
+ "sqlx",
  "tokio",
  "tower 0.4.13",
  "tower-http 0.5.2",
  "tracing",
+ "tracing-subscriber",
  "uuid",
 ]
 
@@ -3349,6 +3357,7 @@ name = "op-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "chrono",
  "op-execution-tracker",
  "serde",
@@ -3412,6 +3421,7 @@ dependencies = [
  "tokio-stream",
  "tonic",
  "tonic-reflection",
+ "tonic-web",
  "tower 0.4.13",
  "tower-http 0.5.2",
  "tracing",
@@ -3429,7 +3439,9 @@ dependencies = [
  "dashmap",
  "futures",
  "op-core",
+ "op-grpc-bridge",
  "op-jsonrpc",
+ "op-network",
  "serde",
  "simd-json",
  "sqlx",
@@ -3446,7 +3458,9 @@ dependencies = [
  "anyhow",
  "chrono",
  "op-core",
+ "op-state-store",
  "serde",
+ "serde_json",
  "simd-json",
  "sqlx",
  "thiserror 1.0.69",
@@ -3542,6 +3556,10 @@ dependencies = [
  "base64 0.21.7",
  "chrono",
  "futures",
+ "op-core",
+ "op-identity",
+ "op-jsonrpc",
+ "op-network",
  "op-state-store",
  "prost 0.13.5",
  "prost-types 0.13.5",
@@ -3554,7 +3572,9 @@ dependencies = [
  "tokio-test",
  "tonic",
  "tonic-build 0.12.3",
+ "tonic-health",
  "tonic-reflection",
+ "tonic-web",
  "tracing",
  "uuid",
  "zbus 4.4.0",
@@ -3817,11 +3837,13 @@ dependencies = [
  "md5",
  "op-blockchain",
  "op-core",
+ "op-dbus-model",
  "op-dynamic-loader",
  "op-execution-tracker",
  "op-network",
  "op-state",
  "op-state-store",
+ "parking_lot",
  "reqwest 0.11.27",
  "serde",
  "sha2",
@@ -3878,6 +3900,7 @@ dependencies = [
  "op-jsonrpc",
  "op-network",
  "op-state-store",
+ "parking_lot",
  "pocketflow_rs",
  "quick-xml 0.36.2",
  "rand 0.8.5",
@@ -6381,6 +6404,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "tonic-health"
+version = "0.12.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1eaf34ddb812120f5c601162d5429933c9b527d901ab0e7f930d3147e33a09b2"
+dependencies = [
+ "async-stream",
+ "prost 0.13.5",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+]
+
+[[package]]
 name = "tonic-reflection"
 version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6391,6 +6427,26 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tonic",
+]
+
+[[package]]
+name = "tonic-web"
+version = "0.12.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5299dd20801ad736dccb4a5ea0da7376e59cd98f213bf1c3d478cf53f4834b58"
+dependencies = [
+ "base64 0.22.1",
+ "bytes",
+ "http 1.4.0",
+ "http-body 1.0.1",
+ "http-body-util",
+ "pin-project",
+ "tokio-stream",
+ "tonic",
+ "tower-http 0.5.2",
+ "tower-layer",
+ "tower-service",
+ "tracing",
 ]
 
 [[package]]

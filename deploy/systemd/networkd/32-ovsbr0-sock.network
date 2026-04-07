@@ -1,0 +1,15 @@
+# Shared OVS socket ingress port. L2-only attachment point.
+[Match]
+Name=ovsbr0-sock
+
+[Link]
+ActivationPolicy=up
+RequiredForOnline=no
+
+[Network]
+DHCP=no
+LinkLocalAddressing=no
+LLMNR=no
+MulticastDNS=no
+IPv6AcceptRA=no
+ConfigureWithoutCarrier=yes

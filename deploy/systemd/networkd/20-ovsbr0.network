@@ -1,20 +1,17 @@
-# ovsbr0 is the OVS local/internal interface restored from persistent OVSDB.
-# OVS owns the bridge MAC via Bridge.other-config:hwaddr; networkd only owns L3.
+# ovsbr0 is created by netplan/openvswitch.
+# systemd-networkd only applies the host-side control-plane address here.
 [Match]
 Name=ovsbr0
 
 [Link]
 ActivationPolicy=up
+RequiredForOnline=no
 
 [Network]
-DHCP=no
+Address=10.88.88.1/24
 LinkLocalAddressing=no
+LLMNR=no
+MulticastDNS=no
 IPv6AcceptRA=no
 ConfigureWithoutCarrier=yes
-Address=148.113.204.83/32
-DNS=1.1.1.1
-DNS=8.8.8.8
-
-[Route]
-Gateway=148.113.204.1
-GatewayOnLink=yes
+KeepConfiguration=static
