@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+mkdir -p "/home/jeremy/git/operation-dbus-proto/deploy/run"
+exec /usr/bin/dbus-daemon --session --nofork --address=unix:path=/home/jeremy/git/operation-dbus-proto/deploy/run/session-bus

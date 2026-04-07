@@ -1,0 +1,37 @@
+[package]
+name = "op-plugins"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Plugin system with state management, domain plugins, and blockchain footprints"
+
+[dependencies]
+op-core = { path = "../op-core" }
+op-dbus-model = { workspace = true }
+op-state = { path = "../op-state" }
+op-state-store = { path = "../op-state-store" }
+op-blockchain = { path = "../op-blockchain" }
+op-network = { path = "../op-network" }
+op-dynamic-loader = { path = "../op-dynamic-loader" }
+op-execution-tracker = { path = "../op-execution-tracker" }
+
+tokio = { workspace = true }
+serde = { workspace = true }
+simd-json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+zbus = { workspace = true }
+chrono = { workspace = true }
+log = { workspace = true }
+reqwest = { workspace = true }
+sha2 = { workspace = true }
+md5 = { workspace = true }
+uuid = { workspace = true }
+dirs = "5.0"
+parking_lot = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

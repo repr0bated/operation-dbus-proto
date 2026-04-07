@@ -1,7 +1,19 @@
-# ens3 remains an unmanaged OVS system port.
-# Bridge membership is restored from persistent OVSDB state, not by networkd.
+# ens3 is the standalone DHCP uplink.
+# Not enslaved to OVS — purely for host management/SSH connectivity.
 [Match]
 Name=ens3
 
 [Link]
-Unmanaged=yes
+ActivationPolicy=up
+
+[Network]
+DHCP=yes
+LinkLocalAddressing=no
+LLMNR=no
+MulticastDNS=no
+IPv6AcceptRA=no
+
+[DHCPv4]
+UseDNS=yes
+UseRoutes=yes
+RouteMetric=100

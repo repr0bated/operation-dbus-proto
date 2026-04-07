@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Privacy Registration</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f4efe7;
+      --panel: #fffaf2;
+      --ink: #1f1a16;
+      --muted: #6b6259;
+      --line: #d8c7b3;
+      --accent: #005f73;
+      --accent-strong: #0a9396;
+      --danger: #9b2226;
+      --ok: #386641;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, rgba(10, 147, 150, 0.12), transparent 28%),
+        linear-gradient(160deg, var(--bg), #efe3d3 55%, #e9dccb);
+      display: grid;
+      place-items: center;
+      padding: 24px;
+    }
+
+    .card {
+      width: min(100%, 640px);
+      background: rgba(255, 250, 242, 0.92);
+      border: 1px solid rgba(216, 199, 179, 0.9);
+      border-radius: 24px;
+      padding: 32px;
+      box-shadow: 0 24px 80px rgba(31, 26, 22, 0.12);
+      backdrop-filter: blur(12px);
+    }
+
+    .eyebrow {
+      margin: 0 0 12px;
+      color: var(--accent);
+      font: 600 0.85rem/1.2 "IBM Plex Sans", "Segoe UI", sans-serif;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(2rem, 4vw, 3.4rem);
+      line-height: 0.95;
+      letter-spacing: -0.04em;
+    }
+
+    p {
+      color: var(--muted);
+      font-size: 1.05rem;
+      line-height: 1.55;
+    }
+
+    form {
+      margin-top: 28px;
+      display: grid;
+      gap: 14px;
+    }
+
+    label {
+      font: 600 0.95rem/1.2 "IBM Plex Sans", "Segoe UI", sans-serif;
+      color: var(--ink);
+    }
+
+    input[type="email"] {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 14px 16px;
+      font: 1rem/1.2 "IBM Plex Sans", "Segoe UI", sans-serif;
+      background: #fff;
+      color: var(--ink);
+    }
+
+    input[type="email"]:focus {
+      outline: 2px solid rgba(10, 147, 150, 0.18);
+      border-color: var(--accent-strong);
+    }
+
+    button {
+      border: 0;
+      border-radius: 999px;
+      padding: 14px 18px;
+      font: 700 0.98rem/1 "IBM Plex Sans", "Segoe UI", sans-serif;
+      color: #fff;
+      background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+      cursor: pointer;
+    }
+
+    button:disabled {
+      opacity: 0.7;
+      cursor: wait;
+    }
+
+    .message {
+      min-height: 1.4em;
+      margin-top: 16px;
+      font: 500 0.95rem/1.5 "IBM Plex Sans", "Segoe UI", sans-serif;
+    }
+
+    .message.ok {
+      color: var(--ok);
+    }
+
+    .message.error {
+      color: var(--danger);
+    }
+
+    .notes {
+      margin-top: 24px;
+      padding-top: 20px;
+      border-top: 1px solid var(--line);
+      display: grid;
+      gap: 8px;
+      font: 0.92rem/1.5 "IBM Plex Sans", "Segoe UI", sans-serif;
+      color: var(--muted);
+    }
+
+    code {
+      font-family: "IBM Plex Mono", "SFMono-Regular", monospace;
+      color: var(--ink);
+    }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <p class="eyebrow">Privacy Router</p>
+    <h1>Request your access link.</h1>
+    <p>
+      Enter your email address and the system will send a magic link for registration
+      and WireGuard provisioning.
+    </p>
+
+    <form id="signup-form">
+      <div>
+        <label for="email">Email address</label>
+        <input id="email" name="email" type="email" autocomplete="email" placeholder="you@example.com" required>
+      </div>
+      <button id="submit" type="submit">Send magic link</button>
+    </form>
+
+    <div id="message" class="message" aria-live="polite"></div>
+
+    <section class="notes">
+      <div>The verification flow lands on <code>/privacy/verify?token=...</code>.</div>
+      <div>Provisioned users are shown a human-readable access page at <code>/privacy/access</code>.</div>
+    </section>
+  </main>
+
+  <script>
+    const form = document.getElementById("signup-form");
+    const email = document.getElementById("email");
+    const submit = document.getElementById("submit");
+    const message = document.getElementById("message");
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      message.textContent = "";
+      message.className = "message";
+      submit.disabled = true;
+
+      try {
+        const response = await fetch("/api/privacy/signup", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: email.value })
+        });
+
+        const payload = await response.json();
+        message.textContent = payload.message || "Unknown response";
+        message.classList.add(response.ok && payload.success ? "ok" : "error");
+      } catch (error) {
+        message.textContent = "Request failed. Try again in a moment.";
+        message.classList.add("error");
+      } finally {
+        submit.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

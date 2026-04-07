@@ -1,56 +1,45 @@
 DNS Records for 3tched.com Mail Server
 ======================================
 
-Replace <CONTAINER_IP> with your Incus container IP address
-Replace <YOUR_IPV4> with your public IPv4 address (if different)
+Replace `<PUBLIC_IPV4>` with your public IPv4 address.
 
-1. A Record (Mail Server)
---------------------------
+1. A Record (Webmail Hostname)
+------------------------------
 Type: A
 Name: mail
-Value: <CONTAINER_IP>
-TTL: 3600
+Value: <PUBLIC_IPV4>
+Proxy: Proxied through Cloudflare
+TTL: Auto
 
 2. MX Record (Mail Exchange)
------------------------------
-Type: MX
-Name: @
-Value: mail.3tched.com
-Priority: 10
-TTL: 3600
+----------------------------
+Keep the current authoritative MX that Cloudflare is already serving for the
+zone. In the current live config that is a managed `_dc-mx...` hostname, not a
+direct `mail.3tched.com` target.
 
 3. SPF Record (Sender Policy Framework)
 ----------------------------------------
 Type: TXT
 Name: @
-Value: v=spf1 mx ~all
-TTL: 3600
+Value: v=spf1 ip4:<PUBLIC_IPV4> ~all
+TTL: 300
 
 4. DMARC Record
 ---------------
 Type: TXT
 Name: _dmarc
-Value: v=DMARC1; p=quarantine; rua=mailto:admin@3tched.com
-TTL: 3600
+Value: v=DMARC1; p=quarantine; rua=mailto:admin@3tched.com; ruf=mailto:admin@3tched.com; fo=1
+TTL: 300
 
 5. DKIM Record
 --------------
-After Maddy generates DKIM keys, you'll get a record like:
+Preserve the live selectors already published in Cloudflare. Rotate them only
+when you are intentionally rotating mail keys.
 
-Type: TXT
-Name: default._domainkey
-Value: (will be provided by Maddy after setup)
-TTL: 3600
-
-To get DKIM record after setup:
-  incus exec mail-3tched -- maddyctl dkim show default 3tched.com
-
-6. Optional: Webmail A Record
-------------------------------
-Type: A
-Name: webmail
-Value: <CONTAINER_IP>
-TTL: 3600
+To inspect the current live selectors:
+  dig TXT default._domainkey.3tched.com
+  dig TXT neo1._domainkey.3tched.com
+  dig TXT s202602._domainkey.3tched.com
 
 Testing
 -------

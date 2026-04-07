@@ -1,0 +1,15 @@
+# Internal OVS helper port for the gRPC bridge. No autonomous L3.
+[Match]
+Name=grpc-bridge
+
+[Link]
+ActivationPolicy=up
+RequiredForOnline=no
+
+[Network]
+DHCP=no
+LinkLocalAddressing=no
+LLMNR=no
+MulticastDNS=no
+IPv6AcceptRA=no
+ConfigureWithoutCarrier=yes

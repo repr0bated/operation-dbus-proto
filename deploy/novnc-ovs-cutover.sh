@@ -7,8 +7,10 @@ set -euo pipefail
 SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 REPO_ROOT="$(CDPATH='' cd -- "$SCRIPT_DIR/.." && pwd)"
 
-BRIDGE="${PRIVACY_BRIDGE_NAME:-ovsbr0}"
-UPLINK="${PRIVACY_UPLINK_PORT:-ens3}"
+BRIDGE="${OP_DBUS_BRIDGE_NAME:-ovsbr0}"
+UPLINK="${OP_DBUS_UPLINK_PORT:-ens3}"
+SECONDARY_UPLINK_IFACE="${OP_DBUS_SECONDARY_UPLINK_IFACE:-uplink1}"
+SECONDARY_UPLINK_IPV4="${OP_DBUS_SECONDARY_UPLINK_IPV4:-15.235.37.41/32}"
 DBUS_DEST="${OP_DBUS_DEST:-org.opdbus}"
 OVSDB_PATH="${OP_DBUS_OVS_PATH:-/org/opdbus/ovsdb}"
 OVSDB_IFACE="${OP_DBUS_OVS_IFACE:-org.opdbus.OvsdbV1}"
@@ -39,6 +41,68 @@ log() {
 die() {
     printf '[cutover] ERROR: %s\n' "$*" >&2
     exit 1
+}
+
+start_service_via_dinit_dbus() {
+    local service="$1"
+    local output
+
+    if command -v gdbus >/dev/null 2>&1; then
+        if output="$(gdbus call \
+            --system \
+            --dest org.chimera.dinit \
+            --object-path /org/chimera/dinit \
+            --method org.chimera.dinit.Manager.StartService \
+            "$service" \
+            false 2>&1)"; then
+            return 0
+        fi
+
+        if printf '%s' "$output" | grep -q 'org.chimera.dinit.Error.ServiceAlready'; then
+            return 0
+        fi
+    fi
+
+    if command -v dinitctl >/dev/null 2>&1; then
+        dinitctl start "$service" >/dev/null 2>&1 && return 0
+    fi
+
+    return 1
+}
+
+stop_service_via_dinit_dbus() {
+    local service="$1"
+    local output
+
+    if command -v gdbus >/dev/null 2>&1; then
+        if output="$(gdbus call \
+            --system \
+            --dest org.chimera.dinit \
+            --object-path /org/chimera/dinit \
+            --method org.chimera.dinit.Manager.StopService \
+            "$service" \
+            false \
+            false \
+            false 2>&1)"; then
+            return 0
+        fi
+
+        if printf '%s' "$output" | grep -q 'org.chimera.dinit.Error.ServiceAlready'; then
+            return 0
+        fi
+    fi
+
+    if command -v dinitctl >/dev/null 2>&1; then
+        dinitctl stop "$service" >/dev/null 2>&1 && return 0
+    fi
+
+    return 1
+}
+
+restart_service_via_dinit_dbus() {
+    local service="$1"
+    stop_service_via_dinit_dbus "$service" || true
+    start_service_via_dinit_dbus "$service"
 }
 
 cleanup() {
@@ -93,6 +157,7 @@ require_cmd() {
 capture_state() {
     UPLINK_ADDRS=()
     mapfile -t UPLINK_ADDRS < <(ip -4 -o addr show dev "$UPLINK" scope global | awk '{print $4}')
+
     GATEWAY="$(ip -4 route show default dev "$UPLINK" 2>/dev/null | awk '{print $3}' | head -n1)"
     if [ -z "$GATEWAY" ]; then
         GATEWAY="$(ip route get 1.1.1.1 2>/dev/null | awk '/via/ {for (i=1;i<=NF;i++) if ($i=="via") print $(i+1)}' | head -n1)"
@@ -130,8 +195,9 @@ backup_file() {
 
 install_repo_config() {
     install -d /etc/systemd/network /etc/dinit.d
-    install -m 0644 "$REPO_ROOT/deploy/systemd/networkd/10-ens3.network" /etc/systemd/network/10-ens3.network
-    install -m 0644 "$REPO_ROOT/deploy/systemd/networkd/20-ovsbr0.network" /etc/systemd/network/20-ovsbr0.network
+    for network_file in "$REPO_ROOT"/deploy/systemd/networkd/*; do
+        install -m 0644 "$network_file" "/etc/systemd/network/$(basename "$network_file")"
+    done
     install -m 0644 "$REPO_ROOT/deploy/dinit/systemd-networkd" /etc/dinit.d/systemd-networkd
     log "Installed repo networkd and dinit files"
 }
@@ -191,9 +257,7 @@ atomic_ip_migration() {
 }
 
 activate_networkd() {
-    if command -v dinitctl >/dev/null 2>&1; then
-        dinitctl restart systemd-networkd >/dev/null 2>&1 || dinitctl start systemd-networkd >/dev/null 2>&1 || true
-    fi
+    restart_service_via_dinit_dbus systemd-networkd || start_service_via_dinit_dbus systemd-networkd || true
 
     if command -v networkctl >/dev/null 2>&1; then
         if busctl --system status org.freedesktop.network1 >/dev/null 2>&1; then
@@ -211,6 +275,7 @@ show_state() {
     printf '\n'
     log "Current IPv4 state:"
     ip -4 addr show dev "$UPLINK" 2>/dev/null || true
+    ip -4 addr show dev "$SECONDARY_UPLINK_IFACE" 2>/dev/null || true
     ip -4 addr show dev "$BRIDGE" 2>/dev/null || true
     printf '\n'
     log "Current default routes:"
@@ -224,6 +289,9 @@ show_state() {
 }
 
 main() {
+    local secondary_repo_netdev=""
+    local secondary_repo_network=""
+
     [ "$EUID" -eq 0 ] || die "must run as root"
 
     require_cmd ip
@@ -231,6 +299,10 @@ main() {
     require_cmd install
 
     [ -f "$REPO_ROOT/deploy/systemd/networkd/10-ens3.network" ] || die "missing repo file: deploy/systemd/networkd/10-ens3.network"
+    secondary_repo_netdev="$(find "$REPO_ROOT/deploy/systemd/networkd" -maxdepth 1 -type f -name "*${SECONDARY_UPLINK_IFACE}.netdev" | head -n1)"
+    secondary_repo_network="$(find "$REPO_ROOT/deploy/systemd/networkd" -maxdepth 1 -type f -name "*${SECONDARY_UPLINK_IFACE}.network" | head -n1)"
+    [ -n "$secondary_repo_netdev" ] || die "missing repo netdev file for secondary uplink interface $SECONDARY_UPLINK_IFACE"
+    [ -n "$secondary_repo_network" ] || die "missing repo network file for secondary uplink interface $SECONDARY_UPLINK_IFACE"
     [ -f "$REPO_ROOT/deploy/systemd/networkd/20-ovsbr0.network" ] || die "missing repo file: deploy/systemd/networkd/20-ovsbr0.network"
     [ -f "$REPO_ROOT/deploy/dinit/systemd-networkd" ] || die "missing repo file: deploy/dinit/systemd-networkd"
 
@@ -242,6 +314,8 @@ main() {
     log "This script is intended for noVNC / out-of-band console use only"
     log "Bridge: $BRIDGE"
     log "Uplink: $UPLINK"
+    log "Secondary uplink interface: $SECONDARY_UPLINK_IFACE"
+    log "Secondary uplink IPv4: $SECONDARY_UPLINK_IPV4"
     log "Captured IPv4 addresses on $UPLINK: ${UPLINK_ADDRS[*]:-(none)}"
     log "Captured default gateway: ${GATEWAY:-none}"
     printf '\n'
@@ -253,6 +327,8 @@ main() {
 
     install -d "$BACKUP_DIR/etc-systemd-network" "$BACKUP_DIR/etc-dinit.d"
     backup_file /etc/systemd/network/10-ens3.network "$BACKUP_DIR/etc-systemd-network"
+    backup_file "/etc/systemd/network/$(basename "$secondary_repo_netdev")" "$BACKUP_DIR/etc-systemd-network"
+    backup_file "/etc/systemd/network/$(basename "$secondary_repo_network")" "$BACKUP_DIR/etc-systemd-network"
     backup_file /etc/systemd/network/20-ovsbr0.network "$BACKUP_DIR/etc-systemd-network"
     backup_file /etc/dinit.d/systemd-networkd "$BACKUP_DIR/etc-dinit.d"
     write_rollback_script

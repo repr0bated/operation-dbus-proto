@@ -48,6 +48,7 @@ server {
     ssl_certificate /etc/nginx/ssl/${safe_domain}.crt;
     ssl_certificate_key /etc/nginx/ssl/${safe_domain}.key;
     ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ecdh_curve X25519:prime256v1:secp384r1;
     ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
     ssl_prefer_server_ciphers off;
     ssl_session_cache shared:SSL:10m;
