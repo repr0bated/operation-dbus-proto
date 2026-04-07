@@ -142,9 +142,23 @@ impl SchemaEngine {
             .map_err(|e| anyhow::anyhow!(e))
     }
 
+    fn compute_tags(&self, plugin_id: &str, object_path: &str) -> Vec<String> {
+        let mut tags = Vec::new();
+        if plugin_id == "net" || object_path.contains("/ovsdb/") {
+            tags.push("network".to_string());
+            tags.push("ovsdb".to_string());
+        } else if object_path.contains("/nonnet/") {
+            tags.push("nonnet".to_string());
+            tags.push("plugin".to_string());
+        } else {
+            tags.push("state".to_string());
+            tags.push(plugin_id.to_string());
+        }
+        tags
+    }
+
     /// Process a change that has already happened in an authoritative store.
     /// This records the change in the event chain and broadcasts it to gRPC.
-    #[allow(clippy::too_many_arguments)]
     pub async fn process_authoritative_change(
         &self,
         plugin_id: String,
@@ -153,10 +167,14 @@ impl SchemaEngine {
         member_name: Option<String>,
         old_value: Option<simd_json::OwnedValue>,
         new_value: simd_json::OwnedValue,
-        tags: Vec<String>,
+        mut tags: Vec<String>,
         actor_id: String,
         source: ChangeSource,
     ) -> Result<StateChange, String> {
+        if tags.is_empty() {
+            tags = self.compute_tags(&plugin_id, &object_path);
+        }
+
         let event = {
             let mut chain = self.event_chain.write().await;
             let op = match change_type {
@@ -264,7 +282,6 @@ impl SchemaEngine {
 
     /// Unified mutation entry point. Writes to authoritative RCP stores and
     /// triggers the event recording/broadcast pipeline.
-    #[allow(clippy::too_many_arguments)]
     pub async fn mutate(
         &self,
         plugin_id: String,
@@ -327,13 +344,19 @@ impl SchemaEngine {
         } else {
             // NonNet / Generic Plugin Path
             if change_type == ChangeType::PropertySet {
-                // Get old value for the footprint before update
+                // Get old value for the footprint before update from cache
                 old_value = self.get_state(&plugin_id).await
-                    .and_then(|v| v.get(member_name.as_deref().unwrap_or("")).cloned());
+                    .and_then(|v| {
+                        if let Some(prop) = &member_name {
+                            v.get(prop).cloned()
+                        } else {
+                            Some(v)
+                        }
+                    });
 
                 // For NonNet plugins, we update the NonNetDb which is authoritative for non-network state
                 if let Some(rows) = value.as_array() {
-                    let rows_vec: Vec<simd_json::OwnedValue> = rows.to_vec();
+                    let rows_vec: Vec<simd_json::OwnedValue> = rows.iter().cloned().collect();
                     self.nonnet.update_table(&plugin_id, rows_vec).await;
                 }
             }
@@ -348,7 +371,7 @@ impl SchemaEngine {
                 member_name,
                 old_value,
                 value.clone(),
-                vec![], // TODO: Compute tags from schema
+                vec![], // Automatically computed in process_authoritative_change
                 actor_id,
                 ChangeSource::Grpc,
             )
@@ -365,7 +388,6 @@ impl SchemaEngine {
     }
 
     /// Backward-compatible wrapper for gRPC Mutations.
-    #[allow(clippy::too_many_arguments)]
     pub async fn process_grpc_mutation(
         &self,
         plugin_id: String,
@@ -431,7 +453,6 @@ impl SchemaEngine {
     }
 
     /// Route a D-Bus method call through the authoritative bridge
-    #[allow(clippy::too_many_arguments)]
     pub async fn call_dbus_method(
         &self,
         bus_name: &str,

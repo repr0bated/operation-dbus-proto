@@ -453,7 +453,7 @@ sequenceDiagram
     UI->>MCP: tool call (HTTP/gRPC/stdio)
     MCP->>CHAT: route to ChatActor
 
-    Note over CHAT,AGENT: === DIRECT D-Bus AGENT PATH ===
+    Note over CHAT,AGENT: === DIRECT D-BUS AGENT PATH ===
     CHAT->>BUS: introspect org.dbusmcp.Agent.*
     BUS-->>CHAT: agent metadata
     CHAT->>BUS: execute(task_json) on Agent interface

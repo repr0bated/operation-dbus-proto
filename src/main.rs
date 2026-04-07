@@ -2,7 +2,6 @@
 //!
 //! Production entry point with all components wired together.
 
-use parking_lot::RwLock;
 use simd_json::prelude::*;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -386,8 +385,8 @@ async fn main() -> Result<()> {
     // Initialize blockchain (StreamingBlockchain)
     let blockchain_path = PathBuf::from(&config.cache_dir).join("blockchain");
     let blockchain_stream = StreamingBlockchain::new(blockchain_path).await?;
-    // DbusProjection expects Arc<parking_lot::RwLock<StreamingBlockchain>>
-    let blockchain = Arc::new(parking_lot::RwLock::new(blockchain_stream));
+    // DbusProjection expects Arc<tokio::sync::RwLock<StreamingBlockchain>>
+    let blockchain = Arc::new(tokio::sync::RwLock::new(blockchain_stream));
 
     // Initialize cache
     let cache = Arc::new(BtrfsCache::new(PathBuf::from(&config.cache_dir)).await?);

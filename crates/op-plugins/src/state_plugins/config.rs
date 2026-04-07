@@ -4,7 +4,7 @@ use op_state::{
     ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
 };
 use serde::{Deserialize, Serialize};
-use simd_json::prelude::*;
+use tokio::sync::RwLock;
 use simd_json::OwnedValue as Value;
 use std::collections::HashMap;
 use std::path::PathBuf;

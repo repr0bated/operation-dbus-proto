@@ -5,7 +5,9 @@ edition = "2021"
 description = "Unified MCP Protocol Server with multiple transport and mode support"
 
 [features]
-default = ["grpc"]
+default = []
+op-chat = []
+code_search = []
 grpc = ["tonic", "prost", "tonic-build"]
 
 [dependencies]

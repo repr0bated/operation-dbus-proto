@@ -30,6 +30,7 @@ const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 #[cfg(feature = "grpc")]
 type ResponseStream<T> = Pin<Box<dyn Stream<Item = Result<T, Status>> + Send>>;
 
+#[allow(dead_code)]
 struct Session {
     id: String,
     client_name: String,
@@ -86,6 +87,7 @@ impl GrpcInfrastructure {
     }
 }
 
+#[allow(dead_code)]
 pub struct McpGrpcService {
     mode: ServerMode,
     sessions: RwLock<HashMap<String, Session>>,
@@ -124,6 +126,7 @@ impl McpGrpcService {
         }
     }
 
+    #[allow(dead_code)]
     async fn start_session_agents(&self, session_id: &str, client_name: &str) -> Vec<String> {
         let started = Vec::new();
         let session = Session {
@@ -161,6 +164,7 @@ impl McpGrpcService {
     }
 
     /// Emit an event to all active subscribers. Failures (no receivers) are silently ignored.
+    #[allow(dead_code)]
     fn emit_event(&self, event_type: &str, data_json: String) {
         let _ = self.event_tx.send(McpEvent {
             event_type: event_type.to_string(),

@@ -9,7 +9,7 @@ use op_state::{
 };
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
-use simd_json::{json, OwnedValue as Value};
+use simd_json::OwnedValue as Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -201,7 +201,7 @@ struct DiscoveredContainer {
     bridge: String,
 
     /// OpenFlow port number
-    ofport: Option<u16>,
+    _ofport: Option<u16>,
 }
 
 const OPENFLOW_PROTOCOL: &str = "OpenFlow13";
@@ -258,7 +258,7 @@ impl OpenFlowPlugin {
                             name: container_name,
                             port_name: port.clone(),
                             bridge: bridge.clone(),
-                            ofport: self.get_port_ofport(&port).await.ok(),
+                            _ofport: self.get_port_ofport(&port).await.ok(),
                         });
                     }
                 }

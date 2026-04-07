@@ -30,7 +30,7 @@ op-execution-tracker = { path = "../op-execution-tracker" }
 regex = { workspace = true }
 libc = { workspace = true }
 op-agents = { path = "../op-agents" }
-op-mcp = { path = "../op-mcp" }
+op-mcp = { path = "../op-mcp", features = ["grpc"] }
 tonic = { workspace = true }
 tonic-reflection = { workspace = true }
 tokio-stream = { workspace = true }

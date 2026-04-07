@@ -3,12 +3,9 @@
 //! This module provides the capability to automatically discover system services
 //! and create corresponding state plugins.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use async_trait::async_trait;
-use op_state::{
-    ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
-};
-use simd_json::prelude::*;
+use op_state::StatePlugin;
 use simd_json::{json, OwnedValue as Value};
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -44,7 +41,7 @@ impl SystemdAutoCreator {
 /// Generic auto-plugin that can wrap discovered services
 pub struct AutoPlugin {
     name: String,
-    category: String,
+    _category: String,
     current_state: Arc<RwLock<Value>>,
 }
 
@@ -52,7 +49,7 @@ impl AutoPlugin {
     pub fn new(name: &str, category: &str, initial_state: Value) -> Self {
         Self {
             name: name.to_string(),
-            category: category.to_string(),
+            _category: category.to_string(),
             current_state: Arc::new(RwLock::new(initial_state)),
         }
     }

@@ -15,7 +15,7 @@ use op_core::state_publisher::StatePublisher;
 use op_dbus_model::{CatalogDocument, SqlitePluginCatalog};
 use op_state::StatePlugin;
 use op_state_store::{
-    builtin_plugin_schema, FieldSchema, FieldType, PluginSchema, SchemaCatalog, SchemaRegistry,
+    builtin_plugin_schema, PluginSchema, SchemaCatalog, SchemaRegistry,
 };
 use parking_lot::RwLock;
 use std::collections::HashMap;
