@@ -1181,10 +1181,6 @@ impl Tool for OvsApplyObfuscationTool {
         let bridge = input
             .get("bridge")
             .and_then(|v| v.as_str())
-            .unwrap_or("ovs-br0");
-        let bridge = input
-            .get("bridge")
-            .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing required parameter: bridge"))?;
 
         let level = input.get("level").and_then(|v| v.as_u64()).unwrap_or(2) as u8;

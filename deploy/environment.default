@@ -16,4 +16,4 @@ SMTP_FROM_EMAIL=noreply@3tched.com
 SMTP_FROM_NAME="Operation DBUS Registration"
 
 # Base URL for magic links (uses the reverse proxy we just set up)
-BASE_URL=https://registration.jeremytech.net
+BASE_URL=https://registration.3tched.com

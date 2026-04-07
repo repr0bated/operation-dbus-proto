@@ -26,7 +26,7 @@ use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use tracing::{debug, error, info, warn};
 
-use crate::security::{get_security_validator, SecurityValidator};
+use crate::security::get_security_validator;
 use crate::{Tool, ToolRegistry};
 
 // ============================================================================

@@ -1,12 +1,9 @@
 //! Desired state management and change tracking
 
-use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
-use std::collections::HashMap;
 
 /// Desired state configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]

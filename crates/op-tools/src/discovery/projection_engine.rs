@@ -4,15 +4,12 @@
 //! interfaces as executable tools in the registry.
 
 use anyhow::Result;
-use futures::{stream::iter, StreamExt};
 use simd_json::prelude::*;
-use simd_json::OwnedValue as Value;
-use std::collections::HashMap;
+use simd_json::json;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use crate::registry::ToolDefinition;
 use crate::tool::Tool;
 use op_core::BusType;
 use op_introspection::IntrospectionService;

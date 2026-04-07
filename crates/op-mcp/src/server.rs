@@ -140,6 +140,7 @@ impl ToolExecutor for DefaultToolExecutor {
 }
 
 /// Unified MCP Server
+#[allow(dead_code)]
 pub struct McpServer {
     config: McpServerConfig,
     tool_executor: Arc<dyn ToolExecutor>,
@@ -151,12 +152,14 @@ pub struct McpServer {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct ClientInfo {
     name: String,
     version: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
+#[allow(dead_code)]
 struct SessionData {
     initialized: bool,
     compact_mode: bool,
@@ -335,7 +338,7 @@ impl McpServer {
             );
         }
 
-        let mut arguments = params
+        let arguments = params
             .as_object()
             .and_then(|obj| obj.get("arguments"))
             .cloned()

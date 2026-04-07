@@ -21,7 +21,6 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use simd_json::prelude::*;
-use simd_json::ValueBuilder;
 use simd_json::{json, OwnedValue as Value};
 use std::collections::HashMap;
 use std::env;

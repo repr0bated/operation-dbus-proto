@@ -6,7 +6,7 @@ use op_state::{
     ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
 };
 use serde::{Deserialize, Serialize};
-use simd_json::prelude::*;
+use std::time::Duration;
 use simd_json::OwnedValue as Value;
 use std::collections::HashMap;
 use zbus::{proxy, Connection, Error as ZbusError};

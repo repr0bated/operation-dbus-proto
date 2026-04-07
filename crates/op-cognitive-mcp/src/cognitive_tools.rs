@@ -286,5 +286,5 @@ fn simd_json_to_serde(v: &Value) -> serde_json::Value {
 fn serde_to_simd_json(v: serde_json::Value) -> Value {
     let s = serde_json::to_string(&v).unwrap_or_default();
     let mut buf = s.into_bytes();
-    unsafe { simd_json::from_slice(&mut buf) }.unwrap_or(Value::Static(simd_json::StaticNode::Null))
+    simd_json::from_slice(&mut buf).unwrap_or(Value::Static(simd_json::StaticNode::Null))
 }

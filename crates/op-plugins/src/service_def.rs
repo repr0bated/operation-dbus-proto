@@ -2,9 +2,8 @@
 //!
 //! Schema-as-code: These types ARE the schema. Validation happens at parse time.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use simd_json::{json, OwnedValue as Value};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use tracing::info;

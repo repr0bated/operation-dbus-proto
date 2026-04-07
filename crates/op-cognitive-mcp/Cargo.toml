@@ -22,5 +22,5 @@ tower-http = { version = "0.5", features = ["cors"] }
 uuid = { version = "1.0", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 async-trait = "0.1"
-clap = { workspace = true }
+clap = { workspace = true, features = ["env"] }
 sqlx = { workspace = true, features = ["sqlite", "runtime-tokio", "chrono", "json"] }

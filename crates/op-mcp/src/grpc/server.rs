@@ -195,14 +195,16 @@ impl GrpcTransport {
 }
 
 #[cfg(feature = "grpc")]
+#[allow(dead_code)]
 pub async fn run_grpc_server(config: GrpcConfig) -> Result<()> {
     let transport = GrpcTransport::new(config).await?;
     transport.serve().await
 }
 
 #[cfg(feature = "grpc")]
+#[allow(dead_code)]
 pub async fn run_grpc_server_lightweight(address: SocketAddr, mode: ServerMode) -> Result<()> {
-    let config = GrpcConfig::default()
+    let _config = GrpcConfig::default()
         .with_address(address)
         .with_mode(mode)
         .without_infrastructure();

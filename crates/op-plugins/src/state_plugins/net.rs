@@ -10,7 +10,7 @@ use log;
 use op_state::{ApplyResult, Checkpoint, PluginCapabilities, StateAction, StateDiff, StatePlugin};
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
-use simd_json::{json, OwnedValue as Value};
+use simd_json::OwnedValue as Value;
 use std::collections::HashMap;
 // use std::net::Ipv4Addr; // not needed currently
 

@@ -522,7 +522,7 @@ impl AgentExecutor for DbusAgentExecutor {
 
 pub struct AgentTool {
     name: String,
-    agent_name: String,
+    _agent_name: String,
     description: String,
     operations: Vec<String>,
     role_category: String,
@@ -538,7 +538,7 @@ impl AgentTool {
     ) -> Self {
         Self {
             name: format!("agent_{}", agent_name.replace('-', "_")),
-            agent_name: agent_name.to_string(),
+            _agent_name: agent_name.to_string(),
             description: description.to_string(),
             operations: operations.to_vec(),
             role_category: "agent".to_string(),
@@ -555,7 +555,7 @@ impl AgentTool {
     ) -> Self {
         Self {
             name: format!("agent_{}", agent_name.replace('-', "_")),
-            agent_name: agent_name.to_string(),
+            _agent_name: agent_name.to_string(),
             description: description.to_string(),
             operations: operations.to_vec(),
             role_category: category.to_string(),

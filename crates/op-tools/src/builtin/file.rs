@@ -15,7 +15,6 @@ use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
 use std::path::Path;
 use std::sync::Arc;
-use tracing::{debug, info};
 
 use crate::registry::ToolDefinition;
 use crate::security::get_security_validator;

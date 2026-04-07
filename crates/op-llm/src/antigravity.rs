@@ -26,7 +26,9 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use reqwest::Client;
-use simd_json::OwnedValue as Value;
+use simd_json::prelude::*;
+use simd_json::{json, OwnedValue as Value};
+use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, info};
 use uuid::Uuid;
@@ -373,20 +375,20 @@ impl LlmProvider for AntigravityProvider {
 
             let content = result
                 .get("choices")
-                .and_then(|c| c.as_array())
-                .and_then(|c| c.first())
-                .and_then(|c| c.get("message"))
-                .and_then(|m| m.get("content"))
-                .and_then(|t| t.as_str())
+                .and_then(|c: &Value| c.as_array())
+                .and_then(|c: &Vec<Value>| c.first())
+                .and_then(|c: &Value| c.get("message"))
+                .and_then(|m: &Value| m.get("content"))
+                .and_then(|t: &Value| t.as_str())
                 .unwrap_or_default()
                 .to_string();
 
             let finish_reason = result
                 .get("choices")
-                .and_then(|c| c.as_array())
-                .and_then(|c| c.first())
-                .and_then(|c| c.get("finish_reason"))
-                .and_then(|s| s.as_str())
+                .and_then(|c: &Value| c.as_array())
+                .and_then(|c: &Vec<Value>| c.first())
+                .and_then(|c: &Value| c.get("finish_reason"))
+                .and_then(|s: &Value| s.as_str())
                 .map(String::from);
 
             return Ok(ChatResponse {
@@ -474,7 +476,7 @@ impl LlmProvider for AntigravityProvider {
         // Parse response
         let candidates = result
             .get("candidates")
-            .and_then(|c| c.as_array())
+            .and_then(|c: &Value| c.as_array())
             .ok_or_else(|| anyhow::anyhow!("No candidates in response"))?;
 
         let first_candidate = candidates
@@ -487,15 +489,15 @@ impl LlmProvider for AntigravityProvider {
 
         if let Some(parts) = first_candidate
             .get("content")
-            .and_then(|c| c.get("parts"))
-            .and_then(|p| p.as_array())
+            .and_then(|c: &Value| c.get("parts"))
+            .and_then(|p: &Value| p.as_array())
         {
             for part in parts {
-                if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
+                if let Some(text) = part.get("text").and_then(|t: &Value| t.as_str()) {
                     text_parts.push(text.to_string());
                 }
                 if let Some(fc) = part.get("functionCall") {
-                    let name = fc.get("name").and_then(|n| n.as_str()).unwrap_or_default();
+                    let name = fc.get("name").and_then(|n: &Value| n.as_str()).unwrap_or_default();
                     let args = fc.get("args").cloned().unwrap_or(json!({}));
                     tool_calls.push(ToolCallInfo {
                         id: format!("call_{}", Uuid::new_v4()),
@@ -506,18 +508,18 @@ impl LlmProvider for AntigravityProvider {
             }
         }
 
-        let usage = result.get("usageMetadata").map(|u| TokenUsage {
+        let usage = result.get("usageMetadata").map(|u: &Value| TokenUsage {
             prompt_tokens: u
                 .get("promptTokenCount")
-                .and_then(|v| v.as_u64())
+                .and_then(|v: &Value| v.as_u64())
                 .unwrap_or(0) as u32,
             completion_tokens: u
                 .get("candidatesTokenCount")
-                .and_then(|v| v.as_u64())
+                .and_then(|v: &Value| v.as_u64())
                 .unwrap_or(0) as u32,
             total_tokens: u
                 .get("totalTokenCount")
-                .and_then(|v| v.as_u64())
+                .and_then(|v: &Value| v.as_u64())
                 .unwrap_or(0) as u32,
         });
 
@@ -536,7 +538,7 @@ impl LlmProvider for AntigravityProvider {
             provider: "antigravity".to_string(),
             finish_reason: first_candidate
                 .get("finishReason")
-                .and_then(|f| f.as_str())
+                .and_then(|f: &Value| f.as_str())
                 .map(String::from),
             usage,
             tool_calls: if tool_calls.is_empty() {

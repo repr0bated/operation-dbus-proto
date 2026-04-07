@@ -4,7 +4,7 @@
 //! Uses op-introspection crate for actual D-Bus scanning.
 
 use async_trait::async_trait;
-use op_core::{BusType as CoreBusType, MethodInfo, ToolDefinition};
+use op_core::{BusType as CoreBusType, MethodInfo};
 use op_introspection::IntrospectionService;
 use simd_json::json;
 use std::collections::HashSet;
