@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
+import { useSearchParams } from "react-router-dom";
 import { Callout } from "@/components/shell/Primitives";
 import { JsonRenderer } from "@/components/json/JsonRenderer";
 import { MessageBubble, type LocalMessage } from "@/components/chat/MessageBubble";
@@ -11,13 +12,21 @@ type ChatTab = "chat" | "system-prompt";
 
 export default function ChatPage() {
   const { connected } = useEventStore();
+  const [searchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState<ChatTab>("chat");
   const [messages, setMessages] = useState<LocalMessage[]>([
     { id: "sys-1", role: "system", content: "Connected to Operation-DBUS control plane. Ready for commands.", timestamp: Date.now() },
   ]);
   const [draft, setDraft] = useState("");
-  const [sessionKey, setSessionKey] = useState("default");
+  const [sessionKey, setSessionKey] = useState(searchParams.get("session_id") || "default");
   const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  useEffect(() => {
+    const sid = searchParams.get("session_id");
+    if (sid && sid !== sessionKey) {
+      setSessionKey(sid);
+    }
+  }, [searchParams, sessionKey]);
   const [sidebarContent, setSidebarContent] = useState<unknown>(null);
   const [focusMode, setFocusMode] = useState(false);
   const [sending, setSending] = useState(false);
