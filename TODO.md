@@ -17,9 +17,9 @@
 
 ### [IN PROGRESS] Event-Driven Architecture
 - [x] **NonNet Event-Driven:** Implemented `broadcast` channel in `NonNetDb` and listener in `DbusMirror`.
-- [ ] **OVSDB Event-Driven:**
-    - [ ] Implement `monitor` method in `OvsdbClient` to subscribe to RFC 7047 update notifications.
-    - [ ] Add OVSDB update listener to `DbusMirror` to replace periodic reconciliation.
+- [x] **OVSDB Event-Driven:**
+    - [x] Implement `monitor` method in `OvsdbClient` to subscribe to RFC 7047 update notifications.
+    - [x] Add OVSDB update listener to `DbusMirror` to replace periodic reconciliation.
 - [ ] **Enterprise Event-Driven:**
     - [ ] Implement `inotify` or `SQLITE_UPDATE_HOOK` for `state.db` updates.
     - [ ] Trigger selective re-projection on database changes.

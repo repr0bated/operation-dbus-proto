@@ -15,7 +15,7 @@ Follow these strictly to maintain consistency, pass CI, and adhere to team stand
   - `op-mcp`: MCP integration.
 - Frontend:
   - Shared Vite app: `crates/src` (components, hooks).
-  - Production UI: `crates/op-web/ui` (Next.js/Vite build).
+  - Production UI: `crates/op-web/ui` (embedded in `op-web-server`).
 - `deploy/`: Installation/upgrade scripts for Chimera Linux.
 - `schemas/`: JSON schemas for config/state.
 - `examples/`: Usage examples.
@@ -58,7 +58,7 @@ Follow these strictly to maintain consistency, pass CI, and adhere to team stand
 
 **Frontend (Vite + Vitest)**
 - Install deps: `cd crates && npm ci`
-- Build UI prod: `cd crates/op-web/ui && npm ci && npm run build:prod`
+- Build embedded UI from source of truth: `./update-ui.sh`
 - Dev server: `cd crates/op-web/ui && npm run dev`
 - Tests all: `cd crates && npm test` (Vitest)
 - Single test file: `cd crates && npx vitest tests/component.test.tsx`
@@ -73,7 +73,8 @@ cargo fmt --all -- --check &&
 cargo clippy --workspace --all-targets --all-features -- -D warnings &&
 cargo test --workspace --all-targets --all-features &&
 cargo build -p op-web --release &&
-cd crates/op-web/ui && npm ci && npm run build:prod && npm test -- --coverage &&
+./update-ui.sh &&
+cd crates/op-web/ui && npm test -- --coverage &&
 cd crates && npm test
 ```
 

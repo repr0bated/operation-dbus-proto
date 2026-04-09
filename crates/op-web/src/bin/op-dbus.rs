@@ -30,7 +30,9 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|_| "10.88.88.1:50051".parse().unwrap());
 
     let chain = Arc::new(RwLock::new(EventChain::new(ChainConfig::default())));
-    let engine = Arc::new(SchemaEngine::new(chain));
+    let mirror_ovsdb = Arc::new(op_network::ovsdb::OvsdbClient::new());
+    let mirror_nonnet = Arc::new(op_jsonrpc::nonnet::NonNetDb::new());
+    let engine = Arc::new(SchemaEngine::new(chain, mirror_ovsdb, mirror_nonnet));
 
     info!(addr = %addr, "op-dbus starting");
     run_grpc_server(addr, engine, None).await?;

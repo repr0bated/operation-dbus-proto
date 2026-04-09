@@ -359,3 +359,52 @@ pub trait LlmProvider: Send + Sync {
         messages: Vec<ChatMessage>,
     ) -> Result<tokio::sync::mpsc::Receiver<Result<String>>>;
 }
+
+/// Embedding input type hint — lets the provider map to API-specific params
+/// (Voyage uses "document"/"query", OpenAI uses encoding_format, etc.)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmbeddingIntent {
+    /// Embedding a document/record for storage (Voyage: input_type="document")
+    Document,
+    /// Embedding a query for retrieval (Voyage: input_type="query")
+    Query,
+}
+
+/// Embedding response for a single text
+#[derive(Debug, Clone)]
+pub struct EmbeddingResult {
+    pub vector: Vec<f32>,
+    pub token_count: Option<u32>,
+}
+
+/// Embedding Provider trait — separate from LlmProvider because embedding
+/// endpoints have different semantics (batch vectors, no chat history).
+///
+/// Implementations route via model string (OpenClaw agent routing) or
+/// call embedding APIs directly (Voyage, local ONNX).
+#[async_trait]
+pub trait EmbeddingProvider: Send + Sync {
+    /// Get provider type
+    fn provider_type(&self) -> ProviderType;
+
+    /// Vector dimensions returned by this provider
+    fn embedding_dimensions(&self) -> usize;
+
+    /// Embed a batch of texts
+    async fn embed_batch(
+        &self,
+        texts: Vec<String>,
+        intent: EmbeddingIntent,
+    ) -> Result<Vec<EmbeddingResult>>;
+
+    /// Embed a single text (convenience wrapper)
+    async fn embed(&self, text: String, intent: EmbeddingIntent) -> Result<EmbeddingResult> {
+        let mut results = self.embed_batch(vec![text], intent).await?;
+        results
+            .pop()
+            .ok_or_else(|| anyhow::anyhow!("Empty embedding response"))
+    }
+}
+
+/// Boxed embedding provider for dynamic dispatch
+pub type BoxedEmbeddingProvider = Box<dyn EmbeddingProvider + Send + Sync>;

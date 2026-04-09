@@ -6,17 +6,17 @@
 use anyhow::Result;
 use dashmap::DashMap;
 use op_core::types::BusType;
+use op_grpc_bridge::SchemaEngine;
 use op_jsonrpc::nonnet::NonNetDb;
 use op_network::ovsdb::OvsdbClient;
-use op_grpc_bridge::SchemaEngine;
 use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
 use sqlx::{sqlite::SqlitePool, Row};
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use zbus::{connection::Builder, Connection};
 use zbus::zvariant::ObjectPath;
+use zbus::{connection::Builder, Connection};
 
 pub mod dbus_interface;
 pub mod jsonrpc_interface;
@@ -92,27 +92,81 @@ impl DbusMirror {
             .await?;
 
         // Register OVSDB JSON-RPC interface at /org/opdbus/v1/ovsdb
-        let ovsdb_interface = jsonrpc_interface::OvsdbInterface::new(self.ovsdb.clone(), self.schema_engine.clone());
+        let ovsdb_interface =
+            jsonrpc_interface::OvsdbInterface::new(self.ovsdb.clone(), self.schema_engine.clone());
         self.connection
             .object_server()
             .at("/org/opdbus/v1/ovsdb", ovsdb_interface)
             .await?;
 
         // Register NonNet JSON-RPC interface at /org/opdbus/v1/nonnet
-        let nonnet_interface = jsonrpc_interface::NonNetInterface::new(self.nonnet.clone(), self.schema_engine.clone());
+        let nonnet_interface = jsonrpc_interface::NonNetInterface::new(
+            self.nonnet.clone(),
+            self.schema_engine.clone(),
+        );
         self.connection
             .object_server()
             .at("/org/opdbus/v1/nonnet", nonnet_interface)
             .await?;
 
-        // Start background refresh task
+        // Start background refresh task using event-driven updates
+        let mut ovsdb_rx = match self.ovsdb.monitor_db("Open_vSwitch").await {
+            Ok(rx) => Some(rx),
+            Err(e) => {
+                tracing::error!("Failed to start OVSDB monitor: {}", e);
+                None
+            }
+        };
+        let mut nonnet_rx = self.nonnet.subscribe();
         let mirror = self.clone();
+
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+            // Keep a fallback periodic interval, but much longer (e.g., 5 minutes) just in case
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
             loop {
-                interval.tick().await;
-                if let Err(e) = mirror.refresh_full_tree().await {
-                    tracing::error!("D-Bus mirror snapshot repair publication failed: {}", e);
+                tokio::select! {
+                    _ = interval.tick() => {
+                        if let Err(e) = mirror.refresh_full_tree().await {
+                            tracing::error!("Periodic D-Bus mirror snapshot repair publication failed: {}", e);
+                        }
+                    }
+                    result = nonnet_rx.recv() => {
+                        match result {
+                            Ok(_update) => {
+                                tracing::debug!("Received NonNet event, triggering mirror refresh");
+                                if let Err(e) = mirror.refresh_full_tree().await {
+                                    tracing::error!("Event-driven D-Bus mirror snapshot repair publication failed: {}", e);
+                                }
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                                tracing::warn!("NonNet event receiver lagged by {} messages", n);
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                tracing::error!("NonNet event receiver closed, sleeping before next poll");
+                                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                            }
+                        }
+                    }
+                    result = async {
+                        if let Some(rx) = ovsdb_rx.as_mut() {
+                            rx.recv().await
+                        } else {
+                            std::future::pending().await
+                        }
+                    } => {
+                        match result {
+                            Some(_update) => {
+                                tracing::debug!("Received OVSDB event, triggering mirror refresh");
+                                if let Err(e) = mirror.refresh_full_tree().await {
+                                    tracing::error!("Event-driven D-Bus mirror snapshot repair publication failed: {}", e);
+                                }
+                            }
+                            None => {
+                                tracing::error!("OVSDB event receiver closed, disabling OVSDB event-driven updates");
+                                ovsdb_rx = None;
+                            }
+                        }
+                    }
                 }
             }
         });
@@ -221,9 +275,7 @@ impl DbusMirror {
 
                 if let Some(tables) = schema_resp
                     .result
-                    .and_then(|schema| {
-                        schema.get("tables").and_then(|v| v.as_object().cloned())
-                    })
+                    .and_then(|schema| schema.get("tables").and_then(|v| v.as_object().cloned()))
                 {
                     for (table_name, _) in tables.iter() {
                         let dump_req = op_jsonrpc::protocol::JsonRpcRequest::new(
@@ -258,8 +310,18 @@ impl DbusMirror {
 
     async fn publish_object(&self, path: &str, data: Value) -> Result<()> {
         if self.published_objects.contains_key(path) {
-            // Signal property update if needed
-            // TODO: Track versions to avoid redundant signals
+            let op = ObjectPath::try_from(path)?;
+            if let Ok(iface_ref) = self
+                .connection
+                .object_server()
+                .interface::<_, object::MirrorObject>(op)
+                .await
+            {
+                let mut guard = iface_ref.get_mut().await;
+                if guard.update_data(data) {
+                    guard.data_updated(iface_ref.signal_context()).await.ok();
+                }
+            }
             return Ok(());
         }
 
@@ -271,10 +333,7 @@ impl DbusMirror {
     }
 
     /// Load plugin state into the mirror (Seeding).
-    pub async fn load_plugin_state(
-        &self,
-        plugins: &std::collections::HashMap<String, Value>,
-    ) {
+    pub async fn load_plugin_state(&self, plugins: &std::collections::HashMap<String, Value>) {
         let mut active_paths = HashSet::new();
         for (plugin_id, state) in plugins {
             let path = format!("/org/opdbus/v1/plugins/{}", plugin_id);
@@ -295,7 +354,10 @@ impl DbusMirror {
 
         for path in to_remove {
             let op = ObjectPath::try_from(path.as_str())?;
-            self.connection.object_server().remove::<object::MirrorObject, _>(op).await?;
+            self.connection
+                .object_server()
+                .remove::<object::MirrorObject, _>(op)
+                .await?;
             self.published_objects.remove(&path);
         }
 

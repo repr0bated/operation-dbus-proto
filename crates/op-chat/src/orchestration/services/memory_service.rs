@@ -226,11 +226,7 @@ impl MemoryService for OrchestrationServer {
             usize::MAX
         };
 
-        let paged: Vec<String> = matching_keys
-            .into_iter()
-            .skip(offset)
-            .take(limit)
-            .collect();
+        let paged: Vec<String> = matching_keys.into_iter().skip(offset).take(limit).collect();
 
         let has_more = (offset + paged.len()) < total_count as usize;
 
@@ -294,7 +290,11 @@ impl MemoryService for OrchestrationServer {
             .collect();
 
         // Sort by score descending
-        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         // Apply limit
         if req.limit > 0 {
@@ -367,7 +367,11 @@ impl MemoryService for OrchestrationServer {
             }
         }
 
-        info!(success = success_count, failed = failure_count, "BulkRemember complete");
+        info!(
+            success = success_count,
+            failed = failure_count,
+            "BulkRemember complete"
+        );
 
         Ok(Response::new(BulkOperationResponse {
             success_count,
@@ -448,9 +452,7 @@ impl MemoryService for OrchestrationServer {
         });
 
         let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
-        Ok(Response::new(
-            Box::pin(stream) as Self::BulkRecallStream
-        ))
+        Ok(Response::new(Box::pin(stream) as Self::BulkRecallStream))
     }
 
     /// Batch delete: remove all specified keys, return counts.
@@ -473,7 +475,11 @@ impl MemoryService for OrchestrationServer {
             }
         }
 
-        info!(success = success_count, not_found = failure_count, "BulkForget complete");
+        info!(
+            success = success_count,
+            not_found = failure_count,
+            "BulkForget complete"
+        );
 
         Ok(Response::new(BulkOperationResponse {
             success_count,

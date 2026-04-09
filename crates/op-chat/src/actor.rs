@@ -257,6 +257,7 @@ pub struct ChatActor {
     tool_registry: Arc<ToolRegistry>,
     session_manager: Arc<SessionManager>,
     pipeline: Arc<ForcedToolPipeline>,
+    grpc_client: Arc<crate::grpc_client::GrpcAgentClient>,
     llm_provider: Arc<dyn LlmProvider>,
     receiver: mpsc::Receiver<ActorMessage>,
 }
@@ -296,6 +297,11 @@ impl ChatActor {
             tool_executor.clone(),
         ));
 
+        let grpc_client = Arc::new(crate::grpc_client::GrpcAgentClient::with_default_config());
+        if let Err(e) = grpc_client.connect().await {
+            warn!("Failed to connect to gRPC agent server: {}", e);
+        }
+
         // Register builtin tools so the LLM has tools to call
         if let Err(e) = op_tools::builtin::register_all_builtin_tools(&tool_registry).await {
             warn!("Failed to register some builtin tools: {}", e);
@@ -313,6 +319,7 @@ impl ChatActor {
             tool_registry,
             session_manager,
             pipeline,
+            grpc_client,
             llm_provider,
             receiver,
         };
@@ -461,8 +468,38 @@ impl ChatActor {
 
         info!(session_id = %session_id, model = %model, "Processing chat message");
 
+        let is_new_session = self.session_manager.get(session_id).await.is_none();
+
         // Get or create session, retrieve history
         let session = self.session_manager.get_or_create(session_id).await;
+
+        if is_new_session {
+            let pool_config = crate::orchestration::grpc_pool::AgentPoolConfig::from_env();
+            let agents_to_start = pool_config.run_on_connection;
+            let available = op_agents::list_agent_types();
+
+            for agent in &agents_to_start {
+                if !available.contains(agent) {
+                    error!(
+                        "Configured run_on_connection agent '{}' is not registered!",
+                        agent
+                    );
+                    return RpcResponse::error(format!(
+                        "Configured run_on_connection agent '{}' is not registered!",
+                        agent
+                    ));
+                }
+            }
+
+            if let Err(e) = self
+                .grpc_client
+                .start_session(session_id, "chat-actor", agents_to_start)
+                .await
+            {
+                error!("Failed to start gRPC agent session: {}", e);
+                return RpcResponse::error(format!("Failed to start gRPC agent session: {}", e));
+            }
+        }
 
         // Build LLM message history
         let mut messages = Vec::new();
@@ -576,5 +613,14 @@ impl ChatActor {
         _bus_type: Option<String>,
     ) -> RpcResponse {
         RpcResponse::error("Generic D-Bus call not implemented - use registered tools")
+    }
+}
+
+impl Drop for ChatActor {
+    fn drop(&mut self) {
+        let client = self.grpc_client.clone();
+        tokio::spawn(async move {
+            let _ = client.end_session("default").await;
+        });
     }
 }

@@ -6,7 +6,7 @@ use simd_json::prelude::*;
 use simd_json::value::owned::Object;
 use simd_json::{json, OwnedValue as Value};
 use std::path::Path;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 
 /// Direct OVSDB JSON-RPC client
@@ -73,45 +73,30 @@ impl OvsdbClient {
         log::debug!("OVSDB request sent, waiting for response");
 
         // Read response with timeout
-        // Try a simple approach first - read a fixed amount of data
-        let mut buffer = vec![0u8; 1024];
+        let mut reader = BufReader::new(stream);
+        let mut response_line = String::new();
 
-        let read_result =
-            tokio::time::timeout(std::time::Duration::from_secs(10), stream.read(&mut buffer))
-                .await;
+        let read_result = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                response_line.clear();
+                let n = reader.read_line(&mut response_line).await?;
+                if n == 0 || response_line.trim().starts_with('{') {
+                    return Ok::<usize, std::io::Error>(n);
+                }
+            }
+        })
+        .await;
 
-        let response_line = match read_result {
+        match read_result {
             Ok(Ok(bytes_read)) => {
                 if bytes_read == 0 {
                     return Err(anyhow::anyhow!("OVSDB connection closed by server"));
                 }
-
-                // Convert to string and find the JSON response
-                let response_data = &buffer[..bytes_read];
-                let response_str = String::from_utf8_lossy(response_data);
                 log::debug!(
                     "Received OVSDB raw response ({} bytes): {}",
                     bytes_read,
-                    response_str.trim()
+                    response_line.trim()
                 );
-
-                // Find the JSON response (should start with '{')
-                if let Some(json_start) = response_str.find('{') {
-                    let json_response = &response_str[json_start..];
-                    // Find the end of the JSON (should end with '}')
-                    if let Some(json_end) = json_response.rfind('}') {
-                        let json_str = &json_response[..=json_end];
-                        log::debug!("Extracted JSON response: {}", json_str);
-                        json_str.to_string()
-                    } else {
-                        return Err(anyhow::anyhow!("Could not find end of JSON response"));
-                    }
-                } else {
-                    return Err(anyhow::anyhow!(
-                        "No JSON response found in: {}",
-                        response_str
-                    ));
-                }
             }
             Ok(Err(e)) => {
                 return Err(anyhow::anyhow!("Failed to read OVSDB response: {}", e));
@@ -580,17 +565,24 @@ impl OvsdbClient {
                 if let Ok(req_str) = simd_json::to_string(&monitor_req) {
                     let _ = stream.write_all(req_str.as_bytes()).await;
                     let _ = stream.write_all(b"\n").await;
-                    
-                    let mut buffer = [0u8; 4096];
+
+                    let mut reader = BufReader::new(stream);
+                    let mut line = String::new();
                     loop {
-                        match stream.read(&mut buffer).await {
+                        line.clear();
+                        match reader.read_line(&mut line).await {
                             Ok(0) => break, // Connection closed
-                            Ok(n) => {
-                                let mut data = buffer[..n].to_vec();
+                            Ok(_) => {
+                                if line.trim().is_empty() {
+                                    continue;
+                                }
+                                let mut data = line.clone().into_bytes();
                                 if let Ok(update) = simd_json::from_slice::<Value>(&mut data) {
                                     if tx.send(update).await.is_err() {
                                         break;
                                     }
+                                } else {
+                                    log::warn!("Failed to parse OVSDB monitor update: {}", line);
                                 }
                             }
                             Err(_) => break,

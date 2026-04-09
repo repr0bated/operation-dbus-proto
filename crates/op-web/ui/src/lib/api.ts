@@ -2,6 +2,8 @@
  * Typed API client for the operation-dbus gateway.
  * Unary RPCs use gRPC-Web; streaming is handled by use-event-stream.
  * Falls back to REST for endpoints not yet ported to gRPC.
+ *
+ * @see docs/architecture-flow.md for the full service topology.
  */
 import {
   stateSync,
@@ -10,6 +12,11 @@ import {
   runtimeMirror,
   eventChainService,
   componentRegistry,
+  mailService,
+  privacyService,
+  registrationService,
+  serviceManager,
+  mcpService,
 } from "@/grpc/client";
 import { structToObject } from "@/grpc/google/protobuf/struct";
 import type {
@@ -30,7 +37,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  // ── gRPC-powered endpoints ──────────────────────────────────────────────
+  // ── gRPC-powered endpoints (bridge services) ───────────────────────────
 
   /** Get full state snapshot via gRPC StateSync.GetState */
   state: async (pluginId = "", objectPath = "") => {
@@ -50,12 +57,18 @@ export const api = {
     },
     getSchema: pluginService.getSchema,
     callMethod: pluginService.callMethod,
+    getProperty: pluginService.getProperty,
+    setProperty: pluginService.setProperty,
   },
 
   /** Event chain / audit via gRPC EventChainService */
   eventChain: {
     getEvents: eventChainService.getEvents,
     verifyChain: eventChainService.verifyChain,
+    getProof: eventChainService.getProof,
+    proveTagImmutability: eventChainService.proveTagImmutability,
+    getSnapshot: eventChainService.getSnapshot,
+    createSnapshot: eventChainService.createSnapshot,
   },
 
   /** OVSDB via gRPC OvsdbMirror */
@@ -64,6 +77,8 @@ export const api = {
     getSchema: ovsdbMirror.getSchema,
     transact: ovsdbMirror.transact,
     getBridgeState: ovsdbMirror.getBridgeState,
+    echo: ovsdbMirror.echo,
+    dumpDb: ovsdbMirror.dumpDb,
   },
 
   /** Runtime via gRPC RuntimeMirror */
@@ -79,6 +94,65 @@ export const api = {
   registry: {
     discover: componentRegistry.discover,
     getComponent: componentRegistry.getComponent,
+  },
+
+  // ── gRPC domain services ───────────────────────────────────────────────
+
+  /** Mail service (operation.mail.v1) */
+  mail: {
+    sendEmail: mailService.sendEmail,
+    getInbox: mailService.getInbox,
+    getMessage: mailService.getMessage,
+    getMailStatus: mailService.getMailStatus,
+    listAccounts: mailService.listMailAccounts,
+    adminAction: mailService.adminMailAction,
+    checkServer: mailService.checkMailServer,
+  },
+
+  /** Privacy network (operation.privacy.v1) */
+  privacy: {
+    ensureNetwork: privacyService.ensurePrivacyNetwork,
+    getStatus: privacyService.getNetworkStatus,
+    provisionUser: privacyService.provisionUser,
+    getWireGuardConfig: privacyService.getPrivacyWireGuardConfig,
+    manageComponent: privacyService.manageComponent,
+    getTopology: privacyService.getNetworkTopology,
+    healthCheck: privacyService.healthCheck,
+    configureRouting: privacyService.configurePacketRouting,
+    generateKeyPair: privacyService.generateWireGuardKeyPair,
+  },
+
+  /** Registration (operation.registration.v1) */
+  registration: {
+    sendMagicLink: registrationService.sendMagicLink,
+    verifyMagicLink: registrationService.verifyMagicLink,
+    registerUser: registrationService.registerUser,
+    getUserStatus: registrationService.getUserStatus,
+    listUsers: registrationService.listUsers,
+    getWireGuardConfig: registrationService.getWireGuardConfig,
+    adminAction: registrationService.adminUserAction,
+  },
+
+  /** Dinit service manager (opdbus.services.v1) */
+  serviceManager: {
+    start: serviceManager.start,
+    stop: serviceManager.stop,
+    restart: serviceManager.restart,
+    reload: serviceManager.reload,
+    create: serviceManager.create,
+    delete: serviceManager.delete,
+    get: serviceManager.get,
+    list: serviceManager.list,
+    enable: serviceManager.enable,
+    disable: serviceManager.disable,
+  },
+
+  /** MCP service (op.mcp.v1) */
+  mcp: {
+    health: mcpService.health,
+    initialize: mcpService.initialize,
+    listTools: mcpService.listTools,
+    callTool: mcpService.callTool,
   },
 
   // ── REST fallbacks (not yet ported to gRPC) ─────────────────────────────
@@ -172,6 +246,5 @@ export function connectEventStream(
   onError: (err: Error) => void,
 ): () => void {
   console.warn("[DEPRECATED] connectEventStream: SSE has been replaced by gRPC-Web. Use useEventStream() hook.");
-  // No-op — streams are now managed by useEventStream
   return () => {};
 }

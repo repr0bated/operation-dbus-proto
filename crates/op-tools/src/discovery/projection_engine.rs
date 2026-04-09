@@ -4,8 +4,8 @@
 //! interfaces as executable tools in the registry.
 
 use anyhow::Result;
-use simd_json::prelude::*;
 use simd_json::json;
+use simd_json::prelude::*;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;

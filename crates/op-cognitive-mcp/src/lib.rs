@@ -9,7 +9,8 @@
 
 pub mod activity_filter;
 pub mod cognitive_tools;
-pub mod memory_store;
+pub mod embedding_worker;
+pub mod graph_store;
 pub mod server;
 
 pub use activity_filter::{
@@ -17,5 +18,5 @@ pub use activity_filter::{
     OpKind, Significance, SuppressReason,
 };
 pub use cognitive_tools::CognitiveToolRegistry;
-pub use memory_store::CognitiveMemoryStore;
+pub use graph_store::{KnowledgeGraphStore, NamespaceNode};
 pub use server::CognitiveMcpServer;

@@ -1,36 +1,50 @@
 //! Cognitive Tools for MCP
 //!
-//! MCP tools backed by the SQLite namespace/entry memory store.
-//! Operations: store, retrieve, query, delete, list_namespaces, stats.
+//! MCP tools for transitional memory operations and authoritative graph inspection.
 
-use crate::memory_store::{CognitiveMemoryStore, EntryQuery, NamespaceKind};
+use crate::graph_store::{KnowledgeGraphStore, ProjectedEvent};
 use anyhow::Result;
 use async_trait::async_trait;
+use op_blockchain::PluginFootprint;
 use op_mcp::tool_registry::{BoxedTool, Tool, ToolRegistry};
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
 use std::sync::Arc;
+use uuid::Uuid;
 
 pub struct CognitiveToolRegistry;
 
 impl CognitiveToolRegistry {
     pub async fn register_all(
         registry: &ToolRegistry,
-        store: Arc<CognitiveMemoryStore>,
+        graph_store: Arc<KnowledgeGraphStore>,
     ) -> Result<()> {
         registry
-            .register(Arc::new(MemoryTool::new(store.clone())) as BoxedTool)
+            .register(Arc::new(MemoryTool::new(graph_store.clone())) as BoxedTool)
+            .await?;
+        registry
+            .register(Arc::new(GraphTool::new(graph_store)) as BoxedTool)
             .await?;
         Ok(())
     }
 }
 
 pub struct MemoryTool {
-    store: Arc<CognitiveMemoryStore>,
+    graph_store: Arc<KnowledgeGraphStore>,
 }
 
 impl MemoryTool {
-    pub fn new(store: Arc<CognitiveMemoryStore>) -> Self {
+    pub fn new(graph_store: Arc<KnowledgeGraphStore>) -> Self {
+        Self { graph_store }
+    }
+}
+
+pub struct GraphTool {
+    store: Arc<KnowledgeGraphStore>,
+}
+
+impl GraphTool {
+    pub fn new(store: Arc<KnowledgeGraphStore>) -> Self {
         Self { store }
     }
 }
@@ -42,7 +56,7 @@ impl Tool for MemoryTool {
     }
 
     fn description(&self) -> &str {
-        "Manage cognitive memory namespaces and entries. Operations: store, retrieve, query, delete, list_namespaces, stats."
+        "Manage cognitive memory with graph-authoritative reads and transitional compatibility writes. Operations: store, retrieve, query, delete, list_namespaces, stats."
     }
 
     fn category(&self) -> &str {
@@ -63,7 +77,7 @@ impl Tool for MemoryTool {
             "properties": {
                 "operation": {
                     "type": "string",
-                    "enum": ["store", "retrieve", "query", "delete", "list_namespaces", "stats"],
+                    "enum": ["store", "retrieve", "query", "delete", "list_namespaces", "stats", "graph_retrieve", "graph_query", "graph_list_namespaces", "graph_stats"],
                     "description": "Operation to perform"
                 },
                 "namespace": {
@@ -112,41 +126,94 @@ impl Tool for MemoryTool {
             "delete" => self.op_delete(&input).await,
             "list_namespaces" => self.op_list_namespaces(&input).await,
             "stats" => self.op_stats().await,
+            "graph_retrieve" => self.op_graph_retrieve(&input).await,
+            "graph_query" => self.op_graph_query(&input).await,
+            "graph_list_namespaces" => self.op_graph_list_namespaces().await,
+            "graph_stats" => self.op_graph_stats().await,
+            other => Err(anyhow::anyhow!("unknown operation: {}", other)),
+        }
+    }
+}
+
+#[async_trait]
+impl Tool for GraphTool {
+    fn name(&self) -> &str {
+        "cognitive_graph"
+    }
+
+    fn description(&self) -> &str {
+        "Inspect the authoritative Cozo knowledge graph projected from immutable blockchain footprints. Operations: list_events, list_links, list_namespaces, stats."
+    }
+
+    fn category(&self) -> &str {
+        "cognitive"
+    }
+
+    fn tags(&self) -> Vec<String> {
+        vec![
+            "graph".to_string(),
+            "cognitive".to_string(),
+            "knowledge".to_string(),
+        ]
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "operation": {
+                    "type": "string",
+                    "enum": ["list_events", "list_links", "list_namespaces", "stats"],
+                    "description": "Graph operation to perform"
+                }
+            },
+            "required": ["operation"]
+        })
+    }
+
+    async fn execute(&self, input: Value) -> Result<Value> {
+        let op = input["operation"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("missing operation"))?;
+
+        match op {
+            "list_events" => {
+                let events = self.store.list_projected_events()?;
+                Ok(json!({
+                    "count": events.len(),
+                    "events": events
+                }))
+            }
+            "list_links" => {
+                let links = self.store.list_links()?;
+                Ok(json!({
+                    "count": links.len(),
+                    "links": links
+                }))
+            }
+            "list_namespaces" => {
+                let namespaces = self.store.list_namespaces()?;
+                Ok(json!({
+                    "count": namespaces.len(),
+                    "namespaces": namespaces
+                }))
+            }
+            "stats" => {
+                let events = self.store.list_projected_events()?;
+                let links = self.store.list_links()?;
+                let namespaces = self.store.list_namespaces()?;
+                Ok(json!({
+                    "event_count": events.len(),
+                    "link_count": links.len(),
+                    "namespace_count": namespaces.len()
+                }))
+            }
             other => Err(anyhow::anyhow!("unknown operation: {}", other)),
         }
     }
 }
 
 impl MemoryTool {
-    async fn ensure_namespace(&self, name: &str, kind_str: Option<&str>) -> Result<()> {
-        let kind = kind_str
-            .and_then(|s| s.parse::<NamespaceKind>().ok())
-            .unwrap_or_else(|| {
-                if name.starts_with("project:") {
-                    NamespaceKind::Project
-                } else if name.starts_with("session:") {
-                    NamespaceKind::Session
-                } else if name.starts_with("agent:") {
-                    NamespaceKind::Agent
-                } else if name.starts_with("cron:") {
-                    NamespaceKind::Cron
-                } else if name.starts_with("workflow:") {
-                    NamespaceKind::Workflow
-                } else if name.starts_with("db:") {
-                    NamespaceKind::Database
-                } else {
-                    NamespaceKind::Custom
-                }
-            });
-
-        if self.store.get_namespace_by_name(name).await?.is_none() {
-            self.store
-                .upsert_namespace(name, kind, None, None, None, serde_json::json!({}))
-                .await?;
-        }
-        Ok(())
-    }
-
     async fn op_store(&self, input: &Value) -> Result<Value> {
         let namespace = input["namespace"]
             .as_str()
@@ -154,24 +221,15 @@ impl MemoryTool {
         let key = input["key"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("missing key"))?;
-        let value = simd_json_to_serde(&input["value"]);
-        let tags: Vec<String> = input["tags"]
-            .as_array()
-            .map(|a| {
-                a.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        self.ensure_namespace(namespace, input["namespace_kind"].as_str())
-            .await?;
-
-        let entry = self
-            .store
-            .store_entry(namespace, key, value, tags, None)
-            .await?;
-        Ok(json!({ "ok": true, "id": entry.id, "namespace": namespace, "key": key }))
+        let block_hash = format!("memory-{}", Uuid::new_v4());
+        self.project_memory_footprint("store", namespace, key, &input["value"], &block_hash)?;
+        Ok(json!({
+            "ok": true,
+            "block_hash": block_hash,
+            "namespace": namespace,
+            "key": key,
+            "source": "graph"
+        }))
     }
 
     async fn op_retrieve(&self, input: &Value) -> Result<Value> {
@@ -182,54 +240,69 @@ impl MemoryTool {
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("missing key"))?;
 
-        match self.store.retrieve_entry(namespace, key).await? {
-            Some(e) => {
-                let val = serde_to_simd_json(e.value);
-                Ok(json!({
-                    "found": true,
-                    "id": e.id,
+        if let Some(event) = self.graph_store.find_latest_event(namespace, key, None)? {
+            if event.operation == "delete" {
+                return Ok(json!({
+                    "found": false,
                     "namespace": namespace,
-                    "key": e.key,
-                    "value": val,
-                    "tags": e.tags,
-                    "access_count": e.access_count,
-                    "updated_at": e.updated_at.to_rfc3339()
-                }))
+                    "key": key,
+                    "source": "graph"
+                }));
             }
-            None => Ok(json!({ "found": false, "namespace": namespace, "key": key })),
+            let payload = parse_payload_value(&event.payload_json)?;
+            return Ok(json!({
+                "found": true,
+                "block_hash": event.block_hash,
+                "namespace": namespace,
+                "key": key,
+                "value": payload["value"].clone(),
+                "source": "graph",
+                "timestamp": event.timestamp
+            }));
         }
+        Ok(json!({
+            "found": false,
+            "namespace": namespace,
+            "key": key,
+            "source": "graph"
+        }))
     }
 
     async fn op_query(&self, input: &Value) -> Result<Value> {
-        let q = EntryQuery {
-            namespace_id: input["namespace"].as_str().map(String::from),
-            key_pattern: input["key_pattern"].as_str().map(String::from),
-            tags: input["tags"].as_array().map(|a| {
-                a.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect()
-            }),
-            limit: input["limit"].as_i64(),
-            offset: None,
-        };
+        let namespace = input.get("namespace").and_then(|value| value.as_str());
+        let key_pattern = input.get("key_pattern").and_then(|value| value.as_str());
+        let limit = input
+            .get("limit")
+            .and_then(|value| value.as_i64())
+            .map(|value| value as usize);
 
-        let entries = self.store.query_entries(q).await?;
-        let count = entries.len();
-        let items: Vec<Value> = entries
+        let graph_events = self.graph_store.query_events(namespace, key_pattern, None)?;
+        let latest = collapse_latest_memory_events(graph_events)?;
+        let items: Vec<Value> = latest
             .into_iter()
-            .map(|e| {
-                json!({
-                    "id": e.id,
-                    "namespace_id": e.namespace_id,
-                    "key": e.key,
-                    "tags": e.tags,
-                    "access_count": e.access_count,
-                    "updated_at": e.updated_at.to_rfc3339()
-                })
+            .filter_map(|event| {
+                if event.operation == "delete" {
+                    return None;
+                }
+                let payload = parse_payload_value(&event.payload_json).ok()?;
+                Some(json!({
+                    "block_hash": event.block_hash,
+                    "namespace": event.namespace,
+                    "key": payload["key"].clone(),
+                    "value": payload["value"].clone(),
+                    "operation": event.operation,
+                    "timestamp": event.timestamp,
+                    "source": "graph"
+                }))
             })
             .collect();
+        let items = if let Some(limit) = limit {
+            items.into_iter().take(limit).collect::<Vec<_>>()
+        } else {
+            items
+        };
 
-        Ok(json!({ "count": count, "entries": items }))
+        Ok(json!({ "count": items.len(), "entries": items, "source": "graph" }))
     }
 
     async fn op_delete(&self, input: &Value) -> Result<Value> {
@@ -240,51 +313,285 @@ impl MemoryTool {
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("missing key"))?;
 
-        let deleted = self.store.delete_entry(namespace, key).await?;
-        Ok(json!({ "ok": deleted, "namespace": namespace, "key": key }))
+        let block_hash = format!("memory-delete-{}", Uuid::new_v4());
+        self.project_memory_footprint(
+            "delete",
+            namespace,
+            key,
+            &Value::Static(simd_json::StaticNode::Null),
+            &block_hash,
+        )?;
+        Ok(json!({
+            "ok": true,
+            "namespace": namespace,
+            "key": key,
+            "block_hash": block_hash,
+            "source": "graph"
+        }))
     }
 
     async fn op_list_namespaces(&self, input: &Value) -> Result<Value> {
-        let kind = input["namespace_kind"]
-            .as_str()
-            .and_then(|s| s.parse::<NamespaceKind>().ok());
-
-        let namespaces = self.store.list_namespaces(kind).await?;
-        let count = namespaces.len();
-        let items: Vec<Value> = namespaces
+        let kind_filter = input["namespace_kind"].as_str();
+        let graph_namespaces = self.graph_store.list_namespaces()?;
+        let filtered_graph: Vec<_> = graph_namespaces
             .into_iter()
-            .map(|ns| {
+            .filter(|ns| kind_filter.map(|kind| ns.kind == kind).unwrap_or(true))
+            .collect();
+        if !filtered_graph.is_empty() {
+            let count = filtered_graph.len();
+            let items: Vec<Value> = filtered_graph
+                .into_iter()
+                .map(|ns| {
+                    json!({
+                        "name": ns.name,
+                        "kind": ns.kind,
+                        "source": "graph"
+                    })
+                })
+                .collect();
+            return Ok(json!({ "count": count, "namespaces": items, "source": "graph" }));
+        }
+        Ok(json!({ "count": 0, "namespaces": [], "source": "graph" }))
+    }
+
+    async fn op_stats(&self) -> Result<Value> {
+        let events = self.graph_store.list_projected_events()?;
+        let links = self.graph_store.list_links()?;
+        let namespaces = self.graph_store.list_namespaces()?;
+        Ok(json!({
+            "event_count": events.len(),
+            "link_count": links.len(),
+            "namespace_count": namespaces.len(),
+            "source": "graph"
+        }))
+    }
+
+    async fn op_graph_retrieve(&self, input: &Value) -> Result<Value> {
+        let namespace = input["namespace"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("missing namespace"))?;
+        let key = input["key"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("missing key"))?;
+
+        match self
+            .graph_store
+            .find_latest_event(namespace, key, Some("store"))?
+        {
+            Some(event) => Ok(json!({
+                "found": true,
+                "block_hash": event.block_hash,
+                "namespace": event.namespace,
+                "key": key,
+                "plugin_id": event.plugin_id,
+                "timestamp": event.timestamp,
+                "payload": parse_payload_value(&event.payload_json)?
+            })),
+            None => Ok(json!({ "found": false, "namespace": namespace, "key": key })),
+        }
+    }
+
+    async fn op_graph_query(&self, input: &Value) -> Result<Value> {
+        let namespace = input.get("namespace").and_then(|value| value.as_str());
+        let key_pattern = input.get("key_pattern").and_then(|value| value.as_str());
+        let limit = input
+            .get("limit")
+            .and_then(|value| value.as_i64())
+            .map(|value| value as usize);
+
+        let events = self
+            .graph_store
+            .query_events(namespace, key_pattern, limit)?;
+        let count = events.len();
+        let items: Vec<Value> = events
+            .into_iter()
+            .map(|event| {
+                let payload = parse_payload_value(&event.payload_json).unwrap_or(Value::Static(simd_json::StaticNode::Null));
                 json!({
-                    "id": ns.id,
-                    "name": ns.name,
-                    "kind": ns.kind.to_string(),
-                    "description": ns.description,
-                    "linked_task_id": ns.linked_task_id,
-                    "linked_cron": ns.linked_cron
+                    "block_hash": event.block_hash,
+                    "namespace": event.namespace,
+                    "operation": event.operation,
+                    "timestamp": event.timestamp,
+                    "payload": payload
                 })
             })
             .collect();
 
-        Ok(json!({ "count": count, "namespaces": items }))
+        Ok(json!({ "count": count, "events": items }))
     }
 
-    async fn op_stats(&self) -> Result<Value> {
-        let stats = self.store.get_stats().await?;
+    async fn op_graph_list_namespaces(&self) -> Result<Value> {
+        let namespaces = self.graph_store.list_namespaces()?;
         Ok(json!({
-            "total_namespaces": stats.total_namespaces,
-            "total_entries": stats.total_entries,
-            "entries_by_kind": stats.entries_by_kind
+            "count": namespaces.len(),
+            "namespaces": namespaces
         }))
     }
+
+    async fn op_graph_stats(&self) -> Result<Value> {
+        let events = self.graph_store.list_projected_events()?;
+        let links = self.graph_store.list_links()?;
+        let namespaces = self.graph_store.list_namespaces()?;
+        Ok(json!({
+            "event_count": events.len(),
+            "link_count": links.len(),
+            "namespace_count": namespaces.len()
+        }))
+    }
+
+    fn project_memory_footprint(
+        &self,
+        operation: &str,
+        namespace: &str,
+        key: &str,
+        value: &Value,
+        block_hash: &str,
+    ) -> Result<()> {
+        let mut footprint = PluginFootprint::new(
+            "cognitive_memory",
+            operation,
+            &json!({
+                "namespace": namespace,
+                "key": key,
+                "value": value.clone()
+            }),
+        );
+        footprint.metadata = simd_json::serde::from_owned_value(json!({
+            "namespace": namespace,
+            "memory_store": "control:memory",
+            "key": key,
+            "value": value.clone()
+        }))?;
+        self.graph_store.project_footprint(block_hash, &footprint)
+    }
 }
 
-fn simd_json_to_serde(v: &Value) -> serde_json::Value {
-    let s = simd_json::to_string(v).unwrap_or_default();
-    serde_json::from_str(&s).unwrap_or(serde_json::Value::Null)
+fn parse_payload_value(payload_json: &str) -> Result<Value> {
+    let mut buf = payload_json.as_bytes().to_vec();
+    simd_json::from_slice(&mut buf).map_err(Into::into)
 }
 
-fn serde_to_simd_json(v: serde_json::Value) -> Value {
-    let s = serde_json::to_string(&v).unwrap_or_default();
-    let mut buf = s.into_bytes();
-    simd_json::from_slice(&mut buf).unwrap_or(Value::Static(simd_json::StaticNode::Null))
+fn collapse_latest_memory_events(mut events: Vec<ProjectedEvent>) -> Result<Vec<ProjectedEvent>> {
+    events.sort_by(|left, right| right.timestamp.cmp(&left.timestamp));
+    let mut seen = std::collections::HashSet::new();
+    let mut latest = Vec::new();
+    for event in events {
+        let payload = parse_payload_value(&event.payload_json)?;
+        let key = payload["key"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("graph event missing key"))?;
+        let dedupe_key = format!("{}:{}", event.namespace, key);
+        if seen.insert(dedupe_key) {
+            latest.push(event);
+        }
+    }
+    Ok(latest)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn should_prefer_graph_for_default_retrieve() {
+        let graph_store = Arc::new(KnowledgeGraphStore::new_in_memory().unwrap());
+        let tool = MemoryTool::new(graph_store.clone());
+
+        let mut footprint = PluginFootprint::new(
+            "cognitive_memory",
+            "store",
+            &json!({
+                "namespace": "project:alpha",
+                "key": "database_url",
+                "value": "graph-value"
+            }),
+        );
+        footprint.timestamp = 200;
+        footprint.metadata = simd_json::serde::from_owned_value(json!({
+            "namespace": "project:alpha",
+            "memory_store": "control:memory",
+            "key": "database_url",
+            "value": "graph-value"
+        }))
+        .unwrap();
+        graph_store.project_footprint("block-graph", &footprint).unwrap();
+
+        let result = tool
+            .execute(json!({
+                "operation": "retrieve",
+                "namespace": "project:alpha",
+                "key": "database_url"
+            }))
+            .await
+            .unwrap();
+
+        assert_eq!(result["found"].as_bool(), Some(true));
+        assert_eq!(result["source"].as_str(), Some("graph"));
+        assert_eq!(result["value"].as_str(), Some("graph-value"));
+    }
+
+    #[tokio::test]
+    async fn should_hide_deleted_entries_from_default_retrieve_and_query() {
+        let graph_store = Arc::new(KnowledgeGraphStore::new_in_memory().unwrap());
+        let tool = MemoryTool::new(graph_store.clone());
+
+        let mut store_footprint = PluginFootprint::new(
+            "cognitive_memory",
+            "store",
+            &json!({
+                "namespace": "project:alpha",
+                "key": "api_key",
+                "value": "secret"
+            }),
+        );
+        store_footprint.timestamp = 100;
+        store_footprint.metadata = simd_json::serde::from_owned_value(json!({
+            "namespace": "project:alpha",
+            "memory_store": "control:memory",
+            "key": "api_key",
+            "value": "secret"
+        }))
+        .unwrap();
+        graph_store.project_footprint("block-store", &store_footprint).unwrap();
+
+        let mut delete_footprint = PluginFootprint::new(
+            "cognitive_memory",
+            "delete",
+            &json!({
+                "namespace": "project:alpha",
+                "key": "api_key",
+                "value": null
+            }),
+        );
+        delete_footprint.timestamp = 200;
+        delete_footprint.metadata = simd_json::serde::from_owned_value(json!({
+            "namespace": "project:alpha",
+            "memory_store": "control:memory",
+            "key": "api_key",
+            "value": null
+        }))
+        .unwrap();
+        graph_store
+            .project_footprint("block-delete", &delete_footprint)
+            .unwrap();
+
+        let retrieve = tool
+            .execute(json!({
+                "operation": "retrieve",
+                "namespace": "project:alpha",
+                "key": "api_key"
+            }))
+            .await
+            .unwrap();
+        assert_eq!(retrieve["found"].as_bool(), Some(false));
+
+        let query = tool
+            .execute(json!({
+                "operation": "query",
+                "namespace": "project:alpha"
+            }))
+            .await
+            .unwrap();
+        assert_eq!(query["count"].as_u64(), Some(0));
+    }
 }

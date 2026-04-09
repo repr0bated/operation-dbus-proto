@@ -1,8 +1,12 @@
 type = process
-command = /home/jeremy/git/operation-dbus/deploy/bin/op-dbus
+command = /home/jeremy/git/operation-dbus-proto/deploy/bin/op-dbus
 log-type = buffer
 smooth-recovery = true
-env = OP_DBUS_DATABASE_URL=sqlite:///home/jeremy/git/operation-dbus/deploy/data/state.db
-env = OP_DBUS_CACHE_DIR=/home/jeremy/git/operation-dbus/deploy/data/cache
+depends-on = op-session-bus
+depends-on = ovs-attach-ports
+env-file = /etc/op-dbus/environment
+env = OP_DBUS_DATABASE_URL=sqlite:///home/jeremy/git/operation-dbus-proto/deploy/data/state.db
+env = OP_DBUS_CACHE_DIR=/home/jeremy/git/operation-dbus-proto/deploy/data/cache
 env = OP_DBUS_WEB_PORT=8081
 env = OP_DBUS_SESSION_BUS=1
+env = DBUS_SESSION_BUS_ADDRESS=unix:path=/home/jeremy/git/operation-dbus-proto/deploy/run/session-bus

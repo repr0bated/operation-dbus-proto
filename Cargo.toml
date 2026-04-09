@@ -162,6 +162,21 @@ license.workspace = true
 description = "OP-DBUS: Native, Deterministic Control Plane for Linux Systems"
 authors = ["OP-DBUS Contributors"]
 
+[lib]
+path = "root-package-src/lib.rs"
+
+[[bin]]
+name = "op-dbus"
+path = "root-package-src/main.rs"
+
+[[bin]]
+name = "inspector-onboard"
+path = "root-package-src/bin/inspector-onboard.rs"
+
+[[bin]]
+name = "microsoft-device-login"
+path = "root-package-src/bin/microsoft-device-login.rs"
+
 [features]
 default = ["grpc"]
 grpc = []

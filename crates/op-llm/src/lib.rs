@@ -59,7 +59,8 @@ pub use huggingface::HuggingFaceClient;
 pub use openclaw::OpenClawProvider;
 pub use perplexity::PerplexityClient;
 pub use provider::{
-    ChatMessage, ChatRequest, ChatResponse, LlmProvider, ModelInfo, ProviderConfig, ProviderType,
+    BoxedEmbeddingProvider, ChatMessage, ChatRequest, ChatResponse, EmbeddingIntent,
+    EmbeddingProvider, EmbeddingResult, LlmProvider, ModelInfo, ProviderConfig, ProviderType,
     ToolChoice, ToolDefinition,
 };
 
@@ -74,7 +75,8 @@ pub mod prelude {
     pub use super::openclaw::OpenClawProvider;
     pub use super::perplexity::PerplexityClient;
     pub use super::provider::{
-        ChatMessage, ChatRequest, ChatResponse, LlmProvider, ModelInfo, ProviderConfig,
-        ProviderType, ToolChoice, ToolDefinition,
+        BoxedEmbeddingProvider, ChatMessage, ChatRequest, ChatResponse, EmbeddingIntent,
+        EmbeddingProvider, EmbeddingResult, LlmProvider, ModelInfo, ProviderConfig, ProviderType,
+        ToolChoice, ToolDefinition,
     };
 }

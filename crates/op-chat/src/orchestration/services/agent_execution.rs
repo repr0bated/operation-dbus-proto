@@ -83,7 +83,10 @@ impl AgentExecution for OrchestrationServer {
                 let elapsed = start.elapsed().as_millis() as i64;
 
                 // Clean up cancellation token
-                self.cancellation_tokens.write().await.remove(&correlation_id);
+                self.cancellation_tokens
+                    .write()
+                    .await
+                    .remove(&correlation_id);
 
                 let result_json =
                     simd_json::to_string(&result).unwrap_or_else(|_| "{}".to_string());
@@ -101,7 +104,10 @@ impl AgentExecution for OrchestrationServer {
             }
             Err(e) => {
                 let elapsed = start.elapsed().as_millis() as i64;
-                self.cancellation_tokens.write().await.remove(&correlation_id);
+                self.cancellation_tokens
+                    .write()
+                    .await
+                    .remove(&correlation_id);
 
                 Ok(Response::new(ExecuteResponse {
                     correlation_id,
@@ -225,9 +231,7 @@ impl AgentExecution for OrchestrationServer {
         });
 
         let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
-        Ok(Response::new(
-            Box::pin(stream) as Self::ExecuteStreamStream
-        ))
+        Ok(Response::new(Box::pin(stream) as Self::ExecuteStreamStream))
     }
 
     // -- batch ---------------------------------------------------------------
@@ -395,9 +399,7 @@ impl AgentExecution for OrchestrationServer {
         });
 
         let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
-        Ok(Response::new(
-            Box::pin(stream) as Self::BatchExecuteStream
-        ))
+        Ok(Response::new(Box::pin(stream) as Self::BatchExecuteStream))
     }
 
     /// Cancel a running operation by correlation ID.

@@ -225,10 +225,8 @@ fn proto_to_schema_def(proto: &ServiceDef) -> anyhow::Result<schema::ServiceDef>
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("missing exec config"))?;
 
-    let exec_start = schema::ExecCommand::new(
-        PathBuf::from(&exec.start_program),
-        exec.start_args.clone(),
-    )?;
+    let exec_start =
+        schema::ExecCommand::new(PathBuf::from(&exec.start_program), exec.start_args.clone())?;
 
     let exec_stop = match &exec.stop_program {
         Some(prog) if !prog.is_empty() => Some(schema::ExecCommand::new(
@@ -261,11 +259,7 @@ fn proto_to_schema_def(proto: &ServiceDef) -> anyhow::Result<schema::ServiceDef>
                 }
                 _ => schema::RestartCondition::Never,
             };
-            let delay_secs = rp
-                .delay
-                .as_ref()
-                .map(|d| d.seconds as u64)
-                .unwrap_or(1);
+            let delay_secs = rp.delay.as_ref().map(|d| d.seconds as u64).unwrap_or(1);
             schema::RestartPolicy {
                 condition,
                 delay_secs,

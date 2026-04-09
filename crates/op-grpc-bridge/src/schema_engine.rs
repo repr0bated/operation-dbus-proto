@@ -7,16 +7,16 @@
 //! - Directly manages authoritative RCP stores (OVSDB, NonNet, SQLite)
 
 use async_trait::async_trait;
-use simd_json::prelude::{ValueAsMutContainer, ValueObjectAccess, ValueAsScalar, ValueAsContainer};
+use simd_json::prelude::{ValueAsContainer, ValueAsMutContainer, ValueAsScalar, ValueObjectAccess};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{broadcast, OnceCell, RwLock, Semaphore};
 use zbus::zvariant::OwnedValue as ZOwnedValue;
 use zbus::{Connection, Proxy};
 
-use op_state_store::{Decision, EventChain, OperationType};
 use op_jsonrpc::nonnet::NonNetDb;
 use op_network::ovsdb::OvsdbClient;
+use op_state_store::{Decision, EventChain, OperationType};
 
 /// A state change projected from the authoritative system bus
 #[derive(Debug, Clone)]
@@ -66,7 +66,7 @@ pub struct SchemaEngine {
     /// Resource limiter for D-Bus operations
     #[allow(dead_code)]
     dbus_call_limiter: Arc<Semaphore>,
-    
+
     /// Authoritative RCP stores
     pub ovsdb: Arc<OvsdbClient>,
     pub nonnet: Arc<NonNetDb>,
@@ -228,23 +228,25 @@ impl SchemaEngine {
     /// Subscribes to authoritative RCP stores and broadcasts changes.
     pub async fn start(self: Arc<Self>) -> anyhow::Result<()> {
         let me = self.clone();
-        
+
         // 1. Subscribe to NonNet updates
         let mut nonnet_rx = self.nonnet.subscribe();
         let nonnet_self = me.clone();
         tokio::spawn(async move {
             while let Ok(update) = nonnet_rx.recv().await {
-                let _ = nonnet_self.process_authoritative_change(
-                    update.table.clone(),
-                    format!("/org/opdbus/v1/nonnet/{}/{}", update.db_name, update.table),
-                    ChangeType::PropertySet,
-                    None,
-                    None,
-                    simd_json::json!(update.rows),
-                    vec!["nonnet".to_string()],
-                    "nonnet-db".to_string(),
-                    ChangeSource::Internal,
-                ).await;
+                let _ = nonnet_self
+                    .process_authoritative_change(
+                        update.table.clone(),
+                        format!("/org/opdbus/v1/nonnet/{}/{}", update.db_name, update.table),
+                        ChangeType::PropertySet,
+                        None,
+                        None,
+                        simd_json::json!(update.rows),
+                        vec!["nonnet".to_string()],
+                        "nonnet-db".to_string(),
+                        ChangeSource::Internal,
+                    )
+                    .await;
             }
         });
 
@@ -258,17 +260,19 @@ impl SchemaEngine {
                             if let Some(tables) = params[2].as_object() {
                                 for (table_name, table_update) in tables.iter() {
                                     let table_name_owned: String = table_name.to_string();
-                                    let _ = ovsdb_self.process_authoritative_change(
-                                        "net".to_string(),
-                                        format!("/org/opdbus/v1/ovsdb/{}", table_name_owned),
-                                        ChangeType::PropertySet,
-                                        Some(table_name_owned),
-                                        None,
-                                        table_update.clone(),
-                                        vec!["ovsdb".to_string(), "network".to_string()],
-                                        "ovsdb-monitor".to_string(),
-                                        ChangeSource::DBus,
-                                    ).await;
+                                    let _ = ovsdb_self
+                                        .process_authoritative_change(
+                                            "net".to_string(),
+                                            format!("/org/opdbus/v1/ovsdb/{}", table_name_owned),
+                                            ChangeType::PropertySet,
+                                            Some(table_name_owned),
+                                            None,
+                                            table_update.clone(),
+                                            vec!["ovsdb".to_string(), "network".to_string()],
+                                            "ovsdb-monitor".to_string(),
+                                            ChangeSource::DBus,
+                                        )
+                                        .await;
                                 }
                             }
                         }
@@ -308,7 +312,9 @@ impl SchemaEngine {
                         "add_port" => {
                             if let Some(args) = value.as_array() {
                                 if args.len() >= 2 {
-                                    if let (Some(br), Some(port)) = (args[0].as_str(), args[1].as_str()) {
+                                    if let (Some(br), Some(port)) =
+                                        (args[0].as_str(), args[1].as_str())
+                                    {
                                         self.ovsdb.add_port(br, port).await?;
                                     }
                                 }
@@ -316,15 +322,17 @@ impl SchemaEngine {
                         }
                         _ => {
                             // Fallback to generic D-Bus call if it's a known service
-                            let _ = self.call_dbus_method(
-                                &format!("org.opdbus.{}.v1", plugin_id),
-                                &object_path,
-                                "org.opdbus.OvsdbV1",
-                                method,
-                                vec![value.clone()],
-                                &actor_id,
-                                &_capability_id,
-                            ).await?;
+                            let _ = self
+                                .call_dbus_method(
+                                    &format!("org.opdbus.{}.v1", plugin_id),
+                                    &object_path,
+                                    "org.opdbus.OvsdbV1",
+                                    method,
+                                    vec![value.clone()],
+                                    &actor_id,
+                                    &_capability_id,
+                                )
+                                .await?;
                         }
                     }
                 }
@@ -336,7 +344,9 @@ impl SchemaEngine {
                     if parts.len() >= 6 && parts[4] == "Bridge" {
                         let br_name = parts[5].replace('_', "-");
                         if let Some(val_str) = value.as_str() {
-                            self.ovsdb.set_bridge_property(&br_name, prop, val_str).await?;
+                            self.ovsdb
+                                .set_bridge_property(&br_name, prop, val_str)
+                                .await?;
                         }
                     }
                 }
@@ -345,14 +355,13 @@ impl SchemaEngine {
             // NonNet / Generic Plugin Path
             if change_type == ChangeType::PropertySet {
                 // Get old value for the footprint before update from cache
-                old_value = self.get_state(&plugin_id).await
-                    .and_then(|v| {
-                        if let Some(prop) = &member_name {
-                            v.get(prop).cloned()
-                        } else {
-                            Some(v)
-                        }
-                    });
+                old_value = self.get_state(&plugin_id).await.and_then(|v| {
+                    if let Some(prop) = &member_name {
+                        v.get(prop).cloned()
+                    } else {
+                        Some(v)
+                    }
+                });
 
                 // For NonNet plugins, we update the NonNetDb which is authoritative for non-network state
                 if let Some(rows) = value.as_array() {
@@ -398,7 +407,16 @@ impl SchemaEngine {
         actor_id: String,
         capability_id: Option<String>,
     ) -> anyhow::Result<MutationResult> {
-        self.mutate(plugin_id, object_path, change_type, member_name, value, actor_id, capability_id).await
+        self.mutate(
+            plugin_id,
+            object_path,
+            change_type,
+            member_name,
+            value,
+            actor_id,
+            capability_id,
+        )
+        .await
     }
 
     /// Fetch current state for a specific plugin from authoritative cache

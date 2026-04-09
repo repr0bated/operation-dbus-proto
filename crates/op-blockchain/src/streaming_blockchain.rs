@@ -7,6 +7,7 @@
 //! 3. Creates snapshots for each block
 //! 4. Streams vector data to remote vector databases via btrfs send/receive
 
+use crate::send_state::SendState;
 use crate::PluginFootprint;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -157,6 +158,7 @@ pub struct StreamingBlockchain {
     snapshot_interval: SnapshotInterval,
     retention_policy: RetentionPolicy,
     last_snapshot_time: Arc<RwLock<Instant>>,
+    send_state: Arc<RwLock<SendState>>,
 }
 
 impl StreamingBlockchain {
@@ -178,6 +180,15 @@ impl StreamingBlockchain {
         Self::create_subvolume(&vector_subvol).await?;
         Self::create_subvolume(&state_subvol).await?;
 
+        // Load send state (for incremental btrfs send tracking)
+        let snapshot_dir = base_path.join("snapshots");
+        tokio::fs::create_dir_all(&snapshot_dir).await?;
+        let mut send_state = SendState::load(&snapshot_dir).await?;
+        send_state.bootstrap_from_env();
+        if !send_state.list_remotes().is_empty() {
+            send_state.save().await?;
+        }
+
         Ok(Self {
             base_path,
             timing_subvol,
@@ -186,6 +197,7 @@ impl StreamingBlockchain {
             snapshot_interval,
             retention_policy: RetentionPolicy::from_env(),
             last_snapshot_time: Arc::new(RwLock::new(Instant::now())),
+            send_state: Arc::new(RwLock::new(send_state)),
         })
     }
 
@@ -498,71 +510,122 @@ impl StreamingBlockchain {
         Ok(())
     }
 
-    #[allow(dead_code)]
-    pub async fn stream_vectors(&self, block_hash: &str, remote: &str) -> Result<()> {
-        let vector_snapshot = self
-            .base_path
-            .join("snapshots")
-            .join(format!("vectors-{}", block_hash));
+    /// Stream a snapshot to a specific remote using incremental send when possible.
+    ///
+    /// Uses `btrfs send -p <parent>` for incremental sends when the remote
+    /// has a known last-received snapshot. Falls back to full send otherwise.
+    /// The parent snapshot is tracked per-remote and must not be pruned.
+    pub async fn stream_to_remote(&self, snapshot_name: &str, remote_id: &str) -> Result<()> {
+        let snapshot_dir = self.base_path.join("snapshots");
+        let snapshot_path = snapshot_dir.join(snapshot_name);
 
-        info!("Streaming vectors for block {} to {}", block_hash, remote);
-
-        let output = Command::new("bash")
-            .arg("-c")
-            .arg(format!(
-                "btrfs send {} | ssh {} 'btrfs receive /var/lib/blockchain/vectors/'",
-                vector_snapshot.display(),
-                remote
-            ))
-            .output()
-            .await
-            .context("Failed to stream vectors")?;
-
-        if !output.status.success() {
-            anyhow::bail!("Stream failed: {}", String::from_utf8_lossy(&output.stderr));
+        if !snapshot_path.exists() {
+            anyhow::bail!("Snapshot not found: {}", snapshot_name);
         }
 
-        Ok(())
-    }
+        let send_state = self.send_state.read().await;
+        let remote = send_state
+            .remotes
+            .get(remote_id)
+            .ok_or_else(|| anyhow::anyhow!("Unknown remote: {}", remote_id))?;
 
-    #[allow(dead_code)]
-    pub async fn stream_to_replicas(&self, block_hash: &str, replicas: &[String]) -> Result<()> {
-        let vector_snapshot = self
-            .base_path
-            .join("snapshots")
-            .join(format!("vectors-{}", block_hash));
+        let parent = send_state.parent_for(remote_id);
+        let receive_path = &remote.btrfs_receive_path;
+        let ssh_host = &remote.ssh_host;
 
-        let mut tee_args = Vec::new();
-        for replica in replicas {
-            tee_args.push(format!(
-                ">(ssh {} 'btrfs receive /var/lib/blockchain/vectors/')",
-                replica
-            ));
-        }
+        let cmd = if let Some(parent_name) = parent {
+            let parent_path = snapshot_dir.join(parent_name);
+            if !parent_path.exists() {
+                warn!(
+                    "Parent snapshot '{}' missing on sender — falling back to full send for remote '{}'",
+                    parent_name, remote_id
+                );
+                format!(
+                    "btrfs send {} | ssh {} 'btrfs receive {}'",
+                    snapshot_path.display(),
+                    ssh_host,
+                    receive_path
+                )
+            } else {
+                info!(
+                    "Incremental send to '{}': parent='{}' child='{}'",
+                    remote_id, parent_name, snapshot_name
+                );
+                format!(
+                    "btrfs send -p {} {} | ssh {} 'btrfs receive {}'",
+                    parent_path.display(),
+                    snapshot_path.display(),
+                    ssh_host,
+                    receive_path
+                )
+            }
+        } else {
+            info!("Full send to '{}': snapshot='{}'", remote_id, snapshot_name);
+            format!(
+                "btrfs send {} | ssh {} 'btrfs receive {}'",
+                snapshot_path.display(),
+                ssh_host,
+                receive_path
+            )
+        };
 
-        let cmd = format!(
-            "btrfs send {} | tee {} > /dev/null",
-            vector_snapshot.display(),
-            tee_args.join(" ")
-        );
-
-        info!("Streaming to {} replicas", replicas.len());
+        // Drop read lock before executing
+        drop(send_state);
 
         let output = Command::new("bash")
             .arg("-c")
             .arg(&cmd)
             .output()
             .await
-            .context("Failed to stream to replicas")?;
+            .context("Failed to stream snapshot")?;
 
         if !output.status.success() {
             anyhow::bail!(
-                "Multi-replica stream failed: {}",
+                "Stream to '{}' failed: {}",
+                remote_id,
                 String::from_utf8_lossy(&output.stderr)
             );
         }
 
+        // Record successful send — old parent becomes unpinned for this remote
+        let mut send_state = self.send_state.write().await;
+        send_state.record_successful_send(remote_id, snapshot_name);
+        send_state.save().await?;
+
         Ok(())
+    }
+
+    /// Stream a snapshot to all configured remotes.
+    pub async fn stream_to_all_remotes(&self, snapshot_name: &str) -> Result<()> {
+        let remote_ids: Vec<String> = {
+            let send_state = self.send_state.read().await;
+            send_state.remotes.keys().cloned().collect()
+        };
+
+        if remote_ids.is_empty() {
+            debug!("No remotes configured — skipping stream");
+            return Ok(());
+        }
+
+        info!(
+            "Streaming '{}' to {} remotes",
+            snapshot_name,
+            remote_ids.len()
+        );
+
+        for remote_id in &remote_ids {
+            if let Err(e) = self.stream_to_remote(snapshot_name, remote_id).await {
+                warn!("Failed to stream to remote '{}': {}", remote_id, e);
+                // Continue to other remotes
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Get a reference to the send state (for external coordination).
+    pub fn send_state(&self) -> &Arc<RwLock<SendState>> {
+        &self.send_state
     }
 
     /// Get current snapshot interval configuration
@@ -695,10 +758,24 @@ impl StreamingBlockchain {
             keep_snapshots.insert(snapshot.clone());
         }
 
-        // Delete snapshots not in keep set
+        // Get pinned snapshots from send state (must not delete these)
+        let pinned = self.send_state.read().await.all_pinned_snapshots();
+
+        // Delete snapshots not in keep set AND not pinned by any remote
         let mut deleted_count = 0;
+        let mut pinned_retained = 0;
         for (name, _dt) in &snapshots {
             if !keep_snapshots.contains(name) {
+                // Safety check: never delete a snapshot pinned as a send parent
+                if pinned.contains(name) {
+                    pinned_retained += 1;
+                    debug!(
+                        "Retaining snapshot '{}' — pinned as incremental send parent",
+                        name
+                    );
+                    continue;
+                }
+
                 let snapshot_path = snapshot_dir.join(name);
                 match Command::new("btrfs")
                     .args(["subvolume", "delete"])
@@ -725,10 +802,11 @@ impl StreamingBlockchain {
             }
         }
 
-        if deleted_count > 0 {
+        if deleted_count > 0 || pinned_retained > 0 {
             info!(
-                "Pruned {} old state snapshots (retention: {}h/{}d/{}w/{}q)",
+                "Pruned {} old state snapshots, {} retained as send parents (retention: {}h/{}d/{}w/{}q)",
                 deleted_count,
+                pinned_retained,
                 self.retention_policy.hourly,
                 self.retention_policy.daily,
                 self.retention_policy.weekly,

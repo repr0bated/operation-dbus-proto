@@ -5,7 +5,7 @@
 //! - WebSocket for real-time chat
 //! - MCP protocol endpoint for Claude Desktop
 //! - SSE for streaming events
-//! - Static file serving for web UI
+//! - Embedded UI fallback for the web interface
 //!
 //! ## Architecture
 //!
@@ -21,7 +21,7 @@
 //! │  /api/events     - SSE event stream                             │
 //! │  /mcp            - MCP JSON-RPC endpoint                        │
 //! │  /ws             - WebSocket chat                               │
-//! │  /               - Static files (WASM frontend)                 │
+//! │  /               - Embedded UI fallback                         │
 //! └─────────────────────────────────────────────────────────────────┘
 //! ```
 
@@ -56,7 +56,6 @@ pub use state::AppState;
 pub struct ServerConfig {
     pub host: String,
     pub port: u16,
-    pub static_dir: Option<String>,
     pub enable_cors: bool,
     pub enable_compression: bool,
 }
@@ -66,7 +65,6 @@ impl Default for ServerConfig {
         Self {
             host: "0.0.0.0".to_string(),
             port: 8080,
-            static_dir: Some("static".to_string()),
             enable_cors: true,
             enable_compression: true,
         }

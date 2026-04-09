@@ -117,6 +117,13 @@ pub async fn signup(
                     .await
                 {
                     error!("Failed to send magic link email: {}", e);
+                    return (
+                        StatusCode::BAD_GATEWAY,
+                        Json(SignupResponse {
+                            success: false,
+                            message: "Failed to send login email".to_string(),
+                        }),
+                    );
                 }
                 return (
                     StatusCode::OK,
@@ -171,6 +178,13 @@ pub async fn signup(
                         .await
                     {
                         error!("Failed to send magic link email: {}", e);
+                        return (
+                            StatusCode::BAD_GATEWAY,
+                            Json(SignupResponse {
+                                success: false,
+                                message: "Failed to send login email".to_string(),
+                            }),
+                        );
                     }
                     info!("New privacy user registered: {}", email);
                     (

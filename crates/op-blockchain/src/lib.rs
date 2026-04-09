@@ -13,13 +13,16 @@ pub mod btrfs_numa_integration;
 pub mod footprint;
 pub mod plugin_footprint;
 pub mod retention;
+pub mod send_state;
 pub mod snapshot;
 pub mod streaming_blockchain;
 
 // Re-export main types
 pub use blockchain::StreamingBlockchain;
+pub use btrfs_numa_integration::EmbedRequest;
 pub use footprint::{BlockEvent, PluginFootprint};
 pub use retention::RetentionPolicy;
+pub use send_state::{RemoteState, SendState};
 pub use snapshot::SnapshotInterval;
 
 // Also export from plugin_footprint for compatibility

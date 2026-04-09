@@ -25,6 +25,7 @@ op-state-store = { path = "../op-state-store" }
 op-identity = { workspace = true }
 op-introspection = { workspace = true }
 op-grpc-bridge = { path = "../op-grpc-bridge" }
+op-jsonrpc = { path = "../op-jsonrpc" }
 
 # Rate limiting
 tower_governor = "0.4"

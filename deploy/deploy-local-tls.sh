@@ -242,6 +242,11 @@ upstream op_web_backend {
     keepalive 32;
 }
 
+upstream op_dbus_grpc_backend {
+    server 10.200.0.2:50051;
+    keepalive 32;
+}
+
 # HTTP -> HTTPS redirect
 server {
     listen 80 default_server;
@@ -339,6 +344,25 @@ server {
         proxy_cache off;
         proxy_read_timeout 86400s;
     }
+
+    # gRPC-Web endpoints
+    location ~ ^/operation\.[^/]+/[^/]+$ {
+        limit_req zone=api_limit burst=50 nodelay;
+
+        proxy_pass http://op_dbus_grpc_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header TE $http_te;
+        proxy_set_header Connection "TE";
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+    }
     
     # WebSocket endpoint
     location /ws {
@@ -354,6 +378,22 @@ server {
         # Long timeout for WebSocket
         proxy_read_timeout 86400s;
         proxy_send_timeout 86400s;
+    }
+
+    location = /grpc.health.v1.Health/Check {
+        proxy_pass http://op_dbus_grpc_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header TE $http_te;
+        proxy_set_header Connection "TE";
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_read_timeout 60s;
+        proxy_send_timeout 60s;
     }
     
     # MCP endpoints

@@ -31,6 +31,9 @@ axum = { version = "0.7", features = ["ws"] }
 tower-http = { version = "0.5", features = ["cors"] }
 reqwest.workspace = true
 
+# Vector database
+qdrant-client = "1.17"
+
 # D-Bus (for agent executor)
 zbus = "4.0"
 
@@ -43,6 +46,7 @@ prost = { workspace = true, optional = true }
 
 # Internal crates
 op-core = { path = "../op-core" }
+op-llm = { path = "../op-llm" }
 op-tools = { path = "../op-tools" }
 op-plugins = { path = "../op-plugins" }
 op-introspection = { path = "../op-introspection" }

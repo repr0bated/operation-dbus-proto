@@ -3,31 +3,23 @@
 //! Main server implementation that provides cognitive memory and dynamic loading capabilities.
 
 use crate::cognitive_tools::CognitiveToolRegistry;
-use crate::memory_store::CognitiveMemoryStore;
+use crate::graph_store::KnowledgeGraphStore;
 use op_mcp::tool_registry::ToolRegistry;
-use sqlx::sqlite::SqlitePoolOptions;
 use std::sync::Arc;
 
 pub struct CognitiveMcpServer {
-    memory_store: Arc<CognitiveMemoryStore>,
+    graph_store: Arc<KnowledgeGraphStore>,
     tool_registry: Arc<ToolRegistry>,
 }
 
 impl CognitiveMcpServer {
-    pub async fn new(db_path: &str) -> Result<Self, Box<dyn std::error::Error>> {
-        let pool = SqlitePoolOptions::new()
-            .max_connections(5)
-            .connect(&format!("sqlite://{}?mode=rwc", db_path))
-            .await?;
-        let memory_store = Arc::new(CognitiveMemoryStore::new(pool).await?);
+    pub async fn new(graph_path: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let graph_store = Arc::new(KnowledgeGraphStore::new_on_disk(graph_path)?);
         let tool_registry = Arc::new(ToolRegistry::new());
 
-        CognitiveToolRegistry::register_all(&tool_registry, memory_store.clone()).await?;
+        CognitiveToolRegistry::register_all(&tool_registry, graph_store.clone()).await?;
 
-        Ok(Self {
-            memory_store,
-            tool_registry,
-        })
+        Ok(Self { graph_store, tool_registry })
     }
 
     pub async fn start_http_server(self, addr: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -47,11 +39,11 @@ impl CognitiveMcpServer {
         Ok(())
     }
 
-    pub fn memory_store(&self) -> Arc<CognitiveMemoryStore> {
-        self.memory_store.clone()
-    }
-
     pub fn tool_registry(&self) -> Arc<ToolRegistry> {
         self.tool_registry.clone()
+    }
+
+    pub fn graph_store(&self) -> Arc<KnowledgeGraphStore> {
+        self.graph_store.clone()
     }
 }

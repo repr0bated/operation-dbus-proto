@@ -231,21 +231,26 @@ wait_for_container() {
 
 log "--- Section 4: wg-quick up wgcf ---"
 
-# wg-quick returns exit code 1 if the interface already exists ("already exists")
-# and a non-1 code on real errors. We capture the output to distinguish.
-WG_OUTPUT=""
-WG_EXIT=0
-WG_OUTPUT=$(wg-quick up wgcf 2>&1) || WG_EXIT=$?
-
-if [[ $WG_EXIT -ne 0 ]]; then
-    # "already exists" is not a failure
-    if echo "$WG_OUTPUT" | grep -qi "already exists\|already in use"; then
-        log "wgcf: interface already up (ignored)"
-    else
-        die "wg-quick up wgcf failed (exit ${WG_EXIT}): ${WG_OUTPUT}"
-    fi
+# If the interface already exists in the kernel, wg-quick is not needed.
+if ip link show wgcf >/dev/null 2>&1; then
+    log "wgcf: interface already present — skipping wg-quick up"
 else
-    log "wg-quick up wgcf: success"
+    WG_OUTPUT=""
+    WG_EXIT=0
+    WG_OUTPUT=$(wg-quick up wgcf 2>&1) || WG_EXIT=$?
+
+    if [[ $WG_EXIT -ne 0 ]]; then
+        # A second check in case the interface appeared between the check above and the call.
+        if ip link show wgcf >/dev/null 2>&1; then
+            log "wgcf: interface appeared during wg-quick call — treating as success"
+        elif echo "$WG_OUTPUT" | grep -qi "already exists\|already in use\|address already assigned"; then
+            log "wgcf: interface already up (ignored: ${WG_OUTPUT})"
+        else
+            die "wg-quick up wgcf failed (exit ${WG_EXIT}): ${WG_OUTPUT}"
+        fi
+    else
+        log "wg-quick up wgcf: success"
+    fi
 fi
 
 wait_for_iface wgcf 30
@@ -387,6 +392,37 @@ if [[ $OVS_EXIT -ne 0 ]]; then
     die "ovs-attach-ports.sh failed (exit ${OVS_EXIT})"
 fi
 log "ovs-attach-ports completed successfully"
+
+# ---------------------------------------------------------------------------
+# 7.5. GRPC-BRIDGE IP ASSIGNMENT
+# ---------------------------------------------------------------------------
+# ovs-attach-ports.sh creates the grpc-bridge internal port and assigns its IP
+# from PRIVACY_GRPC_BRIDGE_CIDR.  Verify the interface is up and has an address;
+# re-run the assignment here if it got lost (idempotent: flush then add).
+# ---------------------------------------------------------------------------
+
+log "--- Section 7.5: grpc-bridge IP assignment ---"
+
+GRPC_BRIDGE_CIDR="${PRIVACY_GRPC_BRIDGE_CIDR:-10.200.0.2/24}"
+MGMT_CIDR="${PRIVACY_MGMT_CIDR:-10.200.0.1/24}"
+
+for iface_cidr in "grpc-bridge:${GRPC_BRIDGE_CIDR}" "ovsbr0-mgmt:${MGMT_CIDR}"; do
+    iface="${iface_cidr%%:*}"
+    cidr="${iface_cidr##*:}"
+    if ip link show "$iface" &>/dev/null; then
+        current_addr="$(ip -4 addr show dev "$iface" 2>/dev/null | awk '/inet / { print $2 }')"
+        if [[ "$current_addr" != "$cidr" ]]; then
+            ip addr flush dev "$iface" 2>/dev/null || true
+            ip addr add "$cidr" dev "$iface"
+            log "${iface}: assigned ${cidr}"
+        else
+            log "${iface}: already has ${cidr}"
+        fi
+        ip link set "$iface" up
+    else
+        log "WARNING: ${iface} interface not found — ovs-attach-ports may not have run yet"
+    fi
+done
 
 # ---------------------------------------------------------------------------
 # 8. NEXTDNS PROFILE DISCOVERY
@@ -684,6 +720,39 @@ incus network set incusbr0 dns.nameservers=10.149.181.188
 log "incusbr0 DNS nameserver set to 10.149.181.188"
 
 # ---------------------------------------------------------------------------
+# 13.5. CONFIGURE DNS IN OVS-BRIDGED CONTAINERS
+# ---------------------------------------------------------------------------
+# Containers attached directly to ovsbr0 (managed by the privacy_router plugin
+# at runtime: privacy-wireguard-ingress, privacy-xray-egress) do NOT go through
+# incusbr0 and thus do not inherit the incusbr0 dns.nameservers setting.
+# Write /etc/resolv.conf inside each running ovsbr0 container so they reach
+# NextDNS at 10.149.181.188 (services container on incusbr0).
+# The host has routes to both 10.200.0.0/24 (ovsbr0 mgmt) and 10.149.181.0/24
+# (incusbr0), so the services container is routable from the host side.
+# ---------------------------------------------------------------------------
+
+log "--- Section 13.5: DNS in OVS-bridged containers ---"
+
+OVS_CONTAINER_DNS_NAMESERVERS="10.149.181.188\nnameserver 1.1.1.1\nnameserver 9.9.9.9"
+OVS_MANAGED_CONTAINERS=(privacy-wireguard-ingress privacy-xray-egress)
+
+for cname in "${OVS_MANAGED_CONTAINERS[@]}"; do
+    if incus info "$cname" &>/dev/null; then
+        status="$(incus info "$cname" 2>/dev/null | awk -F': ' '$1 == "Status" { print toupper($2); exit }' || true)"
+        if [[ "$status" == "RUNNING" ]]; then
+            incus exec "$cname" -- sh -c \
+                'printf "nameserver 10.149.181.188\nnameserver 1.1.1.1\nnameserver 9.9.9.9\n" > /etc/resolv.conf' \
+                2>/dev/null && log "DNS configured in ${cname}" \
+                || log "WARNING: could not write /etc/resolv.conf in ${cname} (may not be fully started yet)"
+        else
+            log "Container ${cname} not running (status: ${status}) — DNS will be set by privacy_router plugin at runtime"
+        fi
+    else
+        log "Container ${cname} not found — will be created and configured by privacy_router plugin"
+    fi
+done
+
+# ---------------------------------------------------------------------------
 # 14. INSTALL AND START NEXTDNS IN SERVICES CONTAINER
 # ---------------------------------------------------------------------------
 
@@ -753,6 +822,35 @@ Check: incus exec services -- journalctl -u nextdns -n 50"
 fi
 
 # ---------------------------------------------------------------------------
+# 16.5. CROSS-BRIDGE DNS ROUTE (ovsbr0 → incusbr0 services container)
+# ---------------------------------------------------------------------------
+# The services container (10.149.181.188 on incusbr0) runs NextDNS.
+# Incus containers on ovsbr0 (privacy_router fabric) are on a different L2
+# segment and need a host-level route to reach the DNS server.
+# This adds a persistent host route so grpc-bridge / ovsbr0-mgmt traffic
+# destined for 10.149.181.188 routes via the incusbr0 interface.
+# ---------------------------------------------------------------------------
+
+log "--- Section 16.5: Cross-bridge DNS route (ovsbr0 → services/NextDNS) ---"
+
+INCUSBR0_ADDR=""
+if ip addr show incusbr0 &>/dev/null; then
+    INCUSBR0_ADDR="$(ip -4 addr show incusbr0 | awk '/inet / { split($2,a,"/"); print a[1]; exit }')"
+fi
+
+if [[ -n "$INCUSBR0_ADDR" ]]; then
+    if ! ip route show 10.149.181.0/24 | grep -q incusbr0; then
+        ip route add 10.149.181.0/24 dev incusbr0 2>/dev/null \
+            && log "Added route: 10.149.181.0/24 dev incusbr0" \
+            || log "WARNING: could not add 10.149.181.0/24 route (may already exist)"
+    else
+        log "Route 10.149.181.0/24 dev incusbr0 already present"
+    fi
+else
+    log "WARNING: incusbr0 not found — cannot add cross-bridge DNS route; OVS containers must use NextDNS anycast (45.90.28.0)"
+fi
+
+# ---------------------------------------------------------------------------
 # 17. XRAY-CLIENT START
 # ---------------------------------------------------------------------------
 
@@ -789,17 +887,23 @@ ip link show wgcf &>/dev/null && WGCF_STATUS="UP (wgcf interface present)"
 OVSBR0_STATUS="DOWN"
 ip link show ovsbr0 &>/dev/null && OVSBR0_STATUS="UP (10.88.88.1/24)"
 
+GRPCBRIDGE_STATUS="DOWN"
+ip link show grpc-bridge &>/dev/null && GRPCBRIDGE_STATUS="UP (${PRIVACY_GRPC_BRIDGE_CIDR:-10.200.0.2/24})"
+
 cat <<EOF
 
 === DEPLOY SUMMARY ===
 wgcf tunnel:          ${WGCF_STATUS}
 ovsbr0 bridge:        ${OVSBR0_STATUS}
+grpc-bridge port:     ${GRPCBRIDGE_STATUS}
+gRPC server addr:     ${OP_DBUS_GRPC_ADDR:-10.200.0.2:50051}
 services container:   ${SERVICES_STATE} (10.149.181.188)
 NextDNS profile:      ${NEXTDNS_PROFILE}
 NextDNS listening:    10.149.181.188:53
 DNS test (google.com): ${DNS_TEST_RESULT}
 incusbr0 DNS:         10.149.181.188
 Host resolv.conf:     10.149.181.188 (primary), 1.1.1.1 (fallback)
+OVS container DNS:    ${PRIVACY_DNS_NAMESERVERS:-10.149.181.188,1.1.1.1} (via privacy_router bootstrap)
 privacy-xray-ingress: ${PRIV_XRAY_STATE}
 xray-server:          ${XRAY_SERVER_STATE}
 xray-client:          ${XRAY_CLIENT_STATE}

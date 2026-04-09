@@ -21,7 +21,7 @@ DEPLOY_DIR="${PROJECT_ROOT}/deploy"
 
 # App service components: "crate_name:binary_name:service_name"
 SERVICES=(
-    "op-web:op-dbus:op-dbus"        # gRPC server (op-grpc-bridge), binary in op-web crate
+    "op-dbus:op-dbus:op-dbus"       # main control-plane binary (root crate)
     "op-web:op-web-server:op-web"   # HTTP/WS server
     "op-services:op-services:op-services"
     "op-chat:op-chat:op-chat"
@@ -60,6 +60,9 @@ done
 log()   { echo -e "\033[0;32m[DEPLOY]\033[0m $*"; }
 warn()  { echo -e "\033[1;33m[WARN]\033[0m $*"; }
 error() { echo -e "\033[0;31m[ERROR]\033[0m $*"; exit 1; }
+
+BUILD_SESSION_ID="$(date +%Y%m%d%H%M%S)"
+TARGET_RETENTION_COUNT="${OP_DBUS_TARGET_RETENTION_COUNT:-3}"
 
 # ---------------------------------------------------------------------------
 # Mode detection (system vs user)
@@ -113,6 +116,105 @@ read_env_value() {
     local file="$1" key="$2"
     [[ -f "$file" ]] || return 0
     awk -F= -v wanted="$key" '$1 == wanted { print substr($0, index($0, "=") + 1); exit }' "$file"
+}
+
+path_owner_user() {
+    local path="$1"
+
+    if stat -c "%U" "$path" >/dev/null 2>&1; then
+        stat -c "%U" "$path"
+        return 0
+    fi
+
+    if stat -f "%Su" "$path" >/dev/null 2>&1; then
+        stat -f "%Su" "$path"
+        return 0
+    fi
+
+    return 1
+}
+
+build_cache_root() {
+    if [[ "$EUID" -eq 0 ]]; then
+        printf '%s\n' "/var/cache/op-dbus-build"
+    else
+        printf '%s\n' "${PROJECT_ROOT}/deploy/target-cache"
+    fi
+}
+
+cleanup_legacy_cargo_target_layout() {
+    local root="$1"
+    local legacy_entries=(
+        "build"
+        "deps"
+        "examples"
+        "incremental"
+        "release"
+        "debug"
+        "doc"
+        "tmp"
+        ".fingerprint"
+        ".rustc_info.json"
+        "CACHEDIR.TAG"
+        ".cargo-lock"
+        ".future-incompat-report.json"
+    )
+    local found=false
+    local entry
+
+    for entry in "${legacy_entries[@]}"; do
+        if [[ -e "${root}/${entry}" ]]; then
+            found=true
+            break
+        fi
+    done
+
+    if [[ "$found" == true ]]; then
+        log "Removing legacy flat cargo cache layout in ${root}"
+        rm -rf \
+            "${root}/build" \
+            "${root}/deps" \
+            "${root}/examples" \
+            "${root}/incremental" \
+            "${root}/release" \
+            "${root}/debug" \
+            "${root}/doc" \
+            "${root}/tmp" \
+            "${root}/.fingerprint" \
+            "${root}/.rustc_info.json" \
+            "${root}/CACHEDIR.TAG" \
+            "${root}/.cargo-lock" \
+            "${root}/.future-incompat-report.json"
+    fi
+}
+
+prepare_cargo_target_dir() {
+    local root
+    root="$(build_cache_root)"
+
+    mkdir -p "$root"
+    cleanup_legacy_cargo_target_layout "$root"
+
+    local target="${root}/build-${BUILD_SESSION_ID}"
+    mkdir -p "$target"
+    printf '%s\n' "$target"
+}
+
+prune_old_cargo_target_dirs() {
+    local root="$1"
+    local keep_count="$2"
+    local dirs=()
+    local dir
+
+    while IFS= read -r dir; do
+        dirs+=("$dir")
+    done < <(find "$root" -mindepth 1 -maxdepth 1 -type d -name 'build-*' | sort)
+
+    while (( ${#dirs[@]} > keep_count )); do
+        log "Pruning old cargo target cache ${dirs[0]}"
+        rm -rf "${dirs[0]}"
+        dirs=("${dirs[@]:1}")
+    done
 }
 
 ensure_dhcpcd_ovs_denyinterfaces() {
@@ -354,34 +456,77 @@ run_network_bootstrap() {
 
 # ---------------------------------------------------------------------------
 # STEP 3: App service build + deploy
-# [COMMENTED OUT — pending network verification]
-# Uncomment this section once deploy-network.sh has been verified on the VPS.
 # ---------------------------------------------------------------------------
+
+build_embedded_ui() {
+    local ui_dir="${PROJECT_ROOT}/crates/op-web/ui"
+
+    if [[ ! -d "$ui_dir" ]]; then
+        warn "op-web/ui not found — skipping embedded UI build"
+        return 0
+    fi
+
+    log "Building embedded UI (${ui_dir})..."
+
+    local build_user
+    build_user=$(path_owner_user "$PROJECT_ROOT" 2>/dev/null || echo "")
+
+    if [[ "$EUID" -eq 0 && -n "$build_user" && "$build_user" != "root" ]]; then
+        su -l "$build_user" -c \
+            "export PATH=\"\$HOME/.bun/bin:\$PATH\" && \
+             cd '${ui_dir}' && \
+             if command -v bun >/dev/null 2>&1; then \
+                 bun install && bun run build; \
+             elif command -v npm >/dev/null 2>&1; then \
+                 npm install && npm run build; \
+             else \
+                 echo 'Neither bun nor npm found — cannot build embedded UI' >&2; \
+                 exit 127; \
+             fi" \
+            || error "Embedded UI build failed"
+    else
+        (export PATH="${HOME}/.bun/bin:${PATH}" && \
+         cd "$ui_dir" && \
+         if command -v bun >/dev/null 2>&1; then
+             bun install && bun run build
+         elif command -v npm >/dev/null 2>&1; then
+             npm install && npm run build
+         else
+             echo "Neither bun nor npm found — cannot build embedded UI" >&2
+             exit 127
+         fi) \
+            || error "Embedded UI build failed"
+    fi
+
+    log "Embedded UI built → ${ui_dir}/dist"
+}
 
 build_and_install() {
     local crate=$1 binary=$2
 
-    log "Building ${crate}..."
-    # stat -c "%U" gives owner username on Linux (Chimera). stat -f is BSD only.
-    local build_user
-    build_user=$(stat -c "%U" "$PROJECT_ROOT" 2>/dev/null || echo "")
-    local cargo_target
-    if [[ "$EUID" -eq 0 ]]; then
-        cargo_target="/var/cache/op-dbus-build"
-    else
-        cargo_target="${PROJECT_ROOT}/deploy/target"
+    # Build embedded UI before cargo so rust-embed picks up fresh assets.
+    if [[ "$crate" == "op-web" ]]; then
+        build_embedded_ui
     fi
-    mkdir -p "$cargo_target"
+
+    log "Building ${crate}..."
+    local build_user
+    build_user=$(path_owner_user "$PROJECT_ROOT" 2>/dev/null || echo "")
+    local cargo_target
+    cargo_target="$(prepare_cargo_target_dir)"
+    local cargo_cmd="cargo"
+
     if [[ "$EUID" -eq 0 ]]; then
-        chown "${build_user:-root}:${build_user:-root}" "$cargo_target" 2>/dev/null || true
+        chown -R "${build_user:-root}:${build_user:-root}" "$cargo_target" 2>/dev/null || true
     fi
 
     if [[ "$EUID" -eq 0 && -n "$build_user" && "$build_user" != "root" ]]; then
+        cargo_cmd=$(su -l "$build_user" -c 'command -v cargo')
         su -l "$build_user" -c \
-            "cd '${PROJECT_ROOT}' && CARGO_TARGET_DIR='${cargo_target}' cargo build --release -p '${crate}' --bin '${binary}'" \
+            "cd '${PROJECT_ROOT}' && OP_DBUS_DISABLE_MANAGED_CARGO=1 CARGO_TARGET_DIR='${cargo_target}' '${cargo_cmd}' build --release -p '${crate}' --bin '${binary}'" \
             || error "Build failed for ${crate}"
     else
-        CARGO_TARGET_DIR="$cargo_target" cargo build --release -p "$crate" --bin "$binary" \
+        OP_DBUS_DISABLE_MANAGED_CARGO=1 CARGO_TARGET_DIR="$cargo_target" "$cargo_cmd" build --release -p "$crate" --bin "$binary" \
             || error "Build failed for ${crate}"
     fi
 
@@ -389,6 +534,8 @@ build_and_install() {
     install -m 755 "${cargo_target}/release/${binary}" "$staged"
     mv -f "$staged" "${INSTALL_DIR}/${binary}"
     log "Installed ${binary} → ${INSTALL_DIR}/${binary}"
+
+    prune_old_cargo_target_dirs "$(build_cache_root)" "$TARGET_RETENTION_COUNT"
 }
 
 generate_service_file() {
@@ -406,6 +553,8 @@ command = ${command}
 log-type = buffer
 smooth-recovery = true
 depends-on = op-session-bus
+depends-on = ovs-attach-ports
+env-file = /etc/op-dbus/environment
 EOF
             ;;
         op-web)
@@ -415,6 +564,7 @@ command = ${command}
 log-type = buffer
 smooth-recovery = true
 depends-on = op-dbus
+env-file = /etc/op-dbus/environment
 EOF
             ;;
         op-services|op-chat)
@@ -466,7 +616,7 @@ deploy_service() {
 
     case "$service" in
         op-dbus)
-            for dep in op-chat op-services op-web xray-client ovs-attach-ports systemd-networkd op-ovsdb-bridge; do
+            for dep in ovs-dbus-init op-chat op-services op-web op-ovsdb-bridge; do
                 if is_started "$dep"; then
                     $DINITCTL stop "$dep"; stopped_dependents+=("$dep")
                 fi
@@ -486,7 +636,7 @@ deploy_service() {
     fi
 
     if [[ "${#stopped_dependents[@]}" -gt 0 ]]; then
-        for dep in systemd-networkd ovs-attach-ports xray-client op-web op-services op-chat; do
+        for dep in systemd-networkd ovs-attach-ports xray-client op-web op-services op-chat ovs-dbus-init; do
             was_stopped "$dep" && $DINITCTL start "$dep"
         done
     fi
@@ -504,8 +654,7 @@ install_system_files
 run_network_bootstrap
 install_user_support_files
 
-# --- App services: uncomment after network is verified on VPS ---
-# command -v cargo >/dev/null || error "Cargo not found — cannot build services"
+command -v cargo >/dev/null || error "Cargo not found — cannot build services"
 for entry in "${SERVICES[@]}"; do
     IFS=':' read -r crate binary service <<< "$entry"
     if [[ -z "$TARGET" || "$TARGET" == "all" || "$TARGET" == "$crate" ]]; then

@@ -19,8 +19,8 @@ use std::time::Duration;
 use tracing::{debug, info, warn};
 
 use crate::provider::{
-    ChatMessage, ChatRequest, ChatResponse, LlmProvider, ModelInfo, ProviderType, TokenUsage,
-    ToolCallInfo,
+    ChatMessage, ChatRequest, ChatResponse, EmbeddingIntent, EmbeddingProvider, EmbeddingResult,
+    LlmProvider, ModelInfo, ProviderType, TokenUsage, ToolCallInfo,
 };
 
 const DEFAULT_BASE_URL: &str = "http://127.0.0.1:18789";
@@ -402,6 +402,133 @@ impl LlmProvider for OpenClawProvider {
         let response = self.chat(model, messages).await?;
         let _ = tx.send(Ok(response.message.content)).await;
         Ok(rx)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// EmbeddingProvider — routes to OpenClaw's /v1/embeddings endpoint.
+// The model string selects the agent (e.g. "openclaw:embedder-voyage4lite").
+// ---------------------------------------------------------------------------
+
+impl OpenClawProvider {
+    fn embeddings_url(&self) -> String {
+        format!("{}/v1/embeddings", self.base_url)
+    }
+
+    fn resolve_embedding_model(&self) -> String {
+        std::env::var("OPENCLAW_EMBEDDING_MODEL")
+            .unwrap_or_else(|_| "openclaw:embedder-voyage4lite".to_string())
+    }
+}
+
+#[async_trait]
+impl EmbeddingProvider for OpenClawProvider {
+    fn provider_type(&self) -> ProviderType {
+        ProviderType::OpenClaw
+    }
+
+    fn embedding_dimensions(&self) -> usize {
+        // voyage-4-lite default: 1024
+        std::env::var("OPENCLAW_EMBEDDING_DIMS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(1024)
+    }
+
+    async fn embed_batch(
+        &self,
+        texts: Vec<String>,
+        intent: EmbeddingIntent,
+    ) -> Result<Vec<EmbeddingResult>> {
+        let model = self.resolve_embedding_model();
+        let url = self.embeddings_url();
+
+        // Map intent to Voyage-compatible input_type
+        let input_type = match intent {
+            EmbeddingIntent::Document => "document",
+            EmbeddingIntent::Query => "query",
+        };
+
+        let body = json!({
+            "model": model,
+            "input": texts,
+            "input_type": input_type
+        });
+
+        debug!(
+            "OpenClaw embedding request: model={}, texts={}, intent={}",
+            model,
+            texts.len(),
+            input_type
+        );
+
+        let response = self
+            .auth_request(self.client.post(&url))
+            .json(&body)
+            .send()
+            .await
+            .context("Failed to send embedding request to OpenClaw")?;
+
+        let status = response.status();
+        let response_text = response.text().await?;
+
+        if !status.is_success() {
+            return Err(anyhow::anyhow!(
+                "OpenClaw embedding API error ({}): {}",
+                status,
+                &response_text[..response_text.len().min(500)]
+            ));
+        }
+
+        // Parse OpenAI-compatible embedding response
+        let mut response_text_mut = response_text;
+        let response_json: Value = unsafe { simd_json::from_str(&mut response_text_mut) }
+            .map_err(|e| anyhow::anyhow!("Failed to parse OpenClaw embedding response: {}", e))?;
+
+        let data = response_json
+            .get("data")
+            .and_then(|d| d.as_array())
+            .ok_or_else(|| anyhow::anyhow!("No 'data' array in embedding response"))?;
+
+        let mut results = Vec::with_capacity(data.len());
+        for entry in data {
+            let embedding = entry
+                .get("embedding")
+                .and_then(|e| e.as_array())
+                .ok_or_else(|| anyhow::anyhow!("Missing 'embedding' in response entry"))?;
+
+            let vector: Vec<f32> = embedding
+                .iter()
+                .filter_map(|v| v.as_f64().map(|f| f as f32))
+                .collect();
+
+            results.push(EmbeddingResult {
+                vector,
+                token_count: None,
+            });
+        }
+
+        // Extract token usage if available
+        if let Some(usage) = response_json.get("usage") {
+            let total = usage
+                .get("total_tokens")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32);
+            if let Some(total) = total {
+                let per_text = total / results.len().max(1) as u32;
+                for r in &mut results {
+                    r.token_count = Some(per_text);
+                }
+            }
+        }
+
+        info!(
+            "OpenClaw: embedded {} texts ({} dims each)",
+            results.len(),
+            results.first().map(|r| r.vector.len()).unwrap_or(0)
+        );
+
+        Ok(results)
     }
 }
 

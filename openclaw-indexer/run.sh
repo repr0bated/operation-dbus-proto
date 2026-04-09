@@ -21,11 +21,17 @@ if [[ -f "$HOME/.bash_secrets" ]]; then
     source "$HOME/.bash_secrets"
 fi
 
+QDRANT_URL="${QDRANT_URL:-http://10.149.181.190:6333}"
+
 ensure_qdrant() {
-    if ! curl -s http://127.0.0.1:6333/collections > /dev/null 2>&1; then
-        echo "Starting Qdrant..."
-        nohup ~/.local/bin/qdrant > /tmp/qdrant.log 2>&1 &
+    if ! curl -s "$QDRANT_URL/collections" > /dev/null 2>&1; then
+        echo "Starting Qdrant container..."
+        incus start qdrant 2>/dev/null || true
         sleep 3
+        if ! curl -s "$QDRANT_URL/collections" > /dev/null 2>&1; then
+            echo "Qdrant not responding at $QDRANT_URL — run deploy/incus/qdrant.sh first"
+            exit 1
+        fi
     fi
 }
 

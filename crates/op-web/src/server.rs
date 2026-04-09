@@ -2,7 +2,6 @@
 
 use axum::{routing::get, Router};
 use std::net::SocketAddr;
-use std::path::PathBuf;
 use tower::ServiceBuilder;
 use tower_governor::{governor::GovernorConfigBuilder, GovernorLayer};
 use tower_http::{
@@ -25,8 +24,6 @@ pub use crate::websocket::ws_handler as websocket_handler;
 pub struct WebServerConfig {
     /// Address to bind to
     pub addr: SocketAddr,
-    /// Path to static files (optional)
-    pub static_dir: Option<PathBuf>,
     /// Enable CORS
     pub cors_enabled: bool,
     /// Rate limiting configuration
@@ -58,7 +55,6 @@ impl Default for WebServerConfig {
     fn default() -> Self {
         Self {
             addr: SocketAddr::from(([127, 0, 0, 1], 3000)),
-            static_dir: None,
             cors_enabled: true,
             rate_limit: Default::default(),
         }
@@ -71,11 +67,6 @@ impl WebServerConfig {
             addr,
             ..Default::default()
         }
-    }
-
-    pub fn with_static_dir(mut self, path: impl Into<PathBuf>) -> Self {
-        self.static_dir = Some(path.into());
-        self
     }
 }
 

@@ -124,7 +124,10 @@ impl ServiceManager {
         // Persist to the store and install the dinit service file
         self.store.save_service(service).await?;
         if let Err(e) = service.install() {
-            warn!("Failed to install dinit service file for {}: {}", service.name, e);
+            warn!(
+                "Failed to install dinit service file for {}: {}",
+                service.name, e
+            );
         }
         Ok(())
     }

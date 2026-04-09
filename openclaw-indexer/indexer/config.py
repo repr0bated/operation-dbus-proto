@@ -11,7 +11,7 @@ class Config:
     git_root: Path = field(default_factory=lambda: Path(os.environ.get("GIT_ROOT", str(Path.home() / "git"))))
 
     # Qdrant
-    qdrant_url: str = field(default_factory=lambda: os.environ.get("QDRANT_URL", "http://127.0.0.1:6333"))
+    qdrant_url: str = field(default_factory=lambda: os.environ.get("QDRANT_URL", "http://10.149.181.190:6333"))
     collection_name: str = "code_chunks_gemini"
 
     # Embedding

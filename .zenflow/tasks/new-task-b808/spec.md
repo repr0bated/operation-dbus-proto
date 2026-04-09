@@ -38,6 +38,11 @@
 - **Cognitive Orchestration (`op-chat/src/cognitive_orchestrator.rs`)**: Integrate OpenClaw's memory retrieval and context propagation. OpenClaw's context awareness will drive the chat session's workstack execution and tool selection.
 - **Memory Sync**: Connect `op-cognitive-mcp` to OpenClaw via HTTP/gRPC to synchronize session-based ephemeral memory and long-term memory retrieval.
 
+### 2.6. Session Startup Wiring & Constraints
+- **Session Setup (`op-chat/src/actor.rs`)**: On session creation, trigger `GrpcAgentClient::start_session()` dynamically providing the `run_on_connection` list, resolving directly against `AgentRegistry`. Fail explicitly if unregistered.
+- **SchemaEngine Authority**: Ensure that `SchemaEngine` completely supplants any prior design related to `DbusWatcher`. The `SchemaEngine` remains the ultimate authority, with schema validation occurring strictly before D-Bus dispatch, not reactively in response to signals.
+- **Error Propagation**: No silent degradation; all grpc and setup errors must propagate as `OrchestrationError`.
+
 ## 3. Source Code Structure Changes
 - **`crates/op-chat/src/grpc_client.rs`**: Full rewrite to implement actual tonic channel calls.
 - **`crates/op-agents/src/agents/base.rs`**: Adjust to support data-driven system prompts.

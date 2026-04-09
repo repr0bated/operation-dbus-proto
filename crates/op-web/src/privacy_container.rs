@@ -11,7 +11,7 @@ use tracing::{debug, info};
 use crate::privacy_routes::derive_route_id;
 use crate::users::PrivacyUser;
 
-const DEFAULT_CONTAINER_IMAGE: &str = "images:alpine/3.19";
+const DEFAULT_CONTAINER_IMAGE: &str = "images:alpine/3.21";
 const DEFAULT_NAME_PREFIX: &str = "privacy-user-";
 const DEFAULT_DEVICE_NAME: &str = "privacy0";
 

@@ -13,8 +13,4 @@ fi
 
 set +a
 
-if [ -x /usr/local/sbin/op-web-server ]; then
-  exec /usr/local/sbin/op-web-server
-fi
-
-exec /usr/local/bin/op-web-server
+exec /usr/local/sbin/op-web-server

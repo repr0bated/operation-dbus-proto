@@ -1,41 +1,86 @@
-# op-web UI Build and Embed
+# Op-Web UI Authoritative Workflow
 
-This project embeds the web UI into the `op-web` binary from `crates/op-web/ui/dist`.
+This is the only authoritative workflow for updating the live dashboard UI.
 
-## Development Build (WASM optional)
+## Source of Truth
+
+- The only source of UI updates is:
+
+```text
+https://github.com/3tched-com/operation-dashboard-ui.git
+```
+
+- Do not copy from a sibling checkout.
+- Do not edit `crates/op-web/ui/dist` by hand.
+- Do not treat any top-level static directory as authoritative.
+
+## Embedded UI Path
+
+The live dashboard is served from the `op-web-server` binary using embedded assets from:
+
+```text
+crates/op-web/ui/dist
+```
+
+Relevant code:
+
+- [`crates/op-web/build.rs`](/home/jeremy/git/operation-dbus-proto/crates/op-web/build.rs)
+- [`crates/op-web/src/embedded_ui.rs`](/home/jeremy/git/operation-dbus-proto/crates/op-web/src/embedded_ui.rs)
+
+## Update Workflow
 
 From repo root:
 
 ```bash
-cd crates/op-web/ui
-npm ci
-npm run build
-cd ../../..
-cargo check -p op-web
+./update-ui.sh
+cargo build --release -p op-web --bin op-web-server
+sudo install -m 755 target/release/op-web-server /usr/local/sbin/op-web-server
+sudo dinitctl stop op-chat
+sudo dinitctl stop op-services
+sudo dinitctl stop op-web
+sudo dinitctl start op-web
+sudo dinitctl start op-services
+sudo dinitctl start op-chat
 ```
 
-Behavior:
-- If `wasm-pack` is available, the Rust WASM decoder is built.
-- If `wasm-pack` is not available, a JS fallback decoder is generated automatically.
+What `./update-ui.sh` does:
 
-## Production Build (WASM required)
+1. Clones the UI repo directly from GitHub into a temp directory
+2. Syncs the clone into `crates/op-web/ui`
+3. Builds `crates/op-web/ui/dist`
+4. Deletes the temp clone on exit
+
+## Full Deploy
+
+If you want the full stack deploy path after syncing the UI:
 
 ```bash
-./scripts/install-wasm-pack.sh
-cd crates/op-web/ui
-npm ci
-npm run build:prod
-cd ../../..
-cargo build -p op-web --release
+sudo ./deploy/deploy.sh all
 ```
 
-Behavior:
-- `npm run build:prod` requires `wasm-pack` and fails if unavailable.
-- `cargo build -p op-web --release` fails if `ui/dist/index.html` is missing.
-- On musl-only hosts, if wasm link fails, build falls back to JS decoder unless `FORCE_STRICT_WASM=1` is set.
+That path should also rebuild and install the embedded `op-web-server`, but the command sequence above is the shortest authoritative path for UI-only rollout and verification.
 
-## Notes
+## Verification
 
-- Embedded UI is served by `crates/op-web/src/embedded_ui.rs`.
-- Release builds should always use `build:prod` to avoid silent fallback behavior.
-- CI enforces this path via `.github/workflows/op-web-production.yml`.
+Check the embedded bundle hash locally:
+
+```bash
+curl -sS http://127.0.0.1:8080/ | rg 'assets/index-[A-Za-z0-9_-]+\.(js|css)' -o
+```
+
+Check the public host:
+
+```bash
+curl -sS https://dashboard.3tched.com/ | rg 'assets/index-[A-Za-z0-9_-]+\.(js|css)' -o
+```
+
+The local and public hashes should match.
+
+## Non-Authoritative Paths
+
+These are not source-of-truth deployment paths:
+
+- local sibling `operation-dashboard-ui` checkout
+- manually editing `crates/op-web/ui/dist`
+- any old top-level static UI directory
+- assuming `cargo build` alone updates the live host without reinstalling and restarting `op-web`

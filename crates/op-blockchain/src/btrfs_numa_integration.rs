@@ -18,8 +18,22 @@ use op_cache::{BtrfsCache, NumaTopology};
 use simd_json::prelude::*;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{mpsc, RwLock};
 use tracing::{debug, info, warn};
+
+/// Request sent to the background embedding channel after a footprint is written.
+/// Plain data — no op-llm dependency here.
+#[derive(Debug, Clone)]
+pub struct EmbedRequest {
+    /// The blockchain block hash (used as the Qdrant point ID)
+    pub block_hash: String,
+    /// Human-readable text to embed
+    pub embedding_text: String,
+    /// Target Qdrant collection
+    pub collection: String,
+    /// Filterable payload (plugin_id, operation, timestamp, etc.)
+    pub payload: simd_json::OwnedValue,
+}
 
 /// Unified blockchain with BTRFS cache and NUMA optimization
 pub struct OptimizedBlockchain {
@@ -27,6 +41,9 @@ pub struct OptimizedBlockchain {
     cache: Arc<BtrfsCache>,
     numa_topology: Arc<RwLock<Option<NumaTopology>>>,
     cache_enabled: bool,
+    /// Optional channel to the background embedding worker.
+    /// None = embedding disabled (no OpenClaw / Qdrant available).
+    embed_tx: Option<mpsc::Sender<EmbedRequest>>,
 }
 
 impl OptimizedBlockchain {
@@ -73,7 +90,15 @@ impl OptimizedBlockchain {
             cache,
             numa_topology,
             cache_enabled,
+            embed_tx: None,
         })
+    }
+
+    /// Attach an embedding channel. The sender is produced by the caller
+    /// (e.g. op-cognitive-mcp) which owns the worker and the op-llm dependency.
+    pub fn with_embed_channel(mut self, tx: mpsc::Sender<EmbedRequest>) -> Self {
+        self.embed_tx = Some(tx);
+        self
     }
 
     /// Add footprint with NUMA-aware caching
@@ -92,7 +117,29 @@ impl OptimizedBlockchain {
         if self.cache_enabled {
             if let Err(e) = self.cache_block(block_hash.clone(), &footprint).await {
                 warn!("Failed to cache blockchain block {}: {}", block_hash, e);
-                // Don't fail the operation if caching fails
+            }
+        }
+
+        // Fire embedding request — non-blocking, drop if channel is full or absent
+        if let Some(ref tx) = self.embed_tx {
+            let text = footprint_to_embedding_text(&footprint);
+            let payload = simd_json::json!({
+                "plugin_id": footprint.plugin_id,
+                "operation": footprint.operation,
+                "timestamp": footprint.timestamp,
+                "data_hash": footprint.data_hash,
+            });
+            let req = EmbedRequest {
+                block_hash: block_hash.clone(),
+                embedding_text: text,
+                collection: "ctl_plane_reasoning_episodes".to_string(),
+                payload,
+            };
+            if tx.try_send(req).is_err() {
+                debug!(
+                    "Embedding channel full or closed — skipping embed for {}",
+                    block_hash
+                );
             }
         }
 
@@ -283,5 +330,26 @@ impl OptimizedBlockchain {
     /// Get cache statistics
     pub async fn cache_stats(&self) -> Result<op_cache::btrfs_cache::CacheStats> {
         self.cache.stats()
+    }
+}
+
+/// Build a plain-text embedding string from a footprint's fields.
+/// Keeps it simple: the embedder turns this into a vector.
+fn footprint_to_embedding_text(fp: &PluginFootprint) -> String {
+    let meta_parts: Vec<String> = fp
+        .metadata
+        .iter()
+        .map(|(k, v)| format!("{}: {}", k, v))
+        .collect();
+
+    if meta_parts.is_empty() {
+        format!("plugin={} operation={}", fp.plugin_id, fp.operation)
+    } else {
+        format!(
+            "plugin={} operation={} {}",
+            fp.plugin_id,
+            fp.operation,
+            meta_parts.join(" ")
+        )
     }
 }

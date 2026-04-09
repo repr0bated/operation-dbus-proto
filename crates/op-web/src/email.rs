@@ -116,11 +116,18 @@ impl EmailSender {
 
         let creds = Credentials::new(self.config.smtp_user.clone(), self.config.smtp_pass.clone());
 
-        let mailer: AsyncSmtpTransport<Tokio1Executor> =
+        // Our local Maddy submission listener on port 587 is configured with `tls off`,
+        // so plain authenticated SMTP is required there instead of STARTTLS relay mode.
+        let transport_builder = if self.config.smtp_port == 465 {
             AsyncSmtpTransport::<Tokio1Executor>::relay(&self.config.smtp_host)?
-                .port(self.config.smtp_port)
-                .credentials(creds)
-                .build();
+        } else {
+            AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&self.config.smtp_host)
+        };
+
+        let mailer: AsyncSmtpTransport<Tokio1Executor> = transport_builder
+            .port(self.config.smtp_port)
+            .credentials(creds)
+            .build();
 
         mailer.send(email).await.context("Failed to send email")?;
 

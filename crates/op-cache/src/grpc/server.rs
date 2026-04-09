@@ -13,8 +13,7 @@ use super::mcp_service::McpServiceImpl;
 use super::orchestrator_service::OrchestratorServiceImpl;
 use super::proto::{
     agent_service_server::AgentServiceServer, cache_service_server::CacheServiceServer,
-    mcp_service_server::McpServiceServer,
-    orchestrator_service_server::OrchestratorServiceServer,
+    mcp_service_server::McpServiceServer, orchestrator_service_server::OrchestratorServiceServer,
 };
 
 /// Server configuration

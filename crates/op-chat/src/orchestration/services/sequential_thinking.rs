@@ -188,8 +188,7 @@ impl SequentialThinkingService for OrchestrationServer {
             loop {
                 match event_rx.recv().await {
                     Ok(event) => {
-                        let is_complete =
-                            event.status == ChainStatus::Complete as i32;
+                        let is_complete = event.status == ChainStatus::Complete as i32;
                         if tx.send(Ok(event)).await.is_err() {
                             break;
                         }
@@ -209,9 +208,7 @@ impl SequentialThinkingService for OrchestrationServer {
         });
 
         let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
-        Ok(Response::new(
-            Box::pin(stream) as Self::ThinkStreamStream
-        ))
+        Ok(Response::new(Box::pin(stream) as Self::ThinkStreamStream))
     }
 
     /// Conclude a thinking chain.
@@ -233,11 +230,7 @@ impl SequentialThinkingService for OrchestrationServer {
                 success: true,
                 chain_id: req.chain_id,
                 conclusion: chain.conclusion.clone().unwrap_or_default(),
-                overall_confidence: chain
-                    .thoughts
-                    .iter()
-                    .map(|t| t.confidence)
-                    .sum::<f32>()
+                overall_confidence: chain.thoughts.iter().map(|t| t.confidence).sum::<f32>()
                     / chain.thoughts.len().max(1) as f32,
                 steps_used: chain.thoughts.len() as i32,
                 key_insights: chain.thoughts.iter().map(|t| t.thought.clone()).collect(),
@@ -253,10 +246,7 @@ impl SequentialThinkingService for OrchestrationServer {
 
         // Generate conclusion from thoughts
         let conclusion = if chain.thoughts.is_empty() {
-            format!(
-                "No analysis was performed for: {}",
-                chain.problem
-            )
+            format!("No analysis was performed for: {}", chain.problem)
         } else {
             let thought_summaries: Vec<String> = chain
                 .thoughts
@@ -274,8 +264,7 @@ impl SequentialThinkingService for OrchestrationServer {
         let overall_confidence = if chain.thoughts.is_empty() {
             0.0
         } else {
-            chain.thoughts.iter().map(|t| t.confidence).sum::<f32>()
-                / chain.thoughts.len() as f32
+            chain.thoughts.iter().map(|t| t.confidence).sum::<f32>() / chain.thoughts.len() as f32
         };
 
         let key_insights: Vec<String> = chain

@@ -2,7 +2,7 @@
 
 ## Summary
 - Status: Partial
-- Verification: `npx tsc --noEmit`, `npm test`, and `npm run build` all passed in `crates/crates/op-web/ui`.
+- Verification: `npx tsc --noEmit`, `npm test`, and `npm run build` all passed in `crates/op-web/ui`.
 - Assessment: The embedded UI is mechanically buildable, but it does not match the Kiro task checklist or the current backend API surface closely enough to call it feature-complete.
 
 ## Spec References
@@ -13,7 +13,7 @@
 ## Coded Features
 - React Router application with dashboard-style pages for chat, agents, tools, mail, MCP, analytics, workflows, debugger, settings, and OpenClaw.
 - Embedded deployment via `op-web/src/embedded_ui.rs` and `rust-embed`.
-- REST client in `crates/crates/op-web/ui/src/lib/api.ts`.
+- REST client in `crates/op-web/ui/src/lib/api.ts`.
 - React Query wiring via `App.tsx`.
 
 ## Alignment Review
@@ -27,8 +27,8 @@
 - Test coverage is minimal: the UI has one example test file, not the component-level test suite implied by the task list.
 
 ## Evidence
-- `crates/crates/op-web/ui/package.json`
-- `crates/crates/op-web/ui/src/App.tsx`
-- `crates/crates/op-web/ui/src/lib/api.ts`
+- `crates/op-web/ui/package.json`
+- `crates/op-web/ui/src/App.tsx`
+- `crates/op-web/ui/src/lib/api.ts`
 - `.kiro/specs/op-web/tasks.md`
 - `.kiro/specs/op-web-ui/requirements.md`

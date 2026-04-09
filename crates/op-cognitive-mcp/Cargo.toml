@@ -6,6 +6,8 @@ edition = "2021"
 [dependencies]
 op-core = { path = "../op-core" }
 op-mcp = { path = "../op-mcp" }
+op-llm = { path = "../op-llm" }
+op-blockchain = { path = "../op-blockchain" }
 op-state-store = { path = "../op-state-store" }
 op-dynamic-loader = { path = "../op-dynamic-loader" }
 op-cache = { path = "../op-cache" }
@@ -23,4 +25,6 @@ uuid = { version = "1.0", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 async-trait = "0.1"
 clap = { workspace = true, features = ["env"] }
-sqlx = { workspace = true, features = ["sqlite", "runtime-tokio", "chrono", "json"] }
+cozo = { version = "0.7.6", default-features = false, features = ["storage-sled", "rayon"] }
+qdrant-client = "1.17"
+tempfile = { workspace = true }

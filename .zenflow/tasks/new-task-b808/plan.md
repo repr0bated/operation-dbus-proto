@@ -94,3 +94,11 @@ Save to `{@artifacts_path}/plan.md`.
 - Implement `crates/op-chat/src/orchestration/skills.rs` to define concrete skill bindings.
 - Interface with the `pocketflow_rs` workflow engine, ensuring schema validation aligns with plugin instantiation.
 - [ ] Write unit tests verifying workstack execution state transitions and skill resolution.
+
+### [ ] Step: Task 7 - Session Startup Wiring & Constraints
+- Update `crates/op-chat/src/actor.rs`: on session creation, call `GrpcAgentClient::start_session()` with the `run_on_connection` agents from `AgentPoolConfig`.
+- The `run_on_connection` list must resolve against `AgentRegistry` — log error and fail if any name is not registered.
+- On session end/drop, call `end_session()`.
+- **Constraint Check**: Ensure all errors propagate as `OrchestrationError` (no panics, no silent fallbacks).
+- **Constraint Check**: Ensure `SchemaEngine` remains authoritative (schema validation happens before D-Bus dispatch, not in response to signals) — completely replacing any former concepts of `DbusWatcher`.
+- [ ] Write integration tests verifying session actor lifecycle calls and error propagation.

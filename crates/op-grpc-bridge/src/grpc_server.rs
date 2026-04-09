@@ -2411,13 +2411,11 @@ impl MailService for OperationGrpcServer {
                     total_accounts: parsed
                         .get("total_accounts")
                         .and_then(|v| v.as_u64())
-                        .unwrap_or(0)
-                        as u32,
+                        .unwrap_or(0) as u32,
                     total_messages: parsed
                         .get("total_messages")
                         .and_then(|v| v.as_u64())
-                        .unwrap_or(0)
-                        as u32,
+                        .unwrap_or(0) as u32,
                     last_checked: Some(OperationGrpcServer::now_ts()),
                     message: "ok".to_string(),
                 }))
@@ -2529,10 +2527,7 @@ impl MailService for OperationGrpcServer {
             "domain": req.domain
         });
 
-        match self
-            .mail_dbus_call("admin_action", &args.to_string())
-            .await
-        {
+        match self.mail_dbus_call("admin_action", &args.to_string()).await {
             Ok(result) => {
                 let parsed: serde_json::Value = serde_json::from_str(&result).unwrap_or_default();
                 Ok(Response::new(AdminMailActionResponse {
@@ -2596,10 +2591,7 @@ impl MailService for OperationGrpcServer {
             "check_webmail": req.check_webmail
         });
 
-        match self
-            .mail_dbus_call("check_server", &args.to_string())
-            .await
-        {
+        match self.mail_dbus_call("check_server", &args.to_string()).await {
             Ok(result) => {
                 let parsed: serde_json::Value = serde_json::from_str(&result).unwrap_or_default();
                 Ok(Response::new(CheckMailServerResponse {
@@ -3147,10 +3139,7 @@ impl PrivacyNetworkService for OperationGrpcServer {
                     .schema_engine
                     .process_grpc_mutation(
                         "privacy".to_string(),
-                        format!(
-                            "/org/opdbus/v1/privacy/components/{}",
-                            req.component
-                        ),
+                        format!("/org/opdbus/v1/privacy/components/{}", req.component),
                         ChangeType::MethodCall,
                         Some("manage_component".to_string()),
                         mutation_value,
@@ -3240,15 +3229,9 @@ impl PrivacyNetworkService for OperationGrpcServer {
                                     .get("grpc_proxy_enabled")
                                     .and_then(|v| v.as_bool())
                                     .unwrap_or(false),
-                                http_port: p
-                                    .get("http_port")
-                                    .and_then(|v| v.as_u64())
-                                    .unwrap_or(0)
+                                http_port: p.get("http_port").and_then(|v| v.as_u64()).unwrap_or(0)
                                     as u32,
-                                grpc_port: p
-                                    .get("grpc_port")
-                                    .and_then(|v| v.as_u64())
-                                    .unwrap_or(0)
+                                grpc_port: p.get("grpc_port").and_then(|v| v.as_u64()).unwrap_or(0)
                                     as u32,
                                 proxy_mode: p
                                     .get("proxy_mode")
@@ -3469,10 +3452,7 @@ impl PrivacyNetworkService for OperationGrpcServer {
                     .schema_engine
                     .process_grpc_mutation(
                         "privacy".to_string(),
-                        format!(
-                            "/org/opdbus/v1/privacy/routing/{}",
-                            req.container_name
-                        ),
+                        format!("/org/opdbus/v1/privacy/routing/{}", req.container_name),
                         ChangeType::MethodCall,
                         Some("configure_routing".to_string()),
                         mutation_value,
@@ -3560,10 +3540,10 @@ impl PrivacyNetworkService for OperationGrpcServer {
 
 use crate::proto::registration::{
     registration_service_server::RegistrationService, AdminUserActionRequest,
-    AdminUserActionResponse, GetUserStatusRequest, GetUserStatusResponse, GetWireGuardConfigRequest,
-    GetWireGuardConfigResponse, ListUsersRequest, ListUsersResponse, RegisterUserRequest,
-    RegisterUserResponse, SendMagicLinkRequest, SendMagicLinkResponse, VerifyMagicLinkRequest,
-    VerifyMagicLinkResponse,
+    AdminUserActionResponse, GetUserStatusRequest, GetUserStatusResponse,
+    GetWireGuardConfigRequest, GetWireGuardConfigResponse, ListUsersRequest, ListUsersResponse,
+    RegisterUserRequest, RegisterUserResponse, SendMagicLinkRequest, SendMagicLinkResponse,
+    VerifyMagicLinkRequest, VerifyMagicLinkResponse,
 };
 
 impl OperationGrpcServer {
@@ -3670,7 +3650,9 @@ impl RegistrationService for OperationGrpcServer {
 
                 Ok(Response::new(SendMagicLinkResponse {
                     success: false,
-                    message: "Registration D-Bus service unavailable; magic link recorded in state store".to_string(),
+                    message:
+                        "Registration D-Bus service unavailable; magic link recorded in state store"
+                            .to_string(),
                     token: Some(token),
                     expires_at: Some(ProstTimestamp {
                         seconds: chrono::Utc::now().timestamp() + 3600,
@@ -3860,9 +3842,8 @@ impl RegistrationService for OperationGrpcServer {
                 Ok(Response::new(RegisterUserResponse {
                     success: false,
                     user_id,
-                    message:
-                        "Registration D-Bus service unavailable; user recorded in state store"
-                            .to_string(),
+                    message: "Registration D-Bus service unavailable; user recorded in state store"
+                        .to_string(),
                     assigned_ip: String::new(),
                     wireguard_config: String::new(),
                     registered_at: Some(OperationGrpcServer::now_ts()),

@@ -157,12 +157,10 @@ pub async fn run_orchestration_server(
     addr: std::net::SocketAddr,
 ) -> Result<(), tonic::transport::Error> {
     use super::proto::op_chat_orchestration::{
-        agent_execution_server::AgentExecutionServer,
-        agent_lifecycle_server::AgentLifecycleServer,
+        agent_execution_server::AgentExecutionServer, agent_lifecycle_server::AgentLifecycleServer,
         backend_architect_service_server::BackendArchitectServiceServer,
         context_manager_service_server::ContextManagerServiceServer,
-        memory_service_server::MemoryServiceServer,
-        rust_pro_service_server::RustProServiceServer,
+        memory_service_server::MemoryServiceServer, rust_pro_service_server::RustProServiceServer,
         sequential_thinking_service_server::SequentialThinkingServiceServer,
         workstack_service_server::WorkstackServiceServer,
     };

@@ -6,7 +6,9 @@
     "workbench.editor.enablePreviewFromQuickOpen": true,
     "workbench.editor.enablePreviewFromCodeNavigation": true,
     "terminal.integrated.suggest.enabled": true,
-    "kiroAgent.modelSelection": "qwen3-coder-next",
+    "kiroAgent.modelSelection": "deepseek-3.2",
     "kiroAgent.configureMCP": "Disabled",
-    "terminal.integrated.copyOnSelection": true
+    "terminal.integrated.copyOnSelection": true,
+    "google.cloud.project": "codeassist-492619",
+    "geminicodeassist.project": "codeassist-492619"
 }

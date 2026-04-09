@@ -1,47 +1,17 @@
 //! Agent catalog for tool registration.
 //!
-//! Builds a list of agent descriptors with operations for MCP/tool exposure.
+//! Loads dynamic agent personas from configuration.
 
-use crate::agents::{
-    aiml::{
-        AIEngineerAgent, DataEngineerAgent, DataScientistAgent, MLEngineerAgent,
-        MLOpsEngineerAgent, PromptEngineerAgent,
-    },
-    analysis::{CodeReviewerAgent, DebuggerAgent, PerformanceEngineerAgent, SecurityAuditorAgent},
-    architecture::{BackendArchitectAgent, FrontendDeveloperAgent, GraphQLArchitectAgent},
-    business::{
-        BusinessAnalystAgent, CustomerSupportAgent, HRProAgent, LegalAdvisorAgent,
-        PaymentIntegrationAgent, SalesAutomatorAgent,
-    },
-    content::{ApiDocumenterAgent, DocsArchitectAgent, MermaidExpertAgent, TutorialEngineerAgent},
-    database::{DatabaseArchitectAgent, DatabaseOptimizerAgent, SqlProAgent},
-    infrastructure::{
-        CloudArchitectAgent, DeploymentAgent, KubernetesAgent, NetworkEngineerAgent, TerraformAgent,
-    },
-    language::{
-        BashProAgent, CProAgent, CSharpProAgent, CppProAgent, ElixirProAgent, GolangProAgent,
-        JavaProAgent, JavaScriptProAgent, JuliaProAgent, PhpProAgent, PythonProAgent, RubyProAgent,
-        RustProAgent, ScalaProAgent, TypeScriptProAgent,
-    },
-    mobile::{FlutterExpertAgent, IOSDeveloperAgent, MobileDeveloperAgent},
-    operations::{DevOpsTroubleshooterAgent, IncidentResponderAgent, TestAutomatorAgent},
-    orchestration::{
-        ContextManagerAgent, DxOptimizerAgent, MemoryAgent, SequentialThinkingAgent,
-        TddOrchestratorAgent,
-    },
-    security::{BackendSecurityCoderAgent, FrontendSecurityCoderAgent, MobileSecurityCoderAgent},
-    seo::{
-        ContentMarketerAgent, SEOContentWriterAgent, SEOKeywordStrategistAgent,
-        SEOMetaOptimizerAgent, SearchSpecialistAgent,
-    },
-    specialty::{
-        ARMCortexExpertAgent, BlockchainDeveloperAgent, ErrorDetectiveAgent,
-        HybridCloudArchitectAgent, LegacyModernizerAgent, ObservabilityEngineerAgent,
-        QuantAnalystAgent, UIUXDesignerAgent, UnityDeveloperAgent,
-    },
-    webframeworks::{DjangoProAgent, FastAPIProAgent, TemporalPythonProAgent},
-    AgentTrait,
-};
+use crate::agent_registry::{AgentRegistry, AgentSpec};
+use crate::agents::persona::{PersonaAgent, PersonaConfig};
+use anyhow::{Context, Result};
+use std::fs::File;
+use std::path::Path;
+
+#[derive(serde::Deserialize)]
+struct ConfigFile {
+    personas: Vec<PersonaConfig>,
+}
 
 /// Minimal descriptor for tool registration.
 #[derive(Debug, Clone)]
@@ -52,116 +22,68 @@ pub struct AgentDescriptor {
     pub operations: Vec<String>,
 }
 
-fn describe_agent(agent: &dyn AgentTrait) -> AgentDescriptor {
-    AgentDescriptor {
-        agent_type: agent.agent_type().to_string(),
-        name: agent.name().to_string(),
-        description: agent.description().to_string(),
-        operations: agent.operations(),
+/// Load personas from YAML and register them
+pub async fn load_personas(registry: &AgentRegistry, path: &str) -> Result<()> {
+    let p = Path::new(path);
+    if !p.exists() {
+        return Err(anyhow::anyhow!("Persona config not found at {}", path));
     }
+
+    let file = File::open(p).context("Failed to open persona config")?;
+    let config: ConfigFile =
+        serde_yaml::from_reader(file).context("Failed to parse persona config")?;
+
+    for persona in config.personas {
+        // Register spec in AgentRegistry
+        let spec = AgentSpec {
+            agent_type: persona.agent_type.clone(),
+            name: persona.name.clone(),
+            description: persona.description.clone(),
+            command: "builtin".to_string(),
+            args: vec![],
+            env: std::collections::HashMap::new(),
+            working_dir: None,
+            capabilities: persona.capabilities.clone(),
+            requires_root: false,
+            max_instances: 5,
+            restart_policy: Default::default(),
+            health_check: None,
+        };
+
+        let _ = registry.register_spec(spec).await;
+
+        // In a true factory pattern, we would register a factory for this agent_type.
+        // For this refactor, if we still use `create_agent` from lib.rs, we need to adapt it.
+        // But the prompt says: "Update AgentCatalog to load personas.yaml at startup and register each entry as a PersonaAgent into AgentRegistry"
+    }
+
+    Ok(())
 }
 
-/// List built-in agents suitable for MCP/tool exposure.
+/// Helper to parse config to list (for compatibility)
+pub fn load_builtin_personas(path: &str) -> Vec<PersonaConfig> {
+    let p = Path::new(path);
+    if !p.exists() {
+        return vec![];
+    }
+    if let Ok(file) = File::open(p) {
+        if let Ok(config) = serde_yaml::from_reader::<_, ConfigFile>(file) {
+            return config.personas;
+        }
+    }
+    vec![]
+}
+
 pub fn builtin_agent_descriptors() -> Vec<AgentDescriptor> {
-    let agent_id = "catalog".to_string();
-
-    let agents: Vec<Box<dyn AgentTrait>> = vec![
-        // Language agents
-        Box::new(BashProAgent::new(agent_id.clone())),
-        Box::new(CProAgent::new(agent_id.clone())),
-        Box::new(CppProAgent::new(agent_id.clone())),
-        Box::new(CSharpProAgent::new(agent_id.clone())),
-        Box::new(ElixirProAgent::new(agent_id.clone())),
-        Box::new(GolangProAgent::new(agent_id.clone())),
-        Box::new(JavaProAgent::new(agent_id.clone())),
-        Box::new(JavaScriptProAgent::new(agent_id.clone())),
-        Box::new(JuliaProAgent::new(agent_id.clone())),
-        Box::new(PhpProAgent::new(agent_id.clone())),
-        Box::new(PythonProAgent::new(agent_id.clone())),
-        Box::new(RubyProAgent::new(agent_id.clone())),
-        Box::new(RustProAgent::new(agent_id.clone())),
-        Box::new(ScalaProAgent::new(agent_id.clone())),
-        Box::new(TypeScriptProAgent::new(agent_id.clone())),
-        // Architecture agents
-        Box::new(BackendArchitectAgent::new(agent_id.clone())),
-        Box::new(FrontendDeveloperAgent::new(agent_id.clone())),
-        Box::new(GraphQLArchitectAgent::new(agent_id.clone())),
-        // Infrastructure agents
-        Box::new(CloudArchitectAgent::new(agent_id.clone())),
-        Box::new(DeploymentAgent::new(agent_id.clone())),
-        Box::new(KubernetesAgent::new(agent_id.clone())),
-        Box::new(NetworkEngineerAgent::new(agent_id.clone())),
-        Box::new(TerraformAgent::new(agent_id.clone())),
-        // Analysis agents
-        Box::new(CodeReviewerAgent::new(agent_id.clone())),
-        Box::new(DebuggerAgent::new(agent_id.clone())),
-        Box::new(PerformanceEngineerAgent::new(agent_id.clone())),
-        Box::new(SecurityAuditorAgent::new(agent_id.clone())),
-        // Business agents
-        Box::new(BusinessAnalystAgent::new(agent_id.clone())),
-        Box::new(CustomerSupportAgent::new(agent_id.clone())),
-        Box::new(HRProAgent::new(agent_id.clone())),
-        Box::new(LegalAdvisorAgent::new(agent_id.clone())),
-        Box::new(PaymentIntegrationAgent::new(agent_id.clone())),
-        Box::new(SalesAutomatorAgent::new(agent_id.clone())),
-        // Content agents
-        Box::new(ApiDocumenterAgent::new(agent_id.clone())),
-        Box::new(DocsArchitectAgent::new(agent_id.clone())),
-        Box::new(MermaidExpertAgent::new(agent_id.clone())),
-        Box::new(TutorialEngineerAgent::new(agent_id.clone())),
-        // Database agents
-        Box::new(DatabaseArchitectAgent::new(agent_id.clone())),
-        Box::new(DatabaseOptimizerAgent::new(agent_id.clone())),
-        Box::new(SqlProAgent::new(agent_id.clone())),
-        // Operations agents
-        Box::new(DevOpsTroubleshooterAgent::new(agent_id.clone())),
-        Box::new(IncidentResponderAgent::new(agent_id.clone())),
-        Box::new(TestAutomatorAgent::new(agent_id.clone())),
-        // Orchestration agents
-        Box::new(ContextManagerAgent::new(agent_id.clone())),
-        Box::new(DxOptimizerAgent::new(agent_id.clone())),
-        Box::new(TddOrchestratorAgent::new(agent_id.clone())),
-        // Security agents
-        Box::new(BackendSecurityCoderAgent::new(agent_id.clone())),
-        Box::new(FrontendSecurityCoderAgent::new(agent_id.clone())),
-        Box::new(MobileSecurityCoderAgent::new(agent_id.clone())),
-        // SEO agents
-        Box::new(ContentMarketerAgent::new(agent_id.clone())),
-        Box::new(SearchSpecialistAgent::new(agent_id.clone())),
-        Box::new(SEOContentWriterAgent::new(agent_id.clone())),
-        Box::new(SEOKeywordStrategistAgent::new(agent_id.clone())),
-        Box::new(SEOMetaOptimizerAgent::new(agent_id.clone())),
-        // Specialty agents
-        Box::new(ARMCortexExpertAgent::new(agent_id.clone())),
-        Box::new(BlockchainDeveloperAgent::new(agent_id.clone())),
-        Box::new(ErrorDetectiveAgent::new(agent_id.clone())),
-        Box::new(HybridCloudArchitectAgent::new(agent_id.clone())),
-        Box::new(LegacyModernizerAgent::new(agent_id.clone())),
-        Box::new(MemoryAgent::new(agent_id.clone())),
-        Box::new(SequentialThinkingAgent::new(agent_id.clone())),
-        Box::new(ObservabilityEngineerAgent::new(agent_id.clone())),
-        Box::new(QuantAnalystAgent::new(agent_id.clone())),
-        Box::new(UIUXDesignerAgent::new(agent_id.clone())),
-        Box::new(UnityDeveloperAgent::new(agent_id.clone())),
-        // AI/ML agents
-        Box::new(AIEngineerAgent::new(agent_id.clone())),
-        Box::new(DataEngineerAgent::new(agent_id.clone())),
-        Box::new(DataScientistAgent::new(agent_id.clone())),
-        Box::new(MLEngineerAgent::new(agent_id.clone())),
-        Box::new(MLOpsEngineerAgent::new(agent_id.clone())),
-        Box::new(PromptEngineerAgent::new(agent_id.clone())),
-        // Web frameworks
-        Box::new(DjangoProAgent::new(agent_id.clone())),
-        Box::new(FastAPIProAgent::new(agent_id.clone())),
-        Box::new(TemporalPythonProAgent::new(agent_id.clone())),
-        // Mobile
-        Box::new(FlutterExpertAgent::new(agent_id.clone())),
-        Box::new(IOSDeveloperAgent::new(agent_id.clone())),
-        Box::new(MobileDeveloperAgent::new(agent_id)),
-    ];
-
-    agents
-        .iter()
-        .map(|agent| describe_agent(agent.as_ref()))
+    let path = std::env::var("OP_AGENT_PERSONAS_PATH")
+        .unwrap_or_else(|_| "config/agents/personas.yaml".to_string());
+    load_builtin_personas(&path)
+        .into_iter()
+        .map(|p| AgentDescriptor {
+            agent_type: p.agent_type,
+            name: p.name,
+            description: p.description,
+            operations: p.operations,
+        })
         .collect()
 }

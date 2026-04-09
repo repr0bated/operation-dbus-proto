@@ -498,6 +498,11 @@ upstream op_mcp_backend {
     keepalive 32;
 }
 
+upstream op_dbus_grpc_backend {
+    server ${OP_DBUS_GRPC_ADDR:-10.200.0.2:50051};
+    keepalive 32;
+}
+
 # HTTP redirect to HTTPS
 server {
     listen 80;
@@ -542,6 +547,23 @@ server {
         proxy_set_header X-Forwarded-Proto \$scheme;
     }
 
+    # gRPC-Web bridge
+    location ~ ^/operation\.[^/]+/[^/]+$ {
+        proxy_pass http://op_dbus_grpc_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header X-Forwarded-Host \$host;
+        proxy_set_header TE \$http_te;
+        proxy_set_header Connection "TE";
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_read_timeout 86400;
+        proxy_send_timeout 86400;
+    }
+
     # WebSocket support
     location /ws {
         proxy_pass http://op_web_backend/ws;
@@ -567,6 +589,22 @@ server {
     location /health {
         proxy_pass http://op_web_backend/api/health;
         proxy_http_version 1.1;
+    }
+
+    location = /grpc.health.v1.Health/Check {
+        proxy_pass http://op_dbus_grpc_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header X-Forwarded-Host \$host;
+        proxy_set_header TE \$http_te;
+        proxy_set_header Connection "TE";
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_read_timeout 60;
+        proxy_send_timeout 60;
     }
 
     # Static files

@@ -2,7 +2,7 @@
 
 ## Scope
 - Rust workspace crates under `crates/crates/op-*`.
-- Frontend apps under `crates/` and `crates/crates/op-web/ui`.
+- Frontend apps under `crates/` and `crates/op-web/ui`.
 - Kiro specs under `.kiro/specs/*` where available.
 
 ## Method
@@ -15,7 +15,7 @@
 - Rust crates building individually: 28
 - Rust crates currently failing to build: 3
 - Root `crates/` frontend: typecheck/build/test pass after dependency install.
-- Embedded `crates/crates/op-web/ui` frontend: typecheck/build/test pass, but feature completeness and backend alignment are still partial.
+- Embedded `crates/op-web/ui` frontend: typecheck/build/test pass, but feature completeness and backend alignment are still partial.
 
 ## Major Findings
 - `op-web` is not currently buildable because `crates/crates/op-web/src/email.rs` references `magic_url` before it is defined. That blocks the single-binary web product path.
@@ -70,6 +70,5 @@
 - `cargo check -p op-services`
 - `cargo check -p op-web`
 - Per-crate `cargo check -p <crate>` matrix (unique result set summarized here).
-- `cd crates/crates/op-web/ui && npx tsc --noEmit && npm test && npm run build`
+- `cd crates/op-web/ui && npx tsc --noEmit && npm test && npm run build`
 - `cd crates && npm ci && npx tsc --noEmit && npm test && npm run build`
-

@@ -1,14 +1,24 @@
 # Database and State
 OP_DBUS_STATE_DIR=/var/lib/op-dbus
 
-# gRPC — op-dbus server on ovsbr0 (reachable by all containers)
-OP_DBUS_GRPC_ADDR=http://10.88.88.1:50051
+# gRPC — op-dbus server on grpc-bridge OVS internal port (reachable by all ovsbr0 containers)
+# OP_DBUS_GRPC_ADDR must be a bare host:port SocketAddr — no http:// prefix.
+OP_DBUS_ENABLE_GRPC=1
+OP_DBUS_GRPC_ADDR=10.200.0.2:50051
 
 # OpenFlow controller on ovsbr0
 OPENFLOW_CONTROLLER=tcp:10.88.88.1:6653
 
-# Email Configuration for Magic Links (Maddy Mail Server from MAIL-SERVER-FINAL-CONFIG.md)
-SMTP_HOST=10.149.181.121
+# OVS privacy bridge port CIDRs (read by ovs-attach-ports.sh and privacy_router plugin)
+PRIVACY_MGMT_CIDR=10.200.0.1/24
+PRIVACY_GRPC_BRIDGE_CIDR=10.200.0.2/24
+
+# DNS nameservers for OVS-attached Incus containers (NextDNS via services container)
+# Written to /etc/resolv.conf inside privacy_router system containers at runtime.
+PRIVACY_DNS_NAMESERVERS=10.149.181.188,1.1.1.1
+
+# Email Configuration for Magic Links
+SMTP_HOST=10.149.181.188
 SMTP_PORT=587
 SMTP_USER=jeremy@3tched.com
 SMTP_PASS=jeremy123

@@ -87,9 +87,10 @@ add_internal_port priv_warp
 add_internal_port priv_wg
 add_internal_port ovsbr0-mgmt
 add_internal_port ovsbr0-sock
+add_internal_port grpc-bridge
 
-# --- Bring up internal ports and assign IPs ---
-for port in priv_xray priv_warp priv_wg ovsbr0-mgmt ovsbr0-sock; do
+# --- Bring up internal ports ---
+for port in priv_xray priv_warp priv_wg ovsbr0-mgmt ovsbr0-sock grpc-bridge; do
   if wait_for_iface "$port"; then
     ip link set "$port" up
   else
@@ -106,6 +107,23 @@ if ip link show priv_xray >/dev/null 2>&1; then
   ip rule add from 15.235.37.41/32 table 200 priority 100 2>/dev/null || true
   ip route replace default via 148.113.204.1 dev priv_xray table 200 metric 100 onlink 2>/dev/null || true
   echo "ovs-attach-ports: priv_xray configured with 15.235.37.41"
+fi
+
+# ovsbr0-mgmt: management IP for op-dbus control-plane (OpenFlow controller etc.)
+MGMT_CIDR="${PRIVACY_MGMT_CIDR:-10.200.0.1/24}"
+if ip link show ovsbr0-mgmt >/dev/null 2>&1; then
+  ip addr flush dev ovsbr0-mgmt 2>/dev/null || true
+  ip addr add "$MGMT_CIDR" dev ovsbr0-mgmt
+  echo "ovs-attach-ports: ovsbr0-mgmt configured with ${MGMT_CIDR}"
+fi
+
+# grpc-bridge: dedicated OVS internal port for the gRPC server to bind on.
+# All Incus containers on ovsbr0 reach gRPC via this IP.
+GRPC_BRIDGE_CIDR="${PRIVACY_GRPC_BRIDGE_CIDR:-10.200.0.2/24}"
+if ip link show grpc-bridge >/dev/null 2>&1; then
+  ip addr flush dev grpc-bridge 2>/dev/null || true
+  ip addr add "$GRPC_BRIDGE_CIDR" dev grpc-bridge
+  echo "ovs-attach-ports: grpc-bridge configured with ${GRPC_BRIDGE_CIDR}"
 fi
 
 echo "ovs-attach-ports: done"

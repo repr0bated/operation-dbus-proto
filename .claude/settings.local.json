@@ -1,7 +1,32 @@
 {
   "permissions": {
     "allow": [
-      "Bash(doas ./deploy/deploy.sh 2>&1)"
+      "Bash(doas ./deploy/deploy.sh 2>&1)",
+      "Bash(cargo check:*)",
+      "Bash(wgcf --help)",
+      "Bash(curl -s https://api.github.com/repos/ViRb3/wgcf/releases/latest)",
+      "Bash(curl -sL \"https://github.com/ViRb3/wgcf/releases/download/v2.2.30/wgcf_2.2.30_linux_amd64\" -o /tmp/wgcf)",
+      "Bash(chmod +x /tmp/wgcf)",
+      "Bash(/tmp/wgcf --help)",
+      "Bash(sudo install:*)",
+      "Bash(mkdir -p /tmp/wgcf-setup)",
+      "Read(//tmp/**)",
+      "Bash(wgcf register:*)",
+      "Bash(wgcf generate:*)",
+      "Bash(sudo mkdir:*)",
+      "Bash(sudo cp:*)",
+      "Bash(sudo:*)",
+      "Bash(git:*)",
+      "Bash(command -v dinitctl)",
+      "Bash(command -v incus)",
+      "Bash(command -v wg-quick)",
+      "Bash(systemctl --version)",
+      "Read(//proc/1/**)",
+      "Bash(snap list:*)",
+      "Read(//var/lib/**)",
+      "Bash(apt-cache show:*)",
+      "Bash(command -v apk)",
+      "Bash(apk search:*)"
     ]
   }
 }

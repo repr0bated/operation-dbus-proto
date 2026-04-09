@@ -10,13 +10,12 @@
 //! this file still exports `PluginRegistry` because much of the workspace still
 //! uses that name. New code should think of it as a plugin catalog entry point.
 
+use crate::plugin::PluginMetadata;
 use anyhow::{anyhow, Result};
 use op_core::state_publisher::StatePublisher;
 use op_dbus_model::{CatalogDocument, SqlitePluginCatalog};
 use op_state::StatePlugin;
-use op_state_store::{
-    builtin_plugin_schema, PluginSchema, SchemaCatalog, SchemaRegistry,
-};
+use op_state_store::{builtin_plugin_schema, PluginSchema, SchemaCatalog, SchemaRegistry};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -24,7 +23,6 @@ use std::sync::Arc;
 use tokio::process::Command;
 use tokio::sync::RwLock as AsyncRwLock;
 use tracing::{info, warn};
-use crate::plugin::PluginMetadata;
 
 /// Live runtime record for a registered plugin instance.
 ///
@@ -162,7 +160,8 @@ impl PluginRegistry {
         //
         // This keeps the persisted canonical plugin document ahead of local
         // projection caches and avoids reintroducing a second authority.
-        let document = build_catalog_document(plugin.as_ref(), &schema, &dbus_path_str, &storage_path);
+        let document =
+            build_catalog_document(plugin.as_ref(), &schema, &dbus_path_str, &storage_path);
 
         if let Some(catalog_store) = &self.schema_catalog_store {
             catalog_store.upsert_document(&document).await?;
