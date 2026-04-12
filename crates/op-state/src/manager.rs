@@ -2,24 +2,17 @@
 
 use crate::plugin::{ApplyResult, StateDiff, StatePlugin};
 use anyhow::{anyhow, Result};
-use op_state_store::{SchemaCatalog, SchemaRegistry, StateStore};
-use parking_lot::RwLock;
+use op_state_store::StateStore;
+use tokio::sync::RwLock;
 use simd_json::OwnedValue as Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// Global state manager
+/// State manager for coordinating plugins and their lifecycle
 pub struct StateManager {
     plugins: Arc<RwLock<HashMap<String, Arc<dyn StatePlugin>>>>,
     #[allow(dead_code)]
     store: Option<Arc<dyn StateStore>>,
-    schema_catalog: Arc<RwLock<SchemaCatalog>>,
-}
-
-impl Default for StateManager {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 impl StateManager {
@@ -28,104 +21,120 @@ impl StateManager {
         Self {
             plugins: Arc::new(RwLock::new(HashMap::new())),
             store: None,
-            schema_catalog: Arc::new(RwLock::new(SchemaCatalog::new())),
         }
     }
 
-    /// Preferred constructor: create with a specific schema catalog.
-    pub fn with_schema_catalog(schema_catalog: Arc<RwLock<SchemaCatalog>>) -> Self {
+    /// Create a new state manager with a persistent store
+    pub fn with_store(store: Arc<dyn StateStore>) -> Self {
         Self {
             plugins: Arc::new(RwLock::new(HashMap::new())),
-            store: None,
-            schema_catalog,
+            store: Some(store),
         }
-    }
-
-    /// Compatibility constructor for older call sites that still pass the
-    /// catalog under the `schema_registry` name.
-    pub fn with_schema_registry(schema_registry: Arc<RwLock<SchemaRegistry>>) -> Self {
-        Self::with_schema_catalog(schema_registry)
     }
 
     /// Register a plugin
-    pub fn register_plugin(&self, name: String, plugin: Arc<dyn StatePlugin>) {
-        self.plugins.write().insert(name, plugin);
+    pub async fn register_plugin(&self, name: String, plugin: Arc<dyn StatePlugin>) {
+        let mut plugins = self.plugins.write().await;
+        plugins.insert(name, plugin);
     }
 
     /// Get a plugin by name
-    pub fn get_plugin(&self, name: &str) -> Option<Arc<dyn StatePlugin>> {
-        self.plugins.read().get(name).cloned()
+    pub async fn get_plugin(&self, name: &str) -> Option<Arc<dyn StatePlugin>> {
+        let plugins = self.plugins.read().await;
+        plugins.get(name).cloned()
     }
 
     /// List all registered plugins
-    pub fn list_plugins(&self) -> Vec<String> {
-        self.plugins.read().keys().cloned().collect()
+    pub async fn list_plugins(&self) -> Vec<String> {
+        let plugins = self.plugins.read().await;
+        plugins.keys().cloned().collect()
     }
 
-    /// Compatibility accessor. Architecturally this is the schema catalog used
-    /// for lookup and validation, not a second source of truth.
-    pub fn schema_registry(&self) -> Arc<RwLock<SchemaRegistry>> {
-        self.schema_catalog.clone()
-    }
-
-    pub fn schema_catalog(&self) -> Arc<RwLock<SchemaCatalog>> {
-        self.schema_catalog.clone()
-    }
-
-    /// Query current state for all plugins
+    /// Query the current state of all plugins (best-effort).
+    ///
+    /// Individual plugin failures are logged and skipped so that one
+    /// slow/unavailable backend (e.g. OVSDB) does not prevent the rest
+    /// of the system from seeding.
     pub async fn query_current_state(&self) -> Result<HashMap<String, Value>> {
-        let mut state = HashMap::new();
-        let plugin_map = self.plugins.read().clone();
+        let plugins = self.plugins.read().await;
+        let mut states = HashMap::new();
 
-        for (name, plugin) in plugin_map {
-            if let Ok(plugin_state) = plugin.query_current_state().await {
-                state.insert(name, plugin_state);
+        for (name, plugin) in plugins.iter() {
+            match plugin.query_current_state().await {
+                Ok(state) => {
+                    states.insert(name.clone(), state);
+                }
+                Err(e) => {
+                    tracing::warn!(plugin = %name, "Skipping plugin state query: {}", e);
+                }
             }
         }
-        Ok(state)
+
+        Ok(states)
     }
 
-    /// Validate a desired plugin state against the authoritative schema catalog.
-    pub fn validate_plugin_state(&self, plugin_name: &str, desired: &Value) -> Result<()> {
-        let validation = self
-            .schema_catalog
-            .read()
-            .validate(plugin_name, desired)
-            .ok_or_else(|| anyhow!("Schema '{}' not found in schema catalog", plugin_name))?;
-
-        if validation.valid {
-            return Ok(());
-        }
-
-        Err(anyhow!(
-            "State rejected by schema '{}': {}",
-            plugin_name,
-            validation.errors.join("; ")
-        ))
-    }
-
-    /// Apply a full desired state document for one plugin.
-    pub async fn apply_plugin_state(
-        &self,
-        plugin_name: &str,
-        desired: Value,
-    ) -> Result<ApplyResult> {
-        self.validate_plugin_state(plugin_name, &desired)?;
-
+    /// Get the current state of a single plugin
+    pub async fn query_plugin_state(&self, plugin_name: &str) -> Result<Value> {
         let plugin = self
             .get_plugin(plugin_name)
+            .await
             .ok_or_else(|| anyhow!("Plugin '{}' not found", plugin_name))?;
-        let current = plugin.query_current_state().await?;
-        let diff = plugin.calculate_diff(&current, &desired).await?;
-
-        plugin.apply_state(&diff).await
+        plugin.query_current_state().await
     }
 
-    /// Apply state to a plugin
-    pub async fn apply_state(&self, diff: StateDiff) -> Result<ApplyResult> {
+    /// Validate a desired plugin state.
+    ///
+    /// Runtime Definition Policy:
+    /// 1. The live plugin code is the primary authority for its own schema.
+    /// 2. This manager does not use an external catalog for live validation.
+    pub async fn validate_plugin_state(&self, plugin_name: &str, desired: &Value) -> Result<()> {
+        let plugin = self
+            .get_plugin(plugin_name)
+            .await
+            .ok_or_else(|| anyhow!("Plugin '{}' not found", plugin_name))?;
+
+        // Validate using the live plugin's internal schema
+        if let Some(schema) = plugin.schema() {
+            let validation = schema.validate(desired);
+            if validation.valid {
+                return Ok(());
+            }
+            return Err(anyhow!(
+                "State rejected by live plugin schema '{}': {}",
+                plugin_name,
+                validation.errors.join("; ")
+            ));
+        }
+
+        // If no schema is provided by the plugin, it's considered schema-less at runtime
+        Ok(())
+    }
+
+    /// Apply a state change to a plugin
+    pub async fn apply_diff(&self, diff: &StateDiff) -> Result<ApplyResult> {
         let plugin = self
             .get_plugin(&diff.plugin)
+            .await
             .ok_or_else(|| anyhow!("Plugin '{}' not found", diff.plugin))?;
+        plugin.apply_state(diff).await
+    }
+
+    /// Compatibility helper for older D-Bus code.
+    /// Calculates diff between current and desired state and applies it.
+    pub async fn apply_plugin_state(&self, plugin_name: &str, desired: Value) -> Result<ApplyResult> {
+        let plugin = self
+            .get_plugin(plugin_name)
+            .await
+            .ok_or_else(|| anyhow!("Plugin '{}' not found", plugin_name))?;
+        
+        let current = plugin.query_current_state().await?;
+        let diff = plugin.calculate_diff(&current, &desired).await?;
         plugin.apply_state(&diff).await
+    }
+}
+
+impl Default for StateManager {
+    fn default() -> Self {
+        Self::new()
     }
 }

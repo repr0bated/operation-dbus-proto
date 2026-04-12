@@ -19,7 +19,10 @@ impl CognitiveMcpServer {
 
         CognitiveToolRegistry::register_all(&tool_registry, graph_store.clone()).await?;
 
-        Ok(Self { graph_store, tool_registry })
+        Ok(Self {
+            graph_store,
+            tool_registry,
+        })
     }
 
     pub async fn start_http_server(self, addr: &str) -> Result<(), Box<dyn std::error::Error>> {

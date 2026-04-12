@@ -4,6 +4,7 @@
 
 use anyhow::{Context, Result};
 use simd_json::prelude::*;
+use simd_json::value::owned::Object;
 use simd_json::{json, OwnedValue as Value};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -124,8 +125,145 @@ impl OvsdbClient {
         self.rpc_call("get_schema", json!([db])).await
     }
 
+    async fn validate_mutation_operations(&self, db: &str, operations: &Value) -> Result<()> {
+        let Some(ops) = operations.as_array() else {
+            return Err(anyhow::anyhow!(
+                "OVSDB transaction operations must be an array"
+            ));
+        };
+
+        if !ops.iter().any(Self::operation_changes_rows) {
+            return Ok(());
+        }
+
+        let schema = self.get_schema(db).await?;
+        Self::validate_operations_against_schema(&schema, operations)
+    }
+
+    fn validate_operations_against_schema(schema: &Value, operations: &Value) -> Result<()> {
+        let tables = schema
+            .get("tables")
+            .and_then(|v| v.as_object())
+            .ok_or_else(|| anyhow::anyhow!("Invalid OVSDB schema: missing tables"))?;
+
+        let ops = operations
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("OVSDB transaction operations must be an array"))?;
+
+        for (idx, op) in ops.iter().enumerate() {
+            if !Self::operation_changes_rows(op) {
+                continue;
+            }
+
+            let op_name = op
+                .get("op")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("OVSDB operation {} is missing op", idx))?;
+            let table_name = op.get("table").and_then(|v| v.as_str()).ok_or_else(|| {
+                anyhow::anyhow!("OVSDB {} operation {} is missing table", op_name, idx)
+            })?;
+            let table_schema = tables.get(table_name).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "OVSDB schema does not contain table '{}' required by {} operation {}",
+                    table_name,
+                    op_name,
+                    idx
+                )
+            })?;
+
+            Self::validate_operation_columns(idx, op_name, table_name, table_schema, op)?;
+        }
+
+        Ok(())
+    }
+
+    fn operation_changes_rows(op: &Value) -> bool {
+        matches!(
+            op.get("op").and_then(|v| v.as_str()),
+            Some("insert" | "update" | "mutate" | "delete")
+        )
+    }
+
+    fn validate_operation_columns(
+        idx: usize,
+        op_name: &str,
+        table_name: &str,
+        table_schema: &Value,
+        op: &Value,
+    ) -> Result<()> {
+        let columns = table_schema
+            .get("columns")
+            .and_then(|v| v.as_object())
+            .ok_or_else(|| anyhow::anyhow!("Invalid OVSDB schema for table '{}'", table_name))?;
+
+        if let Some(row) = op.get("row").and_then(|v| v.as_object()) {
+            for column in row.keys() {
+                Self::ensure_column_exists(idx, op_name, table_name, columns, column)?;
+            }
+        }
+
+        if let Some(conditions) = op.get("where").and_then(|v| v.as_array()) {
+            for condition in conditions {
+                if let Some(column) = condition
+                    .as_array()
+                    .and_then(|parts| parts.first())
+                    .and_then(|v| v.as_str())
+                {
+                    Self::ensure_column_exists(idx, op_name, table_name, columns, column)?;
+                }
+            }
+        }
+
+        if let Some(mutations) = op.get("mutations").and_then(|v| v.as_array()) {
+            for mutation in mutations {
+                let column = mutation
+                    .as_array()
+                    .and_then(|parts| parts.first())
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "OVSDB mutate operation {} on table '{}' has a malformed mutation",
+                            idx,
+                            table_name
+                        )
+                    })?;
+                Self::ensure_column_exists(idx, op_name, table_name, columns, column)?;
+            }
+        }
+
+        if let Some(columns_list) = op.get("columns").and_then(|v| v.as_array()) {
+            for column in columns_list.iter().filter_map(|v| v.as_str()) {
+                Self::ensure_column_exists(idx, op_name, table_name, columns, column)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn ensure_column_exists(
+        idx: usize,
+        op_name: &str,
+        table_name: &str,
+        columns: &Object,
+        column: &str,
+    ) -> Result<()> {
+        if column == "_uuid" || column == "_version" || columns.contains_key(column) {
+            return Ok(());
+        }
+
+        Err(anyhow::anyhow!(
+            "OVSDB schema table '{}' does not contain column '{}' required by {} operation {}",
+            table_name,
+            column,
+            op_name,
+            idx
+        ))
+    }
+
     /// Execute a transaction
     pub async fn transact(&self, db: &str, operations: Value) -> Result<Value> {
+        self.validate_mutation_operations(db, &operations).await?;
+
         let mut params = vec![json!(db)];
         if let Some(ops_array) = operations.as_array() {
             for op in ops_array {
@@ -593,6 +731,25 @@ mod tests {
     use std::time::Duration;
     use tokio::net::UnixListener;
 
+    fn native_schema() -> Value {
+        json!({
+            "tables": {
+                "Bridge": {
+                    "columns": {
+                        "name": {},
+                        "ports": {}
+                    }
+                },
+                "Interface": {
+                    "columns": {
+                        "name": {},
+                        "type": {}
+                    }
+                }
+            }
+        })
+    }
+
     #[test]
     fn parse_json_response_accepts_plain_json() {
         let parsed =
@@ -623,6 +780,41 @@ mod tests {
         let value = json!(["set", [["uuid", "a"], ["uuid", "b"]]]);
         let uuids = OvsdbClient::extract_uuid_set(&value);
         assert_eq!(uuids, vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn validates_native_schema_for_mutations() {
+        let operations = json!([
+            {
+                "op": "update",
+                "table": "Interface",
+                "where": [["name", "==", "eth0"]],
+                "row": {
+                    "type": "internal"
+                }
+            }
+        ]);
+
+        OvsdbClient::validate_operations_against_schema(&native_schema(), &operations)
+            .expect("valid mutation schema");
+    }
+
+    #[test]
+    fn rejects_mutation_columns_not_in_native_schema() {
+        let operations = json!([
+            {
+                "op": "update",
+                "table": "Interface",
+                "where": [["name", "==", "eth0"]],
+                "row": {
+                    "schema_derived": true
+                }
+            }
+        ]);
+
+        let err = OvsdbClient::validate_operations_against_schema(&native_schema(), &operations)
+            .expect_err("unknown column must fail");
+        assert!(err.to_string().contains("schema_derived"));
     }
 
     #[tokio::test]

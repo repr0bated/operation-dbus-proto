@@ -230,14 +230,6 @@ impl Default for InspectorConfig {
 pub struct InspectorGadget {
     config: InspectorConfig,
     state_store: Arc<dyn StateStore>,
-    /// Compatibility handle to the runtime plugin catalog.
-    ///
-    /// Inspector remains a one-shot discovery/import tool, so this must not
-    /// become a source of runtime truth. It exists so onboarding flows can map
-    /// newly discovered shapes back to canonical plugin documents when that
-    /// path is restored.
-    #[allow(dead_code)]
-    plugin_catalog: Arc<PluginCatalog>,
     tool_registry: Arc<ToolRegistry>,
 }
 
@@ -246,14 +238,12 @@ impl InspectorGadget {
     pub fn new(
         config: InspectorConfig,
         state_store: Arc<dyn StateStore>,
-        plugin_catalog: Arc<PluginCatalog>,
         tool_registry: Arc<ToolRegistry>,
     ) -> Self {
         tracing::info!("Inspector Gadget initialized (one-shot discovery only)");
         Self {
             config,
             state_store,
-            plugin_catalog,
             tool_registry,
         }
     }

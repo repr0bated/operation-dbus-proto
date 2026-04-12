@@ -4,8 +4,8 @@
 
 use anyhow::{Context, Result};
 use lettre::{
-    message::header::ContentType, transport::smtp::authentication::Credentials, AsyncSmtpTransport,
-    AsyncTransport, Message, Tokio1Executor,
+    message::header::ContentType, transport::smtp::authentication::Credentials,
+    transport::smtp::client::Tls, AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor,
 };
 use tracing::info;
 
@@ -122,6 +122,7 @@ impl EmailSender {
             AsyncSmtpTransport::<Tokio1Executor>::relay(&self.config.smtp_host)?
         } else {
             AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&self.config.smtp_host)
+                .tls(Tls::None)
         };
 
         let mailer: AsyncSmtpTransport<Tokio1Executor> = transport_builder

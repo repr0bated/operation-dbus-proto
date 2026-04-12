@@ -138,42 +138,6 @@ impl SqliteStore {
             .execute(&self.pool)
             .await?;
 
-        // Execute namespace schema (org.opdbus.* enterprise tables)
-        debug!("Initializing enterprise namespace schema...");
-        let namespace_schema = include_str!("namespace_schema.sql");
-
-        // Split by semicolon but keep multi-line statements together
-        let mut current_statement = String::new();
-        for line in namespace_schema.lines() {
-            let trimmed = line.trim();
-
-            // Skip comment-only lines
-            if trimmed.starts_with("--") || trimmed.is_empty() {
-                continue;
-            }
-
-            current_statement.push_str(line);
-            current_statement.push('\n');
-
-            // Execute when we hit a semicolon at the end of a line
-            if trimmed.ends_with(';') {
-                let stmt = current_statement.trim();
-                if !stmt.is_empty() {
-                    if let Err(e) = sqlx::query(stmt).execute(&self.pool).await {
-                        warn!(
-                            "Failed to execute namespace schema statement: {} - Error: {}",
-                            stmt.chars().take(100).collect::<String>(),
-                            e
-                        );
-                        // Continue on error for idempotency (IF NOT EXISTS)
-                    }
-                }
-                current_statement.clear();
-            }
-        }
-
-        info!("✅ Enterprise namespace schema initialized (org.opdbus.*)");
-
         // Create tools table for tool registry persistence (read-only on startup)
         sqlx::query(
             r#"
@@ -207,73 +171,6 @@ impl SqliteStore {
         .execute(&self.pool)
         .await?;
 
-        // Execute Full Active Directory schema
-        debug!("Initializing Full Active Directory schema...");
-        let ad_schema = include_str!("ad_full_schema.sql");
-        let mut current_statement = String::new();
-        for line in ad_schema.lines() {
-            let trimmed = line.trim();
-            if trimmed.starts_with("--") || trimmed.is_empty() {
-                continue;
-            }
-            current_statement.push_str(line);
-            current_statement.push('\n');
-            if trimmed.ends_with(';') {
-                let stmt = current_statement.trim();
-                if !stmt.is_empty() {
-                    if let Err(e) = sqlx::query(stmt).execute(&self.pool).await {
-                        warn!("Failed to execute AD schema statement: {}", e);
-                    }
-                }
-                current_statement.clear();
-            }
-        }
-
-        // Execute Drupal CMS schema
-        debug!("Initializing Drupal CMS schema...");
-        let drupal_schema = include_str!("cms_drupal_schema.sql");
-        let mut current_statement = String::new();
-        for line in drupal_schema.lines() {
-            let trimmed = line.trim();
-            if trimmed.starts_with("--") || trimmed.is_empty() {
-                continue;
-            }
-            current_statement.push_str(line);
-            current_statement.push('\n');
-            if trimmed.ends_with(';') {
-                let stmt = current_statement.trim();
-                if !stmt.is_empty() {
-                    if let Err(e) = sqlx::query(stmt).execute(&self.pool).await {
-                        warn!("Failed to execute Drupal schema statement: {}", e);
-                    }
-                }
-                current_statement.clear();
-            }
-        }
-
-        // Execute WordPress CMS schema
-        debug!("Initializing WordPress CMS schema...");
-        let wordpress_schema = include_str!("cms_wordpress_schema.sql");
-        let mut current_statement = String::new();
-        for line in wordpress_schema.lines() {
-            let trimmed = line.trim();
-            if trimmed.starts_with("--") || trimmed.is_empty() {
-                continue;
-            }
-            current_statement.push_str(line);
-            current_statement.push('\n');
-            if trimmed.ends_with(';') {
-                let stmt = current_statement.trim();
-                if !stmt.is_empty() {
-                    if let Err(e) = sqlx::query(stmt).execute(&self.pool).await {
-                        warn!("Failed to execute WordPress schema statement: {}", e);
-                    }
-                }
-                current_statement.clear();
-            }
-        }
-
-        info!("✅ Extended enterprise schemas loaded: Full AD + Drupal + WordPress");
         debug!("Database schema initialized");
         Ok(())
     }

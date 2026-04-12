@@ -22,13 +22,23 @@ async fn proxy(connection: &Connection) -> Result<Proxy<'_>> {
     Ok(proxy)
 }
 
+async fn state_manager_connection() -> Result<Connection> {
+    if std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_some() {
+        return Connection::session()
+            .await
+            .context("connect to session D-Bus for StateManager access");
+    }
+
+    Connection::system()
+        .await
+        .context("connect to system D-Bus for StateManager access")
+}
+
 pub async fn query_plugin_state<T>(plugin_id: &str) -> Result<Option<T>>
 where
     T: DeserializeOwned,
 {
-    let connection = Connection::system()
-        .await
-        .context("connect to system D-Bus for StateManager access")?;
+    let connection = state_manager_connection().await?;
     let proxy = proxy(&connection).await?;
     let mut state_json: String = proxy
         .call("QueryState", &())
@@ -50,9 +60,7 @@ pub async fn apply_plugin_state<T>(plugin_id: &str, value: &T) -> Result<()>
 where
     T: Serialize,
 {
-    let connection = Connection::system()
-        .await
-        .context("connect to system D-Bus for StateManager access")?;
+    let connection = state_manager_connection().await?;
     let proxy = proxy(&connection).await?;
     let value = simd_json::serde::to_owned_value(value)
         .with_context(|| format!("serialize {} plugin state", plugin_id))?;

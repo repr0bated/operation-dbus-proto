@@ -138,6 +138,7 @@ impl ToolRegistry {
 mod tests {
     use super::*;
     use crate::tool::Tool;
+    use async_trait::async_trait;
 
     struct TestTool {
         name: String,

@@ -1,8 +1,8 @@
-use op_blockchain::PluginFootprint;
 use op_blockchain::btrfs_numa_integration::OptimizedBlockchain;
+use op_blockchain::PluginFootprint;
 use op_cognitive_mcp::graph_store::KnowledgeGraphStore;
-use simd_json::prelude::ValueAsScalar;
 use simd_json::json;
+use simd_json::prelude::ValueAsScalar;
 use tempfile::tempdir;
 use tokio::sync::mpsc;
 

@@ -70,14 +70,16 @@ impl GrpcClientPool {
 
     /// Get or create a channel to the specified endpoint
     async fn get_channel(&self, address: &str) -> Result<Channel, GrpcClientError> {
+        let address = normalize_grpc_endpoint(address);
+
         {
             let channels = self.channels.read().await;
-            if let Some(channel) = channels.get(address) {
+            if let Some(channel) = channels.get(&address) {
                 return Ok(channel.clone());
             }
         }
 
-        let endpoint = Endpoint::from_shared(address.to_string())
+        let endpoint = Endpoint::from_shared(address.clone())
             .map_err(|e| GrpcClientError::ConnectionFailed(e.to_string()))?
             .connect_timeout(self.default_config.connect_timeout)
             .timeout(self.default_config.request_timeout);
@@ -89,7 +91,7 @@ impl GrpcClientPool {
 
         {
             let mut channels = self.channels.write().await;
-            channels.insert(address.to_string(), channel.clone());
+            channels.insert(address.clone(), channel.clone());
         }
 
         info!("Connected to remote gRPC endpoint: {}", address);
@@ -128,6 +130,36 @@ impl GrpcClientPool {
         let mut channels = self.channels.write().await;
         channels.clear();
         info!("Closed all gRPC client connections");
+    }
+}
+
+fn normalize_grpc_endpoint(address: &str) -> String {
+    let trimmed = address.trim();
+    if trimmed.contains("://") {
+        trimmed.to_string()
+    } else {
+        format!("http://{}", trimmed)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_grpc_endpoint;
+
+    #[test]
+    fn should_keep_uri_grpc_endpoint() {
+        assert_eq!(
+            normalize_grpc_endpoint("http://10.200.0.2:50051"),
+            "http://10.200.0.2:50051"
+        );
+    }
+
+    #[test]
+    fn should_add_http_scheme_to_socket_grpc_endpoint() {
+        assert_eq!(
+            normalize_grpc_endpoint("10.200.0.2:50051"),
+            "http://10.200.0.2:50051"
+        );
     }
 }
 

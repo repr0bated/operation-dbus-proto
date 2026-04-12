@@ -1056,6 +1056,8 @@ pub fn builtin_plugin_schemas() -> Vec<PluginSchema> {
         "users",
         "web_ui",
         "wireguard",
+        "directory",
+        "cms",
     ]
     .into_iter()
     .filter_map(builtin_plugin_schema_from_canonical_name)
@@ -1101,6 +1103,8 @@ fn builtin_plugin_schema_from_canonical_name(name: &str) -> Option<PluginSchema>
         "privacy_router" => create_privacy_router_schema(),
         "privacy_routes" => create_privacy_routes_schema(),
         "netmaker" => create_netmaker_schema(),
+        "directory" => create_directory_schema(),
+        "cms" => create_cms_schema(),
         _ => return None,
     })
 }
@@ -4877,7 +4881,92 @@ fn field_type_to_json_schema_2026(field_type: &FieldType) -> Value {
     }
 }
 
-#[cfg(test)]
+fn create_directory_schema() -> PluginSchema {
+    simple_schema(
+        "directory",
+        "Enterprise directory and identity management (AD/LDAP replacement)",
+        &[],
+        vec![
+            (
+                "version",
+                FieldSchema {
+                    field_type: FieldType::Integer,
+                    required: false,
+                    description: "Schema version".to_string(),
+                    default: Some(json!(1)),
+                    example: None,
+                    constraints: vec![Constraint::Min { value: 1.0 }],
+                    read_only: false,
+                    read_only_when: None,
+                },
+            ),
+            (
+                "domains",
+                any_field(false, "AD Domain or Forest Root map", Some(json!({}))),
+            ),
+            (
+                "users",
+                any_field(false, "AD-compatible User Account map", Some(json!({}))),
+            ),
+            (
+                "groups",
+                any_field(false, "AD-compatible Group map", Some(json!({}))),
+            ),
+            (
+                "computers",
+                any_field(false, "AD-compatible Computer Account map", Some(json!({}))),
+            ),
+            (
+                "gpo",
+                any_field(false, "AD Group Policy Object map", Some(json!({}))),
+            ),
+            (
+                "dns",
+                any_field(false, "AD-integrated DNS Zone map", Some(json!({}))),
+            ),
+        ],
+    )
+}
+
+fn create_cms_schema() -> PluginSchema {
+    simple_schema(
+        "cms",
+        "Enterprise CMS management (Drupal/WordPress replacement)",
+        &[],
+        vec![
+            (
+                "version",
+                FieldSchema {
+                    field_type: FieldType::Integer,
+                    required: false,
+                    description: "Schema version".to_string(),
+                    default: Some(json!(1)),
+                    example: None,
+                    constraints: vec![Constraint::Min { value: 1.0 }],
+                    read_only: false,
+                    read_only_when: None,
+                },
+            ),
+            (
+                "nodes",
+                any_field(false, "Drupal-compatible Content Node map", Some(json!({}))),
+            ),
+            (
+                "wp_posts",
+                any_field(false, "WordPress-compatible Post map", Some(json!({}))),
+            ),
+            (
+                "wp_users",
+                any_field(false, "WordPress-compatible User map", Some(json!({}))),
+            ),
+            (
+                "wc_products",
+                any_field(false, "WooCommerce-compatible Product map", Some(json!({}))),
+            ),
+        ],
+    )
+}
+
 mod tests {
     use super::*;
 

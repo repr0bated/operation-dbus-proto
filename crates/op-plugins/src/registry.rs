@@ -4,7 +4,7 @@
 //! - Plugin code is the origin of schema truth.
 //! - Registration materializes one canonical plugin document.
 //! - That document is persisted to the schema catalog store first.
-//! - The in-memory catalog here is only a local index/projection cache.
+//! - The in-memory catalog here is only a local reference index.
 //!
 //! Compatibility note:
 //! this file still exports `PluginRegistry` because much of the workspace still
@@ -12,7 +12,6 @@
 
 use crate::plugin::PluginMetadata;
 use anyhow::{anyhow, Result};
-use op_core::state_publisher::StatePublisher;
 use op_dbus_model::{CatalogDocument, SqlitePluginCatalog};
 use op_state::StatePlugin;
 use op_state_store::{builtin_plugin_schema, PluginSchema, SchemaCatalog, SchemaRegistry};
@@ -43,8 +42,6 @@ pub struct PluginRegistry {
     schema_catalog: Arc<RwLock<SchemaCatalog>>,
     schema_catalog_store: Option<Arc<SqlitePluginCatalog>>,
     base_path: PathBuf,
-    publisher: AsyncRwLock<Option<Arc<dyn StatePublisher>>>,
-    dbus_conn: AsyncRwLock<Option<zbus::Connection>>,
 }
 
 /// Preferred architectural name for `PluginRegistry`.
@@ -102,8 +99,6 @@ impl PluginRegistry {
             schema_catalog,
             schema_catalog_store,
             base_path: base_path.as_ref().to_path_buf(),
-            publisher: AsyncRwLock::new(None),
-            dbus_conn: AsyncRwLock::new(None),
         }
     }
 
@@ -115,17 +110,6 @@ impl PluginRegistry {
 
     pub fn schema_catalog(&self) -> Arc<RwLock<SchemaCatalog>> {
         self.schema_catalog.clone()
-    }
-
-    /// Set the state publisher for catalog-derived projection updates.
-    pub async fn set_publisher(&self, publisher: Arc<dyn StatePublisher>) {
-        *self.publisher.write().await = Some(publisher);
-        self.project_registered_schemas().await;
-    }
-
-    /// Set the D-Bus connection for object exportation
-    pub async fn set_dbus_connection(&self, conn: zbus::Connection) {
-        *self.dbus_conn.write().await = Some(conn);
     }
 
     /// Register a plugin instance
@@ -154,12 +138,8 @@ impl PluginRegistry {
 
         // Registration order matters:
         // 1. Build the canonical plugin document from plugin-owned schema.
-        // 2. Persist that document into the schema catalog store.
-        // 3. Update the in-memory schema catalog for fast local resolution.
-        // 4. Export projections (D-Bus, gRPC-facing state publisher).
-        //
-        // This keeps the persisted canonical plugin document ahead of local
-        // projection caches and avoids reintroducing a second authority.
+        // 2. Persist that document into the catalog store.
+        // 3. Update the in-memory schema catalog for local reference lookups.
         let document =
             build_catalog_document(plugin.as_ref(), &schema, &dbus_path_str, &storage_path);
 
@@ -170,33 +150,6 @@ impl PluginRegistry {
 
         self.schema_catalog.write().register(schema.clone());
         info!("Plugin {} indexed in schema catalog", name);
-
-        if let Some(conn) = &*self.dbus_conn.read().await {
-            let host = op_state::dbus_server::PluginDbusHost {
-                plugin: plugin.clone(),
-                schema_registry: self.schema_catalog.clone(),
-            };
-            if let Ok(path) = zbus::zvariant::ObjectPath::try_from(dbus_path_str.as_str()) {
-                let _ = conn.object_server().at(path, host).await;
-                info!("Plugin {} exported to D-Bus at {}", name, dbus_path_str);
-            }
-        }
-
-        if let Some(publ) = &*self.publisher.read().await {
-            let _ = publ
-                .publish_change(
-                    name.clone(),
-                    format!("schema/{}/{}", schema.category, name),
-                    op_core::state_publisher::ChangeType::PropertySet,
-                    Some("definition".to_string()),
-                    None,
-                    schema.to_json_schema(),
-                    vec!["schema".to_string(), schema.category.clone()],
-                    "catalog".to_string(),
-                )
-                .await;
-            info!("Plugin {} schema projected from catalog", name);
-        }
 
         plugins.insert(
             name.clone(),
@@ -217,6 +170,32 @@ impl PluginRegistry {
     pub async fn get(&self, name: &str) -> Option<Arc<dyn StatePlugin>> {
         let plugins = self.plugins.read().await;
         plugins.get(name).map(|r| r.plugin.clone())
+    }
+
+    /// Get a plugin record by name
+    pub async fn get_record(&self, name: &str) -> Option<Arc<PluginRecord>> {
+        let plugins = self.plugins.read().await;
+        plugins.get(name).map(|r| Arc::new(PluginRecord {
+            name: r.name.clone(),
+            plugin: r.plugin.clone(),
+            storage_path: r.storage_path.clone(),
+            change_count: r.change_count,
+            schema: r.schema.clone(),
+            dbus_path: r.dbus_path.clone(),
+        }))
+    }
+
+    /// List all registered plugin records
+    pub async fn list_all(&self) -> Vec<Arc<PluginRecord>> {
+        let plugins = self.plugins.read().await;
+        plugins.values().map(|r| Arc::new(PluginRecord {
+            name: r.name.clone(),
+            plugin: r.plugin.clone(),
+            storage_path: r.storage_path.clone(),
+            change_count: r.change_count,
+            schema: r.schema.clone(),
+            dbus_path: r.dbus_path.clone(),
+        })).collect()
     }
 
     async fn create_plugin_subvolume(&self, name: &str) -> Result<PathBuf> {
@@ -246,48 +225,6 @@ impl PluginRegistry {
         }
 
         Ok(path)
-    }
-
-    async fn project_registered_schemas(&self) {
-        let Some(publisher) = self.publisher.read().await.clone() else {
-            return;
-        };
-
-        let snapshots = {
-            let catalog = self.schema_catalog.read();
-            let mut names: Vec<String> = catalog.list().into_iter().map(str::to_string).collect();
-            names.sort();
-            names
-                .into_iter()
-                .filter_map(|name| {
-                    catalog.get_copies(&name).map(|copies| {
-                        (
-                            name,
-                            copies.plugin.category.clone(),
-                            copies.json_schema.clone(),
-                        )
-                    })
-                })
-                .collect::<Vec<_>>()
-        };
-
-        for (name, category, schema) in snapshots {
-            if let Err(error) = publisher
-                .publish_change(
-                    name.clone(),
-                    format!("schema/{category}/{name}"),
-                    op_core::state_publisher::ChangeType::PropertySet,
-                    Some("definition".to_string()),
-                    None,
-                    schema,
-                    vec!["schema".to_string(), category],
-                    "catalog".to_string(),
-                )
-                .await
-            {
-                warn!("Failed to project schema for {}: {}", name, error);
-            }
-        }
     }
 
     /// Hydrate the in-memory catalog from any persisted plugin documents.

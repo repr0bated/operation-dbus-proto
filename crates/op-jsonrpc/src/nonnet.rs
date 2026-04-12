@@ -45,6 +45,43 @@ fn empty_nonnet_schema() -> Value {
     })
 }
 
+fn normalize_object_types(def: &Value) -> Option<Value> {
+    let object_types = def.get("object_types")?.as_object()?;
+    let mut normalized = simd_json::value::owned::Object::new();
+
+    for (name, object_type) in object_types.iter() {
+        let Some(object_schema) = object_type.as_object() else {
+            continue;
+        };
+        let mut object_schema = object_schema.clone();
+        object_schema
+            .entry("schema_derived".to_string())
+            .or_insert_with(|| Value::from(true));
+        normalized.insert(name.clone(), Value::Object(Box::new(object_schema)));
+    }
+
+    Some(Value::Object(Box::new(normalized)))
+}
+
+fn first_schema_derived_base_path(object_types: &Value) -> Option<String> {
+    object_types
+        .as_object()?
+        .iter()
+        .find_map(|(_, object_schema)| {
+            let schema_derived = object_schema
+                .get("schema_derived")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if !schema_derived {
+                return None;
+            }
+            object_schema
+                .get("base_path")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        })
+}
+
 impl Default for NonNetState {
     fn default() -> Self {
         Self {
@@ -69,32 +106,61 @@ impl NonNetDb {
         self.update_tx.subscribe()
     }
 
-    /// Set the tables/schema from plugin state
-    pub async fn load_from_plugins(&self, plugins: &HashMap<String, Value>) {
+    /// Set the tables/schema from plugin state.
+    ///
+    /// `schema_defs` is an optional map of plugin name → raw schema JSON
+    /// (the `base_object` column from the `plugins` table). When present,
+    /// `object_types.*.base_path` is propagated into the NonNet schema so
+    /// that the D-Bus mirror can project to schema-derived paths instead of
+    /// generic `/dynamic/` paths.
+    pub async fn load_from_plugins(
+        &self,
+        plugins: &HashMap<String, Value>,
+        schema_defs: Option<&HashMap<String, Value>>,
+    ) {
         let mut state = self.state.write().await;
 
         // Build schema and tables from plugin state
         let mut schema_tables = simd_json::value::owned::Object::new();
         let mut tables = HashMap::new();
 
-        for (name, value) in plugins {
+        for (db_name, value) in plugins {
             // Skip network plugin
-            if name == "net" {
+            if db_name == "net" {
                 continue;
             }
 
             // Infer columns from the value structure
             let columns = infer_columns(value);
-            schema_tables.insert(name.clone(), json!({"columns": columns}));
 
-            // Convert value to rows
+            let object_types = schema_defs
+                .and_then(|defs| defs.get(db_name))
+                .and_then(normalize_object_types);
+            let base_path = object_types
+                .as_ref()
+                .and_then(first_schema_derived_base_path);
+
+            let mut table_schema = json!({"columns": columns});
+            if let Some(bp) = &base_path {
+                if let Some(obj) = table_schema.as_object_mut() {
+                    obj.insert("base_path".to_string(), Value::from(bp.clone()));
+                }
+            }
+            if let Some(ot) = object_types {
+                if let Some(obj) = table_schema.as_object_mut() {
+                    obj.insert("object_types".to_string(), ot);
+                }
+            }
+            schema_tables.insert(db_name.clone(), table_schema);
+
+            // Convert value to rows - 1:1 mirror of plugin state
             let rows = value_to_rows(value);
-            tables.insert(name.clone(), rows.clone());
+            tables.insert(db_name.clone(), rows.clone());
 
             // Broadcast initial load as update
             let _ = self.update_tx.send(NonNetUpdate {
                 db_name: NONNET_DB_NAME.to_string(),
-                table: name.clone(),
+                table: db_name.clone(),
                 rows,
             });
         }
@@ -108,16 +174,76 @@ impl NonNetDb {
         debug!("NonNet DB loaded {} tables", state.tables.len());
     }
 
+    /// Seed the NonNet schema directly from plugin schema definitions.
+    ///
+    /// Each entry in `schema_defs` is a plugin name → raw schema JSON (with
+    /// `object_types` containing `base_path`). This creates empty tables with
+    /// schema metadata so the D-Bus mirror can project paths immediately,
+    /// without calling `query_current_state()` or touching OVSDB.
+    pub async fn load_from_schema_defs(&self, schema_defs: &HashMap<String, Value>) {
+        let mut state = self.state.write().await;
+
+        let mut schema_tables = simd_json::value::owned::Object::new();
+
+        for (plugin_name, def) in schema_defs {
+            let mut table_schema = simd_json::value::owned::Object::new();
+
+            if let Some(ot) = normalize_object_types(def) {
+                if let Some(first_bp) = first_schema_derived_base_path(&ot) {
+                    table_schema.insert("base_path".to_string(), Value::from(first_bp));
+                }
+                table_schema.insert("object_types".to_string(), ot);
+            }
+
+            // Infer columns from object_type properties
+            if let Some(props) = def.get("common_properties").and_then(|v| v.as_object()) {
+                let cols: Vec<Value> = props.iter().map(|(k, _)| Value::from(k.clone())).collect();
+                table_schema.insert("columns".to_string(), Value::Array(cols));
+            }
+
+            schema_tables.insert(plugin_name.clone(), Value::Object(Box::new(table_schema)));
+
+            // Create empty table entry so list_dbs/get_schema work
+            state
+                .tables
+                .entry(plugin_name.clone())
+                .or_insert_with(Vec::new);
+        }
+
+        state.schema = json!({
+            "name": NONNET_DB_NAME,
+            "tables": Value::Object(Box::new(schema_tables))
+        });
+
+        info!(
+            "NonNet schema seeded from {} plugin definitions",
+            schema_defs.len()
+        );
+    }
+
     /// Update a specific table
     pub async fn update_table(&self, name: &str, rows: Vec<Value>) {
         let mut state = self.state.write().await;
         state.tables.insert(name.to_string(), rows.clone());
 
-        // Keep schema in sync with updated rows.
-        let mut schema_tables = simd_json::value::owned::Object::new();
+        // Keep inferred columns in sync without losing schema-derived
+        // projection metadata that was seeded from plugin definitions.
+        let mut schema_tables = state
+            .schema
+            .get("tables")
+            .and_then(|v| v.as_object().cloned())
+            .unwrap_or_default();
         for (table_name, table_rows) in state.tables.iter() {
             let columns = infer_columns(&Value::Array(table_rows.clone()));
-            schema_tables.insert(table_name.clone(), json!({"columns": columns}));
+            let mut table_schema = schema_tables
+                .remove(table_name)
+                .and_then(|value| match value {
+                    Value::Object(object) => Some(*object),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            table_schema.insert("columns".to_string(), columns);
+            schema_tables.insert(table_name.clone(), Value::Object(Box::new(table_schema)));
         }
         state.schema = json!({
             "name": NONNET_DB_NAME,
@@ -266,7 +392,36 @@ fn handle_method(state: &NonNetState, request: JsonRpcRequest) -> JsonRpcRespons
                         "select" => {
                             let table = op.get("table").and_then(|v| v.as_str()).unwrap_or("");
                             let rows = state.tables.get(table).cloned().unwrap_or_default();
-                            results.push(json!({"rows": rows}));
+
+                            // Apply limit and offset if provided
+                            let offset =
+                                op.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                            let limit =
+                                op.get("limit").and_then(|v| v.as_u64()).map(|v| v as usize);
+
+                            let processed_rows = if offset > 0 || limit.is_some() {
+                                let mut start = offset;
+                                if start > rows.len() {
+                                    start = rows.len();
+                                }
+                                let mut end = match limit {
+                                    Some(l) => start + l,
+                                    None => rows.len(),
+                                };
+                                if end > rows.len() {
+                                    end = rows.len();
+                                }
+                                rows[start..end].to_vec()
+                            } else {
+                                rows
+                            };
+
+                            results.push(json!({"rows": processed_rows}));
+                        }
+                        "count" => {
+                            let table = op.get("table").and_then(|v| v.as_str()).unwrap_or("");
+                            let count = state.tables.get(table).map(|r| r.len()).unwrap_or(0);
+                            results.push(json!({"count": count}));
                         }
                         "insert" | "update" | "delete" | "mutate" => {
                             // Read-only database
@@ -376,7 +531,7 @@ mod tests {
             }),
         );
 
-        db.load_from_plugins(&plugins).await;
+        db.load_from_plugins(&plugins, None).await;
 
         let request = JsonRpcRequest::new("list_dbs", json!([]));
         let response = db.handle_request(request).await;

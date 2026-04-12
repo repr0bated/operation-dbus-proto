@@ -479,7 +479,7 @@ mod tests {
         "#
         .to_string();
 
-        let plugin: NetworkPlugin = simd_json::from_str(&mut json).unwrap();
+        let plugin: NetworkPlugin = unsafe { simd_json::from_str(&mut json) }.unwrap();
         assert_eq!(plugin.bridges.len(), 1);
         assert_eq!(plugin.bridges[0].name, "vmbr0");
         assert_eq!(plugin.bridges[0].datapath_type, "system");

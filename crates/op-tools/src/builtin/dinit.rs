@@ -311,6 +311,7 @@ pub async fn register_dinit_tools(registry: &ToolRegistry) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{status_to_json, DinitStatusRecord};
+    use simd_json::prelude::ValueAsScalar;
 
     #[test]
     fn test_status_to_json_preserves_service_name() {

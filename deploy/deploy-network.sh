@@ -1,14 +1,8 @@
 #!/usr/bin/env bash
 # deploy-network.sh — Idempotent network bootstrap for operation-dbus-proto VPS
 #
-# Topology:
-#   ens3 (148.113.204.83/32) → Host → ovsbr0 (10.88.88.1/24, OVS bridge)
-#                                    → incusbr0 (10.149.181.1/24, Incus LAN)
-#
-# Containers:
-#   services             10.149.181.188  — NextDNS DNS server
-#   privacy-xray-ingress 10.149.181.167  — WireGuard/xray ingress
-#   xray-server          10.149.181.100  — Xray server (optional)
+# Topology and container addresses are resolved from /etc/op-dbus/environment
+# and existing Incus state. This script does not invent network addresses.
 #
 # Usage:
 #   sudo ./deploy-network.sh [--exclude-xray-server] [--help]
@@ -57,6 +51,7 @@ done
 # ---------------------------------------------------------------------------
 
 LOG_FILE="/var/log/deploy-network.log"
+OP_DBUS_ENV_FILE="${OP_DBUS_ENV_FILE:-/etc/op-dbus/environment}"
 
 # Ensure log file is writable. If /var/log is not yet writable as the current
 # user, we redirect to a temp file and note this.  The calling convention
@@ -137,6 +132,69 @@ restart_service_via_dinit_dbus() {
     start_service_via_dinit_dbus "$service"
 }
 
+first_csv_value() {
+    local csv="${1:-}"
+    csv="${csv%%,*}"
+    printf '%s' "$csv"
+}
+
+csv_value_at() {
+    local csv="${1:-}"
+    local index="$2"
+    local value
+
+    value="$(awk -v idx="$index" -F, '{ gsub(/^[ \t]+|[ \t]+$/, "", $idx); print $idx }' <<<"$csv")"
+    printf '%s' "$value"
+}
+
+container_configured_ip() {
+    local container="$1"
+
+    incus config device get "$container" eth0 ipv4.address 2>/dev/null || true
+}
+
+container_runtime_ip() {
+    local container="$1"
+
+    if ! incus info "$container" &>/dev/null; then
+        return 0
+    fi
+
+    incus exec "$container" -- sh -lc \
+        "ip -4 -o addr show eth0 2>/dev/null | awk '{ split(\$4,a,\"/\"); print a[1]; exit }'" \
+        2>/dev/null || true
+}
+
+resolve_container_ip() {
+    local container="$1"
+    local env_var="$2"
+    local fallback="${3:-}"
+    local configured="${!env_var:-}"
+    local current=""
+
+    if [[ -n "$configured" ]]; then
+        printf '%s' "$configured"
+        return
+    fi
+
+    if [[ -n "$fallback" ]]; then
+        printf '%s' "$fallback"
+        return
+    fi
+
+    current="$(container_configured_ip "$container")"
+    if [[ -z "$current" ]]; then
+        current="$(container_runtime_ip "$container")"
+    fi
+
+    if [[ -n "$current" ]]; then
+        printf '%s' "$current"
+        return
+    fi
+
+    die "${env_var} is required because ${container} has no configured or runtime IPv4 address"
+}
+
 # ---------------------------------------------------------------------------
 # 3. PREFLIGHT CHECKS
 # ---------------------------------------------------------------------------
@@ -147,6 +205,16 @@ log "exclude-xray-server: ${EXCLUDE_XRAY_SERVER}"
 # Must be root (sudo provides this; Chimera has sudo→doas alias)
 if [[ "$(id -u)" -ne 0 ]]; then
     die "This script must be run as root (use: sudo $0 $*)"
+fi
+
+if [[ -f "$OP_DBUS_ENV_FILE" ]]; then
+    # shellcheck disable=SC1090
+    set -a
+    . "$OP_DBUS_ENV_FILE"
+    set +a
+    log "Loaded network configuration from ${OP_DBUS_ENV_FILE}"
+else
+    log "WARNING: ${OP_DBUS_ENV_FILE} not found; addresses must be provided via environment or existing Incus state"
 fi
 
 # wgcf config
@@ -185,13 +253,51 @@ if ! command -v jq &>/dev/null; then
 fi
 log "Preflight: jq found at $(command -v jq)"
 
-# dig (for DNS verification in section 16)
-if ! command -v dig &>/dev/null; then
-    die "dig not found. Install bind-tools (or dig equivalent) before running this script."
-fi
-log "Preflight: dig found at $(command -v dig)"
+# DNS verification runs inside the services container so host Tailscale DNS
+# state does not affect bootstrap.
+log "Preflight: DNS verification will run inside ${OP_DBUS_SERVICES_CONTAINER:-services}"
 
 log "All preflight checks passed."
+
+SERVICES_CONTAINER="${OP_DBUS_SERVICES_CONTAINER:-services}"
+PRIVACY_XRAY_CONTAINER="${OP_DBUS_PRIVACY_XRAY_CONTAINER:-privacy-xray-ingress}"
+XRAY_SERVER_CONTAINER="${OP_DBUS_XRAY_SERVER_CONTAINER:-xray-server}"
+INCUS_NETWORK="${OP_DBUS_INCUS_NETWORK:-incusbr0}"
+OVS_BRIDGE="${OP_DBUS_OVS_BRIDGE:-ovsbr0}"
+WGCF_INTERFACE="${OP_DBUS_WGCF_INTERFACE:-wgcf}"
+GRPC_BRIDGE_IFACE="${OP_DBUS_GRPC_BRIDGE_IFACE:-grpc-bridge}"
+MGMT_IFACE="${OP_DBUS_MGMT_IFACE:-ovsbr0-mgmt}"
+DNS_FALLBACK_1="${OP_DBUS_DNS_FALLBACK_1:-$(csv_value_at "${PRIVACY_DNS_NAMESERVERS:-}" 2)}"
+DNS_FALLBACK_2="${OP_DBUS_DNS_FALLBACK_2:-$(csv_value_at "${PRIVACY_DNS_NAMESERVERS:-}" 3)}"
+
+SERVICES_IP="$(resolve_container_ip \
+    "$SERVICES_CONTAINER" \
+    OP_DBUS_SERVICES_IP \
+    "$(first_csv_value "${PRIVACY_DNS_NAMESERVERS:-}")")"
+SMTP_LISTEN_ADDR="${OP_DBUS_SMTP_LISTEN_ADDR:-}"
+if [[ -z "$SMTP_LISTEN_ADDR" ]] && incus info "$SERVICES_CONTAINER" &>/dev/null; then
+    current_smtp_listen="$(incus config device get "$SERVICES_CONTAINER" smtp25 listen 2>/dev/null || true)"
+    SMTP_LISTEN_ADDR="${current_smtp_listen#tcp:}"
+    SMTP_LISTEN_ADDR="${SMTP_LISTEN_ADDR%:25}"
+fi
+if [[ -z "$SMTP_LISTEN_ADDR" ]]; then
+    die "OP_DBUS_SMTP_LISTEN_ADDR is required because ${SERVICES_CONTAINER}/smtp25 has no existing listen address"
+fi
+PRIVACY_XRAY_IP="$(resolve_container_ip "$PRIVACY_XRAY_CONTAINER" OP_DBUS_PRIVACY_XRAY_INGRESS_IP)"
+XRAY_SERVER_IP=""
+if [[ "$EXCLUDE_XRAY_SERVER" == "false" ]]; then
+    XRAY_SERVER_IP="$(resolve_container_ip "$XRAY_SERVER_CONTAINER" OP_DBUS_XRAY_SERVER_IP)"
+fi
+
+GRPC_BRIDGE_CIDR="${PRIVACY_GRPC_BRIDGE_CIDR:?PRIVACY_GRPC_BRIDGE_CIDR is required}"
+MGMT_CIDR="${PRIVACY_MGMT_CIDR:?PRIVACY_MGMT_CIDR is required}"
+
+log "Resolved services DNS IP: ${SERVICES_IP}"
+log "Resolved SMTP listen address: ${SMTP_LISTEN_ADDR}"
+log "Resolved ${PRIVACY_XRAY_CONTAINER} IP: ${PRIVACY_XRAY_IP}"
+if [[ -n "$XRAY_SERVER_IP" ]]; then
+    log "Resolved ${XRAY_SERVER_CONTAINER} IP: ${XRAY_SERVER_IP}"
+fi
 
 # ---------------------------------------------------------------------------
 # 4. HELPER: wait_for_iface
@@ -232,28 +338,28 @@ wait_for_container() {
 log "--- Section 4: wg-quick up wgcf ---"
 
 # If the interface already exists in the kernel, wg-quick is not needed.
-if ip link show wgcf >/dev/null 2>&1; then
-    log "wgcf: interface already present — skipping wg-quick up"
+if ip link show "$WGCF_INTERFACE" >/dev/null 2>&1; then
+    log "${WGCF_INTERFACE}: interface already present — skipping wg-quick up"
 else
     WG_OUTPUT=""
     WG_EXIT=0
-    WG_OUTPUT=$(wg-quick up wgcf 2>&1) || WG_EXIT=$?
+    WG_OUTPUT=$(wg-quick up "$WGCF_INTERFACE" 2>&1) || WG_EXIT=$?
 
     if [[ $WG_EXIT -ne 0 ]]; then
         # A second check in case the interface appeared between the check above and the call.
-        if ip link show wgcf >/dev/null 2>&1; then
-            log "wgcf: interface appeared during wg-quick call — treating as success"
+        if ip link show "$WGCF_INTERFACE" >/dev/null 2>&1; then
+            log "${WGCF_INTERFACE}: interface appeared during wg-quick call — treating as success"
         elif echo "$WG_OUTPUT" | grep -qi "already exists\|already in use\|address already assigned"; then
-            log "wgcf: interface already up (ignored: ${WG_OUTPUT})"
+            log "${WGCF_INTERFACE}: interface already up (ignored: ${WG_OUTPUT})"
         else
-            die "wg-quick up wgcf failed (exit ${WG_EXIT}): ${WG_OUTPUT}"
+            die "wg-quick up ${WGCF_INTERFACE} failed (exit ${WG_EXIT}): ${WG_OUTPUT}"
         fi
     else
-        log "wg-quick up wgcf: success"
+        log "wg-quick up ${WGCF_INTERFACE}: success"
     fi
 fi
 
-wait_for_iface wgcf 30
+wait_for_iface "$WGCF_INTERFACE" 30
 
 # ---------------------------------------------------------------------------
 # 5. DINIT SERVICE: wg-quick-all
@@ -403,10 +509,7 @@ log "ovs-attach-ports completed successfully"
 
 log "--- Section 7.5: grpc-bridge IP assignment ---"
 
-GRPC_BRIDGE_CIDR="${PRIVACY_GRPC_BRIDGE_CIDR:-10.200.0.2/24}"
-MGMT_CIDR="${PRIVACY_MGMT_CIDR:-10.200.0.1/24}"
-
-for iface_cidr in "grpc-bridge:${GRPC_BRIDGE_CIDR}" "ovsbr0-mgmt:${MGMT_CIDR}"; do
+for iface_cidr in "${GRPC_BRIDGE_IFACE}:${GRPC_BRIDGE_CIDR}" "${MGMT_IFACE}:${MGMT_CIDR}"; do
     iface="${iface_cidr%%:*}"
     cidr="${iface_cidr##*:}"
     if ip link show "$iface" &>/dev/null; then
@@ -434,7 +537,7 @@ discover_nextdns_profile() {
     local profile=""
 
     # Method 1: nextdns config show inside the services container
-    profile=$(incus exec services -- nextdns config show 2>/dev/null \
+    profile=$(incus exec "$SERVICES_CONTAINER" -- nextdns config show 2>/dev/null \
         | awk -F': ' '$1 == "Profile" { print $2; exit }' || true)
     if [[ -n "$profile" ]]; then
         log "NextDNS profile discovered via 'nextdns config show': ${profile}" >&2
@@ -443,7 +546,7 @@ discover_nextdns_profile() {
     fi
 
     # Method 2: read /etc/nextdns.conf in the services container
-    profile=$(incus exec services -- cat /etc/nextdns.conf 2>/dev/null \
+    profile=$(incus exec "$SERVICES_CONTAINER" -- cat /etc/nextdns.conf 2>/dev/null \
         | awk '$1 == "profile" { print $2; exit }' || true)
     if [[ -n "$profile" ]]; then
         log "NextDNS profile discovered via /etc/nextdns.conf in container: ${profile}" >&2
@@ -483,8 +586,8 @@ discover_nextdns_profile() {
 # Ensure the services container exists and is running before discovery
 # (section 10 creates containers, but we need services up for profile discovery —
 # so we do a pre-check and start it here, full idempotent creation happens below)
-if ! incus info services &>/dev/null; then
-    log "services container does not exist yet — will create in section 10; skipping discovery pre-check"
+if ! incus info "$SERVICES_CONTAINER" &>/dev/null; then
+    log "${SERVICES_CONTAINER} container does not exist yet — will create in section 10; skipping discovery pre-check"
     NEXTDNS_PROFILE=""
 else
     NEXTDNS_PROFILE="$(discover_nextdns_profile)"
@@ -505,7 +608,7 @@ write_nextdns_conf() {
     cat > /etc/nextdns/nextdns.conf <<EOF
 # Managed by deploy-network.sh — do not edit manually
 profile ${profile}
-listen 10.149.181.188:53
+listen ${SERVICES_IP}:53
 report-client-info yes
 hardened-privacy yes
 cache-size 10MB
@@ -514,17 +617,28 @@ EOF
 }
 
 write_host_resolv() {
-    # Called only after NextDNS is verified listening — do not move earlier
+    if [[ "${OP_DBUS_MANAGE_HOST_RESOLV:-0}" != "1" ]]; then
+        log "Leaving host /etc/resolv.conf unmanaged; Tailscale/OpenClaw owns host DNS"
+        return
+    fi
+
+    # Called only after NextDNS is verified listening and only when explicitly enabled.
     log "Writing /etc/resolv.conf (NextDNS verified)"
-    cat > /etc/resolv.conf <<EOF
+    {
+        cat <<EOF
 # Managed by deploy-network.sh — do not edit manually
 # Primary: NextDNS via services container (verified listening)
-nameserver 10.149.181.188
+nameserver ${SERVICES_IP}
 # Fallback: if NextDNS is down
-nameserver 1.1.1.1
-nameserver 9.9.9.9
 EOF
-    log "Wrote /etc/resolv.conf (primary: 10.149.181.188, fallbacks: 1.1.1.1 9.9.9.9)"
+        if [[ -n "$DNS_FALLBACK_1" ]]; then
+            printf 'nameserver %s\n' "$DNS_FALLBACK_1"
+        fi
+        if [[ -n "$DNS_FALLBACK_2" ]]; then
+            printf 'nameserver %s\n' "$DNS_FALLBACK_2"
+        fi
+    } > /etc/resolv.conf
+    log "Wrote /etc/resolv.conf (primary: ${SERVICES_IP}, fallbacks: ${DNS_FALLBACK_1} ${DNS_FALLBACK_2})"
 }
 
 # ---------------------------------------------------------------------------
@@ -549,15 +663,15 @@ ensure_container_config() {
     }
 
     case "$name" in
-        services)
+        "$SERVICES_CONTAINER")
             ensure_container_config_value security.privileged true
             ensure_container_config_value security.nesting true
             ;;
-        privacy-xray-ingress)
+        "$PRIVACY_XRAY_CONTAINER")
             ensure_container_config_value security.privileged true
             ensure_container_config_value linux.kernel_modules wireguard
             ;;
-        xray-server)
+        "$XRAY_SERVER_CONTAINER")
             ensure_container_config_value security.privileged true
             ;;
     esac
@@ -592,40 +706,66 @@ ensure_container() {
     local name=$1
     local ip=$2
 
+    ensure_static_ip() {
+        local container=$1
+        local static_ip=$2
+        local current_ip
+
+        current_ip="$(incus config device get "$container" eth0 ipv4.address 2>/dev/null || true)"
+        if [[ "$current_ip" == "$static_ip" ]]; then
+            log "Static IP ${static_ip} already configured on ${container} eth0"
+            return
+        fi
+
+        if incus config device override "$container" eth0 \
+                ipv4.address="$static_ip" 2>/dev/null; then
+            log "Static IP ${static_ip} assigned to ${container} eth0"
+        else
+            log "WARNING: device override failed — attempting explicit NIC add for ${container}"
+            incus config device remove "$container" eth0 2>/dev/null || true
+            incus config device add "$container" eth0 nic \
+                nictype=bridged \
+                parent="$INCUS_NETWORK" \
+                ipv4.address="$static_ip" 2>/dev/null \
+                || log "WARNING: could not set static IP for ${container} — Incus will assign via DHCP"
+        fi
+    }
+
+    ensure_runtime_ip() {
+        local container=$1
+        local static_ip=$2
+        local runtime_ip
+
+        runtime_ip="$(container_runtime_ip "$container")"
+        if [[ -n "$runtime_ip" && "$runtime_ip" != "$static_ip" ]]; then
+            log "${container}: runtime IP is ${runtime_ip}, restarting to apply ${static_ip}"
+            incus restart "$container"
+            wait_for_container "$container" 60
+        fi
+    }
+
     if ! incus info "$name" &>/dev/null; then
         log "Creating container ${name} (IP: ${ip})..."
         incus init images:debian/trixie "$name"
         ensure_container_config "$name"
-
-        # Assign static IP. If the device override fails (e.g., NIC not named
-        # eth0 in the profile), fall back to letting Incus/DHCP assign it.
-        if incus config device override "$name" eth0 \
-                ipv4.address="$ip" 2>/dev/null; then
-            log "Static IP ${ip} assigned to ${name} eth0"
-        else
-            # Try adding a new NIC device explicitly
-            log "WARNING: device override failed — attempting explicit NIC add for ${name}"
-            incus config device add "$name" eth0 nic \
-                nictype=bridged \
-                parent=incusbr0 \
-                ipv4.address="$ip" 2>/dev/null \
-                || log "WARNING: could not set static IP for ${name} — Incus will assign via DHCP"
-        fi
+        ensure_static_ip "$name" "$ip"
 
         incus start "$name"
         wait_for_container "$name" 60
         log "Container ${name} created and Running"
     else
         log "Container ${name} already exists"
+        ensure_container_config "$name"
+        ensure_static_ip "$name" "$ip"
         local status
         status="$(incus info "$name" 2>/dev/null | awk -F': ' '$1 == "Status" { print toupper($2); exit }' || true)"
         if [[ "$status" != "RUNNING" ]]; then
-            ensure_container_config "$name"
             log "Starting container ${name} (current status: ${status})..."
             incus start "$name"
             wait_for_container "$name" 60
         else
             log "Container ${name} is already Running"
+            ensure_runtime_ip "$name" "$ip"
         fi
     fi
 }
@@ -635,15 +775,15 @@ SERVICES_STATE="UNKNOWN"
 PRIV_XRAY_STATE="UNKNOWN"
 XRAY_SERVER_STATE="SKIPPED"
 
-ensure_container services              10.149.181.188
-ensure_proxy_device services smtp25 tcp:0.0.0.0:25 tcp:10.149.181.188:25
+ensure_container "$SERVICES_CONTAINER" "$SERVICES_IP"
+ensure_proxy_device "$SERVICES_CONTAINER" smtp25 "tcp:${SMTP_LISTEN_ADDR}:25" "tcp:${SERVICES_IP}:25"
 SERVICES_STATE="RUNNING"
 
-ensure_container privacy-xray-ingress  10.149.181.167
+ensure_container "$PRIVACY_XRAY_CONTAINER" "$PRIVACY_XRAY_IP"
 PRIV_XRAY_STATE="RUNNING"
 
 if [[ "$EXCLUDE_XRAY_SERVER" == "false" ]]; then
-    ensure_container xray-server 10.149.181.100
+    ensure_container "$XRAY_SERVER_CONTAINER" "$XRAY_SERVER_IP"
     XRAY_SERVER_STATE="RUNNING"
 else
     log "Skipping xray-server container (--exclude-xray-server)"
@@ -696,8 +836,7 @@ mount_device() {
     log "Mounted ${source} → ${container}:${path}"
 }
 
-mount_device services nextdns-conf /etc/nextdns/nextdns.conf /etc/nextdns.conf
-mount_device services resolv-conf  /etc/resolv.conf          /etc/resolv.conf
+mount_device "$SERVICES_CONTAINER" nextdns-conf /etc/nextdns/nextdns.conf /etc/nextdns.conf
 
 # ---------------------------------------------------------------------------
 # 12. DISABLE SYSTEMD-RESOLVED IN SERVICES CONTAINER
@@ -705,43 +844,56 @@ mount_device services resolv-conf  /etc/resolv.conf          /etc/resolv.conf
 
 log "--- Section 12: Disable systemd-resolved in services container ---"
 
-incus exec services -- systemctl disable --now systemd-resolved 2>/dev/null || true
-# Remove resolv.conf symlink (typically → /run/systemd/resolve/stub-resolv.conf)
-incus exec services -- bash -c 'rm -f /etc/resolv.conf && echo "removed /etc/resolv.conf symlink"' 2>/dev/null || true
+incus exec "$SERVICES_CONTAINER" -- systemctl disable --now systemd-resolved 2>/dev/null || true
+incus config device remove "$SERVICES_CONTAINER" resolv-conf 2>/dev/null || true
+bootstrap_resolv="nameserver ${DNS_FALLBACK_1}"
+if [[ -n "$DNS_FALLBACK_2" ]]; then
+    bootstrap_resolv="${bootstrap_resolv}\nnameserver ${DNS_FALLBACK_2}"
+fi
+incus exec "$SERVICES_CONTAINER" -- sh -c "printf '${bootstrap_resolv}\n' > /etc/resolv.conf"
 log "systemd-resolved disabled in services container"
 
 # ---------------------------------------------------------------------------
-# 13. CONFIGURE INCUSBR0 DNS
+# 13. CONFIGURE INCUS NETWORK DNS
 # ---------------------------------------------------------------------------
 
-log "--- Section 13: incusbr0 DNS nameserver ---"
+log "--- Section 13: ${INCUS_NETWORK} DNS nameserver ---"
 
-incus network set incusbr0 dns.nameservers=10.149.181.188
-log "incusbr0 DNS nameserver set to 10.149.181.188"
+incus network set "$INCUS_NETWORK" dns.nameservers="$SERVICES_IP"
+log "${INCUS_NETWORK} DNS nameserver set to ${SERVICES_IP}"
 
 # ---------------------------------------------------------------------------
 # 13.5. CONFIGURE DNS IN OVS-BRIDGED CONTAINERS
 # ---------------------------------------------------------------------------
-# Containers attached directly to ovsbr0 (managed by the privacy_router plugin
-# at runtime: privacy-wireguard-ingress, privacy-xray-egress) do NOT go through
-# incusbr0 and thus do not inherit the incusbr0 dns.nameservers setting.
+# Containers attached directly to the OVS bridge (managed by the
+# privacy_router plugin at runtime: privacy-wireguard-ingress,
+# privacy-xray-egress) do NOT go through the Incus network and thus do not
+# inherit the Incus dns.nameservers setting.
 # Write /etc/resolv.conf inside each running ovsbr0 container so they reach
-# NextDNS at 10.149.181.188 (services container on incusbr0).
-# The host has routes to both 10.200.0.0/24 (ovsbr0 mgmt) and 10.149.181.0/24
-# (incusbr0), so the services container is routable from the host side.
+# NextDNS at the configured services IP.
 # ---------------------------------------------------------------------------
 
 log "--- Section 13.5: DNS in OVS-bridged containers ---"
 
-OVS_CONTAINER_DNS_NAMESERVERS="10.149.181.188\nnameserver 1.1.1.1\nnameserver 9.9.9.9"
+OVS_CONTAINER_DNS_NAMESERVERS="nameserver ${SERVICES_IP}"
+if [[ -n "$DNS_FALLBACK_1" ]]; then
+    OVS_CONTAINER_DNS_NAMESERVERS="${OVS_CONTAINER_DNS_NAMESERVERS}\nnameserver ${DNS_FALLBACK_1}"
+fi
+if [[ -n "$DNS_FALLBACK_2" ]]; then
+    OVS_CONTAINER_DNS_NAMESERVERS="${OVS_CONTAINER_DNS_NAMESERVERS}\nnameserver ${DNS_FALLBACK_2}"
+fi
 OVS_MANAGED_CONTAINERS=(privacy-wireguard-ingress privacy-xray-egress)
 
 for cname in "${OVS_MANAGED_CONTAINERS[@]}"; do
     if incus info "$cname" &>/dev/null; then
         status="$(incus info "$cname" 2>/dev/null | awk -F': ' '$1 == "Status" { print toupper($2); exit }' || true)"
         if [[ "$status" == "RUNNING" ]]; then
+            dns_write_cmd="printf 'nameserver %s\n' ${SERVICES_IP}"
+            [[ -n "$DNS_FALLBACK_1" ]] && dns_write_cmd="${dns_write_cmd} ${DNS_FALLBACK_1}"
+            [[ -n "$DNS_FALLBACK_2" ]] && dns_write_cmd="${dns_write_cmd} ${DNS_FALLBACK_2}"
+            dns_write_cmd="${dns_write_cmd} > /etc/resolv.conf"
             incus exec "$cname" -- sh -c \
-                'printf "nameserver 10.149.181.188\nnameserver 1.1.1.1\nnameserver 9.9.9.9\n" > /etc/resolv.conf' \
+                "$dns_write_cmd" \
                 2>/dev/null && log "DNS configured in ${cname}" \
                 || log "WARNING: could not write /etc/resolv.conf in ${cname} (may not be fully started yet)"
         else
@@ -758,9 +910,9 @@ done
 
 log "--- Section 14: Install and start NextDNS in services container ---"
 
-if ! incus exec services -- which nextdns &>/dev/null; then
+if ! incus exec "$SERVICES_CONTAINER" -- which nextdns &>/dev/null; then
     log "Installing nextdns in services container..."
-    incus exec services -- bash -c "curl -sf https://nextdns.io/install | sh"
+    incus exec "$SERVICES_CONTAINER" -- bash -c "curl -sf https://nextdns.io/install | sh"
     log "nextdns installation complete"
 else
     log "nextdns already installed in services container"
@@ -768,13 +920,13 @@ fi
 
 # Restart nextdns (uses the host-managed config now mounted at /etc/nextdns.conf)
 log "Restarting nextdns in services container..."
-if incus exec services -- systemctl restart nextdns 2>/dev/null; then
+if incus exec "$SERVICES_CONTAINER" -- systemctl restart nextdns 2>/dev/null; then
     log "nextdns restarted via systemctl"
-elif incus exec services -- service nextdns restart 2>/dev/null; then
+elif incus exec "$SERVICES_CONTAINER" -- service nextdns restart 2>/dev/null; then
     log "nextdns restarted via service"
 else
     # nextdns CLI start as fallback
-    incus exec services -- nextdns start \
+    incus exec "$SERVICES_CONTAINER" -- nextdns start \
         || die "All methods to start nextdns in services container failed"
     log "nextdns started via nextdns CLI"
 fi
@@ -783,22 +935,22 @@ fi
 # 15. VERIFY NEXTDNS IS LISTENING
 # ---------------------------------------------------------------------------
 
-log "--- Section 15: Verify NextDNS is listening on 10.149.181.188:53 ---"
+log "--- Section 15: Verify NextDNS is listening on ${SERVICES_IP}:53 ---"
 
 verify_dns_listening() {
     local attempt=0
     local max=15
     while [[ $attempt -lt $max ]]; do
-        if incus exec services -- ss -lnup 2>/dev/null | grep -q '10.149.181.188:53'; then
-            log "NextDNS is listening on 10.149.181.188:53"
+        if incus exec "$SERVICES_CONTAINER" -- ss -lnup 2>/dev/null | grep -q "${SERVICES_IP}:53"; then
+            log "NextDNS is listening on ${SERVICES_IP}:53"
             return 0
         fi
-        log "Waiting for NextDNS to bind 10.149.181.188:53 (attempt $((attempt+1))/${max})..."
+        log "Waiting for NextDNS to bind ${SERVICES_IP}:53 (attempt $((attempt+1))/${max})..."
         sleep 2
         ((attempt++))
     done
-    die "NextDNS is NOT listening on 10.149.181.188:53 after ${max} attempts.
-Diagnose with: incus exec services -- journalctl -u nextdns"
+    die "NextDNS is NOT listening on ${SERVICES_IP}:53 after ${max} attempts.
+Diagnose with: incus exec ${SERVICES_CONTAINER} -- journalctl -u nextdns"
 }
 
 verify_dns_listening
@@ -810,44 +962,44 @@ verify_dns_listening
 log "--- Section 16: DNS query verification ---"
 
 DNS_TEST_RESULT="FAIL"
-if dig @10.149.181.188 google.com +short +timeout=5 &>/dev/null; then
-    log "DNS query to 10.149.181.188 (google.com) succeeded"
+if incus exec "$SERVICES_CONTAINER" -- sh -lc 'command -v nslookup >/dev/null 2>&1' \
+        && incus exec "$SERVICES_CONTAINER" -- nslookup google.com "$SERVICES_IP" &>/dev/null; then
+    log "DNS query to ${SERVICES_IP} (google.com) succeeded from ${SERVICES_CONTAINER}"
     DNS_TEST_RESULT="PASS"
-    # Only update host resolver after DNS is confirmed working
+    write_host_resolv
+elif command -v nslookup >/dev/null 2>&1 && nslookup google.com "$SERVICES_IP" &>/dev/null; then
+    log "DNS query to ${SERVICES_IP} (google.com) succeeded"
+    DNS_TEST_RESULT="PASS"
     write_host_resolv
 else
-    die "DNS query to 10.149.181.188 failed. NextDNS may be running but not forwarding.
-Check: incus exec services -- nextdns status
-Check: incus exec services -- journalctl -u nextdns -n 50"
+    die "DNS query to ${SERVICES_IP} failed. NextDNS may be running but not forwarding.
+Check: incus exec ${SERVICES_CONTAINER} -- nextdns status
+Check: incus exec ${SERVICES_CONTAINER} -- journalctl -u nextdns -n 50"
 fi
 
 # ---------------------------------------------------------------------------
-# 16.5. CROSS-BRIDGE DNS ROUTE (ovsbr0 → incusbr0 services container)
+# 16.5. CROSS-BRIDGE DNS ROUTE
 # ---------------------------------------------------------------------------
-# The services container (10.149.181.188 on incusbr0) runs NextDNS.
-# Incus containers on ovsbr0 (privacy_router fabric) are on a different L2
-# segment and need a host-level route to reach the DNS server.
-# This adds a persistent host route so grpc-bridge / ovsbr0-mgmt traffic
-# destined for 10.149.181.188 routes via the incusbr0 interface.
+# Verify the host can route to the configured services DNS IP through the
+# configured Incus network. Route creation belongs to netplan/Incus, not this
+# script.
 # ---------------------------------------------------------------------------
 
-log "--- Section 16.5: Cross-bridge DNS route (ovsbr0 → services/NextDNS) ---"
+log "--- Section 16.5: Cross-bridge DNS route (${OVS_BRIDGE} → ${SERVICES_CONTAINER}/NextDNS) ---"
 
-INCUSBR0_ADDR=""
-if ip addr show incusbr0 &>/dev/null; then
-    INCUSBR0_ADDR="$(ip -4 addr show incusbr0 | awk '/inet / { split($2,a,"/"); print a[1]; exit }')"
+INCUS_NETWORK_ADDR=""
+if ip addr show "$INCUS_NETWORK" &>/dev/null; then
+    INCUS_NETWORK_ADDR="$(ip -4 addr show "$INCUS_NETWORK" | awk '/inet / { split($2,a,"/"); print a[1]; exit }')"
 fi
 
-if [[ -n "$INCUSBR0_ADDR" ]]; then
-    if ! ip route show 10.149.181.0/24 | grep -q incusbr0; then
-        ip route add 10.149.181.0/24 dev incusbr0 2>/dev/null \
-            && log "Added route: 10.149.181.0/24 dev incusbr0" \
-            || log "WARNING: could not add 10.149.181.0/24 route (may already exist)"
+if [[ -n "$INCUS_NETWORK_ADDR" ]]; then
+    if ip route get "$SERVICES_IP" 2>/dev/null | grep -q "$INCUS_NETWORK"; then
+        log "Route to ${SERVICES_IP} resolves via ${INCUS_NETWORK}"
     else
-        log "Route 10.149.181.0/24 dev incusbr0 already present"
+        log "WARNING: route to ${SERVICES_IP} does not resolve via ${INCUS_NETWORK}"
     fi
 else
-    log "WARNING: incusbr0 not found — cannot add cross-bridge DNS route; OVS containers must use NextDNS anycast (45.90.28.0)"
+    log "WARNING: ${INCUS_NETWORK} not found — cannot verify cross-bridge DNS route"
 fi
 
 # ---------------------------------------------------------------------------
@@ -882,13 +1034,17 @@ log "--- Section 18: Deploy Summary ---"
 
 # Collect live state for the summary
 WGCF_STATUS="DOWN"
-ip link show wgcf &>/dev/null && WGCF_STATUS="UP (wgcf interface present)"
+ip link show "$WGCF_INTERFACE" &>/dev/null && WGCF_STATUS="UP (${WGCF_INTERFACE} interface present)"
 
 OVSBR0_STATUS="DOWN"
-ip link show ovsbr0 &>/dev/null && OVSBR0_STATUS="UP (10.88.88.1/24)"
+OVS_BRIDGE_ADDR="$(ip -4 addr show "$OVS_BRIDGE" 2>/dev/null | awk '/inet / { print $2; exit }' || true)"
+if ip link show "$OVS_BRIDGE" &>/dev/null; then
+    OVSBR0_STATUS="UP"
+    [[ -n "$OVS_BRIDGE_ADDR" ]] && OVSBR0_STATUS="UP (${OVS_BRIDGE_ADDR})"
+fi
 
 GRPCBRIDGE_STATUS="DOWN"
-ip link show grpc-bridge &>/dev/null && GRPCBRIDGE_STATUS="UP (${PRIVACY_GRPC_BRIDGE_CIDR:-10.200.0.2/24})"
+ip link show "$GRPC_BRIDGE_IFACE" &>/dev/null && GRPCBRIDGE_STATUS="UP (${GRPC_BRIDGE_CIDR})"
 
 cat <<EOF
 
@@ -896,14 +1052,14 @@ cat <<EOF
 wgcf tunnel:          ${WGCF_STATUS}
 ovsbr0 bridge:        ${OVSBR0_STATUS}
 grpc-bridge port:     ${GRPCBRIDGE_STATUS}
-gRPC server addr:     ${OP_DBUS_GRPC_ADDR:-10.200.0.2:50051}
-services container:   ${SERVICES_STATE} (10.149.181.188)
+gRPC server addr:     ${OP_DBUS_GRPC_ADDR:-unset}
+services container:   ${SERVICES_STATE} (${SERVICES_IP})
 NextDNS profile:      ${NEXTDNS_PROFILE}
-NextDNS listening:    10.149.181.188:53
+NextDNS listening:    ${SERVICES_IP}:53
 DNS test (google.com): ${DNS_TEST_RESULT}
-incusbr0 DNS:         10.149.181.188
-Host resolv.conf:     10.149.181.188 (primary), 1.1.1.1 (fallback)
-OVS container DNS:    ${PRIVACY_DNS_NAMESERVERS:-10.149.181.188,1.1.1.1} (via privacy_router bootstrap)
+${INCUS_NETWORK} DNS:         ${SERVICES_IP}
+Host resolv.conf:     managed by Tailscale/OpenClaw unless OP_DBUS_MANAGE_HOST_RESOLV=1
+OVS container DNS:    ${PRIVACY_DNS_NAMESERVERS:-unset} (via privacy_router bootstrap)
 privacy-xray-ingress: ${PRIV_XRAY_STATE}
 xray-server:          ${XRAY_SERVER_STATE}
 xray-client:          ${XRAY_CLIENT_STATE}

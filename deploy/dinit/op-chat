@@ -1,0 +1,6 @@
+type = process
+command = /usr/local/sbin/op-chat-dinit.sh
+log-type = buffer
+smooth-recovery = true
+depends-on = op-web
+env-file = /etc/op-dbus/environment

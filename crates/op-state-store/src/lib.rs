@@ -46,7 +46,7 @@ pub use schema_validator::{
     canonicalize_json, SchemaValidator, ValidationError, ValidationReport, ValidatorError,
 };
 pub use sqlite_store::SqliteStore;
-pub use state_store::StateStore;
+pub use state_store::{MemoryStore, StateStore};
 
 use serde::{Deserialize, Serialize};
 

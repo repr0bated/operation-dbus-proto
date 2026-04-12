@@ -102,8 +102,10 @@ impl DefaultPluginRegistry {
         let mut plugins: Vec<Arc<dyn op_state::StatePlugin>> = Vec::new();
 
         for plugin_name in &self.config.auto_load {
+            tracing::debug!("Loading plugin: {}", plugin_name);
             match self.load_plugin(plugin_name).await {
                 Ok(plugin) => {
+                    tracing::debug!("Checking availability: {}", plugin_name);
                     if !plugin.is_available() {
                         tracing::info!(
                             "Skipping unavailable plugin {}: {}",

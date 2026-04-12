@@ -276,7 +276,9 @@ impl MemoryTool {
             .and_then(|value| value.as_i64())
             .map(|value| value as usize);
 
-        let graph_events = self.graph_store.query_events(namespace, key_pattern, None)?;
+        let graph_events = self
+            .graph_store
+            .query_events(namespace, key_pattern, None)?;
         let latest = collapse_latest_memory_events(graph_events)?;
         let items: Vec<Value> = latest
             .into_iter()
@@ -406,7 +408,8 @@ impl MemoryTool {
         let items: Vec<Value> = events
             .into_iter()
             .map(|event| {
-                let payload = parse_payload_value(&event.payload_json).unwrap_or(Value::Static(simd_json::StaticNode::Null));
+                let payload = parse_payload_value(&event.payload_json)
+                    .unwrap_or(Value::Static(simd_json::StaticNode::Null));
                 json!({
                     "block_hash": event.block_hash,
                     "namespace": event.namespace,
@@ -514,7 +517,9 @@ mod tests {
             "value": "graph-value"
         }))
         .unwrap();
-        graph_store.project_footprint("block-graph", &footprint).unwrap();
+        graph_store
+            .project_footprint("block-graph", &footprint)
+            .unwrap();
 
         let result = tool
             .execute(json!({
@@ -552,7 +557,9 @@ mod tests {
             "value": "secret"
         }))
         .unwrap();
-        graph_store.project_footprint("block-store", &store_footprint).unwrap();
+        graph_store
+            .project_footprint("block-store", &store_footprint)
+            .unwrap();
 
         let mut delete_footprint = PluginFootprint::new(
             "cognitive_memory",

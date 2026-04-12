@@ -9,6 +9,7 @@
 //! - `types`: Common types used across op-dbus-v2
 
 pub mod config;
+pub mod dbus;
 pub mod error;
 pub mod execution;
 pub mod security;

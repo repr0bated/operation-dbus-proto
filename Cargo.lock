@@ -3909,7 +3909,6 @@ dependencies = [
  "op-network",
  "serde",
  "simd-json",
- "sqlx",
  "tokio",
  "tracing",
  "tracing-subscriber",

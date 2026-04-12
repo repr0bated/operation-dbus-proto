@@ -13,9 +13,24 @@ cleanup() {
 }
 trap cleanup EXIT
 
+repo_slug_from_url() {
+    local url="$1"
+    url="${url#https://github.com/}"
+    url="${url%.git}"
+    echo "$url"
+}
+
 echo "🚀 Updating embedded UI crate from a fresh operation-dashboard-ui clone..."
 echo "📥 Cloning UI repo from $UI_REPO"
-git clone "$UI_REPO" "$SOURCE_DIR"
+
+if command -v gh >/dev/null 2>&1; then
+    UI_REPO_SLUG="$(repo_slug_from_url "$UI_REPO")"
+    echo "🔐 Using GitHub CLI auth flow: gh repo clone $UI_REPO_SLUG"
+     gh repo clone "$UI_REPO_SLUG" "$SOURCE_DIR" -- --quiet
+else
+    echo "ℹ️ GitHub CLI not found; falling back to git clone"
+    git clone "$UI_REPO" "$SOURCE_DIR"
+fi
 
 if [ -n "$UI_REF" ]; then
     echo "🔀 Checking out UI ref $UI_REF"

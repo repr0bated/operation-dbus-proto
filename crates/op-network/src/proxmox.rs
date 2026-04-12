@@ -610,6 +610,7 @@ impl Default for ProxmoxClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use simd_json::prelude::ValueObjectAccess;
 
     #[test]
     fn test_token_auth_header() {

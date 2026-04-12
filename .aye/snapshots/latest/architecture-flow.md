@@ -151,10 +151,9 @@ flowchart TB
         direction TB
         MIRROR_IF["MirrorV1 Interface\n/org/opdbus/v1\npublish_snapshot | reconcile\nget_stats | list_paths"]
 
-        subgraph projected["Projected Objects"]
+        subgraph projected["Projected Objects (Pure 1:1 RCP)"]
             OVSDB_OBJ["ProjectedObjectV1\n/org/opdbus/v1/ovsdb/{table}/{uuid}\njson_data property\nget_property(key)\nSignal: data_updated"]
-            NONNET_OBJ["ProjectedObjectV1\n/org/opdbus/v1/nonnet/{db}/{table}/{uuid}\njson_data property\nget_property(key)\nSignal: data_updated"]
-            ENT_OBJ["ProjectedObjectV1\n/org/opdbus/v1/state/{entity_id}\njson_data property"]
+            PLUGIN_OBJ["ProjectedObjectV1\n/org/opdbus/v1/plugins/{table}/{uuid}\njson_data property\nget_property(key)\nSignal: data_updated"]
         end
 
         subgraph jsonrpc_if["JSON-RPC Interfaces"]
@@ -163,10 +162,9 @@ flowchart TB
         end
     end
 
-    subgraph data_sources["Data Sources (non-D-Bus)"]
+    subgraph data_sources["Authoritative RCP Stores"]
         OVSDB_SOCK["OVSDB\n(JSON-RPC socket)\nOpen_vSwitch DB"]
-        NONNET_DB["NonNet DB\n(JSON-RPC)"]
-        ENT_SQLITE["Enterprise SQLite\n/var/lib/op-dbus/state.db\nlive_objects table"]
+        NONNET_DB["NonNet DB\n(in-process JSON-RPC)\nPlugin state"]
     end
 
     subgraph state_svc["op-state (org.opdbus)"]
@@ -217,20 +215,17 @@ flowchart TB
         SQLITE_CAT["SqlitePluginCatalog\nPluginCatalogDocument:\n  schema + dbus_path\n  service_name + storage_path"]
     end
 
-    %% Data source → Mirror
+    %% Data source → Mirror (pure 1:1 read)
     OVSDB_SOCK -->|"JSON-RPC\nmonitor_db('Open_vSwitch')\nstream updates"| MIRROR_IF
     NONNET_DB -->|"JSON-RPC\nsubscribe() broadcast"| MIRROR_IF
-    ENT_SQLITE -->|"SQLite read\nlive_objects"| MIRROR_IF
 
     %% Mirror publishes objects
     MIRROR_IF -->|"publish_ovsdb_snapshot()"| OVSDB_OBJ
-    MIRROR_IF -->|"publish_nonnet_snapshot()"| NONNET_OBJ
-    MIRROR_IF -->|"publish_enterprise_snapshot()"| ENT_OBJ
+    MIRROR_IF -->|"publish_nonnet_snapshot()"| PLUGIN_OBJ
 
     %% Mirror → D-Bus
     OVSDB_OBJ -->|"Signal: data_updated\nPropertiesChanged"| BUS
-    NONNET_OBJ -->|"Signal: data_updated\nPropertiesChanged"| BUS
-    ENT_OBJ -->|"PropertiesChanged"| BUS
+    PLUGIN_OBJ -->|"Signal: data_updated\nPropertiesChanged"| BUS
 
     %% State manager → D-Bus
     STATE_MGR -->|"register interface"| BUS
@@ -332,7 +327,7 @@ flowchart TB
         SYSTEM_BUS["System D-Bus"]
 
         subgraph dbus_publishers["D-Bus Publishers"]
-            MIRROR["op-dbus-mirror\norg.opdbus.v1\nOVSDB + NonNet + Enterprise\nprojection"]
+            MIRROR["op-dbus-mirror\norg.opdbus.v1\nPure 1:1 RCP projection\nOVSDB + NonNet only"]
             STATE["op-state\norg.opdbus\nStateManager + PluginV1\nhosts"]
             AGENTS["op-agents\norg.dbusmcp.Agent.*\nPythonPro, RustPro, etc."]
             SERVICES["op-services\norg.opdbus.services\ndinit lifecycle mgmt"]
@@ -340,8 +335,7 @@ flowchart TB
 
         subgraph dbus_sources["Underlying Data Sources"]
             OVS["Open vSwitch\nOVSDB socket"]
-            NONNET["NonNet DB"]
-            SQLITE["Enterprise SQLite"]
+            NONNET["NonNet DB\n(in-process JSON-RPC)"]
             DINIT["dinit\n(service supervisor)"]
             RTNETLINK["rtnetlink\n(kernel networking)"]
         end

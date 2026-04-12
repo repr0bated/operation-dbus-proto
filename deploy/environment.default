@@ -2,9 +2,17 @@
 OP_DBUS_STATE_DIR=/var/lib/op-dbus
 
 # gRPC — op-dbus server on grpc-bridge OVS internal port (reachable by all ovsbr0 containers)
-# OP_DBUS_GRPC_ADDR must be a bare host:port SocketAddr — no http:// prefix.
+# OP_DBUS_GRPC_ADDR must stay a bare host:port SocketAddr because op-dbus
+# uses it as the server bind address. Client wrappers add the URI scheme.
 OP_DBUS_ENABLE_GRPC=1
 OP_DBUS_GRPC_ADDR=10.200.0.2:50051
+
+# op-web runs separately from op-dbus and uses op-dbus only as its reference tool source.
+OP_WEB_PORT=8081
+OP_WEB_TOOL_SOURCE=op-dbus
+OP_WEB_REMOTE_TOOL_URL=http://localhost:8080
+OP_DBUS_SESSION_BUS=1
+OP_DBUS_PUBLISH_SYSTEM_BUS=1
 
 # OpenFlow controller on ovsbr0
 OPENFLOW_CONTROLLER=tcp:10.88.88.1:6653
@@ -16,6 +24,7 @@ PRIVACY_GRPC_BRIDGE_CIDR=10.200.0.2/24
 # DNS nameservers for OVS-attached Incus containers (NextDNS via services container)
 # Written to /etc/resolv.conf inside privacy_router system containers at runtime.
 PRIVACY_DNS_NAMESERVERS=10.149.181.188,1.1.1.1
+PRIVACY_ROUTE_SHARED_SECRET=change-me-to-a-random-secret
 
 # Email Configuration for Magic Links
 SMTP_HOST=10.149.181.188

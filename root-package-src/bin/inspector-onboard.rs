@@ -35,9 +35,9 @@ async fn main() -> Result<()> {
     let inspector = InspectorGadget::new(
         InspectorConfig::default(),
         state_store.clone(),
-        plugin_catalog,
-        tool_registry,
+        tool_registry.clone(),
     );
+
 
     let discovery = inspector.discover().await?;
     println!("discovery_id={}", discovery.discovery_id);

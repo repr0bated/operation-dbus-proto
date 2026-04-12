@@ -30,7 +30,6 @@ pub mod mcp_live;
 pub mod chatbot;
 pub mod error;
 pub mod plugins;
-pub mod pre_canned;
 
 // Core system components
 pub mod inspector_gadget;

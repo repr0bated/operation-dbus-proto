@@ -355,19 +355,34 @@ impl SchemaEngine {
             // NonNet / Generic Plugin Path
             if change_type == ChangeType::PropertySet {
                 // Get old value for the footprint before update from cache
-                old_value = self.get_state(&plugin_id).await.and_then(|v| {
+                let cached_state = self.get_state(&plugin_id).await;
+                old_value = cached_state.as_ref().and_then(|v| {
                     if let Some(prop) = &member_name {
                         v.get(prop).cloned()
                     } else {
-                        Some(v)
+                        Some(v.clone())
                     }
                 });
 
-                // For NonNet plugins, we update the NonNetDb which is authoritative for non-network state
-                if let Some(rows) = value.as_array() {
-                    let rows_vec: Vec<simd_json::OwnedValue> = rows.iter().cloned().collect();
-                    self.nonnet.update_table(&plugin_id, rows_vec).await;
-                }
+                let persisted_state = if let Some(prop) = &member_name {
+                    let mut next_state = cached_state.unwrap_or_else(|| simd_json::json!({}));
+
+                    if let Some(existing) = next_state.as_object_mut() {
+                        existing.insert(prop.clone(), value.clone());
+                    } else {
+                        let mut state = simd_json::value::owned::Object::new();
+                        state.insert(prop.clone(), value.clone());
+                        next_state = simd_json::OwnedValue::Object(Box::new(state));
+                    }
+
+                    next_state
+                } else {
+                    value.clone()
+                };
+
+                self.nonnet
+                    .update_table(&plugin_id, nonnet_rows_from_value(&persisted_state))
+                    .await;
             }
         }
 
@@ -515,4 +530,83 @@ pub enum ErrorCode {
     ValidationFailed,
     ReadOnly,
     Internal,
+}
+
+fn nonnet_rows_from_value(value: &simd_json::OwnedValue) -> Vec<simd_json::OwnedValue> {
+    match value {
+        simd_json::OwnedValue::Array(rows) => rows.to_vec(),
+        simd_json::OwnedValue::Object(map) => {
+            for (_, nested) in map.iter() {
+                if let Some(rows) = nested.as_array() {
+                    return rows.to_vec();
+                }
+            }
+
+            vec![value.clone()]
+        }
+        _ => vec![value.clone()],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{nonnet_rows_from_value, ChangeType, SchemaEngine};
+    use op_jsonrpc::nonnet::NonNetDb;
+    use op_jsonrpc::protocol::JsonRpcRequest;
+    use op_network::ovsdb::OvsdbClient;
+    use op_state_store::{ChainConfig, EventChain};
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+
+    #[test]
+    fn nonnet_rows_from_value_uses_embedded_arrays() {
+        let state = simd_json::json!({
+            "items": [
+                {"id": "peer-01"},
+                {"id": "peer-02"}
+            ]
+        });
+
+        let rows = nonnet_rows_from_value(&state);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["id"], "peer-01");
+    }
+
+    #[tokio::test]
+    async fn property_set_persists_nonnet_state() {
+        let nonnet = Arc::new(NonNetDb::new());
+        let engine = SchemaEngine::new(
+            Arc::new(RwLock::new(EventChain::new(ChainConfig::default()))),
+            Arc::new(OvsdbClient::new()),
+            nonnet.clone(),
+        );
+
+        engine
+            .mutate(
+                "mail".to_string(),
+                "/org/opdbus/v1/plugins/mail".to_string(),
+                ChangeType::PropertySet,
+                None,
+                simd_json::json!({
+                    "outbox": [
+                        {"id": "msg-1", "status": "queued"}
+                    ]
+                }),
+                "tester".to_string(),
+                None,
+            )
+            .await
+            .expect("property set should persist");
+
+        let response = nonnet
+            .handle_request(JsonRpcRequest::new(
+                "transact",
+                simd_json::json!(["OpNonNet", {"op": "select", "table": "mail"}]),
+            ))
+            .await;
+
+        let rows = response.result.expect("select result");
+        assert_eq!(rows[0]["rows"][0]["id"], "msg-1");
+        assert_eq!(rows[0]["rows"][0]["status"], "queued");
+    }
 }

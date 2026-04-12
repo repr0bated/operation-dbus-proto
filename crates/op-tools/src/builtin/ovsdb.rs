@@ -9,6 +9,7 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use simd_json::value::owned::Object;
 use simd_json::{json, OwnedValue as Value};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -44,7 +45,10 @@ impl OvsdbClient {
     async fn rpc_call(&self, method: &str, params: Value) -> Result<Value> {
         let stream = UnixStream::connect(&self.socket_path)
             .await
-            .context(format!("Failed to connect to OVSDB socket: {}", self.socket_path))?;
+            .context(format!(
+                "Failed to connect to OVSDB socket: {}",
+                self.socket_path
+            ))?;
 
         let (reader, mut writer) = stream.into_split();
         let mut reader = BufReader::new(reader);
@@ -67,8 +71,8 @@ impl OvsdbClient {
         reader.read_line(&mut response_str).await?;
         debug!("OVSDB response: {}", response_str.trim());
 
-        let response: Value = simd_json::from_str(&response_str)
-            .context("Failed to parse OVSDB response")?;
+        let response: Value =
+            simd_json::from_str(&response_str).context("Failed to parse OVSDB response")?;
 
         // Check for error
         if let Some(error) = response.get("error") {
@@ -82,8 +86,31 @@ impl OvsdbClient {
 
     /// Execute OVSDB transaction
     pub async fn transact(&self, operations: Vec<Value>) -> Result<Value> {
-        let params = json!(["Open_vSwitch", operations]);
-        self.rpc_call("transact", params).await
+        self.validate_mutation_operations(&operations).await?;
+
+        let mut params = Vec::with_capacity(operations.len() + 1);
+        params.push(json!("Open_vSwitch"));
+        params.extend(operations);
+
+        let result = self.rpc_call("transact", json!(params)).await?;
+        if let Some(results) = result.as_array() {
+            for (idx, op_result) in results.iter().enumerate() {
+                if let Some(error) = op_result.get("error").and_then(|e| e.as_str()) {
+                    let details = op_result
+                        .get("details")
+                        .and_then(|d| d.as_str())
+                        .unwrap_or("no details");
+                    return Err(anyhow::anyhow!(
+                        "OVSDB operation {} failed: {} ({})",
+                        idx,
+                        error,
+                        details
+                    ));
+                }
+            }
+        }
+
+        Ok(result)
     }
 
     /// List all databases
@@ -96,6 +123,131 @@ impl OvsdbClient {
     /// Get database schema
     pub async fn get_schema(&self, db: &str) -> Result<Value> {
         self.rpc_call("get_schema", json!([db])).await
+    }
+
+    async fn validate_mutation_operations(&self, operations: &[Value]) -> Result<()> {
+        if !operations.iter().any(Self::operation_changes_rows) {
+            return Ok(());
+        }
+
+        let schema = self.get_schema("Open_vSwitch").await?;
+        Self::validate_operations_against_schema(&schema, operations)
+    }
+
+    fn validate_operations_against_schema(schema: &Value, operations: &[Value]) -> Result<()> {
+        let tables = schema
+            .get("tables")
+            .and_then(|v| v.as_object())
+            .ok_or_else(|| anyhow::anyhow!("Invalid OVSDB schema: missing tables"))?;
+
+        for (idx, op) in operations.iter().enumerate() {
+            if !Self::operation_changes_rows(op) {
+                continue;
+            }
+
+            let op_name = op
+                .get("op")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("OVSDB operation {} is missing op", idx))?;
+            let table_name = op.get("table").and_then(|v| v.as_str()).ok_or_else(|| {
+                anyhow::anyhow!("OVSDB {} operation {} is missing table", op_name, idx)
+            })?;
+            let table_schema = tables.get(table_name).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "OVSDB schema does not contain table '{}' required by {} operation {}",
+                    table_name,
+                    op_name,
+                    idx
+                )
+            })?;
+
+            Self::validate_operation_columns(idx, op_name, table_name, table_schema, op)?;
+        }
+
+        Ok(())
+    }
+
+    fn operation_changes_rows(op: &Value) -> bool {
+        matches!(
+            op.get("op").and_then(|v| v.as_str()),
+            Some("insert" | "update" | "mutate" | "delete")
+        )
+    }
+
+    fn validate_operation_columns(
+        idx: usize,
+        op_name: &str,
+        table_name: &str,
+        table_schema: &Value,
+        op: &Value,
+    ) -> Result<()> {
+        let columns = table_schema
+            .get("columns")
+            .and_then(|v| v.as_object())
+            .ok_or_else(|| anyhow::anyhow!("Invalid OVSDB schema for table '{}'", table_name))?;
+
+        if let Some(row) = op.get("row").and_then(|v| v.as_object()) {
+            for column in row.keys() {
+                Self::ensure_column_exists(idx, op_name, table_name, columns, column)?;
+            }
+        }
+
+        if let Some(conditions) = op.get("where").and_then(|v| v.as_array()) {
+            for condition in conditions {
+                if let Some(column) = condition
+                    .as_array()
+                    .and_then(|parts| parts.first())
+                    .and_then(|v| v.as_str())
+                {
+                    Self::ensure_column_exists(idx, op_name, table_name, columns, column)?;
+                }
+            }
+        }
+
+        if let Some(mutations) = op.get("mutations").and_then(|v| v.as_array()) {
+            for mutation in mutations {
+                let column = mutation
+                    .as_array()
+                    .and_then(|parts| parts.first())
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "OVSDB mutate operation {} on table '{}' has a malformed mutation",
+                            idx,
+                            table_name
+                        )
+                    })?;
+                Self::ensure_column_exists(idx, op_name, table_name, columns, column)?;
+            }
+        }
+
+        if let Some(columns_list) = op.get("columns").and_then(|v| v.as_array()) {
+            for column in columns_list.iter().filter_map(|v| v.as_str()) {
+                Self::ensure_column_exists(idx, op_name, table_name, columns, column)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn ensure_column_exists(
+        idx: usize,
+        op_name: &str,
+        table_name: &str,
+        columns: &Object,
+        column: &str,
+    ) -> Result<()> {
+        if column == "_uuid" || column == "_version" || columns.contains_key(column) {
+            return Ok(());
+        }
+
+        Err(anyhow::anyhow!(
+            "OVSDB schema table '{}' does not contain column '{}' required by {} operation {}",
+            table_name,
+            column,
+            op_name,
+            idx
+        ))
     }
 
     /// Create a bridge
@@ -215,7 +367,11 @@ impl OvsdbClient {
         let result = self.transact(vec![select]).await?;
         let mut bridges = Vec::new();
 
-        if let Some(rows) = result.get(0).and_then(|r| r.get("rows")).and_then(|r| r.as_array()) {
+        if let Some(rows) = result
+            .get(0)
+            .and_then(|r| r.get("rows"))
+            .and_then(|r| r.as_array())
+        {
             for row in rows {
                 if let Some(name) = row.get("name").and_then(|n| n.as_str()) {
                     bridges.push(name.to_string());
@@ -228,7 +384,10 @@ impl OvsdbClient {
 
     /// Add port to bridge
     pub async fn add_port(&self, bridge: &str, port: &str) -> Result<Value> {
-        info!("Adding port '{}' to bridge '{}' via OVSDB JSON-RPC", port, bridge);
+        info!(
+            "Adding port '{}' to bridge '{}' via OVSDB JSON-RPC",
+            port, bridge
+        );
 
         // Get bridge UUID
         let select_bridge = json!({
@@ -284,7 +443,10 @@ impl OvsdbClient {
 
     /// Delete port from bridge
     pub async fn delete_port(&self, bridge: &str, port: &str) -> Result<Value> {
-        info!("Deleting port '{}' from bridge '{}' via OVSDB JSON-RPC", port, bridge);
+        info!(
+            "Deleting port '{}' from bridge '{}' via OVSDB JSON-RPC",
+            port, bridge
+        );
 
         // Get port UUID
         let select_port = json!({
@@ -897,6 +1059,25 @@ pub fn create_ovs_tools() -> Vec<BoxedTool> {
 mod tests {
     use super::*;
 
+    fn native_schema() -> Value {
+        json!({
+            "tables": {
+                "Bridge": {
+                    "columns": {
+                        "name": {},
+                        "ports": {}
+                    }
+                },
+                "Port": {
+                    "columns": {
+                        "name": {},
+                        "interfaces": {}
+                    }
+                }
+            }
+        })
+    }
+
     #[test]
     fn test_tool_names() {
         let tools = create_ovs_tools();
@@ -918,5 +1099,35 @@ mod tests {
 
         assert!(schema.get("properties").is_some());
         assert!(schema.get("properties").unwrap().get("name").is_some());
+    }
+
+    #[test]
+    fn test_validates_native_schema_for_mutations() {
+        let operations = vec![json!({
+            "op": "mutate",
+            "table": "Bridge",
+            "where": [["_uuid", "==", ["uuid", "bridge-uuid"]]],
+            "mutations": [
+                ["ports", "insert", ["set", [["uuid", "port-uuid"]]]]
+            ]
+        })];
+
+        OvsdbClient::validate_operations_against_schema(&native_schema(), &operations)
+            .expect("valid mutation schema");
+    }
+
+    #[test]
+    fn test_rejects_mutation_columns_not_in_native_schema() {
+        let operations = vec![json!({
+            "op": "insert",
+            "table": "Bridge",
+            "row": {
+                "schema_derived": true
+            }
+        })];
+
+        let err = OvsdbClient::validate_operations_against_schema(&native_schema(), &operations)
+            .expect_err("unknown column must fail");
+        assert!(err.to_string().contains("schema_derived"));
     }
 }

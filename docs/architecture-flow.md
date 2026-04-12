@@ -32,7 +32,13 @@ External caller
     (plugin IS the schema — schema drives everything)
             │
             ▼
-    Plugin diff/apply
+    Plugin mutation/apply
+            │
+            ├── Network state     →  OVSDB (JSON-RPC socket)
+            │                        authoritative RCP store
+            │
+            ├── Plugin state      →  NonNet DB (in-process JSON-RPC)
+            │                        authoritative RCP store
             │
             ├── Persistent state  →  op-state-store (SQLite)
             │
@@ -42,6 +48,16 @@ External caller
             └── DR state dump     →  BTRFS state_subvol
                                      current.json
                                      (only include_in_dr=true plugins)
+
+    D-Bus projection (op-dbus-mirror):
+      Pure 1:1 read from OVSDB + NonNet
+      Projection index comes from RCP plugin schema metadata
+      OVSDB row + native OVSDB schema + plugin projection metadata
+      → /org/opdbus/network/bridges/{name}
+      → /org/opdbus/network/ports/{name}
+      → /org/opdbus/network/interfaces/{name}
+      Large schema-derived tables only → /org/opdbus/v1/dynamic/{plugin}/{object_type}
+      No catalog lookup, no sync, no intermediate stores
 ```
 
 ---
@@ -221,6 +237,7 @@ AFTER (dynamic personas):
 | Service | Host | Port | Protocol | Notes |
 |---|---|---|---|---|
 | op-dbus | op-dbus (host) | D-Bus session | D-Bus | StateManager, plugins |
+| op-dbus-mirror | op-dbus (host) | D-Bus session (org.opdbus.v1) | D-Bus | 1:1 RCP projection (OVSDB + NonNet) |
 | op-grpc-bridge | op-dbus | 50051 | gRPC/TLS | Primary mutation ingress |
 | op-jsonrpc | op-dbus | 7020 | HTTP+JSON | Legacy / tooling |
 | op-mcp | op-dbus | 3000 | HTTP | MCP tool server |
@@ -248,11 +265,129 @@ ovsbr0                        — OVS bridge (privacy + container networking)
 
 ---
 
-## 8. Data Stores at a Glance
+## 8. D-Bus Mirror — Pure 1:1 RCP Projection
+
+The D-Bus mirror (`op-dbus-mirror`, bus name `org.opdbus.v1`) is a **pure 1:1 projection** of the two
+authoritative RCP (Runtime Control Plane) databases. It introduces **no second source of truth** — it reads
+directly from the databases and publishes what it finds as D-Bus objects.
+
+### RCP Stores (read directly)
+
+| Store | Protocol | Projection rule | What it holds |
+|---|---|---|---|
+| **OVSDB** | JSON-RPC (socket) | Read native `Open_vSwitch` schema, then project rows only when plugin RCP schema marks the object type `schema_derived=true` | Network state: bridges, ports, interfaces, flows |
+| **NonNet** | JSON-RPC (in-process) | Read plugin RCP schema metadata and project only `schema_derived=true` object types | Non-network plugin state: dinit, hardware, privacy, DNS, etc. |
+
+The native OVSDB schema is the data-shape authority for OVSDB mutations and reads. Every OVSDB transaction that inserts, updates, mutates, or deletes rows validates the target table and column names against that schema before the JSON-RPC `transact` request is sent.
+The plugin/RCP schema supplies OP-DBUS ownership and projection metadata:
+
+```json
+{
+  "schema_derived": true,
+  "rcp_db": "ovsdb",
+  "rcp_table": "Bridge",
+  "id_field": "name",
+  "base_path": "/org/opdbus/network/bridges",
+  "interface": "org.opdbus.network.v1.Bridge"
+}
+```
+
+Result:
+
+```
+OVSDB Bridge row name=ovsbr0
+  + native OVSDB schema table Bridge
+  + plugin projection metadata
+  → /org/opdbus/network/bridges/ovsbr0
+```
+
+`/org/opdbus/v1/dynamic/{plugin}/{object_type}` is not a fallback. It is only a lazy-loading branch for large tables that already passed the same `schema_derived=true` selection rule.
+
+### NOT projected (catalog only)
+
+| Store | Purpose | Where it lives |
+|---|---|---|
+| Enterprise SQLite (namespace_schema) | Schema catalog/library — service definitions, LDAP schemas, migration rules | ComponentRegistry (gRPC) |
+
+The Enterprise SQLite is a **catalog** used to create, store, and maintain a library of schemas.
+It feeds the ComponentRegistry for gRPC discovery but is **never** part of the D-Bus projection flow.
+ComponentRegistry is a pure gRPC in-memory service (`RegistryInner`).
+
+### Refresh model
+
+```
+                ┌──────────────────────────────────┐
+                │      op-dbus-mirror (org.opdbus.v1)       │
+                │                                           │
+                │  refresh_full_tree()                      │
+                │    1. publish_nonnet_snapshot()            │
+                │       └── NonNet get_schema → schema_derived│
+                │           → select rows → base_path/{id}  │
+                │    2. publish_ovsdb_snapshot()             │
+                │       └── OVSDB get_schema + plugin RCP schema│
+                │           → select schema-derived tables  │
+                │    3. remove_stale_publications()          │
+                │       └── prune D-Bus objects not in DB   │
+                └──────────────────────────────────┘
+
+Event-driven triggers:
+  ├── OVSDB monitor_db("Open_vSwitch")  → channel rx → refresh
+  ├── NonNet subscribe() broadcast      → channel rx → refresh
+  └── Periodic fallback (300s)          → tick → refresh
+```
+
+### D-Bus interfaces
+
+| Interface | Path | Methods / Properties |
+|---|---|---|
+| `org.opdbus.MirrorV1` | `/org/opdbus/v1` | `publish_snapshot`, `reconcile`, `get_stats`, `list_paths` |
+| `org.opdbus.OvsdbV1` | `/org/opdbus/v1/ovsdb` | `transact`, `get_schema`, `list_dbs`, `create_bridge`, etc. |
+| `org.opdbus.NonNetV1` | `/org/opdbus/v1/nonnet` | `transact`, `get_schema`, `list_dbs` |
+| `org.opdbus.ProjectedObjectV1` | schema `base_path/{id}` | `json_data` property, `get_property(key)`, Signal: `data_updated` |
+| `org.opdbus.LazyTableV1` | `/org/opdbus/v1/dynamic/{plugin}/{object_type}` | `count`, `table`, `database`, `list_ids(offset, limit)`, `get_row(id)` |
+
+### NonNet seeding
+
+NonNet starts with schema metadata, not catalog lookups. At boot,
+`authoritative_nonnet.load_from_schema_defs(&schema_defs)` seeds plugin object metadata into the RCP schema.
+The mirror reads that RCP schema directly. Runtime rows are still read from the authoritative RCP DB that owns them.
+
+### D-Bus object path hierarchy
+
+```
+/org/opdbus/
+├── state                              ← StateManager interface
+└── v1/                                ← MirrorV1 management interface
+    ├── ovsdb/                         ← OvsdbV1 JSON-RPC interface
+    ├── nonnet/                        ← NonNetV1 JSON-RPC interface
+    └── dynamic/                       ← LazyTableV1 for large schema-derived tables only
+        └── {plugin}/{object_type}
+
+/org/opdbus/network/
+├── bridges/{name}                     ← OVSDB Bridge via network plugin schema
+├── ports/{name}                       ← OVSDB Port via network plugin schema
+└── interfaces/{name}                  ← OVSDB Interface via network plugin schema
+
+/org/opdbus/{plugin}/...               ← NonNet rows at plugin schema base_path/{id}
+
+/org/dbusmcp/Agent/
+├── PythonPro                          ← Agent interface
+├── RustPro                            ← Agent interface
+└── ...per agent type
+
+/org/opdbus/services                   ← services.v1.Manager interface
+```
+
+---
+
+## 9. Data Stores at a Glance
 
 | Store | Location | What lives there | Durability |
 |---|---|---|---|
+| OVSDB | JSON-RPC socket (host) | Network state (bridges, ports, interfaces, flows) | Persistent (OVS manages) |
+| NonNet | In-process JSON-RPC | Non-network plugin state (seeded from state_manager at boot) | Runtime (re-seeded on restart) |
 | op-state-store | SQLite (op-dbus host) | Plugin state, cognitive memory, user memory | Persistent |
+| Enterprise SQLite | SQLite (namespace_schema) | Schema catalog: service definitions, LDAP schemas, migration rules | Persistent (catalog only) |
 | BTRFS timing_subvol | /timing_subvol | Blockchain footprints (audit, immutable) | Persistent + replicated |
 | BTRFS state_subvol | /state_subvol | DR current.json snapshots | Persistent + replicated |
 | Qdrant | qdrant container | Vectors: footprints, reasoning episodes | Persistent + snapshotted |

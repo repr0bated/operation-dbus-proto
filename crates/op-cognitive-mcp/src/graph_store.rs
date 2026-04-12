@@ -120,7 +120,10 @@ impl KnowledgeGraphStore {
             serde_json::to_string(&footprint.metadata).context("serialize footprint metadata")?;
 
         let mut params = BTreeMap::new();
-        params.insert("block_hash".to_string(), DataValue::from(block_hash.to_string()));
+        params.insert(
+            "block_hash".to_string(),
+            DataValue::from(block_hash.to_string()),
+        );
         params.insert(
             "plugin_id".to_string(),
             DataValue::from(footprint.plugin_id.clone()),
@@ -313,7 +316,11 @@ fn namespace_from_metadata(metadata: &HashMap<String, simd_json::OwnedValue>) ->
     metadata
         .get("namespace")
         .and_then(|value| value.as_str())
-        .or_else(|| metadata.get("memory_store").and_then(|value| value.as_str()))
+        .or_else(|| {
+            metadata
+                .get("memory_store")
+                .and_then(|value| value.as_str())
+        })
         .unwrap_or("control:default")
         .to_string()
 }

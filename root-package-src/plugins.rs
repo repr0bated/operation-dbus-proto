@@ -1,8 +1,8 @@
-use sqlx::SqlitePool;
 use anyhow::{anyhow, Result};
-use std::path::Path;
 use jsonschema::Draft;
 use serde_json::Value;
+use sqlx::SqlitePool;
+use std::path::Path;
 
 pub struct PluginDefinition {
     pub name: &'static str,
@@ -16,7 +16,7 @@ const PLUGIN_DEFINITIONS: &[PluginDefinition] = &[
         service_name: "org.opdbus.directory.v1",
         schema_json: r#"{
                 "type": "DirectoryEntry",
-                "description": "Enterprise directory and identity management",
+                "description": "Enterprise directory and identity management (AD/LDAP replacement)",
                 "replaces": ["Active Directory", "OpenLDAP", "FreeIPA"],
                 "common_properties": {
                     "id": {"type": "uuid", "required": true},
@@ -25,25 +25,157 @@ const PLUGIN_DEFINITIONS: &[PluginDefinition] = &[
                     "object_type": {"type": "string", "required": true}
                 },
                 "object_types": {
-                    "User": {
-                        "description": "Directory user account",
-                        "base_path": "/org/opdbus/directory/users",
-                        "interface": "org.opdbus.directory.v1.User"
-                    },
-                    "Group": {
-                        "description": "Directory group",
-                        "base_path": "/org/opdbus/directory/groups",
-                        "interface": "org.opdbus.directory.v1.Group"
+                    "Domain": {
+                        "description": "AD Domain or Forest Root",
+                        "base_path": "/org/opdbus/directory/domains",
+                        "interface": "org.opdbus.directory.v1.Domain",
+                        "properties": {
+                            "domain_name": {"type": "string", "required": true},
+                            "dns_root": {"type": "string"},
+                            "forest_name": {"type": "string"},
+                            "functional_level": {"type": "integer"},
+                            "domain_sid": {"type": "string"},
+                            "netbios_name": {"type": "string"}
+                        }
                     },
                     "OrganizationalUnit": {
                         "description": "Organizational unit (OU)",
                         "base_path": "/org/opdbus/directory/ou",
-                        "interface": "org.opdbus.directory.v1.OrganizationalUnit"
+                        "interface": "org.opdbus.directory.v1.OrganizationalUnit",
+                        "properties": {
+                            "ou_name": {"type": "string", "required": true},
+                            "description": {"type": "string"},
+                            "parent_dn": {"type": "string"},
+                            "gpo_links": {"type": "array"},
+                            "managed_by": {"type": "string"}
+                        }
+                    },
+                    "Site": {
+                        "description": "AD Physical Site",
+                        "base_path": "/org/opdbus/directory/sites",
+                        "interface": "org.opdbus.directory.v1.Site",
+                        "properties": {
+                            "site_name": {"type": "string", "required": true},
+                            "description": {"type": "string"},
+                            "subnets": {"type": "array"},
+                            "site_links": {"type": "array"},
+                            "location": {"type": "string"}
+                        }
+                    },
+                    "User": {
+                        "description": "AD-compatible User Account",
+                        "base_path": "/org/opdbus/directory/users",
+                        "interface": "org.opdbus.directory.v1.User",
+                        "properties": {
+                            "username": {"type": "string", "required": true},
+                            "display_name": {"type": "string"},
+                            "email": {"type": "string"},
+                            "department": {"type": "string"},
+                            "title": {"type": "string"},
+                            "member_of": {"type": "array"},
+                            "object_sid": {"type": "string"},
+                            "user_principal_name": {"type": "string"}
+                        }
+                    },
+                    "Group": {
+                        "description": "AD-compatible Group",
+                        "base_path": "/org/opdbus/directory/groups",
+                        "interface": "org.opdbus.directory.v1.Group",
+                        "properties": {
+                            "group_name": {"type": "string", "required": true},
+                            "description": {"type": "string"},
+                            "members": {"type": "array"},
+                            "group_type": {"type": "integer"}
+                        }
                     },
                     "Computer": {
-                        "description": "Computer account",
+                        "description": "AD-compatible Computer Account",
                         "base_path": "/org/opdbus/directory/computers",
-                        "interface": "org.opdbus.directory.v1.Computer"
+                        "interface": "org.opdbus.directory.v1.Computer",
+                        "properties": {
+                            "computer_name": {"type": "string", "required": true},
+                            "dns_hostname": {"type": "string"},
+                            "operating_system": {"type": "string"},
+                            "os_version": {"type": "string"}
+                        }
+                    },
+                    "GroupPolicyObject": {
+                        "description": "AD Group Policy Object",
+                        "base_path": "/org/opdbus/directory/gpo",
+                        "interface": "org.opdbus.directory.v1.GroupPolicyObject",
+                        "properties": {
+                            "gpo_name": {"type": "string", "required": true},
+                            "gpo_guid": {"type": "string", "required": true},
+                            "settings": {"type": "object"}
+                        }
+                    },
+                    "DNSZone": {
+                        "description": "AD-integrated DNS Zone",
+                        "base_path": "/org/opdbus/directory/dns",
+                        "interface": "org.opdbus.directory.v1.DNSZone",
+                        "properties": {
+                            "zone_name": {"type": "string", "required": true},
+                            "zone_type": {"type": "string"},
+                            "dns_records": {"type": "array"}
+                        }
+                    }
+                }
+            }"#,
+    },
+    PluginDefinition {
+        name: "cms",
+        service_name: "org.opdbus.cms.v1",
+        schema_json: r#"{
+                "type": "CMSObject",
+                "description": "Enterprise CMS management (Drupal/WordPress replacement)",
+                "replaces": ["Drupal", "WordPress"],
+                "common_properties": {
+                    "id": {"type": "uuid", "required": true},
+                    "created_at": {"type": "timestamp", "required": true},
+                    "object_type": {"type": "string", "required": true}
+                },
+                "object_types": {
+                    "Node": {
+                        "description": "Drupal-compatible Content Node",
+                        "base_path": "/org/opdbus/cms/nodes",
+                        "interface": "org.opdbus.cms.v1.Node",
+                        "properties": {
+                            "title": {"type": "string", "required": true},
+                            "body": {"type": "string"},
+                            "content_type": {"type": "string", "required": true},
+                            "status": {"type": "string"}
+                        }
+                    },
+                    "WPPost": {
+                        "description": "WordPress-compatible Post",
+                        "base_path": "/org/opdbus/cms/wp-posts",
+                        "interface": "org.opdbus.cms.v1.WPPost",
+                        "properties": {
+                            "post_title": {"type": "string", "required": true},
+                            "post_content": {"type": "string"},
+                            "post_status": {"type": "string"},
+                            "post_type": {"type": "string", "required": true}
+                        }
+                    },
+                    "WPUser": {
+                        "description": "WordPress-compatible User",
+                        "base_path": "/org/opdbus/cms/wp-users",
+                        "interface": "org.opdbus.cms.v1.WPUser",
+                        "properties": {
+                            "user_login": {"type": "string", "required": true},
+                            "user_email": {"type": "string", "required": true},
+                            "role": {"type": "string"}
+                        }
+                    },
+                    "WCProduct": {
+                        "description": "WooCommerce-compatible Product",
+                        "base_path": "/org/opdbus/cms/wc-products",
+                        "interface": "org.opdbus.cms.v1.WCProduct",
+                        "properties": {
+                            "sku": {"type": "string"},
+                            "regular_price": {"type": "string"},
+                            "stock_quantity": {"type": "integer"}
+                        }
                     }
                 }
             }"#,
@@ -64,16 +196,34 @@ const PLUGIN_DEFINITIONS: &[PluginDefinition] = &[
                 "object_types": {
                     "Interface": {
                         "description": "Network interface",
+                        "schema_derived": true,
+                        "rcp_db": "ovsdb",
+                        "rcp_table": "Interface",
+                        "id_field": "name",
                         "base_path": "/org/opdbus/network/interfaces",
                         "interface": "org.opdbus.network.v1.Interface"
                     },
                     "Bridge": {
                         "description": "Network bridge",
+                        "schema_derived": true,
+                        "rcp_db": "ovsdb",
+                        "rcp_table": "Bridge",
+                        "id_field": "name",
                         "base_path": "/org/opdbus/network/bridges",
                         "interface": "org.opdbus.network.v1.Bridge"
                     },
+                    "Port": {
+                        "description": "OVS port",
+                        "schema_derived": true,
+                        "rcp_db": "ovsdb",
+                        "rcp_table": "Port",
+                        "id_field": "name",
+                        "base_path": "/org/opdbus/network/ports",
+                        "interface": "org.opdbus.network.v1.Port"
+                    },
                     "VLAN": {
                         "description": "VLAN interface",
+                        "schema_derived": true,
                         "base_path": "/org/opdbus/network/vlans",
                         "interface": "org.opdbus.network.v1.VLAN"
                     }
@@ -468,8 +618,14 @@ pub fn validate_plugin_schemas_from_repo() -> Result<()> {
 
 pub fn validate_plugin_schemas(official_meta_schema_path: &Path) -> Result<()> {
     let official_meta_schema: Value = if official_meta_schema_path.exists() {
-        let official_meta_str = std::fs::read_to_string(official_meta_schema_path)
-            .map_err(|e| anyhow!("Failed to read meta-schema {}: {}", official_meta_schema_path.display(), e))?;
+        let official_meta_str =
+            std::fs::read_to_string(official_meta_schema_path).map_err(|e| {
+                anyhow!(
+                    "Failed to read meta-schema {}: {}",
+                    official_meta_schema_path.display(),
+                    e
+                )
+            })?;
         serde_json::from_str(&official_meta_str)
             .map_err(|e| anyhow!("Failed to parse official meta-schema JSON: {}", e))?
     } else {
@@ -513,9 +669,7 @@ pub fn validate_plugin_schemas(official_meta_schema_path: &Path) -> Result<()> {
         for err in plugin_compiled.iter_errors(&schema_value) {
             errors.push(format!(
                 "plugin {}: {} at {}",
-                plugin.name,
-                err,
-                err.instance_path
+                plugin.name, err, err.instance_path
             ));
         }
     }
@@ -528,6 +682,34 @@ pub fn validate_plugin_schemas(official_meta_schema_path: &Path) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Return plugin schema definitions keyed by name.
+///
+/// The values are the parsed `schema_json` from each `PluginDefinition`,
+/// containing `object_types` with `base_path` entries. The D-Bus mirror
+/// uses these to project state to schema-derived paths.
+pub fn plugin_schema_defs() -> std::collections::HashMap<String, simd_json::OwnedValue> {
+    let mut defs = std::collections::HashMap::new();
+    for plugin in PLUGIN_DEFINITIONS {
+        // Use standard serde_json for initial robust parsing
+        let value: serde_json::Value = match serde_json::from_str(plugin.schema_json) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("ERROR: Failed to parse schema for plugin {}: {}", plugin.name, e);
+                continue;
+            }
+        };
+
+        // Convert to OwnedValue for compatibility with the existing return type
+        let json_str = value.to_string();
+        if let Ok(val) = unsafe { simd_json::from_str(&mut json_str.clone()) } {
+            defs.insert(plugin.name.to_string(), val);
+        } else {
+            eprintln!("ERROR: Failed to convert schema to OwnedValue for plugin {}", plugin.name);
+        }
+    }
+    defs
 }
 
 pub async fn insert_plugins(pool: &SqlitePool) -> Result<()> {
