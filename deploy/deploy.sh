@@ -33,14 +33,18 @@ SERVICES=(
 
 EXCLUDE_XRAY_SERVER=false
 TARGET=""
+SKIP_NETWORK=false
 
 for arg in "$@"; do
     case "$arg" in
         --exclude-xray-server)
             EXCLUDE_XRAY_SERVER=true
             ;;
+        --skip-network)
+            SKIP_NETWORK=true
+            ;;
         --help)
-            echo "Usage: sudo $0 [--exclude-xray-server] [SERVICE|all]"
+            echo "Usage: sudo $0 [--exclude-xray-server] [--skip-network] [SERVICE|all]"
             exit 0
             ;;
         -*)
@@ -328,6 +332,7 @@ install_system_files() {
     install -m 0755 "${DEPLOY_DIR}/dinit/op-session-bus.sh"      /usr/local/sbin/op-session-bus
     install -m 0755 "${DEPLOY_DIR}/dinit/op-dbus-dinit.sh"       /usr/local/sbin/op-dbus-dinit.sh
     install -m 0755 "${DEPLOY_DIR}/dinit/op-web-dinit.sh"        /usr/local/sbin/op-web-dinit.sh
+    install -m 0755 "${DEPLOY_DIR}/dinit/op-web-start.sh"        /usr/local/sbin/op-web-start.sh
     rm -f /usr/local/sbin/op-networkd-dinit.sh   # stale
 
     # --- Dinit service definitions (network boot chain) ---
@@ -440,6 +445,11 @@ install_system_files() {
 # ---------------------------------------------------------------------------
 
 run_network_bootstrap() {
+    if [[ "$SKIP_NETWORK" == "true" ]]; then
+        log "Skipping network bootstrap (--skip-network provided)."
+        return 0
+    fi
+
     if [[ "$EUID" -ne 0 ]]; then
         warn "Skipping network bootstrap (non-root)."
         return 0
@@ -563,7 +573,7 @@ EOF
         op-web)
             cat > "$file" <<EOF
 type = process
-command = ${command}
+command = /usr/local/sbin/op-web-start.sh
 log-type = buffer
 smooth-recovery = true
 depends-on = op-dbus

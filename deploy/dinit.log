@@ -7,3 +7,7 @@ dinit: Could not load service op-dbus: could not load dependency.
 dinit: service boot stopped.
 dinit: service boot started.
 dinit: service boot stopped.
+dinit: service boot started.
+dinit: service boot stopped.
+dinit: service boot started.
+dinit: service boot stopped.
