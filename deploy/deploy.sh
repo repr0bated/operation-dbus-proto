@@ -229,6 +229,7 @@ install_system_files() {
     rm -f /usr/local/sbin/op-networkd-dinit.sh   # stale
 
     # --- Dinit service definitions (network boot chain) ---
+    install -m 0644 "${DEPLOY_DIR}/dinit/services0-sockets"  "${SERVICE_DIR}/services0-sockets"
     install -m 0644 "${DEPLOY_DIR}/dinit/wg-quick-all"       "${SERVICE_DIR}/wg-quick-all"
     install -m 0644 "${DEPLOY_DIR}/dinit/systemd-networkd"   "${SERVICE_DIR}/systemd-networkd"
     install -m 0644 "${DEPLOY_DIR}/dinit/op-ovs-services"    "${SERVICE_DIR}/op-ovs-services"
@@ -242,6 +243,7 @@ install_system_files() {
     install -m 0644 "${DEPLOY_DIR}/dinit/op-ovsdb-bridge"    "${SERVICE_DIR}/op-ovsdb-bridge"
 
     # --- Dinit scripts ---
+    install -m 0755 "${DEPLOY_DIR}/dinit/scripts/services0-sockets.sh"   "${SERVICE_DIR}/scripts/services0-sockets.sh"
     install -m 0755 "${DEPLOY_DIR}/dinit/scripts/ovs-attach-ports.sh"    "${SERVICE_DIR}/scripts/ovs-attach-ports.sh"
     install -m 0755 "${DEPLOY_DIR}/dinit/op-ovs-services-start.sh"       "${SERVICE_DIR}/scripts/op-ovs-services-start.sh"
     install -m 0755 "${DEPLOY_DIR}/dinit/op-ovsdb-seed.sh"               "${SERVICE_DIR}/scripts/op-ovsdb-seed.sh"
@@ -317,6 +319,7 @@ install_system_files() {
     $DINITCTL stop stalwart >/dev/null 2>&1 || true
 
     # --- Enable network boot chain ---
+    enable_boot services0-sockets
     enable_boot wg-quick-all
     enable_boot systemd-networkd
     enable_boot op-ovs-services
