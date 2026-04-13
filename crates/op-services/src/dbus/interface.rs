@@ -97,6 +97,10 @@ pub async fn run_dbus_server(manager: Arc<ServiceManager>) -> anyhow::Result<()>
     conn.object_server()
         .at("/org/opdbus/services", iface)
         .await?;
+
+    // Register socket endpoints (gateway.sock, future mail.sock, etc.)
+    super::socket_endpoint::register_socket_endpoints(&conn).await?;
+
     conn.request_name("org.opdbus.services").await?;
 
     info!("D-Bus interface started on org.opdbus.services");

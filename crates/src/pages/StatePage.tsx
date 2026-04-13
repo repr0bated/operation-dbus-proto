@@ -47,7 +47,7 @@ const MOCK_BLOCKS = [
     prev_hash: "3c4d5e6f7a8b…",
     hash: "9f8e7d6c5b4a…1234",
     event_type: "network.bridge.update",
-    payload: { bridge: "ovs-br0", action: "port_add", port: "veth-wg1" },
+    payload: { bridge: "ovsbr0", action: "port_add", port: "veth-wg1" },
     verified: true,
   },
   {
@@ -134,7 +134,7 @@ const MOCK_STATE_ENTRIES = [
     subvol: "state_v840",
   },
   {
-    key: "network/ovs-br0",
+    key: "network/ovsbr0",
     type: "ovs_bridge",
     size: "2.8 KB",
     updated: "2026-02-17T14:15:22Z",

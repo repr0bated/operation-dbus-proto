@@ -1142,8 +1142,8 @@ impl Tool for OvsApplyObfuscationTool {
             "properties": {
                 "bridge": {
                     "type": "string",
-                    "description": "OVS bridge name (default: ovs-br0)",
-                    "default": "ovs-br0"
+                    "description": "OVS bridge name (default: ovsbr0)",
+                    "default": "ovsbr0"
                 },
                 "level": {
                     "type": "integer",

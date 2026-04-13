@@ -1,5 +1,7 @@
-//! Native OpenFlow protocol implementation
-//! Talks directly to OpenFlow switches without CLI tools
+//! Native OpenFlow protocol implementation — OVS PRIVACY FABRIC ONLY
+//!
+//! Talks directly to the OpenFlow switch on ovsbr0 for the privacy dataplane.
+//! This is NOT used for the OpenClaw socket gateway (which uses nginx → Unix socket).
 #![allow(dead_code)]
 
 use anyhow::{Context, Result};

@@ -168,7 +168,8 @@ impl DefaultPluginRegistry {
             "proxy_server" => Arc::new(ProxyServerPlugin::new()),
             "web_ui" => Arc::new(WebUiPlugin::new()),
             _ => {
-                return Err(anyhow::anyhow!("Unknown plugin: {}", name));
+                tracing::info!("Automatically creating missing plugin: {}", name);
+                Arc::new(crate::auto_create::AutoPlugin::new(name, "auto", simd_json::json!({})))
             }
         };
 

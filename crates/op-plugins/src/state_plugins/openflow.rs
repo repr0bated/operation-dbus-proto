@@ -1,5 +1,11 @@
-// OpenFlow Controller Plugin - Flow-based networking for containerless communication
-// Manages OpenFlow flows for socket-based container networking without veth interfaces
+// OpenFlow Controller Plugin — OVS PRIVACY FABRIC ONLY
+//
+// Manages OpenFlow flows on ovsbr0 for the privacy dataplane:
+//   wgcf → ovsbr0 → OpenFlow policy → priv_wg / priv_warp / priv_xray
+//
+// This plugin does NOT manage the OpenClaw socket gateway or service access.
+// OpenClaw uses: nginx → Unix socket /run/services0/gateway.sock → container loopback.
+// That path never touches ovsbr0 or OpenFlow.
 
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;

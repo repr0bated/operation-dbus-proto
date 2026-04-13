@@ -19,8 +19,8 @@ async fn main() -> anyhow::Result<()> {
 
     info!("Starting op-services daemon");
 
-    // Initialize store
-    let store = Arc::new(Store::new("/var/lib/op-dbus/services.db").await?);
+    // Initialize store (stateless D-Bus client to the authoritative state tree)
+    let store = Arc::new(Store::new().await?);
 
     // Initialize service manager
     let manager = Arc::new(ServiceManager::new(store).await?);

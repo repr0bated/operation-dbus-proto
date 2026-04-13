@@ -138,131 +138,85 @@ For reading files (safe operations):
 
 /// Network topology specification (FIXED - NOT EDITABLE)
 const FIXED_TOPOLOGY_SPEC: &str = r#"
-## TARGET NETWORK TOPOLOGY SPECIFICATION
+## NETWORK TOPOLOGY — TWO SEPARATE DATAPLANES
 
-**This is the TARGET network architecture. When asked to "set up the network", "configure networking", or "match the topology", configure the system to match this EXACT specification.**
+**CRITICAL: There are TWO independent network paths. Do NOT confuse them.**
 
-### Architecture Overview - SINGLE OVS BRIDGE DESIGN
+### PATH 1: Socket-Based Service Access (OpenClaw, services)
 ```
-LAYER 1: PHYSICAL
-=================
-ens1 (physical NIC) ──► vmbr0 (Linux bridge) ──► Proxmox host
-IP: 80.209.240.244/24    Ports: ens1             Gateway: 80.209.240.1
-
-LAYER 2: OVS SWITCHING (Single Bridge)
-======================================
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                            ovs-br0                                           │
-│                     (Single OVS Bridge)                                      │
-│  Datapath: netdev    Fail-mode: secure    IP: 10.0.0.1/16                   │
-│                                                                              │
-│  ┌─────────────────────────────────────────────────────────────────────┐    │
-│  │                         PORT GROUPS                                  │    │
-│  ├──────────────┬──────────────┬──────────────┬────────────────────────┤    │
-│  │  GHOSTBRIDGE │  WORKLOADS   │  OPERATIONS  │  NETMAKER              │    │
-│  │  (Privacy)   │  (Tasks)     │  (Ops)       │  (VPN Overlay)         │    │
-│  │              │              │              │                        │    │
-│  │  gb-{id}     │  ai-{id}     │  mgr-{id}    │  nm0                   │    │
-│  │              │  web-{id}    │  ctl-{id}    │  (WireGuard)           │    │
-│  │  VLAN 100    │  db-{id}     │  mon-{id}    │                        │    │
-│  │  10.100.0/24 │  VLAN 200    │  VLAN 300    │  10.50.0/24            │    │
-│  │              │  10.200.0/24 │  10.30.0/24  │  Enslaved to bridge    │    │
-│  └──────────────┴──────────────┴──────────────┴────────────────────────┘    │
-└─────────────────────────────────────────────────────────────────────────────┘
-                                    │
-                                    ▼
-LAYER 3: OVERLAY/VPN (Netmaker WireGuard Mesh)
-==============================================
-┌─────────────────────────────────────────────────────────────────────────────┐
-│  nm0 (Netmaker Interface) - Enslaved to ovs-br0                             │
-│  Type: WireGuard         Network: privacy-mesh                              │
-│  IP: 10.50.0.129/25      Port: 51820/UDP        MTU: 1420                   │
-│  Traffic: Encrypted peer-to-peer tunnels for GhostBridge (gb-*) ports       │
-└─────────────────────────────────────────────────────────────────────────────┘
+WireGuard client (10.0.0.x)
+  -> wg0 on host (10.0.0.1/24, listen :51820)
+  -> nginx on 10.0.0.1:443 (dashboard.3tched.com)
+  -> location /gateway/
+  -> Unix socket /run/services0/gateway.sock
+  -> socat inside services container
+  -> 127.0.0.1:18789 (OpenClaw gateway on container loopback)
 ```
 
-### PORT NAMING CONVENTION
+Containers in this model have NO veth, NO eth0, NO routable IP.
+The only interface inside them is lo. Host reaches them through Unix socket
+files on shared /run mounts.
+
+Key containers:
+- services: system services (OpenClaw). Socket dir: /run/services0/
+- user-<sha256(wg_pubkey)[:12]>: per-user. Socket dir: /run/user-sockets/<id>/
+
+### PATH 2: OVS Privacy Fabric (WARP obfuscation)
 ```
-PREFIX   NAME           VLAN   SUBNET            PURPOSE
-────────────────────────────────────────────────────────────────────────
-gb-      GhostBridge    100    10.100.0.128/25   Privacy/encrypted traffic
-ai-      AI             200    10.200.0.128/25   AI/ML workloads
-web-     Web            200    10.200.1.128/25   Web service containers
-db-      Database       200    10.200.2.128/25   Database containers
-mgr-     Management     300    10.30.0.128/25    Management plane
-ctl-     Control        300    10.30.1.128/25    Control plane
-mon-     Monitoring     300    10.30.2.128/25    Monitoring/observability
-nm0      Netmaker       -      10.50.0.128/25    WireGuard mesh overlay
+wgcf (Cloudflare WARP tunnel, 172.16.0.2/32)
+  -> ovsbr0 (OVS bridge, 10.88.88.1/24)
+  -> OpenFlow policy
+  -> priv_wg   (no IP, L2-only privacy chain ingress)
+  -> priv_warp (no IP, L2-only privacy chain middle)
+  -> priv_xray (15.235.37.41/32, Xray egress)
 ```
 
-### OVS BRIDGE CONFIGURATION
+OpenClaw traffic does NOT cross ovsbr0 or use OpenFlow.
+OpenFlow is for privacy/WARP routing only.
+
+### HOST INTERFACES
 ```
-BRIDGE     DATAPATH   FAIL_MODE   IP            DESCRIPTION
-──────────────────────────────────────────────────────────────────────
-ovs-br0    netdev     secure      10.0.0.1/16   Single unified switch
+INTERFACE       ADDRESS            PURPOSE
+wg0             10.0.0.1/24        WireGuard device identity/session
+wgcf            172.16.0.2/32      Cloudflare WARP tunnel
+ovsbr0          10.88.88.1/24      OVS privacy bridge
+ovsbr0-mgmt     10.200.0.1/24      Management internal port
+grpc-bridge     10.200.0.2/24      gRPC control plane
+ovsbr0-sock     (no IP)            Shared socket-network anchor
+priv_wg         (no IP)            Privacy chain port
+priv_warp       (no IP)            Privacy chain port
+priv_xray       15.235.37.41/32    Xray identity/egress
 ```
 
-### IP ADDRESS ALLOCATION (/25 subnets, gateway .129)
+### SERVICE ACCESS
 ```
-NETWORK           SUBNET            GATEWAY        RANGE           PORT PREFIX
-─────────────────────────────────────────────────────────────────────────────
-GhostBridge       10.100.0.128/25   10.100.0.129   .130-.254       gb-
-AI Workloads      10.200.0.128/25   10.200.0.129   .130-.254       ai-
-Web Services      10.200.1.128/25   10.200.1.129   .130-.254       web-
-Databases         10.200.2.128/25   10.200.2.129   .130-.254       db-
-Management        10.30.0.128/25    10.30.0.129    .130-.254       mgr-
-Control           10.30.1.128/25    10.30.1.129    .130-.254       ctl-
-Monitoring        10.30.2.128/25    10.30.2.129    .130-.254       mon-
-Netmaker-Mesh     10.50.0.128/25    10.50.0.129    .130-.254       nm0
+SERVICE                SOCKET PATH                   TRANSPORT
+OpenClaw gateway       /run/services0/gateway.sock    Unix socket via socat
+OVSDB                  /run/openvswitch/db.sock       JSON-RPC
+D-Bus System           /run/dbus/system_bus_socket    D-Bus
 ```
 
-### TRAFFIC FLOW RULES
+### AUTHENTICATION
+1. WireGuard wg0 authenticates the device/session.
+2. nginx only exposes /gateway/ on 10.0.0.1 (WG-only).
+3. nginx injects the OpenClaw bearer token (secret, never in docs).
+4. OpenClaw validates token auth.
+Public IP returns 404 for dashboard routes, not the gateway.
+
+### INCUS CONTAINERS
 ```
-TRAFFIC TYPE              ACTION
-─────────────────────────────────────────────────────────────────
-GhostBridge → Netmaker    Route gb-* traffic through nm0 for encryption
-Intra-VLAN                Normal L2 switching within same VLAN
-Inter-VLAN                Isolated by default (no cross-VLAN traffic)
+CONTAINER              NETWORKING    SOCKET MOUNT
+services               loopback-only /run/services0
+user-<id>              loopback-only /run/user-sockets/<id>
+privacy-xray-ingress   eth0 (legacy) NOT yet socket-only
+xray-server            eth0 (legacy) NOT yet socket-only
 ```
 
-### QoS POLICY (Task-Based)
-```
-PORT PREFIX    QUEUE    PRIORITY
-────────────────────────────────────
-ai-*           1        High bandwidth
-web-*          0        Normal
-db-*           2        Low latency
-```
-
-### SOCKET PATHS (Native Protocol Access)
-```
-SERVICE          SOCKET PATH                           PROTOCOL
-────────────────────────────────────────────────────────────────
-OVSDB            /var/run/openvswitch/db.sock          JSON-RPC
-D-Bus System     /var/run/dbus/system_bus_socket       D-Bus
-Netmaker         /var/run/netclient/netclient.sock     gRPC
-```
-
-### NETMAKER OVERLAY
-```
-Interface:      nm0
-Network:        privacy-mesh  
-IP:             10.50.0.129/25
-WireGuard Port: 51820/UDP
-MTU:            1420
-Enslaved to:    ovs-br0
-Purpose:        Encrypted tunnel for GhostBridge (gb-*) traffic
-```
-
-### EXPECTED STATE
-When properly configured, the system should have:
-- Single OVS bridge: ovs-br0 (datapath=netdev, fail_mode=secure)
-- Netmaker interface nm0 as port on ovs-br0
-- Ports follow naming convention: gb-*, ai-*, web-*, db-*, mgr-*, ctl-*, mon-*
-- VLAN tags applied per port prefix (100/200/300)
-- OpenFlow rules for GhostBridge→Netmaker routing and QoS
-
-Use native tools (OVSDB JSON-RPC, rtnetlink) to configure - NOT shell commands like ovs-vsctl or ip.
+### RULES
+- NEVER describe OpenClaw traffic as crossing ovsbr0 or OpenFlow.
+- NEVER assign IP addresses to socket-mode containers.
+- OpenFlow tools manage the privacy fabric (priv_wg/priv_warp/priv_xray), NOT service access.
+- Use native tools (OVSDB JSON-RPC, rtnetlink) to configure, NOT shell commands.
 "#;
 
 // =============================================================================
@@ -485,7 +439,7 @@ mod tests {
     async fn test_system_prompt_generation() {
         let prompt = generate_system_prompt().await;
         assert!(prompt.content.contains("FORCED TOOL EXECUTION"));
-        assert!(prompt.content.contains("ovs-br0"));
+        assert!(prompt.content.contains("ovsbr0"));
         assert!(prompt.content.contains("CUSTOM INSTRUCTIONS"));
     }
 

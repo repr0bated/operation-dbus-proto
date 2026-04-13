@@ -422,11 +422,36 @@ async fn main() -> Result<()> {
 
     let state_manager = Arc::new(op_state::manager::StateManager::new());
     let default_plugin_loader = op_plugins::DefaultPluginRegistry::new(state_store.clone());
+    let mut initial_plugin_states = std::collections::HashMap::new();
     match default_plugin_loader.load_default_plugins().await {
         Ok(plugins) => {
+            let mut join_set = tokio::task::JoinSet::new();
             for plugin in plugins {
                 let plugin_name = plugin.name().to_string();
-                state_manager.register_plugin(plugin_name, plugin.clone()).await;
+                let plugin_clone = plugin.clone();
+                state_manager.register_plugin(plugin_name.clone(), plugin.clone()).await;
+                
+                // Fetch initial state concurrently with a timeout
+                join_set.spawn(async move {
+                    let res = tokio::time::timeout(std::time::Duration::from_secs(5), plugin_clone.query_current_state()).await;
+                    (plugin_name, res)
+                });
+            }
+
+            while let Some(res) = join_set.join_next().await {
+                if let Ok((plugin_name, timeout_res)) = res {
+                    match timeout_res {
+                        Ok(Ok(state)) => {
+                            initial_plugin_states.insert(plugin_name, state);
+                        }
+                        Ok(Err(e)) => {
+                            tracing::warn!("Failed to query initial state for plugin {}: {}", plugin_name, e);
+                        }
+                        Err(_) => {
+                            tracing::warn!("Timed out querying initial state for plugin {}", plugin_name);
+                        }
+                    }
+                }
             }
             if privacy_router_bootstrap_enabled() {
                 start_privacy_router_bootstrap(state_manager.clone());
@@ -439,17 +464,24 @@ async fn main() -> Result<()> {
         }
     }
 
-    // Seed authoritative NonNet from schema-derived plugin definitions only.
-    // This avoids query_current_state() which would block on OVSDB timeouts.
-    // The plugin_schema_defs() returns schemas with base_path — the mirror
-    // uses these to project to the correct D-Bus paths immediately.
+    // Seed authoritative NonNet from both schema definitions AND initial live state.
+    // This ensures both the hierarchy (base paths) and the objects (rows) are published.
     let schema_defs = op_dbus::plugins::plugin_schema_defs();
+    
+    // Merge schema definitions with live state
+    let schema_defs_simd: std::collections::HashMap<String, simd_json::OwnedValue> = schema_defs
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+
     authoritative_nonnet
-        .load_from_schema_defs(&schema_defs)
+        .load_from_plugins(&initial_plugin_states, Some(&schema_defs_simd))
         .await;
+
     tracing::info!(
-        "Seeded authoritative NonNet from {} schema-derived plugins",
-        schema_defs.len()
+        "Seeded authoritative NonNet from {} plugins ({} with schema definitions)",
+        initial_plugin_states.len(),
+        schema_defs_simd.len()
     );
 
     #[cfg(feature = "grpc")]

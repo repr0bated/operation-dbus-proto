@@ -10,24 +10,17 @@ truth for Lovable UI generation and onboarding.
 ```
 External caller
   │
-  ├── gRPC (op-grpc-bridge:50051)
-  │     sync_engine.rs → ApplyContractMutation
+  ├── gRPC (op-dbus:50051)
+  │     StateSyncServer (op_grpc_bridge)
+  │     → mutate()
   │
-  └── JSON-RPC (op-jsonrpc:7020)
-        → ApplyContractMutation
+  └── JSON-RPC (stdio/tcp/unix)
+        → state.mutate request
+        → handle_state_mutate_request()
 
             │
             ▼
-    D-Bus ingress
-    org.opdbus.StateManager
-    .ApplyContractMutation
-            │
-            ▼
-    StateManager
-    apply_state / apply_state_single_plugin
-            │
-            ▼
-    SchemaEngine
+    SchemaEngine (in-process singleton)
     schema materialization + validation
     (plugin IS the schema — schema drives everything)
             │
@@ -236,31 +229,40 @@ AFTER (dynamic personas):
 
 | Service | Host | Port | Protocol | Notes |
 |---|---|---|---|---|
-| op-dbus | op-dbus (host) | D-Bus session | D-Bus | StateManager, plugins |
+| op-dbus | op-dbus (host) | 50051 | gRPC/TLS | Unified gRPC server (StateSync, MCP, Plugins) |
+| op-dbus | op-dbus (host) | stdio/tcp/unix | JSON-RPC | MCP compact / CLI tooling |
 | op-dbus-mirror | op-dbus (host) | D-Bus session (org.opdbus.v1) | D-Bus | 1:1 RCP projection (OVSDB + NonNet) |
-| op-grpc-bridge | op-dbus | 50051 | gRPC/TLS | Primary mutation ingress |
-| op-jsonrpc | op-dbus | 7020 | HTTP+JSON | Legacy / tooling |
-| op-mcp | op-dbus | 3000 | HTTP | MCP tool server |
-| op-cognitive-mcp | op-dbus | 3001 | HTTP | Cognitive tools, memory |
 | op-web | op-web | 8080 | HTTP | UI frontend |
-| OpenClaw | services container | 11434-ish | HTTP | LLM agent routing |
-| NextDNS | services container | 53 | DNS | Internal resolver |
+| OpenClaw | services container (loopback:18789 → /run/services0/gateway.sock) | — | HTTP/WS | No IP; nginx proxies via Unix socket |
 | Qdrant REST | qdrant container | 6333 | HTTP | Collection management |
 | Qdrant gRPC | qdrant container | 6334 | gRPC | Vector ops (Rust client) |
-| Xray | xray-server container | varies | proxy | Privacy ingress |
+| Xray | xray-server container | varies | proxy | Privacy ingress (not yet socket-only) |
 
 ### Network segments
 
+**Socket-based service access (implemented):**
 ```
-incusbr0 (10.149.181.0/24)  — internal Incus bridge
-  ├── services  10.149.181.10   OpenClaw + NextDNS
-  ├── qdrant    10.149.181.190  Qdrant vector DB (BTRFS-backed volume)
-  └── xray-server              Privacy proxy
+wg0 (10.0.0.1/24)            — WireGuard device identity/session
+  └── nginx on 10.0.0.1:443  → /run/services0/gateway.sock → OpenClaw (127.0.0.1:18789 inside services)
 
-ovsbr0                        — OVS bridge (privacy + container networking)
-  ├── wgcf                     Cloudflare WARP (obfuscation, no identity)
-  ├── priv_wg / priv_xray / priv_warp
-  └── ovsbr0-sock              Shared container socket port
+services container            — loopback-only, no veth, no IP
+  └── /run/services0/         — shared host ↔ container socket directory
+      └── gateway.sock        — OpenClaw gateway socket (socat bridge)
+
+user-<id> containers          — loopback-only, no veth, no IP
+  └── /run/user-sockets/<id>/ — per-user socket directory
+```
+
+**OVS privacy fabric (separate dataplane, NOT used for OpenClaw):**
+```
+ovsbr0                        — OVS bridge (privacy routing only)
+  ├── wgcf                     Cloudflare WARP tunnel (no IP on port)
+  ├── priv_wg                  Privacy chain port (no IP)
+  ├── priv_warp                Privacy chain port (no IP)
+  ├── priv_xray                Privacy chain port (15.235.37.41/32)
+  ├── ovsbr0-mgmt              Management internal port (10.200.0.1/24)
+  ├── grpc-bridge              gRPC control plane (10.200.0.2/24)
+  └── ovsbr0-sock              Socket-network anchor (no IP)
 ```
 
 ---

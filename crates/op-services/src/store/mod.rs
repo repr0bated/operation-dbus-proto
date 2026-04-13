@@ -1,117 +1,131 @@
-//! SQLite storage
+//! Stateless D-Bus client for the authoritative op-dbus state tree.
+//!
+//! Reads and writes service definitions via `org.opdbus.StateManager`
+//! instead of hoarding state in a local SQLite database.
 
-use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
-use std::path::Path;
-use tracing::info;
+use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
+use simd_json::OwnedValue as Value;
+use std::collections::HashMap;
+use tracing::{debug, info};
+use zbus::{Connection, Proxy};
 
 use crate::schema::{ServiceDef, ServiceName};
 
+const PLUGIN_ID: &str = "services";
+
+/// Wrapper for the QueryState response.
+#[derive(Debug, Deserialize)]
+struct QueryStateResponse {
+    plugins: HashMap<String, Value>,
+}
+
+/// The services plugin state stored in the D-Bus state tree.
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct ServicesState {
+    #[serde(default)]
+    services: HashMap<String, ServiceDef>,
+}
+
 pub struct Store {
-    pool: SqlitePool,
+    connection: Connection,
 }
 
 impl Store {
-    pub async fn new(path: impl AsRef<Path>) -> anyhow::Result<Self> {
-        let url = format!("sqlite:{}?mode=rwc", path.as_ref().display());
-        let pool = SqlitePoolOptions::new()
-            .max_connections(5)
-            .connect(&url)
-            .await?;
+    /// Connect to the D-Bus state tree.
+    pub async fn new() -> Result<Self> {
+        let connection = if std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_some() {
+            Connection::session()
+                .await
+                .context("connect to session D-Bus for StateManager access")?
+        } else {
+            Connection::system()
+                .await
+                .context("connect to system D-Bus for StateManager access")?
+        };
 
-        let store = Self { pool };
-        store.migrate().await?;
-        Ok(store)
+        info!("Store connected to D-Bus state tree");
+        Ok(Self { connection })
     }
 
-    async fn migrate(&self) -> anyhow::Result<()> {
-        sqlx::query(
-            r#"
-            CREATE TABLE IF NOT EXISTS services (
-                name TEXT PRIMARY KEY,
-                definition TEXT NOT NULL,
-                enabled INTEGER DEFAULT 0,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-            )
-        "#,
+    async fn proxy(&self) -> Result<Proxy<'_>> {
+        Proxy::new(
+            &self.connection,
+            "org.opdbus",
+            "/org/opdbus/state",
+            "org.opdbus.StateManager",
         )
-        .execute(&self.pool)
-        .await?;
-
-        sqlx::query(
-            r#"
-            CREATE TABLE IF NOT EXISTS audit_log (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                service_name TEXT,
-                action TEXT NOT NULL,
-                details TEXT,
-                timestamp TEXT DEFAULT CURRENT_TIMESTAMP
-            )
-        "#,
-        )
-        .execute(&self.pool)
-        .await?;
-
-        info!("Database migrated");
-        Ok(())
+        .await
+        .context("create StateManager D-Bus proxy")
     }
 
-    pub async fn get_service(&self, name: &ServiceName) -> anyhow::Result<Option<ServiceDef>> {
-        let row: Option<(String,)> =
-            sqlx::query_as("SELECT definition FROM services WHERE name = ?")
-                .bind(name.as_str())
-                .fetch_optional(&self.pool)
-                .await?;
+    /// Fetch the full services plugin state from the state tree.
+    async fn read_state(&self) -> Result<ServicesState> {
+        let proxy = self.proxy().await?;
+        let mut state_json: String = proxy
+            .call("QueryState", &())
+            .await
+            .context("QueryState call failed")?;
 
-        match row {
-            Some((json,)) => Ok(Some(serde_json::from_str(&json)?)),
-            None => Ok(None),
+        let response: QueryStateResponse = unsafe { simd_json::from_str(&mut state_json) }
+            .context("parse QueryState response")?;
+
+        match response.plugins.get(PLUGIN_ID) {
+            Some(value) => {
+                let state: ServicesState = simd_json::serde::from_owned_value(value.clone())
+                    .context("parse services plugin state")?;
+                debug!("read {} services from state tree", state.services.len());
+                Ok(state)
+            }
+            None => {
+                debug!("services plugin not yet present in state tree");
+                Ok(ServicesState::default())
+            }
         }
     }
 
-    pub async fn save_service(&self, service: &ServiceDef) -> anyhow::Result<()> {
-        let json = serde_json::to_string(service)?;
-        sqlx::query(
-            "INSERT OR REPLACE INTO services (name, definition, enabled, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)"
-        )
-        .bind(service.name.as_str())
-        .bind(&json)
-        .bind(service.enabled)
-        .execute(&self.pool)
-        .await?;
+    /// Write the full services plugin state back to the state tree.
+    async fn write_state(&self, state: &ServicesState) -> Result<()> {
+        let proxy = self.proxy().await?;
+        let value = simd_json::serde::to_owned_value(state)
+            .context("serialize services plugin state")?;
+        let request = simd_json::json!({
+            "plugin_id": PLUGIN_ID,
+            "value": value,
+        });
+        let request_json =
+            simd_json::to_string(&request).context("encode contract mutation")?;
+
+        let _: String = proxy
+            .call("ApplyContractMutation", &(request_json,))
+            .await
+            .context("ApplyContractMutation call failed")?;
+
+        debug!("wrote services state to state tree");
         Ok(())
     }
 
-    pub async fn delete_service(&self, name: &ServiceName) -> anyhow::Result<()> {
-        sqlx::query("DELETE FROM services WHERE name = ?")
-            .bind(name.as_str())
-            .execute(&self.pool)
-            .await?;
-        Ok(())
+    pub async fn get_service(&self, name: &ServiceName) -> Result<Option<ServiceDef>> {
+        let state = self.read_state().await?;
+        Ok(state.services.get(name.as_str()).cloned())
     }
 
-    pub async fn list_services(&self) -> anyhow::Result<Vec<ServiceDef>> {
-        let rows: Vec<(String,)> = sqlx::query_as("SELECT definition FROM services")
-            .fetch_all(&self.pool)
-            .await?;
-
-        rows.into_iter()
-            .map(|(json,)| serde_json::from_str(&json).map_err(Into::into))
-            .collect()
+    pub async fn save_service(&self, service: &ServiceDef) -> Result<()> {
+        let mut state = self.read_state().await?;
+        state
+            .services
+            .insert(service.name.to_string(), service.clone());
+        self.write_state(&state).await
     }
 
-    pub async fn audit(
-        &self,
-        service: Option<&str>,
-        action: &str,
-        details: Option<&str>,
-    ) -> anyhow::Result<()> {
-        sqlx::query("INSERT INTO audit_log (service_name, action, details) VALUES (?, ?, ?)")
-            .bind(service)
-            .bind(action)
-            .bind(details)
-            .execute(&self.pool)
-            .await?;
-        Ok(())
+    pub async fn delete_service(&self, name: &ServiceName) -> Result<()> {
+        let mut state = self.read_state().await?;
+        state.services.remove(name.as_str());
+        self.write_state(&state).await
+    }
+
+    pub async fn list_services(&self) -> Result<Vec<ServiceDef>> {
+        let state = self.read_state().await?;
+        Ok(state.services.into_values().collect())
     }
 }

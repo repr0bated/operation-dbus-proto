@@ -26,7 +26,11 @@
       "Read(//var/lib/**)",
       "Bash(apt-cache show:*)",
       "Bash(command -v apk)",
-      "Bash(apk search:*)"
+      "Bash(apk search:*)",
+      "Bash(ls -la /home/jeremy/git/operation-dbus-proto/*.key)",
+      "Bash(ls -la /home/jeremy/git/operation-dbus-proto/*.pem)",
+      "Read(//home/jeremy/**)",
+      "Read(//etc/wireguard/**)"
     ]
   }
 }

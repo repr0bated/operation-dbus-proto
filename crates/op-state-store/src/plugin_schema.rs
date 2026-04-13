@@ -1769,8 +1769,8 @@ fn create_lxc_schema() -> PluginSchema {
                 field_type: FieldType::String,
                 required: false,
                 description: "OVS bridge name".to_string(),
-                default: Some(json!("ovs-br0")),
-                example: Some(json!("ovs-br0")),
+                default: Some(json!("ovsbr0")),
+                example: Some(json!("ovsbr0")),
                 constraints: Vec::new(),
                 read_only: false,
                 read_only_when: None,
@@ -1824,7 +1824,7 @@ fn create_lxc_schema() -> PluginSchema {
                 {
                     "id": "100",
                     "veth": "vi100",
-                    "bridge": "ovs-br0",
+                    "bridge": "ovsbr0",
                     "running": true,
                     "properties": {
                         "hostname": "wireguard-gateway",
@@ -3774,7 +3774,7 @@ fn create_openflow_schema() -> PluginSchema {
                 required: true,
                 description: "Bridge name".to_string(),
                 default: None,
-                example: Some(json!("ovs-br0")),
+                example: Some(json!("ovsbr0")),
                 constraints: Vec::new(),
                 read_only: true, // Bridge name is identity
                 read_only_when: None,
@@ -5011,7 +5011,7 @@ mod tests {
                 {
                     "id": "100",
                     "veth": "vi100",
-                    "bridge": "ovs-br0",
+                    "bridge": "ovsbr0",
                     "running": true
                 }
             ]

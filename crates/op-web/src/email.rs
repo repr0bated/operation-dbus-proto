@@ -74,8 +74,13 @@ impl EmailSender {
             return Ok(());
         }
 
+        let from_mailbox = lettre::message::Mailbox::new(
+            Some(self.config.from_name.clone()),
+            self.config.from_email.parse()?,
+        );
+
         let email = Message::builder()
-            .from(format!("{} <{}>", self.config.from_name, self.config.from_email).parse()?)
+            .from(from_mailbox)
             .to(to_email.parse()?)
             .subject("Your Privacy Router Login Link")
             .header(ContentType::TEXT_HTML)

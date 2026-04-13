@@ -1,13 +1,17 @@
-//! OpenFlow Tools - Native OpenFlow protocol access
+//! OpenFlow Tools — OVS PRIVACY FABRIC ONLY
 //!
-//! These tools provide OpenFlow management via OVSDB (for now).
-//! Direct OpenFlow protocol access requires fixing thread safety in OpenFlowClient.
+//! These tools manage OpenFlow rules on the OVS privacy bridge (ovsbr0).
+//! The privacy dataplane is: wgcf → ovsbr0 → OpenFlow → priv_wg/priv_warp/priv_xray.
+//!
+//! **These tools do NOT manage the OpenClaw socket gateway.**
+//! OpenClaw service access uses: nginx → Unix socket /run/services0/gateway.sock → container loopback.
+//! That path has no OVS involvement.
 //!
 //! Tools:
 //! - openflow_add_flow: Add a flow rule via OVSDB flow table
-//! - openflow_delete_flows: Delete flows  
+//! - openflow_delete_flows: Delete flows
 //! - openflow_list_flows: List flows on a bridge
-//! - openflow_create_socket_port: Create a dynamic container socket port
+//! - openflow_create_socket_port: Create a dynamic container socket port (OVS internal port)
 
 use crate::tool::Tool;
 use crate::ToolRegistry;
@@ -36,7 +40,7 @@ impl Tool for OpenFlowAddFlowTool {
             "properties": {
                 "bridge": {
                     "type": "string",
-                    "description": "OVS bridge name (e.g., 'ovs-br0')"
+                    "description": "OVS bridge name (e.g., 'ovsbr0')"
                 },
                 "priority": {
                     "type": "integer",
@@ -69,7 +73,7 @@ impl Tool for OpenFlowAddFlowTool {
     }
 
     async fn execute(&self, input: Value) -> Result<Value> {
-        let bridge = input["bridge"].as_str().unwrap_or("ovs-br0");
+        let bridge = input["bridge"].as_str().unwrap_or("ovsbr0");
         let in_port = input["in_port"].as_str().unwrap_or("");
         let out_port = input["out_port"].as_str().unwrap_or("");
         let priority = input["priority"].as_u64().unwrap_or(100);
@@ -169,7 +173,7 @@ impl Tool for OpenFlowDeleteFlowsTool {
     }
 
     async fn execute(&self, input: Value) -> Result<Value> {
-        let bridge = input["bridge"].as_str().unwrap_or("ovs-br0");
+        let bridge = input["bridge"].as_str().unwrap_or("ovsbr0");
         let delete_all = input["all"].as_bool().unwrap_or(false);
         let cookie = input["cookie"].as_u64();
         let in_port = input["in_port"].as_str();
@@ -206,7 +210,7 @@ impl Tool for OpenFlowListFlowsTool {
                 "bridge": {
                     "type": "string",
                     "description": "OVS bridge name",
-                    "default": "ovs-br0"
+                    "default": "ovsbr0"
                 }
             },
             "required": []
@@ -218,7 +222,7 @@ impl Tool for OpenFlowListFlowsTool {
     }
 
     async fn execute(&self, input: Value) -> Result<Value> {
-        let bridge = input["bridge"].as_str().unwrap_or("ovs-br0");
+        let bridge = input["bridge"].as_str().unwrap_or("ovsbr0");
 
         // Use OVS Netlink to dump flows from kernel datapath
         let mut ovs_netlink = op_network::ovs_netlink::OvsNetlinkClient::new().await?;
@@ -261,7 +265,7 @@ impl Tool for OpenFlowCreateSocketPortTool {
                 "bridge": {
                     "type": "string",
                     "description": "OVS bridge name",
-                    "default": "ovs-br0"
+                    "default": "ovsbr0"
                 },
                 "container_name": {
                     "type": "string",
@@ -277,7 +281,7 @@ impl Tool for OpenFlowCreateSocketPortTool {
     }
 
     async fn execute(&self, input: Value) -> Result<Value> {
-        let bridge = input["bridge"].as_str().unwrap_or("ovs-br0");
+        let bridge = input["bridge"].as_str().unwrap_or("ovsbr0");
         let container_name = match input["container_name"].as_str() {
             Some(name) if !name.is_empty() => name,
             _ => return Ok(json!({
@@ -346,7 +350,7 @@ impl Tool for OpenFlowCreatePrivacySocketTool {
                 "bridge": {
                     "type": "string",
                     "description": "OVS bridge name",
-                    "default": "ovs-br0"
+                    "default": "ovsbr0"
                 },
                 "socket_type": {
                     "type": "string",
@@ -363,7 +367,7 @@ impl Tool for OpenFlowCreatePrivacySocketTool {
     }
 
     async fn execute(&self, input: Value) -> Result<Value> {
-        let bridge = input["bridge"].as_str().unwrap_or("ovs-br0");
+        let bridge = input["bridge"].as_str().unwrap_or("ovsbr0");
         let socket_type = match input["socket_type"].as_str() {
             Some("priv_wg") => "priv_wg",
             Some("priv_xray") => "priv_xray",

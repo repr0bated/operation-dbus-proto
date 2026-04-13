@@ -98,6 +98,17 @@ for port in priv_xray priv_warp priv_wg ovsbr0-mgmt ovsbr0-sock grpc-bridge; do
   fi
 done
 
+# --- Strip all addresses from ports that must have no IP ---
+# These are L2-only OVS ports. Flush any v4/v6 addresses that may have
+# leaked from races with systemd-networkd or previous runs.
+for port in priv_wg priv_warp ovsbr0-sock; do
+  ip -4 addr flush dev "$port" 2>/dev/null || true
+  ip -6 addr flush dev "$port" 2>/dev/null || true
+  # Also disable v6 at the kernel level to prevent auto-assignment
+  sysctl -qw "net.ipv6.conf.${port}.disable_ipv6=1" 2>/dev/null || true
+  echo "ovs-attach-ports: flushed v4+v6 from $port (no-IP port)"
+done
+
 # priv_xray: Xray client public identity
 if ip link show priv_xray >/dev/null 2>&1; then
   ip addr flush dev priv_xray 2>/dev/null || true
