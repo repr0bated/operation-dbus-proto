@@ -409,6 +409,41 @@ wg0 client
 
 Specs and code MUST NOT confuse these two paths.
 
+## Network Installer Contract
+
+The network installer is `deploy/deploy-network.sh`.
+
+Default behavior:
+
+- require existing `/etc/wireguard/wgcf.conf`;
+- install `services0-sockets`, `wg-quick-all`, `op-ovs-services`,
+  `systemd-networkd`, `netplan-apply`, and `ovs-attach-ports`;
+- install `/etc/netplan/01-ovsbr0.yaml`;
+- start `wgcf` through `wg-quick-all`;
+- apply netplan so `ovsbr0` exists with OpenFlow settings;
+- attach `wgcf`, `priv_wg`, `priv_warp`, `priv_xray`, `ovsbr0-sock`,
+  `ovsbr0-mgmt`, and `grpc-bridge`;
+- keep the `services` container loopback-only;
+- install `openclaw-socket.service`;
+- apply the NextDNS rewrite only when `NEXTDNS_API_KEY` is present.
+
+One-off update flags:
+
+```sh
+WG_SERVER_PRIVATE_KEY_FILE=/etc/wireguard/wg0.netplan.key \
+WG_SERVER_PEERS='pubkey1|10.0.0.2/32;pubkey2|10.0.0.3/32' \
+  deploy/deploy-network.sh --update-wgconf
+
+deploy/deploy-network.sh --update-wgcf
+```
+
+`--update-wgconf` writes the host `wg0` netplan tunnel and removes legacy
+`wg-quick-wg0` dinit artifacts. `--update-wgcf` runs the `wgcf` CLI using the
+existing account file and writes `/etc/wireguard/wgcf.conf`.
+
+Normal runs MUST NOT regenerate `wg0`, rotate WGCF state, or rewrite lifecycle
+WireGuard values.
+
 ## Verification Matrix
 
 ### Container No-Network Checks

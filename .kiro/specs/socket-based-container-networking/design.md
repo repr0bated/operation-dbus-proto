@@ -360,6 +360,34 @@ same file is mounted into the container.
 8. Host nginx routes `/gateway/` to
    `http://unix:/run/services0/gateway.sock:/`.
 
+## Deployment Script Behavior
+
+`deploy/deploy-network.sh` installs and verifies the current socket/OpenFlow
+network without treating every run as a WireGuard rewrite.
+
+Default runs:
+
+- install dinit artifacts for `services0-sockets`, `wg-quick-all`,
+  `op-ovs-services`, `systemd-networkd`, `netplan-apply`, and
+  `ovs-attach-ports`;
+- apply the netplan `ovsbr0` definition;
+- start `wgcf` through `wg-quick-all`;
+- attach `wgcf` and internal ports through `ovs-attach-ports`;
+- keep `services` socket-only and mount `/run/services0`;
+- install the OpenClaw socket bridge.
+
+One-off deployment flags:
+
+- `--update-wgconf` writes the host `wg0` netplan tunnel from supplied
+  `WG_SERVER_*` values and removes any legacy `wg-quick-wg0` dinit artifact.
+- `--update-wgcf` runs `wgcf update`/`wgcf generate` against the existing
+  account file and refreshes `/etc/wireguard/wgcf.conf`.
+
+Without those flags, the script uses the already-deployed WireGuard values.
+netplan is still required because it creates the `wg0` and `ovsbr0`
+kernel/networkd objects; `wg-quick` is retained for `wgcf`, which is then
+attached to `ovsbr0` as an OVS port.
+
 ## Failure Modes
 
 ### Duplicate OpenClaw Process

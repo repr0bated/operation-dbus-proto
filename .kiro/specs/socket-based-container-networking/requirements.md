@@ -290,6 +290,21 @@ on boot before Incus and nginx are expected to use them. The host dinit
 `/run/services0` MUST be owned by `root:_nginx` with mode `0770`.
 `/run/services0/gateway.sock` MUST be owned by `root:_nginx` with mode `0660`.
 
+### NFR-3a: Deployment script owns one-off network writes
+
+`deploy/deploy-network.sh` MUST treat WireGuard configuration writes as
+explicit deployment-time actions:
+
+- `--update-wgconf` MAY rewrite the host `wg0` netplan tunnel from supplied
+  `WG_SERVER_*` values.
+- `--update-wgcf` MAY run `wgcf` and refresh `/etc/wireguard/wgcf.conf`.
+- normal runs MUST use existing deployed WireGuard values and MUST NOT rotate,
+  regenerate, or rewrite WireGuard lifecycle state.
+
+netplan remains required for the host `wg0` and `ovsbr0` kernel/networkd
+objects. `wg-quick` remains required for the bridge-facing `wgcf` interface so
+`ovs-attach-ports` can add it to `ovsbr0`.
+
 ### NFR-4: Clear separation of current state and target fabric
 
 Specs MUST distinguish:
