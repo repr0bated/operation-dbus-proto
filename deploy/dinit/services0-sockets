@@ -1,0 +1,2 @@
+type = scripted
+command = /etc/dinit.d/scripts/services0-sockets.sh
