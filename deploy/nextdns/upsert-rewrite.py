@@ -30,6 +30,7 @@ def request(method: str, url: str, api_key: str, payload: dict | None = None) ->
     data = None
     headers = {
         "Accept": "application/json",
+        "User-Agent": "operation-dbus-proto-deploy/1.0",
         "X-Api-Key": api_key,
     }
 
