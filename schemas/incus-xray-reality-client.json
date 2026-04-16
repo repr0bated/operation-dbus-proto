@@ -1,0 +1,128 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Incus Container: Xray REALITY Client",
+  "description": "Schema for an Xray REALITY outbound proxy client container",
+  "type": "object",
+  "required": ["name", "version", "plugin_type", "container", "xray"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z0-9_-]+$",
+      "maxLength": 64
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "plugin_type": {
+      "type": "string",
+      "const": "network"
+    },
+    "container": {
+      "type": "object",
+      "required": ["image", "profiles"],
+      "properties": {
+        "image": { "type": "string" },
+        "profiles": { "type": "array", "items": { "type": "string" } },
+        "devices": {
+          "type": "object",
+          "additionalProperties": { "type": "object" }
+        }
+      }
+    },
+    "xray": {
+      "type": "object",
+      "required": ["inbounds", "outbounds"],
+      "properties": {
+        "log_level": {
+          "type": "string",
+          "enum": ["debug", "info", "warning", "error", "none"],
+          "default": "warning"
+        },
+        "inbounds": {
+          "type": "array",
+          "description": "Local proxy listeners (socks5, http, tproxy)",
+          "items": {
+            "type": "object",
+            "required": ["protocol", "port"],
+            "properties": {
+              "tag": { "type": "string" },
+              "protocol": { "type": "string", "enum": ["socks", "http", "dokodemo-door"] },
+              "port": { "type": "integer" },
+              "listen": { "type": "string", "default": "127.0.0.1" },
+              "sniffing": { "type": "boolean", "default": true }
+            }
+          }
+        },
+        "outbounds": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["protocol", "settings", "stream_settings"],
+            "properties": {
+              "tag": { "type": "string" },
+              "protocol": { "type": "string", "const": "vless" },
+              "settings": {
+                "type": "object",
+                "required": ["vnext"],
+                "properties": {
+                  "vnext": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": ["address", "port", "users"],
+                      "properties": {
+                        "address": { "type": "string" },
+                        "port": { "type": "integer" },
+                        "users": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "required": ["id", "flow"],
+                            "properties": {
+                              "id": { "type": "string", "description": "UUID" },
+                              "flow": { "type": "string", "const": "xtls-rprx-vision" },
+                              "encryption": { "type": "string", "const": "none" }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "stream_settings": {
+                "type": "object",
+                "required": ["network", "security", "reality_settings"],
+                "properties": {
+                  "network": { "type": "string", "const": "tcp" },
+                  "security": { "type": "string", "const": "reality" },
+                  "reality_settings": {
+                    "type": "object",
+                    "required": ["server_name", "public_key", "short_id"],
+                    "properties": {
+                      "server_name": { "type": "string", "description": "SNI to mimic, e.g. www.microsoft.com" },
+                      "public_key": { "type": "string" },
+                      "short_id": { "type": "string" },
+                      "fingerprint": { "type": "string", "default": "chrome" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "capabilities": {
+      "type": "object",
+      "properties": {
+        "requires_root": { "type": "boolean", "default": false },
+        "supports_rollback": { "type": "boolean", "default": false }
+      }
+    },
+    "service": {
+      "$ref": "service-plugin-schema.json"
+    }
+  }
+}
