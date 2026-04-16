@@ -820,7 +820,7 @@ fn schema_projection_specs(plugin_id: &str, table_schema: &Value) -> Vec<Project
             Some(ProjectionSpec {
                 plugin_id: plugin_id.to_string(),
                 object_type: object_type.to_string(),
-                base_path: sanitize_dbus_path(base_path),
+                base_path: unify_dbus_path(base_path),
                 rcp_db: rcp_db.to_string(),
                 rcp_table: rcp_table.to_string(),
                 id_field,
@@ -872,6 +872,27 @@ fn sanitize_dbus_path(path: &str) -> String {
         .map(sanitize_path_segment)
         .collect();
     format!("/{}", segments.join("/"))
+}
+
+/// Convert any path to unified /org/opdbus/v1/ hierarchy
+/// Input: /org/opdbus/hardware/cpu -> Output: /org/opdbus/v1/hardware/cpu
+/// Input: /org/opdbus/incus/containers -> Output: /org/opdbus/v1/incus/containers
+fn unify_dbus_path(path: &str) -> String {
+    // First sanitize
+    let sanitized = sanitize_dbus_path(path);
+    
+    // If already starts with /org/opdbus/v1, return as-is
+    if sanitized.starts_with("/org/opdbus/v1") {
+        return sanitized;
+    }
+    
+    // If starts with /org/opdbus (without v1), insert v1
+    if sanitized.starts_with("/org/opdbus") {
+        return sanitized.replace("/org/opdbus", "/org/opdbus/v1");
+    }
+    
+    // Otherwise, prepend /org/opdbus/v1
+    format!("/org/opdbus/v1{}", sanitized)
 }
 
 fn sanitize_path_segment(segment: &str) -> String {
