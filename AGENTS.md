@@ -165,5 +165,6 @@ cd crates && npm test
 - Mimic existing patterns: Search similar code.
 - No new deps without PR justification.
 - Commit only when asked.
+- Host privilege: agents have `doas` rights on this machine; use `doas` for privileged host operations when needed.
 
 (150+ lines achieved with details)

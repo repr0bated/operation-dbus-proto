@@ -1,12 +1,13 @@
 #!/bin/bash
 # deploy/install-dashboard-nginx.sh
-# Install nginx config for dashboard.3tched.com with token substitution
+# Install the WG-bound dashboard gateway nginx config with token substitution.
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-NGINX_TEMPLATE="${SCRIPT_DIR}/nginx/dashboard-3tched.conf.template"
+NGINX_TEMPLATE="${SCRIPT_DIR}/nginx/dashboard-3tched-socket.conf.template"
 ENV_FILE="/etc/op-dbus/environment"
+TARGET="/etc/nginx/http.d/dashboard-3tched.conf"
 
 echo "[INSTALL] Setting up dashboard.3tched.com nginx config..."
 
@@ -22,31 +23,51 @@ if ! command -v nginx >/dev/null 2>&1; then
     exit 1
 fi
 
-# Read OpenClaw token from environment file
-OPENCLAW_TOKEN=""
+# Read OpenClaw gateway token from environment file. OPENCLAW_TOKEN is accepted
+# for compatibility with older local env files, but the rendered nginx config
+# only injects it as an upstream bearer token.
+OPENCLAW_GATEWAY_TOKEN="${OPENCLAW_GATEWAY_TOKEN:-}"
 if [[ -f "$ENV_FILE" ]]; then
-    OPENCLAW_TOKEN=$(grep "^OPENCLAW_TOKEN=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2- || true)
+    set -a
+    # shellcheck disable=SC1090
+    . "$ENV_FILE"
+    set +a
+    OPENCLAW_GATEWAY_TOKEN="${OPENCLAW_GATEWAY_TOKEN:-${OPENCLAW_TOKEN:-}}"
 fi
 
-if [[ -z "$OPENCLAW_TOKEN" || "$OPENCLAW_TOKEN" == "your-openclaw-api-token-here" ]]; then
-    echo "[WARN] OPENCLAW_TOKEN not set in ${ENV_FILE}"
+if [[ -z "$OPENCLAW_GATEWAY_TOKEN" || "$OPENCLAW_GATEWAY_TOKEN" == "your-openclaw-api-token-here" ]]; then
+    echo "[WARN] OPENCLAW_GATEWAY_TOKEN not set in ${ENV_FILE}"
     echo "[WARN] Please set it first, then re-run this script"
     echo ""
     echo "To set the token:"
-    echo "  echo 'OPENCLAW_TOKEN=your-actual-token' >> ${ENV_FILE}"
+    echo "  install -m 0600 /dev/null ${ENV_FILE}"
+    echo "  printf '%s\n' 'OPENCLAW_GATEWAY_TOKEN=<token>' >> ${ENV_FILE}"
     exit 1
 fi
 
-echo "[INFO] Found OPENCLAW_TOKEN in environment file"
+echo "[INFO] Found OpenClaw gateway token in environment"
 
 # Install nginx config with token substitution
 mkdir -p /etc/nginx/http.d
 
-# Replace token placeholder and install
-sed "s/OPENCLAW_TOKEN_PLACEHOLDER/${OPENCLAW_TOKEN}/g" "$NGINX_TEMPLATE" \
-    > /etc/nginx/http.d/dashboard-3tched.conf
+# Replace token placeholder and install. Use Python instead of sed so token
+# characters are not interpreted as replacement syntax.
+OPENCLAW_GATEWAY_TOKEN="$OPENCLAW_GATEWAY_TOKEN" python3 - "$NGINX_TEMPLATE" "$TARGET" <<'PY'
+import os
+import pathlib
+import sys
 
-echo "[INSTALL] Installed /etc/nginx/http.d/dashboard-3tched.conf"
+template = pathlib.Path(sys.argv[1])
+target = pathlib.Path(sys.argv[2])
+target.write_text(
+    template.read_text().replace(
+        "<OPENCLAW_GATEWAY_TOKEN>",
+        os.environ["OPENCLAW_GATEWAY_TOKEN"],
+    )
+)
+PY
+
+echo "[INSTALL] Installed ${TARGET}"
 
 # Test nginx config
 echo "[TEST] Testing nginx configuration..."
@@ -63,16 +84,15 @@ nginx -s reload
 
 echo ""
 echo "=========================================="
-echo "✅ dashboard.3tched.com configured!"
+echo "dashboard.3tched.com configured"
 echo "=========================================="
 echo ""
 echo "Routes:"
-echo "  /gateway/  -> OpenClaw gateway (with auth token)"
-echo "  /          -> op-web UI"
+echo "  10.0.0.1 /gateway/       -> /run/services0/gateway.sock"
+echo "  148.113.204.83 /gateway/ -> 404 public sink"
 echo ""
 echo "Make sure:"
 echo "  1. OpenClaw gateway socket exists at /run/services0/gateway.sock"
-echo "  2. op-dbus is running on port 8080"
-echo "  3. op-web is running on port 8081"
-echo "  4. WireGuard is active and peer is connected"
+echo "  2. WireGuard wg0 is active on 10.0.0.1/24"
+echo "  3. dashboard.3tched.com resolves to 10.0.0.1 for WG clients"
 echo ""

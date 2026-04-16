@@ -20,3 +20,11 @@ hostname  = "0.4"
 rusqlite  = { workspace = true, features = ["bundled"] }
 chrono    = { version = "0.4", features = ["serde"] }
 uuid      = { version = "1.6", features = ["v4", "serde"] }
+axum      = { workspace = true }
+tower-http = { version = "0.5", features = ["cors"] }
+hyper     = { version = "1.0", features = ["full"] }
+hyper-util = { version = "0.1", features = ["full"] }
+rcgen     = { version = "0.13", features = ["pem"] }
+rustls    = { version = "0.23", features = ["ring"] }
+rustls-pemfile = "2"
+tokio-rustls = "0.26"

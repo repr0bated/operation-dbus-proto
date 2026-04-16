@@ -39,12 +39,12 @@ pub async fn create_schema(pool: &SqlitePool) -> Result<()> {
     Ok(())
 }
 
-/// SQLite-backed catalog for canonical plugin documents.
+/// Schema-library catalog for plugin documents.
 ///
-/// This is a persistence backend, not the architectural source of truth.
-/// The source of truth originates in plugin code, which emits one canonical
-/// plugin document. The catalog stores that document so D-Bus/gRPC/rendering
-/// layers can mirror the same persisted shape.
+/// This store is only an index of plugin-owned schema documents. It exists so
+/// builders, renderers, and compatibility layers can reuse known schema shapes
+/// when composing new schemas. Runtime state and platform reality live outside
+/// this catalog.
 #[derive(Clone)]
 pub struct SqlitePluginCatalog {
     pool: SqlitePool,
@@ -67,7 +67,9 @@ impl SqlitePluginCatalog {
             "#,
         )
         .bind(document.schema.name.as_str())
-        .bind(document.service_name.as_str())
+        // Legacy column retained for compatibility with existing databases.
+        // The schema-library document itself no longer carries service identity.
+        .bind(document.schema.name.as_str())
         .bind(encoded)
         .execute(&self.pool)
         .await?;
@@ -125,9 +127,7 @@ fn decode_document(encoded: &str) -> Result<Option<PluginCatalogDocument>> {
 /// Compatibility alias while the rest of the workspace still says "schema
 /// catalog" in some places.
 ///
-/// Architecturally the primary name is `SqlitePluginCatalog` because each
-/// entry is a canonical plugin document whose schema, footprint, and render
-/// contract are one and the same.
+/// Each entry is a plugin document in the schema library.
 pub type SqliteSchemaCatalog = SqlitePluginCatalog;
 
 #[cfg(test)]
@@ -150,18 +150,42 @@ mod tests {
                 tags: Vec::new(),
                 dialect: op_state_store::DEFAULT_SCHEMA_DIALECT.to_string(),
             },
-            dbus_path: "/org/opdbus/v1/plugins/sample".to_string(),
-            service_name: "org.opdbus.sample.v1".to_string(),
-            storage_path: "/var/lib/op-dbus/plugins/sample".to_string(),
             source: "plugin".to_string(),
         }
     }
 
     #[test]
-    fn decode_document_accepts_canonical_plugin_document() {
-        let encoded = serde_json::to_string(&sample_document()).expect("canonical document");
+    fn decode_document_accepts_schema_library_document() {
+        let encoded = serde_json::to_string(&sample_document()).expect("schema document");
 
         let decoded = decode_document(&encoded).expect("decode should succeed");
+
+        assert!(decoded.is_some());
+        assert_eq!(decoded.unwrap().schema.name, "sample");
+    }
+
+    #[test]
+    fn decode_document_accepts_legacy_runtime_hints() {
+        let encoded = r#"{
+            "schema": {
+                "name": "sample",
+                "category": "test",
+                "version": "1.0.0",
+                "description": "sample schema",
+                "fields": {},
+                "dependencies": [],
+                "example": null,
+                "immutable_paths": [],
+                "tags": [],
+                "dialect": "op-state/v1"
+            },
+            "dbus_path": "/org/opdbus/v1/plugins/sample",
+            "service_name": "org.opdbus.sample.v1",
+            "storage_path": "/var/lib/op-dbus/plugins/sample",
+            "source": "plugin"
+        }"#;
+
+        let decoded = decode_document(encoded).expect("decode should succeed");
 
         assert!(decoded.is_some());
         assert_eq!(decoded.unwrap().schema.name, "sample");

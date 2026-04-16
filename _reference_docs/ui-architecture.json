@@ -1,0 +1,472 @@
+{
+  "meta": {
+    "project": "OPERATION-DBUS Control Plane",
+    "framework": "React 18 + Vite 5 + TypeScript 5 + Tailwind CSS v3",
+    "stateManagement": "Zustand (useEventStore)",
+    "uiLibrary": "shadcn/ui",
+    "grpcTransport": "@protobuf-ts/grpcweb-transport (binary gRPC-Web)",
+    "totalPages": 25,
+    "totalLines": 5500,
+    "generatedAt": "2026-04-14"
+  },
+  "transport": {
+    "baseUrl": "https://dashboard.3tched.com",
+    "format": "binary (application/grpc-web)",
+    "framingProtocol": "5-byte length-prefixed (1 byte flags + 4 bytes big-endian length)",
+    "backendServer": "tonic-web (Rust)",
+    "proxy": "Nginx reverse proxy",
+    "ports": {
+      "50051": "Core D-Bus services, StateSync, McpService",
+      "50052": "Chat orchestration, AgentService"
+    },
+    "clientFile": "src/grpc/client.ts (1080 lines)",
+    "reconnection": "Exponential backoff with auto-reconnect on stream failure"
+  },
+  "zustandStore": {
+    "file": "src/stores/event-store.ts",
+    "interface": "EventStore",
+    "stateFields": {
+      "connected": {
+        "type": "boolean",
+        "description": "Whether any gRPC stream is connected"
+      },
+      "health": {
+        "type": "HealthSnapshot | null",
+        "description": "Last health check result"
+      },
+      "logs": {
+        "type": "LogEntry[]",
+        "maxSize": 1000,
+        "description": "Rolling log buffer"
+      },
+      "agents": {
+        "type": "Agent[]",
+        "description": "Registered agents"
+      },
+      "events": {
+        "type": "EventLogEntry[]",
+        "maxSize": 500,
+        "description": "Rolling event buffer"
+      },
+      "lastError": {
+        "type": "string | null",
+        "description": "Last error message"
+      },
+      "eventCounts": {
+        "type": "Record<string, number>",
+        "description": "Counters per event type (state_update, audit_event, registry_event, system_stats)"
+      },
+      "latestState": {
+        "type": "Record<string, unknown>",
+        "description": "Projected D-Bus state tree. Keys: plugin.property, ovsdb.table.uuid, agents[]"
+      },
+      "latestStats": {
+        "type": "Record<string, unknown> | null",
+        "description": "Runtime metrics keyed by category.name.labels"
+      }
+    },
+    "mutations": [
+      "setConnected",
+      "setHealth",
+      "addLog",
+      "setLogs",
+      "setAgents",
+      "addEvent",
+      "setError",
+      "clearLogs",
+      "updateState",
+      "setStats",
+      "incrementEventCount"
+    ]
+  },
+  "globalStreams": {
+    "hookFile": "src/hooks/use-event-stream.ts (308 lines)",
+    "description": "5 server-side gRPC streams connected on app mount, feeding Zustand store",
+    "streams": [
+      {
+        "name": "StateSync.Subscribe",
+        "protoPath": "operation.v1.StateSync/Subscribe",
+        "request": {
+          "includeInitialState": true
+        },
+        "responseType": "StateChange",
+        "storeTarget": "latestState[pluginId.memberName]",
+        "eventType": "state_update",
+        "description": "D-Bus property changes mirrored via DbusWatcher"
+      },
+      {
+        "name": "EventChain.SubscribeEvents",
+        "protoPath": "operation.v1.EventChainService/SubscribeEvents",
+        "request": {
+          "fromEventId": 0
+        },
+        "responseType": "ChainEvent",
+        "storeTarget": "events[]",
+        "eventType": "audit_event",
+        "description": "Immutable audit ledger events with hash chain"
+      },
+      {
+        "name": "OvsdbMirror.Monitor",
+        "protoPath": "operation.v1.OvsdbMirror/Monitor",
+        "request": {
+          "database": "Open_vSwitch",
+          "monitorRequestsJson": "{Bridge:{},Port:{},Interface:{}}"
+        },
+        "responseType": "OvsdbUpdate",
+        "storeTarget": "latestState[ovsdb.table.uuid]",
+        "eventType": "state_update",
+        "description": "OVS bridge/port/interface real-time changes"
+      },
+      {
+        "name": "RuntimeMirror.StreamMetrics",
+        "protoPath": "operation.v1.RuntimeMirror/StreamMetrics",
+        "request": {
+          "intervalSeconds": 5,
+          "categories": []
+        },
+        "responseType": "RuntimeMetricUpdate",
+        "storeTarget": "latestStats[category.name.labels]",
+        "eventType": "system_stats",
+        "description": "CPU, memory, network metrics at 5s intervals"
+      },
+      {
+        "name": "ComponentRegistry.Watch",
+        "protoPath": "operation.registry.v1.ComponentRegistry/Watch",
+        "request": {
+          "componentTypes": [],
+          "includeExisting": true
+        },
+        "responseType": "RegistryEvent",
+        "storeTarget": "latestState[agents[]]",
+        "eventType": "registry_event",
+        "description": "Live agent/component registration, deregistration, heartbeat"
+      }
+    ]
+  },
+  "grpcTypeFiles": {
+    "directory": "src/grpc/types/",
+    "files": [
+      "accountability.ts",
+      "blockchain.ts",
+      "btrfs.ts",
+      "data-stores.ts",
+      "embedding.ts",
+      "event-chain.ts",
+      "mail.ts",
+      "mcp.ts",
+      "operation.ts",
+      "ovsdb-mirror.ts",
+      "persona.ts",
+      "plugin-service.ts",
+      "privacy.ts",
+      "registration.ts",
+      "registry.ts",
+      "runtime-mirror.ts",
+      "service-manager.ts",
+      "state-sync.ts"
+    ]
+  },
+  "grpcServices": {
+    "stateSync": {
+      "exportName": "stateSync",
+      "protoPackage": "operation.v1.StateSync",
+      "rpcs": {
+        "GetState": { "type": "unary", "request": "GetStateRequest", "response": "GetStateResponse" },
+        "Mutate": { "type": "unary", "request": "MutateRequest", "response": "MutateResponse" },
+        "BatchMutate": { "type": "unary", "request": "BatchMutateRequest", "response": "BatchMutateResponse" },
+        "Subscribe": { "type": "server-stream", "request": "SubscribeRequest", "response": "StateChange" }
+      }
+    },
+    "pluginService": {
+      "exportName": "pluginService",
+      "protoPackage": "operation.v1.PluginService",
+      "rpcs": {
+        "ListPlugins": { "type": "unary", "request": "{}", "response": "ListPluginsResponse" },
+        "GetSchema": { "type": "unary", "request": "GetSchemaRequest", "response": "GetSchemaResponse" },
+        "CallMethod": { "type": "unary", "request": "CallMethodRequest", "response": "CallMethodResponse" },
+        "GetProperty": { "type": "unary", "request": "GetPropertyRequest", "response": "GetPropertyResponse" },
+        "SetProperty": { "type": "unary", "request": "SetPropertyRequest", "response": "SetPropertyResponse" },
+        "SubscribeSignals": { "type": "server-stream", "request": "SubscribeSignalsRequest", "response": "Signal" }
+      }
+    },
+    "eventChainService": {
+      "exportName": "eventChainService",
+      "protoPackage": "operation.v1.EventChainService",
+      "rpcs": {
+        "GetEvents": { "type": "unary", "request": "GetEventsRequest", "response": "GetEventsResponse" },
+        "SubscribeEvents": { "type": "server-stream", "request": "SubscribeEventsRequest", "response": "ChainEvent" },
+        "VerifyChain": { "type": "unary", "request": "VerifyChainRequest", "response": "VerifyChainResponse" },
+        "GetProof": { "type": "unary", "request": "GetProofRequest", "response": "GetProofResponse" },
+        "ProveTagImmutability": { "type": "unary", "request": "ProveTagImmutabilityRequest", "response": "ProveTagImmutabilityResponse" },
+        "GetSnapshot": { "type": "unary", "request": "GetSnapshotRequest", "response": "GetSnapshotResponse" },
+        "CreateSnapshot": { "type": "unary", "request": "CreateSnapshotRequest", "response": "CreateSnapshotResponse" }
+      }
+    },
+    "ovsdbMirror": {
+      "exportName": "ovsdbMirror",
+      "protoPackage": "operation.v1.OvsdbMirror",
+      "rpcs": {
+        "ListDbs": { "type": "unary", "request": "{}", "response": "OvsdbListDbsResponse" },
+        "GetSchema": { "type": "unary", "request": "{database}", "response": "OvsdbGetSchemaResponse" },
+        "Transact": { "type": "unary", "request": "OvsdbTransactRequest", "response": "OvsdbTransactResponse" },
+        "Monitor": { "type": "server-stream", "request": "OvsdbMonitorRequest", "response": "OvsdbUpdate" },
+        "Echo": { "type": "unary", "request": "OvsdbEchoRequest", "response": "OvsdbEchoResponse" },
+        "DumpDb": { "type": "unary", "request": "OvsdbDumpDbRequest", "response": "OvsdbDumpDbResponse" },
+        "GetBridgeState": { "type": "unary", "request": "{bridgeName}", "response": "OvsdbGetBridgeStateResponse" }
+      }
+    },
+    "runtimeMirror": {
+      "exportName": "runtimeMirror",
+      "protoPackage": "operation.v1.RuntimeMirror",
+      "rpcs": {
+        "GetSystemInfo": { "type": "unary", "request": "{}", "response": "RuntimeSystemInfo" },
+        "ListServices": { "type": "unary", "request": "{stateFilter}", "response": "RuntimeListServicesResponse" },
+        "GetService": { "type": "unary", "request": "{serviceName}", "response": "RuntimeServiceInfo" },
+        "StreamMetrics": { "type": "server-stream", "request": "RuntimeStreamMetricsRequest", "response": "RuntimeMetricUpdate" },
+        "ListInterfaces": { "type": "unary", "request": "{}", "response": "RuntimeListInterfacesResponse" },
+        "GetNumaTopology": { "type": "unary", "request": "{}", "response": "RuntimeNumaTopologyResponse" }
+      }
+    },
+    "componentRegistry": {
+      "exportName": "componentRegistry",
+      "protoPackage": "operation.registry.v1.ComponentRegistry",
+      "rpcs": {
+        "Discover": { "type": "unary", "request": "DiscoverRequest", "response": "DiscoverResponse" },
+        "Watch": { "type": "server-stream", "request": "WatchRequest", "response": "RegistryEvent" },
+        "GetComponent": { "type": "unary", "request": "{componentId}", "response": "{component, found}" }
+      }
+    },
+    "mailService": {
+      "exportName": "mailService",
+      "protoPackage": "operation.mail.v1.MailService",
+      "rpcs": {
+        "SendEmail": { "type": "unary", "request": "SendEmailRequest", "response": "SendEmailResponse" },
+        "GetInbox": { "type": "unary", "request": "GetInboxRequest", "response": "GetInboxResponse" },
+        "GetMessage": { "type": "unary", "request": "GetMessageRequest", "response": "GetMessageResponse" },
+        "GetMailStatus": { "type": "unary", "request": "GetMailStatusRequest", "response": "GetMailStatusResponse" },
+        "ListMailAccounts": { "type": "unary", "request": "ListMailAccountsRequest", "response": "ListMailAccountsResponse" },
+        "AdminMailAction": { "type": "unary", "request": "AdminMailActionRequest", "response": "AdminMailActionResponse" },
+        "CheckMailServer": { "type": "unary", "request": "CheckMailServerRequest", "response": "CheckMailServerResponse" }
+      }
+    },
+    "privacyService": {
+      "exportName": "privacyService",
+      "protoPackage": "operation.privacy.v1.PrivacyNetworkService",
+      "rpcs": {
+        "EnsurePrivacyNetwork": { "type": "unary", "request": "EnsurePrivacyNetworkRequest", "response": "EnsurePrivacyNetworkResponse" },
+        "GetNetworkStatus": { "type": "unary", "request": "GetNetworkStatusRequest", "response": "GetNetworkStatusResponse" },
+        "ProvisionUser": { "type": "unary", "request": "ProvisionUserRequest", "response": "ProvisionUserResponse" },
+        "GetPrivacyWireGuardConfig": { "type": "unary", "request": "GetPrivacyWireGuardConfigRequest", "response": "GetPrivacyWireGuardConfigResponse" },
+        "ManageComponent": { "type": "unary", "request": "ManageComponentRequest", "response": "ManageComponentResponse" },
+        "GetNetworkTopology": { "type": "unary", "request": "GetNetworkTopologyRequest", "response": "GetNetworkTopologyResponse" },
+        "HealthCheck": { "type": "unary", "request": "HealthCheckRequest", "response": "HealthCheckResponse" },
+        "ConfigurePacketRouting": { "type": "unary", "request": "ConfigurePacketRoutingRequest", "response": "ConfigurePacketRoutingResponse" },
+        "GenerateWireGuardKeyPair": { "type": "unary", "request": "GenerateWireGuardKeyPairRequest", "response": "GenerateWireGuardKeyPairResponse" }
+      }
+    },
+    "registrationService": {
+      "exportName": "registrationService",
+      "protoPackage": "operation.registration.v1.RegistrationService",
+      "rpcs": {
+        "SendMagicLink": { "type": "unary", "request": "SendMagicLinkRequest", "response": "SendMagicLinkResponse" },
+        "VerifyMagicLink": { "type": "unary", "request": "VerifyMagicLinkRequest", "response": "VerifyMagicLinkResponse" },
+        "RegisterUser": { "type": "unary", "request": "RegisterUserRequest", "response": "RegisterUserResponse" },
+        "GetUserStatus": { "type": "unary", "request": "GetUserStatusRequest", "response": "GetUserStatusResponse" },
+        "ListUsers": { "type": "unary", "request": "ListUsersRequest", "response": "ListUsersResponse" },
+        "GetWireGuardConfig": { "type": "unary", "request": "GetWireGuardConfigRequest", "response": "GetWireGuardConfigResponse" },
+        "AdminUserAction": { "type": "unary", "request": "AdminUserActionRequest", "response": "AdminUserActionResponse" }
+      }
+    },
+    "serviceManager": {
+      "exportName": "serviceManager",
+      "protoPackage": "opdbus.services.v1.ServiceManager",
+      "rpcs": {
+        "Start": { "type": "unary", "request": "{name}", "response": "{status: ServiceStatus}" },
+        "Stop": { "type": "unary", "request": "{name}", "response": "{status: ServiceStatus}" },
+        "Restart": { "type": "unary", "request": "{name}", "response": "{status: ServiceStatus}" },
+        "Reload": { "type": "unary", "request": "{name}", "response": "{status: ServiceStatus}" },
+        "Create": { "type": "unary", "request": "{service: ServiceDef}", "response": "{service: ServiceDef}" },
+        "Delete": { "type": "unary", "request": "{name}", "response": "{}" },
+        "Get": { "type": "unary", "request": "{name}", "response": "GetServiceResponse" },
+        "List": { "type": "unary", "request": "{filter}", "response": "SvcMgrListResponse" },
+        "Enable": { "type": "unary", "request": "{name}", "response": "{}" },
+        "Disable": { "type": "unary", "request": "{name}", "response": "{}" },
+        "WatchStatus": { "type": "server-stream", "request": "WatchServicesRequest", "response": "ServiceEvent" }
+      }
+    },
+    "mcpService": {
+      "exportName": "mcpService",
+      "protoPackage": "op.mcp.v1.McpService",
+      "rpcs": {
+        "Health": { "type": "unary", "request": "{}", "response": "McpHealthResponse" },
+        "Initialize": { "type": "unary", "request": "InitializeRequest", "response": "InitializeResponse" },
+        "ListTools": { "type": "unary", "request": "ListToolsRequest", "response": "McpListToolsResponse" },
+        "CallTool": { "type": "unary", "request": "CallToolRequest", "response": "CallToolResponse" },
+        "CallToolStream": { "type": "server-stream", "request": "CallToolRequest", "response": "ToolOutput" },
+        "Subscribe": { "type": "server-stream", "request": "McpSubscribeRequest", "response": "McpEvent" }
+      }
+    },
+    "accountabilityService": {
+      "exportName": "accountabilityService",
+      "protoPackage": "operation.accountability.v1.ChatbotAccountabilityService",
+      "rpcs": {
+        "SearchEpisodes": { "type": "unary", "request": "SearchEpisodesRequest", "response": "SearchEpisodesResponse" },
+        "GetEpisode": { "type": "unary", "request": "GetEpisodeRequest", "response": "GetEpisodeResponse" },
+        "GetCollectionStats": { "type": "unary", "request": "{}", "response": "CollectionStatsResponse" },
+        "ChatWithContext": { "type": "unary", "request": "ChatWithContextRequest", "response": "ChatWithContextResponse" },
+        "SubscribeEpisodes": { "type": "server-stream", "request": "SubscribeEpisodesRequest", "response": "EpisodeEvent" },
+        "GetPiiPolicy": { "type": "unary", "request": "{}", "response": "GetPiiPolicyResponse" }
+      }
+    },
+    "blockchainService": {
+      "exportName": "blockchainService",
+      "protoPackage": "operation.blockchain.v1.BlockchainService",
+      "rpcs": {
+        "GetFootprints": { "type": "unary", "request": "GetFootprintsRequest", "response": "GetFootprintsResponse" },
+        "VerifyChain": { "type": "unary", "request": "VerifyBlockchainRequest", "response": "VerifyBlockchainResponse" },
+        "GetEmbeddingQueueStatus": { "type": "unary", "request": "{}", "response": "GetEmbeddingQueueStatusResponse" },
+        "GetQdrantRoles": { "type": "unary", "request": "{}", "response": "GetQdrantRolesResponse" }
+      }
+    },
+    "btrfsService": {
+      "exportName": "btrfsService",
+      "protoPackage": "operation.btrfs.v1.BtrfsService",
+      "rpcs": {
+        "GetSubvolumes": { "type": "unary", "request": "{}", "response": "GetSubvolumesResponse" },
+        "GetSnapshots": { "type": "unary", "request": "BtrfsGetSnapshotsRequest", "response": "BtrfsGetSnapshotsResponse" },
+        "GetSendState": { "type": "unary", "request": "{}", "response": "GetSendStateResponse" },
+        "GetDrStatus": { "type": "unary", "request": "{}", "response": "GetDrStatusResponse" }
+      }
+    },
+    "personaService": {
+      "exportName": "personaService",
+      "protoPackage": "operation.agents.v1.PersonaService",
+      "rpcs": {
+        "ListPersonas": { "type": "unary", "request": "{}", "response": "ListPersonasResponse" },
+        "GetPersona": { "type": "unary", "request": "GetPersonaRequest", "response": "GetPersonaResponse" },
+        "CreatePersona": { "type": "unary", "request": "CreatePersonaRequest", "response": "CreatePersonaResponse" },
+        "UpdatePersona": { "type": "unary", "request": "UpdatePersonaRequest", "response": "UpdatePersonaResponse" },
+        "DeletePersona": { "type": "unary", "request": "DeletePersonaRequest", "response": "DeletePersonaResponse" },
+        "ListAgentRoutes": { "type": "unary", "request": "{}", "response": "ListAgentRoutesResponse" }
+      }
+    },
+    "dataStoreService": {
+      "exportName": "dataStoreService",
+      "protoPackage": "operation.stores.v1.DataStoreService",
+      "rpcs": {
+        "GetDataStores": { "type": "unary", "request": "{}", "response": "GetDataStoresResponse" },
+        "GetStoreDetail": { "type": "unary", "request": "GetStoreDetailRequest", "response": "GetStoreDetailResponse" }
+      }
+    },
+    "embeddingService": {
+      "exportName": "embeddingService",
+      "protoPackage": "operation.embedding.v1.EmbeddingService",
+      "rpcs": {
+        "GetQueue": { "type": "unary", "request": "GetEmbeddingQueueRequest", "response": "GetEmbeddingQueueResponse" },
+        "GetWorkerStatus": { "type": "unary", "request": "{}", "response": "GetEmbeddingWorkerStatusResponse" },
+        "PreviewEmbeddingText": { "type": "unary", "request": "PreviewEmbeddingTextRequest", "response": "PreviewEmbeddingTextResponse" },
+        "GetChannelDiagnostics": { "type": "unary", "request": "{}", "response": "GetChannelDiagnosticsResponse" }
+      }
+    }
+  },
+  "pages": [
+    { "route": "/", "title": "Overview", "file": "src/pages/OverviewPage.tsx", "lines": 323, "navGroup": "Control", "icon": "BarChart3", "fullHeight": false, "dataSource": "useEventStore only (passive — reads from global streams)", "storeFields": ["connected","health","events","eventCounts","latestState","latestStats","lastError"], "directGrpcCalls": [], "restCalls": [], "components": ["PageHeader","StatCard","Card","Pill","StatusDot","ResourceGauge","EventDistribution","EventTape","GenerativeBlock"], "description": "Main dashboard: health status, resource gauges (CPU/mem/disk/net), event distribution chart, event tape, connected peers monitor with generative UI deep-dive" },
+    { "route": "/chat", "title": "Chat", "file": "src/pages/ChatPage.tsx", "lines": 211, "navGroup": "Chat", "icon": "MessageSquare", "fullHeight": true, "dataSource": "useEventStore (connected status) + REST fallback", "storeFields": ["connected"], "directGrpcCalls": [], "restCalls": ["/api/chat/{sessionKey}/history (GET)","/api/chat (POST)"], "components": ["MessageBubble","SystemPromptEditor","JsonRenderer","Callout"], "description": "Full-height chat interface with message bubbles, system prompt editor, JSON rendering for structured responses" },
+    { "route": "/orchestration", "title": "Orchestration", "file": "src/pages/OrchestrationPage.tsx", "lines": 303, "navGroup": "Control", "icon": "Orbit", "fullHeight": false, "dataSource": "useEventStore.latestState (passive from StateSync stream)", "storeFields": ["latestState"], "directGrpcCalls": [], "restCalls": [], "components": ["@xyflow/react (ReactFlow)"], "description": "Service orchestration graph using ReactFlow, visualizes dinit service dependencies from latestState" },
+    { "route": "/services", "title": "Services", "file": "src/pages/ServicesPage.tsx", "lines": 288, "navGroup": "Control", "icon": "Link2", "fullHeight": false, "dataSource": "useEventStore.latestState (passive from StateSync stream)", "storeFields": ["latestState"], "directGrpcCalls": [], "restCalls": [], "components": ["PageHeader","Card","SchemaRenderer","StatusDot","Badge"], "description": "D-Bus service browser with introspection, interface listing, method/property inspection" },
+    { "route": "/llm", "title": "LLM", "file": "src/pages/LlmPage.tsx", "lines": 54, "navGroup": "Control", "icon": "Radio", "fullHeight": false, "dataSource": "useEventStore.latestState", "storeFields": ["latestState"], "directGrpcCalls": [], "restCalls": [], "components": ["PageHeader","Card","Pill","StatCard"], "description": "LLM provider status and model listing from projected state" },
+    { "route": "/agents", "title": "Agents", "file": "src/pages/AgentsPage.tsx", "lines": 274, "navGroup": "Agent", "icon": "Folder", "fullHeight": false, "dataSource": "useEventStore.latestState + useEventStore.agents + personaService (direct gRPC)", "storeFields": ["latestState","agents"], "directGrpcCalls": [{"service":"personaService","rpc":"ListPersonas","protoPath":"operation.agents.v1.PersonaService/ListPersonas","trigger":"useEffect on mount + manual refresh"}], "restCalls": [], "components": ["PageHeader","Card","Pill","StatCard","StatusDot","SchemaRenderer","Badge","Dialog"], "description": "Agent management merging live registry stream data with persona definitions. Shows capabilities, sessions, memory, config schemas" },
+    { "route": "/models", "title": "Routable Models", "file": "src/pages/RoutableModelsPage.tsx", "lines": 90, "navGroup": "Agent", "icon": "Radio", "fullHeight": false, "dataSource": "No store or gRPC — static/placeholder", "storeFields": [], "directGrpcCalls": [], "restCalls": [], "components": ["PageHeader"], "description": "Routable models placeholder page" },
+    { "route": "/tools", "title": "Tools", "file": "src/pages/ToolsPage.tsx", "lines": 85, "navGroup": "Agent", "icon": "Zap", "fullHeight": false, "dataSource": "useEventStore.latestState", "storeFields": ["latestState"], "directGrpcCalls": [], "restCalls": [], "components": ["PageHeader","Card","Pill"], "description": "MCP tool listing from projected state" },
+    { "route": "/workflows", "title": "Workflows", "file": "src/pages/WorkflowsPage.tsx", "lines": 157, "navGroup": "Agent", "icon": "GitBranch", "fullHeight": true, "dataSource": "useEventStore.latestState", "storeFields": ["latestState"], "directGrpcCalls": [], "restCalls": [], "components": ["ToolPalette","WorkflowNodeCard"], "description": "Visual workflow editor (full height)" },
+    { "route": "/security", "title": "Security", "file": "src/pages/SecurityPage.tsx", "lines": 140, "navGroup": "Agent", "icon": "Shield", "fullHeight": false, "dataSource": "useEventStore.latestState", "storeFields": ["latestState"], "directGrpcCalls": [], "restCalls": [], "components": ["PageHeader","Card","SchemaRenderer"], "description": "Security overview from projected state" },
+    { "route": "/accountability", "title": "Accountability", "file": "src/pages/AccountabilityPage.tsx", "lines": 581, "navGroup": "Agent", "icon": "ScrollText", "fullHeight": true, "dataSource": "accountabilityService (direct gRPC)", "storeFields": [], "directGrpcCalls": [{"service":"accountabilityService","rpc":"SearchEpisodes","protoPath":"operation.accountability.v1.ChatbotAccountabilityService/SearchEpisodes","trigger":"Search form submit"},{"service":"accountabilityService","rpc":"ChatWithContext","protoPath":"operation.accountability.v1.ChatbotAccountabilityService/ChatWithContext","trigger":"Chat send button"}], "restCalls": [], "components": ["Button","Input","Badge"], "description": "Reasoning episode search with semantic/keyword modes, episode detail view with reasoning chains, context-aware chat interface. Largest page (581 lines)" },
+    { "route": "/skills", "title": "Skills", "file": "src/pages/SkillsPage.tsx", "lines": 170, "navGroup": "Agent", "icon": "ScrollText", "fullHeight": false, "dataSource": "useEventStore.latestState", "storeFields": ["latestState"], "directGrpcCalls": [], "restCalls": [], "components": ["PageHeader","Card","Badge","SchemaRenderer"], "description": "Plugin/skill browser from projected state" },
+    { "route": "/knowledge", "title": "Knowledge", "file": "src/pages/KnowledgePage.tsx", "lines": 340, "navGroup": "Agent", "icon": "Brain", "fullHeight": false, "dataSource": "useEventStore.latestState only (no direct gRPC calls despite having blockchain types)", "storeFields": ["latestState"], "directGrpcCalls": [], "restCalls": [], "components": ["Card","Pill","StatusDot","JsonRenderer","SchemaRenderer","Badge","Button","Input","Progress","Switch","Tabs","Collapsible"], "description": "Knowledge base with collections, embeddings, blockchain provenance. All data from projected state" },
+    { "route": "/embedding", "title": "Embedding Pipeline", "file": "src/pages/EmbeddingPipelinePage.tsx", "lines": 211, "navGroup": "Agent", "icon": "Orbit", "fullHeight": false, "dataSource": "embeddingService + blockchainService (direct gRPC)", "storeFields": [], "directGrpcCalls": [{"service":"embeddingService","rpc":"GetWorkerStatus","protoPath":"operation.embedding.v1.EmbeddingService/GetWorkerStatus","trigger":"useEffect on mount"},{"service":"embeddingService","rpc":"GetChannelDiagnostics","protoPath":"operation.embedding.v1.EmbeddingService/GetChannelDiagnostics","trigger":"useEffect on mount"},{"service":"embeddingService","rpc":"GetQueue","protoPath":"operation.embedding.v1.EmbeddingService/GetQueue","trigger":"useEffect on mount"},{"service":"blockchainService","rpc":"GetQdrantRoles","protoPath":"operation.blockchain.v1.BlockchainService/GetQdrantRoles","trigger":"useEffect on mount"}], "restCalls": [], "components": ["Badge"], "description": "Embedding pipeline: worker status, channel diagnostics, queue inspection, Qdrant collection roles" },
+    { "route": "/containers", "title": "Containers", "file": "src/pages/ContainersPage.tsx", "lines": 154, "navGroup": "Infrastructure", "icon": "Box", "fullHeight": false, "dataSource": "useEventStore.latestState", "storeFields": ["latestState"], "directGrpcCalls": [], "restCalls": [], "components": ["PageHeader","Card","Tabs","Badge","Sheet","SchemaRenderer","StatusDot"], "description": "Container management from projected state" },
+    { "route": "/privacy-network", "title": "Privacy Network", "file": "src/pages/PrivacyNetworkPage.tsx", "lines": 146, "navGroup": "Infrastructure", "icon": "Globe", "fullHeight": false, "dataSource": "useEventStore.latestState (no direct gRPC despite privacyService being available)", "storeFields": ["latestState"], "directGrpcCalls": [], "restCalls": [], "components": ["PageHeader","Card","Badge","StatusDot"], "description": "WireGuard + Tor + I2P overlay network status. Currently reads from projected state only" },
+    { "route": "/ovs", "title": "Open vSwitch", "file": "src/pages/OpenSwitchPage.tsx", "lines": 113, "navGroup": "Infrastructure", "icon": "Network", "fullHeight": false, "dataSource": "useEventStore.latestState (OVS data from OvsdbMirror.Monitor stream)", "storeFields": ["latestState"], "directGrpcCalls": [], "restCalls": [], "components": ["PageHeader","Card","Badge","Dialog","SchemaRenderer","StatusDot"], "description": "OVSDB browser showing bridges, ports, interfaces from real-time Monitor stream" },
+    { "route": "/openflow", "title": "OpenFlow", "file": "src/pages/OpenFlowPage.tsx", "lines": 168, "navGroup": "Infrastructure", "icon": "Workflow", "fullHeight": false, "dataSource": "useEventStore.latestState", "storeFields": ["latestState"], "directGrpcCalls": [], "restCalls": [], "components": ["PageHeader","Card","Badge","Collapsible","Dialog","SchemaRenderer"], "description": "OpenFlow rule management from projected state" },
+    { "route": "/btrfs", "title": "BTRFS Storage", "file": "src/pages/BtrfsPage.tsx", "lines": 276, "navGroup": "Infrastructure", "icon": "Monitor", "fullHeight": false, "dataSource": "btrfsService (direct gRPC — 4 parallel calls)", "storeFields": [], "directGrpcCalls": [{"service":"btrfsService","rpc":"GetSubvolumes","protoPath":"operation.btrfs.v1.BtrfsService/GetSubvolumes","trigger":"useEffect on mount"},{"service":"btrfsService","rpc":"GetSnapshots","protoPath":"operation.btrfs.v1.BtrfsService/GetSnapshots","trigger":"useEffect on mount"},{"service":"btrfsService","rpc":"GetSendState","protoPath":"operation.btrfs.v1.BtrfsService/GetSendState","trigger":"useEffect on mount"},{"service":"btrfsService","rpc":"GetDrStatus","protoPath":"operation.btrfs.v1.BtrfsService/GetDrStatus","trigger":"useEffect on mount"}], "restCalls": [], "components": ["Button","Badge"], "description": "BTRFS subvolumes, snapshots with retention, send/receive state, disaster recovery status" },
+    { "route": "/data-stores", "title": "Data Stores", "file": "src/pages/DataStoresPage.tsx", "lines": 93, "navGroup": "Infrastructure", "icon": "Monitor", "fullHeight": false, "dataSource": "dataStoreService (direct gRPC)", "storeFields": [], "directGrpcCalls": [{"service":"dataStoreService","rpc":"GetDataStores","protoPath":"operation.stores.v1.DataStoreService/GetDataStores","trigger":"useEffect on mount"}], "restCalls": [], "components": ["Badge"], "description": "Data store health: SQLite, Qdrant, BTRFS, embedding channel" },
+    { "route": "/config", "title": "Config", "file": "src/pages/ConfigPage.tsx", "lines": 167, "navGroup": "Settings", "icon": "Settings", "fullHeight": false, "dataSource": "useEventStore.latestState", "storeFields": ["latestState"], "directGrpcCalls": [], "restCalls": [], "components": ["PageHeader","Pill","SchemaRenderer"], "description": "Configuration editor organized by domain sections (Security, Services, AI/LLM, Privacy, System, Network)" },
+    { "route": "/inspector", "title": "Inspector", "file": "src/pages/InspectorPage.tsx", "lines": 226, "navGroup": "Settings", "icon": "Bug", "fullHeight": false, "dataSource": "useEventStore (events + latestState)", "storeFields": ["events","latestState"], "directGrpcCalls": [], "restCalls": [], "components": ["PageHeader","Card","SchemaRenderer","EventTape","Badge","ScrollArea"], "description": "JSON state inspector with tree browser, event tape, raw state viewer" },
+    { "route": "/state", "title": "State", "file": "src/pages/StatePage.tsx", "lines": 249, "navGroup": "Settings", "icon": "Monitor", "fullHeight": false, "dataSource": "useEventStore (latestState + events)", "storeFields": ["latestState","events"], "directGrpcCalls": [], "restCalls": [], "components": ["SchemaRenderer","SchemaPanel","StateProjectionPanel"], "description": "Raw state projection viewer with schema panel and projection breakdown" },
+    { "route": "/logs", "title": "Logs", "file": "src/pages/LogsPage.tsx", "lines": 169, "navGroup": "Settings", "icon": "ScrollText", "fullHeight": false, "dataSource": "useEventStore (latestState + logs)", "storeFields": ["latestState","logs"], "directGrpcCalls": [], "restCalls": [], "components": ["PageHeader","Card","Pill","Collapsible","SchemaRenderer","Button","Badge"], "description": "Log viewer with level filtering, expandable JSON metadata" },
+    { "route": "/grpc", "title": "gRPC Diagnostics", "file": "src/pages/GrpcDiagnosticsPage.tsx", "lines": 488, "navGroup": "Settings", "icon": "Radio", "fullHeight": false, "dataSource": "useEventStore + direct gRPC probe calls to ALL services", "storeFields": ["connected","lastError","eventCounts","latestState","latestStats"], "directGrpcCalls": [{"service":"stateSync","rpc":"GetState","protoPath":"operation.v1.StateSync/GetState","trigger":"Manual probe button"},{"service":"pluginService","rpc":"ListPlugins","protoPath":"operation.v1.PluginService/ListPlugins","trigger":"Manual probe button"},{"service":"eventChainService","rpc":"GetEvents","protoPath":"operation.v1.EventChainService/GetEvents","trigger":"Manual probe button"},{"service":"eventChainService","rpc":"VerifyChain","protoPath":"operation.v1.EventChainService/VerifyChain","trigger":"Manual probe button"},{"service":"ovsdbMirror","rpc":"ListDbs","protoPath":"operation.v1.OvsdbMirror/ListDbs","trigger":"Manual probe button"},{"service":"ovsdbMirror","rpc":"GetBridgeState","protoPath":"operation.v1.OvsdbMirror/GetBridgeState","trigger":"Manual probe button"},{"service":"runtimeMirror","rpc":"GetSystemInfo","protoPath":"operation.v1.RuntimeMirror/GetSystemInfo","trigger":"Manual probe button"},{"service":"runtimeMirror","rpc":"ListServices","protoPath":"operation.v1.RuntimeMirror/ListServices","trigger":"Manual probe button"},{"service":"runtimeMirror","rpc":"ListInterfaces","protoPath":"operation.v1.RuntimeMirror/ListInterfaces","trigger":"Manual probe button"},{"service":"runtimeMirror","rpc":"GetNumaTopology","protoPath":"operation.v1.RuntimeMirror/GetNumaTopology","trigger":"Manual probe button"},{"service":"componentRegistry","rpc":"Discover","protoPath":"operation.registry.v1.ComponentRegistry/Discover","trigger":"Manual probe button"}], "streamProbes": [{"stream":"StateSync.Subscribe","protoPath":"operation.v1.StateSync/Subscribe"},{"stream":"EventChain.SubscribeEvents","protoPath":"operation.v1.EventChainService/SubscribeEvents"},{"stream":"OvsdbMirror.Monitor","protoPath":"operation.v1.OvsdbMirror/Monitor"},{"stream":"RuntimeMirror.StreamMetrics","protoPath":"operation.v1.RuntimeMirror/StreamMetrics"},{"stream":"ComponentRegistry.Watch","protoPath":"operation.registry.v1.ComponentRegistry/Watch"}], "restCalls": [], "components": ["Badge","Button","Card","ScrollArea","Collapsible","Tabs"], "description": "Diagnostic dashboard: unary RPC latency probes (11 endpoints), stream health probes (5 streams), Zustand store inspector" }
+  ],
+  "restFallbackApi": {
+    "file": "src/lib/api.ts (250 lines)",
+    "baseUrl": "import.meta.env.VITE_API_BASE_URL || '/api'",
+    "note": "Most REST endpoints are NOT actively called by pages — pages primarily consume from Zustand store (fed by gRPC streams). REST api object exists for future use or manual debugging.",
+    "endpoints": {
+      "/api/health": { "method": "GET", "response": "HealthSnapshot", "usedBy": [] },
+      "/api/status": { "method": "GET", "response": "StatusSummary", "usedBy": [] },
+      "/api/services": { "method": "GET", "response": "DbusService[]", "usedBy": [] },
+      "/api/services/{name}": { "method": "GET", "response": "DbusService", "usedBy": [] },
+      "/api/services/{name}/introspect": { "method": "GET", "response": "unknown", "usedBy": [] },
+      "/api/services/{name}/call": { "method": "POST", "response": "unknown", "usedBy": [] },
+      "/api/tools": { "method": "GET", "response": "Tool[]", "usedBy": [] },
+      "/api/tools/{id}": { "method": "GET", "response": "Tool", "usedBy": [] },
+      "/api/tools/{id}/execute": { "method": "POST", "response": "unknown", "usedBy": [] },
+      "/api/agents": { "method": "GET", "response": "Agent[]", "usedBy": [] },
+      "/api/agents/{id}": { "method": "GET", "response": "Agent", "usedBy": [] },
+      "/api/agents/{id}/start": { "method": "POST", "response": "void", "usedBy": [] },
+      "/api/agents/{id}/stop": { "method": "POST", "response": "void", "usedBy": [] },
+      "/api/llm/status": { "method": "GET", "response": "LlmProvider[]", "usedBy": [] },
+      "/api/llm/models": { "method": "GET", "response": "LlmModel[]", "usedBy": [] },
+      "/api/llm/model": { "method": "POST", "response": "void", "usedBy": [] },
+      "/api/sessions": { "method": "GET", "response": "Session[]", "usedBy": [] },
+      "/api/sessions/{key}": { "methods": ["GET","PATCH","DELETE"], "response": "Session | void", "usedBy": [] },
+      "/api/chat/{sessionKey}/history": { "method": "GET", "response": "ChatMessage[]", "usedBy": ["ChatPage"] },
+      "/api/chat": { "method": "POST", "response": "ChatMessage", "usedBy": ["ChatPage"] },
+      "/api/logs": { "method": "GET", "response": "LogEntry[]", "usedBy": [] },
+      "/api/config": { "methods": ["GET","PUT"], "response": "ConfigSnapshot | void", "usedBy": [] },
+      "/api/config/apply": { "method": "POST", "response": "void", "usedBy": [] },
+      "/api/debug/call": { "method": "POST", "response": "unknown", "usedBy": [] }
+    }
+  },
+  "navigation": {
+    "file": "src/components/shell/AppShell.tsx",
+    "brokenRoutes": ["/sessions — nav link exists but no page component"],
+    "groups": [
+      { "label": "Chat", "items": [{ "title": "Chat", "path": "/chat" }] },
+      { "label": "Control", "items": [{ "title": "Overview", "path": "/" }, { "title": "Orchestration", "path": "/orchestration" }, { "title": "Services", "path": "/services" }, { "title": "Sessions", "path": "/sessions", "NOTE": "ROUTE EXISTS IN NAV BUT NO PAGE COMPONENT — WILL 404" }, { "title": "LLM", "path": "/llm" }] },
+      { "label": "Agent", "items": [{ "title": "Agents", "path": "/agents" }, { "title": "Routable Models", "path": "/models" }, { "title": "Tools", "path": "/tools" }, { "title": "Workflows", "path": "/workflows" }, { "title": "Security", "path": "/security" }, { "title": "Accountability", "path": "/accountability" }, { "title": "Skills", "path": "/skills" }, { "title": "Knowledge", "path": "/knowledge" }, { "title": "Embedding Pipeline", "path": "/embedding" }] },
+      { "label": "Infrastructure", "items": [{ "title": "Containers", "path": "/containers" }, { "title": "Privacy Network", "path": "/privacy-network" }, { "title": "Open vSwitch", "path": "/ovs" }, { "title": "OpenFlow", "path": "/openflow" }, { "title": "BTRFS Storage", "path": "/btrfs" }, { "title": "Data Stores", "path": "/data-stores" }] },
+      { "label": "Settings", "items": [{ "title": "Config", "path": "/config" }, { "title": "Inspector", "path": "/inspector" }, { "title": "State", "path": "/state" }, { "title": "Logs", "path": "/logs" }, { "title": "gRPC Diagnostics", "path": "/grpc" }] }
+    ]
+  },
+  "totals": {
+    "pages": 25,
+    "totalPageLines": 5500,
+    "grpcServices": 17,
+    "unaryRPCs": 87,
+    "serverStreams": 11,
+    "activeGlobalStreams": 5,
+    "restEndpoints": 24,
+    "grpcTypeFiles": 18,
+    "pagesUsingDirectGrpc": 6,
+    "pagesUsingStoreOnly": 17,
+    "pagesWithNoData": 1,
+    "brokenRoutes": ["/sessions — nav link exists but no page component"]
+  },
+  "dataFlowPatterns": {
+    "pattern1_passiveStore": {
+      "description": "Page reads from useEventStore which is fed by 5 global gRPC streams. No direct API calls.",
+      "pages": ["/","/chat","/orchestration","/services","/llm","/tools","/workflows","/security","/skills","/knowledge","/containers","/privacy-network","/ovs","/openflow","/config","/inspector","/state","/logs"],
+      "count": 18
+    },
+    "pattern2_directGrpc": {
+      "description": "Page makes direct gRPC unary calls on mount or user action, independent of global streams.",
+      "pages": ["/agents","/accountability","/btrfs","/data-stores","/embedding","/grpc"],
+      "count": 6
+    },
+    "pattern3_noData": {
+      "description": "Page has no data source — static/placeholder content.",
+      "pages": ["/models"],
+      "count": 1
+    }
+  }
+}

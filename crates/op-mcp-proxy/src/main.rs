@@ -11,6 +11,7 @@ use tracing::info;
 mod cloudaicompanion;
 mod direct_llm;
 mod gcloud_auth;
+mod http_server;
 mod session;
 
 use direct_llm::DirectLLM;
@@ -20,6 +21,16 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .init();
+
+    // HTTP_MODE: run as an OpenAI-compatible HTTP server.
+    // All tools (OpenCode, Kilocode, Kiro, etc.) point at this endpoint.
+    let http_mode = std::env::var("HTTP_MODE").is_ok();
+    if http_mode {
+        info!("Running in HTTP_MODE – OpenAI-compatible gateway → cloudcode-pa.googleapis.com");
+        let llm = Arc::new(DirectLLM::new().await?);
+        llm.start_auto_refresh();
+        return http_server::run(llm).await;
+    }
 
     // If DIRECT_MODE is set we handle LLM requests ourselves.
     let direct_mode = std::env::var("DIRECT_MODE").is_ok();

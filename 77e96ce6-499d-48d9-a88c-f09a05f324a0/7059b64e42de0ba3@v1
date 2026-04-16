@@ -1,0 +1,5 @@
+# System Info
+- OS: Chimera Linux
+- Init: dinit (not systemd)
+- Privilege escalation: doas (not sudo)
+- Services: sshd, nginx, podman, incus, tailscaled, step-ca, ovs, chrony

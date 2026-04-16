@@ -4,8 +4,7 @@ import { SchemaRenderer } from "@/components/json/SchemaRenderer";
 import { Badge } from "@/components/ui/badge";
 import { useEventStore } from "@/stores/event-store";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
-import { personaService } from "@/grpc/client";
-import type { PersonaDefinition } from "@/grpc/types/persona";
+import { componentRegistry } from "@/grpc/client";
 import { Loader2 } from "lucide-react";
 
 interface CognitiveAgent {
@@ -31,6 +30,15 @@ const STATUS_DOT: Record<CognitiveAgent["status"], "ok" | "warn" | "error" | "of
 const STATUS_PILL: Record<CognitiveAgent["status"], "ok" | "warn" | "danger" | "default"> = {
   running: "ok", busy: "warn", error: "danger", offline: "default",
 };
+
+interface PersonaDefinition {
+  name: string;
+  description: string;
+  model: string;
+  tools: string[];
+  tags: string[];
+  systemPrompt: string;
+}
 
 /** Merge persona definitions (schema) with live state (store) */
 function mergeAgents(
@@ -104,10 +112,17 @@ export default function AgentsPage() {
 
   // Fetch personas from schema on mount
   useEffect(() => {
-    personaService.listPersonas()
+    componentRegistry.discover({ componentType: "agent" })
       .then((res) => {
-        setPersonas(res.personas);
-        setPersonaSource(res.source);
+        setPersonas((res.components || []).map((c) => ({
+          name: c.name || c.componentId,
+          description: c.description,
+          model: c.metadata?.["model"] ?? "",
+          tools: [], // Tools would need to be extracted from metadata or capabilities
+          tags: c.capabilities || [],
+          systemPrompt: c.metadata?.["system_prompt"] ?? "",
+        })));
+        setPersonaSource("ComponentRegistry");
       })
       .catch(() => {
         // Fallback: try to extract from latestState
@@ -147,7 +162,7 @@ export default function AgentsPage() {
               </span>
             )}
             <button
-              onClick={() => { setLoading(true); personaService.listPersonas().then((r) => { setPersonas(r.personas); setPersonaSource(r.source); }).catch(() => {}).finally(() => setLoading(false)); }}
+              onClick={() => { setLoading(true); componentRegistry.discover({ componentType: "agent" }).then((r) => { setPersonas((r.components || []).map(c => ({ name: c.name || c.componentId, description: c.description, model: c.metadata?.["model"] ?? "", tools: [], tags: c.capabilities || [], systemPrompt: c.metadata?.["system_prompt"] ?? "" }))); setPersonaSource("ComponentRegistry"); }).catch(() => {}).finally(() => setLoading(false)); }}
               className="px-4 py-2 rounded-md border border-border bg-[hsl(var(--bg-elevated))] text-sm font-medium hover:bg-muted/30 transition-colors"
             >
               Refresh

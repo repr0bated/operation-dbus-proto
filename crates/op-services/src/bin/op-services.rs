@@ -42,6 +42,8 @@ async fn main() -> anyhow::Result<()> {
     info!("gRPC server listening on {}", addr);
 
     Server::builder()
+        .accept_http1(true)
+        .layer(tonic_web::GrpcWebLayer::new())
         .add_service(ServiceManagerServer::new(grpc_server))
         .serve(addr)
         .await?;

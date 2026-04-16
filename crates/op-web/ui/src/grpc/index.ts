@@ -23,7 +23,14 @@ export * from "./types/mail";
 export * from "./types/privacy";
 export * from "./types/registration";
 export * from "./types/service-manager";
-export * from "./types/mcp";
+export type {
+  ServerMode, ParameterType, McpRequest, McpResponse, McpError,
+  SubscribeRequest as McpSubscribeRequest, McpEvent, HealthRequest, HealthResponse as McpHealthResponse,
+  InitializeRequest, InitializeResponse, ListToolsRequest, ListToolsResponse as McpListToolsResponse,
+  ToolInfo, ToolSchema, ToolParameter, FileOperation, FileMode,
+  FileSystemArgs, NetworkArgs, DatabaseArgs, ShellArgs, ToolArguments,
+  CallToolRequest, CallToolResponse, ToolOutput
+} from "./types/mcp";
 export * from "./types/accountability";
 export * from "./types/blockchain";
 export * from "./types/btrfs";

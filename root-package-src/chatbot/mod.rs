@@ -10,7 +10,6 @@
 //! - Policy Engine (checks policies before suggesting actions)
 //! - Disaster Recovery (can export/import canonical state)
 //! - Dependency Manager (can check/satisfy dependencies)
-//! - Antigravity Tunnel (dev mode, same interface)
 
 pub mod intent;
 pub mod planner;
@@ -86,8 +85,6 @@ pub struct Chatbot {
     workflow_planner: WorkflowPlanner,
     maintenance_handler: MaintenanceHandler,
     sessions: dashmap::DashMap<String, ChatSession>,
-    #[cfg(feature = "dev-antigravity")]
-    bridge_client: Option<crate::antigravity::AntigravityBridgeClient>,
 }
 
 impl Chatbot {
@@ -112,8 +109,6 @@ impl Chatbot {
             workflow_planner: WorkflowPlanner::new(registry),
             maintenance_handler: MaintenanceHandler::new(),
             sessions: dashmap::DashMap::new(),
-            #[cfg(feature = "dev-antigravity")]
-            bridge_client: crate::antigravity::AntigravityBridgeClient::from_env(),
         }
     }
 
@@ -671,8 +666,6 @@ Type `approve workflow` to execute.",
             "policy" => "Policies are first-class state objects that govern what can be executed.".into(),
             "disaster recovery" | "dr" => 
                 "Disaster recovery exports/imports canonical JSON. Recovery uses the same execution contract.".into(),
-            "antigravity" | "tunnel" =>
-                "Antigravity tunnel is DEVELOPMENT-ONLY for IDE code-assist billing. Removed in production.".into(),
             _ => format!("No specific explanation for '{}'", topic),
         };
 
@@ -689,35 +682,6 @@ Type `approve workflow` to execute.",
         raw: &str,
         session: &ChatSession,
     ) -> Result<ChatResponse> {
-        // Fallback to Antigravity Bridge if available
-        #[cfg(feature = "dev-antigravity")]
-        if let Some(bridge) = &self.bridge_client {
-            let system_prompt = format!(
-                "You are the OP-DBUS cognitive control plane. 
-                The user has asked: '{}'. 
-                You have access to the current session history. 
-                Your goal is to help the user by suggesting relevant tools or explaining concepts. 
-                Do NOT execute tools directly, but suggest the commands. 
-                Current Context: {{:?}}", 
-                raw,
-                session.messages.last().map(|m| &m.content)
-            );
-
-            match bridge.chat(raw, Some(&system_prompt)).await {
-                Ok(reply) => {
-                     return Ok(ChatResponse {
-                        message: reply,
-                        intent: Intent::Unknown(raw.to_string()),
-                        actions_taken: vec![],
-                        suggestions: vec![],
-                    });
-                }
-                Err(e) => {
-                    tracing::warn!("Bridge fallback failed: {}", e);
-                }
-            }
-        }
-
         Ok(ChatResponse {
             message: format!(
                 "I'm not sure how to help with: \"{}\"\n\n\nI can help you with:\n\t• **list tools** - see available tools\n\t• **run <tool>** - execute a tool\n\t• **discover system** - one-shot system discovery\n\t• **export/import** - disaster recovery\n\t• **system status** - check system health",

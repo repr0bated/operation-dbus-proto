@@ -8,7 +8,7 @@
 
 use std::path::PathBuf;
 use tokio::net::UnixStream;
-use tracing::{debug, warn};
+use tracing::debug;
 use zbus::{interface, Connection};
 
 /// A socket service endpoint published on D-Bus.
@@ -19,14 +19,26 @@ pub struct SocketEndpoint {
     socket_path: PathBuf,
     /// Description of what this endpoint provides
     description: String,
+    /// Protocol spoken by the service behind the Unix socket.
+    backend_protocol: String,
+    /// Network-facing protocol before nginx reaches this socket.
+    ingress_protocol: String,
 }
 
 impl SocketEndpoint {
-    pub fn new(name: impl Into<String>, socket_path: impl Into<PathBuf>, description: impl Into<String>) -> Self {
+    pub fn new(
+        name: impl Into<String>,
+        socket_path: impl Into<PathBuf>,
+        description: impl Into<String>,
+        backend_protocol: impl Into<String>,
+        ingress_protocol: impl Into<String>,
+    ) -> Self {
         Self {
             name: name.into(),
             socket_path: socket_path.into(),
             description: description.into(),
+            backend_protocol: backend_protocol.into(),
+            ingress_protocol: ingress_protocol.into(),
         }
     }
 }
@@ -55,7 +67,11 @@ impl SocketEndpoint {
         match UnixStream::connect(&self.socket_path).await {
             Ok(_) => true,
             Err(e) => {
-                debug!("Socket {} exists but connect failed: {}", self.socket_path.display(), e);
+                debug!(
+                    "Socket {} exists but connect failed: {}",
+                    self.socket_path.display(),
+                    e
+                );
                 false
             }
         }
@@ -65,6 +81,18 @@ impl SocketEndpoint {
     #[zbus(property)]
     async fn description(&self) -> &str {
         &self.description
+    }
+
+    /// Protocol spoken by the backend service over the socket bridge.
+    #[zbus(property)]
+    async fn backend_protocol(&self) -> &str {
+        &self.backend_protocol
+    }
+
+    /// Protocol used at the WireGuard/nginx edge before proxying to the socket.
+    #[zbus(property)]
+    async fn ingress_protocol(&self) -> &str {
+        &self.ingress_protocol
     }
 
     /// Transport type (always "unix-socket" for these endpoints).
@@ -96,6 +124,8 @@ pub async fn register_socket_endpoints(conn: &Connection) -> anyhow::Result<()> 
         "gateway",
         "/run/services0/gateway.sock",
         "OpenClaw WebSocket gateway (socat bridge to 127.0.0.1:18789 inside services container)",
+        "http-websocket",
+        "https-websocket",
     );
 
     conn.object_server()

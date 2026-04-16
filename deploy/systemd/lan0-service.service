@@ -1,0 +1,17 @@
+[Unit]
+Description=Create lan0-service loopback interface
+After=network.target
+Before=systemd-networkd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=-/bin/sh -c '/sbin/ip link delete lan0-service 2>/dev/null || true'
+ExecStart=/sbin/ip link add lan0-service type dummy
+ExecStart=/sbin/ip addr add 127.127.0.1/8 dev lan0-service
+ExecStart=/sbin/ip link set lan0-service up
+ExecStart=/sbin/sysctl -qw net.ipv6.conf.lan0-service.disable_ipv6=1
+ExecStop=-/bin/sh -c '/sbin/ip link delete lan0-service 2>/dev/null || true'
+
+[Install]
+WantedBy=multi-user.target

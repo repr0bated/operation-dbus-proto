@@ -1,0 +1,128 @@
+# Socket-Based Container Networking — Design
+
+## Architecture
+
+```
+                          INTERNET
+                             |
+                        wgcf (WARP)
+                             |
+                          ovsbr0
+                        (OpenFlow)
+                             |
+    +----------+----------+--+--+----------+-----------+
+    |          |          |     |          |           |
+ ovsbr0-   ovsbr0-   grpc-   priv_     priv_      priv_wg
+  sock      mgmt     bridge   warp      xray      (legacy)
+    |
+    |   +--- wg0 (10.0.0.1/24) --- WG peers (tablet, laptop)
+    |   |
+    |   v
+  nginx (host)
+    |
+    |--- /run/services0/gateway.sock ---> services container (loopback)
+    |--- /run/services0/mail.sock ------> services container (loopback)  [future]
+    |--- /run/services0/dns.sock -------> services container (loopback)  [future]
+    |
+    |--- /run/user-sockets/<id>/*.sock -> user containers (loopback)
+```
+
+## Two-Layer Authentication
+
+### Layer 1: WireGuard (Network Identity)
+- Host `wg0` at `10.0.0.1/24`, listening port `51820`
+- Peers: tablet (`10.0.0.2`), laptop (`10.0.0.3`)
+- nginx binds to `10.0.0.1` only — unreachable without WG session
+- Establishes: "you are an authenticated device"
+
+### Layer 2: Bearer Token (Service Identity)
+- nginx injects `Authorization: Bearer <token>` header on proxy
+- OpenClaw validates token on WebSocket connect
+- Establishes: "you are authorized to use this service"
+
+### Future: MAC Address Filtering
+- OpenFlow rules on `ovsbr0` can match source MAC from WG-decrypted frames
+- Provides device-level identity without additional WG complexity
+- Chatbot and user devices identifiable by MAC at the bridge level
+
+## Container Types
+
+### System Containers
+- **Purpose:** Shared infrastructure services (AI gateway, mail, DNS)
+- **Naming:** Descriptive (e.g., `services`)
+- **Identity:** `user.function` config key (e.g., `system-services`)
+- **Socket path:** `/run/services0/<service>.sock`
+- **Example:** `services` container runs OpenClaw, Maddy, NextDNS
+
+### User Containers
+- **Purpose:** Per-user isolated environments created by magic link workflow
+- **Naming:** `user-<sha256(wg_pubkey)[:12]>`
+- **Identity:** `user.wg-pubkey` config key (full WG public key)
+- **Socket path:** `/run/user-sockets/<container-id>/*.sock`
+- **Lifecycle:** Created on magic link auth, destroyed on session expiry
+- **Example:** `user-be7efab0cc2a` (tablet WG key)
+
+## Socket Bridge Pattern
+
+Each service inside a container follows the same pattern:
+
+```
+[container loopback]          [shared mount]              [host]
+service → 127.0.0.1:PORT  →  socat  →  /run/services0/X.sock  →  nginx  →  WG client
+```
+
+### systemd Unit Template
+
+```ini
+[Unit]
+Description=<Service> Unix Socket Bridge
+After=<service>.service
+Requires=<service>.service
+
+[Service]
+ExecStartPre=/bin/rm -f /run/services0/<service>.sock
+ExecStart=/usr/bin/socat UNIX-LISTEN:/run/services0/<service>.sock,fork,mode=666 TCP:127.0.0.1:<PORT>
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
+```
+
+## nginx Routing
+
+All services are path-based under `dashboard.3tched.com`, WG-bound:
+
+| Path | Backend Socket | Service |
+|------|---------------|---------|
+| `/gateway/` | `/run/services0/gateway.sock` | OpenClaw AI gateway |
+| `/operation.*/` | `10.88.88.1:50051` (gRPC) | op-dbus control plane |
+| `/grpc.health.v1.Health/Check` | `10.88.88.1:50051` (gRPC) | Health check |
+| `/` (default) | `10.149.181.130` (legacy) | Dashboard UI |
+
+nginx handles:
+- TLS termination (Let's Encrypt wildcard cert for `3tched.com`)
+- WebSocket upgrade (`Upgrade` / `Connection` headers)
+- Bearer token injection
+- WG-only binding (`listen 10.0.0.1:443`)
+
+## OVS Bridge Role
+
+`ovsbr0` handles privacy/transport layer switching, NOT container service access:
+
+- **wgcf ↔ priv_xray:** Privacy proxy egress
+- **wgcf ↔ priv_warp:** WARP traffic routing
+- **ovsbr0-mgmt:** Management plane (10.200.0.1/24)
+- **grpc-bridge:** gRPC control plane (10.200.0.2/24)
+- **ovsbr0-sock:** System container anchor port (no L2 traffic to containers — socket path bypasses this)
+
+Container service access bypasses OVS entirely via Unix sockets. The bridge exists for the privacy fabric and external traffic switching.
+
+## Security Properties
+
+1. **No TCP surface:** Containers have no IP, no ports, no veth. `nmap` sees nothing.
+2. **No subdomain leakage:** No `openclaw.3tched.com` in DNS. Service is at `/gateway/`.
+3. **WG gate:** nginx only listens on `10.0.0.1` — must be a WG peer to reach it.
+4. **Token gate:** Even with WG access, must have valid bearer token for service auth.
+5. **Socket permissions:** Unix socket files are filesystem-permission-controlled (`mode=666` within container mount, host-level directory permissions restrict access).
+6. **Process isolation:** Each container is a separate namespace. Compromise of one container does not expose socket files of another.

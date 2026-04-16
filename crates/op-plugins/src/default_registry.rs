@@ -51,6 +51,7 @@ fn default_auto_load() -> Vec<String> {
         "mcp".to_string(),
         "config".to_string(),
         "dinit".to_string(),
+        "hardware".to_string(),
         "incus".to_string(),
         "net".to_string(),
         "openflow".to_string(),
@@ -58,6 +59,8 @@ fn default_auto_load() -> Vec<String> {
         "privacy_router".to_string(),
         "privacy_routes".to_string(),
         "rtnetlink".to_string(),
+        "software".to_string(),
+        "users".to_string(),
     ]
 }
 
@@ -72,9 +75,9 @@ impl Default for PluginRegistryConfig {
 
 /// Default plugin loader.
 ///
-/// This is intentionally not the authoritative plugin catalog. Its job is to
-/// instantiate the built-in plugin implementations so the real catalog path can
-/// persist their canonical plugin documents during registration.
+/// This is intentionally only a plugin loader. Its job is to instantiate the
+/// built-in plugin implementations so the catalog path can index their schema
+/// documents during registration.
 pub struct DefaultPluginRegistry {
     config: PluginRegistryConfig,
     state_store: Arc<dyn StateStore>,
@@ -169,7 +172,11 @@ impl DefaultPluginRegistry {
             "web_ui" => Arc::new(WebUiPlugin::new()),
             _ => {
                 tracing::info!("Automatically creating missing plugin: {}", name);
-                Arc::new(crate::auto_create::AutoPlugin::new(name, "auto", simd_json::json!({})))
+                Arc::new(crate::auto_create::AutoPlugin::new(
+                    name,
+                    "auto",
+                    simd_json::json!({}),
+                ))
             }
         };
 

@@ -1,6 +1,8 @@
 # /etc/dinit.d/wg-quick-all
 # Managed by deploy.sh — do not edit manually
-# Brings up the wgcf WireGuard/WARP tunnel before OVS attach-ports runs.
+# Brings up WireGuard tunnels before OVS attach-ports runs.
+#   wgcf  — Cloudflare WARP egress tunnel (bridges into OVS)
+#   wg0   — host VPN server for tablet/laptop/services-container clients
 type = scripted
-command = /usr/bin/wg-quick up wgcf
-stop-command = /usr/bin/wg-quick down wgcf
+command = /usr/local/sbin/wg-quick-all-up.sh
+stop-command = /usr/local/sbin/wg-quick-all-down.sh

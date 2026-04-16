@@ -40,7 +40,7 @@ The shared catalog indexes it so all projections read the same contract.
 
 ### Acceptance Criteria
 
-1. WHEN `mutation_footprint` registers at startup THEN it persists a `PluginCatalogDocument`
+1. WHEN `mutation_footprint` registers at startup THEN it indexes a `PluginCatalogDocument`
    containing a full `PluginSchema` with these fields:
    - `footprint_id` — UUID v4, immutable, semantic
    - `plugin_source` — originating plugin name, semantic
@@ -229,7 +229,7 @@ Before the plugin is considered complete:
 - [ ] `actor` and `diff_summary` have explicit `privacy_index.redaction.rules` entries (path, action=drop/mask)
       because their names do not match the auto-PII detection patterns.
 - [ ] The plugin is added to `DefaultPluginRegistry` and listed in `default_auto_load`.
-- [ ] `PluginCatalog::register` persists the `PluginCatalogDocument` and indexes the schema into
+- [ ] `PluginCatalog::register` indexes the `PluginCatalogDocument` and schema into
       `SchemaCatalog` on startup.
 - [ ] `op-state` intercepts `apply_state` and sends `MutationEvent` through a shared async channel
       to the mutation_footprint worker.

@@ -1,20 +1,20 @@
 # Plugin System Overview
 
-This document is the official reference for the plugin creation/registration lifecycle, the schema catalog, and the control plane workflows that consume plugins. It synthesizes the refactor, the blockchain mutation spec, and the chatbot-vector spec into a single authoritative guide.
+This document is the operational reference for the plugin creation/registration lifecycle, the schema catalog, and the control plane workflows that consume plugins. It synthesizes the refactor, the blockchain mutation spec, and the chatbot-vector spec into a single guide.
 
 ## 1. Plugin-as-schema Rule
 - Every plugin implements `op_state::plugin::StatePlugin` and provides `fn schema(&self) -> Option<PluginSchema>`.
-- The schema defines all authoritative fields, privacy tags, semantic tags, read-only paths, and metadata.
+- The schema defines all fields, privacy tags, semantic tags, read-only paths, and metadata.
 - No runtime consumer invents a schema; everything resolves through the schema catalog.
 
 ## 2. Canonical Workflow
 1. Plugin instantiation (per `DefaultPluginRegistry` or manual registration).
-2. `PluginCatalog::register` builds the canonical `PluginSchema` via `StatePlugin::schema()` or compatibility entries, persists the `PluginCatalogDocument` in `op_dbus_model::SqlitePluginCatalog`, and indexes the shared `SchemaCatalog`.
-3. Startup hydrates the in-memory catalog from persisted documents via `plugin_catalog.hydrate_catalog_from_store()` before registering new plugins.
+2. `PluginCatalog::register` builds the canonical `PluginSchema` via `StatePlugin::schema()` or compatibility entries, copies the `PluginCatalogDocument` into the schema library when that catalog is enabled, and indexes the shared `SchemaCatalog`.
+3. Startup can seed the in-memory catalog from schema-library documents via `plugin_catalog.hydrate_catalog_from_store()` before registering new plugins.
 4. Consumers access schema copies through `SchemaCatalog::get_copies(plugin_name)` for validation, rendering, footprint projection, vectorization, and compatibility exports.
 
 ## 3. Mutation-footprint Integration
-- The `mutation_footprint` plugin (see `.kiro/specs/blockchain-mutation-footprint`) owns the audit schema fields, persistence logic, blockchain writes, and optional vectors.
+- The `mutation_footprint` plugin (see `.kiro/specs/blockchain-mutation-footprint`) owns the audit schema fields, blockchain writes, and optional vectors.
 - Mutation producers send events to this plugin, which uses the catalog to resolve hashes/chain linkage, writes to `StreamingBlockchain`, and emits tracing spans.
 
 ## 4. Control-plane chatbot vectors

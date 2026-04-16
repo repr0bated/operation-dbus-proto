@@ -35,16 +35,16 @@ Always keep these helpers consistent with the plugin schema; do not add runtime 
 2. During registration, `PluginCatalog::register` will:
    - Build your schema via `StatePlugin::schema()` (or built-in compatibility entry if the schema already exists in
      `SchemaCatalog`).
-   - Persist the canonical `PluginCatalogDocument` to `op_dbus_model::SqlitePluginCatalog`.
+   - Copy the canonical `PluginCatalogDocument` into the schema library when that catalog is enabled.
    - Index the schema into the shared `SchemaCatalog` so validation, JSON rendering, and vectorization read the same
      fields.
    - Export D-Bus/gRPC projections derived from that catalog entry.
-3. Ensure the schema document contains metadata such as `service_name`, `storage_path`, and `source`.
+3. Keep runtime projection details such as service names and storage paths on the live plugin record, not in the schema-library document.
 
 ## 4. Include the catalog in the workflow
 
-1. The canonical document produced by `PluginCatalog::register` is persisted to `op_dbus_model::SqlitePluginCatalog`.
-2. At startup the catalog store hydrates the shared `SchemaCatalog` via `plugin_catalog.hydrate_catalog_from_store()`, and each registration updates that same catalog entry.
+1. The canonical document produced by `PluginCatalog::register` can be copied into the schema library.
+2. At startup the catalog store can seed the shared `SchemaCatalog` via `plugin_catalog.hydrate_catalog_from_store()`, and each registration updates that same catalog entry.
 3. Consumers such as validators, vector workers, and renderers resolve schema/footprint data through `SchemaCatalog::get_copies(plugin_name)` so they never invent a parallel schema.
 
 ## 5. Keep downstream flows schema-driven
@@ -62,4 +62,4 @@ Always keep these helpers consistent with the plugin schema; do not add runtime 
 
 - `cargo check -p op-plugins`
 - `cargo check -p op-state` (if your plugin interacts with state manager)
-- Ensure the schema catalog contains the new entry (`PluginCatalog::register` logs the persistence step). 
+- Ensure the schema catalog contains the new entry (`PluginCatalog::register` logs the schema-library indexing step). 

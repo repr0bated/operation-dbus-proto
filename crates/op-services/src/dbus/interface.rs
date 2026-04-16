@@ -100,6 +100,7 @@ pub async fn run_dbus_server(manager: Arc<ServiceManager>) -> anyhow::Result<()>
 
     // Register socket endpoints (gateway.sock, future mail.sock, etc.)
     super::socket_endpoint::register_socket_endpoints(&conn).await?;
+    super::infrastructure::register_infrastructure_objects(&conn).await?;
 
     conn.request_name("org.opdbus.services").await?;
 

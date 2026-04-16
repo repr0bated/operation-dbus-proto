@@ -3,8 +3,8 @@
 //! Architectural intent:
 //! - Plugin code is the origin of schema truth.
 //! - Registration materializes one canonical plugin document.
-//! - That document is persisted to the schema catalog store first.
-//! - The in-memory catalog here is only a local reference index.
+//! - That document can be copied into the schema-library catalog.
+//! - The in-memory catalog here is only a runtime reference index.
 //!
 //! Compatibility note:
 //! this file still exports `PluginRegistry` because much of the workspace still
@@ -25,8 +25,7 @@ use tracing::{info, warn};
 
 /// Live runtime record for a registered plugin instance.
 ///
-/// This is not the persisted source of truth. The canonical persisted form is
-/// the catalog document written during registration.
+/// This is a live runtime record for a registered plugin instance.
 pub struct PluginRecord {
     pub name: String,
     pub plugin: Arc<dyn StatePlugin>,
@@ -50,9 +49,8 @@ pub type PluginCatalog = PluginRegistry;
 impl PluginRegistry {
     /// Create a new plugin catalog entry point.
     ///
-    /// Authority still originates in the plugin and the persisted canonical
-    /// plugin document it writes. This type is the local runtime catalog over
-    /// that persisted truth.
+    /// Plugin code originates the schema. This type is the local runtime
+    /// catalog over plugin instances and their schema-library entries.
     pub fn new(base_path: impl AsRef<Path>) -> Self {
         Self::with_schema_catalog(base_path, Arc::new(RwLock::new(SchemaCatalog::empty())))
     }
@@ -75,7 +73,7 @@ impl PluginRegistry {
     }
 
     /// Preferred constructor: create a new plugin catalog backed by a shared
-    /// schema catalog and an optional persisted plugin-catalog store.
+    /// schema catalog and an optional schema-library catalog store.
     pub fn with_schema_catalog_and_store(
         base_path: impl AsRef<Path>,
         schema_catalog: Arc<RwLock<SchemaCatalog>>,
@@ -86,9 +84,8 @@ impl PluginRegistry {
 
     /// Compatibility constructor for older code that still says `registry`.
     ///
-    /// The persisted catalog store is where the canonical plugin document
-    /// lives. The in-memory schema catalog remains an index/projection layer
-    /// over that data for fast local resolution.
+    /// The catalog store is a schema library. The in-memory schema catalog is
+    /// the fast lookup layer used by validation/rendering paths.
     pub fn with_schema_registry_and_catalog(
         base_path: impl AsRef<Path>,
         schema_catalog: Arc<RwLock<SchemaCatalog>>,
@@ -102,8 +99,7 @@ impl PluginRegistry {
         }
     }
 
-    /// Compatibility accessor. Architecturally this is the in-memory schema
-    /// catalog, not an origin-authority registry.
+    /// Compatibility accessor. This is the in-memory schema catalog.
     pub fn schema_registry(&self) -> Arc<RwLock<SchemaRegistry>> {
         self.schema_catalog.clone()
     }
@@ -137,15 +133,14 @@ impl PluginRegistry {
         };
 
         // Registration order matters:
-        // 1. Build the canonical plugin document from plugin-owned schema.
-        // 2. Persist that document into the catalog store.
+        // 1. Build the plugin document from plugin-owned schema.
+        // 2. Copy that document into the schema-library catalog when enabled.
         // 3. Update the in-memory schema catalog for local reference lookups.
-        let document =
-            build_catalog_document(plugin.as_ref(), &schema, &dbus_path_str, &storage_path);
+        let document = build_catalog_document(&schema);
 
         if let Some(catalog_store) = &self.schema_catalog_store {
             catalog_store.upsert_document(&document).await?;
-            info!("Plugin {} persisted to schema catalog store", name);
+            info!("Plugin {} indexed in schema library", name);
         }
 
         self.schema_catalog.write().register(schema.clone());
@@ -175,27 +170,34 @@ impl PluginRegistry {
     /// Get a plugin record by name
     pub async fn get_record(&self, name: &str) -> Option<Arc<PluginRecord>> {
         let plugins = self.plugins.read().await;
-        plugins.get(name).map(|r| Arc::new(PluginRecord {
-            name: r.name.clone(),
-            plugin: r.plugin.clone(),
-            storage_path: r.storage_path.clone(),
-            change_count: r.change_count,
-            schema: r.schema.clone(),
-            dbus_path: r.dbus_path.clone(),
-        }))
+        plugins.get(name).map(|r| {
+            Arc::new(PluginRecord {
+                name: r.name.clone(),
+                plugin: r.plugin.clone(),
+                storage_path: r.storage_path.clone(),
+                change_count: r.change_count,
+                schema: r.schema.clone(),
+                dbus_path: r.dbus_path.clone(),
+            })
+        })
     }
 
     /// List all registered plugin records
     pub async fn list_all(&self) -> Vec<Arc<PluginRecord>> {
         let plugins = self.plugins.read().await;
-        plugins.values().map(|r| Arc::new(PluginRecord {
-            name: r.name.clone(),
-            plugin: r.plugin.clone(),
-            storage_path: r.storage_path.clone(),
-            change_count: r.change_count,
-            schema: r.schema.clone(),
-            dbus_path: r.dbus_path.clone(),
-        })).collect()
+        plugins
+            .values()
+            .map(|r| {
+                Arc::new(PluginRecord {
+                    name: r.name.clone(),
+                    plugin: r.plugin.clone(),
+                    storage_path: r.storage_path.clone(),
+                    change_count: r.change_count,
+                    schema: r.schema.clone(),
+                    dbus_path: r.dbus_path.clone(),
+                })
+            })
+            .collect()
     }
 
     async fn create_plugin_subvolume(&self, name: &str) -> Result<PathBuf> {
@@ -227,7 +229,7 @@ impl PluginRegistry {
         Ok(path)
     }
 
-    /// Hydrate the in-memory catalog from any persisted plugin documents.
+    /// Seed the in-memory catalog from schema-library plugin documents.
     pub async fn hydrate_catalog_from_store(&self) -> Result<()> {
         let store = match &self.schema_catalog_store {
             Some(store) => store,
@@ -243,27 +245,11 @@ impl PluginRegistry {
     }
 }
 
-fn build_catalog_document(
-    plugin: &dyn StatePlugin,
-    schema: &PluginSchema,
-    dbus_path: &str,
-    storage_path: &Path,
-) -> CatalogDocument {
-    let metadata = plugin.metadata();
+fn build_catalog_document(schema: &PluginSchema) -> CatalogDocument {
     CatalogDocument {
         schema: schema.clone(),
-        dbus_path: dbus_path.to_string(),
-        service_name: default_service_name(schema.name.as_str(), &metadata.dbus_services),
-        storage_path: storage_path.to_string_lossy().to_string(),
         source: "plugin".to_string(),
     }
-}
-
-fn default_service_name(name: &str, dbus_services: &[String]) -> String {
-    dbus_services
-        .first()
-        .cloned()
-        .unwrap_or_else(|| format!("org.opdbus.{}.v1", name.replace('-', "_")))
 }
 
 fn default_plugin_category(name: &str) -> &'static str {

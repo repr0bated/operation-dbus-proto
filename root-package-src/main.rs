@@ -59,12 +59,6 @@ use op_web::{routes, AppState};
 #[cfg(feature = "grpc")]
 static GLOBAL_SCHEMA_ENGINE: OnceLock<Arc<SchemaEngine>> = OnceLock::new();
 
-#[cfg(feature = "dev-antigravity")]
-use op_dbus::antigravity::{
-    transport::{TransportConfig, TransportType, TunnelTransport},
-    AntigravityConfig, AntigravityTunnel,
-};
-
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 #[derive(Debug, Clone)]
@@ -77,12 +71,6 @@ struct Config {
     web_host: String,
     web_port: u16,
     listen: String,
-    #[cfg(feature = "dev-antigravity")]
-    enable_antigravity: bool,
-    #[cfg(feature = "dev-antigravity")]
-    antigravity_listen: String,
-    #[cfg(feature = "dev-antigravity")]
-    antigravity_transport: String,
 }
 
 fn start_privacy_router_bootstrap(state_manager: Arc<op_state::manager::StateManager>) {
@@ -198,16 +186,6 @@ impl Default for Config {
                 .and_then(|p| p.parse().ok())
                 .unwrap_or(constants::WEB_DEFAULT_PORT),
             listen: std::env::var("OP_DBUS_LISTEN").unwrap_or_else(|_| "none".to_string()),
-            #[cfg(feature = "dev-antigravity")]
-            enable_antigravity: std::env::var("OP_DBUS_ENABLE_ANTIGRAVITY")
-                .map(|v| v == "1" || v.to_lowercase() == "true")
-                .unwrap_or(false),
-            #[cfg(feature = "dev-antigravity")]
-            antigravity_listen: std::env::var("OP_DBUS_ANTIGRAVITY_LISTEN")
-                .unwrap_or_else(|_| format!("127.0.0.1:{}", constants::ANTIGRAVITY_DEFAULT_PORT)),
-            #[cfg(feature = "dev-antigravity")]
-            antigravity_transport: std::env::var("OP_DBUS_ANTIGRAVITY_TRANSPORT")
-                .unwrap_or_else(|_| "tcp".to_string()),
         }
     }
 }
@@ -311,14 +289,6 @@ async fn main() -> Result<()> {
     tracing::info!("Authoritative Stores: OVSDB + NonNet (Direct RCP)");
     tracing::info!("Cache: {}", config.cache_dir);
     tracing::info!("Web: {}:{}", config.web_host, config.web_port);
-
-    #[cfg(feature = "dev-antigravity")]
-    if config.enable_antigravity {
-        tracing::warn!("============================================");
-        tracing::warn!("DEVELOPMENT BUILD: Antigravity tunnel enabled");
-        tracing::warn!("This feature is REMOVED in production builds");
-        tracing::warn!("============================================");
-    }
 
     // Initialize authoritative RCP stores
     let authoritative_ovsdb = Arc::new(op_network::ovsdb::OvsdbClient::new());
@@ -555,57 +525,6 @@ async fn main() -> Result<()> {
         None
     };
 
-    // Start Antigravity tunnel if enabled (DEVELOPMENT ONLY)
-    #[cfg(feature = "dev-antigravity")]
-    let _antigravity_handle = if config.enable_antigravity {
-        let transport_type = match config.antigravity_transport.to_lowercase().as_str() {
-            "stdio" => TransportType::Stdio,
-            "tcp" => TransportType::Tcp,
-            "websocket" | "ws" => TransportType::WebSocket,
-            _ => TransportType::Tcp,
-        };
-
-        let antigravity_config = AntigravityConfig {
-            enabled: true,
-            transport: TransportConfig {
-                transport_type,
-                listen_addr: config.antigravity_listen.clone(),
-                tls: false,
-            },
-            session_timeout_secs: constants::ANTIGRAVITY_SESSION_TIMEOUT_SECS,
-            track_billing: true,
-            allowed_ides: vec![],
-            max_sessions: 100,
-        };
-
-        let tunnel = Arc::new(AntigravityTunnel::new(
-            antigravity_config,
-            mcp_compact.clone(),
-            orchestrator.clone(),
-        ));
-
-        let transport = TunnelTransport::new(TransportConfig {
-            transport_type,
-            listen_addr: config.antigravity_listen.clone(),
-            tls: false,
-        });
-
-        let tunnel_clone = tunnel.clone();
-        let handle = tokio::spawn(async move {
-            if let Err(e) = transport.start(tunnel_clone).await {
-                tracing::error!("Antigravity tunnel error: {}", e);
-            }
-        });
-
-        tracing::info!(
-            "Antigravity tunnel started at {}",
-            config.antigravity_listen
-        );
-        Some(handle)
-    } else {
-        None
-    };
-
     // Start web server if enabled
     if config.enable_web {
         tracing::info!(
@@ -653,6 +572,9 @@ async fn main() -> Result<()> {
     {
         let addr =
             std::env::var("OP_DBUS_GRPC_ADDR").unwrap_or_else(|_| "0.0.0.0:50051".to_string());
+        let addr = addr
+            .trim_start_matches("https://")
+            .trim_start_matches("http://");
         let socket_addr: std::net::SocketAddr = addr.parse().map_err(|e| {
             op_dbus::error::OpDbusError::ConfigError(format!("Invalid OP_DBUS_GRPC_ADDR: {}", e))
         })?;
@@ -678,6 +600,8 @@ async fn main() -> Result<()> {
                 .unwrap();
 
             if let Err(e) = tonic::transport::Server::builder()
+                .accept_http1(true)
+                .layer(tonic_web::GrpcWebLayer::new())
                 .add_service(reflection_service)
                 .add_service(StateSyncServer::new(op_grpc_server.clone()))
                 .add_service(PluginServiceServer::new(op_grpc_server.clone()))

@@ -51,6 +51,58 @@
 
 ---
 
+### [TODO] Projection-First State Control
+- [ ] **Architectural vocabulary reset:**
+    - [ ] Replace stale `desired state` / drift-correction language in active design docs with projection-first authority language.
+    - [ ] Define `current authoritative state`, `constructed state`, `revision`, `snapshot`, `branch transition`, and `promote to current`.
+    - [ ] Document explicitly that the live `org.opdbus.v1` tree is owned by `DbusMirror`, not by `DbusProjection`.
+- [ ] **Legacy path inventory:**
+    - [ ] Identify every path still using `org.opdbus.StateManager` and classify it as legacy, transitional, or still required.
+    - [ ] Reconcile `TODO.md`, `docs/operations/dbus-projection-object-map.md`, and older architecture docs so they describe the same control model.
+    - [ ] Update docs that still imply `StateManager` is the primary runtime authority.
+- [ ] **Constructed-state branch control:**
+    - [ ] Define the control object for whole-branch operations.
+    - [ ] Pick naming for the control object:
+        `ConstructedStateController`, `BranchRevisionController`, or `StateComposer`.
+    - [ ] Define branch-scoped operations for:
+        snapshot, list revisions, load revision, compose branch state, preview diff, commit/promote.
+    - [ ] Support whole-subtree operations for business/logistical scopes such as departments, document classes, and plugin-owned object families.
+- [ ] **Branch selector model:**
+    - [ ] Define how branch selection works:
+        path prefix, plugin, object type, tags, and business grouping keys.
+    - [ ] Define mixed-branch selection rules when a branch spans NonNet-backed and OVSDB-backed objects.
+    - [ ] Define whether selectors operate on D-Bus path hierarchy only or also on schema metadata tags.
+- [ ] **Revision / snapshot backing model:**
+    - [ ] Decide where branch revisions live:
+        `EventChain`, `StreamingBlockchain`, DB-backed snapshots, or hybrid.
+    - [ ] Define how a prior authoritative branch state is reconstructed.
+    - [ ] Define whether revisions are full subtree snapshots, deltas, or composable fragments.
+- [ ] **Commit model into the live projection tree:**
+    - [ ] Define how a constructed branch state becomes the new current authoritative state.
+    - [ ] Define backend-specific commit paths for NonNet-backed branches.
+    - [ ] Define backend-specific commit paths for OVSDB-backed branches.
+    - [ ] Define atomicity and ordering rules when a constructed branch spans multiple authoritative backends.
+- [ ] **Preview and audit semantics:**
+    - [ ] Add dry-run/preview for branch transitions.
+    - [ ] Show adds, removals, property mutations, and incompatible merges before commit.
+    - [ ] Record who constructed the branch state, which revisions were used, and which subtree was promoted.
+    - [ ] Record resulting event hashes / commit references in the audit layer.
+- [ ] **UI / operator workflow for branch control:**
+    - [ ] Add UI flow for:
+        select branch, browse revisions, compose candidate, preview diff, commit.
+    - [ ] Make branch rollback / promotion a first-class operation in `op-web`.
+    - [ ] Ensure branch-level actions are represented in a schema-driven way rather than as one-off hardcoded screens.
+- [ ] **Triggers beyond manual clicks:**
+    - [ ] Support workflow/orchestration-triggered branch transitions.
+    - [ ] Support scheduled transitions and reactive rollback triggers.
+    - [ ] Support policy-driven branch promotion/rollback actions.
+- [ ] **Implementation path:**
+    - [ ] Prototype branch control for a NonNet-only subtree first.
+    - [ ] Add tests for whole-branch rollback, partial branch composition, preview-only mode, and commit audit trail.
+    - [ ] After NonNet works, extend the model to mixed NonNet + OVSDB branches.
+
+---
+
 ### [BACKLOG] Long-term
 - [ ] Migration of legacy shell scripts to native Rust tools.
 - [ ] Hardened security policy for D-Bus object access (polkit integration).

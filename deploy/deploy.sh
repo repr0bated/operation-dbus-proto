@@ -21,10 +21,11 @@ DEPLOY_DIR="${PROJECT_ROOT}/deploy"
 
 # App service components: "crate_name:binary_name:service_name"
 SERVICES=(
-    "op-dbus:op-dbus:op-dbus"       # main control-plane binary (root crate)
-    "op-web:op-web-server:op-web"   # HTTP/WS server
+    "op-dbus:op-dbus:op-dbus"                           # main control-plane binary (root crate)
+    "op-web:op-web-server:op-web"                       # HTTP/WS server
     "op-services:op-services:op-services"
     "op-chat:op-chat:op-chat"
+    "op-mcp-proxy:op-mcp-proxy:code-assist-gateway"     # Code Assist HTTP/HTTPS gateway
 )
 
 # ---------------------------------------------------------------------------
@@ -344,6 +345,16 @@ install_system_files() {
     install -m 0644 "${DEPLOY_DIR}/dinit/netplan-apply"      "${SERVICE_DIR}/netplan-apply"
     install -m 0644 "${DEPLOY_DIR}/dinit/ovs-attach-ports"   "${SERVICE_DIR}/ovs-attach-ports"
     install -m 0644 "${DEPLOY_DIR}/dinit/xray-client"        "${SERVICE_DIR}/xray-client"
+    install -m 0644 "${DEPLOY_DIR}/dinit/code-assist-gateway" "${SERVICE_DIR}/code-assist-gateway"
+
+    # --- Code Assist gateway env ---
+    install -d /etc/op
+    if [[ ! -f /etc/op/code-assist-gateway.env ]]; then
+        install -m 0640 "${DEPLOY_DIR}/dinit/code-assist-gateway.env" /etc/op/code-assist-gateway.env
+        log "Installed /etc/op/code-assist-gateway.env"
+    else
+        log "/etc/op/code-assist-gateway.env already present — not overwriting"
+    fi
 
     # --- Dinit service definitions (app chain — installed now, started after network verify) ---
     install -m 0644 "${DEPLOY_DIR}/dinit/op-session-bus"     "${SERVICE_DIR}/op-session-bus"
@@ -352,6 +363,8 @@ install_system_files() {
     # --- Dinit scripts ---
     install -m 0755 "${DEPLOY_DIR}/dinit/scripts/services0-sockets.sh"   "${SERVICE_DIR}/scripts/services0-sockets.sh"
     install -m 0755 "${DEPLOY_DIR}/dinit/scripts/ovs-attach-ports.sh"    "${SERVICE_DIR}/scripts/ovs-attach-ports.sh"
+    install -m 0755 "${DEPLOY_DIR}/dinit/scripts/wg-quick-all-up.sh"     /usr/local/sbin/wg-quick-all-up.sh
+    install -m 0755 "${DEPLOY_DIR}/dinit/scripts/wg-quick-all-down.sh"   /usr/local/sbin/wg-quick-all-down.sh
     install -m 0755 "${DEPLOY_DIR}/dinit/op-ovs-services-start.sh"       "${SERVICE_DIR}/scripts/op-ovs-services-start.sh"
     install -m 0755 "${DEPLOY_DIR}/dinit/op-ovsdb-seed.sh"               "${SERVICE_DIR}/scripts/op-ovsdb-seed.sh"
     install -m 0755 "${DEPLOY_DIR}/dinit/op-ovsdb-bridge-start.sh"       "${SERVICE_DIR}/scripts/op-ovsdb-bridge-start.sh"
@@ -436,6 +449,7 @@ install_system_files() {
     enable_boot xray-client
     enable_boot op-session-bus
     enable_boot op-ovsdb-bridge
+    enable_boot code-assist-gateway
 
     log "System file artifacts installed."
 }
@@ -485,8 +499,13 @@ build_embedded_ui() {
     build_user=$(path_owner_user "$PROJECT_ROOT" 2>/dev/null || echo "")
 
     if [[ "$EUID" -eq 0 && -n "$build_user" && "$build_user" != "root" ]]; then
-        su -l "$build_user" -c \
-            "export PATH=\"\$HOME/.bun/bin:\$PATH\" && \
+        # Use sudo -u (not su -l) so the login shell doesn't clobber bun's
+        # native module resolution. su -l sources login scripts that can
+        # alter NODE_PATH / library paths and break @swc/core native binding.
+        local bun_home
+        bun_home="$(getent passwd "$build_user" | cut -d: -f6)"
+        sudo -u "$build_user" bash -c \
+            "export PATH=\"${bun_home}/.bun/bin:\$PATH\" && \
              cd '${ui_dir}' && \
              if command -v bun >/dev/null 2>&1; then \
                  bun install && bun run build; \
@@ -589,6 +608,17 @@ smooth-recovery = true
 depends-on = op-web
 EOF
             ;;
+        code-assist-gateway)
+            cat > "$file" <<EOF
+type = process
+command = ${INSTALL_DIR}/op-mcp-proxy
+env-file = /etc/op/code-assist-gateway.env
+logfile = /var/log/code-assist-gateway.log
+smooth-recovery = true
+restart = true
+depends-on = ovs-attach-ports
+EOF
+            ;;
         *)
             cat > "$file" <<EOF
 type = process
@@ -676,3 +706,14 @@ for entry in "${SERVICES[@]}"; do
 done
 
 log "Deployment complete."
+
+# ---------------------------------------------------------------------------
+# ENVIRONMENT DETAILS (2026-04-15T02:25:03+00:00)
+# ---------------------------------------------------------------------------
+# Socket Migration Complete:
+# - services container: loopback-only (lan0-service = lo renamed, no veth)
+# - ovsbr0 ports: grpc-bridge, wgcf, priv_warp, priv_xray, ovsbr0-sock anchor
+# - OpenFlow: DNS pri 200 udp:53 → ovsbr0-sock → lan0-service nextdns
+# - Uplink: ovsbr0 10.88.88.1/24 NAT → ens3 (148.113.204.83)
+# - Persistence: raw.lxc post-start hook for lan0-service dummy
+# Verify: incus exec services -- ping 1.1.1.1

@@ -22,6 +22,7 @@ op-plugins = { path = "../op-plugins" }
 
 # gRPC
 tonic = "0.12"
+tonic-web = "0.12"
 prost = "0.13"
 prost-types = "0.13"
 

@@ -9,12 +9,12 @@ without re-explaining the architecture.
   schema, footprint policy, privacy instructions, tags, and metadata. Everything downstream reads
   through that document.
 - `op_plugins::PluginCatalog`/`PluginRegistry` is the runtime catalog/cache. It **does not create new
-  schema**; it hydrates from the persisted `op_dbus_model::SqlitePluginCatalog` (a.k.a. the schema
-  catalog store) and exposes `SchemaCatalog`/`SchemaRegistry` as a read-only index.
+  schema**; it can seed from the schema-library catalog and exposes `SchemaCatalog`/`SchemaRegistry`
+  as a read-only index.
 - `SchemaCatalog` is the shared lookup/composition layer for validation, JSON rendering, vectorization,
   and compatibility exports. Rename callers to the catalog terminology, but keep compatibility aliases
   for the short term.
-- Registration order: plugin code builds schema → canonical document → persist to catalog store → update
+- Registration order: plugin code builds schema → canonical document → schema-library index → update
   in-memory catalog → export D-Bus/grpc projections.
 
 ## Operational Notes
@@ -25,8 +25,8 @@ without re-explaining the architecture.
 - Keep the QA list minimal: `cargo check -p op-plugins`, `op-state(-store)`, `op-grpc-bridge`, `op-dbus-model`.
 
 ## To Do Next Time
-1. Finish rehydrating startup so the catalog seeds from persisted documents before calling
-   `PluginRegistry::register` (makes persisted authority the ground floor).
+1. Finish startup seeding so the catalog can reuse schema-library documents before calling
+   `PluginRegistry::register`.
 2. Remove any code still inferring schema by sampling live state (`build_plugin_schema` fallback) once
    all plugins ship explicit `schema()` implementations.
 3. Align the `ctl-plane-chatbot` Kiro spec with this architecture (metadata, reasoning episodes, vectors).

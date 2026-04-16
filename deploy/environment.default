@@ -42,8 +42,11 @@ BASE_URL=https://registration.3tched.com
 OP_TRUSTED_NETWORKS=10.0.0.0/24,10.200.0.0/24
 
 # OpenClaw Gateway Configuration
-# Token for accessing the OpenClaw LLM gateway
-# Must be accessible via WireGuard network (10.0.0.1)
+# OPENCLAW_GATEWAY_TOKEN is injected by nginx for /gateway/.
+# Local host-side services use the Unix socket by default. Set OPENCLAW_BASE_URL
+# only for explicit development TCP access inside the services container.
+OPENCLAW_GATEWAY_TOKEN=your-openclaw-api-token-here
 OPENCLAW_TOKEN=your-openclaw-api-token-here
-OPENCLAW_BASE_URL=http://10.0.0.1:18789
+OPENCLAW_SOCKET_PATH=/run/services0/gateway.sock
+# OPENCLAW_BASE_URL=http://127.0.0.1:18789
 OPENCLAW_DEFAULT_MODEL=openclaw:main

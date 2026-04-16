@@ -7,15 +7,21 @@
 //!
 //! ```bash
 //! OPENCLAW_TOKEN=your-token
-//! OPENCLAW_BASE_URL=http://127.0.0.1:18789  # default
+//! OPENCLAW_SOCKET_PATH=/run/services0/gateway.sock  # default
+//! OPENCLAW_BASE_URL=http://127.0.0.1:18789          # explicit TCP override
 //! ```
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use http_body_util::{BodyExt, Full};
+use hyper::body::Bytes;
+use hyper::Request;
+use hyper_util::rt::TokioIo;
 use reqwest::Client;
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
 use std::time::Duration;
+use tokio::net::UnixStream;
 use tracing::{debug, info, warn};
 
 use crate::provider::{
@@ -23,18 +29,36 @@ use crate::provider::{
     LlmProvider, ModelInfo, ProviderType, TokenUsage, ToolCallInfo,
 };
 
-const DEFAULT_BASE_URL: &str = "http://127.0.0.1:18789";
+const DEFAULT_SOCKET_PATH: &str = "/run/services0/gateway.sock";
 const DEFAULT_MODEL: &str = "openclaw:main";
+
+#[derive(Debug, Clone)]
+enum OpenClawTransport {
+    UnixSocket(String),
+    Tcp(String),
+}
 
 pub struct OpenClawProvider {
     client: Client,
     token: String,
-    base_url: String,
+    transport: OpenClawTransport,
     default_model: String,
 }
 
 impl OpenClawProvider {
     pub fn new(token: String, base_url: Option<String>, default_model: Option<String>) -> Self {
+        let transport = match base_url {
+            Some(base_url) => OpenClawTransport::Tcp(base_url.trim_end_matches('/').to_string()),
+            None => OpenClawTransport::UnixSocket(DEFAULT_SOCKET_PATH.to_string()),
+        };
+        Self::with_transport(token, transport, default_model)
+    }
+
+    fn with_transport(
+        token: String,
+        transport: OpenClawTransport,
+        default_model: Option<String>,
+    ) -> Self {
         let client = Client::builder()
             .timeout(Duration::from_secs(180))
             .build()
@@ -43,27 +67,46 @@ impl OpenClawProvider {
         Self {
             client,
             token,
-            base_url: base_url
-                .unwrap_or_else(|| DEFAULT_BASE_URL.to_string())
-                .trim_end_matches('/')
-                .to_string(),
+            transport,
             default_model: default_model.unwrap_or_else(|| DEFAULT_MODEL.to_string()),
         }
     }
 
+    pub fn new_with_socket(
+        token: String,
+        socket_path: String,
+        default_model: Option<String>,
+    ) -> Self {
+        Self::with_transport(
+            token,
+            OpenClawTransport::UnixSocket(socket_path),
+            default_model,
+        )
+    }
+
     pub fn from_env() -> Result<Self> {
         let token = std::env::var("OPENCLAW_TOKEN").context("OPENCLAW_TOKEN must be set")?;
-        let base_url = std::env::var("OPENCLAW_BASE_URL").ok();
+        let transport = match std::env::var("OPENCLAW_BASE_URL") {
+            Ok(base_url) => OpenClawTransport::Tcp(base_url.trim_end_matches('/').to_string()),
+            Err(_) => OpenClawTransport::UnixSocket(
+                std::env::var("OPENCLAW_SOCKET_PATH")
+                    .unwrap_or_else(|_| DEFAULT_SOCKET_PATH.to_string()),
+            ),
+        };
         let default_model = std::env::var("OPENCLAW_DEFAULT_MODEL").ok();
-        Ok(Self::new(token, base_url, default_model))
+        Ok(Self::with_transport(token, transport, default_model))
     }
 
-    fn models_url(&self) -> String {
-        format!("{}/v1/models", self.base_url)
+    fn models_path(&self) -> &'static str {
+        "/v1/models"
     }
 
-    fn chat_url(&self) -> String {
-        format!("{}/v1/chat/completions", self.base_url)
+    fn chat_path(&self) -> &'static str {
+        "/v1/chat/completions"
+    }
+
+    fn embeddings_path(&self) -> &'static str {
+        "/v1/embeddings"
     }
 
     fn resolve_model(&self, model: &str) -> String {
@@ -78,6 +121,72 @@ impl OpenClawProvider {
         builder
             .header("Authorization", format!("Bearer {}", self.token))
             .header("Content-Type", "application/json")
+    }
+
+    async fn request_text(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<String>,
+    ) -> Result<(u16, String)> {
+        match &self.transport {
+            OpenClawTransport::Tcp(base_url) => {
+                let url = format!("{base_url}{path}");
+                let mut request = match method {
+                    "POST" => self.client.post(&url),
+                    "PUT" => self.client.put(&url),
+                    _ => self.client.get(&url),
+                };
+                request = self.auth_request(request);
+                if let Some(body) = body {
+                    request = request.body(body);
+                }
+
+                let response = request.send().await.context("Failed to query OpenClaw")?;
+                let status = response.status().as_u16();
+                let response_text = response.text().await?;
+                Ok((status, response_text))
+            }
+            OpenClawTransport::UnixSocket(socket_path) => {
+                let stream = UnixStream::connect(socket_path).await.with_context(|| {
+                    format!("Failed to connect to OpenClaw socket {socket_path}")
+                })?;
+                let io = TokioIo::new(stream);
+
+                let (mut sender, conn) = hyper::client::conn::http1::handshake(io).await?;
+                tokio::spawn(async move {
+                    if let Err(err) = conn.await {
+                        debug!("OpenClaw Unix socket connection closed: {}", err);
+                    }
+                });
+
+                let body = body.unwrap_or_default();
+                let mut builder = Request::builder()
+                    .method(method)
+                    .uri(path)
+                    .header("Host", "localhost")
+                    .header("Authorization", format!("Bearer {}", self.token));
+
+                if !body.is_empty() {
+                    builder = builder.header("Content-Type", "application/json");
+                }
+
+                let request = builder.body(Full::new(Bytes::from(body)))?;
+                let response = sender.send_request(request).await?;
+                let status = response.status().as_u16();
+                let response_body = response.into_body().collect().await?.to_bytes();
+                Ok((status, String::from_utf8_lossy(&response_body).into_owned()))
+            }
+        }
+    }
+
+    async fn get_text(&self, path: &str) -> Result<(u16, String)> {
+        self.request_text("GET", path, None).await
+    }
+
+    async fn post_json(&self, path: &str, body: &Value) -> Result<(u16, String)> {
+        let body = simd_json::to_string(body).context("Failed to serialize OpenClaw request")?;
+        self.request_text("POST", path, Some(body)).await
     }
 
     fn fallback_model_info(&self) -> ModelInfo {
@@ -149,16 +258,12 @@ impl LlmProvider for OpenClawProvider {
     }
 
     async fn list_models(&self) -> Result<Vec<ModelInfo>> {
-        let response = self
-            .auth_request(self.client.get(self.models_url()))
-            .send()
+        let (status, response_text) = self
+            .get_text(self.models_path())
             .await
             .context("Failed to query OpenClaw models")?;
 
-        let status = response.status();
-        let response_text = response.text().await?;
-
-        if !status.is_success() {
+        if !(200..300).contains(&status) {
             warn!(
                 "OpenClaw model listing failed ({}), falling back to configured default route",
                 status
@@ -209,7 +314,9 @@ impl LlmProvider for OpenClawProvider {
 
     async fn chat_with_request(&self, model: &str, request: ChatRequest) -> Result<ChatResponse> {
         let model = self.resolve_model(model);
-        let url = self.chat_url();
+        info!("OpenClaw routing: requested={:?} resolved={} msgs={}",
+            if model == self.default_model { "auto" } else { model.as_str() },
+            model, request.messages.len());
 
         // Convert messages to OpenAI format
         let messages: Vec<Value> = request
@@ -278,15 +385,10 @@ impl LlmProvider for OpenClawProvider {
             simd_json::to_string_pretty(&body).unwrap_or_default()
         );
 
-        let response = self
-            .auth_request(self.client.post(&url))
-            .json(&body)
-            .send()
+        let (status, response_text) = self
+            .post_json(self.chat_path(), &body)
             .await
             .context("Failed to send request to OpenClaw")?;
-
-        let status = response.status();
-        let response_text = response.text().await?;
 
         debug!(
             "OpenClaw response ({}): {}",
@@ -294,7 +396,7 @@ impl LlmProvider for OpenClawProvider {
             &response_text[..response_text.len().min(500)]
         );
 
-        if !status.is_success() {
+        if !(200..300).contains(&status) {
             return Err(anyhow::anyhow!(
                 "OpenClaw API error ({}): {}",
                 status,
@@ -411,10 +513,6 @@ impl LlmProvider for OpenClawProvider {
 // ---------------------------------------------------------------------------
 
 impl OpenClawProvider {
-    fn embeddings_url(&self) -> String {
-        format!("{}/v1/embeddings", self.base_url)
-    }
-
     fn resolve_embedding_model(&self) -> String {
         std::env::var("OPENCLAW_EMBEDDING_MODEL")
             .unwrap_or_else(|_| "openclaw:embedder-voyage4lite".to_string())
@@ -441,7 +539,6 @@ impl EmbeddingProvider for OpenClawProvider {
         intent: EmbeddingIntent,
     ) -> Result<Vec<EmbeddingResult>> {
         let model = self.resolve_embedding_model();
-        let url = self.embeddings_url();
 
         // Map intent to Voyage-compatible input_type
         let input_type = match intent {
@@ -462,17 +559,12 @@ impl EmbeddingProvider for OpenClawProvider {
             input_type
         );
 
-        let response = self
-            .auth_request(self.client.post(&url))
-            .json(&body)
-            .send()
+        let (status, response_text) = self
+            .post_json(self.embeddings_path(), &body)
             .await
             .context("Failed to send embedding request to OpenClaw")?;
 
-        let status = response.status();
-        let response_text = response.text().await?;
-
-        if !status.is_success() {
+        if !(200..300).contains(&status) {
             return Err(anyhow::anyhow!(
                 "OpenClaw embedding API error ({}): {}",
                 status,
@@ -539,6 +631,7 @@ mod tests {
     use std::net::TcpListener;
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     fn spawn_test_server(
         response_status: &str,
@@ -660,6 +753,65 @@ mod tests {
         assert_eq!(models.len(), 1);
         assert_eq!(models[0].id, "openclaw:gemini3-adc");
         assert!(models[0].tags.iter().any(|tag| tag == "agent-route"));
+    }
+
+    #[tokio::test]
+    async fn list_models_uses_unix_socket_transport() {
+        let socket_path =
+            std::env::temp_dir().join(format!("op-llm-openclaw-{}.sock", uuid::Uuid::new_v4()));
+        let listener =
+            tokio::net::UnixListener::bind(&socket_path).expect("Unix socket should bind");
+        let request_bytes = Arc::new(Mutex::new(Vec::new()));
+        let request_bytes_clone = request_bytes.clone();
+
+        let handle = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("client should connect");
+            let mut buffer = [0_u8; 4096];
+            let read = stream.read(&mut buffer).await.expect("request should read");
+            request_bytes_clone
+                .lock()
+                .expect("request bytes lock poisoned")
+                .extend_from_slice(&buffer[..read]);
+
+            let body = r#"{"data":[{"id":"openclaw:main","owned_by":"openclaw"}]}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream
+                .write_all(response.as_bytes())
+                .await
+                .expect("response should write");
+        });
+
+        let provider = OpenClawProvider::new_with_socket(
+            "secret-token".to_string(),
+            socket_path.to_string_lossy().to_string(),
+            Some("openclaw:main".to_string()),
+        );
+
+        let models = provider
+            .list_models()
+            .await
+            .expect("list_models should succeed");
+        handle.await.expect("server should finish");
+        let _ = std::fs::remove_file(&socket_path);
+
+        let request_text = String::from_utf8(
+            request_bytes
+                .lock()
+                .expect("request bytes lock poisoned")
+                .clone(),
+        )
+        .expect("request should be valid utf-8");
+
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id, "openclaw:main");
+        assert!(request_text.starts_with("GET /v1/models "));
+        assert!(request_text
+            .to_lowercase()
+            .contains("authorization: bearer secret-token"));
     }
 
     #[tokio::test]

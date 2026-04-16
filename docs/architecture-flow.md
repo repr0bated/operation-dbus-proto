@@ -55,6 +55,105 @@ External caller
 
 ---
 
+## 1.5 Projection-First Runtime Layers
+
+```mermaid
+flowchart TD
+  subgraph FrontDoor["Front Door / Operator Layer"]
+    Chat["Chatbot / OpenClaw\none point of contact"]
+    Web["op-web / UI / websocket"]
+    GrpcIn["gRPC callers"]
+    JsonRpc["JSON-RPC callers"]
+  end
+
+  subgraph Runtime["Runtime Authority Layer"]
+    Main["op-dbus main()"]
+    Plugins["State plugins\nquery_current_state() / apply_state()"]
+    NonNet["NonNetDb\nin-process authoritative non-network object tables"]
+    OVS["Open_vSwitch DB\nnative OVSDB socket"]
+    OvsClient["OvsdbClient"]
+    Engine["SchemaEngine\nchange bridge + state cache + audit coordinator"]
+  end
+
+  subgraph Projection["Projection / Ontology Layer"]
+    Mirror["DbusMirror\nowner of org.opdbus.v1"]
+    Tree["org.opdbus.v1\nlive rolodex / phone book / operator desk"]
+    OvsTree["/org/opdbus/v1/ovsdb/..."]
+    NonNetTree["/org/opdbus/v1/nonnet/..."]
+    Branches["schema-derived branches\n/org/opdbus/<plugin>/..."]
+    Dynamic["/org/opdbus/v1/dynamic/..."]
+  end
+
+  subgraph Audit["Bridge / Audit / Revision Layer"]
+    EventChain["EventChain"]
+    DbusProjection["DbusProjection helper\nintrospect + persist"]
+    Blockchain["StreamingBlockchain\nBTRFS state + block events"]
+    Qdrant["Qdrant / vector memory"]
+  end
+
+  subgraph Legacy["Legacy / Transitional Paths"]
+    StateMgr["org.opdbus.StateManager"]
+    SmClient["state_manager_client\nop-web / op-services legacy path"]
+  end
+
+  subgraph Missing["Missing Control Layer"]
+    Constructed["Constructed state / branch revision control\nsnapshot • compose • preview • promote"]
+  end
+
+  Chat --> Web
+  Chat --> GrpcIn
+  Chat --> JsonRpc
+
+  Web --> Main
+  GrpcIn --> Main
+  JsonRpc --> Main
+
+  Main --> Plugins
+  Plugins --> NonNet
+  Main --> OvsClient
+  OvsClient <--> OVS
+  Main --> Engine
+  NonNet --> Engine
+  OvsClient --> Engine
+
+  Main --> Mirror
+  NonNet --> Mirror
+  OvsClient --> Mirror
+  Engine --> Mirror
+
+  Mirror --> Tree
+  Tree --> OvsTree
+  Tree --> NonNetTree
+  Tree --> Branches
+  Tree --> Dynamic
+
+  Engine --> EventChain
+  EventChain --> Blockchain
+  Blockchain --> Qdrant
+  Tree -. introspect_and_persist .-> DbusProjection
+  DbusProjection --> Blockchain
+
+  SmClient --> StateMgr
+  StateMgr -. bypasses primary projection model .-> Tree
+
+  Constructed -. should operate on .-> Tree
+  Constructed -. should commit through .-> NonNet
+  Constructed -. should commit through .-> OVS
+  Constructed -. should record via .-> EventChain
+```
+
+Notes:
+
+- `runtime layers` is accurate shorthand here.
+- The primary live ontology is the `org.opdbus.v1` projection tree.
+- `DbusMirror` is the owner of that tree.
+- `SchemaEngine` is the adjacent change/audit bridge, not the owner of the tree.
+- `org.opdbus.StateManager` is shown as transitional/legacy because it is not the primary
+  projection-first authority model.
+- The missing piece is branch-level constructed-state control over authoritative current state.
+
+---
+
 ## 2. Blockchain & Vector Pipeline
 
 ```

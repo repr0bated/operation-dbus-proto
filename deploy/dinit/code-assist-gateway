@@ -1,0 +1,7 @@
+type = process
+command = /usr/local/sbin/op-mcp-proxy
+env-file = /etc/op/code-assist-gateway.env
+logfile = /var/log/code-assist-gateway.log
+smooth-recovery = true
+restart = true
+depends-on = ovs-attach-ports

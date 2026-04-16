@@ -20,28 +20,26 @@ pub struct Schema {
     pub created_at: DateTime<Utc>,
 }
 
-/// Canonical persisted plugin document.
+/// Plugin document stored in the schema library.
 ///
-/// Architectural rule:
+/// Catalog rule:
 /// - The plugin defines the schema.
-/// - That same schema is the footprint and JSON render contract.
-/// - This document is the persisted authority that projection layers mirror.
+/// - That same schema provides the footprint and JSON render contract.
+/// - This document is reusable schema material for builders/projection layers.
 ///
 /// The document stays intentionally small. We do not create separate runtime
-/// "schema", "footprint", or "render" authorities here because that would
-/// reintroduce the drift this refactor is removing.
+/// "schema", "footprint", or "render" stores here because that would
+/// reintroduce drift.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginCatalogDocument {
-    /// Canonical plugin-owned schema. This is the thing every downstream
-    /// consumer ultimately resolves.
+    /// Plugin-owned schema copied into the schema library.
     pub schema: PluginSchema,
-    /// Stable D-Bus projection path for the plugin.
-    pub dbus_path: String,
-    /// Service identity used by external projections and compatibility layers.
-    pub service_name: String,
-    /// Durable storage path allocated to the plugin instance.
-    pub storage_path: String,
     /// Origin marker for diagnostics; runtime plugin registration should use
-    /// `"plugin"` rather than inventing a second authority.
+    /// `"plugin"` rather than inventing a second schema source.
+    #[serde(default = "default_schema_document_source")]
     pub source: String,
+}
+
+fn default_schema_document_source() -> String {
+    "plugin".to_string()
 }

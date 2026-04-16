@@ -1,0 +1,60 @@
+---
+title: Socket-Based Container Networking Topology (2026-04-15)
+description: ovsbr0 privacy fabric + NAT route to ens3 uplink. No veth, loopback-only containers.
+---
+
+```mermaid
+flowchart TD
+    subgraph 'Host WG Clients wg0'
+        WG[wg0 Clients 10.0.0.x]
+    end
+
+    subgraph 'ovsbr0 Privacy Fabric (10.88.88.1/24)'
+        OVS[ovsbr0 Bridge<br/>fail-mode: standalone<br/>OpenFlow TCP:6653]
+        WGCF[wgcf WARP<br/>172.16.0.2]
+        GRPC[grpc-bridge<br/>control plane]
+        SOCK[ovsbr0-sock anchor<br/>internal no IP<br/>unix socket dispatch]
+        PRIVXRAY[priv_xray egress]
+    end
+
+    subgraph 'services Container (Incus)'
+        LOOP[lan0-service = lo<br/>127.0.0.1/8<br/>nextdns UDP/TCP:53]
+        UNIX[/run/services0/dns.sock]
+    end
+
+    subgraph 'Host NAT + Uplink'
+        NAT[iptables NAT<br/>127.0.0.0/8 → ens3]
+        ENS3[ens3 uplink<br/>148.113.204.83/32]
+        INTERNET[internet]
+    end
+
+    subgraph 'OpenFlow table=0 (pri 200)'
+        DNSIN[match udp tp_dst=53<br/>actions: output ovsbr0-sock]
+        DNSOUT[match in_port=ovsbr0-sock udp tp_src=53<br/>actions: output priv_xray]
+        SEC[Security Lv1<br/>drop invTCP/frag/ct<br/>TTL=64]
+    end
+
+    WG --> SOCK
+    WGCF --> OVS
+    GRPC --> OVS
+    SOCK --> OVS
+    PRIVXRAY --> OVS
+    OVS --> DNSIN --> SOCK
+    SOCK --> DNSOUT --> PRIVXRAY
+    OVS --> SEC
+
+    LOOP -->|bind 127.0.0.1:53| UNIX
+    UNIX -.->|dispatch| SOCK
+    LOOP -.->|outbound NAT| NAT
+    NAT --> ENS3 --> INTERNET
+
+    classDef ovs fill:#e1f5fe
+    classDef of fill:#f3e5f5
+    classDef cont fill:#e8f5e8
+    classDef nat fill:#fff3e0
+    class OVS,WGCF,GRPC,SOCK,PRIVXRAY ovs
+    class DNSIN,DNSOUT,SEC of
+    class LOOP,UNIX cont
+    class NAT,ENS3 nat
+```
+`

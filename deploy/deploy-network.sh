@@ -37,8 +37,8 @@ WGCF_ACCOUNT_FILE="${WGCF_ACCOUNT_FILE:-/etc/wireguard/wgcf-account.toml}"
 OVS_BRIDGE="${OP_DBUS_OVS_BRIDGE:-ovsbr0}"
 GRPC_BRIDGE_IFACE="${OP_DBUS_GRPC_BRIDGE_IFACE:-grpc-bridge}"
 MGMT_IFACE="${OP_DBUS_MGMT_IFACE:-ovsbr0-mgmt}"
-GRPC_BRIDGE_CIDR="${PRIVACY_GRPC_BRIDGE_CIDR:-10.200.0.2/24}"
-MGMT_CIDR="${PRIVACY_MGMT_CIDR:-10.200.0.1/24}"
+GRPC_BRIDGE_CIDR="10.200.0.2/24"
+MGMT_CIDR="10.200.0.1/24"
 
 DINIT_D="${DINIT_D:-/etc/dinit.d}"
 NEXTDNS_PROFILE="${NEXTDNS_PROFILE:-689ec7}"
@@ -47,7 +47,7 @@ NEXTDNS_REWRITE_CONTENT="${NEXTDNS_REWRITE_CONTENT:-10.0.0.1}"
 
 APPLY_NEXTDNS_REWRITE=true
 INSTALL_DASHBOARD_NGINX=false
-INSTALL_OPENCLAW_SOCKET=true
+INSTALL_SERVICES_GATEWAY_SOCKET=true
 UPDATE_WGCONF=false
 UPDATE_WGCF=false
 VERIFY_ONLY=false
@@ -61,7 +61,8 @@ Options:
   --no-nextdns-rewrite       Do not apply the NextDNS dashboard rewrite.
   --install-dashboard-nginx  Render deploy/nginx/dashboard-3tched-socket.conf.template.
                              Requires OPENCLAW_GATEWAY_TOKEN in the environment.
-  --no-openclaw-socket       Do not install/restart the OpenClaw socket bridge.
+  --no-services-gateway-socket
+                             Do not install/restart the services gateway socket bridge.
   --update-wgconf            Rewrite the netplan wg0 tunnel from WG_SERVER_* values.
   --update-wgcf              Refresh/generate WGCF_CONF from WGCF_ACCOUNT_FILE.
   --help                     Show this help message.
@@ -79,7 +80,7 @@ Environment:
   WGCF_DEVICE_NAME            Optional device name for --update-wgcf.
   NEXTDNS_API_KEY            Required to upsert the NextDNS rewrite.
   NEXTDNS_PROFILE            Defaults to ${NEXTDNS_PROFILE}.
-  OPENCLAW_GATEWAY_TOKEN     Required only with --install-dashboard-nginx.
+  SERVICES_GATEWAY_TOKEN     Required only with --install-dashboard-nginx.
 EOF
 }
 
@@ -94,8 +95,11 @@ for arg in "$@"; do
     --install-dashboard-nginx)
       INSTALL_DASHBOARD_NGINX=true
       ;;
+    --no-services-gateway-socket)
+      INSTALL_SERVICES_GATEWAY_SOCKET=false
+      ;;
     --no-openclaw-socket)
-      INSTALL_OPENCLAW_SOCKET=false
+      INSTALL_SERVICES_GATEWAY_SOCKET=false
       ;;
     --update-wgconf)
       UPDATE_WGCONF=true
@@ -260,8 +264,8 @@ load_configuration() {
   OVS_BRIDGE="${OP_DBUS_OVS_BRIDGE:-${OVS_BRIDGE:-ovsbr0}}"
   GRPC_BRIDGE_IFACE="${OP_DBUS_GRPC_BRIDGE_IFACE:-${GRPC_BRIDGE_IFACE:-grpc-bridge}}"
   MGMT_IFACE="${OP_DBUS_MGMT_IFACE:-${MGMT_IFACE:-ovsbr0-mgmt}}"
-  GRPC_BRIDGE_CIDR="${PRIVACY_GRPC_BRIDGE_CIDR:-${GRPC_BRIDGE_CIDR:-10.200.0.2/24}}"
-  MGMT_CIDR="${PRIVACY_MGMT_CIDR:-${MGMT_CIDR:-10.200.0.1/24}}"
+  GRPC_BRIDGE_CIDR="10.200.0.2/24"
+  MGMT_CIDR="10.200.0.1/24"
 
   NEXTDNS_PROFILE="${NEXTDNS_PROFILE:-689ec7}"
   NEXTDNS_REWRITE_NAME="${NEXTDNS_REWRITE_NAME:-dashboard.3tched.com}"
@@ -396,6 +400,8 @@ install_network_artifacts() {
   install -m 0644 "$SCRIPT_DIR/dinit/services0-sockets" "$DINIT_D/services0-sockets"
   install -m 0755 "$SCRIPT_DIR/dinit/scripts/services0-sockets.sh" "$DINIT_D/scripts/services0-sockets.sh"
   install -m 0644 "$SCRIPT_DIR/dinit/wg-quick-all" "$DINIT_D/wg-quick-all"
+  install -m 0755 "$SCRIPT_DIR/dinit/scripts/wg-quick-all-up.sh"   /usr/local/sbin/wg-quick-all-up.sh
+  install -m 0755 "$SCRIPT_DIR/dinit/scripts/wg-quick-all-down.sh" /usr/local/sbin/wg-quick-all-down.sh
   install -m 0644 "$SCRIPT_DIR/dinit/op-ovs-services" "$DINIT_D/op-ovs-services"
   install -m 0755 "$SCRIPT_DIR/dinit/op-ovs-services-start.sh" "$DINIT_D/scripts/op-ovs-services-start.sh"
   install -m 0644 "$SCRIPT_DIR/dinit/systemd-networkd" "$DINIT_D/systemd-networkd"
@@ -510,25 +516,26 @@ verify_container_loopback_only() {
   log "${container}: loopback-only"
 }
 
-install_openclaw_socket_bridge() {
-  [[ "$INSTALL_OPENCLAW_SOCKET" == "true" ]] || return 0
-  log "--- Install OpenClaw socket bridge ---"
+install_services_gateway_socket_bridge() {
+  [[ "$INSTALL_SERVICES_GATEWAY_SOCKET" == "true" ]] || return 0
+  log "--- Install services gateway socket bridge ---"
 
   if ! incus info "$SERVICES_CONTAINER" >/dev/null 2>&1; then
-    log "Skipping OpenClaw socket bridge; ${SERVICES_CONTAINER} does not exist"
+    log "Skipping services gateway socket bridge; ${SERVICES_CONTAINER} does not exist"
     return 0
   fi
 
-  incus file push "$SCRIPT_DIR/systemd/openclaw-socket.service" \
-    "$SERVICES_CONTAINER/etc/systemd/system/openclaw-socket.service"
+  incus file push "$SCRIPT_DIR/systemd/gateway-socket.service" \
+    "$SERVICES_CONTAINER/etc/systemd/system/gateway-socket.service"
 
   incus exec "$SERVICES_CONTAINER" -- systemctl daemon-reload
-  incus exec "$SERVICES_CONTAINER" -- systemctl enable openclaw-socket.service >/dev/null 2>&1 || true
+  incus exec "$SERVICES_CONTAINER" -- systemctl disable --now openclaw-socket.service >/dev/null 2>&1 || true
+  incus exec "$SERVICES_CONTAINER" -- systemctl enable gateway-socket.service >/dev/null 2>&1 || true
 
   if incus exec "$SERVICES_CONTAINER" -- systemctl is-active --quiet openclaw-gateway.service; then
-    incus exec "$SERVICES_CONTAINER" -- systemctl restart openclaw-socket.service
+    incus exec "$SERVICES_CONTAINER" -- systemctl restart gateway-socket.service
   else
-    log "OpenClaw gateway is not active; socket bridge installed but not restarted"
+    log "Gateway service is not active; socket bridge installed but not restarted"
   fi
 }
 
@@ -536,11 +543,14 @@ install_dashboard_nginx() {
   [[ "$INSTALL_DASHBOARD_NGINX" == "true" ]] || return 0
   log "--- Install dashboard nginx socket config ---"
 
-  [[ -n "${OPENCLAW_GATEWAY_TOKEN:-}" ]] \
-    || die "OPENCLAW_GATEWAY_TOKEN is required with --install-dashboard-nginx"
+  if [[ -z "${SERVICES_GATEWAY_TOKEN:-}" && -n "${OPENCLAW_GATEWAY_TOKEN:-}" ]]; then
+    SERVICES_GATEWAY_TOKEN="$OPENCLAW_GATEWAY_TOKEN"
+  fi
+  [[ -n "${SERVICES_GATEWAY_TOKEN:-}" ]] \
+    || die "SERVICES_GATEWAY_TOKEN is required with --install-dashboard-nginx"
 
   install -d /etc/nginx/http.d
-  OPENCLAW_GATEWAY_TOKEN="$OPENCLAW_GATEWAY_TOKEN" python3 - \
+  SERVICES_GATEWAY_TOKEN="$SERVICES_GATEWAY_TOKEN" python3 - \
     "$SCRIPT_DIR/nginx/dashboard-3tched-socket.conf.template" \
     /etc/nginx/http.d/dashboard-3tched.conf <<'PY'
 import os
@@ -550,7 +560,7 @@ import sys
 template = pathlib.Path(sys.argv[1])
 target = pathlib.Path(sys.argv[2])
 target.write_text(
-    template.read_text().replace("<OPENCLAW_GATEWAY_TOKEN>", os.environ["OPENCLAW_GATEWAY_TOKEN"])
+    template.read_text().replace("<OPENCLAW_GATEWAY_TOKEN>", os.environ["SERVICES_GATEWAY_TOKEN"])
 )
 PY
 
@@ -606,7 +616,7 @@ verify_network() {
         | grep -qx '200' || die "nginx user cannot reach gateway.sock"
     fi
   else
-    log "gateway.sock is not present yet; OpenClaw socket bridge may not be active"
+    log "gateway.sock is not present yet; services gateway socket bridge may not be active"
   fi
 
   log "Verification complete"
@@ -635,7 +645,7 @@ main() {
     start_host_network
     ensure_default_profile_socket_only
     ensure_services_container
-    install_openclaw_socket_bridge
+    install_services_gateway_socket_bridge
     install_dashboard_nginx
     apply_nextdns_rewrite
   fi
@@ -646,3 +656,14 @@ main() {
 }
 
 main "$@"
+
+# ---------------------------------------------------------------------------
+# ENVIRONMENT DETAILS (2026-04-15T02:25:03+00:00)
+# ---------------------------------------------------------------------------
+# Socket Migration Complete:
+# - services container: loopback-only (lan0-service = lo renamed, no veth)
+# - ovsbr0 ports: grpc-bridge, wgcf, priv_warp, priv_xray, ovsbr0-sock anchor
+# - OpenFlow: DNS pri 200 udp:53 → ovsbr0-sock → lan0-service nextdns
+# - Uplink: ovsbr0 10.88.88.1/24 NAT → ens3 (148.113.204.83)
+# - Persistence: raw.lxc post-start hook for lan0-service dummy
+# Verify: incus exec services -- ping 1.1.1.1

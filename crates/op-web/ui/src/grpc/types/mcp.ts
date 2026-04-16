@@ -45,7 +45,7 @@ export interface McpError {
   data?: ProtobufStruct;
 }
 
-export interface McpSubscribeRequest {
+export interface SubscribeRequest {
   eventTypes: string[];
   sessionId?: string;
 }
@@ -57,7 +57,9 @@ export interface McpEvent {
   sequence: number;
 }
 
-export interface McpHealthResponse {
+export interface HealthRequest {}
+
+export interface HealthResponse {
   healthy: boolean;
   version: string;
   serverName: string;
@@ -116,9 +118,54 @@ export interface ToolParameter {
   enumValues: string[];
 }
 
+export enum FileOperation {
+  READ = 0,
+  WRITE = 1,
+  DELETE = 2,
+  LIST = 3,
+}
+
+export interface FileMode {
+  mode: number;
+}
+
+export interface FileSystemArgs {
+  path: string;
+  content?: string;
+  operation: FileOperation;
+  mode?: FileMode;
+}
+
+export interface NetworkArgs {
+  url: string;
+  method: string;
+  headers: Record<string, string>;
+  body?: string;
+}
+
+export interface DatabaseArgs {
+  query: string;
+  parameters: Record<string, string>;
+}
+
+export interface ShellArgs {
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+  workingDir?: string;
+}
+
+export interface ToolArguments {
+  filesystem?: FileSystemArgs;
+  network?: NetworkArgs;
+  database?: DatabaseArgs;
+  shell?: ShellArgs;
+  generic?: ProtobufStruct;
+}
+
 export interface CallToolRequest {
   toolName: string;
-  arguments: ProtobufStruct;
+  arguments: ToolArguments;
   sessionId?: string;
   timeoutMs?: number;
 }

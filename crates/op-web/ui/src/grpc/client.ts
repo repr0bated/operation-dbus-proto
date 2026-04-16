@@ -189,7 +189,7 @@ function grpcServerStream<TReq, TResp>(
 // ── Type Imports ────────────────────────────────────────────────────────────
 
 import type {
-  SubscribeRequest, StateChange, MutateRequest, MutateResponse,
+  SubscribeRequest as StateSyncSubscribeRequest, StateChange, MutateRequest, MutateResponse,
   GetStateRequest, GetStateResponse, BatchMutateRequest, BatchMutateResponse,
 } from "./types/state-sync";
 
@@ -269,10 +269,10 @@ import type {
 } from "./types/service-manager";
 
 import type {
-  McpHealthResponse, InitializeRequest, InitializeResponse,
+  InitializeRequest, InitializeResponse,
   ListToolsRequest, ListToolsResponse as McpListToolsResponse,
   CallToolRequest, CallToolResponse, ToolOutput,
-  McpSubscribeRequest, McpEvent,
+  McpEvent, SubscribeRequest as McpSubscribeRequest, HealthResponse as McpHealthResponse
 } from "./types/mcp";
 
 import type {
@@ -326,14 +326,14 @@ import type {
 // ── StateSync Service ───────────────────────────────────────────────────────
 
 export const stateSync = {
-  subscribe(req: Partial<SubscribeRequest> = {}) {
-    const full: SubscribeRequest = {
+  subscribe(req: Partial<StateSyncSubscribeRequest> = {}) {
+    const full: StateSyncSubscribeRequest = {
       pluginIds: req.pluginIds ?? [],
       pathPatterns: req.pathPatterns ?? [],
       tags: req.tags ?? [],
       includeInitialState: req.includeInitialState ?? true,
     };
-    return grpcServerStream<SubscribeRequest, StateChange>(
+    return grpcServerStream<StateSyncSubscribeRequest, StateChange>(
       "operation.v1.StateSync", "Subscribe", full,
     );
   },

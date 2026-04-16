@@ -1,0 +1,66 @@
+title Service Manager Interaction Overview
+autoNumber nested
+
+// Actor definitions with icons and colors
+User [icon: user, color: blue]
+Frontend [icon: monitor, color: blue]
+"JSON Renderer" [icon: layout, color: blue]
+"Plugin Schema" [icon: database, color: green]
+"SchemaEngine" [icon: cpu, color: green]
+"op-dbus gRPC" [icon: server, color: orange]
+"D-Bus Tree" [icon: git-branch, color: orange]
+"NonNet / OVSDB" [icon: hard-drive, color: orange]
+"Audit Trail" [icon: file-text, color: purple]
+"Embedding Worker" [icon: zap, color: purple]
+
+// Schema drives UI rendering (happens at startup / schema change)
+loop [label: UI schema rendering, icon: refresh-cw] {
+  Frontend > "op-dbus gRPC": Request plugin schema (gRPC)
+  "op-dbus gRPC" > "Plugin Schema": Resolve schema definitions
+  "Plugin Schema" > "JSON Renderer": Provide schema for UI
+  "JSON Renderer" > Frontend: Render UI components
+  Frontend > User: Display current state
+}
+
+// D-Bus tree is a read-only projection of authoritative stores
+par [label: Direct projection (read-only), icon: git-branch] {
+  "NonNet / OVSDB" > "D-Bus Tree": DbusMirror refresh on OVSDB monitor event
+  "NonNet / OVSDB" > "D-Bus Tree": DbusMirror refresh on NonNet subscribe broadcast
+}
+and {
+  "D-Bus Tree" -- "NonNet / OVSDB": One-to-one read projection
+}
+
+// State mutation path
+loop [label: Handle state mutations, icon: repeat] {
+  User > Frontend: Request state change
+  Frontend > "op-dbus gRPC": Send mutation (gRPC, 10.88.88.1:50051)
+
+  // SchemaEngine validates before touching stores
+  "op-dbus gRPC" > SchemaEngine: Route through SchemaEngine
+  opt [label: Schema validation, icon: shield] {
+    SchemaEngine > "Plugin Schema": Validate against plugin RCP schema
+    "Plugin Schema" > SchemaEngine: Return validation result
+  }
+
+  // Plugin executes against authoritative stores
+  SchemaEngine > "NonNet / OVSDB": Plugin apply_state() → transact
+  "NonNet / OVSDB" > SchemaEngine: Confirm write
+
+  alt [label: Success, icon: check] {
+    // Audit trail written synchronously after confirmed mutation
+    SchemaEngine > "Audit Trail": EventChain → OptimizedBlockchain → BTRFS timing_subvol
+    "Audit Trail" > "Embedding Worker": Enqueue embed request (non-blocking, drop if full)
+    "Embedding Worker" > "Audit Trail": Upsert to Qdrant (async, best-effort)
+
+    // D-Bus mirror refreshes from stores (event-driven, not a direct push)
+    "NonNet / OVSDB" > "D-Bus Tree": Monitor event triggers DbusMirror refresh
+    "op-dbus gRPC" > Frontend: Return success (gRPC)
+  }
+  else [label: Failure, icon: x] {
+    SchemaEngine > "op-dbus gRPC": Propagate error
+    "op-dbus gRPC" > Frontend: Return failure (gRPC)
+  }
+
+  Frontend > User: Display updated state
+}

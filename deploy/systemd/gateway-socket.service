@@ -1,5 +1,5 @@
 [Unit]
-Description=OpenClaw Unix Socket Bridge
+Description=Services Gateway Unix Socket Bridge
 After=openclaw-gateway.service
 Requires=openclaw-gateway.service
 

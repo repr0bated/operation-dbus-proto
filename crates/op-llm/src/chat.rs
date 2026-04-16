@@ -505,7 +505,10 @@ impl ChatManager {
 #[async_trait]
 impl LlmProvider for ChatManager {
     fn provider_type(&self) -> ProviderType {
-        self.current_provider.blocking_read().clone()
+        self.current_provider
+            .try_read()
+            .map(|g| g.clone())
+            .unwrap_or(ProviderType::McpProxy)
     }
 
     async fn list_models(&self) -> Result<Vec<ModelInfo>> {

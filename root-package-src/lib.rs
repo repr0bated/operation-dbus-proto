@@ -8,7 +8,6 @@
 //! - Chatbot reasons but never executes directly
 //! - Inspector Gadget is one-shot only (discovery, migration, schema)
 //! - MCP is ingress only, never an execution engine
-//! - Antigravity tunnel is development-only
 
 pub mod json_rpc;
 // pub mod execution;
@@ -39,10 +38,6 @@ pub mod disaster_recovery;
 pub mod vectorization;
 pub mod numa_cache;
 pub mod security;
-
-// Development-only antigravity tunnel
-#[cfg(feature = "dev-antigravity")]
-pub mod antigravity;
 
 // Re-exports
 pub use json_rpc::{JsonRpcRequest, JsonRpcResponse, JsonRpcError};
@@ -75,9 +70,6 @@ pub use disaster_recovery::{DisasterRecovery, CanonicalExport};
 pub use error::{OpDbusError, Result};
 pub use security::{SecurityValidator, ToolSecurityProfile, AccessLevel, SecurityError};
 
-#[cfg(feature = "dev-antigravity")]
-pub use antigravity::{AntigravityTunnel, DevTunnelRequest, DevSession};
-
 /// System-wide constants
 pub mod constants {
     pub const JSONRPC_VERSION: &str = "2.0";
@@ -88,9 +80,4 @@ pub mod constants {
     pub const WEB_DEFAULT_PORT: u16 = 8080;
     pub const CHATBOT_MAX_HISTORY: usize = 100;
     pub const MODEL_DIR: &str = "/var/lib/op-dbus/models";
-    
-    #[cfg(feature = "dev-antigravity")]
-    pub const ANTIGRAVITY_DEFAULT_PORT: u16 = 9999;
-    #[cfg(feature = "dev-antigravity")]
-    pub const ANTIGRAVITY_SESSION_TIMEOUT_SECS: u64 = 3600;
 }
