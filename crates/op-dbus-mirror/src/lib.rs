@@ -28,6 +28,27 @@ const LAZY_LOAD_THRESHOLD: usize = 1000;
 const NONNET_CHUNK_SIZE: usize = 500;
 const OVSDB_TABLE_TIMEOUT_SECS: u64 = 5;
 
+/// Blocked service prefixes - these external services should not be projected
+/// We manage our own network stack, not freedesktop
+const BLOCKED_SERVICE_PREFIXES: &[&str] = &[
+    "org.freedesktop.NetworkManager",
+    "org.freedesktop.systemd",
+    "org.freedesktop.resolve1",
+    "org.freedesktop.timesync1",
+    "org.freedesktop.udisks2",
+    "fi.w1.wpa_supplicant1",
+    "org.bluez",
+    "net.connman",
+];
+
+/// Check if a service name or path should be blocked (external freedesktop)
+fn is_blocked_service(name: &str) -> bool {
+    let name_lower = name.to_lowercase();
+    BLOCKED_SERVICE_PREFIXES.iter().any(|prefix| {
+        name_lower.starts_with(&prefix.to_lowercase())
+    })
+}
+
 #[derive(Clone, Debug)]
 struct ProjectionSpec {
     plugin_id: String,
