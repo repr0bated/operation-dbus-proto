@@ -341,7 +341,12 @@ async fn main() -> Result<()> {
     let _cache = Arc::new(BtrfsCache::new(PathBuf::from(&config.cache_dir)).await?);
 
     // Create orchestrator
-    let _orchestrator = Arc::new(Orchestrator::new(
+    // Create orchestrator
+    let orchestrator = Arc::new(Orchestrator::new(
+        OrchestratorConfig::default(),
+        tool_registry.clone(),
+        plugin_registry.clone(),
+    ));
         OrchestratorConfig::default(),
         tool_registry.clone(),
         plugin_registry.clone(),
