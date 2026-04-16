@@ -1,4 +1,5 @@
 import { AppHeader } from "@/components/layout/AppHeader";
+import { StreamingJsonExamples } from "@/components/dashboard/StreamingJsonExamples";
 import { useHealth, useStatus } from "@/hooks/useApi";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -180,6 +181,17 @@ export default function OverviewPage() {
               )}
             </CardContent>
           </Card>
+        </div>
+
+        <div className="space-y-3">
+          <div>
+            <h2 className="text-sm font-semibold text-foreground">Streaming JSON Rendering</h2>
+            <p className="text-sm text-muted-foreground">
+              Examples using the live SSE event bus to render raw events, derived metrics, and
+              keyed state projections.
+            </p>
+          </div>
+          <StreamingJsonExamples />
         </div>
       </div>
     </>

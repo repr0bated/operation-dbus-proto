@@ -1,0 +1,17 @@
+# wgcf is created by wg-quick. Keep its WireGuard-managed address/config,
+# but prevent networkd from assigning link-local fallback addresses.
+[Match]
+Name=wgcf
+
+[Link]
+ActivationPolicy=up
+RequiredForOnline=no
+
+[Network]
+DHCP=no
+LinkLocalAddressing=no
+LLMNR=no
+MulticastDNS=no
+IPv6AcceptRA=no
+ConfigureWithoutCarrier=yes
+KeepConfiguration=static

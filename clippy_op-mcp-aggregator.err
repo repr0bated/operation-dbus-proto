@@ -1,0 +1,20 @@
+    Checking tokio-stream v0.1.18
+    Checking op-execution-tracker v0.1.0 (/home/jeremy/git/operation-dbus-proto/crates/op-execution-tracker)
+   Compiling op-cache v0.1.0 (/home/jeremy/git/operation-dbus-proto/crates/op-cache)
+    Checking op-http v1.0.0 (/home/jeremy/git/operation-dbus-proto/crates/op-http)
+    Checking tonic v0.12.3
+    Checking sqlx-core v0.8.6
+    Checking sqlx-sqlite v0.8.6
+    Checking sqlx v0.8.6
+    Checking op-state-store v0.1.0 (/home/jeremy/git/operation-dbus-proto/crates/op-state-store)
+    Checking op-core v0.1.0 (/home/jeremy/git/operation-dbus-proto/crates/op-core)
+    Checking op-jsonrpc v1.0.0 (/home/jeremy/git/operation-dbus-proto/crates/op-jsonrpc)
+    Checking op-network v1.0.0 (/home/jeremy/git/operation-dbus-proto/crates/op-network)
+    Checking op-agents v1.0.0 (/home/jeremy/git/operation-dbus-proto/crates/op-agents)
+    Checking op-dbus-model v0.1.0 (/home/jeremy/git/operation-dbus-proto/crates/op-dbus-model)
+    Checking op-blockchain v1.0.0 (/home/jeremy/git/operation-dbus-proto/crates/op-blockchain)
+    Checking op-introspection v1.0.0 (/home/jeremy/git/operation-dbus-proto/crates/op-introspection)
+    Checking op-state v1.0.0 (/home/jeremy/git/operation-dbus-proto/crates/op-state)
+    Checking op-inspector v1.0.0 (/home/jeremy/git/operation-dbus-proto/crates/op-inspector)
+    Checking op-tools v0.1.0 (/home/jeremy/git/operation-dbus-proto/crates/op-tools)
+error: could not compile `op-tools` (lib) due to 21 previous errors; 1 warning emitted

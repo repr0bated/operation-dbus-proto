@@ -126,7 +126,7 @@ impl DisasterRecovery {
             exported_at_ns: now,
             system_id: uuid::Uuid::new_v4().to_string(),
             objects: db_export.objects,
-            plugins: vec![], // Would be loaded from plugin registry
+            plugins: vec![], // Would be loaded from the authoritative plugin catalog
             policies: vec![],
             compliance_profiles: vec![],
             executions: db_export.executions.into_iter()

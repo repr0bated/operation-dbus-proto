@@ -29,7 +29,7 @@ use crate::error::{OpDbusError, Result};
 use op_core::BusType;
 use op_introspection::IntrospectionService;
 use op_state_store::StateStore;
-use op_plugins::registry::PluginRegistry;
+use op_plugins::PluginCatalog;
 use crate::work_stack::WorkStack;
 use op_tools::ToolRegistry;
 
@@ -229,7 +229,14 @@ impl Default for InspectorConfig {
 pub struct InspectorGadget {
     config: InspectorConfig,
     state_store: Arc<dyn StateStore>,
-    plugin_registry: Arc<PluginRegistry>,
+    /// Compatibility handle to the runtime plugin catalog.
+    ///
+    /// Inspector remains a one-shot discovery/import tool, so this must not
+    /// become a source of runtime truth. It exists so onboarding flows can map
+    /// newly discovered shapes back to canonical plugin documents when that
+    /// path is restored.
+    #[allow(dead_code)]
+    plugin_catalog: Arc<PluginCatalog>,
     tool_registry: Arc<ToolRegistry>,
 }
 
@@ -238,14 +245,14 @@ impl InspectorGadget {
     pub fn new(
         config: InspectorConfig,
         state_store: Arc<dyn StateStore>,
-        plugin_registry: Arc<PluginRegistry>,
+        plugin_catalog: Arc<PluginCatalog>,
         tool_registry: Arc<ToolRegistry>,
     ) -> Self {
         tracing::info!("Inspector Gadget initialized (one-shot discovery only)");
         Self {
             config,
             state_store,
-            plugin_registry,
+            plugin_catalog,
             tool_registry,
         }
     }
@@ -265,7 +272,7 @@ impl InspectorGadget {
         tracing::info!("Starting one-shot discovery: {}", discovery_id);
 
         let mut objects: HashMap<String, Vec<DiscoveredObject>> = HashMap::new();
-        let schemas = Vec::new();
+        let mut schemas = Vec::new();
         let mut warnings = Vec::new();
 
         // Discover network interfaces
@@ -595,7 +602,7 @@ impl InspectorGadget {
             _ => vec![],
         };
 
-        let _registered = schemas.len();
+        let registered = schemas.len();
 
         let registered = schemas.len();
         let any_schemas = !schemas.is_empty();

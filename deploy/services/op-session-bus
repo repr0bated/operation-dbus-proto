@@ -1,0 +1,4 @@
+type = process
+command = /home/jeremy/git/operation-dbus-proto/deploy/bin/op-session-bus
+log-type = buffer
+smooth-recovery = true

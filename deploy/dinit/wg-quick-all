@@ -1,0 +1,6 @@
+# /etc/dinit.d/wg-quick-all
+# Managed by deploy.sh — do not edit manually
+# Brings up the wgcf WireGuard/WARP tunnel before OVS attach-ports runs.
+type = scripted
+command = /usr/bin/wg-quick up wgcf
+stop-command = /usr/bin/wg-quick down wgcf

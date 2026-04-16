@@ -17,7 +17,7 @@ concurrency:
 jobs:
   codex:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     env:
       OPENAI_API_KEY_PRESENT: ${{ secrets.OPENAI_API_KEY != '' }}
     outputs:
@@ -43,6 +43,8 @@ jobs:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           prompt-file: .github/codex/prompts/full-repo-review.md
           output-file: codex-full-review.md
+          model: gpt-5.3-codex
+          effort: xhigh
           safety-strategy: drop-sudo
           sandbox: workspace-write
 

@@ -1,0 +1,133 @@
+@import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 228 18% 10%;
+    --foreground: 240 5% 90%;
+    --card: 225 15% 13%;
+    --card-foreground: 240 6% 96%;
+    --popover: 225 15% 13%;
+    --popover-foreground: 240 6% 96%;
+    --primary: 0 100% 68%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 230 14% 14%;
+    --secondary-foreground: 240 6% 96%;
+    --muted: 230 10% 18%;
+    --muted-foreground: 240 4% 49%;
+    --accent: 0 100% 68%;
+    --accent-foreground: 0 0% 98%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 4% 16%;
+    --input: 240 4% 16%;
+    --ring: 0 100% 68%;
+    --radius: 0.5rem;
+
+    --sidebar-background: 228 18% 10%;
+    --sidebar-foreground: 240 5% 90%;
+    --sidebar-primary: 0 100% 68%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 230 10% 18%;
+    --sidebar-accent-foreground: 240 5% 90%;
+    --sidebar-border: 240 4% 16%;
+    --sidebar-ring: 0 100% 68%;
+
+    --ok: 142 71% 45%;
+    --warn: 38 92% 50%;
+    --danger: 0 84% 60%;
+    --info: 217 91% 60%;
+    --accent-2: 174 72% 40%;
+    --chart-1: 0 100% 68%;
+    --chart-2: 174 72% 40%;
+    --chart-3: 38 92% 50%;
+    --chart-4: 217 91% 60%;
+    --chart-5: 142 71% 45%;
+
+    --bg-elevated: 225 13% 16%;
+    --bg-hover: 228 10% 21%;
+    --card-highlight: 0 0% 100% / 0.03;
+  }
+
+  .light {
+    --background: 0 0% 98%;
+    --foreground: 240 6% 16%;
+    --card: 0 0% 100%;
+    --card-foreground: 240 6% 10%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 240 6% 10%;
+    --primary: 0 72% 51%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 240 5% 96%;
+    --secondary-foreground: 240 4% 25%;
+    --muted: 240 5% 96%;
+    --muted-foreground: 240 4% 49%;
+    --accent: 0 72% 51%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 6% 90%;
+    --input: 240 6% 90%;
+    --ring: 0 72% 51%;
+    --sidebar-background: 0 0% 98%;
+    --sidebar-foreground: 240 4% 25%;
+    --sidebar-primary: 0 72% 51%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 240 5% 96%;
+    --sidebar-accent-foreground: 240 4% 25%;
+    --sidebar-border: 240 6% 90%;
+    --sidebar-ring: 0 72% 51%;
+
+    --ok: 142 76% 36%;
+    --warn: 38 92% 43%;
+    --danger: 0 72% 51%;
+    --info: 217 91% 53%;
+    --accent-2: 174 72% 33%;
+    --bg-elevated: 0 0% 100%;
+    --bg-hover: 240 5% 94%;
+    --card-highlight: 0 0% 0% / 0.03;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: "Space Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    letter-spacing: -0.02em;
+  }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { @apply bg-border rounded-full; }
+  ::-webkit-scrollbar-thumb:hover { @apply bg-muted-foreground/30; }
+}
+
+@layer utilities {
+  .font-mono {
+    font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
+  }
+}
+
+@keyframes rise {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}

@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(doas ./deploy/deploy.sh 2>&1)"
+    ]
+  }
+}

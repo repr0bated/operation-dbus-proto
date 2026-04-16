@@ -1,0 +1,24 @@
+# OVS bridge — netplan apply is the execution path.
+# wgcf WireGuard tunnel managed by wg-quick (not netplan), then attached to OVS
+# by ovs-attach-ports.sh via native OVSDB JSON-RPC.
+network:
+  version: 2
+  renderer: networkd
+
+  bridges:
+    ovsbr0:
+      interfaces: []
+      dhcp4: false
+      dhcp6: false
+      addresses:
+        - 10.88.88.1/24
+      mtu: 1500
+      openvswitch:
+        controller:
+          addresses:
+            - tcp:10.88.88.1:6653
+        fail-mode: standalone
+        mcast-snooping: false
+        rstp: false
+        protocols:
+          - OpenFlow13
