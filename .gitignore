@@ -3,6 +3,11 @@ target-cache/
 grpc-gateway/
 node_modules/
 dist/
+crates/op-web/ui/.env
+crates/op-web/ui/dist.root-owned.*/
+gemini-conversation-*.json
+session-ses_*.md
+op-dbus.pid
 build/
 .cache/
 *.log
