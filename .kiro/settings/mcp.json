@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "openclaw-gateway": {
+      "command": "curl",
+      "args": ["-X", "POST", "http://127.0.0.1:18789/v1/mcp"],
+      "env": {
+        "AUTHORIZATION": "Bearer b6fb8429d8fd9e615305261050aa67d97489d566842a8cec"
+      },
+      "disabled": false,
+      "autoApprove": []
+    }
+  }
+}
