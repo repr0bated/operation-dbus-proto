@@ -152,9 +152,12 @@ impl ChatManager {
         }
 
         // =====================================================
-        // OpenClaw - Bearer token
+        // OpenClaw - trusted internal network
         // =====================================================
-        if std::env::var("OPENCLAW_TOKEN").is_ok() {
+        if matches!(env_provider.as_deref(), Some("openclaw"))
+            || std::env::var("OPENCLAW_BASE_URL").is_ok()
+            || std::env::var("OPENCLAW_DEFAULT_MODEL").is_ok()
+        {
             match OpenClawProvider::from_env() {
                 Ok(openclaw) => {
                     info!("✅ OpenClaw provider initialized");
@@ -210,7 +213,7 @@ impl ChatManager {
             warn!("   Configure authentication:");
             warn!("   1. Install/build op-mcp-proxy and set OP_MCP_PROXY_BIN");
             warn!("   2. Authenticate: gcloud auth login");
-            warn!("   3. Or set OPENCLAW_TOKEN and LLM_PROVIDER=openclaw");
+            warn!("   3. Or set OPENCLAW_BASE_URL and LLM_PROVIDER=openclaw");
             warn!("   4. Or set GEMINI_API_KEY environment variable");
         } else {
             info!("\n📊 Default provider: {:?}", final_provider);
@@ -304,7 +307,7 @@ impl ChatManager {
             1. Build/install op-mcp-proxy and set OP_MCP_PROXY_BIN\n\
             2. Run: gcloud auth login\n\
             3. Optional: set LLM_PROVIDER=mcp-proxy\n\
-            4. Or set OPENCLAW_TOKEN and LLM_PROVIDER=openclaw\n\n\
+            4. Or set OPENCLAW_BASE_URL and LLM_PROVIDER=openclaw\n\n\
             Or set GEMINI_API_KEY environment variable."
         ))
     }
@@ -477,7 +480,7 @@ impl ChatManager {
                     vec!["Claude models", "Best reasoning", "Tool use"],
                 ),
                 ProviderType::OpenClaw => (
-                    "Bearer token (OPENCLAW_TOKEN)",
+                    "Trusted internal network (OPENCLAW_BASE_URL)",
                     vec!["OpenAI-compatible API", "Agent platform", "Tool use"],
                 ),
                 _ => ("API key", vec![]),

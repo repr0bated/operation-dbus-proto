@@ -497,7 +497,10 @@ impl LlmProvider for AntigravityProvider {
                     text_parts.push(text.to_string());
                 }
                 if let Some(fc) = part.get("functionCall") {
-                    let name = fc.get("name").and_then(|n: &Value| n.as_str()).unwrap_or_default();
+                    let name = fc
+                        .get("name")
+                        .and_then(|n: &Value| n.as_str())
+                        .unwrap_or_default();
                     let args = fc.get("args").cloned().unwrap_or(json!({}));
                     tool_calls.push(ToolCallInfo {
                         id: format!("call_{}", Uuid::new_v4()),

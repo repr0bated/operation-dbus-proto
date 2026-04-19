@@ -1,4 +1,4 @@
-//! Streaming blockchain with dual BTRFS subvolumes
+/y is /! Streaming blockchain with dual BTRFS subvolumes
 //!
 //! Architecture:
 //! - timing_subvol: Immutable audit trail (append-only)
@@ -124,14 +124,16 @@ impl StreamingBlockchain {
             *counter
         };
 
-        // Write to timing subvolume (audit trail)
+        // TIMING IS AUTHORITATIVE: Write timing record first (durable audit trail)
+        // This is the source of truth - vectors are async projections
         let timing_file = self
             .timing_subvol
             .join(format!("block-{:012}.json", block_num));
         let timing_data = simd_json::to_string_pretty(&event)?;
         tokio::fs::write(&timing_file, &timing_data).await?;
 
-        // Write vector data if present
+        // VECTORS ARE PROJECTIONS: Write vector data if present (sync but optional)
+        // Vectors can be recomputed from timing if lost, but timing cannot be regenerated
         if !event.vector.is_empty() {
             let vector_file = self
                 .vector_subvol

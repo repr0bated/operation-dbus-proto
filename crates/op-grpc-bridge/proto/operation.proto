@@ -70,6 +70,9 @@ service EventChainService {
   // Get/Create snapshot
   rpc GetSnapshot(GetSnapshotRequest) returns (GetSnapshotResponse);
   rpc CreateSnapshot(CreateSnapshotRequest) returns (CreateSnapshotResponse);
+
+  // Trace-scoped semantic lookup for the Accountability pane
+  rpc SearchSemanticTrace(SearchSemanticTraceRequest) returns (SearchSemanticTraceResponse);
 }
 
 // =============================================================================
@@ -455,6 +458,23 @@ message Snapshot {
   string effective_hash = 8;
   google.protobuf.Timestamp timestamp = 9;
   google.protobuf.Struct state = 10;
+}
+
+message SearchSemanticTraceRequest {
+  // Max matches to return (0 = server default)
+  uint32 limit = 1;
+}
+
+message SearchSemanticTraceResponse {
+  string trace_id = 1;
+  uint64 mutation_index = 2;
+  repeated SemanticTraceMatch matches = 3;
+}
+
+message SemanticTraceMatch {
+  string point_id = 1;
+  float score = 2;
+  google.protobuf.Struct payload = 3;
 }
 
 // =============================================================================

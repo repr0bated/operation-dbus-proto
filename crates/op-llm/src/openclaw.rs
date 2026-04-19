@@ -1,12 +1,11 @@
 //! OpenClaw LLM Provider
 //!
 //! Connects to the OpenClaw agent platform via its OpenAI-compatible
-//! `/v1/chat/completions` endpoint with bearer token auth.
+//! `/v1/chat/completions` endpoint over the trusted internal network.
 //!
 //! ## Configuration
 //!
 //! ```bash
-//! OPENCLAW_TOKEN=your-token
 //! OPENCLAW_BASE_URL=http://127.0.0.1:18789  # default
 //! ```
 
@@ -28,13 +27,12 @@ const DEFAULT_MODEL: &str = "openclaw:main";
 
 pub struct OpenClawProvider {
     client: Client,
-    token: String,
     base_url: String,
     default_model: String,
 }
 
 impl OpenClawProvider {
-    pub fn new(token: String, base_url: Option<String>, default_model: Option<String>) -> Self {
+    pub fn new(base_url: Option<String>, default_model: Option<String>) -> Self {
         let client = Client::builder()
             .timeout(Duration::from_secs(180))
             .build()
@@ -42,7 +40,6 @@ impl OpenClawProvider {
 
         Self {
             client,
-            token,
             base_url: base_url
                 .unwrap_or_else(|| DEFAULT_BASE_URL.to_string())
                 .trim_end_matches('/')
@@ -52,10 +49,9 @@ impl OpenClawProvider {
     }
 
     pub fn from_env() -> Result<Self> {
-        let token = std::env::var("OPENCLAW_TOKEN").context("OPENCLAW_TOKEN must be set")?;
         let base_url = std::env::var("OPENCLAW_BASE_URL").ok();
         let default_model = std::env::var("OPENCLAW_DEFAULT_MODEL").ok();
-        Ok(Self::new(token, base_url, default_model))
+        Ok(Self::new(base_url, default_model))
     }
 
     fn models_url(&self) -> String {
@@ -74,10 +70,8 @@ impl OpenClawProvider {
         }
     }
 
-    fn auth_request(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-        builder
-            .header("Authorization", format!("Bearer {}", self.token))
-            .header("Content-Type", "application/json")
+    fn api_request(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        builder.header("Content-Type", "application/json")
     }
 
     fn fallback_model_info(&self) -> ModelInfo {
@@ -150,7 +144,7 @@ impl LlmProvider for OpenClawProvider {
 
     async fn list_models(&self) -> Result<Vec<ModelInfo>> {
         let response = self
-            .auth_request(self.client.get(self.models_url()))
+            .api_request(self.client.get(self.models_url()))
             .send()
             .await
             .context("Failed to query OpenClaw models")?;
@@ -279,7 +273,7 @@ impl LlmProvider for OpenClawProvider {
         );
 
         let response = self
-            .auth_request(self.client.post(&url))
+            .api_request(self.client.post(&url))
             .json(&body)
             .send()
             .await
@@ -499,7 +493,6 @@ mod tests {
                 .expect("test server should start");
 
         let provider = OpenClawProvider::new(
-            "token".to_string(),
             Some(base_url),
             Some("opencode/agent".to_string()),
         );
@@ -520,7 +513,6 @@ mod tests {
                 .expect("test server should start");
 
         let provider = OpenClawProvider::new(
-            "token".to_string(),
             Some(base_url),
             Some("openclaw:gemini3-adc".to_string()),
         );
@@ -563,7 +555,6 @@ mod tests {
             spawn_test_server("200 OK", response_body).expect("test server should start");
 
         let provider = OpenClawProvider::new(
-            "secret-token".to_string(),
             Some(base_url),
             Some("openclaw:main".to_string()),
         );
@@ -604,7 +595,7 @@ mod tests {
         .expect("request should be valid utf-8");
         let request_text_lower = request_text.to_lowercase();
 
-        assert!(request_text_lower.contains("authorization: bearer secret-token"));
+        assert!(!request_text_lower.contains("authorization:"));
         assert!(request_text.contains("\"tool_choice\":\"required\""));
         assert!(request_text.contains("\"name\":\"tool.echo\""));
         assert_eq!(response.provider, "openclaw");

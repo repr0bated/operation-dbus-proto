@@ -6,17 +6,17 @@
 use anyhow::Result;
 use dashmap::DashMap;
 use op_core::types::BusType;
+use op_grpc_bridge::SchemaEngine;
 use op_jsonrpc::nonnet::NonNetDb;
 use op_network::ovsdb::OvsdbClient;
-use op_grpc_bridge::SchemaEngine;
 use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
 use sqlx::{sqlite::SqlitePool, Row};
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use zbus::{connection::Builder, Connection};
 use zbus::zvariant::ObjectPath;
+use zbus::{connection::Builder, Connection};
 
 pub mod dbus_interface;
 pub mod jsonrpc_interface;
@@ -49,8 +49,20 @@ impl DbusMirror {
         schema_engine: Option<Arc<SchemaEngine>>,
     ) -> Result<Self> {
         let connection = match bus_type {
-            BusType::System => Builder::system()?.name("org.opdbus.v1")?.build().await?,
-            BusType::Session => Builder::session()?.name("org.opdbus.v1")?.build().await?,
+            BusType::System => {
+                Builder::system()?
+                    .name("org.opdbus.v1")?
+                    .name("org.opdbus")?
+                    .build()
+                    .await?
+            }
+            BusType::Session => {
+                Builder::session()?
+                    .name("org.opdbus.v1")?
+                    .name("org.opdbus")?
+                    .build()
+                    .await?
+            }
         };
 
         // Initialize Enterprise DB pool if it exists
@@ -92,14 +104,18 @@ impl DbusMirror {
             .await?;
 
         // Register OVSDB JSON-RPC interface at /org/opdbus/v1/ovsdb
-        let ovsdb_interface = jsonrpc_interface::OvsdbInterface::new(self.ovsdb.clone(), self.schema_engine.clone());
+        let ovsdb_interface =
+            jsonrpc_interface::OvsdbInterface::new(self.ovsdb.clone(), self.schema_engine.clone());
         self.connection
             .object_server()
             .at("/org/opdbus/v1/ovsdb", ovsdb_interface)
             .await?;
 
         // Register NonNet JSON-RPC interface at /org/opdbus/v1/nonnet
-        let nonnet_interface = jsonrpc_interface::NonNetInterface::new(self.nonnet.clone(), self.schema_engine.clone());
+        let nonnet_interface = jsonrpc_interface::NonNetInterface::new(
+            self.nonnet.clone(),
+            self.schema_engine.clone(),
+        );
         self.connection
             .object_server()
             .at("/org/opdbus/v1/nonnet", nonnet_interface)
@@ -156,7 +172,12 @@ impl DbusMirror {
             tracing::warn!("NonNet snapshot failed: {}", e);
         }
 
-        // 4. Remove any D-Bus objects that no longer exist in any authority
+        // 4. Scan freedesktop system services
+        if let Err(e) = self.publish_system_services(&mut active_paths).await {
+            tracing::warn!("System services snapshot failed: {}", e);
+        }
+
+        // 5. Remove any D-Bus objects that no longer exist in any authority
         self.remove_stale_publications(&active_paths).await?;
 
         Ok(())
@@ -221,9 +242,7 @@ impl DbusMirror {
 
                 if let Some(tables) = schema_resp
                     .result
-                    .and_then(|schema| {
-                        schema.get("tables").and_then(|v| v.as_object().cloned())
-                    })
+                    .and_then(|schema| schema.get("tables").and_then(|v| v.as_object().cloned()))
                 {
                     for (table_name, _) in tables.iter() {
                         let dump_req = op_jsonrpc::protocol::JsonRpcRequest::new(
@@ -256,6 +275,87 @@ impl DbusMirror {
         Ok(())
     }
 
+    /// Services that are too large or ephemeral to project, or that op-dbus replaces.
+    const SKIP_SERVICES: &'static [&'static str] = &[
+        "org.freedesktop.systemd1",       // thousands of unit objects
+        "org.freedesktop.NetworkManager", // replaced by op-dbus, huge ephemeral tree
+        "fi.w1.wpa_supplicant1",          // ephemeral BSS/scan results
+        "org.freedesktop.DBus",           // meta bus service
+    ];
+
+    async fn publish_system_services(&self, active_paths: &mut HashSet<String>) -> Result<()> {
+        let system_conn = zbus::Connection::system().await?;
+        let proxy = zbus::fdo::DBusProxy::new(&system_conn).await?;
+        let names = proxy.list_names().await?;
+
+        for name in names {
+            let name_str = name.as_str();
+            // Skip unique connections, our own service, and known-huge services
+            if name_str.starts_with(':')
+                || name_str.starts_with("org.opdbus")
+                || Self::SKIP_SERVICES.iter().any(|s| *s == name_str)
+            {
+                continue;
+            }
+
+            // Sanitize for D-Bus object path: replace dots and hyphens with underscores
+            let safe_name = name_str.replace('.', "/").replace('-', "_");
+
+            let introspect_proxy = zbus::fdo::IntrospectableProxy::builder(&system_conn)
+                .destination(name_str)?
+                .path("/")?
+                .build()
+                .await?;
+
+            let mut interfaces = Vec::new();
+            let mut methods = Vec::new();
+            let mut properties = Vec::new();
+            let mut signals = Vec::new();
+
+            if let Ok(xml) = introspect_proxy.introspect().await {
+                if let Ok(node) = zbus_xml::Node::try_from(xml.as_str()) {
+                    for iface in node.interfaces() {
+                        let iface_name: String = iface.name().to_string();
+                        // Skip standard D-Bus plumbing interfaces
+                        if iface_name == "org.freedesktop.DBus.Introspectable"
+                            || iface_name == "org.freedesktop.DBus.Peer"
+                            || iface_name == "org.freedesktop.DBus.Properties"
+                        {
+                            continue;
+                        }
+                        interfaces.push(Value::from(iface_name));
+                        for m in iface.methods() {
+                            let n: String = m.name().to_string();
+                            methods.push(Value::from(n));
+                        }
+                        for p in iface.properties() {
+                            let n: String = p.name().to_string();
+                            properties.push(Value::from(n));
+                        }
+                        for s in iface.signals() {
+                            let n: String = s.name().to_string();
+                            signals.push(Value::from(n));
+                        }
+                    }
+                }
+            }
+
+            let service_data = simd_json::json!({
+                "service": name_str,
+                "interfaces": interfaces,
+                "methods": methods,
+                "properties": properties,
+                "signals": signals,
+            });
+
+            let path = format!("/org/opdbus/v1/system/{}", safe_name);
+            self.publish_object(&path, service_data).await?;
+            active_paths.insert(path);
+        }
+
+        Ok(())
+    }
+
     async fn publish_object(&self, path: &str, data: Value) -> Result<()> {
         if self.published_objects.contains_key(path) {
             // Signal property update if needed
@@ -271,10 +371,7 @@ impl DbusMirror {
     }
 
     /// Load plugin state into the mirror (Seeding).
-    pub async fn load_plugin_state(
-        &self,
-        plugins: &std::collections::HashMap<String, Value>,
-    ) {
+    pub async fn load_plugin_state(&self, plugins: &std::collections::HashMap<String, Value>) {
         let mut active_paths = HashSet::new();
         for (plugin_id, state) in plugins {
             let path = format!("/org/opdbus/v1/plugins/{}", plugin_id);
@@ -295,7 +392,10 @@ impl DbusMirror {
 
         for path in to_remove {
             let op = ObjectPath::try_from(path.as_str())?;
-            self.connection.object_server().remove::<object::MirrorObject, _>(op).await?;
+            self.connection
+                .object_server()
+                .remove::<object::MirrorObject, _>(op)
+                .await?;
             self.published_objects.remove(&path);
         }
 
@@ -307,6 +407,12 @@ impl DbusMirror {
             .iter()
             .map(|e| entry_path_to_dbus(e.key()))
             .collect()
+    }
+
+    /// Expose the underlying D-Bus connection so callers can register
+    /// additional interfaces on the same bus name.
+    pub fn connection(&self) -> &Connection {
+        &self.connection
     }
 
     fn extract_uuid(&self, row: &Value) -> String {

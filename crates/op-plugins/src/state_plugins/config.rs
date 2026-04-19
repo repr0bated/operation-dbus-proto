@@ -4,10 +4,10 @@ use op_state::{
     ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
 };
 use serde::{Deserialize, Serialize};
-use tokio::sync::RwLock;
 use simd_json::OwnedValue as Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use tokio::sync::RwLock;
 
 const DEFAULT_CONFIG_STORE_PATH: &str = "/etc/op-dbus/config-store.json";
 

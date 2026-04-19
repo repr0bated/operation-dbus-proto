@@ -32,11 +32,12 @@ impl AgentLifecycle for OrchestrationServer {
 
         info!(session_id = %session_id, client = %req.client_name, "StartSession");
 
-        let metadata_map: Option<std::collections::HashMap<String, String>> = if req.metadata.is_empty() {
-            None
-        } else {
-            Some(req.metadata.clone())
-        };
+        let metadata_map: Option<std::collections::HashMap<String, String>> =
+            if req.metadata.is_empty() {
+                None
+            } else {
+                Some(req.metadata.clone())
+            };
 
         match self
             .pool
@@ -68,10 +69,7 @@ impl AgentLifecycle for OrchestrationServer {
                         agent_ids: started_agents.clone(),
                         metadata: req.metadata.clone(),
                     };
-                    self.sessions
-                        .write()
-                        .await
-                        .insert(session_id.clone(), info);
+                    self.sessions.write().await.insert(session_id.clone(), info);
                 }
 
                 // Broadcast agent started events
@@ -113,9 +111,7 @@ impl AgentLifecycle for OrchestrationServer {
 
         match self.pool.shutdown_session(&req.session_id).await {
             Ok(duration) => {
-                let stopped_agents = session_info
-                    .map(|s| s.agent_ids)
-                    .unwrap_or_default();
+                let stopped_agents = session_info.map(|s| s.agent_ids).unwrap_or_default();
 
                 // Broadcast agent stopped events
                 let now_ms = chrono::Utc::now().timestamp_millis();
@@ -159,7 +155,10 @@ impl AgentLifecycle for OrchestrationServer {
 
                 let mut metrics = std::collections::HashMap::new();
                 if req.include_metrics {
-                    metrics.insert("request_count".to_string(), health.request_count.to_string());
+                    metrics.insert(
+                        "request_count".to_string(),
+                        health.request_count.to_string(),
+                    );
                     metrics.insert("error_count".to_string(), health.error_count.to_string());
                     metrics.insert(
                         "circuit_state".to_string(),
@@ -212,15 +211,12 @@ impl AgentLifecycle for OrchestrationServer {
                 match rx.recv().await {
                     Ok(event) => {
                         // Filter by agent ID if requested
-                        if !filter_agents.is_empty()
-                            && !filter_agents.contains(&event.agent_id)
-                        {
+                        if !filter_agents.is_empty() && !filter_agents.contains(&event.agent_id) {
                             continue;
                         }
 
                         // Skip heartbeats if not requested
-                        if !include_heartbeats
-                            && event.message.to_lowercase().contains("heartbeat")
+                        if !include_heartbeats && event.message.to_lowercase().contains("heartbeat")
                         {
                             continue;
                         }
@@ -242,9 +238,7 @@ impl AgentLifecycle for OrchestrationServer {
         });
 
         let stream = tokio_stream::wrappers::ReceiverStream::new(stream_rx);
-        Ok(Response::new(
-            Box::pin(stream) as Self::WatchAgentsStream
-        ))
+        Ok(Response::new(Box::pin(stream) as Self::WatchAgentsStream))
     }
 
     /// Graceful shutdown: iterate all tracked sessions and shut each one down.
@@ -255,9 +249,7 @@ impl AgentLifecycle for OrchestrationServer {
         let req = request.into_inner();
         info!(force = req.force, "Shutdown requested");
 
-        let session_ids: Vec<String> = {
-            self.sessions.read().await.keys().cloned().collect()
-        };
+        let session_ids: Vec<String> = { self.sessions.read().await.keys().cloned().collect() };
 
         let mut agents_stopped: i32 = 0;
         let mut errors: Vec<String> = Vec::new();

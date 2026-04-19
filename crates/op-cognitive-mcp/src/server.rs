@@ -4,12 +4,14 @@
 
 use crate::cognitive_tools::CognitiveToolRegistry;
 use crate::memory_store::CognitiveMemoryStore;
+use crate::qdrant_shuttle::QdrantSemanticShuttle;
 use op_mcp::tool_registry::ToolRegistry;
 use sqlx::sqlite::SqlitePoolOptions;
 use std::sync::Arc;
 
 pub struct CognitiveMcpServer {
     memory_store: Arc<CognitiveMemoryStore>,
+    qdrant_shuttle: Arc<QdrantSemanticShuttle>,
     tool_registry: Arc<ToolRegistry>,
 }
 
@@ -21,11 +23,13 @@ impl CognitiveMcpServer {
             .await?;
         let memory_store = Arc::new(CognitiveMemoryStore::new(pool).await?);
         let tool_registry = Arc::new(ToolRegistry::new());
+        let qdrant_shuttle = Arc::new(QdrantSemanticShuttle::new().await?);
 
         CognitiveToolRegistry::register_all(&tool_registry, memory_store.clone()).await?;
 
         Ok(Self {
             memory_store,
+            qdrant_shuttle,
             tool_registry,
         })
     }
@@ -53,5 +57,9 @@ impl CognitiveMcpServer {
 
     pub fn tool_registry(&self) -> Arc<ToolRegistry> {
         self.tool_registry.clone()
+    }
+
+    pub fn qdrant_shuttle(&self) -> Arc<QdrantSemanticShuttle> {
+        self.qdrant_shuttle.clone()
     }
 }

@@ -777,7 +777,11 @@ fn compute_merkle_proof(hashes: &[&str], index: usize) -> Vec<(String, bool)> {
     let mut idx = index;
 
     while level.len() > 1 {
-        let sibling_idx = if idx.is_multiple_of(2) { idx + 1 } else { idx - 1 };
+        let sibling_idx = if idx.is_multiple_of(2) {
+            idx + 1
+        } else {
+            idx - 1
+        };
         let is_right = idx.is_multiple_of(2);
 
         if sibling_idx < level.len() {

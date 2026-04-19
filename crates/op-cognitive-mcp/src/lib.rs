@@ -9,13 +9,19 @@
 
 pub mod activity_filter;
 pub mod cognitive_tools;
+pub mod cozo_shuttle;
 pub mod memory_store;
+pub mod qdrant_shuttle;
 pub mod server;
+pub mod voyage;
 
 pub use activity_filter::{
     derive_significance, is_pii, ActivityEvent, ActivityFilter, FilterDecision, FilterTunables,
     OpKind, Significance, SuppressReason,
 };
 pub use cognitive_tools::CognitiveToolRegistry;
+pub use cozo_shuttle::CozoGraphShuttle;
 pub use memory_store::CognitiveMemoryStore;
+pub use qdrant_shuttle::{IdentitySled, QdrantSemanticShuttle, SessionTraceContext};
 pub use server::CognitiveMcpServer;
+pub use voyage::VoyageClient;

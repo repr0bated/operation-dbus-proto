@@ -95,10 +95,7 @@ fn parse_design_response(result: Value) -> ArchitectDesignResponse {
 fn parse_review_response(result: Value) -> ArchitectReviewResponse {
     let review_json = simd_json::to_string(&result).unwrap_or_default();
 
-    let score = result
-        .get("score")
-        .and_then(|v| v.as_i64())
-        .unwrap_or(0) as i32;
+    let score = result.get("score").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
 
     let issues = result
         .get("issues")
@@ -175,14 +172,8 @@ fn parse_suggest_response(result: Value) -> ArchitectSuggestResponse {
                             .and_then(|v| v.as_str())
                             .unwrap_or("")
                             .to_string(),
-                        effort: f
-                            .get("effort")
-                            .and_then(|v| v.as_i64())
-                            .unwrap_or(3) as i32,
-                        impact: f
-                            .get("impact")
-                            .and_then(|v| v.as_i64())
-                            .unwrap_or(3) as i32,
+                        effort: f.get("effort").and_then(|v| v.as_i64()).unwrap_or(3) as i32,
+                        impact: f.get("impact").and_then(|v| v.as_i64()).unwrap_or(3) as i32,
                     })
                 })
                 .collect()
@@ -223,7 +214,11 @@ impl BackendArchitectService for OrchestrationServer {
             "focus_areas": req.focus_areas,
         });
 
-        match self.pool.execute(session_id, AGENT_ID, "analyze", args).await {
+        match self
+            .pool
+            .execute(session_id, AGENT_ID, "analyze", args)
+            .await
+        {
             Ok(result) => Ok(Response::new(parse_analyze_response(result))),
             Err(e) => {
                 warn!(error = %e, "Backend architect analyze failed");
@@ -251,7 +246,11 @@ impl BackendArchitectService for OrchestrationServer {
             "style": req.style,
         });
 
-        match self.pool.execute(session_id, AGENT_ID, "design", args).await {
+        match self
+            .pool
+            .execute(session_id, AGENT_ID, "design", args)
+            .await
+        {
             Ok(result) => Ok(Response::new(parse_design_response(result))),
             Err(e) => {
                 warn!(error = %e, "Backend architect design failed");
@@ -279,7 +278,11 @@ impl BackendArchitectService for OrchestrationServer {
             "review_criteria": req.review_criteria,
         });
 
-        match self.pool.execute(session_id, AGENT_ID, "review", args).await {
+        match self
+            .pool
+            .execute(session_id, AGENT_ID, "review", args)
+            .await
+        {
             Ok(result) => Ok(Response::new(parse_review_response(result))),
             Err(e) => {
                 warn!(error = %e, "Backend architect review failed");
@@ -308,7 +311,11 @@ impl BackendArchitectService for OrchestrationServer {
             "max_suggestions": req.max_suggestions,
         });
 
-        match self.pool.execute(session_id, AGENT_ID, "suggest", args).await {
+        match self
+            .pool
+            .execute(session_id, AGENT_ID, "suggest", args)
+            .await
+        {
             Ok(result) => Ok(Response::new(parse_suggest_response(result))),
             Err(e) => {
                 warn!(error = %e, "Backend architect suggest failed");
@@ -342,23 +349,17 @@ impl BackendArchitectService for OrchestrationServer {
 
             let callback_tx = tx.clone();
             let result = pool
-                .execute_streaming(
-                    &session_id,
-                    AGENT_ID,
-                    "document",
-                    args,
-                    move |chunk| {
-                        let msg = DocumentChunk {
-                            content: chunk.content,
-                            section: String::new(),
-                            is_final: chunk.is_final,
-                            sequence,
-                        };
-                        // Use try_send since callback is not async
-                        let _ = callback_tx.try_send(Ok(msg));
-                        sequence += 1;
-                    },
-                )
+                .execute_streaming(&session_id, AGENT_ID, "document", args, move |chunk| {
+                    let msg = DocumentChunk {
+                        content: chunk.content,
+                        section: String::new(),
+                        is_final: chunk.is_final,
+                        sequence,
+                    };
+                    // Use try_send since callback is not async
+                    let _ = callback_tx.try_send(Ok(msg));
+                    sequence += 1;
+                })
                 .await;
 
             // If the streaming call itself failed, send error as final chunk

@@ -1,3 +1,4 @@
+mented
 //! Block events and plugin footprints for the streaming blockchain
 
 use serde::{Deserialize, Serialize};
@@ -94,6 +95,8 @@ impl PluginFootprint {
     }
 
     /// Convert to a BlockEvent
+    /// NOTE: Vectors are dropped for plugin footprints - timing is authoritative,
+    /// vectors are async projections handled separately via Voyage AI embedding pipeline
     pub fn to_block_event(&self) -> BlockEvent {
         let data = simd_json::json!({
             "plugin_id": self.plugin_id,
@@ -108,7 +111,7 @@ impl PluginFootprint {
             action: self.operation.clone(),
             data,
             hash: self.data_hash.clone(),
-            vector: Vec::new(),
+            vector: Vec::new(), // Vectors are projections, not part of authoritative timing
         }
     }
 }

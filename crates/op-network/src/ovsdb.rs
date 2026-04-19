@@ -580,7 +580,7 @@ impl OvsdbClient {
                 if let Ok(req_str) = simd_json::to_string(&monitor_req) {
                     let _ = stream.write_all(req_str.as_bytes()).await;
                     let _ = stream.write_all(b"\n").await;
-                    
+
                     let mut buffer = [0u8; 4096];
                     loop {
                         match stream.read(&mut buffer).await {

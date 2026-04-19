@@ -30,7 +30,7 @@ This task requires documenting and structuring a complete, production-scale cogn
 - Host OS: Chimera Linux (dinit-managed services)
 - Openclaw gateway runs in Incus container named `services`
   - Endpoint: `http://127.0.0.1:18789/v1/chat/completions` (OpenAI-compatible)
-  - Auth: `OPENCLAW_TOKEN` env var
+  - Access: internal OpenClaw network endpoint via `OPENCLAW_BASE_URL`
   - Models: `google-gemini-cli/*`, `opencode/*`
 - op-dbus MCP servers exposed at `:8080/mcp/{compact,agents,sse}`
 - Host IP for container bridge: `10.149.181.1`

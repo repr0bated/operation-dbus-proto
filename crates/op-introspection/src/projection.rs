@@ -1,9 +1,9 @@
 use anyhow::Result;
 use futures::{stream::iter, StreamExt};
-use tokio::sync::RwLock as AsyncRwLock;
 use sha2::{Digest, Sha256};
 use simd_json::OwnedValue as Value;
 use std::sync::Arc;
+use tokio::sync::RwLock as AsyncRwLock;
 
 use crate::IntrospectionService;
 pub use op_core::types::BusType;

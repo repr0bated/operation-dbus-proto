@@ -16,7 +16,7 @@ OpenClaw is now configured to run securely without Tailscale by using network is
 ✓ Not exposed to internet
 ✓ Not exposed to other network interfaces
 ✓ Only accessible within Incus bridge network
-✓ Bearer token authentication required
+✓ Internal bridge network isolation is the primary access control
 
 ### Removed Configuration
 - Removed Incus proxy device `port18789` that was forwarding to host
@@ -29,7 +29,6 @@ OpenClaw is now configured to run securely without Tailscale by using network is
 ### From Host (operation-dbus)
 ```bash
 OPENCLAW_BASE_URL=http://10.149.181.114:18789/v1
-OPENCLAW_TOKEN=b6fb8429d8fd9e615305261050aa67d97489d566842a8cec
 ```
 
 ### From Other Containers
@@ -45,8 +44,7 @@ The op-dbus MCP servers on the host (10.149.181.1:8080) can access OpenClaw via 
 
 ```bash
 # Should work (from host via bridge)
-curl http://10.149.181.114:18789/v1/models \
-  -H "Authorization: Bearer b6fb8429d8fd9e615305261050aa67d97489d566842a8cec"
+curl http://10.149.181.114:18789/v1/models
 
 # Should fail (not exposed to host localhost)
 curl http://127.0.0.1:18789/v1/models
@@ -87,7 +85,7 @@ doas incus config device add openclaw port18789 proxy \
 
 1. **Network Isolation:** Container network is isolated from host and internet
 2. **No Tailscale:** Completely removed - simpler setup, no VPN overhead
-3. **Token Authentication:** Still requires bearer token for API access
+3. **Internal-Only Reachability:** Access depends on staying on the trusted Incus bridge
 4. **Bridge Security:** Incus bridge provides network-level isolation
 5. **Minimal Attack Surface:** Only accessible from trusted containers
 6. **Reduced Dependencies:** Fewer packages, smaller attack surface
@@ -108,7 +106,7 @@ doas incus config device add openclaw port18789 proxy \
 │  │  │ IP: 10.149.181.114                 │ │  │
 │  │  │                                    │ │  │
 │  │  │ OpenClaw Gateway :18789            │ │  │
-│  │  │ - Bearer token auth                │ │  │
+│  │  │ - Internal bridge only             │ │  │
 │  │  │ - Bridge network only              │ │  │
 │  │  └────────────────────────────────────┘ │  │
 │  │                                          │  │

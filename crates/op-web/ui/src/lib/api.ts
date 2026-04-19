@@ -55,6 +55,7 @@ export const api = {
   /** Event chain / audit via gRPC EventChainService */
   eventChain: {
     getEvents: eventChainService.getEvents,
+    searchSemanticTrace: eventChainService.searchSemanticTrace,
     verifyChain: eventChainService.verifyChain,
   },
 

@@ -25,10 +25,7 @@ fn parse_version(v: &str) -> u64 {
     if v.is_empty() {
         return 0;
     }
-    v.strip_prefix('v')
-        .unwrap_or(v)
-        .parse()
-        .unwrap_or(0)
+    v.strip_prefix('v').unwrap_or(v).parse().unwrap_or(0)
 }
 
 /// Helper to increment a version string
@@ -155,9 +152,7 @@ impl ContextManagerService for OrchestrationServer {
             .values()
             .filter(|entry| {
                 // Filter by tag
-                if !req.tag_filter.is_empty()
-                    && !entry.tags.iter().any(|t| t == &req.tag_filter)
-                {
+                if !req.tag_filter.is_empty() && !entry.tags.iter().any(|t| t == &req.tag_filter) {
                     return false;
                 }
 
@@ -403,7 +398,11 @@ impl ContextManagerService for OrchestrationServer {
             imported_count += 1;
         }
 
-        info!(imported = imported_count, skipped = skipped_count, "Import complete");
+        info!(
+            imported = imported_count,
+            skipped = skipped_count,
+            "Import complete"
+        );
 
         Ok(Response::new(ImportContextResponse {
             success: errors.is_empty(),

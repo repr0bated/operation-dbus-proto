@@ -20,7 +20,6 @@ New ~200-line module implementing `LlmProvider` trait. Pattern follows `anthropi
 OpenClawProvider {
     client: reqwest::Client,
     base_url: String,              // OPENCLAW_BASE_URL, default http://127.0.0.1:18789
-    token: String,                 // OPENCLAW_TOKEN (required)
     session_key: Option<String>,   // OPENCLAW_SESSION_KEY (stateful sessions)
     agent_id: Option<String>,      // OPENCLAW_AGENT_ID (agent routing)
 }
@@ -28,7 +27,7 @@ OpenClawProvider {
 
 - `from_env()` constructor reads env vars
 - `chat_with_request()` — POST to `{base_url}/v1/chat/completions` with:
-  - `Authorization: Bearer {token}` header
+  - trusted internal-network access to the gateway
   - `x-openclaw-session-key` and `x-openclaw-agent-id` headers (if set)
   - `user` field for session routing
   - Tools via `ToolDefinition::to_openai_format()` (already exists at `provider.rs:144`)
@@ -36,6 +35,7 @@ OpenClawProvider {
 - Parse OpenAI-format response: `choices[0].message.tool_calls` → `Vec<ToolCallInfo>`
   - Note: OpenAI returns `arguments` as a JSON string, needs `simd_json::from_str()`
 - `list_models()` — hit `{base_url}/v1/models` with auth header
+- `list_models()` — hit `{base_url}/v1/models` over the internal bridge
 - `provider_type()` — return `ProviderType::Custom("openclaw".into())`
 - No new Cargo.toml deps needed (reqwest, simd-json, async-trait already present)
 
@@ -44,7 +44,7 @@ OpenClawProvider {
 **`crates/op-llm/src/chat.rs`** — Add OpenClaw auto-detection block in `ChatManager::new()`, **before** the MCP Proxy block (highest priority when configured):
 
 ```rust
-if std::env::var("OPENCLAW_TOKEN").is_ok() {
+if std::env::var("OPENCLAW_BASE_URL").is_ok() || matches!(env_provider.as_deref(), Some("openclaw")) {
     match OpenClawProvider::from_env() { ... }
 }
 ```
@@ -55,7 +55,7 @@ if std::env::var("OPENCLAW_TOKEN").is_ok() {
 
 ### Step 3: Verify
 
-- Set `OPENCLAW_TOKEN` + `OPENCLAW_BASE_URL` env vars
+- Set `OPENCLAW_BASE_URL` + `LLM_PROVIDER=openclaw`
 - Start op-web, send chat messages through the Assistant UI
 - Verify tool calling works (ask chatbot to list bridges, etc.)
 - Verify multi-turn conversation works

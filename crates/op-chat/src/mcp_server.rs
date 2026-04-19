@@ -357,14 +357,20 @@ impl McpService for ChatMcpServer {
     async fn subscribe(
         &self,
         _request: Request<SubscribeRequest>,
-    ) -> std::result::Result<Response<ReceiverStream<std::result::Result<ProtoMcpEvent, Status>>>, Status> {
+    ) -> std::result::Result<
+        Response<ReceiverStream<std::result::Result<ProtoMcpEvent, Status>>>,
+        Status,
+    > {
         Err(Status::unimplemented("Subscribe not implemented"))
     }
 
     async fn stream(
         &self,
         _request: Request<tonic::Streaming<ProtoMcpRequest>>,
-    ) -> std::result::Result<Response<ReceiverStream<std::result::Result<ProtoMcpResponse, Status>>>, Status> {
+    ) -> std::result::Result<
+        Response<ReceiverStream<std::result::Result<ProtoMcpResponse, Status>>>,
+        Status,
+    > {
         Err(Status::unimplemented("Streaming not implemented"))
     }
 
@@ -469,7 +475,10 @@ impl McpService for ChatMcpServer {
     async fn call_tool_streaming(
         &self,
         _request: Request<CallToolRequest>,
-    ) -> std::result::Result<Response<ReceiverStream<std::result::Result<ProtoToolOutput, Status>>>, Status> {
+    ) -> std::result::Result<
+        Response<ReceiverStream<std::result::Result<ProtoToolOutput, Status>>>,
+        Status,
+    > {
         Err(Status::unimplemented("Streaming tool call not implemented"))
     }
 

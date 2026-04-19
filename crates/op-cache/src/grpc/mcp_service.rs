@@ -14,10 +14,8 @@ use tracing::{debug, info, warn};
 use super::agent_service::AgentServiceImpl;
 use super::orchestrator_service::OrchestratorServiceImpl;
 use super::proto::{
-    agent_service_server::AgentService,
-    mcp_service_server::McpService,
-    ListAgentsRequest, ListToolsRequest, ListToolsResponse, McpError, McpRequest, McpResponse,
-    McpTool,
+    agent_service_server::AgentService, mcp_service_server::McpService, ListAgentsRequest,
+    ListToolsRequest, ListToolsResponse, McpError, McpRequest, McpResponse, McpTool,
 };
 
 /// MCP service implementation backed by the agent registry and orchestrator.
@@ -41,11 +39,7 @@ impl McpServiceImpl {
     }
 
     /// Dispatch a `tools/call` request to the appropriate agent.
-    async fn handle_tools_call(
-        &self,
-        id: &str,
-        params: &[u8],
-    ) -> Result<McpResponse, Status> {
+    async fn handle_tools_call(&self, id: &str, params: &[u8]) -> Result<McpResponse, Status> {
         // Parse the params to extract tool name and arguments.
         // Expected JSON: { "name": "<agent_id>", "arguments": { ... } }
         let mut params_buf = params.to_vec();
@@ -157,9 +151,8 @@ impl McpServiceImpl {
                         if buf.is_empty() {
                             serde_json::Value::Object(serde_json::Map::new())
                         } else {
-                            simd_json::from_slice(&mut buf).unwrap_or(serde_json::Value::Object(
-                                serde_json::Map::new(),
-                            ))
+                            simd_json::from_slice(&mut buf)
+                                .unwrap_or(serde_json::Value::Object(serde_json::Map::new()))
                         }
                     },
                 })
@@ -212,9 +205,7 @@ impl McpServiceImpl {
     async fn list_tools_internal(&self) -> Result<ListToolsResponse, Status> {
         let agents_response = self
             .agent_service
-            .list_agents(Request::new(ListAgentsRequest {
-                enabled_only: true,
-            }))
+            .list_agents(Request::new(ListAgentsRequest { enabled_only: true }))
             .await?
             .into_inner();
 

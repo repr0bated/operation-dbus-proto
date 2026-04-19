@@ -339,9 +339,7 @@ impl SqliteStore {
         backend_checkpoint: Option<&simd_json::OwnedValue>,
     ) -> Result<()> {
         let state_json = simd_json::to_string(state_snapshot)?;
-        let backend_json = backend_checkpoint
-            .map(simd_json::to_string)
-            .transpose()?;
+        let backend_json = backend_checkpoint.map(simd_json::to_string).transpose()?;
         let now = Utc::now().to_rfc3339();
 
         sqlx::query(
@@ -618,11 +616,7 @@ impl SqliteStore {
 impl StateStore for SqliteStore {
     async fn save_job(&self, job: &ExecutionJob) -> Result<()> {
         let arguments_json = simd_json::to_string(&job.arguments)?;
-        let result_json = job
-            .result
-            .as_ref()
-            .map(simd_json::to_string)
-            .transpose()?;
+        let result_json = job.result.as_ref().map(simd_json::to_string).transpose()?;
         let status_str = status_to_string(&job.status);
 
         sqlx::query(
@@ -661,11 +655,7 @@ impl StateStore for SqliteStore {
 
     async fn update_job(&self, job: &ExecutionJob) -> Result<()> {
         let arguments_json = simd_json::to_string(&job.arguments)?;
-        let result_json = job
-            .result
-            .as_ref()
-            .map(simd_json::to_string)
-            .transpose()?;
+        let result_json = job.result.as_ref().map(simd_json::to_string).transpose()?;
         let status_str = status_to_string(&job.status);
 
         let result = sqlx::query(

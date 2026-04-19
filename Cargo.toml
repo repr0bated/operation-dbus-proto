@@ -32,6 +32,7 @@ members = [
     "crates/op-dbus-model",
     "crates/op-grpc-bridge",
     "crates/op-dbus-mirror",
+    "crates/op-compliance",
 ]
 
 [workspace.package]
@@ -92,6 +93,12 @@ tower-http = { version = "0.5", features = ["cors", "fs", "trace", "compression-
 # HTTP client
 reqwest = { version = "0.11", features = ["json", "stream"] }
 
+# Vector DB
+qdrant-client = "1.7"
+
+# Graph DB
+cozo-lib = "0.7"
+
 # Error handling
 anyhow = "1"
 thiserror = "1"
@@ -110,6 +117,7 @@ base64 = "0.21"
 libc = "0.2"
 bytes = "1.0"
 hex = "0.4"
+memmap2 = "0.9"
 parking_lot = "0.12"
 dashmap = "5.0"
 pin-project-lite = "0.2"
@@ -207,6 +215,7 @@ op-web.workspace = true
 op-grpc-bridge.workspace = true
 op-dbus-mirror.workspace = true
 op-mcp.workspace = true
+op-cognitive-mcp = { path = "crates/op-cognitive-mcp" }
 
 parking_lot = "0.12"
 dashmap = "5.0"

@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import {
   MessageSquare, BarChart3, Link2, Radio, FileText, Clock,
   Folder, Zap, Monitor, Settings, Bug, ScrollText, Sun, Moon, Laptop,
-  Menu, Shield, GitBranch, Orbit, Box, Globe, Network, Workflow, Brain,
+  Menu, Shield, GitBranch, Orbit, Box, Globe, Network, Workflow, Brain, Scale,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { StatusDot, Pill } from "@/components/shell/Primitives";
@@ -36,6 +36,7 @@ const NAV_GROUPS = [
       { title: "Security", path: "/security", icon: Shield },
       { title: "Skills", path: "/skills", icon: ScrollText },
       { title: "Knowledge", path: "/knowledge", icon: Brain },
+      { title: "Accountability", path: "/accountability", icon: Scale },
     ],
   },
   {
@@ -69,7 +70,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const { theme, toggleTheme } = useTheme();
   const { connected, health, lastError } = useEventStore();
 
-  const isFullHeight = location.pathname === "/chat" || location.pathname === "/workflows";
+  const isFullHeight = location.pathname === "/chat" || location.pathname === "/workflows" || location.pathname === "/accountability";
   const ThemeIcon = themeIcons[theme];
 
   const toggleGroup = (label: string) => {

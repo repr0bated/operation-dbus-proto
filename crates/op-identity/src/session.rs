@@ -3,11 +3,9 @@
 //! Sessions are created when a WireGuard peer connects and
 //! destroyed on disconnect or timeout.
 
-use std::path::PathBuf;
-use std::sync::Arc;
-
 use chrono::{DateTime, Utc};
-use rusqlite::{params, Connection};
+use dashmap::DashMap;
+use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
@@ -29,10 +27,20 @@ pub struct Session {
     pub last_seen_at: DateTime<Utc>,
 }
 
+/// Mapping of WireGuard pubkey to user information
+#[derive(Debug, Clone)]
+pub struct UserMapping {
+    pub pubkey: String,
+    pub user_email: String,
+    pub allowed_ip: String,
+    pub created_at: DateTime<Utc>,
+}
+
 /// Manages sessions and their lifecycle
 #[derive(Clone)]
 pub struct SessionManager {
-    db: Arc<Mutex<Connection>>,
+    sessions: Arc<DashMap<String, Session>>,
+    wireguard_users: Arc<DashMap<String, UserMapping>>,
     gcloud_auth: GCloudAuth,
     wireguard: WireGuardIdentity,
     current_session_id: Arc<Mutex<Option<String>>>,
@@ -44,52 +52,15 @@ impl SessionManager {
     }
 
     pub fn with_wireguard_interface(interface: &str) -> anyhow::Result<Self> {
-        let db_path = Self::db_path()?;
-
-        // Ensure parent directory exists
-        if let Some(parent) = db_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-
-        let conn = Connection::open(&db_path)?;
-
-        // Initialize schema
-        conn.execute_batch(
-            "
-            CREATE TABLE IF NOT EXISTS sessions (
-                session_id TEXT PRIMARY KEY,
-                pubkey TEXT NOT NULL,
-                user_email TEXT,
-                oauth_token TEXT,
-                token_expires_at INTEGER,
-                created_at INTEGER NOT NULL,
-                last_seen_at INTEGER NOT NULL
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_sessions_pubkey ON sessions(pubkey);
-
-            CREATE TABLE IF NOT EXISTS wireguard_users (
-                pubkey TEXT PRIMARY KEY,
-                user_email TEXT NOT NULL,
-                allowed_ip TEXT NOT NULL,
-                created_at INTEGER NOT NULL
-            );
-        ",
-        )?;
-
+        // SQL is obsolete in the 3tched architecture.
+        // We use in-memory DashMaps to prevent Btrfs mutation loops.
         Ok(Self {
-            db: Arc::new(Mutex::new(conn)),
+            sessions: Arc::new(DashMap::new()),
+            wireguard_users: Arc::new(DashMap::new()),
             gcloud_auth: GCloudAuth::new(),
             wireguard: WireGuardIdentity::with_interface(interface),
             current_session_id: Arc::new(Mutex::new(None)),
         })
-    }
-
-    fn db_path() -> anyhow::Result<PathBuf> {
-        let data_dir = dirs::data_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("identity");
-        Ok(data_dir.join("sessions.db"))
     }
 
     /// Get the GCloud auth provider
@@ -110,48 +81,17 @@ impl SessionManager {
 
     /// Get or create a session for a given pubkey
     pub async fn get_or_create_session(&self, pubkey: &str) -> anyhow::Result<Session> {
-        let db = self.db.lock().await;
-        let now = Utc::now().timestamp();
+        let now = Utc::now();
 
         // Check for existing valid session
-        let existing: Option<Session> = db
-            .query_row(
-                "SELECT session_id, pubkey, user_email, oauth_token, token_expires_at,
-                    created_at, last_seen_at
-             FROM sessions
-             WHERE pubkey = ? AND last_seen_at > ?",
-                params![pubkey, now - SESSION_TIMEOUT_SECS],
-                |row| {
-                    Ok(Session {
-                        session_id: row.get(0)?,
-                        pubkey: row.get(1)?,
-                        user_email: row.get(2)?,
-                        oauth_token: row.get(3)?,
-                        token_expires_at: row
-                            .get::<_, Option<i64>>(4)?
-                            .and_then(|ts| DateTime::from_timestamp(ts, 0)),
-                        created_at: DateTime::from_timestamp(row.get::<_, i64>(5)?, 0)
-                            .unwrap_or_default(),
-                        last_seen_at: DateTime::from_timestamp(row.get::<_, i64>(6)?, 0)
-                            .unwrap_or_default(),
-                    })
-                },
-            )
-            .ok();
+        if let Some(mut session_ref) = self.sessions.iter_mut().find(|r| {
+            r.pubkey == pubkey && (now - r.last_seen_at).num_seconds() < SESSION_TIMEOUT_SECS
+        }) {
+            debug!("Found existing session: {}", session_ref.session_id);
+            session_ref.last_seen_at = now;
+            let session = session_ref.clone();
 
-        if let Some(mut session) = existing {
-            debug!("Found existing session: {}", session.session_id);
-
-            // Update last_seen
-            db.execute(
-                "UPDATE sessions SET last_seen_at = ? WHERE session_id = ?",
-                params![now, session.session_id],
-            )?;
-            session.last_seen_at = Utc::now();
-
-            // Store current session ID
             *self.current_session_id.lock().await = Some(session.session_id.clone());
-
             return Ok(session);
         }
 
@@ -163,16 +103,12 @@ impl SessionManager {
         );
 
         // Try to get user email from WireGuard user mapping
-        let user_email: Option<String> = db
-            .query_row(
-                "SELECT user_email FROM wireguard_users WHERE pubkey = ?",
-                params![pubkey],
-                |row| row.get(0),
-            )
-            .ok();
+        let user_email = self
+            .wireguard_users
+            .get(pubkey)
+            .map(|u| u.user_email.clone());
 
         // Try to get OAuth token
-        drop(db); // Release lock before async call
         let (oauth_token, token_expires_at) = match self.gcloud_auth.get_token().await {
             Ok((token, expires)) => (Some(token), Some(expires)),
             Err(e) => {
@@ -181,31 +117,17 @@ impl SessionManager {
             }
         };
 
-        let db = self.db.lock().await;
-        db.execute(
-            "INSERT INTO sessions (session_id, pubkey, user_email, oauth_token,
-                                   token_expires_at, created_at, last_seen_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
-            params![
-                session_id,
-                pubkey,
-                user_email,
-                oauth_token,
-                token_expires_at.map(|t| t.timestamp()),
-                now,
-                now
-            ],
-        )?;
-
         let session = Session {
             session_id: session_id.clone(),
             pubkey: pubkey.to_string(),
             user_email,
             oauth_token,
             token_expires_at,
-            created_at: Utc::now(),
-            last_seen_at: Utc::now(),
+            created_at: now,
+            last_seen_at: now,
         };
+
+        self.sessions.insert(session_id.clone(), session.clone());
 
         // Store current session ID
         *self.current_session_id.lock().await = Some(session_id);
@@ -215,21 +137,17 @@ impl SessionManager {
 
     /// Get the current session ID
     pub async fn current_session_id(&self) -> Option<String> {
-        self.current_session_id.lock().await.clone()
+        self.current_session_id.lock().await.as_ref().cloned()
     }
 
     /// Update last_seen timestamp for current session
     pub async fn touch_session(&self) -> anyhow::Result<()> {
-        let session_id = self.current_session_id.lock().await.clone();
+        let session_id = self.current_session_id.lock().await.as_ref().cloned();
 
         if let Some(id) = session_id {
-            let db = self.db.lock().await;
-            let now = Utc::now().timestamp();
-
-            db.execute(
-                "UPDATE sessions SET last_seen_at = ? WHERE session_id = ?",
-                params![now, id],
-            )?;
+            if let Some(mut session) = self.sessions.get_mut(&id) {
+                session.last_seen_at = Utc::now();
+            }
         }
 
         Ok(())
@@ -237,42 +155,30 @@ impl SessionManager {
 
     /// Get a valid OAuth token, refreshing if necessary
     pub async fn get_valid_token(&self) -> anyhow::Result<String> {
-        let session_id = self.current_session_id.lock().await.clone();
+        let session_id = self.current_session_id.lock().await.as_ref().cloned();
 
         if let Some(id) = session_id {
-            let db = self.db.lock().await;
-            let now = Utc::now().timestamp();
-
-            // Check if we have a valid cached token
-            let cached: Option<(String, i64)> = db
-                .query_row(
-                    "SELECT oauth_token, token_expires_at FROM sessions
-                 WHERE session_id = ? AND oauth_token IS NOT NULL",
-                    params![id],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )
-                .ok();
-
-            if let Some((token, expires_at)) = cached {
-                // Token valid for at least 5 more minutes
-                if expires_at > now + 300 {
-                    return Ok(token);
+            if let Some(session) = self.sessions.get(&id) {
+                if let (Some(token), Some(expires_at)) =
+                    (&session.oauth_token, session.token_expires_at)
+                {
+                    // Token valid for at least 5 more minutes
+                    if expires_at > Utc::now() + chrono::Duration::minutes(5) {
+                        return Ok(token.clone());
+                    }
                 }
             }
-
-            drop(db); // Release lock before async call
         }
 
         // Refresh token
         let (token, expires_at) = self.gcloud_auth.get_token().await?;
 
-        // Update in database
-        if let Some(id) = self.current_session_id.lock().await.clone() {
-            let db = self.db.lock().await;
-            db.execute(
-                "UPDATE sessions SET oauth_token = ?, token_expires_at = ? WHERE session_id = ?",
-                params![token, expires_at.timestamp(), id],
-            )?;
+        // Update in session
+        if let Some(id) = self.current_session_id.lock().await.as_ref().cloned() {
+            if let Some(mut session) = self.sessions.get_mut(&id) {
+                session.oauth_token = Some(token.clone());
+                session.token_expires_at = Some(expires_at);
+            }
         }
 
         Ok(token)
@@ -285,14 +191,14 @@ impl SessionManager {
         user_email: &str,
         allowed_ip: &str,
     ) -> anyhow::Result<()> {
-        let db = self.db.lock().await;
-        let now = Utc::now().timestamp();
+        let mapping = UserMapping {
+            pubkey: pubkey.to_string(),
+            user_email: user_email.to_string(),
+            allowed_ip: allowed_ip.to_string(),
+            created_at: Utc::now(),
+        };
 
-        db.execute(
-            "INSERT OR REPLACE INTO wireguard_users (pubkey, user_email, allowed_ip, created_at)
-             VALUES (?, ?, ?, ?)",
-            params![pubkey, user_email, allowed_ip, now],
-        )?;
+        self.wireguard_users.insert(pubkey.to_string(), mapping);
 
         info!("Registered WireGuard user: {} -> {}", pubkey, user_email);
         Ok(())
@@ -300,28 +206,25 @@ impl SessionManager {
 
     /// Get user email for a pubkey
     pub async fn get_user_for_pubkey(&self, pubkey: &str) -> anyhow::Result<Option<String>> {
-        let db = self.db.lock().await;
-
-        let email: Option<String> = db
-            .query_row(
-                "SELECT user_email FROM wireguard_users WHERE pubkey = ?",
-                params![pubkey],
-                |row| row.get(0),
-            )
-            .ok();
-
-        Ok(email)
+        Ok(self
+            .wireguard_users
+            .get(pubkey)
+            .map(|u| u.user_email.clone()))
     }
 
     /// Clean up expired sessions
     pub async fn cleanup_expired_sessions(&self) -> anyhow::Result<usize> {
-        let db = self.db.lock().await;
-        let cutoff = Utc::now().timestamp() - SESSION_TIMEOUT_SECS;
+        let now = Utc::now();
+        let mut deleted = 0;
 
-        let deleted = db.execute(
-            "DELETE FROM sessions WHERE last_seen_at < ?",
-            params![cutoff],
-        )?;
+        self.sessions.retain(|_, session| {
+            if (now - session.last_seen_at).num_seconds() >= SESSION_TIMEOUT_SECS {
+                deleted += 1;
+                false
+            } else {
+                true
+            }
+        });
 
         if deleted > 0 {
             info!("Cleaned up {} expired sessions", deleted);
@@ -332,20 +235,53 @@ impl SessionManager {
 
     /// Invalidate a specific session
     pub async fn invalidate_session(&self, session_id: &str) -> anyhow::Result<()> {
-        let db = self.db.lock().await;
-
-        db.execute(
-            "DELETE FROM sessions WHERE session_id = ?",
-            params![session_id],
-        )?;
+        self.sessions.remove(session_id);
 
         // Clear current session if it matches
-        let mut current = self.current_session_id.lock().await;
-        if current.as_deref() == Some(session_id) {
-            *current = None;
+        let mut current_guard = self.current_session_id.lock().await;
+        if current_guard.as_deref() == Some(session_id) {
+            *current_guard = None;
         }
 
         info!("Invalidated session: {}", session_id);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_session_creation() {
+        let manager = SessionManager::new().unwrap();
+        let session = manager.get_or_create_session("test-pubkey").await.unwrap();
+        assert_eq!(session.pubkey, "test-pubkey");
+        assert!(manager.current_session_id().await.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_session_touch() {
+        let manager = SessionManager::new().unwrap();
+        let session = manager.get_or_create_session("test-pubkey").await.unwrap();
+        let last_seen = session.last_seen_at;
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+        manager.touch_session().await.unwrap();
+
+        let updated = manager.get_or_create_session("test-pubkey").await.unwrap();
+        assert!(updated.last_seen_at > last_seen);
+    }
+
+    #[tokio::test]
+    async fn test_wireguard_user_registration() {
+        let manager = SessionManager::new().unwrap();
+        manager
+            .register_wireguard_user("pubkey1", "user@example.com", "10.0.0.1")
+            .await
+            .unwrap();
+
+        let email = manager.get_user_for_pubkey("pubkey1").await.unwrap();
+        assert_eq!(email, Some("user@example.com".to_string()));
     }
 }

@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use tokio::fs as async_fs;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use anyhow::Result;
