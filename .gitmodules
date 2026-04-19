@@ -1,0 +1,21 @@
+[submodule "_reference_docs/repos/OpenAPI-Specification"]
+	path = _reference_docs/repos/OpenAPI-Specification
+	url = https://github.com/OAI/OpenAPI-Specification.git
+[submodule "_reference_docs/repos/cozo"]
+	path = _reference_docs/repos/cozo
+	url = https://github.com/cozodb/cozo.git
+[submodule "_reference_docs/repos/dinit"]
+	path = _reference_docs/repos/dinit
+	url = https://github.com/davmac314/dinit.git
+[submodule "_reference_docs/repos/grpc"]
+	path = _reference_docs/repos/grpc
+	url = https://github.com/grpc/grpc.git
+[submodule "_reference_docs/repos/ovs"]
+	path = _reference_docs/repos/ovs
+	url = https://github.com/openvswitch/ovs.git
+[submodule "operation-dbus-proto"]
+	path = operation-dbus-proto
+	url = https://github.com/repr0bated/operation-dbus-proto.git
+[submodule "axon-trace-ui"]
+	path = axon-trace-ui
+	url = https://github.com/repr0bated/axon-trace-ui.git
