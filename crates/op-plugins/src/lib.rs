@@ -9,7 +9,7 @@
 //! - Automatic hash footprints for blockchain audit trail
 //! - Auto-creation of missing plugins
 //! - Lifecycle hooks
-//! - Plugin-document indexing into the schema library
+//! - Canonical plugin-document persistence into the schema catalog
 
 pub mod auto_create;
 pub mod builtin;
