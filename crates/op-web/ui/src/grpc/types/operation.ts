@@ -227,6 +227,22 @@ export interface VerifyChainResponse {
   errors: string[];
 }
 
+export interface SearchSemanticTraceRequest {
+  limit: number;
+}
+
+export interface SemanticTraceMatch {
+  pointId: string;
+  score: number;
+  payload?: ProtobufStruct;
+}
+
+export interface SearchSemanticTraceResponse {
+  traceId: string;
+  mutationIndex: number;
+  matches: SemanticTraceMatch[];
+}
+
 // ── OvsdbMirror ─────────────────────────────────────────────────────────────
 
 export interface OvsdbListDbsResponse {

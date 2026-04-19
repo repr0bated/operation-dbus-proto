@@ -9,6 +9,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 use tracing::{debug, info, warn};
 
+use crate::orchestration::proto::op_chat_orchestration::WorkstackInfo as ProtoWorkstackInfo;
 use crate::orchestration::proto::op_chat_orchestration::{
     workstack_service_server::WorkstackService, ListWorkstacksRequest, ListWorkstacksResponse,
     WorkstackCancelRequest, WorkstackCancelResponse, WorkstackEvent as ProtoWorkstackEvent,
@@ -16,10 +17,7 @@ use crate::orchestration::proto::op_chat_orchestration::{
     WorkstackRollbackRequest, WorkstackRollbackResponse, WorkstackStatusRequest,
     WorkstackStatusResponse,
 };
-use crate::orchestration::proto::op_chat_orchestration::WorkstackInfo as ProtoWorkstackInfo;
-use crate::orchestration::workstack_executor::{
-    ExecutionStatus, WorkstackEvent as InternalEvent,
-};
+use crate::orchestration::workstack_executor::{ExecutionStatus, WorkstackEvent as InternalEvent};
 
 use super::OrchestrationServer;
 
@@ -112,7 +110,12 @@ fn to_proto_event(event: &InternalEvent) -> ProtoWorkstackEvent {
                 execution_id: String::new(),
                 event_type: event_type as i32,
                 phase_id: phase_id.clone(),
-                message: format!("Phase {}: {} ({}ms)", phase_id, status, duration.as_millis()),
+                message: format!(
+                    "Phase {}: {} ({}ms)",
+                    phase_id,
+                    status,
+                    duration.as_millis()
+                ),
                 details_json: format!(
                     "{{\"duration_ms\": {}, \"status\": \"{}\"}}",
                     duration.as_millis(),
@@ -132,7 +135,10 @@ fn to_proto_event(event: &InternalEvent) -> ProtoWorkstackEvent {
             event_type: WorkstackEventType::WorkstackEventPhaseProgress as i32,
             phase_id: phase_id.clone(),
             message: chunk.content.clone(),
-            details_json: format!("{{\"tool\": \"{}\", \"stream\": \"{}\"}}", tool, chunk.stream_type),
+            details_json: format!(
+                "{{\"tool\": \"{}\", \"stream\": \"{}\"}}",
+                tool, chunk.stream_type
+            ),
             timestamp_ms: now_ms,
             progress: None,
         },
@@ -245,9 +251,7 @@ fn to_proto_status(status: ExecutionStatus) -> i32 {
 #[tonic::async_trait]
 impl WorkstackService for OrchestrationServer {
     type ExecuteStream = Pin<
-        Box<
-            dyn tokio_stream::Stream<Item = Result<ProtoWorkstackEvent, Status>> + Send + 'static,
-        >,
+        Box<dyn tokio_stream::Stream<Item = Result<ProtoWorkstackEvent, Status>> + Send + 'static>,
     >;
 
     async fn execute(
@@ -334,11 +338,7 @@ impl WorkstackService for OrchestrationServer {
         let req = request.into_inner();
         debug!(execution_id = %req.execution_id, "Getting workstack status");
 
-        match self
-            .workstack_executor
-            .get_status(&req.execution_id)
-            .await
-        {
+        match self.workstack_executor.get_status(&req.execution_id).await {
             Some(status) => Ok(Response::new(WorkstackStatusResponse {
                 found: true,
                 execution_id: req.execution_id,
@@ -369,11 +369,7 @@ impl WorkstackService for OrchestrationServer {
         let req = request.into_inner();
         info!(execution_id = %req.execution_id, rollback = req.rollback, "Cancelling workstack");
 
-        match self
-            .workstack_executor
-            .cancel(&req.execution_id)
-            .await
-        {
+        match self.workstack_executor.cancel(&req.execution_id).await {
             Ok(was_running) => Ok(Response::new(WorkstackCancelResponse {
                 success: was_running,
                 will_rollback: req.rollback && was_running,
@@ -402,11 +398,7 @@ impl WorkstackService for OrchestrationServer {
         // The WorkstackExecutor handles rollback internally during execution.
         // For post-execution rollback, we mark the execution as rolling back.
         // This is a best-effort operation since the executor manages its own rollback.
-        match self
-            .workstack_executor
-            .get_status(&req.execution_id)
-            .await
-        {
+        match self.workstack_executor.get_status(&req.execution_id).await {
             Some(status) => {
                 if status == ExecutionStatus::Failed || status == ExecutionStatus::Completed {
                     // Cannot rollback completed/failed executions post-hoc without
@@ -438,10 +430,7 @@ impl WorkstackService for OrchestrationServer {
             None => Ok(Response::new(WorkstackRollbackResponse {
                 success: false,
                 rolled_back_phases: vec![],
-                errors: vec![format!(
-                    "Execution not found: {}",
-                    req.execution_id
-                )],
+                errors: vec![format!("Execution not found: {}", req.execution_id)],
             })),
         }
     }

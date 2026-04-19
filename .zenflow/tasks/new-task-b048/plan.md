@@ -111,7 +111,7 @@ Implement the openclaw LLM backend wiring in the existing codebase:
 - Add `OpenClaw` variant to `ProviderType` enum in `crates/crates/op-llm/src/provider.rs`
 - Export from `crates/crates/op-llm/src/lib.rs`
 - Update `crates/crates/op-chat/src/llm.rs` `create_provider()` to handle `"openclaw"` type
-- Update `src/chatbot/mod.rs` and `src/main.rs` to wire provider selection via env/config (`LLM_PROVIDER=openclaw`, `OPENCLAW_BASE_URL`, `OPENCLAW_TOKEN`, `OPENCLAW_DEFAULT_MODEL`)
+- Update `src/chatbot/mod.rs` and `src/main.rs` to wire provider selection via env/config (`LLM_PROVIDER=openclaw`, `OPENCLAW_BASE_URL`, `OPENCLAW_DEFAULT_MODEL`)
 - Write unit tests for the new provider (mock HTTP, model listing, tool call serialization)
 - Run `cargo test -p op-llm` and `cargo test -p op-chat`
 

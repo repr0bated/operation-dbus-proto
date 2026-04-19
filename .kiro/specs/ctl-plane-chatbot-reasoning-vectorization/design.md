@@ -1,4 +1,4 @@
-# Control-Plane Chatbot Reasoning Episode Vectorization — Design
+the timing  data inte# Control-Plane Chatbot Reasoning Episode Vectorization — Design
 
 ## Architecture Overview
 
@@ -72,6 +72,18 @@ the catalog is the shared index, and the embedding/Qdrant surfaces follow its fo
 ### 8. Compatibility Exposure
 - Legacy contract adapters (e.g., `op-plugins::state_plugins::schema_contract`) wrap catalog lookups to tempt older consumers without introducing new schema.
 - `SchemaCatalog::export_contract_for("ctl-plane-chatbot")` can still provide compatibility views derived from the canonical schema.
+
+## Timing and Vectorization Integrity
+
+Timing records are the authoritative, durable source of truth in the system. They are written immediately and synchronously to the blockchain for audit integrity. Vector embeddings are async projections of this timing data, processed best-effort through the Voyage AI model. This ensures data integrity by preventing partial vectorization from blocking the critical timing audit trail.
+
+### Write Ordering
+1. Timing block is written first to blockchain (synchronous, authoritative).
+2. Vector data is written optionally to local storage (synchronous, if present).
+3. Embedding is enqueued asynchronously via try_send (best-effort, may fail/retry).
+4. Voyage AI processes embeddings in background, upserts to Qdrant.
+
+This architecture prioritizes timing integrity over vector availability, as vectors are projections that can be recomputed from the authoritative timing source.
 
 ## Data Flow
 

@@ -128,6 +128,9 @@ pub struct PluginSchema {
     /// JSON Schema dialect to use (defaults to DEFAULT_SCHEMA_DIALECT)
     #[serde(default = "default_dialect")]
     pub dialect: String,
+    /// Mutation index for the identity sled
+    #[serde(default)]
+    pub mutation_index: Option<u64>,
 }
 
 fn default_dialect() -> String {
@@ -139,6 +142,11 @@ fn default_category() -> String {
 }
 
 impl PluginSchema {
+    /// Check if the schema state is valid (for the identity sled)
+    pub fn is_valid(&self) -> bool {
+        !self.name.is_empty() && !self.version.is_empty()
+    }
+
     /// Create a new plugin schema builder
     pub fn builder(name: &str) -> PluginSchemaBuilder {
         PluginSchemaBuilder::new(name)
@@ -758,6 +766,7 @@ impl PluginSchemaBuilder {
             immutable_paths: self.immutable_paths,
             tags: self.tags,
             dialect: self.dialect,
+            mutation_index: None,
         }
     }
 }

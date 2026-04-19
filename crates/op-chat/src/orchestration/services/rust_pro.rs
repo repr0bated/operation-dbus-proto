@@ -124,7 +124,8 @@ async fn run_cargo_unary(subcommand: &str, req: &CargoRequest) -> Result<CargoRe
                 stdout: String::new(),
                 stderr: format!(
                     "cargo {} timed out after {} seconds",
-                    subcommand, timeout_duration.as_secs()
+                    subcommand,
+                    timeout_duration.as_secs()
                 ),
                 exit_code: -1,
                 duration_ms: start.elapsed().as_millis() as i64,
@@ -288,7 +289,8 @@ async fn run_cargo_streaming(
     let final_line = if timed_out {
         format!(
             "cargo {} timed out after {} seconds",
-            subcommand, timeout_duration.as_secs()
+            subcommand,
+            timeout_duration.as_secs()
         )
     } else {
         format!("cargo {} exited with code {}", subcommand, exit_code)
@@ -341,10 +343,7 @@ impl RustProService for OrchestrationServer {
         Ok(Response::new(resp))
     }
 
-    async fn fmt(
-        &self,
-        request: Request<CargoRequest>,
-    ) -> Result<Response<CargoResponse>, Status> {
+    async fn fmt(&self, request: Request<CargoRequest>) -> Result<Response<CargoResponse>, Status> {
         let req = request.into_inner();
         info!(path = %req.path, "Running cargo fmt");
         let resp = run_cargo_unary("fmt", &req).await?;

@@ -4,7 +4,6 @@ use crate::manager::StateManager;
 use crate::plugin::StatePlugin;
 use crate::DesiredState;
 use anyhow::Result;
-use op_jsonrpc::ovsdb::OvsdbClient;
 use op_state_store::{SchemaCatalog, SchemaRegistry};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
@@ -184,38 +183,27 @@ pub type SharedSchemaRegistry = SharedSchemaCatalog;
 pub async fn register_on_connection(
     connection: &Connection,
     state_manager: Arc<StateManager>,
-    _ovsdb: Arc<OvsdbClient>,
 ) -> Result<()> {
     let state_iface = StateManagerDBus { state_manager };
     connection
         .object_server()
-        .at("/org/opdbus/state", state_iface)
+        .at("/org/opdbus/v1/state", state_iface)
         .await?;
     Ok(())
 }
 
-pub async fn start_system_bus(
-    state_manager: Arc<StateManager>,
-    ovsdb: Arc<OvsdbClient>,
-) -> Result<()> {
+pub async fn start_system_bus(state_manager: Arc<StateManager>) -> Result<()> {
     let connection = Connection::system().await?;
-    serve_connection(connection, state_manager, ovsdb).await
+    serve_connection(connection, state_manager).await
 }
 
-pub async fn start_session_bus(
-    state_manager: Arc<StateManager>,
-    ovsdb: Arc<OvsdbClient>,
-) -> Result<()> {
+pub async fn start_session_bus(state_manager: Arc<StateManager>) -> Result<()> {
     let connection = Connection::session().await?;
-    serve_connection(connection, state_manager, ovsdb).await
+    serve_connection(connection, state_manager).await
 }
 
-async fn serve_connection(
-    connection: Connection,
-    state_manager: Arc<StateManager>,
-    ovsdb: Arc<OvsdbClient>,
-) -> Result<()> {
-    register_on_connection(&connection, state_manager, ovsdb).await?;
+async fn serve_connection(connection: Connection, state_manager: Arc<StateManager>) -> Result<()> {
+    register_on_connection(&connection, state_manager).await?;
     connection.request_name("org.opdbus").await?;
     std::future::pending::<()>().await;
     Ok(())

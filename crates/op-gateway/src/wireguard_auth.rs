@@ -17,6 +17,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{Mutex, RwLock};
 use tokio::time::interval;
+use tracing::{debug, info, warn};
 
 use argon2::Argon2;
 use base64::{engine::general_purpose, Engine as _};
@@ -809,7 +810,7 @@ impl SimdCryptoEngine {
     /// Create new SIMD crypto engine
     pub async fn new() -> Result<Self> {
         Ok(Self {
-            rng: SystemRandom::new(),
+            _rng: SystemRandom::new(),
         })
     }
 

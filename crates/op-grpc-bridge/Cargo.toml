@@ -32,6 +32,11 @@ op-state-store = { path = "../op-state-store" }
 op-identity = { path = "../op-identity" }
 op-network = { path = "../op-network" }
 op-jsonrpc = { path = "../op-jsonrpc" }
+op-cognitive-mcp = { path = "../op-cognitive-mcp" }
+
+# Zero-copy shared memory (1:1 Direct Read)
+memmap2 = { workspace = true }
+hex = { workspace = true }
 
 # Utilities
 tracing = { workspace = true }
@@ -43,9 +48,11 @@ chrono = { workspace = true }
 futures = "0.3"
 async-stream = "0.3"
 base64 = "0.21"
+qdrant-client = "1.17"
 
 [build-dependencies]
 tonic-build = { workspace = true }
 
 [dev-dependencies]
 tokio-test = "0.4"
+tempfile = { workspace = true }

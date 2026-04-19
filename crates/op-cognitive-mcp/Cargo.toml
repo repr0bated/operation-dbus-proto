@@ -9,11 +9,16 @@ op-mcp = { path = "../op-mcp" }
 op-state-store = { path = "../op-state-store" }
 op-dynamic-loader = { path = "../op-dynamic-loader" }
 op-cache = { path = "../op-cache" }
+hex = { workspace = true }
+memmap2 = { workspace = true }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { workspace = true }
 simd-json = { workspace = true }
 tokio = { version = "1.0", features = ["full"] }
 anyhow = { workspace = true }
+qdrant-client = "1.17"
+cozo-lib = "0.7"
+reqwest = { workspace = true }
 tracing = "0.1"
 tracing-subscriber = "0.3"
 axum = { version = "0.7", features = ["json", "http2"] }

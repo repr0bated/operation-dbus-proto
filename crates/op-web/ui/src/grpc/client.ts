@@ -219,7 +219,10 @@ import type {
   ChainEvent,
   GetEventsRequest,
   GetEventsResponse,
+  SearchSemanticTraceRequest,
+  SearchSemanticTraceResponse,
   SubscribeEventsRequest,
+  SemanticTraceMatch,
   VerifyChainRequest,
   VerifyChainResponse,
   OvsdbListDbsResponse,
@@ -359,6 +362,16 @@ export const eventChainService = {
       "operation.v1.EventChainService",
       "VerifyChain",
       req,
+    );
+  },
+
+  searchSemanticTrace(req: Partial<SearchSemanticTraceRequest> = {}) {
+    return grpcUnary<SearchSemanticTraceRequest, SearchSemanticTraceResponse>(
+      "operation.v1.EventChainService",
+      "SearchSemanticTrace",
+      {
+        limit: req.limit ?? 0,
+      },
     );
   },
 };

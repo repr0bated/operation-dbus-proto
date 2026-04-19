@@ -26,6 +26,7 @@ import OpenSwitchPage from "./pages/OpenSwitchPage";
 import OpenFlowPage from "./pages/OpenFlowPage";
 import KnowledgePage from "./pages/KnowledgePage";
 import GrpcDiagnosticsPage from "./pages/GrpcDiagnosticsPage";
+import { AccountabilityPage } from "./pages/AccountabilityPage";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient({
@@ -58,6 +59,7 @@ function AppInner() {
             <Route path="/openflow" element={<OpenFlowPage />} />
             <Route path="/knowledge" element={<KnowledgePage />} />
             <Route path="/grpc" element={<GrpcDiagnosticsPage />} />
+            <Route path="/accountability" element={<AccountabilityPage />} />
             <Route path="*" element={<NotFound />} />
       </Routes>
     </AppShell>

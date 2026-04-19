@@ -6,10 +6,10 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use reqwest::Client;
-use std::path::PathBuf;
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
 use uuid;

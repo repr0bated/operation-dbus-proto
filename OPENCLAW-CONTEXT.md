@@ -78,8 +78,7 @@ Create `crates/op-llm/src/openclaw.rs` implementing the `LlmProvider` trait from
 
 Key details:
 - Use reqwest to hit `/v1/chat/completions`
-- Auth via `Authorization: Bearer <token>` header
-- Token from env var `OPENCLAW_TOKEN` or config
+- Trust internal Incus/WireGuard reachability instead of gateway bearer auth
 - `list_models()` should return the configured models
 - `chat_with_request()` must handle tools (OpenAI function calling format)
 - Add `OpenClaw` variant to `ProviderType` enum
@@ -96,7 +95,6 @@ The chatbot needs a way to switch models at runtime. OpenClaw models use prefixe
 
 ```bash
 OPENCLAW_BASE_URL=http://127.0.0.1:18789/v1
-OPENCLAW_TOKEN=b6fb8429d8fd9e615305261050aa67d97489d566842a8cec
 OPENCLAW_DEFAULT_MODEL=google-gemini-cli/gemini-2.5-flash
 LLM_PROVIDER=openclaw
 ```
@@ -117,14 +115,14 @@ LLM_PROVIDER=openclaw
 
 The user explicitly said not to push any changes that aren't the latest version. Only commit locally, never push.
 
-## Existing Auth Flow
+## Existing Access Flow
 
-gcloud ADC is already authenticated and working:
+gcloud ADC is already authenticated and working for the agent-side model stack:
 ```
 gcloud auth application-default print-access-token  # returns valid ya29.xxx token
 ```
 
-Both OpenClaw and operation-dbus share the same GCP project credentials. OpenClaw's systemd service already has `GOOGLE_APPLICATION_CREDENTIALS` pointed at the ADC file.
+Both OpenClaw and operation-dbus share the same GCP project credentials. OpenClaw's systemd service already has `GOOGLE_APPLICATION_CREDENTIALS` pointed at the ADC file. Gateway access itself is trusted via internal network isolation, not an extra bearer token.
 
 ## MCP Servers (Already Connected)
 
@@ -161,4 +159,3 @@ Source files:
 - `src/cognitive_tools.rs` - `CognitiveToolRegistry`
 - `src/main.rs` - Standalone binary entry point
 root@openclaw:/home/jeremy# 
-

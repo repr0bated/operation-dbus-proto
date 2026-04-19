@@ -411,8 +411,7 @@ fn extract_url(line: &str) -> Option<String> {
         let rest = &line[start..];
         let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
         let url = &rest[..end];
-        let url =
-            url.trim_end_matches(|c| ['.', ',', ')', '"', '\''].contains(&c));
+        let url = url.trim_end_matches(|c| ['.', ',', ')', '"', '\''].contains(&c));
         return Some(url.to_string());
     }
 
@@ -420,8 +419,7 @@ fn extract_url(line: &str) -> Option<String> {
         let rest = &line[start..];
         let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
         let url = &rest[..end];
-        let url =
-            url.trim_end_matches(|c| ['.', ',', ')', '"', '\''].contains(&c));
+        let url = url.trim_end_matches(|c| ['.', ',', ')', '"', '\''].contains(&c));
         return Some(url.to_string());
     }
 

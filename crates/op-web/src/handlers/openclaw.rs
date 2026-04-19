@@ -63,7 +63,7 @@ pub struct OpenClawStatusResponse {
     pub endpoint: String,
     pub model: String,
     pub container_ip: String,
-    pub authenticated: bool,
+    pub internal_only: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -72,7 +72,7 @@ pub struct OpenClawStatusResponse {
 pub struct OpenClawConfigResponse {
     pub endpoint: String,
     pub model: String,
-    pub token_configured: bool,
+    pub internal_only: bool,
     pub container_ip: String,
     pub container_port: u16,
 }
@@ -81,11 +81,9 @@ pub struct OpenClawConfigResponse {
 pub async fn openclaw_status_handler(
     Extension(_state): Extension<Arc<AppState>>,
 ) -> Json<OpenClawStatusResponse> {
-    let token = std::env::var("OPENCLAW_TOKEN").unwrap_or_default();
     let base_url = openclaw_base_url();
     let default_model = openclaw_default_model();
 
-    let authenticated = !token.is_empty();
     let container_ip = openclaw_host_label(&base_url);
 
     // Try to ping OpenClaw
@@ -100,16 +98,11 @@ pub async fn openclaw_status_handler(
         endpoint: base_url.clone(),
         model: default_model,
         container_ip,
-        authenticated,
+        internal_only: true,
         error: None,
     };
 
-    match client
-        .get(&ping_url)
-        .header("Authorization", format!("Bearer {}", token))
-        .send()
-        .await
-    {
+    match client.get(&ping_url).send().await {
         Ok(resp) => {
             let status = resp.status();
             if status.is_success()
@@ -118,11 +111,6 @@ pub async fn openclaw_status_handler(
             {
                 debug!("OpenClaw gateway is available at {}", base_url);
                 response.available = true;
-            } else if status == reqwest::StatusCode::UNAUTHORIZED
-                || status == reqwest::StatusCode::FORBIDDEN
-            {
-                response.available = true;
-                response.authenticated = false;
             } else {
                 response.error = Some(format!("HTTP {}", status));
                 debug!("OpenClaw returned status {}", status);
@@ -141,13 +129,12 @@ pub async fn openclaw_status_handler(
 pub async fn openclaw_config_handler(
     Extension(_state): Extension<Arc<AppState>>,
 ) -> Json<OpenClawConfigResponse> {
-    let token = std::env::var("OPENCLAW_TOKEN").unwrap_or_default();
     let endpoint = openclaw_base_url();
 
     Json(OpenClawConfigResponse {
         endpoint: endpoint.clone(),
         model: openclaw_default_model(),
-        token_configured: !token.is_empty(),
+        internal_only: true,
         container_ip: openclaw_host_label(&endpoint),
         container_port: 18789,
     })
@@ -169,16 +156,6 @@ pub async fn openclaw_chat_handler(
     Extension(_state): Extension<Arc<AppState>>,
     Json(request): Json<OpenClawChatRequest>,
 ) -> Json<Value> {
-    let token = match std::env::var("OPENCLAW_TOKEN") {
-        Ok(t) if !t.is_empty() => t,
-        _ => {
-            return Json(json!({
-                "success": false,
-                "error": "OPENCLAW_TOKEN not configured"
-            }));
-        }
-    };
-
     let base_url = openclaw_base_url();
 
     let client = Client::builder()
@@ -204,7 +181,6 @@ pub async fn openclaw_chat_handler(
 
     match client
         .post(&chat_url)
-        .header("Authorization", format!("Bearer {}", token))
         .header("Content-Type", "application/json")
         .json(&payload)
         .send()
@@ -255,16 +231,6 @@ pub async fn openclaw_chat_handler(
 
 /// GET /api/openclaw/models - List configured OpenClaw route keys
 pub async fn openclaw_models_handler(Extension(_state): Extension<Arc<AppState>>) -> Json<Value> {
-    let token = match std::env::var("OPENCLAW_TOKEN") {
-        Ok(t) if !t.is_empty() => t,
-        _ => {
-            return Json(json!({
-                "models": [],
-                "error": "OPENCLAW_TOKEN not configured"
-            }));
-        }
-    };
-
     let base_url = openclaw_base_url();
 
     let client = Client::builder()
@@ -276,7 +242,6 @@ pub async fn openclaw_models_handler(Extension(_state): Extension<Arc<AppState>>
 
     match client
         .get(&models_url)
-        .header("Authorization", format!("Bearer {}", token))
         .send()
         .await
     {

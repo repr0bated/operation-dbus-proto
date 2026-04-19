@@ -122,7 +122,9 @@ impl AgentCapability {
 }
 
 /// Agent execution priority
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Default)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Default,
+)]
 pub enum AgentPriority {
     /// Execute first (e.g., validation, security)
     High = 0,

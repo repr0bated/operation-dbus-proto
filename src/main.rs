@@ -39,8 +39,9 @@ use op_dbus::{
 };
 use op_dbus_model;
 use op_jsonrpc::nonnet::NonNetDb;
-use op_jsonrpc::ovsdb::OvsdbClient;
 
+#[cfg(feature = "grpc")]
+use op_cognitive_mcp::QdrantSemanticShuttle;
 #[cfg(feature = "grpc")]
 use op_grpc_bridge::proto::PluginInfo;
 #[cfg(feature = "grpc")]
@@ -49,9 +50,7 @@ use op_grpc_bridge::proto::{
     plugin_service_server::PluginServiceServer, state_sync_server::StateSyncServer,
 };
 #[cfg(feature = "grpc")]
-use op_grpc_bridge::{
-    ChangeType, OperationGrpcServer, PluginSchemaProvider, SchemaEngine,
-};
+use op_grpc_bridge::{ChangeType, OperationGrpcServer, PluginSchemaProvider, SchemaEngine};
 #[cfg(feature = "grpc")]
 use op_mcp::grpc::proto::mcp_service_server::McpServiceServer;
 #[cfg(feature = "grpc")]
@@ -368,15 +367,22 @@ async fn main() -> Result<()> {
         let chain = Arc::new(tokio::sync::RwLock::new(op_state_store::EventChain::new(
             ChainConfig::default(),
         )));
-        let engine = Arc::new(SchemaEngine::new(chain, authoritative_ovsdb.clone(), authoritative_nonnet.clone()));
-        
+        let engine = Arc::new(SchemaEngine::new(
+            chain,
+            authoritative_ovsdb.clone(),
+            authoritative_nonnet.clone(),
+        ));
+
         let engine_clone = engine.clone();
         tokio::spawn(async move {
             if let Err(e) = engine_clone.start().await {
-                tracing::error!("Schema Engine authoritative pipeline failed to start: {}", e);
+                tracing::error!(
+                    "Schema Engine authoritative pipeline failed to start: {}",
+                    e
+                );
             }
         });
-        
+
         plugin_catalog.set_publisher(engine.clone()).await;
         let _ = GLOBAL_SCHEMA_ENGINE.set(engine.clone());
         engine
@@ -484,18 +490,18 @@ async fn main() -> Result<()> {
             BusType::Session => zbus::Connection::session().await?,
         };
         plugin_catalog.set_dbus_connection(dbus_conn).await;
-        
+
         let mirror = Arc::new(
             op_dbus_mirror::DbusMirror::new(
-                config.dbus_connection, 
-                authoritative_ovsdb.clone(), 
+                config.dbus_connection,
+                authoritative_ovsdb.clone(),
                 authoritative_nonnet.clone(),
                 #[cfg(feature = "grpc")]
                 Some(schema_engine.clone()),
                 #[cfg(not(feature = "grpc"))]
                 None,
             )
-                .await?,
+            .await?,
         );
 
         match state_manager.query_current_state().await {
@@ -511,6 +517,10 @@ async fn main() -> Result<()> {
             }
         }
 
+        // Register StateManager on the mirror's connection (single bus name)
+        op_state::dbus_server::register_on_connection(mirror.connection(), state_manager.clone())
+            .await?;
+
         let mirror_clone = mirror.clone();
         tokio::spawn(async move {
             if let Err(e) = mirror_clone.start().await {
@@ -518,23 +528,9 @@ async fn main() -> Result<()> {
             }
         });
 
-        tracing::info!("1:1 D-Bus publication service initialized and started");
-
-        let dbus_ovsdb = Arc::new(OvsdbClient::new());
-        let sm = state_manager.clone();
-        let dbus_bus = config.dbus_connection;
-        tokio::spawn(async move {
-            let result = match dbus_bus {
-                BusType::System => op_state::dbus_server::start_system_bus(sm, dbus_ovsdb).await,
-                BusType::Session => op_state::dbus_server::start_session_bus(sm, dbus_ovsdb).await,
-            };
-
-            if let Err(e) = result {
-                tracing::error!("D-Bus StateManager service failed: {}", e);
-            }
-        });
-
-        tracing::info!("StateManager + OvsdbV1 + NonNetV1 D-Bus service started on org.opdbus");
+        tracing::info!(
+            "D-Bus service started on org.opdbus.v1 (MirrorV1 + OvsdbV1 + NonNetV1 + StateManager)"
+        );
     }
 
     let _dbus_projection = if config.enable_dbus {
@@ -656,8 +652,19 @@ async fn main() -> Result<()> {
         let plugin_provider = Arc::new(OpdbusPluginProvider {
             catalog: persisted_plugin_catalog.clone(),
         });
-        let op_grpc_server =
+        let mut op_grpc_server =
             OperationGrpcServer::with_plugin_provider(schema_engine, plugin_provider);
+        match QdrantSemanticShuttle::new().await {
+            Ok(shuttle) => {
+                op_grpc_server = op_grpc_server.with_semantic_shuttle(Arc::new(shuttle));
+            }
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    "semantic shuttle unavailable; SearchSemanticTrace will return failed_precondition"
+                );
+            }
+        }
 
         // Initialize MCP gRPC service with shared tool registry
         let mcp_infra = GrpcInfrastructure::new().with_tool_registry(tool_registry.clone());

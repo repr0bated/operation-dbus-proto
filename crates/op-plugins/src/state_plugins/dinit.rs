@@ -6,9 +6,9 @@ use op_state::{
     ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
 };
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
 use simd_json::OwnedValue as Value;
 use std::collections::HashMap;
+use std::time::Duration;
 use zbus::{proxy, Connection, Error as ZbusError};
 
 type DinitFlags = HashMap<String, bool>;

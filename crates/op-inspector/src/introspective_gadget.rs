@@ -57,8 +57,9 @@ pub struct SchemaDefinition {
 #[derive(Clone)]
 pub struct IntrospectiveGadget {
     knowledge_base: std::sync::Arc<tokio::sync::RwLock<KnowledgeBase>>,
-    parsers:
-        std::sync::Arc<std::sync::RwLock<HashMap<String, std::sync::Arc<dyn ObjectParser + Send + Sync>>>>,
+    parsers: std::sync::Arc<
+        std::sync::RwLock<HashMap<String, std::sync::Arc<dyn ObjectParser + Send + Sync>>>,
+    >,
 }
 
 impl IntrospectiveGadget {
@@ -66,7 +67,8 @@ impl IntrospectiveGadget {
     pub async fn new(
         knowledge_base: std::sync::Arc<tokio::sync::RwLock<KnowledgeBase>>,
     ) -> Result<Self> {
-        let mut parsers: HashMap<String, std::sync::Arc<dyn ObjectParser + Send + Sync>> = HashMap::new();
+        let mut parsers: HashMap<String, std::sync::Arc<dyn ObjectParser + Send + Sync>> =
+            HashMap::new();
 
         // Register all built-in parsers
         parsers.insert("json".to_string(), std::sync::Arc::new(JsonParser));
@@ -125,7 +127,7 @@ impl IntrospectiveGadget {
                 .iter()
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect();
-            
+
             for (format_name, parser) in all_parsers {
                 if format_name != detected_format && format_name != "auto" {
                     if let Ok(result) = parser.parse(&input).await {
@@ -892,7 +894,9 @@ impl JsonParser {
                 object_patterns: vec![],
             }
         } else if let Some(arr) = value.as_array() {
-            let item_schema = arr.first().map(|first| Box::new(self.analyze_json_schema(first)));
+            let item_schema = arr
+                .first()
+                .map(|first| Box::new(self.analyze_json_schema(first)));
 
             ObjectSchema {
                 schema_type: "array".to_string(),

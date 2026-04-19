@@ -22,6 +22,7 @@ pub mod execution_job;
 pub mod metrics;
 pub mod plugin_schema;
 pub mod redis_stream;
+pub mod schema_shuttle;
 pub mod schema_validator;
 pub mod sqlite_store;
 pub mod state_store;
@@ -42,6 +43,7 @@ pub use plugin_schema::{
     ValidationResult as SchemaValidationResult, DEFAULT_SCHEMA_DIALECT,
 };
 pub use redis_stream::RedisStream;
+pub use schema_shuttle::{IdentitySled, SchemaShuttle};
 pub use schema_validator::{
     canonicalize_json, SchemaValidator, ValidationError, ValidationReport, ValidatorError,
 };

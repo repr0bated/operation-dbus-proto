@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use async_stream::stream;
 use chrono::{DateTime, Utc};
+use op_cognitive_mcp::QdrantSemanticShuttle;
 use prost_types::{Struct as ProstStruct, Timestamp as ProstTimestamp, Value as ProstValue};
 use simd_json::prelude::{ValueAsContainer, ValueAsScalar};
 use tokio::sync::{broadcast, RwLock};
@@ -38,10 +39,11 @@ use crate::proto::{
     RuntimeGetSystemInfoResponse, RuntimeListInterfacesRequest, RuntimeListInterfacesResponse,
     RuntimeListServicesRequest, RuntimeListServicesResponse, RuntimeMetricUpdate,
     RuntimeNetworkInterface as ProtoRuntimeNetworkInterface,
-    RuntimeServiceInfo as ProtoRuntimeServiceInfo, RuntimeStreamMetricsRequest, SetPropertyRequest,
-    SetPropertyResponse, Signal, StateChange as ProtoStateChange, SubscribeEventsRequest,
-    SubscribeRequest, SubscribeSignalsRequest, TagLock as ProtoTagLock, VerifyChainRequest,
-    VerifyChainResponse,
+    RuntimeServiceInfo as ProtoRuntimeServiceInfo, RuntimeStreamMetricsRequest,
+    SearchSemanticTraceRequest, SearchSemanticTraceResponse, SemanticTraceMatch,
+    SetPropertyRequest, SetPropertyResponse, Signal, StateChange as ProtoStateChange,
+    SubscribeEventsRequest, SubscribeRequest, SubscribeSignalsRequest, TagLock as ProtoTagLock,
+    VerifyChainRequest, VerifyChainResponse,
 };
 use crate::schema_engine::{ChangeType, SchemaEngine};
 use op_state_store::{Decision, DenyReason, MerkleProof};
@@ -112,6 +114,7 @@ impl RegistryInner {
 pub struct OperationGrpcServer {
     schema_engine: Arc<SchemaEngine>,
     plugin_provider: Arc<dyn PluginSchemaProvider>,
+    semantic_shuttle: Option<Arc<QdrantSemanticShuttle>>,
     /// Broadcast channel for chain events
     chain_events: broadcast::Sender<ProtoChainEvent>,
     /// Component registry state (shared across clones)
@@ -125,6 +128,7 @@ impl OperationGrpcServer {
         Self {
             schema_engine,
             plugin_provider: Arc::new(EmptyPluginProvider),
+            semantic_shuttle: None,
             chain_events: chain_tx,
             registry: Arc::new(RwLock::new(registry)),
         }
@@ -139,9 +143,15 @@ impl OperationGrpcServer {
         Self {
             schema_engine,
             plugin_provider,
+            semantic_shuttle: None,
             chain_events: chain_tx,
             registry: Arc::new(RwLock::new(registry)),
         }
+    }
+
+    pub fn with_semantic_shuttle(mut self, semantic_shuttle: Arc<QdrantSemanticShuttle>) -> Self {
+        self.semantic_shuttle = Some(semantic_shuttle);
+        self
     }
 }
 
@@ -176,6 +186,13 @@ pub async fn run_grpc_server(
         OperationGrpcServer::with_plugin_provider(schema_engine, provider)
     } else {
         OperationGrpcServer::new(schema_engine)
+    };
+    let server = match QdrantSemanticShuttle::new().await {
+        Ok(shuttle) => server.with_semantic_shuttle(Arc::new(shuttle)),
+        Err(error) => {
+            warn!(%error, "semantic shuttle unavailable; SearchSemanticTrace will return failed_precondition");
+            server
+        }
     };
 
     // Reflection — exposes combined FileDescriptorSet covering all domain protos.
@@ -770,6 +787,33 @@ impl EventChainService for OperationGrpcServer {
             snapshot: Some(proto_snapshot(snapshot)),
         }))
     }
+
+    async fn search_semantic_trace(
+        &self,
+        request: Request<SearchSemanticTraceRequest>,
+    ) -> Result<Response<SearchSemanticTraceResponse>, Status> {
+        let shuttle = self.semantic_shuttle.as_ref().ok_or_else(|| {
+            Status::failed_precondition(
+                "Qdrant Semantic Shuttle is not configured; check Voyage and Qdrant settings",
+            )
+        })?;
+        let req = request.into_inner();
+        let limit = u64::from(if req.limit == 0 { 5 } else { req.limit });
+        let trace = shuttle.current_trace_context().map_err(internal_status)?;
+        let matches = shuttle
+            .search_semantic_trace(limit)
+            .await
+            .map_err(internal_status)?
+            .into_iter()
+            .map(proto_semantic_trace_match)
+            .collect();
+
+        Ok(Response::new(SearchSemanticTraceResponse {
+            trace_id: trace.trace_id,
+            mutation_index: trace.mutation_index,
+            matches,
+        }))
+    }
 }
 
 // =============================================================================
@@ -900,6 +944,65 @@ fn proto_timestamp(ts: DateTime<Utc>) -> ProstTimestamp {
         seconds: ts.timestamp(),
         nanos: ts.timestamp_subsec_nanos() as i32,
     }
+}
+
+fn proto_semantic_trace_match(point: qdrant_client::qdrant::ScoredPoint) -> SemanticTraceMatch {
+    SemanticTraceMatch {
+        point_id: qdrant_point_id_to_string(point.id),
+        score: point.score,
+        payload: Some(qdrant_payload_to_prost_struct(point.payload)),
+    }
+}
+
+fn qdrant_point_id_to_string(point_id: Option<qdrant_client::qdrant::PointId>) -> String {
+    use qdrant_client::qdrant::point_id::PointIdOptions;
+
+    match point_id.and_then(|id| id.point_id_options) {
+        Some(PointIdOptions::Num(value)) => value.to_string(),
+        Some(PointIdOptions::Uuid(value)) => value,
+        None => String::new(),
+    }
+}
+
+fn qdrant_payload_to_prost_struct(
+    payload: std::collections::HashMap<String, qdrant_client::qdrant::Value>,
+) -> ProstStruct {
+    ProstStruct {
+        fields: payload
+            .into_iter()
+            .map(|(key, value)| (key, qdrant_value_to_prost_value(value)))
+            .collect(),
+    }
+}
+
+fn qdrant_value_to_prost_value(value: qdrant_client::qdrant::Value) -> ProstValue {
+    use prost_types::value::Kind as ProstKind;
+    use qdrant_client::qdrant::value::Kind as QdrantKind;
+
+    let kind = match value.kind {
+        Some(QdrantKind::NullValue(_)) => ProstKind::NullValue(0),
+        Some(QdrantKind::DoubleValue(number)) => ProstKind::NumberValue(number),
+        Some(QdrantKind::IntegerValue(number)) => ProstKind::NumberValue(number as f64),
+        Some(QdrantKind::StringValue(text)) => ProstKind::StringValue(text),
+        Some(QdrantKind::BoolValue(flag)) => ProstKind::BoolValue(flag),
+        Some(QdrantKind::StructValue(struct_value)) => {
+            ProstKind::StructValue(qdrant_payload_to_prost_struct(struct_value.fields))
+        }
+        Some(QdrantKind::ListValue(list_value)) => ProstKind::ListValue(prost_types::ListValue {
+            values: list_value
+                .values
+                .into_iter()
+                .map(qdrant_value_to_prost_value)
+                .collect(),
+        }),
+        None => ProstKind::NullValue(0),
+    };
+
+    ProstValue { kind: Some(kind) }
+}
+
+fn internal_status(error: anyhow::Error) -> Status {
+    Status::internal(error.to_string())
 }
 
 fn simd_to_prost_struct(value: &simd_json::OwnedValue) -> ProstStruct {
@@ -2411,13 +2514,11 @@ impl MailService for OperationGrpcServer {
                     total_accounts: parsed
                         .get("total_accounts")
                         .and_then(|v| v.as_u64())
-                        .unwrap_or(0)
-                        as u32,
+                        .unwrap_or(0) as u32,
                     total_messages: parsed
                         .get("total_messages")
                         .and_then(|v| v.as_u64())
-                        .unwrap_or(0)
-                        as u32,
+                        .unwrap_or(0) as u32,
                     last_checked: Some(OperationGrpcServer::now_ts()),
                     message: "ok".to_string(),
                 }))
@@ -2529,10 +2630,7 @@ impl MailService for OperationGrpcServer {
             "domain": req.domain
         });
 
-        match self
-            .mail_dbus_call("admin_action", &args.to_string())
-            .await
-        {
+        match self.mail_dbus_call("admin_action", &args.to_string()).await {
             Ok(result) => {
                 let parsed: serde_json::Value = serde_json::from_str(&result).unwrap_or_default();
                 Ok(Response::new(AdminMailActionResponse {
@@ -2596,10 +2694,7 @@ impl MailService for OperationGrpcServer {
             "check_webmail": req.check_webmail
         });
 
-        match self
-            .mail_dbus_call("check_server", &args.to_string())
-            .await
-        {
+        match self.mail_dbus_call("check_server", &args.to_string()).await {
             Ok(result) => {
                 let parsed: serde_json::Value = serde_json::from_str(&result).unwrap_or_default();
                 Ok(Response::new(CheckMailServerResponse {
@@ -3147,10 +3242,7 @@ impl PrivacyNetworkService for OperationGrpcServer {
                     .schema_engine
                     .process_grpc_mutation(
                         "privacy".to_string(),
-                        format!(
-                            "/org/opdbus/v1/privacy/components/{}",
-                            req.component
-                        ),
+                        format!("/org/opdbus/v1/privacy/components/{}", req.component),
                         ChangeType::MethodCall,
                         Some("manage_component".to_string()),
                         mutation_value,
@@ -3240,15 +3332,9 @@ impl PrivacyNetworkService for OperationGrpcServer {
                                     .get("grpc_proxy_enabled")
                                     .and_then(|v| v.as_bool())
                                     .unwrap_or(false),
-                                http_port: p
-                                    .get("http_port")
-                                    .and_then(|v| v.as_u64())
-                                    .unwrap_or(0)
+                                http_port: p.get("http_port").and_then(|v| v.as_u64()).unwrap_or(0)
                                     as u32,
-                                grpc_port: p
-                                    .get("grpc_port")
-                                    .and_then(|v| v.as_u64())
-                                    .unwrap_or(0)
+                                grpc_port: p.get("grpc_port").and_then(|v| v.as_u64()).unwrap_or(0)
                                     as u32,
                                 proxy_mode: p
                                     .get("proxy_mode")
@@ -3469,10 +3555,7 @@ impl PrivacyNetworkService for OperationGrpcServer {
                     .schema_engine
                     .process_grpc_mutation(
                         "privacy".to_string(),
-                        format!(
-                            "/org/opdbus/v1/privacy/routing/{}",
-                            req.container_name
-                        ),
+                        format!("/org/opdbus/v1/privacy/routing/{}", req.container_name),
                         ChangeType::MethodCall,
                         Some("configure_routing".to_string()),
                         mutation_value,
@@ -3560,10 +3643,10 @@ impl PrivacyNetworkService for OperationGrpcServer {
 
 use crate::proto::registration::{
     registration_service_server::RegistrationService, AdminUserActionRequest,
-    AdminUserActionResponse, GetUserStatusRequest, GetUserStatusResponse, GetWireGuardConfigRequest,
-    GetWireGuardConfigResponse, ListUsersRequest, ListUsersResponse, RegisterUserRequest,
-    RegisterUserResponse, SendMagicLinkRequest, SendMagicLinkResponse, VerifyMagicLinkRequest,
-    VerifyMagicLinkResponse,
+    AdminUserActionResponse, GetUserStatusRequest, GetUserStatusResponse,
+    GetWireGuardConfigRequest, GetWireGuardConfigResponse, ListUsersRequest, ListUsersResponse,
+    RegisterUserRequest, RegisterUserResponse, SendMagicLinkRequest, SendMagicLinkResponse,
+    VerifyMagicLinkRequest, VerifyMagicLinkResponse,
 };
 
 impl OperationGrpcServer {
@@ -3670,7 +3753,9 @@ impl RegistrationService for OperationGrpcServer {
 
                 Ok(Response::new(SendMagicLinkResponse {
                     success: false,
-                    message: "Registration D-Bus service unavailable; magic link recorded in state store".to_string(),
+                    message:
+                        "Registration D-Bus service unavailable; magic link recorded in state store"
+                            .to_string(),
                     token: Some(token),
                     expires_at: Some(ProstTimestamp {
                         seconds: chrono::Utc::now().timestamp() + 3600,
@@ -3860,9 +3945,8 @@ impl RegistrationService for OperationGrpcServer {
                 Ok(Response::new(RegisterUserResponse {
                     success: false,
                     user_id,
-                    message:
-                        "Registration D-Bus service unavailable; user recorded in state store"
-                            .to_string(),
+                    message: "Registration D-Bus service unavailable; user recorded in state store"
+                        .to_string(),
                     assigned_ip: String::new(),
                     wireguard_config: String::new(),
                     registered_at: Some(OperationGrpcServer::now_ts()),
