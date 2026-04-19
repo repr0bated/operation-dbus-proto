@@ -65,8 +65,8 @@ async function grpcUnary<TReq, TResp>(
   const res = await fetch(url, {
     method: "POST",
     headers: {
-      "Content-Type": "application/grpc-web+json",
-      "Accept": "application/grpc-web+json",
+      "Content-Type": "application/grpc-web",
+      "Accept": "application/grpc-web",
       "x-grpc-web": "1",
     },
     body: frame,
@@ -134,8 +134,8 @@ function grpcServerStream<TReq, TResp>(
   const responsePromise = fetch(url, {
     method: "POST",
     headers: {
-      "Content-Type": "application/grpc-web+json",
-      "Accept": "application/grpc-web+json",
+      "Content-Type": "application/grpc-web",
+      "Accept": "application/grpc-web",
       "x-grpc-web": "1",
     },
     body: frame,
