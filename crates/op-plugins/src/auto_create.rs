@@ -7,8 +7,6 @@ use anyhow::Result;
 use async_trait::async_trait;
 use op_state::StatePlugin;
 use simd_json::{json, OwnedValue as Value};
-use simd_json::prelude::*;
-use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -45,115 +43,16 @@ pub struct AutoPlugin {
     name: String,
     _category: String,
     current_state: Arc<RwLock<Value>>,
-    schema: Value,
 }
 
 impl AutoPlugin {
     pub fn new(name: &str, category: &str, initial_state: Value) -> Self {
-        let schema = Self::generate_schema(name, category, &initial_state);
         Self {
             name: name.to_string(),
             _category: category.to_string(),
             current_state: Arc::new(RwLock::new(initial_state)),
-            schema,
         }
     }
-
-    /// Generate a schema for this auto-plugin
-    /// Every auto-created plugin gets a schema with schema_derived=true
-    fn generate_schema(name: &str, category: &str, _initial_state: &Value) -> Value {
-        let object_type_name = format!("{}Object", to_pascal_case(name));
-        let base_path = format!("/org/opdbus/auto/{}", name);
-        let interface = format!("org.opdbus.auto.{}.{}", name, object_type_name);
-
-        let mut object_types = HashMap::new();
-        object_types.insert(
-            object_type_name.clone(),
-            json!({
-                "description": format!("Auto-generated {} object", name),
-                "base_path": base_path,
-                "interface": interface,
-                "schema_derived": true,
-                "category": category
-            }),
-        );
-
-        json!({
-            "version": "1.0.0",
-            "plugin_type": category,
-            "type": object_type_name,
-            "description": format!("Auto-generated plugin for {}", name),
-            "auto_generated": true,
-            "object_types": object_types,
-            "common_properties": {
-                "id": {"type": "string", "required": true},
-                "object_type": {"type": "string", "required": true},
-                "name": {"type": "string", "required": true}
-            }
-        })
-    }
-
-    /// Get the generated schema for this plugin
-    pub fn schema(&self) -> &Value {
-        &self.schema
-    }
-
-    /// Convert raw state to schema-compliant format with object_type
-    fn normalize_state(&self, state: &Value) -> Value {
-        // If state is already an array, ensure each item has object_type
-        if let Some(arr) = state.as_array() {
-            let mut normalized = Vec::new();
-            for (idx, item) in arr.iter().enumerate() {
-                let mut obj = item.clone();
-                // Use simd_json's Object API
-                let obj_ref = obj.as_object_mut();
-                if let Some(obj_map) = obj_ref {
-                    let has_type = obj_map.iter().any(|(k, _)| k == "object_type");
-                    let has_id = obj_map.iter().any(|(k, _)| k == "id");
-                    if !has_type {
-                        obj_map.insert("object_type".to_string(), json!("AutoObject"));
-                    }
-                    if !has_id {
-                        obj_map.insert("id".to_string(), json!(format!("{}-{}", self.name, idx)));
-                    }
-                }
-                normalized.push(obj);
-            }
-            return json!(normalized);
-        }
-
-        // If state is a single object, wrap it in an array with proper fields
-        let mut obj = state.clone();
-        let obj_ref = obj.as_object_mut();
-        if let Some(obj_map) = obj_ref {
-            let has_type = obj_map.iter().any(|(k, _)| k == "object_type");
-            let has_id = obj_map.iter().any(|(k, _)| k == "id");
-            let has_name = obj_map.iter().any(|(k, _)| k == "name");
-            if !has_type {
-                obj_map.insert("object_type".to_string(), json!("AutoObject"));
-            }
-            if !has_id {
-                obj_map.insert("id".to_string(), json!(format!("{}-0", self.name)));
-            }
-            if !has_name {
-                obj_map.insert("name".to_string(), json!(self.name.clone()));
-            }
-        }
-        json!(vec![obj])
-    }
-}
-
-/// Convert snake_case to PascalCase
-fn to_pascal_case(s: &str) -> String {
-    s.split('_')
-        .map(|part| {
-            let mut chars = part.chars();
-            match chars.next() {
-                Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
-                None => String::new(),
-            }
-        })
-        .collect()
 }
 
 #[async_trait]
@@ -167,8 +66,7 @@ impl StatePlugin for AutoPlugin {
     }
 
     async fn query_current_state(&self) -> Result<Value> {
-        let state = self.current_state.read().await.clone();
-        Ok(self.normalize_state(&state))
+        Ok(self.current_state.read().await.clone())
     }
 
     async fn calculate_diff(

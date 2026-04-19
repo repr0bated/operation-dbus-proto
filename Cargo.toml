@@ -32,6 +32,8 @@ members = [
     "crates/op-dbus-model",
     "crates/op-grpc-bridge",
     "crates/op-dbus-mirror",
+    "crates/op-projection",
+    "crates/op-procfs-plugin",
 ]
 
 [workspace.package]
@@ -63,6 +65,8 @@ op-grpc-bridge = { path = "crates/op-grpc-bridge" }
 op-identity = { path = "crates/op-identity" }
 op-dbus-mirror = { path = "crates/op-dbus-mirror" }
 op-jsonrpc = { path = "crates/op-jsonrpc" }
+op-projection = { path = "crates/op-projection" }
+op-procfs-plugin = { path = "crates/op-procfs-plugin" }
 
 # Async
 tokio = { version = "1", features = ["full"] }

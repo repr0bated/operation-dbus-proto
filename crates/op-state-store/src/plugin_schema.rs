@@ -128,6 +128,9 @@ pub struct PluginSchema {
     /// JSON Schema dialect to use (defaults to DEFAULT_SCHEMA_DIALECT)
     #[serde(default = "default_dialect")]
     pub dialect: String,
+    /// Mutation index for the identity sled
+    #[serde(default)]
+    pub mutation_index: Option<u64>,
 }
 
 fn default_dialect() -> String {
@@ -139,6 +142,11 @@ fn default_category() -> String {
 }
 
 impl PluginSchema {
+    /// Check if the schema state is valid (for the identity sled)
+    pub fn is_valid(&self) -> bool {
+        !self.name.is_empty() && !self.version.is_empty()
+    }
+
     /// Create a new plugin schema builder
     pub fn builder(name: &str) -> PluginSchemaBuilder {
         PluginSchemaBuilder::new(name)
@@ -758,6 +766,7 @@ impl PluginSchemaBuilder {
             immutable_paths: self.immutable_paths,
             tags: self.tags,
             dialect: self.dialect,
+            mutation_index: None,
         }
     }
 }
@@ -1056,8 +1065,6 @@ pub fn builtin_plugin_schemas() -> Vec<PluginSchema> {
         "users",
         "web_ui",
         "wireguard",
-        "directory",
-        "cms",
     ]
     .into_iter()
     .filter_map(builtin_plugin_schema_from_canonical_name)
@@ -1103,8 +1110,6 @@ fn builtin_plugin_schema_from_canonical_name(name: &str) -> Option<PluginSchema>
         "privacy_router" => create_privacy_router_schema(),
         "privacy_routes" => create_privacy_routes_schema(),
         "netmaker" => create_netmaker_schema(),
-        "directory" => create_directory_schema(),
-        "cms" => create_cms_schema(),
         _ => return None,
     })
 }
@@ -1769,8 +1774,8 @@ fn create_lxc_schema() -> PluginSchema {
                 field_type: FieldType::String,
                 required: false,
                 description: "OVS bridge name".to_string(),
-                default: Some(json!("ovsbr0")),
-                example: Some(json!("ovsbr0")),
+                default: Some(json!("ovs-br0")),
+                example: Some(json!("ovs-br0")),
                 constraints: Vec::new(),
                 read_only: false,
                 read_only_when: None,
@@ -1824,7 +1829,7 @@ fn create_lxc_schema() -> PluginSchema {
                 {
                     "id": "100",
                     "veth": "vi100",
-                    "bridge": "ovsbr0",
+                    "bridge": "ovs-br0",
                     "running": true,
                     "properties": {
                         "hostname": "wireguard-gateway",
@@ -3774,7 +3779,7 @@ fn create_openflow_schema() -> PluginSchema {
                 required: true,
                 description: "Bridge name".to_string(),
                 default: None,
-                example: Some(json!("ovsbr0")),
+                example: Some(json!("ovs-br0")),
                 constraints: Vec::new(),
                 read_only: true, // Bridge name is identity
                 read_only_when: None,
@@ -4881,92 +4886,7 @@ fn field_type_to_json_schema_2026(field_type: &FieldType) -> Value {
     }
 }
 
-fn create_directory_schema() -> PluginSchema {
-    simple_schema(
-        "directory",
-        "Enterprise directory and identity management (AD/LDAP replacement)",
-        &[],
-        vec![
-            (
-                "version",
-                FieldSchema {
-                    field_type: FieldType::Integer,
-                    required: false,
-                    description: "Schema version".to_string(),
-                    default: Some(json!(1)),
-                    example: None,
-                    constraints: vec![Constraint::Min { value: 1.0 }],
-                    read_only: false,
-                    read_only_when: None,
-                },
-            ),
-            (
-                "domains",
-                any_field(false, "AD Domain or Forest Root map", Some(json!({}))),
-            ),
-            (
-                "users",
-                any_field(false, "AD-compatible User Account map", Some(json!({}))),
-            ),
-            (
-                "groups",
-                any_field(false, "AD-compatible Group map", Some(json!({}))),
-            ),
-            (
-                "computers",
-                any_field(false, "AD-compatible Computer Account map", Some(json!({}))),
-            ),
-            (
-                "gpo",
-                any_field(false, "AD Group Policy Object map", Some(json!({}))),
-            ),
-            (
-                "dns",
-                any_field(false, "AD-integrated DNS Zone map", Some(json!({}))),
-            ),
-        ],
-    )
-}
-
-fn create_cms_schema() -> PluginSchema {
-    simple_schema(
-        "cms",
-        "Enterprise CMS management (Drupal/WordPress replacement)",
-        &[],
-        vec![
-            (
-                "version",
-                FieldSchema {
-                    field_type: FieldType::Integer,
-                    required: false,
-                    description: "Schema version".to_string(),
-                    default: Some(json!(1)),
-                    example: None,
-                    constraints: vec![Constraint::Min { value: 1.0 }],
-                    read_only: false,
-                    read_only_when: None,
-                },
-            ),
-            (
-                "nodes",
-                any_field(false, "Drupal-compatible Content Node map", Some(json!({}))),
-            ),
-            (
-                "wp_posts",
-                any_field(false, "WordPress-compatible Post map", Some(json!({}))),
-            ),
-            (
-                "wp_users",
-                any_field(false, "WordPress-compatible User map", Some(json!({}))),
-            ),
-            (
-                "wc_products",
-                any_field(false, "WooCommerce-compatible Product map", Some(json!({}))),
-            ),
-        ],
-    )
-}
-
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -5011,7 +4931,7 @@ mod tests {
                 {
                     "id": "100",
                     "veth": "vi100",
-                    "bridge": "ovsbr0",
+                    "bridge": "ovs-br0",
                     "running": true
                 }
             ]

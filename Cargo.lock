@@ -3889,10 +3889,12 @@ dependencies = [
  "op-network",
  "serde",
  "simd-json",
+ "sqlx",
  "tokio",
  "tracing",
  "tracing-subscriber",
  "zbus 4.4.0",
+ "zbus_xml",
 ]
 
 [[package]]
@@ -4310,6 +4312,48 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+ "zbus 4.4.0",
+]
+
+[[package]]
+name = "op-procfs-plugin"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "futures",
+ "libc",
+ "op-projection",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "op-projection"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "dashmap",
+ "futures",
+ "op-core",
+ "parking_lot 0.12.5",
+ "prost 0.13.5",
+ "prost-types 0.13.5",
+ "quick-xml 0.36.2",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tonic-build 0.12.3",
+ "tracing",
+ "tracing-subscriber",
  "zbus 4.4.0",
 ]
 

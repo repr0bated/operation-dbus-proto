@@ -19,21 +19,16 @@ MCP_PROXY_AUTO_PRO_THRESHOLD_CHARS=6000
 MCP_PROXY_EXPERIMENTAL=true
 
 OP_DBUS_ENABLE_WEB=1
-OP_DBUS_WEB_HOST=0.0.0.0
-OP_DBUS_WEB_PORT=8080
+OP_DBUS_WEB_HOST=127.0.0.1
+OP_DBUS_WEB_PORT=7010
 OP_DBUS_LISTEN=none
 
 # Shared session bus endpoint for op-* services.
-OP_DBUS_SESSION_BUS=1
-OP_DBUS_PUBLISH_SYSTEM_BUS=1
 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/op-dbus/session-bus
 
-# op-web runs separately from op-dbus and uses op-dbus only as its reference tool source.
-OP_WEB_PORT=8081
-OP_WEB_TOOL_SOURCE=op-dbus
-OP_WEB_REMOTE_TOOL_URL=http://localhost:8080
-
 # System-wide WireGuard + registration defaults.
+OP_WEB_TOOL_SOURCE=op-dbus
+OP_WEB_REMOTE_TOOL_URL=http://127.0.0.1:8081
 WG_SERVER_PUBKEY=+7AlLRCx0cqWwV+cgP7UwA6i//7v0YqA32f8Rbo07zE=
 WG_SERVER_ENDPOINT=148.113.204.83:51820
 WG_INTERFACE=wg0

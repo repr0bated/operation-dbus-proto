@@ -39,12 +39,12 @@ pub async fn create_schema(pool: &SqlitePool) -> Result<()> {
     Ok(())
 }
 
-/// Schema-library catalog for plugin documents.
+/// SQLite-backed catalog for canonical plugin documents.
 ///
-/// This store is only an index of plugin-owned schema documents. It exists so
-/// builders, renderers, and compatibility layers can reuse known schema shapes
-/// when composing new schemas. Runtime state and platform reality live outside
-/// this catalog.
+/// This is a persistence backend, not the architectural source of truth.
+/// The source of truth originates in plugin code, which emits one canonical
+/// plugin document. The catalog stores that document so D-Bus/gRPC/rendering
+/// layers can mirror the same persisted shape.
 #[derive(Clone)]
 pub struct SqlitePluginCatalog {
     pool: SqlitePool,
@@ -67,9 +67,7 @@ impl SqlitePluginCatalog {
             "#,
         )
         .bind(document.schema.name.as_str())
-        // Legacy column retained for compatibility with existing databases.
-        // The schema-library document itself no longer carries service identity.
-        .bind(document.schema.name.as_str())
+        .bind(document.service_name.as_str())
         .bind(encoded)
         .execute(&self.pool)
         .await?;
@@ -87,7 +85,8 @@ impl SqlitePluginCatalog {
         };
 
         let encoded: String = row.try_get("base_object")?;
-        decode_document(&encoded)
+        let document = serde_json::from_str(&encoded)?;
+        Ok(Some(document))
     }
 
     pub async fn list_documents(&self) -> Result<Vec<PluginCatalogDocument>> {
@@ -95,116 +94,20 @@ impl SqlitePluginCatalog {
             .fetch_all(&self.pool)
             .await?;
 
-        let mut documents = Vec::with_capacity(rows.len());
-        for row in rows {
-            let encoded: String = row.try_get("base_object")?;
-            if let Some(document) = decode_document(&encoded)? {
-                documents.push(document);
-            }
-        }
-        Ok(documents)
-    }
-}
-
-fn decode_document(encoded: &str) -> Result<Option<PluginCatalogDocument>> {
-    match serde_json::from_str::<PluginCatalogDocument>(encoded) {
-        Ok(document) => Ok(Some(document)),
-        Err(error) => {
-            let parsed = match serde_json::from_str::<serde_json::Value>(encoded) {
-                Ok(parsed) => parsed,
-                Err(_) => return Err(error.into()),
-            };
-
-            if parsed.get("schema").is_none() {
-                return Ok(None);
-            }
-
-            Err(error.into())
-        }
+        rows.into_iter()
+            .map(|row| {
+                let encoded: String = row.try_get("base_object")?;
+                let document = serde_json::from_str(&encoded)?;
+                Ok(document)
+            })
+            .collect()
     }
 }
 
 /// Compatibility alias while the rest of the workspace still says "schema
 /// catalog" in some places.
 ///
-/// Each entry is a plugin document in the schema library.
+/// Architecturally the primary name is `SqlitePluginCatalog` because each
+/// entry is a canonical plugin document whose schema, footprint, and render
+/// contract are one and the same.
 pub type SqliteSchemaCatalog = SqlitePluginCatalog;
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use op_state_store::PluginSchema;
-    use std::collections::HashMap;
-
-    fn sample_document() -> PluginCatalogDocument {
-        PluginCatalogDocument {
-            schema: PluginSchema {
-                name: "sample".to_string(),
-                category: "test".to_string(),
-                version: "1.0.0".to_string(),
-                description: "sample schema".to_string(),
-                fields: HashMap::new(),
-                dependencies: Vec::new(),
-                example: None,
-                immutable_paths: Vec::new(),
-                tags: Vec::new(),
-                dialect: op_state_store::DEFAULT_SCHEMA_DIALECT.to_string(),
-            },
-            source: "plugin".to_string(),
-        }
-    }
-
-    #[test]
-    fn decode_document_accepts_schema_library_document() {
-        let encoded = serde_json::to_string(&sample_document()).expect("schema document");
-
-        let decoded = decode_document(&encoded).expect("decode should succeed");
-
-        assert!(decoded.is_some());
-        assert_eq!(decoded.unwrap().schema.name, "sample");
-    }
-
-    #[test]
-    fn decode_document_accepts_legacy_runtime_hints() {
-        let encoded = r#"{
-            "schema": {
-                "name": "sample",
-                "category": "test",
-                "version": "1.0.0",
-                "description": "sample schema",
-                "fields": {},
-                "dependencies": [],
-                "example": null,
-                "immutable_paths": [],
-                "tags": [],
-                "dialect": "op-state/v1"
-            },
-            "dbus_path": "/org/opdbus/v1/plugins/sample",
-            "service_name": "org.opdbus.sample.v1",
-            "storage_path": "/var/lib/op-dbus/plugins/sample",
-            "source": "plugin"
-        }"#;
-
-        let decoded = decode_document(encoded).expect("decode should succeed");
-
-        assert!(decoded.is_some());
-        assert_eq!(decoded.unwrap().schema.name, "sample");
-    }
-
-    #[test]
-    fn decode_document_skips_legacy_plugin_rows_without_schema() {
-        let legacy = r#"{
-            "type": "DirectoryEntry",
-            "description": "legacy row",
-            "object_types": {
-                "User": {
-                    "interface": "org.opdbus.directory.v1.User"
-                }
-            }
-        }"#;
-
-        let decoded = decode_document(legacy).expect("legacy rows should be tolerated");
-
-        assert!(decoded.is_none());
-    }
-}

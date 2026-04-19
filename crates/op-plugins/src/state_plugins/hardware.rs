@@ -156,37 +156,11 @@ impl StatePlugin for HardwarePlugin {
         let memory = Self::get_memory_info().await;
         let disks = Self::get_disk_info().await;
 
-        // Return as array of typed objects for D-Bus projection
-        let mut rows = Vec::new();
-        
-        // CPU object
-        rows.push(simd_json::json!({
-            "object_type": "CPU",
-            "id": "cpu-0",
-            "model": cpu.model,
-            "cores": cpu.cores
-        }));
-        
-        // Memory object
-        rows.push(simd_json::json!({
-            "object_type": "Memory",
-            "id": "memory-0",
-            "total_kb": memory.total_kb,
-            "available_kb": memory.available_kb
-        }));
-        
-        // Disk objects
-        for (idx, disk) in disks.iter().enumerate() {
-            rows.push(simd_json::json!({
-                "object_type": "Disk",
-                "id": format!("disk-{}", idx),
-                "name": disk.name,
-                "size_bytes": disk.size_bytes,
-                "mountpoint": disk.mountpoint
-            }));
-        }
-
-        Ok(simd_json::json!(rows))
+        Ok(simd_json::serde::to_owned_value(HardwareState {
+            cpu,
+            memory,
+            disks,
+        })?)
     }
 
     async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {

@@ -29,11 +29,9 @@ const DEFAULT_MGMT_PORT: &str = "ovsbr0-mgmt";
 const DEFAULT_SOCKET_PORT: &str = "ovsbr0-sock";
 const DEFAULT_GRPC_BRIDGE_PORT: &str = "grpc-bridge";
 const DEFAULT_MGMT_CIDR: &str = "10.200.0.1/24";
-const DEFAULT_GRPC_BRIDGE_CIDR: &str = "10.200.0.2/24";
 const DEFAULT_OPENFLOW_CONTROLLER: &str = "10.88.88.1:6653";
 const DEFAULT_WARP_INTERFACE: &str = "wgcf";
 const DEFAULT_WGCF_CONFIG: &str = "/etc/wireguard/wgcf.conf";
-const DEFAULT_DNS_NAMESERVERS: &[&str] = &["45.90.28.0", "45.90.30.0"];
 const SYSTEM_FLOW_COOKIE_PREFIX: u64 = 0x5053_0000_0000_0000;
 const SYSTEM_FLOW_COOKIE_MASK: u64 = 0xFFFF_0000_0000_0000;
 
@@ -63,11 +61,6 @@ pub struct PrivacyRouterConfig {
 
     /// Additional containers (vector DB, bucket storage, etc.)
     pub containers: Vec<ContainerConfig>,
-
-    /// DNS nameservers to configure inside all system Incus containers.
-    /// Defaults to NextDNS anycast addresses.
-    #[serde(default = "default_dns_nameservers")]
-    pub dns_nameservers: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -178,7 +171,6 @@ struct PrivacyHostBootstrapConfig {
     socket_port: String,
     grpc_bridge_port: String,
     management_cidr: String,
-    grpc_bridge_cidr: String,
     openflow_controller: String,
 }
 
@@ -198,8 +190,6 @@ impl PrivacyHostBootstrapConfig {
                 .unwrap_or_else(|_| DEFAULT_GRPC_BRIDGE_PORT.to_string()),
             management_cidr: std::env::var("PRIVACY_MGMT_CIDR")
                 .unwrap_or_else(|_| DEFAULT_MGMT_CIDR.to_string()),
-            grpc_bridge_cidr: std::env::var("PRIVACY_GRPC_BRIDGE_CIDR")
-                .unwrap_or_else(|_| DEFAULT_GRPC_BRIDGE_CIDR.to_string()),
             openflow_controller: std::env::var("PRIVACY_OPENFLOW_CONTROLLER")
                 .unwrap_or_else(|_| DEFAULT_OPENFLOW_CONTROLLER.to_string()),
         }
@@ -258,16 +248,8 @@ impl Default for PrivacyRouterConfig {
                 function_routing: vec![],
             },
             containers: vec![],
-            dns_nameservers: default_dns_nameservers(),
         }
     }
-}
-
-fn default_dns_nameservers() -> Vec<String> {
-    DEFAULT_DNS_NAMESERVERS
-        .iter()
-        .map(|&s| s.to_string())
-        .collect()
 }
 
 fn default_resources() -> ContainerResources {
@@ -628,24 +610,6 @@ impl PrivacyRouterPlugin {
             .await
             .with_context(|| format!("bring '{}' up", host.grpc_bridge_port))?;
 
-        let (grpc_ip, grpc_prefix) = parse_cidr(&host.grpc_bridge_cidr)?;
-        op_network::rtnetlink::flush_addresses(&host.grpc_bridge_port)
-            .await
-            .with_context(|| format!("flush addresses on '{}'", host.grpc_bridge_port))?;
-        op_network::rtnetlink::add_ipv4_address(&host.grpc_bridge_port, &grpc_ip, grpc_prefix)
-            .await
-            .with_context(|| {
-                format!(
-                    "assign gRPC bridge CIDR '{}' to '{}'",
-                    host.grpc_bridge_cidr, host.grpc_bridge_port
-                )
-            })?;
-        log::info!(
-            "gRPC bridge port '{}' assigned {}",
-            host.grpc_bridge_port,
-            host.grpc_bridge_cidr
-        );
-
         let (management_ip, management_prefix) = parse_cidr(&host.management_cidr)?;
         op_network::rtnetlink::flush_addresses(&host.management_port)
             .await
@@ -939,37 +903,6 @@ impl PrivacyRouterPlugin {
         current
     }
 
-    async fn configure_container_dns(name: &str, nameservers: &[String]) -> Result<Vec<String>> {
-        if nameservers.is_empty() {
-            return Ok(vec![]);
-        }
-        let resolv_content = nameservers
-            .iter()
-            .map(|ns| format!("nameserver {}", ns))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let cmd = format!("printf '%s\\n' '{}' > /etc/resolv.conf", resolv_content);
-        let output = Command::new("/usr/bin/incus")
-            .args(["exec", name, "--", "sh", "-c", &cmd])
-            .output()
-            .await
-            .with_context(|| format!("exec DNS config into '{}'", name))?;
-        if !output.status.success() {
-            anyhow::bail!(
-                "DNS config in '{}' failed (exit {}): {}",
-                name,
-                output.status.code().unwrap_or(-1),
-                String::from_utf8_lossy(&output.stderr).trim()
-            );
-        }
-        log::info!("Configured DNS in '{}': {}", name, nameservers.join(", "));
-        Ok(vec![format!(
-            "DNS configured in '{}': {}",
-            name,
-            nameservers.join(", ")
-        )])
-    }
-
     async fn apply_openflow_system_chain(
         &self,
         config: &PrivacyRouterConfig,
@@ -1185,15 +1118,6 @@ impl StatePlugin for PrivacyRouterPlugin {
         }
 
         tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-
-        if !config.dns_nameservers.is_empty() {
-            for spec in self.system_container_specs(&config) {
-                match Self::configure_container_dns(spec.name, &config.dns_nameservers).await {
-                    Ok(dns_changes) => changes_applied.extend(dns_changes),
-                    Err(e) => log::warn!("DNS config in '{}' failed (non-fatal): {}", spec.name, e),
-                }
-            }
-        }
 
         let openflow_result = self.apply_openflow_system_chain(&config).await?;
         changes_applied.extend(openflow_result.changes_applied);

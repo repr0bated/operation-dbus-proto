@@ -4,13 +4,11 @@ use crate::manager::StateManager;
 use crate::plugin::StatePlugin;
 use crate::DesiredState;
 use anyhow::Result;
-use op_core::{dbus::connect_and_claim_name, types::BusType};
-use op_jsonrpc::ovsdb::OvsdbClient;
-use op_state_store::SchemaRegistry;
+use op_state_store::{SchemaCatalog, SchemaRegistry};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use simd_json::OwnedValue as Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use zbus::Connection;
 
@@ -24,6 +22,46 @@ pub struct StateManagerDBus {
 struct ProjectedObject {
     origin_service: String,
     origin_path: String,
+}
+
+#[derive(Default)]
+#[allow(dead_code)]
+struct PublicationRegistry {
+    published_paths: HashSet<String>,
+    paths_by_service: HashMap<String, HashSet<String>>,
+}
+
+#[allow(dead_code)]
+impl PublicationRegistry {
+    fn insert(&mut self, service: &str, path: String) -> bool {
+        if !self.published_paths.insert(path.clone()) {
+            return false;
+        }
+        self.paths_by_service
+            .entry(service.to_string())
+            .or_default()
+            .insert(path);
+        true
+    }
+    fn remove_path(&mut self, service: &str, path: &str) {
+        self.published_paths.remove(path);
+        if let Some(paths) = self.paths_by_service.get_mut(service) {
+            paths.remove(path);
+            if paths.is_empty() {
+                self.paths_by_service.remove(service);
+            }
+        }
+    }
+    fn remove_service(&mut self, service: &str) -> Vec<String> {
+        let paths = self.paths_by_service.remove(service).unwrap_or_default();
+        for path in &paths {
+            self.published_paths.remove(path);
+        }
+        paths.into_iter().collect()
+    }
+    fn total_paths(&self) -> usize {
+        self.published_paths.len()
+    }
 }
 
 #[zbus::interface(name = "org.opdbus.ProjectedObjectV1")]
@@ -48,8 +86,8 @@ impl StateManagerDBus {
                 .state_manager
                 .apply_plugin_state("openflow", desired_state.state)
                 .await
-                .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
-                .and_then(|result| simd_json::to_string(&result).map_err(|e| zbus::fdo::Error::Failed(e.to_string()))),
+                .and_then(|result| simd_json::to_string(&result).map_err(Into::into))
+                .map_err(|e| zbus::fdo::Error::Failed(e.to_string())),
             Err(e) => Err(zbus::fdo::Error::InvalidArgs(format!(
                 "Invalid JSON: {}",
                 e
@@ -80,15 +118,16 @@ impl StateManagerDBus {
         self.state_manager
             .apply_plugin_state(&request.plugin_id, request.value)
             .await
+            .and_then(|result| simd_json::to_string(&result).map_err(Into::into))
             .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
-            .and_then(|result| simd_json::to_string(&result).map_err(|e| zbus::fdo::Error::Failed(e.to_string())))
     }
 }
 
 /// D-Bus interface for an individual plugin
 pub struct PluginDbusHost {
     pub plugin: Arc<dyn StatePlugin>,
-    /// Shared schema catalog used for reference ONLY.
+    /// Compatibility name kept on the host shape for older call sites. This is
+    /// the shared schema catalog used to resolve the canonical plugin document.
     pub schema_registry: Arc<RwLock<SchemaRegistry>>,
 }
 
@@ -119,12 +158,6 @@ impl PluginDbusHost {
     }
 
     async fn get_schema(&self) -> zbus::fdo::Result<String> {
-        // 1. Try live plugin first
-        if let Some(schema) = self.plugin.schema() {
-            return Ok(simd_json::to_string(&schema).unwrap_or_default());
-        }
-
-        // 2. Fallback to catalog
         let plugin_name = self.plugin.name();
         let catalog = self.schema_registry.read();
         let schema = catalog
@@ -132,7 +165,7 @@ impl PluginDbusHost {
             .map(|copies| copies.json_schema.clone())
             .ok_or_else(|| {
                 zbus::fdo::Error::Failed(format!(
-                    "Schema '{}' not found in live plugin or catalog",
+                    "Schema '{}' not found in shared catalog",
                     plugin_name
                 ))
             })?;
@@ -141,41 +174,37 @@ impl PluginDbusHost {
     }
 }
 
+/// Preferred architectural name for `PluginDbusHost` schema lookup state.
+pub type SharedSchemaCatalog = Arc<RwLock<SchemaCatalog>>;
+
+/// Compatibility alias for older call sites that still say `registry`.
+pub type SharedSchemaRegistry = SharedSchemaCatalog;
+
 pub async fn register_on_connection(
     connection: &Connection,
     state_manager: Arc<StateManager>,
-    _ovsdb: Arc<OvsdbClient>,
 ) -> Result<()> {
     let state_iface = StateManagerDBus { state_manager };
     connection
         .object_server()
-        .at("/org/opdbus/state", state_iface)
+        .at("/org/opdbus/v1/state", state_iface)
         .await?;
     Ok(())
 }
 
-pub async fn start_system_bus(
-    state_manager: Arc<StateManager>,
-    ovsdb: Arc<OvsdbClient>,
-) -> Result<()> {
-    let connection = connect_and_claim_name(BusType::System, "org.opdbus").await?;
-    serve_connection(connection, state_manager, ovsdb).await
+pub async fn start_system_bus(state_manager: Arc<StateManager>) -> Result<()> {
+    let connection = Connection::system().await?;
+    serve_connection(connection, state_manager).await
 }
 
-pub async fn start_session_bus(
-    state_manager: Arc<StateManager>,
-    ovsdb: Arc<OvsdbClient>,
-) -> Result<()> {
-    let connection = connect_and_claim_name(BusType::Session, "org.opdbus").await?;
-    serve_connection(connection, state_manager, ovsdb).await
+pub async fn start_session_bus(state_manager: Arc<StateManager>) -> Result<()> {
+    let connection = Connection::session().await?;
+    serve_connection(connection, state_manager).await
 }
 
-async fn serve_connection(
-    connection: Connection,
-    state_manager: Arc<StateManager>,
-    ovsdb: Arc<OvsdbClient>,
-) -> Result<()> {
-    register_on_connection(&connection, state_manager, ovsdb).await?;
+async fn serve_connection(connection: Connection, state_manager: Arc<StateManager>) -> Result<()> {
+    register_on_connection(&connection, state_manager).await?;
+    connection.request_name("org.opdbus").await?;
     std::future::pending::<()>().await;
     Ok(())
 }

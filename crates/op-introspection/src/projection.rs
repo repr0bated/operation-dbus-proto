@@ -1,5 +1,5 @@
 use anyhow::Result;
-use futures::{future::BoxFuture, stream::iter, StreamExt};
+use futures::{stream::iter, StreamExt};
 use sha2::{Digest, Sha256};
 use simd_json::OwnedValue as Value;
 use std::sync::Arc;
@@ -147,9 +147,38 @@ impl DbusProjection {
         bus_type: BusType,
         service: &str,
     ) -> Result<Vec<ObjectSchemaRef>> {
+        let root_info = self.introspect_object(bus_type, service, "/").await?;
         let schemas = Arc::new(tokio::sync::Mutex::new(Vec::new()));
-        self.discover_path(bus_type, service, "/".to_string(), schemas.clone())
+
+        // Persist root
+        if let Ok(schema) = self.introspect_and_persist(bus_type, service, "/").await {
+            schemas.lock().await.push(schema);
+        }
+
+        let self_clone = self.clone();
+
+        // Recursively discover children in parallel
+        iter(root_info.children)
+            .for_each_concurrent(None, |child: String| {
+                let child_path = if child.starts_with('/') {
+                    child.clone()
+                } else {
+                    format!("/{}", child)
+                };
+                let schemas = schemas.clone();
+                let self_clone = self_clone.clone();
+
+                async move {
+                    if let Ok(schema) = self_clone
+                        .introspect_and_persist(bus_type, service, &child_path)
+                        .await
+                    {
+                        schemas.lock().await.push(schema);
+                    }
+                }
+            })
             .await;
+
         let final_schemas = Arc::try_unwrap(schemas).unwrap().into_inner();
         tracing::info!(
             "Discovered {} schemas for service {} (BTRFS state + blockchain trigger)",
@@ -157,37 +186,6 @@ impl DbusProjection {
             service
         );
         Ok(final_schemas)
-    }
-
-    /// Recursively persist a path and all its descendant object paths.
-    fn discover_path<'a>(
-        &'a self,
-        bus_type: BusType,
-        service: &'a str,
-        path: String,
-        schemas: Arc<tokio::sync::Mutex<Vec<ObjectSchemaRef>>>,
-    ) -> BoxFuture<'a, ()> {
-        Box::pin(async move {
-            if let Ok(schema) = self.introspect_and_persist(bus_type, service, &path).await {
-                schemas.lock().await.push(schema);
-            }
-            if let Ok(info) = self.introspect_object(bus_type, service, &path).await {
-                iter(info.children)
-                    .for_each_concurrent(None, |child| {
-                        let child_path = if child.starts_with('/') {
-                            child
-                        } else {
-                            format!("/{}", child)
-                        };
-                        let schemas = schemas.clone();
-                        async move {
-                            self.discover_path(bus_type, service, child_path, schemas)
-                                .await;
-                        }
-                    })
-                    .await;
-            }
-        })
     }
 
     /// Get access to underlying introspection service

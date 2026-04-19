@@ -1,16 +1,11 @@
-//! OpenFlow Traffic Obfuscation Plugin — OVS PRIVACY FABRIC ONLY
+//! OpenFlow Traffic Obfuscation Plugin
 //!
-//! This plugin manages OpenFlow rules on the OVS privacy bridge (ovsbr0).
-//! It is part of the privacy/WARP dataplane: wgcf → ovsbr0 → OpenFlow → priv_wg/priv_warp/priv_xray.
-//!
-//! **This has NOTHING to do with OpenClaw or the socket-based service gateway.**
-//! OpenClaw is reached via host nginx → Unix socket /run/services0/gateway.sock → container loopback.
-//! That path does not cross ovsbr0 or use OpenFlow.
-//!
-//! Obfuscation levels:
+//! Implements three levels of traffic obfuscation using OpenFlow rules:
 //! - Level 1: Basic security (drop invalid, rate limiting, connection tracking)
 //! - Level 2: Pattern hiding (TTL normalization, packet padding, timing jitter)
 //! - Level 3: Advanced obfuscation (protocol mimicry, decoy traffic, morphing)
+//!
+//! Works with OVS bridges to apply privacy-enhancing flow rules.
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -62,7 +57,7 @@ pub struct OpenFlowRule {
 impl Default for OpenFlowObfuscationConfig {
     fn default() -> Self {
         Self {
-            bridge_name: "ovsbr0".to_string(),
+            bridge_name: "ovs-br0".to_string(),
             obfuscation_level: 2,
             enable_security_flows: true,
             privacy_ports: vec![
