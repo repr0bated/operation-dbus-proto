@@ -1,8 +1,0 @@
-# System Info
-- OS: Chimera Linux
-- Init: dinit (not systemd)
-- Privilege escalation: doas (not sudo)
-- Services: sshd, nginx, podman, incus, tailscaled, step-ca, ovs, chrony
-
-# Architecture
-- [Container socket networking](project_container_networking.md) — no veth/IP, Unix sockets only, WG key for user containers, function for system
