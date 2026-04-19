@@ -56,5 +56,6 @@ This file provides essential guidelines for agentic coding agents working in thi
   1.  **Requirements:** The architectural rules it satisfies.
   2.  **Design:** How it fits into the 3tched system (Zero-Copy, Btrfs, GUI Schema, etc.).
   3.  **Code Implementation:** The exact, copy-pasteable Rust/Bash code.
+*   **Commit Discipline:** Commit every logical change as soon as it is coherent and verified. Do not accumulate unrelated edits in the working tree, and do not leave completed code changes uncommitted when switching tasks.
 *   Before edits: `cargo check -p <crate>`, `npm run typecheck`.
 *   Mimic existing patterns: Search similar code. No new deps without PR justification.
