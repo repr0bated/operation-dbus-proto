@@ -12,7 +12,7 @@ pub mod wireguard;
 pub use anna_scribe::{AnnaScribe, PluginSchema, SessionLedger};
 pub use gcloud_auth::GCloudAuth;
 pub use registration::{generate_magic_link_token, generate_wireguard_keypair, WireGuardKeyPair};
-pub use schema_bridge::{run_schema_shuttle, IdentitySled};
+pub use schema_bridge::{run_schema_shuttle, write_sled_from_wg, watch_wireguard_handshakes, IdentitySled};
 pub use session::{Session, SessionManager};
 pub use token::{CachedToken, TokenManager};
 pub use wireguard::{PeerInfo, WireGuardIdentity};

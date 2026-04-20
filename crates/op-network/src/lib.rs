@@ -8,6 +8,7 @@
 //! - Container networking with OpenFlow routing
 //! - Native Proxmox API client for LXC container management
 
+pub mod controller;
 pub mod openflow;
 pub mod ovs_capabilities;
 pub mod ovs_error;
@@ -17,6 +18,7 @@ pub mod plugin;
 pub mod proxmox;
 pub mod rtnetlink;
 
+pub use controller::OpenFlowController;
 pub use openflow::{FlowAction, FlowEntry, FlowMatch, OpenFlowClient, OpenFlowVersion};
 pub use ovs_capabilities::{counter_excuses, excuses_to_llm_context, OvsCapabilities};
 pub use ovs_error::OvsError;

@@ -34,3 +34,8 @@ op-core = { path = "../op-core" }
 
 # Root privilege checking
 libc = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[[bin]]
+name = "op-of-controller"
+path = "src/bin/op-of-controller.rs"
