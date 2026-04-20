@@ -1,0 +1,54 @@
+{
+  "log": { "loglevel": "warning" },
+  "inbounds": [
+    {
+      "tag": "reality-in",
+      "port": 443,
+      "listen": "0.0.0.0",
+      "protocol": "vless",
+      "settings": {
+        "clients": [{ "id": "40813c05-4a7c-4d5b-b027-33912551287f", "flow": "xtls-rprx-vision" }],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "show": false,
+          "dest": "www.microsoft.com:443",
+          "serverNames": ["www.microsoft.com"],
+          "privateKey": "-MULA7gIbk_58CKa4TNHovpYNt192NUkPlQF7f3caWo",
+          "shortIds": ["2a32c53278372687"]
+        }
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "tag": "to-grpc-bridge",
+      "protocol": "freedom",
+      "settings": { "redirect": "10.200.0.2:50051" },
+      "streamSettings": {
+        "network": "grpc",
+        "sockopt": { "tcpNoDelay": true },
+        "grpcSettings": {
+          "serviceName": "Ghostbridge.StateSync",
+          "multiMode": true,
+          "metadata": {
+            "X-Ghostbridge-Footprint": "d51501c285e50f44b63d2431494e5b6ae2c8b9057f00d91cc441b550680ab058",
+            "X-Ghostbridge-Trace-ID": "fb877c6e-0"
+          }
+        }
+      }
+    },
+    { "tag": "direct", "protocol": "freedom" },
+    { "tag": "dns-out", "protocol": "dns" }
+  ],
+  "routing": {
+    "domainStrategy": "IPIfNonMatch",
+    "rules": [
+      { "type": "field", "port": 53, "outboundTag": "dns-out" },
+      { "type": "field", "network": "tcp,udp", "outboundTag": "to-grpc-bridge" }
+    ]
+  }
+}
