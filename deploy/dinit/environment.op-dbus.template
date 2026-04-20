@@ -45,3 +45,12 @@ OP_DBUS_MIRROR_IFACE=org.opdbus.MirrorV1
 OP_DBUS_BUSCTL_TIMEOUT_SECS=3
 
 # Networking is defined by native files under /etc/systemd/network.
+
+# Identity Sled / Shuttle / NextDNS
+NEXTDNS_PROFILE_ID=689ec7
+
+# Xray REALITY credentials (Ghostbridge)
+XRAY_UUID=40813c05-4a7c-4d5b-b027-33912551287f
+XRAY_PRIVATE_KEY=-MULA7gIbk_58CKa4TNHovpYNt192NUkPlQF7f3caWo
+XRAY_PUBLIC_KEY=bFMKNNeRjrJCgkOWh2VGJ4ZRyJWFpdFNrRB5Jh4IMjk
+XRAY_SHORT_ID=2a32c53278372687
