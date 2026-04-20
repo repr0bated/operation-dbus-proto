@@ -37,6 +37,7 @@ op-cognitive-mcp = { path = "../op-cognitive-mcp" }
 # Zero-copy shared memory (1:1 Direct Read)
 memmap2 = { workspace = true }
 hex = { workspace = true }
+sha2 = { workspace = true }
 
 # Utilities
 tracing = { workspace = true }
