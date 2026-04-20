@@ -1,0 +1,109 @@
+# /etc/nginx/http.d/dashboard-3tched.com
+# dashboard.3tched.com - OpenClaw gateway access via WireGuard
+#
+# This config provides:
+#   - /gateway/ -> OpenClaw API (with auth token injection)
+#   - / -> op-web UI
+#
+# Requires:
+#   - op-dbus running on port 8080
+#   - op-web running on port 8081  
+#   - OpenClaw gateway socket at /run/services0/gateway.sock
+
+server {
+    listen 148.113.204.83:80;
+    server_name dashboard.3tched.com;
+    return 404;
+}
+
+server {
+    listen 148.113.204.83:443 ssl;
+    http2 on;
+    server_name dashboard.3tched.com;
+
+    ssl_certificate /etc/letsencrypt/live/3tched.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/3tched.com/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+
+    return 404;
+}
+
+server {
+    listen 10.0.0.1:80;
+    server_name dashboard.3tched.com;
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 10.0.0.1:443 ssl;
+    http2 on;
+    server_name dashboard.3tched.com;
+
+    ssl_certificate /etc/letsencrypt/live/3tched.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/3tched.com/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+
+    # gRPC endpoints (if needed)
+    location ~ ^/operation\.[^/]+/[^/]+$ {
+        proxy_pass http://10.88.88.1:50051;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header TE $http_te;
+        proxy_set_header Connection "TE";
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+    }
+
+    location = /grpc.health.v1.Health/Check {
+        proxy_pass http://10.88.88.1:50051;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header TE $http_te;
+        proxy_set_header Connection "TE";
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_read_timeout 60s;
+        proxy_send_timeout 60s;
+    }
+
+    # OpenClaw Gateway (with token injection)
+    # Token is automatically added to Authorization header
+    location /gateway/ {
+        proxy_pass http://unix:/run/services0/gateway.sock:/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header Authorization "Bearer OPENCLAW_TOKEN_PLACEHOLDER";
+        proxy_read_timeout 7d;
+    }
+
+    # Main UI - proxy to op-web
+    location / {
+        proxy_pass http://10.0.0.1:8081;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_read_timeout 300s;
+    }
+}
