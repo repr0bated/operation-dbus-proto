@@ -14,9 +14,12 @@ use tokio::sync::{broadcast, OnceCell, RwLock, Semaphore};
 use zbus::zvariant::OwnedValue as ZOwnedValue;
 use zbus::{Connection, Proxy};
 
+use op_cognitive_mcp::CozoGraphShuttle;
+use op_identity::write_sled_from_wg;
 use op_jsonrpc::nonnet::NonNetDb;
 use op_network::ovsdb::OvsdbClient;
 use op_state_store::{Decision, EventChain, OperationType};
+use sha2::{Digest, Sha256};
 
 /// A state change projected from the authoritative system bus
 #[derive(Debug, Clone)]
@@ -70,6 +73,8 @@ pub struct SchemaEngine {
     /// Authoritative RCP stores
     pub ovsdb: Arc<OvsdbClient>,
     pub nonnet: Arc<NonNetDb>,
+    /// CozoDB compliance graph — evaluates mutations before they are finalised
+    policy_engine: Arc<CozoGraphShuttle>,
 }
 
 impl std::fmt::Debug for SchemaEngine {
@@ -122,6 +127,8 @@ impl SchemaEngine {
         nonnet: Arc<NonNetDb>,
     ) -> Self {
         let (change_tx, _) = broadcast::channel(1024);
+        let policy_engine = CozoGraphShuttle::from_env()
+            .unwrap_or_else(|_| CozoGraphShuttle::new_in_memory().expect("CozoDB init failed"));
         Self {
             event_chain,
             change_tx,
@@ -130,6 +137,7 @@ impl SchemaEngine {
             dbus_call_limiter: Arc::new(Semaphore::new(32)),
             ovsdb,
             nonnet,
+            policy_engine: Arc::new(policy_engine),
         }
     }
 
@@ -300,6 +308,18 @@ impl SchemaEngine {
     ) -> anyhow::Result<MutationResult> {
         let mut old_value = None;
 
+        // 0. Compliance interception — CozoDB graph evaluation before anything is written
+        let operation = member_name.as_deref().unwrap_or(match change_type {
+            ChangeType::MethodCall => "method_call",
+            ChangeType::PropertySet => "property_set",
+            ChangeType::PropertyDelete => "property_delete",
+            _ => "mutation",
+        });
+        let verdict = self.policy_engine.evaluate_mutation(&plugin_id, operation);
+        if !verdict.allow {
+            return Err(anyhow::anyhow!("PolicyEngine denied mutation on {}: {}", plugin_id, verdict.reason));
+        }
+
         // 1. Write to authoritative RCP store
         if plugin_id == "net" || object_path.contains("/ovsdb/") {
             // OVSDB Authoritative Path
@@ -388,6 +408,20 @@ impl SchemaEngine {
             )
             .await
             .map_err(|e| anyhow::anyhow!(e))?;
+
+        // Write the Identity Sled — hash the event_hash + plugin_id as the footprint,
+        // use it as a pseudo-pubkey so the Xray shuttle sees the schema mutation.
+        {
+            let mut hasher = Sha256::new();
+            hasher.update(change.event_hash.as_bytes());
+            hasher.update(change.plugin_id.as_bytes());
+            let footprint_hex = hex::encode(hasher.finalize());
+            // write_sled_from_wg accepts a base64 WG pubkey; pass the footprint hex
+            // encoded as the peer key so the sled reflects the schema footprint.
+            if let Err(e) = write_sled_from_wg(&footprint_hex) {
+                tracing::warn!("sled write after mutation failed: {}", e);
+            }
+        }
 
         Ok(MutationResult {
             success: true,
