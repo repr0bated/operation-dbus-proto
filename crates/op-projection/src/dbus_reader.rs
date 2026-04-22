@@ -6,10 +6,10 @@
 use crate::interfaces::{DbusReader, RawEntity, SourceReader};
 use anyhow::Result;
 use simd_json::json;
-use zbus::Connection;
-use zbus::fdo::{DBusProxy, IntrospectableProxy};
-use tracing::{debug, warn};
 use std::collections::HashMap;
+use tracing::{debug, warn};
+use zbus::fdo::{DBusProxy, IntrospectableProxy};
+use zbus::Connection;
 
 /// Reader that extracts state from the D-Bus system bus.
 #[derive(Debug)]
@@ -27,22 +27,31 @@ impl SystemDbusReader {
     }
 
     /// Helper to introspect a D-Bus path
-    async fn introspect(&self, conn: &Connection, service: &str, path: &str) -> Result<Vec<RawEntity>> {
+    async fn introspect(
+        &self,
+        conn: &Connection,
+        service: &str,
+        path: &str,
+    ) -> Result<Vec<RawEntity>> {
         let proxy = IntrospectableProxy::builder(conn)
             .destination(service)?
             .path(path)?
             .build()
             .await?;
-        
+
         let xml = proxy.introspect().await?;
         let mut entities = Vec::new();
-        
+
         // Very basic XML parsing for children
         // In production, use a proper XML parser
         let mut children = Vec::new();
         for line in xml.lines() {
             if line.contains("<node name=\"") {
-                if let Some(name) = line.split("name=\"").nth(1).and_then(|s| s.split('\"').next()) {
+                if let Some(name) = line
+                    .split("name=\"")
+                    .nth(1)
+                    .and_then(|s| s.split('\"').next())
+                {
                     if !name.is_empty() {
                         children.push(name.to_string());
                     }
@@ -56,18 +65,19 @@ impl SystemDbusReader {
             } else {
                 format!("{}/{}", path, child)
             };
-            
+
             entities.push(RawEntity {
                 entity_type: "dbus.object".to_string(),
                 entity_id: format!("{}:{}", service, child_path),
                 data: json!({
                     "service": service,
                     "path": child_path,
-                }).into(),
+                })
+                .into(),
                 source: self.source.clone(),
             });
         }
-        
+
         Ok(entities)
     }
 }

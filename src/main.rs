@@ -54,6 +54,10 @@ use op_grpc_bridge::proto::{
 #[cfg(feature = "grpc")]
 use op_grpc_bridge::{ChangeType, OperationGrpcServer, PluginSchemaProvider, SchemaEngine};
 #[cfg(feature = "grpc")]
+use op_grpc_bridge::interceptor::ghostbridge_interceptor;
+#[cfg(feature = "grpc")]
+use op_http::tls::detect_certificates;
+#[cfg(feature = "grpc")]
 use op_mcp::grpc::proto::mcp_service_server::McpServiceServer;
 #[cfg(feature = "grpc")]
 use op_mcp::grpc::{GrpcInfrastructure, GrpcServerMode, McpGrpcService};
@@ -739,7 +743,33 @@ async fn main() -> Result<()> {
                     .build_v1()
                     .unwrap();
 
-                if let Err(e) = tonic::transport::Server::builder()
+                let mut builder = tonic::transport::Server::builder()
+                    .layer(tonic::service::interceptor(ghostbridge_interceptor));
+
+                // Wire in TLS if certificates are auto-detected
+                if let Ok(Some((cert_path, key_path))) = detect_certificates() {
+                    match (std::fs::read(cert_path), std::fs::read(key_path)) {
+                        (Ok(cert), Ok(key)) => {
+                            let identity = tonic::transport::Identity::from_pem(cert, key);
+                            let tls_config = tonic::transport::ServerTlsConfig::new()
+                                .identity(identity);
+                            
+                            match builder.tls_config(tls_config) {
+                                Ok(tls_builder) => {
+                                    builder = tls_builder;
+                                    tracing::info!("gRPC TLS encryption enabled via auto-detected certificates");
+                                }
+                                Err(e) => tracing::error!("Failed to apply TLS config to gRPC server: {}", e),
+                            }
+                        }
+                        (Err(e), _) => tracing::warn!("Failed to read TLS cert: {}", e),
+                        (_, Err(e)) => tracing::warn!("Failed to read TLS key: {}", e),
+                    }
+                } else {
+                    tracing::warn!("gRPC server running on plain TCP (no TLS certificates found)");
+                }
+
+                if let Err(e) = builder
                     .add_service(reflection_service)
                     .add_service(StateSyncServer::new(op_grpc_server.clone()))
                     .add_service(PluginServiceServer::new(op_grpc_server.clone()))

@@ -99,7 +99,7 @@ impl GrpcClient {
     }
 
     pub async fn health(&mut self) -> Result<HealthResponse> {
-        let response = self.client.health(HealthRequest {}).await?.into_inner();
+        let response = self.client.health(()).await?.into_inner();
         Ok(response)
     }
 

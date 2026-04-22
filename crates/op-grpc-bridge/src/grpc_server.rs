@@ -25,18 +25,18 @@ use crate::proto::{
     CreateSnapshotResponse, Decision as ProtoDecision, DenyReason as ProtoDenyReason,
     ErrorCode as ProtoErrorCode, GetEventsRequest, GetEventsResponse, GetProofRequest,
     GetProofResponse, GetPropertyRequest, GetPropertyResponse, GetSchemaRequest, GetSchemaResponse,
-    GetSnapshotRequest, GetSnapshotResponse, GetStateRequest, GetStateResponse, ListPluginsRequest,
+    GetSnapshotRequest, GetSnapshotResponse, GetStateRequest, GetStateResponse,
     ListPluginsResponse, MerkleProofSibling, MutateRequest, MutateResponse,
     MutationError as ProtoMutationError, NumaNode as ProtoNumaNode,
     OperationType as ProtoOperationType, OvsdbBridge as ProtoOvsdbBridge, OvsdbDumpDbRequest,
     OvsdbDumpDbResponse, OvsdbEchoRequest, OvsdbEchoResponse, OvsdbGetBridgeStateRequest,
     OvsdbGetBridgeStateResponse, OvsdbGetSchemaRequest, OvsdbGetSchemaResponse,
-    OvsdbInterface as ProtoOvsdbInterface, OvsdbListDbsRequest, OvsdbListDbsResponse,
+    OvsdbInterface as ProtoOvsdbInterface, OvsdbListDbsResponse,
     OvsdbMonitorRequest, OvsdbPort as ProtoOvsdbPort, OvsdbTransactRequest, OvsdbTransactResponse,
     OvsdbUpdate, PluginInfo, ProveTagImmutabilityRequest, ProveTagImmutabilityResponse,
-    ReadOnlyViolation as ProtoReadOnlyViolation, RuntimeGetNumaTopologyRequest,
-    RuntimeGetNumaTopologyResponse, RuntimeGetServiceRequest, RuntimeGetSystemInfoRequest,
-    RuntimeGetSystemInfoResponse, RuntimeListInterfacesRequest, RuntimeListInterfacesResponse,
+    ReadOnlyViolation as ProtoReadOnlyViolation,
+    RuntimeGetNumaTopologyResponse, RuntimeGetServiceRequest,
+    RuntimeGetSystemInfoResponse, RuntimeListInterfacesResponse,
     RuntimeListServicesRequest, RuntimeListServicesResponse, RuntimeMetricUpdate,
     RuntimeNetworkInterface as ProtoRuntimeNetworkInterface,
     RuntimeServiceInfo as ProtoRuntimeServiceInfo, RuntimeStreamMetricsRequest,
@@ -436,7 +436,7 @@ impl PluginService for OperationGrpcServer {
 
     async fn list_plugins(
         &self,
-        _request: Request<ListPluginsRequest>,
+        _request: Request<()>,
     ) -> Result<Response<ListPluginsResponse>, Status> {
         Ok(Response::new(ListPluginsResponse {
             plugins: self.plugin_provider.list_plugins().await,
@@ -1193,7 +1193,7 @@ impl OvsdbMirror for OperationGrpcServer {
 
     async fn list_dbs(
         &self,
-        _request: Request<OvsdbListDbsRequest>,
+        _request: Request<()>,
     ) -> Result<Response<OvsdbListDbsResponse>, Status> {
         let result = self.ovsdb_call("list_dbs", "[]").await?;
         let dbs: Vec<String> = serde_json::from_str(&result)
@@ -1581,7 +1581,7 @@ impl RuntimeMirror for OperationGrpcServer {
 
     async fn get_system_info(
         &self,
-        _request: Request<RuntimeGetSystemInfoRequest>,
+        _request: Request<()>,
     ) -> Result<Response<RuntimeGetSystemInfoResponse>, Status> {
         let hostname = tokio::fs::read_to_string("/etc/hostname")
             .await
@@ -1768,7 +1768,7 @@ impl RuntimeMirror for OperationGrpcServer {
 
     async fn list_interfaces(
         &self,
-        _request: Request<RuntimeListInterfacesRequest>,
+        _request: Request<()>,
     ) -> Result<Response<RuntimeListInterfacesResponse>, Status> {
         // Read from /sys/class/net
         let mut interfaces = Vec::new();
@@ -1825,7 +1825,7 @@ impl RuntimeMirror for OperationGrpcServer {
 
     async fn get_numa_topology(
         &self,
-        _request: Request<RuntimeGetNumaTopologyRequest>,
+        _request: Request<()>,
     ) -> Result<Response<RuntimeGetNumaTopologyResponse>, Status> {
         let mut nodes = Vec::new();
 

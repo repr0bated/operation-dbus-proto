@@ -26,13 +26,17 @@ impl OvsdbMirrorProjectionImpl {
 
 impl OvsdbMirrorProjection for OvsdbMirrorProjectionImpl {
     fn mirror_table(&mut self, table_name: &str, entities: Vec<RawEntity>) -> Result<()> {
-        debug!(table_name = table_name, count = entities.len(), "Mirroring OVSDB table");
-        
+        debug!(
+            table_name = table_name,
+            count = entities.len(),
+            "Mirroring OVSDB table"
+        );
+
         let mut engine = self.engine.lock();
         for entity in entities {
             engine.create_projection(entity)?;
         }
-        
+
         Ok(())
     }
 
@@ -46,11 +50,7 @@ impl OvsdbMirrorProjection for OvsdbMirrorProjectionImpl {
         let mut engine = self.engine.lock();
         for p in engine.get_all_projections() {
             if p.entity_type.starts_with("ovsdb.") {
-                engine.degrade_projection(
-                    &p.id,
-                    "OVSDB connection lost",
-                    Vec::new()
-                );
+                engine.degrade_projection(&p.id, "OVSDB connection lost", Vec::new());
             }
         }
     }

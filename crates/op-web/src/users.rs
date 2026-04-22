@@ -127,7 +127,7 @@ impl UserStore {
         Ok(())
     }
 
-    /// Save users to disk
+    /// Save users to disk safely using a temporary file
     async fn save(&self) -> Result<()> {
         let users = self.users.read().await;
         let next_ip = self.next_ip.read().await;
@@ -144,19 +144,42 @@ impl UserStore {
             tokio::fs::create_dir_all(parent).await.ok();
         }
 
-        tokio::fs::write(&self.storage_path, content).await?;
+        let temp_path = format!("{}.tmp", self.storage_path);
+        tokio::fs::write(&temp_path, content).await?;
+        tokio::fs::rename(&temp_path, &self.storage_path).await?;
         Ok(())
     }
 
-    /// Get the next available IP address
+    /// Get the next available IP address, ensuring no collisions
     pub async fn allocate_ip(&self) -> String {
-        let mut next_ip = self.next_ip.write().await;
-        let ip = format!("10.100.0.{}/32", *next_ip);
-        *next_ip = next_ip.wrapping_add(1);
-        if *next_ip < 2 {
-            *next_ip = 2; // Wrap around but skip .0 and .1
+        let mut next_ip_oct = self.next_ip.write().await;
+        let users = self.users.read().await;
+        
+        // Collect all currently assigned IPs to avoid collisions
+        let assigned_ips: std::collections::HashSet<String> = users
+            .values()
+            .map(|u| u.assigned_ip.clone())
+            .collect();
+
+        // Try to find the next available IP in the 10.100.0.x range
+        for _ in 0..254 {
+            let ip = format!("10.100.0.{}/32", *next_ip_oct);
+            
+            // Increment for next time, skipping .0, .1, and .255
+            *next_ip_oct = next_ip_oct.wrapping_add(1);
+            if *next_ip_oct > 254 || *next_ip_oct < 2 {
+                *next_ip_oct = 2;
+            }
+
+            if !assigned_ips.contains(&ip) {
+                return ip;
+            }
         }
-        ip
+
+        // Fallback: If 10.100.0.x is full, we should probably expand the range
+        // For now, just return what we have and log a warning
+        warn!("IP address range 10.100.0.x is exhausted!");
+        format!("10.100.0.{}/32", *next_ip_oct)
     }
 
     /// Create a new user (unverified)

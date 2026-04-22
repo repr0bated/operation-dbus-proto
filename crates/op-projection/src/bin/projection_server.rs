@@ -3,11 +3,11 @@
 //! This binary wires together all components of the projection system:
 //! SchemaEngine, ProjectionEngine, EventMaterializer, and SourceReaders.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use op_projection::*;
-use std::sync::Arc;
 use parking_lot::Mutex;
-use tracing::{info, Level};
+use std::sync::Arc;
+use tracing::{info, warn, Level};
 use tracing_subscriber::FmtSubscriber;
 
 #[tokio::main]
@@ -22,7 +22,7 @@ async fn main() -> Result<()> {
 
     // 1. Initialize Schema Engine
     let mut schema_engine = SchemaEngine::new();
-    
+
     // Register some initial schemas (in production, load from files)
     let memory_schema = PluginSchema {
         name: "system.memory".to_string(),
@@ -52,7 +52,7 @@ async fn main() -> Result<()> {
         secret_paths: vec![],
         pii_paths: vec![],
     };
-    
+
     schema_engine.register_schema(memory_schema)?;
 
     let cpu_schema = PluginSchema {
@@ -88,17 +88,15 @@ async fn main() -> Result<()> {
     let network_schema = PluginSchema {
         name: "system.network".to_string(),
         version: "1.0.0".to_string(),
-        fields: vec![
-            FieldSchema {
-                name: "interfaces".to_string(),
-                field_type: FieldType::Array(Box::new(FieldType::String)),
-                required: true,
-                description: Some("List of network interfaces".to_string()),
-                constraints: vec![],
-                example: None,
-                read_only: true,
-            },
-        ],
+        fields: vec![FieldSchema {
+            name: "interfaces".to_string(),
+            field_type: FieldType::Array(Box::new(FieldType::String)),
+            required: true,
+            description: Some("List of network interfaces".to_string()),
+            constraints: vec![],
+            example: None,
+            read_only: true,
+        }],
         category: Some("system".to_string()),
         examples: None,
         secret_paths: vec![],
@@ -148,17 +146,15 @@ async fn main() -> Result<()> {
     let process_schema = PluginSchema {
         name: "system.process".to_string(),
         version: "1.0.0".to_string(),
-        fields: vec![
-            FieldSchema {
-                name: "name".to_string(),
-                field_type: FieldType::String,
-                required: true,
-                description: Some("Process name".to_string()),
-                constraints: vec![],
-                example: None,
-                read_only: true,
-            },
-        ],
+        fields: vec![FieldSchema {
+            name: "name".to_string(),
+            field_type: FieldType::String,
+            required: true,
+            description: Some("Process name".to_string()),
+            constraints: vec![],
+            example: None,
+            read_only: true,
+        }],
         category: Some("system".to_string()),
         examples: None,
         secret_paths: vec![],
@@ -166,20 +162,56 @@ async fn main() -> Result<()> {
     };
     schema_engine.register_schema(process_schema)?;
 
+    let filesystems_schema = PluginSchema {
+        name: "system.filesystems".to_string(),
+        version: "1.0.0".to_string(),
+        fields: vec![FieldSchema {
+            name: "types".to_string(),
+            field_type: FieldType::Array(Box::new(FieldType::String)),
+            required: true,
+            description: Some("Filesystem types listed by /proc/filesystems".to_string()),
+            constraints: vec![],
+            example: None,
+            read_only: true,
+        }],
+        category: Some("system".to_string()),
+        examples: None,
+        secret_paths: vec![],
+        pii_paths: vec![],
+    };
+    schema_engine.register_schema(filesystems_schema)?;
+
+    let plugin_reader = match SystemPluginReader::new().await {
+        Ok(reader) => reader,
+        Err(error) => {
+            warn!(
+                error = %error,
+                "Failed to initialize plugin projection reader; continuing with non-plugin sources"
+            );
+            SystemPluginReader::empty()
+        }
+    };
+
+    for schema in plugin_reader.projection_schemas() {
+        register_schema_if_missing(&mut schema_engine, schema)?;
+    }
+
     info!("Registered initial schemas");
 
     // 2. Initialize Projection Store and Engine
     let store = ProjectionStore::new();
     let validator = SchemaValidator::new(schema_engine.clone());
-    let engine = Arc::new(Mutex::new(ProjectionSystemEngine::new(store.clone(), validator)));
+    let engine = Arc::new(Mutex::new(ProjectionSystemEngine::new(
+        store.clone(),
+        validator,
+    )));
 
     // 3. Initialize Source Readers
     let procfs_reader = SystemProcfsReader::new();
     let sled_reader = IdentitySledReader::new();
     let _dbus_reader = SystemDbusReader::new();
     let _grpc_reader = SystemGrpcReader::new();
-    let _plugin_reader = SystemPluginReader::new();
-    
+
     info!("Initialized source readers");
 
     // 4. Initialize JSON-stream Server
@@ -188,39 +220,37 @@ async fn main() -> Result<()> {
 
     // 5. Initial Scan and Projection
     {
-        let mut engine_lock = engine.lock();
-        
+        let mut initial_entities = Vec::new();
+
         info!("Performing initial scan...");
-        
-        // Scan procfs
+
         if procfs_reader.is_available() {
-            let entities = procfs_reader.read_all()?;
-            for entity in entities {
-                let projection = engine_lock.create_projection(entity)?;
-                
-                // Broadcast initial results
-                stream_server.broadcast(&ProjectionUpdate {
-                    update_type: UpdateType::Created,
-                    projection,
-                    timestamp: chrono::Utc::now(),
-                });
+            initial_entities.extend(procfs_reader.read_all()?);
+        }
+
+        if sled_reader.is_available() {
+            if let Ok(entities) = sled_reader.read_all() {
+                initial_entities.extend(entities);
             }
         }
 
-        // Scan Sled
-        if sled_reader.is_available() {
-            if let Ok(entities) = sled_reader.read_all() {
-                for entity in entities {
-                    let projection = engine_lock.create_projection(entity)?;
-                    stream_server.broadcast(&ProjectionUpdate {
-                        update_type: UpdateType::Created,
-                        projection,
-                        timestamp: chrono::Utc::now(),
-                    });
-                }
+        if plugin_reader.is_available() {
+            match plugin_reader.read_all_async().await {
+                Ok(entities) => initial_entities.extend(entities),
+                Err(error) => warn!(error = %error, "Failed to read plugin projection entities"),
             }
         }
-        
+
+        let mut engine_lock = engine.lock();
+        for entity in initial_entities {
+            let projection = engine_lock.create_projection(entity)?;
+            stream_server.broadcast(&ProjectionUpdate {
+                update_type: UpdateType::Created,
+                projection,
+                timestamp: chrono::Utc::now(),
+            });
+        }
+
         info!("Initial scan complete");
     }
 
@@ -239,37 +269,54 @@ async fn main() -> Result<()> {
     // 7. Keep-alive loop (in production, this would be the event loop)
     loop {
         tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
-        
-        let mut engine_lock = engine.lock();
+        let mut refresh_entities = Vec::new();
 
         // Periodic refresh from procfs
         if let Ok(entities) = procfs_reader.read_all() {
-            for entity in entities {
-                let update = engine_lock.create_projection(entity)?;
-                
-                // Broadcast update to UI
-                stream_server.broadcast(&ProjectionUpdate {
-                    update_type: UpdateType::Updated,
-                    projection: update,
-                    timestamp: chrono::Utc::now(),
-                });
-            }
+            refresh_entities.extend(entities);
         }
 
         // Periodic refresh from Sled
         if let Ok(entities) = sled_reader.read_all() {
-            for entity in entities {
-                let update = engine_lock.create_projection(entity)?;
-                
-                // Broadcast update to UI
-                stream_server.broadcast(&ProjectionUpdate {
-                    update_type: UpdateType::Updated,
-                    projection: update,
-                    timestamp: chrono::Utc::now(),
-                });
+            refresh_entities.extend(entities);
+        }
+
+        if plugin_reader.is_available() {
+            match plugin_reader.read_all_async().await {
+                Ok(entities) => refresh_entities.extend(entities),
+                Err(error) => warn!(
+                    error = %error,
+                    "Failed to refresh plugin projection entities"
+                ),
             }
         }
-        
+
+        let mut engine_lock = engine.lock();
+        for entity in refresh_entities {
+            let update = engine_lock.create_projection(entity)?;
+
+            stream_server.broadcast(&ProjectionUpdate {
+                update_type: UpdateType::Updated,
+                projection: update,
+                timestamp: chrono::Utc::now(),
+            });
+        }
+
         info!("Periodic refresh complete");
     }
+}
+
+fn register_schema_if_missing(
+    schema_engine: &mut SchemaEngine,
+    schema: PluginSchema,
+) -> Result<()> {
+    if schema_engine.has_valid_schema(&schema.name) {
+        return Ok(());
+    }
+
+    let schema_name = schema.name.clone();
+    schema_engine
+        .register_schema(schema)
+        .with_context(|| format!("failed to register projection schema '{}'", schema_name))?;
+    Ok(())
 }

@@ -6,9 +6,9 @@
 use crate::data_models::*;
 use crate::interfaces::AccessController;
 use anyhow::Result;
+use parking_lot::RwLock;
 use regex::Regex;
 use std::sync::Arc;
-use parking_lot::RwLock;
 use tracing::{debug, warn};
 
 /// Controller that enforces security policies on projections.
@@ -37,16 +37,12 @@ impl Default for ProjectionAccessController {
 }
 
 impl AccessController for ProjectionAccessController {
-    fn enforce_policy(
-        &self,
-        projection: &Projection,
-        requester: &Requester,
-    ) -> Result<Projection> {
+    fn enforce_policy(&self, projection: &Projection, requester: &Requester) -> Result<Projection> {
         let mut result = projection.clone();
-        
+
         // Validate access
         self.validate_permissions(requester, "read", &projection.id)?;
-        
+
         // Check if redaction is needed
         let policies = self.policies.read();
         for policy in policies.iter() {
@@ -55,7 +51,7 @@ impl AccessController for ProjectionAccessController {
                 result.data = self.redact_sensitive(&result.data, requester);
             }
         }
-        
+
         Ok(result)
     }
 
@@ -67,7 +63,7 @@ impl AccessController for ProjectionAccessController {
     ) -> Result<()> {
         let policies = self.policies.read();
         let mut allowed = false;
-        
+
         for policy in policies.iter() {
             if policy.action == action {
                 let re = Regex::new(&policy.resource_pattern)?;
@@ -77,7 +73,7 @@ impl AccessController for ProjectionAccessController {
                         allowed = true;
                         break;
                     }
-                    
+
                     for req_perm in &policy.required_permissions {
                         if requester.permissions.contains(req_perm) {
                             allowed = true;
@@ -87,40 +83,46 @@ impl AccessController for ProjectionAccessController {
                 }
             }
         }
-        
+
         // Log decision
         self.log_decision(requester, action, resource, allowed);
-        
+
         if allowed {
             Ok(())
         } else {
-            Err(anyhow::anyhow!("Permission denied: {} on {}", action, resource))
+            Err(anyhow::anyhow!(
+                "Permission denied: {} on {}",
+                action,
+                resource
+            ))
         }
     }
 
-    fn redact_sensitive(&self, data: &simd_json::OwnedValue, _requester: &Requester) -> simd_json::OwnedValue {
+    fn redact_sensitive(
+        &self,
+        data: &simd_json::OwnedValue,
+        _requester: &Requester,
+    ) -> simd_json::OwnedValue {
         // In production, use JSON paths from schema to redact
         data.clone()
     }
 
-    fn log_decision(
-        &self,
-        requester: &Requester,
-        action: &str,
-        resource: &str,
-        allowed: bool,
-    ) {
+    fn log_decision(&self, requester: &Requester, action: &str, resource: &str, allowed: bool) {
         let audit = AccessControlAudit {
             timestamp: chrono::Utc::now(),
             requester_id: requester.id.clone(),
             action: action.to_string(),
             resource: resource.to_string(),
             allowed,
-            reason: if allowed { "Policy match".to_string() } else { "No policy match".to_string() },
+            reason: if allowed {
+                "Policy match".to_string()
+            } else {
+                "No policy match".to_string()
+            },
         };
-        
+
         self.audit_trail.write().push(audit);
-        
+
         if !allowed {
             warn!(
                 requester_id = requester.id,

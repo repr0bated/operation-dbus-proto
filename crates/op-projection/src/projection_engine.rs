@@ -33,7 +33,7 @@ impl ProjectionSystemEngine {
     fn build_projection(&self, entity: RawEntity) -> Projection {
         let timestamp = Utc::now();
         let entity_type = entity.entity_type.clone();
-        
+
         // Validate entity against schema
         let validation_result = self.validator.validate_entity(&entity);
 
@@ -60,7 +60,7 @@ impl ProjectionSystemEngine {
                     projection.state = ProjectionState::Quarantined;
                     projection.quarantine_reason = Some("Schema validation failed".to_string());
                 }
-                
+
                 // Set schema version from registry
                 if let Some(schema) = self.validator.get_schema_for_entity(&entity_type) {
                     projection.schema_version = schema.version.clone();
@@ -87,13 +87,13 @@ impl ProjectionEngine for ProjectionSystemEngine {
         let projection = self.build_projection(entity);
         let projection_clone = projection.clone();
         self.store.upsert(projection);
-        
+
         debug!(
             id = projection_clone.id,
             state = ?projection_clone.state,
             "Projection created"
         );
-        
+
         Ok(projection_clone)
     }
 
@@ -103,13 +103,13 @@ impl ProjectionEngine for ProjectionSystemEngine {
         let projection = self.build_projection(entity);
         let projection_clone = projection.clone();
         self.store.upsert(projection);
-        
+
         debug!(
             id = projection_clone.id,
             state = ?projection_clone.state,
             "Projection updated"
         );
-        
+
         Ok(projection_clone)
     }
 
@@ -131,7 +131,7 @@ impl ProjectionEngine for ProjectionSystemEngine {
             projection.quarantine_reason = Some(reason.to_string());
             projection.updated_at = Utc::now();
             self.store.upsert(projection);
-            
+
             info!(
                 projection_id = projection_id,
                 reason = reason,
@@ -152,7 +152,7 @@ impl ProjectionEngine for ProjectionSystemEngine {
             projection.affected_dependencies = affected_dependencies;
             projection.updated_at = Utc::now();
             self.store.upsert(projection);
-            
+
             info!(
                 projection_id = projection_id,
                 reason = reason,
@@ -171,14 +171,14 @@ impl ProjectionEngine for ProjectionSystemEngine {
                 data: projection.data.clone(),
                 source: "revalidation".to_string(),
             };
-            
+
             let updated = self.build_projection(entity);
             projection.state = updated.state;
             projection.validation_errors = updated.validation_errors;
             projection.quarantine_reason = updated.quarantine_reason;
             projection.schema_version = updated.schema_version;
             projection.updated_at = Utc::now();
-            
+
             self.store.upsert(projection);
         }
     }

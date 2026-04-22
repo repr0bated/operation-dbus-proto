@@ -114,7 +114,10 @@ fn procfs_schema() -> PluginSchema {
         .field("memory", readonly_any("Parsed /proc/meminfo values."))
         .field("loadavg", readonly_any("Parsed /proc/loadavg values."))
         .field("uptime", readonly_any("Parsed /proc/uptime values."))
-        .field("cpuinfo", readonly_any("Parsed CPU inventory from /proc/cpuinfo."))
+        .field(
+            "cpuinfo",
+            readonly_any("Parsed CPU inventory from /proc/cpuinfo."),
+        )
         .field("stat", readonly_any("Parsed /proc/stat values."))
         .field("net_dev", readonly_any("Parsed /proc/net/dev counters."))
         .field("mounts", readonly_any("Parsed /proc/mounts entries."))
@@ -151,18 +154,7 @@ fn readonly_any(description: &str) -> FieldSchema {
 }
 
 async fn gather_procfs_state() -> Value {
-    let (
-        memory,
-        loadavg,
-        uptime,
-        cpuinfo,
-        stat,
-        net_dev,
-        mounts,
-        kernel,
-        vmstat,
-        diskstats,
-    ) = tokio::join!(
+    let (memory, loadavg, uptime, cpuinfo, stat, net_dev, mounts, kernel, vmstat, diskstats) = tokio::join!(
         gather_memory(),
         gather_loadavg(),
         gather_uptime(),
@@ -210,7 +202,10 @@ fn kv_file(content: &str) -> Value {
     let mut map = simd_json::owned::Object::new();
     for line in content.lines() {
         if let Some((key, value)) = line.split_once(':') {
-            map.insert(key.trim().replace(' ', "_").to_lowercase(), num_or_str(value));
+            map.insert(
+                key.trim().replace(' ', "_").to_lowercase(),
+                num_or_str(value),
+            );
         }
     }
     Value::Object(Box::new(map))
@@ -265,7 +260,10 @@ async fn gather_cpuinfo() -> Value {
                 cpus.push(Value::Object(Box::new(std::mem::take(&mut cur))));
             }
         } else if let Some((key, value)) = line.split_once(':') {
-            cur.insert(key.trim().replace(' ', "_").to_lowercase(), num_or_str(value));
+            cur.insert(
+                key.trim().replace(' ', "_").to_lowercase(),
+                num_or_str(value),
+            );
         }
     }
     if !cur.is_empty() {

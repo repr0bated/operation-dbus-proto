@@ -54,7 +54,7 @@ impl WgServerConfig {
 
         let dns = std::env::var("WG_DNS")
             .or_else(|_| std::env::var("VPN_DNS"))
-            .unwrap_or_else(|_| "1.1.1.1, 1.0.0.1".to_string());
+            .unwrap_or_else(|_| "10.88.88.1".to_string());
 
         Self {
             public_key,

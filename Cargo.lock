@@ -4206,6 +4206,7 @@ dependencies = [
  "op-dbus-mirror",
  "op-grpc-bridge",
  "op-identity",
+ "op-plugins",
  "op-state",
  "op-state-store",
  "parking_lot",
@@ -6881,6 +6882,7 @@ dependencies = [
  "tower-layer",
  "tower-service",
  "tracing",
+ "webpki-roots 0.26.11",
 ]
 
 [[package]]

@@ -8,8 +8,8 @@ use crate::data_models::*;
 use crate::interfaces::{EventMaterializer, ProjectionEngine, RawEntity};
 use anyhow::Result;
 use chrono::Utc;
-use std::sync::Arc;
 use parking_lot::Mutex;
+use std::sync::Arc;
 use tracing::{debug, error, warn};
 
 /// Materializer that transforms events into projection updates.
@@ -82,7 +82,7 @@ impl EventMaterializer for ProjectionMaterializer {
             }
             EventType::Deleted => {
                 let projection_id = format!("{}:{}", event.entity_type, event.entity_id);
-                
+
                 let maybe_projection = {
                     let mut engine = self.engine.lock();
                     // Get projection before deletion for the update
@@ -113,7 +113,7 @@ impl EventMaterializer for ProjectionMaterializer {
         }
 
         self.last_latency = Utc::now().signed_duration_since(start_time);
-        
+
         // Ensure 50ms guarantee (log warning if exceeded)
         if self.last_latency > chrono::Duration::milliseconds(50) {
             warn!(
@@ -136,11 +136,7 @@ impl EventMaterializer for ProjectionMaterializer {
 
     fn quarantine_event(&mut self, event: &ProjectionEvent, reason: &str) {
         self.events_quarantined += 1;
-        error!(
-            event_id = event.id,
-            reason = reason,
-            "Event quarantined"
-        );
+        error!(event_id = event.id, reason = reason, "Event quarantined");
     }
 
     fn get_events_processed(&self) -> u64 {

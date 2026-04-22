@@ -224,7 +224,7 @@ fn default_true() -> bool {
 impl Default for NetworkConfig {
     fn default() -> Self {
         // Also check environment variable for additional trusted networks
-        let env_trusted = std::env::var("OP_TRUSTED_NETWORKS")
+        let env_trusted: Vec<String> = std::env::var("OP_TRUSTED_NETWORKS")
             .unwrap_or_default()
             .split(',')
             .filter(|s| !s.is_empty())
@@ -232,8 +232,8 @@ impl Default for NetworkConfig {
             .collect();
 
         Self {
-            trusted_cidrs: vec![],
-            trusted_prefixes: env_trusted,
+            trusted_cidrs: env_trusted,
+            trusted_prefixes: vec![],
             trusted_ips: vec![],
             auto_netmaker: true,
             auto_tailscale: true,

@@ -10,6 +10,7 @@ description = "Projection System: Schema-validated state transformation engine"
 op-core = { path = "../op-core" }
 op-state = { path = "../op-state" }
 op-state-store = { path = "../op-state-store" }
+op-plugins = { path = "../op-plugins" }
 op-dbus-mirror = { path = "../op-dbus-mirror" }
 op-grpc-bridge = { path = "../op-grpc-bridge" }
 op-blockchain = { path = "../op-blockchain" }
