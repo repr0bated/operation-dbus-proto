@@ -1,0 +1,14 @@
+/home/jeremy/git/operation-dbus-proto/target-cache/build-20260418081040/debug/deps/serde-bb588714c1a782bb.d: /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /home/jeremy/git/operation-dbus-proto/target-cache/build-20260418081040/debug/build/serde-df704ef77d85ad0e/out/private.rs
+
+/home/jeremy/git/operation-dbus-proto/target-cache/build-20260418081040/debug/deps/libserde-bb588714c1a782bb.rlib: /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /home/jeremy/git/operation-dbus-proto/target-cache/build-20260418081040/debug/build/serde-df704ef77d85ad0e/out/private.rs
+
+/home/jeremy/git/operation-dbus-proto/target-cache/build-20260418081040/debug/deps/libserde-bb588714c1a782bb.rmeta: /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /home/jeremy/git/operation-dbus-proto/target-cache/build-20260418081040/debug/build/serde-df704ef77d85ad0e/out/private.rs
+
+/home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs:
+/home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs:
+/home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs:
+/home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs:
+/home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs:
+/home/jeremy/git/operation-dbus-proto/target-cache/build-20260418081040/debug/build/serde-df704ef77d85ad0e/out/private.rs:
+
+# env-dep:OUT_DIR=/home/jeremy/git/operation-dbus-proto/target-cache/build-20260418081040/debug/build/serde-df704ef77d85ad0e/out

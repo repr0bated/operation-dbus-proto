@@ -37,8 +37,9 @@ echo "✅ Netplan applied"
 # 3. Start OVS services
 echo "3. Starting OVS services..."
 start_service_via_dinit_dbus op-ovs-services || true
+start_service_via_dinit_dbus op-session-bus || true
+start_service_via_dinit_dbus op-dbus || true
 start_service_via_dinit_dbus op-ovsdb-seed || true
-start_service_via_dinit_dbus op-ovsdb-bridge || true
 start_service_via_dinit_dbus ovs-attach-ports || true
 echo "✅ OVS services started"
 

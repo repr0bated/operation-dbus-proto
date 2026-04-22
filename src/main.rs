@@ -43,6 +43,8 @@ use op_jsonrpc::nonnet::NonNetDb;
 #[cfg(feature = "grpc")]
 use op_cognitive_mcp::QdrantSemanticShuttle;
 #[cfg(feature = "grpc")]
+use op_grpc_bridge::proto::registry::component_registry_server::ComponentRegistryServer;
+#[cfg(feature = "grpc")]
 use op_grpc_bridge::proto::PluginInfo;
 #[cfg(feature = "grpc")]
 use op_grpc_bridge::proto::{
@@ -248,6 +250,12 @@ async fn main() -> Result<()> {
     // Load canonical environment file before reading configuration.
     let _ = load_environment();
 
+    for (key, value) in std::env::vars() {
+        if key.starts_with("OP_DBUS") {
+            println!("ENV: {}={}", key, value);
+        }
+    }
+
     // Initialize logging
     tracing_subscriber::registry()
         .with(
@@ -265,6 +273,8 @@ async fn main() -> Result<()> {
     tracing::info!("Database: {}", config.database_url);
     tracing::info!("Cache: {}", config.cache_dir);
     tracing::info!("Web: {}:{}", config.web_host, config.web_port);
+    tracing::info!("D-Bus Enabled: {}", config.enable_dbus);
+    tracing::info!("D-Bus Bus Type: {:?}", config.dbus_connection);
 
     #[cfg(feature = "dev-antigravity")]
     if config.enable_antigravity {
@@ -323,13 +333,27 @@ async fn main() -> Result<()> {
     // Discover D-Bus tools to reach the full 16k+ toolset
     let introspection = Arc::new(op_introspection::IntrospectionService::new());
     let projection = op_tools::discovery::projection_engine::ProjectionEngine::new(introspection);
-    tracing::info!("Discovering D-Bus tools (System bus)...");
-    if let Ok(count) = projection
-        .discover_all(&tool_registry, BusType::System)
-        .await
-    {
-        tracing::info!("Registered {} tools from D-Bus projection", count);
-    }
+    
+    // Initial discovery
+    let tool_registry_clone = tool_registry.clone();
+    let projection_clone = projection.clone();
+    tokio::spawn(async move {
+        tracing::info!("Discovering D-Bus tools (System bus)...");
+        if let Ok(count) = projection_clone
+            .discover_all(&tool_registry_clone, BusType::System)
+            .await
+        {
+            tracing::info!("Registered {} tools from D-Bus projection", count);
+        }
+
+        // Periodic re-discovery to pick up mirrored objects and new services
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
+        loop {
+            interval.tick().await;
+            tracing::debug!("Refreshing D-Bus tools...");
+            let _ = projection_clone.discover_all(&tool_registry_clone, BusType::System).await;
+        }
+    });
 
     tracing::info!("Total tools in registry: {}", tool_registry.len().await);
 
@@ -386,6 +410,27 @@ async fn main() -> Result<()> {
         plugin_catalog.set_publisher(engine.clone()).await;
         let _ = GLOBAL_SCHEMA_ENGINE.set(engine.clone());
         engine
+    };
+
+    #[cfg(feature = "grpc")]
+    let grpc_server = {
+        let plugin_provider = Arc::new(OpdbusPluginProvider {
+            catalog: persisted_plugin_catalog.clone(),
+        });
+        let mut server =
+            OperationGrpcServer::with_plugin_provider(schema_engine.clone(), plugin_provider);
+        match QdrantSemanticShuttle::new().await {
+            Ok(shuttle) => {
+                server = server.with_semantic_shuttle(Arc::new(shuttle));
+            }
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    "semantic shuttle unavailable; SearchSemanticTrace will return failed_precondition"
+                );
+            }
+        }
+        Arc::new(server)
     };
 
     // Initialize blockchain (StreamingBlockchain)
@@ -460,8 +505,21 @@ async fn main() -> Result<()> {
         }
     }
 
-    #[cfg(feature = "grpc")]
     if let Ok(current_state) = state_manager.query_current_state().await {
+        match op_tools::builtin::plugin_projection::register_plugin_projection_tools(
+            &tool_registry,
+            &current_state,
+        )
+        .await
+        {
+            Ok(count) => tracing::info!(
+                "Registered {} PluginSchema projection tools from plugin-created objects",
+                count
+            ),
+            Err(error) => tracing::warn!("Failed to register plugin projection tools: {}", error),
+        }
+
+        #[cfg(feature = "grpc")]
         for (plugin_id, state) in current_state {
             schema_engine.update_state_cache(plugin_id, state).await;
         }
@@ -491,21 +549,26 @@ async fn main() -> Result<()> {
         };
         plugin_catalog.set_dbus_connection(dbus_conn).await;
 
-        let mirror = Arc::new(
-            op_dbus_mirror::DbusMirror::new(
-                config.dbus_connection,
-                authoritative_ovsdb.clone(),
-                authoritative_nonnet.clone(),
-                #[cfg(feature = "grpc")]
-                Some(schema_engine.clone()),
-                #[cfg(not(feature = "grpc"))]
-                None,
-            )
-            .await?,
-        );
+        let mut dbus_mirror = op_dbus_mirror::DbusMirror::new(
+            config.dbus_connection,
+            authoritative_ovsdb.clone(),
+            authoritative_nonnet.clone(),
+            #[cfg(feature = "grpc")]
+            Some(schema_engine.clone()),
+            #[cfg(not(feature = "grpc"))]
+            None,
+        )
+        .await?
+        .with_state_manager(state_manager.clone());
+        #[cfg(feature = "grpc")]
+        {
+            dbus_mirror = dbus_mirror.with_grpc_server(grpc_server.clone());
+        }
+        let mirror = Arc::new(dbus_mirror);
 
         match state_manager.query_current_state().await {
             Ok(current_state) => {
+                authoritative_nonnet.load_from_plugins(&current_state).await;
                 mirror.load_plugin_state(&current_state).await;
                 tracing::info!(
                     "Seeded NonNet mirror state from {} plugins",
@@ -615,7 +678,8 @@ async fn main() -> Result<()> {
             })?;
 
         // Share the tool_registry with web server (avoids duplicating 16k+ D-Bus tools)
-        let web_state = Arc::new(AppState::new_with_registry(Some(tool_registry.clone())).await?);
+        let web_state =
+            Arc::new(AppState::new_with_registry(Some(tool_registry.clone()), Some(state_store.clone())).await?);
         let app = routes::create_router(web_state);
 
         tokio::spawn(async move {
@@ -639,58 +703,57 @@ async fn main() -> Result<()> {
 
     // Start gRPC server
     #[cfg(feature = "grpc")]
-    if std::env::var("OP_DBUS_ENABLE_GRPC")
-        .map(|v| v == "1" || v.to_lowercase() == "true")
-        .unwrap_or(false)
     {
-        let addr =
-            std::env::var("OP_DBUS_GRPC_ADDR").unwrap_or_else(|_| "0.0.0.0:50051".to_string());
-        let socket_addr: std::net::SocketAddr = addr.parse().map_err(|e| {
-            op_dbus::error::OpDbusError::ConfigError(format!("Invalid OP_DBUS_GRPC_ADDR: {}", e))
-        })?;
+        let enable_grpc = std::env::var("OP_DBUS_ENABLE_GRPC")
+            .map(|v| v == "1" || v.to_lowercase() == "true")
+            .unwrap_or(false);
+        
+        tracing::info!("DEBUG: OP_DBUS_ENABLE_GRPC={}", enable_grpc);
+        println!("DEBUG: OP_DBUS_ENABLE_GRPC={}", enable_grpc);
 
-        let plugin_provider = Arc::new(OpdbusPluginProvider {
-            catalog: persisted_plugin_catalog.clone(),
-        });
-        let mut op_grpc_server =
-            OperationGrpcServer::with_plugin_provider(schema_engine, plugin_provider);
-        match QdrantSemanticShuttle::new().await {
-            Ok(shuttle) => {
-                op_grpc_server = op_grpc_server.with_semantic_shuttle(Arc::new(shuttle));
-            }
-            Err(error) => {
-                tracing::warn!(
-                    %error,
-                    "semantic shuttle unavailable; SearchSemanticTrace will return failed_precondition"
-                );
-            }
+        if enable_grpc {
+            let addr =
+                std::env::var("OP_DBUS_GRPC_ADDR").unwrap_or_else(|_| "0.0.0.0:50051".to_string());
+            tracing::info!("DEBUG: OP_DBUS_GRPC_ADDR={}", addr);
+            println!("DEBUG: OP_DBUS_GRPC_ADDR={}", addr);
+            
+            let socket_addr: std::net::SocketAddr = addr.parse().map_err(|e| {
+                op_dbus::error::OpDbusError::ConfigError(format!("Invalid OP_DBUS_GRPC_ADDR: {}", e))
+            })?;
+            
+            println!("DEBUG: Parsed socket_addr={}", socket_addr);
+
+            let op_grpc_server = grpc_server.as_ref().clone();
+
+            // Initialize MCP gRPC service with shared tool registry
+            let mcp_infra = GrpcInfrastructure::new().with_tool_registry(tool_registry.clone());
+            let mcp_grpc_service =
+                McpGrpcService::with_infrastructure(GrpcServerMode::Compact, mcp_infra);
+
+            tokio::spawn(async move {
+                tracing::info!("Starting unified gRPC server at {}", socket_addr);
+                println!("Starting unified gRPC server at {}", socket_addr);
+
+                let reflection_service = tonic_reflection::server::Builder::configure()
+                    .register_encoded_file_descriptor_set(op_grpc_bridge::proto::FILE_DESCRIPTOR_SET)
+                    .build_v1()
+                    .unwrap();
+
+                if let Err(e) = tonic::transport::Server::builder()
+                    .add_service(reflection_service)
+                    .add_service(StateSyncServer::new(op_grpc_server.clone()))
+                    .add_service(PluginServiceServer::new(op_grpc_server.clone()))
+                    .add_service(EventChainServiceServer::new(op_grpc_server.clone()))
+                    .add_service(ComponentRegistryServer::new(op_grpc_server))
+                    .add_service(McpServiceServer::new(mcp_grpc_service))
+                    .serve(socket_addr)
+                    .await
+                {
+                    tracing::error!("gRPC server error: {}", e);
+                    println!("gRPC server error: {}", e);
+                }
+            });
         }
-
-        // Initialize MCP gRPC service with shared tool registry
-        let mcp_infra = GrpcInfrastructure::new().with_tool_registry(tool_registry.clone());
-        let mcp_grpc_service =
-            McpGrpcService::with_infrastructure(GrpcServerMode::Compact, mcp_infra);
-
-        tokio::spawn(async move {
-            tracing::info!("Starting unified gRPC server at {}", socket_addr);
-
-            let reflection_service = tonic_reflection::server::Builder::configure()
-                .register_encoded_file_descriptor_set(op_grpc_bridge::proto::FILE_DESCRIPTOR_SET)
-                .build_v1()
-                .unwrap();
-
-            if let Err(e) = tonic::transport::Server::builder()
-                .add_service(reflection_service)
-                .add_service(StateSyncServer::new(op_grpc_server.clone()))
-                .add_service(PluginServiceServer::new(op_grpc_server.clone()))
-                .add_service(EventChainServiceServer::new(op_grpc_server))
-                .add_service(McpServiceServer::new(mcp_grpc_service))
-                .serve(socket_addr)
-                .await
-            {
-                tracing::error!("gRPC server error: {}", e);
-            }
-        });
     }
 
     // Run JSON-RPC server (blocking)

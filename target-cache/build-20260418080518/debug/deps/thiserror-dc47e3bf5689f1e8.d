@@ -1,0 +1,14 @@
+/home/jeremy/git/operation-dbus-proto/target-cache/build-20260418080518/debug/deps/thiserror-dc47e3bf5689f1e8.d: /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/lib.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/aserror.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/display.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/var.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/private.rs /home/jeremy/git/operation-dbus-proto/target-cache/build-20260418080518/debug/build/thiserror-fe0e9793f2971283/out/private.rs
+
+/home/jeremy/git/operation-dbus-proto/target-cache/build-20260418080518/debug/deps/libthiserror-dc47e3bf5689f1e8.rlib: /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/lib.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/aserror.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/display.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/var.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/private.rs /home/jeremy/git/operation-dbus-proto/target-cache/build-20260418080518/debug/build/thiserror-fe0e9793f2971283/out/private.rs
+
+/home/jeremy/git/operation-dbus-proto/target-cache/build-20260418080518/debug/deps/libthiserror-dc47e3bf5689f1e8.rmeta: /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/lib.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/aserror.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/display.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/var.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/private.rs /home/jeremy/git/operation-dbus-proto/target-cache/build-20260418080518/debug/build/thiserror-fe0e9793f2971283/out/private.rs
+
+/home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/lib.rs:
+/home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/aserror.rs:
+/home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/display.rs:
+/home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/var.rs:
+/home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/private.rs:
+/home/jeremy/git/operation-dbus-proto/target-cache/build-20260418080518/debug/build/thiserror-fe0e9793f2971283/out/private.rs:
+
+# env-dep:OUT_DIR=/home/jeremy/git/operation-dbus-proto/target-cache/build-20260418080518/debug/build/thiserror-fe0e9793f2971283/out

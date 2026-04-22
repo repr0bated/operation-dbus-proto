@@ -1,0 +1,1 @@
+{"rustc":8085178208779146132,"features":"","declared_features":"","target":0,"profile":0,"path":0,"deps":[[4027366893461257480,"build_script_build",false,14738041520563146012]],"local":[{"RerunIfChanged":{"output":"release/build/op-mcp-21dd090e6c83154a/output","paths":["proto/mcp.proto","proto/mcp.proto","proto"]}}],"rustflags":[],"config":0,"compile_kind":0}

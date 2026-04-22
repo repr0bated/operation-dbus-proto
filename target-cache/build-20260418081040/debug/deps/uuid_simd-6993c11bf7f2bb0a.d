@@ -1,0 +1,11 @@
+/home/jeremy/git/operation-dbus-proto/target-cache/build-20260418081040/debug/deps/uuid_simd-6993c11bf7f2bb0a.d: /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/uuid-simd-0.8.0/src/lib.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/uuid-simd-0.8.0/src/error.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/uuid-simd-0.8.0/src/spec.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/uuid-simd-0.8.0/src/format.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/uuid-simd-0.8.0/src/parse.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/uuid-simd-0.8.0/src/multiversion.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/uuid-simd-0.8.0/src/ext.rs
+
+/home/jeremy/git/operation-dbus-proto/target-cache/build-20260418081040/debug/deps/libuuid_simd-6993c11bf7f2bb0a.rmeta: /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/uuid-simd-0.8.0/src/lib.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/uuid-simd-0.8.0/src/error.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/uuid-simd-0.8.0/src/spec.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/uuid-simd-0.8.0/src/format.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/uuid-simd-0.8.0/src/parse.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/uuid-simd-0.8.0/src/multiversion.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/uuid-simd-0.8.0/src/ext.rs
+
+/home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/uuid-simd-0.8.0/src/lib.rs:
+/home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/uuid-simd-0.8.0/src/error.rs:
+/home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/uuid-simd-0.8.0/src/spec.rs:
+/home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/uuid-simd-0.8.0/src/format.rs:
+/home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/uuid-simd-0.8.0/src/parse.rs:
+/home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/uuid-simd-0.8.0/src/multiversion.rs:
+/home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/uuid-simd-0.8.0/src/ext.rs:

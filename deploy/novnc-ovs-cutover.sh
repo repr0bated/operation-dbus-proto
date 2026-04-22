@@ -9,6 +9,7 @@ REPO_ROOT="$(CDPATH='' cd -- "$SCRIPT_DIR/.." && pwd)"
 
 BRIDGE="${OP_DBUS_BRIDGE_NAME:-ovsbr0}"
 UPLINK="${OP_DBUS_UPLINK_PORT:-ens3}"
+ALLOW_UPLINK_CUTOVER="${OP_DBUS_ALLOW_UPLINK_CUTOVER:-0}"
 SECONDARY_UPLINK_IFACE="${OP_DBUS_SECONDARY_UPLINK_IFACE:-uplink1}"
 SECONDARY_UPLINK_IPV4="${OP_DBUS_SECONDARY_UPLINK_IPV4:-15.235.37.41/32}"
 DBUS_DEST="${OP_DBUS_DEST:-org.opdbus}"
@@ -293,6 +294,7 @@ main() {
     local secondary_repo_network=""
 
     [ "$EUID" -eq 0 ] || die "must run as root"
+    [ "$ALLOW_UPLINK_CUTOVER" = "1" ] || die "refusing to attach standalone uplink $UPLINK to $BRIDGE without OP_DBUS_ALLOW_UPLINK_CUTOVER=1"
 
     require_cmd ip
     require_cmd busctl

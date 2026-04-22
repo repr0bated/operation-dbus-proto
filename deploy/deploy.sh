@@ -25,6 +25,7 @@ SERVICES=(
     "op-web:op-web-server:op-web"   # HTTP/WS server
     "op-services:op-services:op-services"
     "op-chat:op-chat:op-chat"
+    "op-projection:projection_server:op-projection"
 )
 
 # ---------------------------------------------------------------------------
@@ -148,9 +149,8 @@ normalize_system_runtime_environment() {
     # Runtime authority is persisted state, not in-memory bootstrap data.
     # Ensure the directories behind the canonical SQLite-backed control-plane
     # store exist before services start writing plugin catalog/state documents.
-    install -d -m 0750 "$state_dir" "$cache_dir" /run/op-dbus
+    install -d -m 0750 "$cache_dir" /run/op-dbus
 
-    append_env_if_missing "$env_file" "OP_DBUS_DATABASE_URL" "sqlite://${state_dir}/state.db"
     append_env_if_missing "$env_file" "OP_DBUS_CACHE_DIR" "$cache_dir"
 
     # deploy.sh installs and wires the shared session-bus service, so the app
@@ -245,14 +245,12 @@ install_system_files() {
 
     # --- Dinit service definitions (app chain — installed now, started after network verify) ---
     install -m 0644 "${DEPLOY_DIR}/dinit/op-session-bus"     "${SERVICE_DIR}/op-session-bus"
-    install -m 0644 "${DEPLOY_DIR}/dinit/op-ovsdb-bridge"    "${SERVICE_DIR}/op-ovsdb-bridge"
 
     # --- Dinit scripts ---
     install -m 0755 "${DEPLOY_DIR}/dinit/scripts/services0-sockets.sh"   "${SERVICE_DIR}/scripts/services0-sockets.sh"
     install -m 0755 "${DEPLOY_DIR}/dinit/scripts/ovs-attach-ports.sh"    "${SERVICE_DIR}/scripts/ovs-attach-ports.sh"
     install -m 0755 "${DEPLOY_DIR}/dinit/op-ovs-services-start.sh"       "${SERVICE_DIR}/scripts/op-ovs-services-start.sh"
     install -m 0755 "${DEPLOY_DIR}/dinit/op-ovsdb-seed.sh"               "${SERVICE_DIR}/scripts/op-ovsdb-seed.sh"
-    install -m 0755 "${DEPLOY_DIR}/dinit/op-ovsdb-bridge-start.sh"       "${SERVICE_DIR}/scripts/op-ovsdb-bridge-start.sh"
 
     # --- systemd-networkd units (ens3 DHCP standalone) ---
     if [[ -d "${DEPLOY_DIR}/systemd/networkd" ]]; then
@@ -302,14 +300,30 @@ install_system_files() {
         log "Installed /etc/op-dbus/environment from environment.default"
     else
         # Merge: add keys from default that are not yet in the installed file.
+        # Skip git conflict markers if the file was committed mid-merge.
         while IFS= read -r line; do
-            [[ "$line" =~ ^#.*$ || -z "$line" ]] && continue
+            [[ "$line" =~ ^#.*$    ]] && continue
+            [[ "$line" == "<<<<<<<"*  ]] && continue
+            [[ "$line" == "======="*  ]] && continue
+            [[ "$line" == ">>>>>>>"*  ]] && continue
+            [[ -z "$line"          ]] && continue
             key="${line%%=*}"
             if ! grep -q "^${key}=" /etc/op-dbus/environment 2>/dev/null; then
                 echo "$line" >> /etc/op-dbus/environment
                 log "Added ${key} to /etc/op-dbus/environment"
             fi
         done < "${DEPLOY_DIR}/environment.default"
+
+        # Strip any conflict markers already in the installed file.
+        if grep -qE "^(<<<<<<<|=======|>>>>>>>)" /etc/op-dbus/environment 2>/dev/null; then
+            warn "Removing git conflict markers from /etc/op-dbus/environment"
+            python3 -c "
+import re, sys
+content = open('/etc/op-dbus/environment').read()
+content = re.sub(r'^(<<<<<<<|=======|>>>>>>>)[^\n]*\n', '', content, flags=re.MULTILINE)
+open('/etc/op-dbus/environment', 'w').write(content)
+"
+        fi
     fi
 
     normalize_system_runtime_environment
@@ -317,6 +331,8 @@ install_system_files() {
     # --- Remove stale services ---
     rm -f "${SERVICE_DIR}/wgcf" "${SERVICE_DIR}/boot.d/wgcf"      # old wg-quick-era name
     rm -f "${SERVICE_DIR}/boot.d/stalwart" "${SERVICE_DIR}/stalwart"
+    rm -f "${SERVICE_DIR}/op-ovsdb-bridge" "${SERVICE_DIR}/boot.d/op-ovsdb-bridge"
+    rm -f "${SERVICE_DIR}/scripts/op-ovsdb-bridge-start.sh"
     rm -f "${SERVICE_DIR}/disabled/op-ovsdb-bridge" "${SERVICE_DIR}/disabled/op-ovsdb-seed"
     rm -f "${SERVICE_DIR}/op-web.backup" "${SERVICE_DIR}/op-web.broken" "${SERVICE_DIR}/incus.bak"
     rm -f "${SERVICE_DIR}/scripts/ovs-attach-ports.sh.bak" "${SERVICE_DIR}/scripts/ovs-attach-ports.sh.bak3"
@@ -333,7 +349,6 @@ install_system_files() {
     enable_boot ovs-attach-ports
     enable_boot xray-client
     enable_boot op-session-bus
-    enable_boot op-ovsdb-bridge
 
     log "System file artifacts installed."
 }
@@ -439,6 +454,15 @@ smooth-recovery = true
 depends-on = op-web
 EOF
             ;;
+        op-projection)
+            cat > "$file" <<EOF
+type = process
+command = ${INSTALL_DIR}/${binary}
+log-type = buffer
+smooth-recovery = true
+depends-on = op-dbus
+EOF
+            ;;
         *)
             cat > "$file" <<EOF
 type = process
@@ -454,13 +478,35 @@ EOF
         local RUN_DIR="${PROJECT_ROOT}/deploy/run"
         mkdir -p "${DATA_DIR}/cache" "${RUN_DIR}"
         cat >> "$file" <<EOF
-env = OP_DBUS_DATABASE_URL=sqlite://${DATA_DIR}/state.db
 env = OP_DBUS_CACHE_DIR=${DATA_DIR}/cache
 env = OP_DBUS_WEB_PORT=8081
 env = OP_DBUS_SESSION_BUS=1
 env = DBUS_SESSION_BUS_ADDRESS=unix:path=${RUN_DIR}/session-bus
 EOF
     fi
+}
+
+flush_session_bus_names() {
+    # Kill any process still holding org.opdbus.* names on the session bus so
+    # the new binary can claim them cleanly.  Without this, "name already taken"
+    # causes start() to abort before registering /host and /plugins.
+    local bus_addr="/run/op-dbus/session-bus"
+    [[ -S "$bus_addr" ]] || return 0
+
+    local pids
+    pids=$(busctl --address="unix:path=${bus_addr}" list --no-legend 2>/dev/null \
+           | awk '/org\.opdbus/ { print $NF }' \
+           | grep -v '^-$' | sort -u || true)
+
+    for pid in $pids; do
+        [[ "$pid" =~ ^[0-9]+$ ]] || continue
+        local comm
+        comm=$(cat /proc/"$pid"/comm 2>/dev/null || echo "?")
+        log "Killing stale bus holder: pid=${pid} (${comm})"
+        kill -TERM "$pid" 2>/dev/null || true
+    done
+
+    [[ -n "$pids" ]] && sleep 1 || true
 }
 
 deploy_service() {
@@ -479,28 +525,30 @@ deploy_service() {
 
     case "$service" in
         op-dbus)
-            for dep in op-chat op-services op-web xray-client ovs-attach-ports systemd-networkd op-ovsdb-bridge; do
+            for dep in op-chat op-services op-web op-projection code-assist-gateway op-of-controller ovs-dbus-init xray-client ovs-attach-ports systemd-networkd; do
                 if is_started "$dep"; then
-                    $DINITCTL stop "$dep"; stopped_dependents+=("$dep")
+                    $DINITCTL stop "$dep" || true; stopped_dependents+=("$dep")
                 fi
-            done ;;
+            done
+            flush_session_bus_names
+            ;;
         op-web)
             for dep in op-chat op-services; do
                 if is_started "$dep"; then
-                    $DINITCTL stop "$dep"; stopped_dependents+=("$dep")
+                    $DINITCTL stop "$dep" || true; stopped_dependents+=("$dep")
                 fi
             done ;;
     esac
 
     if is_started "$service"; then
-        $DINITCTL restart "$service"
+        $DINITCTL restart "$service" || echo "Failed to restart $service"
     else
-        $DINITCTL start "$service"
+        $DINITCTL start "$service" || echo "Failed to start $service"
     fi
 
     if [[ "${#stopped_dependents[@]}" -gt 0 ]]; then
-        for dep in systemd-networkd ovs-attach-ports xray-client op-web op-services op-chat; do
-            was_stopped "$dep" && $DINITCTL start "$dep"
+        for dep in systemd-networkd ovs-attach-ports op-of-controller xray-client op-web op-projection op-services op-chat; do
+            if was_stopped "$dep"; then $DINITCTL start "$dep" || echo "Failed to start $dep"; fi
         done
     fi
     log "✅ ${service} deployed"

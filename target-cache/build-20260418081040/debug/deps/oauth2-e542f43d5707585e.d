@@ -1,0 +1,11 @@
+/home/jeremy/git/operation-dbus-proto/target-cache/build-20260418081040/debug/deps/oauth2-e542f43d5707585e.d: /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/oauth2-4.4.2/src/lib.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/oauth2-4.4.2/src/basic.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/oauth2-4.4.2/src/devicecode.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/oauth2-4.4.2/src/revocation.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/oauth2-4.4.2/src/helpers.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/oauth2-4.4.2/src/reqwest.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/oauth2-4.4.2/src/types.rs
+
+/home/jeremy/git/operation-dbus-proto/target-cache/build-20260418081040/debug/deps/liboauth2-e542f43d5707585e.rmeta: /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/oauth2-4.4.2/src/lib.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/oauth2-4.4.2/src/basic.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/oauth2-4.4.2/src/devicecode.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/oauth2-4.4.2/src/revocation.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/oauth2-4.4.2/src/helpers.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/oauth2-4.4.2/src/reqwest.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/oauth2-4.4.2/src/types.rs
+
+/home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/oauth2-4.4.2/src/lib.rs:
+/home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/oauth2-4.4.2/src/basic.rs:
+/home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/oauth2-4.4.2/src/devicecode.rs:
+/home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/oauth2-4.4.2/src/revocation.rs:
+/home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/oauth2-4.4.2/src/helpers.rs:
+/home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/oauth2-4.4.2/src/reqwest.rs:
+/home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/oauth2-4.4.2/src/types.rs:

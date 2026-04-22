@@ -105,6 +105,7 @@ impl AppState {
     /// If registry is provided, skips tool discovery (use registry from main binary)
     pub async fn new_with_registry(
         tool_registry: Option<Arc<ToolRegistry>>,
+        state_store: Option<Arc<dyn StateStore>>,
     ) -> anyhow::Result<Self> {
         info!("Initializing application state...");
 
@@ -217,20 +218,25 @@ impl AppState {
         }
 
         // Initialize State Store
-        let state_store_path = "/var/lib/op-dbus/state.db";
-        let state_store: Arc<dyn StateStore> = match SqliteStore::new(state_store_path).await {
-            Ok(store) => Arc::new(store),
-            Err(e) => {
-                warn!(
-                    "Failed to initialize state store at {}: {}, using in-memory",
-                    state_store_path, e
-                );
-                // Fallback to in-memory if file access fails
-                Arc::new(
-                    SqliteStore::new(":memory:")
-                        .await
-                        .expect("Failed to create in-memory state store"),
-                )
+        let state_store: Arc<dyn StateStore> = if let Some(store) = state_store {
+            info!("Using shared state store from main binary");
+            store
+        } else {
+            let state_store_path = "/var/lib/op-dbus/state.db";
+            match SqliteStore::new(state_store_path).await {
+                Ok(store) => Arc::new(store),
+                Err(e) => {
+                    warn!(
+                        "Failed to initialize state store at {}: {}, using in-memory",
+                        state_store_path, e
+                    );
+                    // Fallback to in-memory if file access fails
+                    Arc::new(
+                        SqliteStore::new(":memory:")
+                            .await
+                            .expect("Failed to create in-memory state store"),
+                    )
+                }
             }
         };
 
@@ -264,7 +270,7 @@ impl AppState {
 
     /// Create new AppState (standalone mode with its own tool discovery)
     pub async fn new() -> anyhow::Result<Self> {
-        Self::new_with_registry(None).await
+        Self::new_with_registry(None, None).await
     }
 
     /// Get uptime in seconds

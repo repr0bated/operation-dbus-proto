@@ -12,7 +12,8 @@ use crate::state_plugins::{
     AdcPlugin, AgentConfigPlugin, ConfigPlugin, DinitStatePlugin, EndpointPlugin, GcloudAdcPlugin,
     HardwarePlugin, IncusPlugin, KeypairPlugin, McpStatePlugin, NetStatePlugin, OpenFlowPlugin,
     OvsBridgePlugin, PrivacyRouterPlugin, PrivacyRoutesPlugin, ProxmoxPlugin, ProxyServerPlugin,
-    RtnetlinkPlugin, SessDeclPlugin, SoftwarePlugin, UsersPlugin, WebUiPlugin, WireGuardPlugin,
+    ProcfsPlugin, RtnetlinkPlugin, SessDeclPlugin, SoftwarePlugin, UsersPlugin, WebUiPlugin,
+    WireGuardPlugin,
 };
 
 /// Default plugin loader configuration
@@ -43,6 +44,7 @@ fn default_auto_load() -> Vec<String> {
             "dinit".to_string(),
             "net".to_string(),
             "rtnetlink".to_string(),
+            "procfs".to_string(),
             "wireguard".to_string(),
         ];
     }
@@ -57,6 +59,7 @@ fn default_auto_load() -> Vec<String> {
         "ovsdb_bridge".to_string(),
         "privacy_router".to_string(),
         "privacy_routes".to_string(),
+        "procfs".to_string(),
         "rtnetlink".to_string(),
     ]
 }
@@ -159,6 +162,7 @@ impl DefaultPluginRegistry {
             "agent_config" => Arc::new(AgentConfigPlugin::new()),
             "ovsdb_bridge" => Arc::new(OvsBridgePlugin::new()),
             "privacy_routes" => Arc::new(PrivacyRoutesPlugin::default()),
+            "procfs" => Arc::new(ProcfsPlugin::new()),
             "rtnetlink" => Arc::new(RtnetlinkPlugin::new()),
             "sess_decl" => Arc::new(SessDeclPlugin::new()),
             "adc" => Arc::new(AdcPlugin::new()),

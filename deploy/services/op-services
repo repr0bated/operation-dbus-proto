@@ -1,0 +1,9 @@
+type = process
+command = /home/jeremy/git/operation-dbus-proto/deploy/bin/op-services
+log-type = buffer
+smooth-recovery = true
+depends-on = op-web
+env = OP_DBUS_CACHE_DIR=/home/jeremy/git/operation-dbus-proto/deploy/data/cache
+env = OP_DBUS_WEB_PORT=8081
+env = OP_DBUS_SESSION_BUS=1
+env = DBUS_SESSION_BUS_ADDRESS=unix:path=/home/jeremy/git/operation-dbus-proto/deploy/run/session-bus

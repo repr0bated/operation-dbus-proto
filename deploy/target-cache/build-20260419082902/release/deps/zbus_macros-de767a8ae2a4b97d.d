@@ -1,0 +1,10 @@
+/home/jeremy/git/operation-dbus-proto/deploy/target-cache/build-20260419082902/release/deps/zbus_macros-de767a8ae2a4b97d.d: /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zbus_macros-4.4.0/src/lib.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zbus_macros-4.4.0/src/error.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zbus_macros-4.4.0/src/iface.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zbus_macros-4.4.0/src/proxy.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zbus_macros-4.4.0/src/utils.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zbus_macros-4.4.0/src/../README.md
+
+/home/jeremy/git/operation-dbus-proto/deploy/target-cache/build-20260419082902/release/deps/libzbus_macros-de767a8ae2a4b97d.so: /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zbus_macros-4.4.0/src/lib.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zbus_macros-4.4.0/src/error.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zbus_macros-4.4.0/src/iface.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zbus_macros-4.4.0/src/proxy.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zbus_macros-4.4.0/src/utils.rs /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zbus_macros-4.4.0/src/../README.md
+
+/home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zbus_macros-4.4.0/src/lib.rs:
+/home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zbus_macros-4.4.0/src/error.rs:
+/home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zbus_macros-4.4.0/src/iface.rs:
+/home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zbus_macros-4.4.0/src/proxy.rs:
+/home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zbus_macros-4.4.0/src/utils.rs:
+/home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zbus_macros-4.4.0/src/../README.md:

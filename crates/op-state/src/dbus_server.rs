@@ -204,7 +204,7 @@ pub async fn start_session_bus(state_manager: Arc<StateManager>) -> Result<()> {
 
 async fn serve_connection(connection: Connection, state_manager: Arc<StateManager>) -> Result<()> {
     register_on_connection(&connection, state_manager).await?;
-    connection.request_name("org.opdbus").await?;
+    connection.request_name("org.opdbus.v1").await?;
     std::future::pending::<()>().await;
     Ok(())
 }

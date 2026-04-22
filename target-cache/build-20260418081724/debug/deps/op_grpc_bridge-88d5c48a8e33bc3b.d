@@ -1,0 +1,18 @@
+/home/jeremy/git/operation-dbus-proto/target-cache/build-20260418081724/debug/deps/op_grpc_bridge-88d5c48a8e33bc3b.d: crates/op-grpc-bridge/src/lib.rs crates/op-grpc-bridge/src/auth.rs crates/op-grpc-bridge/src/grpc_client.rs crates/op-grpc-bridge/src/grpc_server.rs crates/op-grpc-bridge/src/proto_gen.rs crates/op-grpc-bridge/src/schema_engine.rs /home/jeremy/git/operation-dbus-proto/target-cache/build-20260418081724/debug/build/op-grpc-bridge-60a39e9656f28871/out/operation.v1.rs /home/jeremy/git/operation-dbus-proto/target-cache/build-20260418081724/debug/build/op-grpc-bridge-60a39e9656f28871/out/operation.mail.v1.rs /home/jeremy/git/operation-dbus-proto/target-cache/build-20260418081724/debug/build/op-grpc-bridge-60a39e9656f28871/out/operation.privacy.v1.rs /home/jeremy/git/operation-dbus-proto/target-cache/build-20260418081724/debug/build/op-grpc-bridge-60a39e9656f28871/out/operation.registration.v1.rs /home/jeremy/git/operation-dbus-proto/target-cache/build-20260418081724/debug/build/op-grpc-bridge-60a39e9656f28871/out/operation.registry.v1.rs /home/jeremy/git/operation-dbus-proto/target-cache/build-20260418081724/debug/build/op-grpc-bridge-60a39e9656f28871/out/operation_descriptor.bin
+
+/home/jeremy/git/operation-dbus-proto/target-cache/build-20260418081724/debug/deps/libop_grpc_bridge-88d5c48a8e33bc3b.rmeta: crates/op-grpc-bridge/src/lib.rs crates/op-grpc-bridge/src/auth.rs crates/op-grpc-bridge/src/grpc_client.rs crates/op-grpc-bridge/src/grpc_server.rs crates/op-grpc-bridge/src/proto_gen.rs crates/op-grpc-bridge/src/schema_engine.rs /home/jeremy/git/operation-dbus-proto/target-cache/build-20260418081724/debug/build/op-grpc-bridge-60a39e9656f28871/out/operation.v1.rs /home/jeremy/git/operation-dbus-proto/target-cache/build-20260418081724/debug/build/op-grpc-bridge-60a39e9656f28871/out/operation.mail.v1.rs /home/jeremy/git/operation-dbus-proto/target-cache/build-20260418081724/debug/build/op-grpc-bridge-60a39e9656f28871/out/operation.privacy.v1.rs /home/jeremy/git/operation-dbus-proto/target-cache/build-20260418081724/debug/build/op-grpc-bridge-60a39e9656f28871/out/operation.registration.v1.rs /home/jeremy/git/operation-dbus-proto/target-cache/build-20260418081724/debug/build/op-grpc-bridge-60a39e9656f28871/out/operation.registry.v1.rs /home/jeremy/git/operation-dbus-proto/target-cache/build-20260418081724/debug/build/op-grpc-bridge-60a39e9656f28871/out/operation_descriptor.bin
+
+crates/op-grpc-bridge/src/lib.rs:
+crates/op-grpc-bridge/src/auth.rs:
+crates/op-grpc-bridge/src/grpc_client.rs:
+crates/op-grpc-bridge/src/grpc_server.rs:
+crates/op-grpc-bridge/src/proto_gen.rs:
+crates/op-grpc-bridge/src/schema_engine.rs:
+/home/jeremy/git/operation-dbus-proto/target-cache/build-20260418081724/debug/build/op-grpc-bridge-60a39e9656f28871/out/operation.v1.rs:
+/home/jeremy/git/operation-dbus-proto/target-cache/build-20260418081724/debug/build/op-grpc-bridge-60a39e9656f28871/out/operation.mail.v1.rs:
+/home/jeremy/git/operation-dbus-proto/target-cache/build-20260418081724/debug/build/op-grpc-bridge-60a39e9656f28871/out/operation.privacy.v1.rs:
+/home/jeremy/git/operation-dbus-proto/target-cache/build-20260418081724/debug/build/op-grpc-bridge-60a39e9656f28871/out/operation.registration.v1.rs:
+/home/jeremy/git/operation-dbus-proto/target-cache/build-20260418081724/debug/build/op-grpc-bridge-60a39e9656f28871/out/operation.registry.v1.rs:
+/home/jeremy/git/operation-dbus-proto/target-cache/build-20260418081724/debug/build/op-grpc-bridge-60a39e9656f28871/out/operation_descriptor.bin:
+
+# env-dep:OUT_DIR=/home/jeremy/git/operation-dbus-proto/target-cache/build-20260418081724/debug/build/op-grpc-bridge-60a39e9656f28871/out

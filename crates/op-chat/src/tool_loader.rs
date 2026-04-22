@@ -776,85 +776,6 @@ impl Tool for ShellExecuteTool {
 // SYSTEM TOOLS (Always Loaded)
 // ============================================================================
 
-/// ProcFs tool - read system information from /proc
-pub struct ProcFsTool;
-
-impl ProcFsTool {
-    pub fn new() -> Arc<Self> {
-        Arc::new(Self)
-    }
-}
-
-impl Default for ProcFsTool {
-    fn default() -> Self {
-        Self
-    }
-}
-
-#[async_trait]
-impl Tool for ProcFsTool {
-    fn name(&self) -> &str {
-        "procfs_read"
-    }
-
-    fn description(&self) -> &str {
-        "Read system information from /proc filesystem (CPU, memory, processes, etc.)"
-    }
-
-    fn input_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "info_type": {
-                    "type": "string",
-                    "enum": ["cpuinfo", "meminfo", "loadavg", "uptime", "version", "mounts", "partitions", "net_dev"],
-                    "description": "Type of system information to read"
-                }
-            },
-            "required": ["info_type"]
-        })
-    }
-
-    fn category(&self) -> &str {
-        "system"
-    }
-
-    fn tags(&self) -> Vec<String> {
-        vec!["system".to_string(), "procfs".to_string(), "monitoring".to_string()]
-    }
-
-    async fn execute(&self, input: Value) -> Result<Value> {
-        let info_type = input
-            .get("info_type")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Missing required field: info_type"))?;
-
-        let path = match info_type {
-            "cpuinfo" => "/proc/cpuinfo",
-            "meminfo" => "/proc/meminfo",
-            "loadavg" => "/proc/loadavg",
-            "uptime" => "/proc/uptime",
-            "version" => "/proc/version",
-            "mounts" => "/proc/mounts",
-            "partitions" => "/proc/partitions",
-            "net_dev" => "/proc/net/dev",
-            _ => return Ok(json!({"success": false, "error": "Unknown info_type"})),
-        };
-
-        match tokio::fs::read_to_string(path).await {
-            Ok(content) => Ok(json!({
-                "success": true,
-                "info_type": info_type,
-                "content": content
-            })),
-            Err(e) => Ok(json!({
-                "success": false,
-                "error": e.to_string()
-            })),
-        }
-    }
-}
-
 /// Network interfaces tool
 pub struct ListNetworkInterfacesTool;
 
@@ -2196,7 +2117,6 @@ async fn load_essential_tools(registry: &ToolRegistry) -> Result<usize> {
     count += register_tool_checked!(registry, ShellExecuteTool::new(), "shell_execute");
 
     // System info tools - ESSENTIAL
-    count += register_tool_checked!(registry, ProcFsTool::new(), "procfs_read");
     count += register_tool_checked!(registry, ListNetworkInterfacesTool::new(), "list_network_interfaces");
 
     info!("✅ Loaded {} essential tools", count);

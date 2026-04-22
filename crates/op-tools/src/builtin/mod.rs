@@ -15,6 +15,7 @@ pub mod dinit;
 pub mod file;
 pub mod gcloud_tools;
 pub mod ovs_tools;
+pub mod plugin_projection;
 pub mod rtnetlink_tools;
 pub mod shell;
 // pub mod self_tools;

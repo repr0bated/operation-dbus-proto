@@ -90,17 +90,26 @@ impl SqlitePluginCatalog {
     }
 
     pub async fn list_documents(&self) -> Result<Vec<PluginCatalogDocument>> {
-        let rows = sqlx::query("SELECT base_object FROM plugins ORDER BY name")
+        let rows = sqlx::query("SELECT name, base_object FROM plugins ORDER BY name")
             .fetch_all(&self.pool)
             .await?;
 
-        rows.into_iter()
-            .map(|row| {
-                let encoded: String = row.try_get("base_object")?;
-                let document = serde_json::from_str(&encoded)?;
-                Ok(document)
-            })
-            .collect()
+        let mut documents = Vec::new();
+        for row in rows {
+            let name: String = row.try_get("name")?;
+            let encoded: String = row.try_get("base_object")?;
+            match serde_json::from_str(&encoded) {
+                Ok(document) => documents.push(document),
+                Err(error) => {
+                    eprintln!(
+                        "Skipping stale plugin catalog document '{}': {}",
+                        name, error
+                    );
+                }
+            }
+        }
+
+        Ok(documents)
     }
 }
 

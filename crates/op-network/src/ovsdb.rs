@@ -73,8 +73,7 @@ impl OvsdbClient {
         log::debug!("OVSDB request sent, waiting for response");
 
         // Read response with timeout
-        // Try a simple approach first - read a fixed amount of data
-        let mut buffer = vec![0u8; 1024];
+        let mut buffer = vec![0u8; 65536]; // 64KB buffer for larger snapshots
 
         let read_result =
             tokio::time::timeout(std::time::Duration::from_secs(10), stream.read(&mut buffer))
@@ -554,8 +553,74 @@ impl OvsdbClient {
     }
 
     /// Dump the entire database
-    pub async fn dump_db(&self, _db: &str) -> Result<Value> {
-        self.rpc_call("dump", json!(["Open_vSwitch"])).await
+    pub async fn dump_db(&self, db: &str) -> Result<Value> {
+        if db == "Open_vSwitch" {
+            self.dump_open_vswitch().await
+        } else {
+            // For other databases, we would need to get their schema first
+            let schema = self.rpc_call("get_schema", json!([db])).await?;
+            let tables = schema
+                .get("tables")
+                .and_then(|v| v.as_object())
+                .ok_or_else(|| anyhow::anyhow!("Invalid OVSDB schema: missing tables"))?;
+
+            let mut ops = Vec::new();
+            let mut order = Vec::new();
+            for (name, _def) in tables.iter() {
+                ops.push(json!({
+                    "op": "select",
+                    "table": name,
+                    "where": []
+                }));
+                order.push(name.clone());
+            }
+
+            let result = self.transact_db(db, json!(ops)).await?;
+
+            let mut out = Object::new();
+            for (i, name) in order.into_iter().enumerate() {
+                let rows = result
+                    .get_idx(i)
+                    .and_then(|r| r.get("rows"))
+                    .cloned()
+                    .unwrap_or_else(|| json!([]));
+                out.insert(name, rows);
+            }
+
+            Ok(Value::Object(Box::new(out)))
+        }
+    }
+
+    /// Transact - execute OVSDB operations on specific database
+    pub async fn transact_db(&self, db: &str, operations: Value) -> Result<Value> {
+        let mut params = vec![json!(db)];
+        if let Some(ops_array) = operations.as_array() {
+            for op in ops_array {
+                params.push(op.clone());
+            }
+        }
+        let result = self.rpc_call("transact", json!(params)).await?;
+
+        if let Some(results) = result.as_array() {
+            for (i, op_result) in results.iter().enumerate() {
+                if let Some(error) = op_result.get("error") {
+                    if let Some(error_str) = error.as_str() {
+                        let details = op_result
+                            .get("details")
+                            .and_then(|d| d.as_str())
+                            .unwrap_or("no details");
+                        return Err(anyhow::anyhow!(
+                            "OVSDB operation {} failed: {} ({})",
+                            i,
+                            error_str,
+                            details
+                        ));
+                    }
+                }
+            }
+        }
+
+        Ok(result)
     }
 
     /// Monitor OVSDB for changes

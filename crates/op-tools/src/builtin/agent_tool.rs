@@ -76,13 +76,7 @@ impl AgentConnectionRegistry {
     pub fn global() -> Arc<Self> {
         AGENT_CONNECTIONS
             .get_or_init(|| {
-                let bus_type = std::env::var("OP_AGENT_BUS")
-                    .ok()
-                    .and_then(|v| match v.to_lowercase().as_str() {
-                        "session" => Some(BusType::Session),
-                        _ => Some(BusType::System),
-                    })
-                    .unwrap_or(BusType::System);
+                let bus_type = default_agent_bus();
                 info!("AgentConnectionRegistry: using {:?} bus", bus_type);
                 Arc::new(Self::new(bus_type))
             })
@@ -241,6 +235,23 @@ fn normalize_agent_type(raw: &str) -> String {
     raw.trim().replace('_', "-").to_ascii_lowercase()
 }
 
+fn default_agent_bus() -> BusType {
+    std::env::var("OP_AGENT_BUS")
+        .ok()
+        .and_then(|v| match v.to_lowercase().as_str() {
+            "session" => Some(BusType::Session),
+            "system" => Some(BusType::System),
+            _ => None,
+        })
+        .unwrap_or_else(|| {
+            if std::env::var("DBUS_SESSION_BUS_ADDRESS").is_ok() {
+                BusType::Session
+            } else {
+                BusType::System
+            }
+        })
+}
+
 fn runtime_catalog() -> &'static HashMap<String, AgentRuntimeDescriptor> {
     AGENT_RUNTIME_CATALOG.get_or_init(|| {
         let mut catalog = HashMap::new();
@@ -359,13 +370,7 @@ pub struct DbusAgentExecutor {
 
 impl DbusAgentExecutor {
     pub fn new() -> Self {
-        let bus_type = std::env::var("OP_AGENT_BUS")
-            .ok()
-            .and_then(|v| match v.to_lowercase().as_str() {
-                "session" => Some(BusType::Session),
-                _ => Some(BusType::System),
-            })
-            .unwrap_or(BusType::System);
+        let bus_type = default_agent_bus();
         Self { bus_type }
     }
 

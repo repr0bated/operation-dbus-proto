@@ -1,0 +1,5 @@
+/home/jeremy/git/operation-dbus-proto/target-cache/build-20260418081724/debug/deps/waker_fn-8c779bb5f02c6720.d: /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/waker-fn-1.2.0/src/lib.rs
+
+/home/jeremy/git/operation-dbus-proto/target-cache/build-20260418081724/debug/deps/libwaker_fn-8c779bb5f02c6720.rmeta: /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/waker-fn-1.2.0/src/lib.rs
+
+/home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/waker-fn-1.2.0/src/lib.rs:

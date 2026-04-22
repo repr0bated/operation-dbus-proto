@@ -25,15 +25,18 @@ OP_DBUS_LISTEN=none
 
 # Shared session bus endpoint for op-* services.
 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/op-dbus/session-bus
+OP_DBUS_SESSION_BUS=1
 
 # System-wide WireGuard + registration defaults.
 OP_WEB_TOOL_SOURCE=op-dbus
-OP_WEB_REMOTE_TOOL_URL=http://127.0.0.1:8081
+OP_WEB_REMOTE_TOOL_URL=http://${OP_DBUS_WEB_HOST}:${OP_DBUS_WEB_PORT}
 WG_SERVER_PUBKEY=+7AlLRCx0cqWwV+cgP7UwA6i//7v0YqA32f8Rbo07zE=
 WG_SERVER_ENDPOINT=148.113.204.83:51820
 WG_INTERFACE=wg0
 OP_DBUS_BRIDGE_NAME=ovsbr0
+# ens3 is the standalone public uplink. Do not require or attach it as an OVS port.
 OP_DBUS_UPLINK_PORT=ens3
+OP_DBUS_REQUIRED_OVS_PORTS="ovsbr0 grpc-bridge ovsbr0-mgmt ovsbr0-sock wgcf priv_xray priv_warp priv_wg"
 OP_DBUS_SECONDARY_UPLINK_IFACE=uplink1
 OP_DBUS_SECONDARY_UPLINK_IPV4=15.235.37.41/32
 

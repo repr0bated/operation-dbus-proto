@@ -123,8 +123,7 @@ Your OVS tools use:
 
 For reading files (safe operations):
 - `read_file {"path": "/etc/hosts"}` - Read file contents
-- `read_proc {"path": "/proc/meminfo"}` - Read /proc filesystem
-- `read_sys {"path": "/sys/class/net"}` - Read /sys filesystem
+- Use PluginSchema projection tools (`plugin_projection_*`) or native D-Bus/rtnetlink tools for system state.
 
 ## Rules
 
