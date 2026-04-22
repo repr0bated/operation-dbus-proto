@@ -153,6 +153,23 @@ impl OperationGrpcServer {
         self.semantic_shuttle = Some(semantic_shuttle);
         self
     }
+
+    /// Snapshot of all registered components plus a live-update receiver.
+    ///
+    /// The receiver fires a `RegistryEvent` every time a component registers,
+    /// updates, or deregisters.  Use this to mirror the registry into the D-Bus
+    /// tree without polling.
+    pub async fn registry_watch(
+        &self,
+    ) -> (
+        Vec<crate::proto::registry::ComponentInfo>,
+        tokio::sync::broadcast::Receiver<crate::proto::registry::RegistryEvent>,
+    ) {
+        let inner = self.registry.read().await;
+        let snapshot: Vec<_> = inner.components.values().cloned().collect();
+        let rx = inner.watch_tx.subscribe();
+        (snapshot, rx)
+    }
 }
 
 /// Run gRPC server for all Operation services.

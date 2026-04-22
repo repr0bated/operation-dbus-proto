@@ -204,7 +204,6 @@ impl RequestHandler {
         ctx.load_tool(Arc::new(tools::shell::ShellExecuteTool::new()));
         
         // System tools
-        ctx.load_tool(Arc::new(tools::system::ProcFsTool));
         ctx.load_tool(Arc::new(tools::system::ListNetworkInterfacesTool));
         
         // Systemd tools

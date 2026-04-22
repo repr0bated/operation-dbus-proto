@@ -1,4 +1,4 @@
-/y is /! Streaming blockchain with dual BTRFS subvolumes
+//! Streaming blockchain with dual BTRFS subvolumes
 //!
 //! Architecture:
 //! - timing_subvol: Immutable audit trail (append-only)

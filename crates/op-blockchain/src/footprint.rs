@@ -1,4 +1,3 @@
-mented
 //! Block events and plugin footprints for the streaming blockchain
 
 use serde::{Deserialize, Serialize};

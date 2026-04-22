@@ -6,15 +6,26 @@
 
 set -e
 
+if [ -f /etc/op-dbus/environment ]; then
+    # shellcheck disable=SC1091
+    . /etc/op-dbus/environment
+fi
+
+: "${OP_DBUS_WEB_HOST:=127.0.0.1}"
+: "${OP_DBUS_WEB_PORT:=8081}"
+: "${OP_WEB_REMOTE_TOOL_URL:=http://${OP_DBUS_WEB_HOST}:${OP_DBUS_WEB_PORT}}"
+
+tool_url="${OP_WEB_REMOTE_TOOL_URL%/}/api/tools"
+
 echo "[op-web-start] Waiting for op-dbus to be ready..."
 
-# Wait up to 30 seconds for op-dbus port to be open
+# Wait up to 30 seconds for op-dbus HTTP API to be reachable.
 for i in {1..30}; do
-    if curl -s http://localhost:8080/api/tools >/dev/null 2>&1; then
+    if curl -sf --max-time 2 "$tool_url" >/dev/null 2>&1; then
         echo "[op-web-start] op-dbus is ready, starting op-web..."
         exec /usr/local/sbin/op-web-dinit.sh "$@"
     fi
-    echo "[op-web-start] Waiting for op-dbus... ($i/30)"
+    echo "[op-web-start] Waiting for op-dbus at $tool_url... ($i/30)"
     sleep 1
 done
 

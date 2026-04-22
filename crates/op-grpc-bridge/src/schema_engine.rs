@@ -14,7 +14,6 @@ use tokio::sync::{broadcast, OnceCell, RwLock, Semaphore};
 use zbus::zvariant::OwnedValue as ZOwnedValue;
 use zbus::{Connection, Proxy};
 
-use op_cognitive_mcp::CozoGraphShuttle;
 use op_identity::write_sled_from_wg;
 use op_jsonrpc::nonnet::NonNetDb;
 use op_network::ovsdb::OvsdbClient;
@@ -73,8 +72,6 @@ pub struct SchemaEngine {
     /// Authoritative RCP stores
     pub ovsdb: Arc<OvsdbClient>,
     pub nonnet: Arc<NonNetDb>,
-    /// CozoDB compliance graph — evaluates mutations before they are finalised
-    policy_engine: Arc<CozoGraphShuttle>,
 }
 
 impl std::fmt::Debug for SchemaEngine {
@@ -127,8 +124,6 @@ impl SchemaEngine {
         nonnet: Arc<NonNetDb>,
     ) -> Self {
         let (change_tx, _) = broadcast::channel(1024);
-        let policy_engine = CozoGraphShuttle::from_env()
-            .unwrap_or_else(|_| CozoGraphShuttle::new_in_memory().expect("CozoDB init failed"));
         Self {
             event_chain,
             change_tx,
@@ -137,7 +132,6 @@ impl SchemaEngine {
             dbus_call_limiter: Arc::new(Semaphore::new(32)),
             ovsdb,
             nonnet,
-            policy_engine: Arc::new(policy_engine),
         }
     }
 
@@ -242,20 +236,28 @@ impl SchemaEngine {
         let mut nonnet_rx = self.nonnet.subscribe();
         let nonnet_self = me.clone();
         tokio::spawn(async move {
-            while let Ok(update) = nonnet_rx.recv().await {
-                let _ = nonnet_self
-                    .process_authoritative_change(
-                        update.table.clone(),
-                        format!("/org/opdbus/v1/nonnet/{}/{}", update.db_name, update.table),
-                        ChangeType::PropertySet,
-                        None,
-                        None,
-                        simd_json::json!(update.rows),
-                        vec!["nonnet".to_string()],
-                        "nonnet-db".to_string(),
-                        ChangeSource::Internal,
-                    )
-                    .await;
+            loop {
+                match nonnet_rx.recv().await {
+                    Ok(update) => {
+                        let _ = nonnet_self
+                            .process_authoritative_change(
+                                update.table.clone(),
+                                format!("/org/opdbus/v1/nonnet/{}/{}", update.db_name, update.table),
+                                ChangeType::PropertySet,
+                                None,
+                                None,
+                                simd_json::json!(update.rows),
+                                vec!["nonnet".to_string()],
+                                "nonnet-db".to_string(),
+                                ChangeSource::Internal,
+                            )
+                            .await;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!("NonNet subscription lagged by {} events", n);
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
             }
         });
 
@@ -307,18 +309,6 @@ impl SchemaEngine {
         _capability_id: Option<String>,
     ) -> anyhow::Result<MutationResult> {
         let mut old_value = None;
-
-        // 0. Compliance interception — CozoDB graph evaluation before anything is written
-        let operation = member_name.as_deref().unwrap_or(match change_type {
-            ChangeType::MethodCall => "method_call",
-            ChangeType::PropertySet => "property_set",
-            ChangeType::PropertyDelete => "property_delete",
-            _ => "mutation",
-        });
-        let verdict = self.policy_engine.evaluate_mutation(&plugin_id, operation);
-        if !verdict.allow {
-            return Err(anyhow::anyhow!("PolicyEngine denied mutation on {}: {}", plugin_id, verdict.reason));
-        }
 
         // 1. Write to authoritative RCP store
         if plugin_id == "net" || object_path.contains("/ovsdb/") {

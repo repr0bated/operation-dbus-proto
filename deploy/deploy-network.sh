@@ -2,8 +2,9 @@
 # deploy-network.sh — Idempotent network bootstrap for operation-dbus-proto VPS
 #
 # Topology:
-#   ens3 (148.113.204.83/32) → Host → ovsbr0 (10.88.88.1/24, OVS bridge)
-#                                    → incusbr0 (10.149.181.1/24, Incus LAN)
+#   ens3 (148.113.204.83/32, standalone public uplink) → Host
+#   ovsbr0 (10.88.88.1/24, private OVS bridge)          → privacy datapath
+#   incusbr0 (10.149.181.1/24, Incus LAN)               → containers
 #
 # Containers:
 #   services             10.149.181.188  — NextDNS DNS server

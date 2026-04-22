@@ -5,22 +5,27 @@
 
 use anyhow::Result;
 use dashmap::DashMap;
+use managed_objects::{
+    build_interface_map, ManagedObjectRegistry, ObjectManagerInterface, OBJECT_MANAGER_PATH,
+    PROJECTED_IFACE,
+};
 use op_core::types::BusType;
-use op_grpc_bridge::SchemaEngine;
+use op_grpc_bridge::{OperationGrpcServer, SchemaEngine};
 use op_jsonrpc::nonnet::NonNetDb;
 use op_network::ovsdb::OvsdbClient;
+use op_state::manager::StateManager;
 use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
-use sqlx::{sqlite::SqlitePool, Row};
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use zbus::zvariant::ObjectPath;
+use zbus::zvariant::{ObjectPath, OwnedObjectPath};
 use zbus::{connection::Builder, Connection};
 
 pub mod dbus_interface;
 pub mod jsonrpc_interface;
+pub mod managed_objects;
 pub mod object;
+pub mod plugin_interface;
 pub mod tree;
 
 /// D-Bus publication service.
@@ -34,10 +39,14 @@ pub struct DbusMirror {
     connection: Connection,
     /// Published D-Bus object paths managed by this service.
     published_objects: DashMap<String, ()>,
-    /// Enterprise state database pool
-    db_pool: Option<SqlitePool>,
-    /// Monotonic counter for generating unique fallback IDs when rows lack a UUID.
-    fallback_id: AtomicU64,
+    /// Registry backing the org.freedesktop.DBus.ObjectManager at OBJECT_MANAGER_PATH.
+    /// Tracks every plugin object so GetManagedObjects can enumerate them all.
+    plugin_registry: ManagedObjectRegistry,
+    /// Optional handle to the gRPC server so the ComponentRegistry can be
+    /// mirrored into the D-Bus tree under /org/opdbus/v1/registry/.
+    grpc_server: Option<Arc<OperationGrpcServer>>,
+    /// StateManager for enumerating all registered plugins (active or not).
+    state_manager: Option<Arc<StateManager>>,
 }
 
 impl DbusMirror {
@@ -49,28 +58,8 @@ impl DbusMirror {
         schema_engine: Option<Arc<SchemaEngine>>,
     ) -> Result<Self> {
         let connection = match bus_type {
-            BusType::System => {
-                Builder::system()?
-                    .name("org.opdbus.v1")?
-                    .name("org.opdbus")?
-                    .build()
-                    .await?
-            }
-            BusType::Session => {
-                Builder::session()?
-                    .name("org.opdbus.v1")?
-                    .name("org.opdbus")?
-                    .build()
-                    .await?
-            }
-        };
-
-        // Initialize Enterprise DB pool if it exists
-        let db_path = "/var/lib/op-dbus/state.db";
-        let db_pool = if std::path::Path::new(db_path).exists() {
-            Some(SqlitePool::connect(&format!("sqlite://{}", db_path)).await?)
-        } else {
-            None
+            BusType::System => Builder::system()?.name("org.opdbus.v1")?.build().await?,
+            BusType::Session => Builder::session()?.name("org.opdbus.v1")?.build().await?,
         };
 
         Ok(Self {
@@ -79,9 +68,23 @@ impl DbusMirror {
             schema_engine,
             connection,
             published_objects: DashMap::new(),
-            db_pool,
-            fallback_id: AtomicU64::new(0),
+            plugin_registry: Arc::new(DashMap::new()),
+            grpc_server: None,
+            state_manager: None,
         })
+    }
+
+    /// Attach a gRPC server so the ComponentRegistry is mirrored into D-Bus.
+    pub fn with_grpc_server(mut self, grpc_server: Arc<OperationGrpcServer>) -> Self {
+        self.grpc_server = Some(grpc_server);
+        self
+    }
+
+    /// Attach the StateManager so all registered plugins are always visible in
+    /// the managed objects tree (active or not).
+    pub fn with_state_manager(mut self, state_manager: Arc<StateManager>) -> Self {
+        self.state_manager = Some(state_manager);
+        self
     }
 
     /// Start the mirror service.
@@ -95,6 +98,21 @@ impl DbusMirror {
         if let Err(e) = self.refresh_full_tree().await {
             tracing::error!("Initial D-Bus mirror sync failed: {}", e);
         }
+
+        // Register ObjectManager at the root to manage EVERYTHING.
+        let om = ObjectManagerInterface::new(self.plugin_registry.clone());
+        self.connection
+            .object_server()
+            .at("/org/opdbus/v1", om)
+            .await?;
+
+        // Register PluginsV1 at the plugins path.
+        let plugin_iface = plugin_interface::PluginInterface::new();
+        let plugin_snap = plugin_iface.snapshot_handle();
+        self.connection
+            .object_server()
+            .at("/org/opdbus/v1/plugins", plugin_iface)
+            .await?;
 
         // Register mirror-management interface
         let interface = dbus_interface::DbusMirrorInterface::new(self.clone());
@@ -121,17 +139,46 @@ impl DbusMirror {
             .at("/org/opdbus/v1/nonnet", nonnet_interface)
             .await?;
 
-        // Start background refresh task
+        // Start background refresh task — also refreshes the fixed plugin objects.
         let mirror = self.clone();
+        let plugin_snap_bg = plugin_snap.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
             loop {
                 interval.tick().await;
+                // Refresh plugin snapshot.
+                mirror.refresh_plugin_snapshot(&plugin_snap_bg).await;
                 if let Err(e) = mirror.refresh_full_tree().await {
                     tracing::error!("D-Bus mirror snapshot repair publication failed: {}", e);
                 }
             }
         });
+
+        // Populate fixed objects immediately on startup.
+        self.refresh_plugin_snapshot(&plugin_snap).await;
+
+        // Watch ComponentRegistry for live register/deregister events
+        if let Some(grpc) = &self.grpc_server {
+            let (_, mut rx) = grpc.registry_watch().await;
+            let mirror = self.clone();
+            tokio::spawn(async move {
+                loop {
+                    match rx.recv().await {
+                        Ok(event) => mirror.apply_registry_event(event).await,
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            tracing::warn!(
+                                "ComponentRegistry watcher lagged by {} events, resyncing",
+                                n
+                            );
+                            if let Err(e) = mirror.refresh_full_tree().await {
+                                tracing::error!("Registry resync failed: {}", e);
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+            });
+        }
 
         std::future::pending::<()>().await;
         Ok(())
@@ -155,16 +202,14 @@ impl DbusMirror {
     pub async fn refresh_full_tree(&self) -> Result<()> {
         let mut active_paths = HashSet::new();
 
-        // 1. Scan Enterprise SQLite (Primary Authority for NonNet rows)
-        if self.db_pool.is_some() {
-            if let Err(e) = self.publish_enterprise_snapshot(&mut active_paths).await {
-                tracing::warn!("Enterprise DB snapshot failed: {}", e);
-            }
-        }
-
-        // 2. Scan OVSDB (Authoritative for Network)
+        // 1. Scan OVSDB (Authoritative for Network)
         if let Err(e) = self.publish_ovsdb_snapshot(&mut active_paths).await {
             tracing::warn!("OVSDB snapshot failed: {}", e);
+        }
+
+        // 2. Scan Procfs (Host state)
+        if let Err(e) = self.publish_host_snapshot(&mut active_paths).await {
+            tracing::warn!("Procfs snapshot failed: {}", e);
         }
 
         // 3. Scan NonNet (Authoritative for Plugins not in Enterprise DB)
@@ -172,48 +217,125 @@ impl DbusMirror {
             tracing::warn!("NonNet snapshot failed: {}", e);
         }
 
-        // 4. Scan freedesktop system services
+        // 4. gRPC ComponentRegistry snapshot (host/plugin now use fixed objects)
+        if let Err(e) = self.publish_registry_snapshot(&mut active_paths).await {
+            tracing::warn!("ComponentRegistry snapshot failed: {}", e);
+        }
+
+        // 6. Scan freedesktop system services
         if let Err(e) = self.publish_system_services(&mut active_paths).await {
             tracing::warn!("System services snapshot failed: {}", e);
         }
 
-        // 5. Remove any D-Bus objects that no longer exist in any authority
+        // 8. Keep plugin objects published even when a plugin is currently inactive.
+        if let Err(e) = self.publish_plugin_snapshot(&mut active_paths).await {
+            tracing::warn!("Plugin snapshot failed: {}", e);
+        }
+
+        // 9. Remove any D-Bus objects that no longer exist in any authority
         self.remove_stale_publications(&active_paths).await?;
 
         Ok(())
     }
 
-    async fn publish_enterprise_snapshot(&self, active_paths: &mut HashSet<String>) -> Result<()> {
-        let pool = self.db_pool.as_ref().unwrap();
-        let rows = sqlx::query("SELECT id, plugin_id, object_path, state_json FROM state_entries")
-            .fetch_all(pool)
-            .await?;
+    async fn publish_host_snapshot(&self, active_paths: &mut HashSet<String>) -> Result<()> {
+        let sections = vec![
+            "cpuinfo", "meminfo", "loadavg", "uptime", "stat", "vmstat", 
+            "diskstats", "mounts", "version"
+        ];
 
-        for row in rows {
-            let plugin_id: String = row.try_get("plugin_id")?;
-            let object_path: String = row.try_get("object_path")?;
-            let state_str: String = row.try_get("state_json")?;
-
-            let mut state_str = state_str;
-            let state_val: Value = unsafe { simd_json::from_str(state_str.as_mut_str())? };
-
-            let full_path = format!("/org/opdbus/v1/plugins/{}{}", plugin_id, object_path);
-            self.publish_object(&full_path, state_val).await?;
-            active_paths.insert(full_path);
+        for section in sections {
+            let path = format!("/org/opdbus/v1/host/{}", section);
+            let data = match section {
+                "meminfo" => self.gather_meminfo().await?,
+                "cpuinfo" => self.gather_cpuinfo().await?,
+                "loadavg" => self.gather_loadavg().await?,
+                _ => simd_json::json!({ "status": "available" }),
+            };
+            self.publish_object(&path, data).await?;
+            active_paths.insert(path);
         }
 
         Ok(())
     }
 
+    async fn gather_meminfo(&self) -> Result<Value> {
+        let content = tokio::fs::read_to_string("/proc/meminfo").await?;
+        let mut map = simd_json::owned::Object::new();
+        for line in content.lines() {
+            let parts: Vec<&str> = line.split(':').collect();
+            if parts.len() == 2 {
+                let key = parts[0].trim();
+                let val = parts[1].trim().split_whitespace().next().unwrap_or("0");
+                if let Ok(n) = val.parse::<i64>() {
+                    map.insert(key.to_string().into(), Value::from(n));
+                }
+            }
+        }
+        Ok(Value::Object(Box::new(map)))
+    }
+
+    async fn gather_cpuinfo(&self) -> Result<Value> {
+        let content = tokio::fs::read_to_string("/proc/cpuinfo").await?;
+        let mut cores = Vec::new();
+        let mut current_core = simd_json::owned::Object::new();
+        for line in content.lines() {
+            if line.is_empty() {
+                if !current_core.is_empty() {
+                    cores.push(Value::Object(Box::new(current_core.clone())));
+                    current_core.clear();
+                }
+                continue;
+            }
+            let parts: Vec<&str> = line.split(':').collect();
+            if parts.len() == 2 {
+                let key = parts[0].trim().replace(' ', "_");
+                let val = parts[1].trim();
+                current_core.insert(key.into(), Value::from(val.to_string()));
+            }
+        }
+        Ok(simd_json::json!({ "cores": cores }))
+    }
+
+    async fn gather_loadavg(&self) -> Result<Value> {
+        let content = tokio::fs::read_to_string("/proc/loadavg").await?;
+        let parts: Vec<&str> = content.split_whitespace().collect();
+        if parts.len() >= 3 {
+            return Ok(simd_json::json!({
+                "1min": parts[0],
+                "5min": parts[1],
+                "15min": parts[2],
+            }));
+        }
+        Ok(simd_json::json!({}))
+    }
+
     async fn publish_ovsdb_snapshot(&self, active_paths: &mut HashSet<String>) -> Result<()> {
+        tracing::debug!("Scanning OVSDB for projection...");
         let dump = self.ovsdb.dump_db("Open_vSwitch").await?;
 
         if let Value::Object(tables) = dump {
-            for (table_name, table_data) in tables.iter() {
-                if let Some(rows) = table_data.get("rows").and_then(|v| v.as_object()) {
-                    for (uuid, row_data) in rows.iter() {
-                        let path = format!("/org/opdbus/v1/ovsdb/{}/{}", table_name, uuid);
-                        self.publish_object(&path, row_data.clone()).await?;
+            let table_list: Vec<_> = tables.iter().map(|(k, v)| (k.to_string(), v.clone())).collect();
+            for (table_name, table_data) in table_list {
+                // Support both "dump" format (object mapping UUID to rows) 
+                // and "select" format (array of rows).
+                if let Some(rows_obj) = table_data.get("rows").and_then(|v| v.as_object()) {
+                    // Native OVSDB "dump" format
+                    let rows: Vec<_> = rows_obj.iter().map(|(k, v)| (k.to_string(), v.clone())).collect();
+                    for (uuid, row_data) in rows {
+                        let row_id = Self::sanitize_path_segment(&uuid);
+                        let path = format!("/org/opdbus/v1/ovsdb/{}/{}", table_name, row_id);
+                        self.publish_object(&path, row_data).await?;
+                        active_paths.insert(path);
+                    }
+                } else if let Some(rows_arr) = table_data.as_array() {
+                    // Internal "dump_open_vswitch" format (array of rows)
+                    let rows: Vec<_> = rows_arr.iter().cloned().collect();
+                    for (idx, row_data) in rows.into_iter().enumerate() {
+                        let row_id = Self::extract_uuid(&row_data);
+                        let id = if row_id == "unknown" { idx.to_string() } else { row_id };
+                        let path = format!("/org/opdbus/v1/ovsdb/{}/{}", table_name, id);
+                        self.publish_object(&path, row_data).await?;
                         active_paths.insert(path);
                     }
                 }
@@ -244,7 +366,8 @@ impl DbusMirror {
                     .result
                     .and_then(|schema| schema.get("tables").and_then(|v| v.as_object().cloned()))
                 {
-                    for (table_name, _) in tables.iter() {
+                    let table_names: Vec<String> = tables.keys().map(|k| k.to_string()).collect();
+                    for table_name in table_names {
                         let dump_req = op_jsonrpc::protocol::JsonRpcRequest::new(
                             "dump",
                             Value::Array(vec![Value::from(db_name)]),
@@ -253,12 +376,12 @@ impl DbusMirror {
 
                         if let Some(rows) = dump_resp
                             .result
-                            .and_then(|r: Value| r.get(table_name).cloned())
+                            .and_then(|r: Value| r.get(&table_name).cloned())
                             .and_then(|r: Value| r.get("rows").cloned())
                             .and_then(|v: Value| v.as_array().map(|a| a.to_vec()))
                         {
                             for row in rows {
-                                let id = self.extract_uuid(&row);
+                                let id = Self::extract_uuid(&row);
                                 let path = format!(
                                     "/org/opdbus/v1/nonnet/{}/{}/{}",
                                     db_name, table_name, id
@@ -356,37 +479,407 @@ impl DbusMirror {
         Ok(())
     }
 
+    async fn publish_registry_snapshot(&self, active_paths: &mut HashSet<String>) -> Result<()> {
+        let grpc = match &self.grpc_server {
+            Some(g) => g,
+            None => return Ok(()),
+        };
+        let (components, _) = grpc.registry_watch().await;
+        for info in components {
+            let path = Self::registry_dbus_path(&info.component_id);
+            let data = Self::component_info_to_value(&info);
+            self.publish_object(&path, data).await?;
+            active_paths.insert(path);
+        }
+        Ok(())
+    }
+
+    /// Handle a single live ComponentRegistry event from the broadcast channel.
+    async fn apply_registry_event(&self, event: op_grpc_bridge::proto::registry::RegistryEvent) {
+        use op_grpc_bridge::proto::registry::RegistryEventType;
+        let event_type = RegistryEventType::try_from(event.event_type)
+            .unwrap_or(RegistryEventType::RegistryEventRegistered);
+
+        match event_type {
+            RegistryEventType::RegistryEventRegistered
+            | RegistryEventType::RegistryEventUpdated => {
+                if let Some(info) = event.component {
+                    let path = Self::registry_dbus_path(&info.component_id);
+                    let data = Self::component_info_to_value(&info);
+                    if let Err(e) = self.publish_object(&path, data).await {
+                        tracing::warn!("registry publish failed for {}: {}", path, e);
+                    }
+                }
+            }
+            RegistryEventType::RegistryEventDeregistered => {
+                if let Some(info) = event.component {
+                    let path = Self::registry_dbus_path(&info.component_id);
+                    let op = match ObjectPath::try_from(path.as_str()) {
+                        Ok(p) => p,
+                        Err(_) => return,
+                    };
+                    let _ = self
+                        .connection
+                        .object_server()
+                        .remove::<object::MirrorObject, _>(op)
+                        .await;
+                    self.published_objects.remove(&path);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn registry_dbus_path(component_id: &str) -> String {
+        let safe = component_id.replace(['.', '-', ':'], "_");
+        format!("/org/opdbus/v1/registry/{}", safe)
+    }
+
+    fn plugin_dbus_path(plugin_id: &str) -> String {
+        format!(
+            "/org/opdbus/v1/plugins/{}",
+            Self::sanitize_dbus_path_segment(plugin_id)
+        )
+    }
+
+    fn is_permanent_plugin_path(path: &str) -> bool {
+        if !path.starts_with("/org/opdbus/v1/plugins/") {
+            return false;
+        }
+
+        let remainder = &path["/org/opdbus/v1/plugins/".len()..];
+        !remainder.is_empty() && !remainder.contains('/')
+    }
+
+    fn sanitize_dbus_path_segment(segment: &str) -> String {
+        let mut out = String::with_capacity(segment.len());
+        for ch in segment.chars() {
+            if ch.is_ascii_alphanumeric() || ch == '_' {
+                out.push(ch);
+            } else {
+                out.push('_');
+            }
+        }
+
+        if out.is_empty() {
+            "_".to_string()
+        } else {
+            out
+        }
+    }
+
+    fn component_info_to_value(info: &op_grpc_bridge::proto::registry::ComponentInfo) -> Value {
+        use simd_json::owned::Object;
+        let mut map = Object::new();
+        map.insert(
+            "component_id".into(),
+            Value::from(info.component_id.clone()),
+        );
+        map.insert(
+            "component_type".into(),
+            Value::from(info.component_type.clone()),
+        );
+        map.insert("name".into(), Value::from(info.name.clone()));
+        map.insert("description".into(), Value::from(info.description.clone()));
+        map.insert("endpoint".into(), Value::from(info.endpoint.clone()));
+        map.insert("version".into(), Value::from(info.version.clone()));
+        map.insert("status".into(), Value::from(info.status as i64));
+        map.insert("schema_json".into(), Value::from(info.schema_json.clone()));
+        let caps: Vec<Value> = info
+            .capabilities
+            .iter()
+            .map(|s| Value::from(s.clone()))
+            .collect();
+        map.insert("capabilities".into(), Value::Array(caps));
+        let mut meta = Object::new();
+        for (k, v) in &info.metadata {
+            meta.insert(k.clone(), Value::from(v.clone()));
+        }
+        map.insert("metadata".into(), Value::Object(Box::new(meta)));
+        Value::Object(Box::new(map))
+    }
+
+    /// Push current plugin state into the fixed PluginInterface object.
+    async fn refresh_plugin_snapshot(&self, handle: &plugin_interface::PluginSnapshot) {
+        let sm = match &self.state_manager {
+            Some(sm) => sm.clone(),
+            None => return,
+        };
+        let live_state = sm.query_current_state().await.unwrap_or_default();
+        let mut map = std::collections::HashMap::new();
+        for name in sm.list_plugins() {
+            let json = match live_state.get(&name) {
+                Some(state) => {
+                    let mut obj = match state {
+                        Value::Object(o) => *o.clone(),
+                        other => {
+                            let mut m = simd_json::owned::Object::new();
+                            m.insert("state".into(), other.clone());
+                            m
+                        }
+                    };
+                    obj.insert("active".into(), Value::from(true));
+                    simd_json::to_string(&Value::Object(Box::new(obj))).unwrap_or_default()
+                }
+                None => format!("{{\"active\":false,\"name\":{:?}}}", name),
+            };
+            map.insert(name, json);
+        }
+        *handle.write().await = map;
+    }
+
+    /// Publish every registered plugin as a stable D-Bus object.
+    ///
+    /// If a plugin cannot currently provide state, it still appears in the tree
+    /// with `active: false`.
+    async fn publish_plugin_snapshot(&self, active_paths: &mut HashSet<String>) -> Result<()> {
+        let sm = match &self.state_manager {
+            Some(sm) => sm.clone(),
+            None => return Ok(()),
+        };
+
+        let live_state = sm.query_current_state().await.unwrap_or_default();
+
+        for plugin_name in sm.list_plugins() {
+            let path = Self::plugin_dbus_path(&plugin_name);
+            let data = match live_state.get(&plugin_name) {
+                Some(state) => {
+                    let mut obj = match state {
+                        Value::Object(o) => *o.clone(),
+                        other => {
+                            let mut m = simd_json::owned::Object::new();
+                            m.insert("state".into(), other.clone());
+                            m
+                        }
+                    };
+                    obj.insert("active".into(), Value::from(true));
+                    obj.insert("name".into(), Value::from(plugin_name.clone()));
+                    Value::Object(Box::new(obj))
+                }
+                None => simd_json::json!({
+                    "active": false,
+                    "name": plugin_name.clone(),
+                }),
+            };
+
+            self.publish_object(&path, data.clone()).await?;
+            active_paths.insert(path.clone());
+
+            if live_state.contains_key(&plugin_name) {
+                self.publish_plugin_children(&path, &data, active_paths)
+                    .await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn publish_plugin_children(
+        &self,
+        root_path: &str,
+        data: &Value,
+        active_paths: &mut HashSet<String>,
+    ) -> Result<()> {
+        let mut projected = Vec::new();
+        self.collect_plugin_children(root_path, data, &mut projected);
+
+        for (path, value) in projected {
+            self.publish_object(&path, value.clone()).await?;
+            active_paths.insert(path.clone());
+        }
+
+        Ok(())
+    }
+
+    fn collect_plugin_children(
+        &self,
+        root_path: &str,
+        data: &Value,
+        out: &mut Vec<(String, Value)>,
+    ) {
+        match data {
+            Value::Object(map) => {
+                for (key, value) in map.iter() {
+                    let child_path = format!(
+                        "{}/{}",
+                        root_path,
+                        Self::sanitize_dbus_path_segment(key.as_str())
+                    );
+                    out.push((child_path.clone(), Self::child_value_payload(value)));
+                    self.collect_plugin_children(&child_path, value, out);
+                }
+            }
+            Value::Array(items) => {
+                for (idx, value) in items.iter().enumerate() {
+                    let child_path = format!("{}/{}", root_path, idx);
+                    out.push((child_path.clone(), Self::child_value_payload(value)));
+                    self.collect_plugin_children(&child_path, value, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn child_value_payload(value: &Value) -> Value {
+        match value {
+            Value::Object(map) => Value::Object(map.clone()),
+            Value::Array(items) => {
+                let mut payload = simd_json::owned::Object::new();
+                payload.insert("items".into(), Value::Array(items.clone()));
+                Value::Object(Box::new(payload))
+            }
+            scalar => {
+                let mut payload = simd_json::owned::Object::new();
+                payload.insert("value".into(), scalar.clone());
+                Value::Object(Box::new(payload))
+            }
+        }
+    }
+
     async fn publish_object(&self, path: &str, data: Value) -> Result<()> {
         if self.published_objects.contains_key(path) {
-            // Signal property update if needed
-            // TODO: Track versions to avoid redundant signals
+            // Object already registered — update data in-place and signal if changed.
+            if let Ok(iface_ref) = self
+                .connection
+                .object_server()
+                .interface::<_, object::MirrorObject>(path)
+                .await
+            {
+                let changed = iface_ref.get_mut().await.update_data(data.clone());
+                if changed {
+                    let ctxt = iface_ref.signal_context();
+                    let _ = iface_ref.get().await.data_updated(ctxt).await;
+                    // Ensure the ObjectManager knows the properties changed as well
+                    self.register_in_object_manager(path, &data).await;
+                }
+            }
             return Ok(());
         }
 
-        let obj = object::MirrorObject::new(data);
+        let obj = object::MirrorObject::new(data.clone());
         self.connection.object_server().at(path, obj).await?;
         self.published_objects.insert(path.to_string(), ());
+        
+        self.register_in_object_manager(path, &data).await;
 
         Ok(())
     }
 
     /// Load plugin state into the mirror (Seeding).
+    ///
+    /// Each plugin gets both a `MirrorObject` at `/org/opdbus/v1/plugins/{id}`
+    /// and an entry in the `ObjectManagerInterface` registry so that
+    /// `GetManagedObjects` immediately returns all loaded plugins.
     pub async fn load_plugin_state(&self, plugins: &std::collections::HashMap<String, Value>) {
-        let mut active_paths = HashSet::new();
         for (plugin_id, state) in plugins {
-            let path = format!("/org/opdbus/v1/plugins/{}", plugin_id);
+            let path = Self::plugin_dbus_path(plugin_id);
             if let Err(e) = self.publish_object(&path, state.clone()).await {
                 tracing::error!("Failed to seed mirror for {}: {}", plugin_id, e);
+                continue;
             }
-            active_paths.insert(path);
+            let mut active_paths = HashSet::new();
+            if let Err(e) = self
+                .publish_plugin_children(&path, state, &mut active_paths)
+                .await
+            {
+                tracing::warn!(
+                    "Failed to seed child plugin objects for {}: {}",
+                    plugin_id,
+                    e
+                );
+            }
+        }
+    }
+
+    /// Insert a plugin object into the ObjectManager registry and emit
+    /// `InterfacesAdded` if the ObjectManager interface is already up.
+    async fn register_in_object_manager(&self, path: &str, data: &Value) {
+        let op = match OwnedObjectPath::try_from(path.to_string()) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!("register_in_object_manager: invalid path {path}: {e}");
+                return;
+            }
+        };
+
+        let json_str = simd_json::to_string(data).unwrap_or_default();
+        let existed = self
+            .plugin_registry
+            .insert(op.clone(), build_interface_map(&json_str))
+            .is_some();
+
+        // Best-effort: emit InterfacesAdded only when the object first appears.
+        if existed {
+            return;
+        }
+
+        match self
+            .connection
+            .object_server()
+            .interface::<_, ObjectManagerInterface>(OBJECT_MANAGER_PATH)
+            .await
+        {
+            Ok(iface_ref) => {
+                let ctxt = iface_ref.signal_context();
+                if let Err(e) = ObjectManagerInterface::interfaces_added(
+                    ctxt,
+                    op,
+                    build_interface_map(&json_str),
+                )
+                .await
+                {
+                    tracing::warn!("InterfacesAdded signal failed for {path}: {e}");
+                }
+            }
+            Err(_) => {
+                // ObjectManager not yet registered — registry is already updated,
+                // so GetManagedObjects will return this entry once it comes up.
+            }
+        }
+    }
+
+    /// Remove a plugin object from the ObjectManager registry and emit
+    /// `InterfacesRemoved`.
+    async fn deregister_from_object_manager(&self, path: &str) {
+        let op = match OwnedObjectPath::try_from(path.to_string()) {
+            Ok(p) => p,
+            Err(_) => return,
+        };
+
+        if self.plugin_registry.remove(&op).is_none() {
+            return; // was not a managed plugin object
+        }
+
+        match self
+            .connection
+            .object_server()
+            .interface::<_, ObjectManagerInterface>(OBJECT_MANAGER_PATH)
+            .await
+        {
+            Ok(iface_ref) => {
+                let ctxt = iface_ref.signal_context();
+                let interfaces = vec![PROJECTED_IFACE.to_string()];
+                if let Err(e) =
+                    ObjectManagerInterface::interfaces_removed(ctxt, op, interfaces).await
+                {
+                    tracing::warn!("InterfacesRemoved signal failed for {path}: {e}");
+                }
+            }
+            Err(_) => {}
         }
     }
 
     async fn remove_stale_publications(&self, active_paths: &HashSet<String>) -> Result<()> {
         let mut to_remove = Vec::new();
         for entry in self.published_objects.iter() {
-            if !active_paths.contains(entry.key()) {
-                to_remove.push(entry.key().clone());
+            let key = entry.key();
+            // Plugin objects are permanent — they stay in the tree with active:false
+            // rather than being removed when inactive.
+            if Self::is_permanent_plugin_path(key) {
+                continue;
+            }
+            if !active_paths.contains(key) {
+                to_remove.push(key.clone());
             }
         }
 
@@ -397,6 +890,12 @@ impl DbusMirror {
                 .remove::<object::MirrorObject, _>(op)
                 .await?;
             self.published_objects.remove(&path);
+
+            // If this was a plugin-managed object, remove it from the registry
+            // and emit InterfacesRemoved.
+            if path.starts_with("/org/opdbus/v1/plugins/") {
+                self.deregister_from_object_manager(&path).await;
+            }
         }
 
         Ok(())
@@ -415,22 +914,30 @@ impl DbusMirror {
         &self.connection
     }
 
-    fn extract_uuid(&self, row: &Value) -> String {
+    fn extract_uuid(row: &Value) -> String {
         if let Some(uuid) = row.get("uuid").and_then(|v| v.as_str()) {
-            return uuid.to_string();
+            return Self::sanitize_path_segment(uuid);
         }
         if let Some(uuid) = row.get("_uuid").and_then(|v| v.as_str()) {
-            return uuid.to_string();
+            return Self::sanitize_path_segment(uuid);
         }
         if let Some(id) = row.get("id").and_then(|v| v.as_str()) {
-            return id.to_string();
+            return Self::sanitize_path_segment(id);
         }
         if let Some(s) = row.get("name").and_then(|v| v.as_str()) {
-            return s.to_string();
+            return Self::sanitize_path_segment(s);
         }
+        "unknown".to_string()
+    }
 
-        // Deterministic fallback ID
-        format!("anon_{}", self.fallback_id.fetch_add(1, Ordering::Relaxed))
+    fn sanitize_path_segment(raw: &str) -> String {
+        raw.chars()
+            .map(|ch| match ch {
+                'a'..='z' | 'A'..='Z' | '0'..='9' | '_' => ch,
+                '-' | '.' | ':' | ' ' | '/' => '_',
+                _ => '_',
+            })
+            .collect()
     }
 }
 

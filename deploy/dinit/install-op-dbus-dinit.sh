@@ -23,7 +23,11 @@ EOF
 cleanup_stale_dinit_artifacts() {
   rm -f "$ROOT/etc/dinit.d/boot.d/stalwart" "$ROOT/etc/dinit.d/stalwart"
   rm -f "$ROOT/etc/dinit.d/wgcf" "$ROOT/etc/dinit.d/boot.d/wgcf"
-  rm -f "$ROOT/etc/dinit.d/disabled/op-ovsdb-bridge" "$ROOT/etc/dinit.d/disabled/op-ovsdb-seed"
+  rm -f "$ROOT/etc/dinit.d/op-ovsdb-bridge" \
+        "$ROOT/etc/dinit.d/boot.d/op-ovsdb-bridge" \
+        "$ROOT/etc/dinit.d/scripts/op-ovsdb-bridge-start.sh" \
+        "$ROOT/etc/dinit.d/disabled/op-ovsdb-bridge" \
+        "$ROOT/etc/dinit.d/disabled/op-ovsdb-seed"
 
   for stale in \
     "$ROOT"/etc/dinit.d/op-dbus.bak.* \
@@ -104,7 +108,6 @@ install -m 0644 "$SCRIPT_DIR/op-dbus" "$ROOT/etc/dinit.d/op-dbus"
 install -m 0644 "$SCRIPT_DIR/op-session-bus" "$ROOT/etc/dinit.d/op-session-bus"
 install -m 0644 "$SCRIPT_DIR/op-ovs-services" "$ROOT/etc/dinit.d/op-ovs-services"
 install -m 0644 "$SCRIPT_DIR/op-ovsdb-seed" "$ROOT/etc/dinit.d/op-ovsdb-seed"
-install -m 0644 "$SCRIPT_DIR/op-ovsdb-bridge" "$ROOT/etc/dinit.d/op-ovsdb-bridge"
 install -m 0644 "$SCRIPT_DIR/services0-sockets" "$ROOT/etc/dinit.d/services0-sockets"
 install -m 0644 "$SCRIPT_DIR/wg-quick-all" "$ROOT/etc/dinit.d/wg-quick-all"
 install -m 0644 "$SCRIPT_DIR/netplan-apply" "$ROOT/etc/dinit.d/netplan-apply"
@@ -120,7 +123,6 @@ install -m 0755 "$SCRIPT_DIR/op-session-bus.sh" "$ROOT/usr/local/sbin/op-session
 install -m 0755 "$SCRIPT_DIR/scripts/services0-sockets.sh" "$ROOT/etc/dinit.d/scripts/services0-sockets.sh"
 install -m 0755 "$SCRIPT_DIR/op-ovs-services-start.sh" "$ROOT/etc/dinit.d/scripts/op-ovs-services-start.sh"
 install -m 0755 "$SCRIPT_DIR/op-ovsdb-seed.sh" "$ROOT/etc/dinit.d/scripts/op-ovsdb-seed.sh"
-install -m 0755 "$SCRIPT_DIR/op-ovsdb-bridge-start.sh" "$ROOT/etc/dinit.d/scripts/op-ovsdb-bridge-start.sh"
 install -m 0755 "$SCRIPT_DIR/scripts/ovs-attach-ports.sh" "$ROOT/etc/dinit.d/scripts/ovs-attach-ports.sh"
 for network_file in "$REPO_ROOT"/deploy/systemd/networkd/*; do
   install -m 0644 "$network_file" "$ROOT/etc/systemd/network/$(basename "$network_file")"
@@ -139,7 +141,6 @@ ln -sfn ../op-dbus "$ROOT/etc/dinit.d/boot.d/op-dbus"
 ln -sfn ../op-session-bus "$ROOT/etc/dinit.d/boot.d/op-session-bus"
 ln -sfn ../op-ovs-services "$ROOT/etc/dinit.d/boot.d/op-ovs-services"
 ln -sfn ../op-ovsdb-seed "$ROOT/etc/dinit.d/boot.d/op-ovsdb-seed"
-ln -sfn ../op-ovsdb-bridge "$ROOT/etc/dinit.d/boot.d/op-ovsdb-bridge"
 ln -sfn ../services0-sockets "$ROOT/etc/dinit.d/boot.d/services0-sockets"
 ln -sfn ../wg-quick-all "$ROOT/etc/dinit.d/boot.d/wg-quick-all"
 ln -sfn ../netplan-apply "$ROOT/etc/dinit.d/boot.d/netplan-apply"
@@ -154,7 +155,6 @@ if [ "$ROOT" = "/" ]; then
   dinit_dbus_restart_service systemd-networkd || dinit_dbus_start_service systemd-networkd || true
   dinit_dbus_restart_service op-dbus || dinit_dbus_start_service op-dbus || true
   dinit_dbus_restart_service op-ovsdb-seed || dinit_dbus_start_service op-ovsdb-seed || true
-  dinit_dbus_restart_service op-ovsdb-bridge || dinit_dbus_start_service op-ovsdb-bridge || true
 fi
 
 echo "Done."

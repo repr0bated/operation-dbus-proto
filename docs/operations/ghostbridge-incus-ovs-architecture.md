@@ -21,10 +21,11 @@ Internet
   |
 ens3 (physical uplink, ISP MAC identity)
   |
-ovsbr0 (OVS bridge, host external datapath)
+host routing
+  |
+ovsbr0 (OVS bridge, private datapath)
   |
   +-- ovsbr0        host L3/internal bridge port
-  +-- ens3          physical uplink port
   +-- ovsbr0-mgmt   management internal port
   +-- ovsbr0-sock   socket-network attachment port
   +-- priv_*        predefined privacy socket ports
@@ -33,9 +34,9 @@ ovsbr0 (OVS bridge, host external datapath)
 
 Host constraints:
 
-- `ovsbr0` must present the same MAC as `ens3`
-- `ens3` must stay attached to `ovsbr0` and be `UP`
-- host public `/32`, default route, and DNS live on `ovsbr0`
+- `ens3` is the standalone public uplink and must not be attached to `ovsbr0`
+- host public `/32`, default route, and DNS stay on `ens3`
+- `ovsbr0` carries the private host/datapath address
 - `systemd-networkd` config is for host L3 only, not container dataplane design
 
 ## Core Design
@@ -178,21 +179,23 @@ Expected service order:
 
 1. `op-session-bus`
 2. `op-dbus`
-3. `op-ovsdb-bridge`
+3. `ovs-attach-ports`
 4. standalone `systemd-networkd`
 5. services that depend on the privacy fabric
 
 At boot:
 
-- `op-ovsdb-bridge` restores `ovsbr0`, reattaches `ens3`, and preserves bridge MAC identity
-- host L3 is applied to `ovsbr0`
+- `op-dbus` verifies persisted `ovsbr0` and the required internal datapath ports
+- `ovs-attach-ports` restores the kernel-facing attachment and link state
+- host L3 is applied to standalone `ens3`, secondary `uplink1`, and private `ovsbr0`
 - privacy-network provisioning ensures `ovsbr0-mgmt` and `ovsbr0-sock`
 - the OpenFlow controller becomes reachable on `127.0.0.1:6653`
 - plugins publish socket ports and flows as containers appear
 
 Relevant files:
 
-- [op-ovsdb-bridge-start.sh](/home/jeremy/git/operation-dbus/deploy/dinit/op-ovsdb-bridge-start.sh)
+- [privacy_router.rs](/home/jeremy/git/operation-dbus-proto/crates/op-plugins/src/state_plugins/privacy_router.rs)
+- [op-of-controller](/home/jeremy/git/operation-dbus-proto/deploy/dinit/op-of-controller)
 - [20-ovsbr0.network](/home/jeremy/git/operation-dbus/deploy/systemd/networkd/20-ovsbr0.network)
 - [op-dbus-dinit.md](/home/jeremy/git/operation-dbus/docs/operations/op-dbus-dinit.md)
 

@@ -1,5 +1,6 @@
 {
   "dependencies": {
-    "@anthropic-ai/claude-code": "^2.1.89"
+    "@anthropic-ai/claude-code": "^2.1.89",
+    "@kilocode/cli": "^7.2.14"
   }
 }

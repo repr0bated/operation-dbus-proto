@@ -1,5 +1,0 @@
-type = scripted
-command = /etc/dinit.d/scripts/op-ovsdb-bridge-start.sh
-depends-on = op-dbus
-depends-on = ovs-attach-ports
-depends-on = op-ovs-services

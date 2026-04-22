@@ -4,7 +4,6 @@
 //! interfaces as executable tools in the registry.
 
 use anyhow::Result;
-use simd_json::json;
 use simd_json::prelude::*;
 use std::future::Future;
 use std::pin::Pin;
@@ -75,7 +74,6 @@ impl ProjectionEngine {
             arr.iter()
                 .filter_map(|v| v.get("name").and_then(|n| n.as_str()).map(String::from))
                 .filter(|n| !n.starts_with(':')) // Skip unique names (temporary connections)
-                .filter(|n| !n.starts_with("org.dbusmcp.")) // Skip our own services
                 .collect()
         } else {
             Vec::new()
@@ -149,6 +147,39 @@ impl ProjectionEngine {
 
                             if let Ok(_) = registry
                                 .register(tool.name.clone().into(), Arc::new(tool), definition)
+                                .await
+                            {
+                                service_tools += 1;
+                            }
+                        }
+
+                        // Register tools for properties (ProjectedObjectV1)
+                        if iface.name == "org.opdbus.ProjectedObjectV1" {
+                             let tool = crate::builtin::plugin_projection::PluginProjectionTool::new_generic(
+                                &service,
+                                path.clone(),
+                            );
+                            
+                            let definition = crate::registry::ToolDefinition {
+                                name: tool.name().to_string(),
+                                description: format!(
+                                    "Read projected object at {} on {}",
+                                    path, service
+                                ),
+                                input_schema: tool.input_schema(),
+                                schema_version: "https://json-schema.org/draft/next/schema".to_string(),
+                                category: "plugin-projection".to_string(),
+                                namespace: "mirrored.v1".to_string(),
+                                tags: vec![
+                                    "dbus".to_string(),
+                                    "projected".to_string(),
+                                    "mirrored".to_string(),
+                                    service.clone(),
+                                ],
+                            };
+                            
+                            if let Ok(_) = registry
+                                .register(tool.name().to_string().into(), Arc::new(tool), definition)
                                 .await
                             {
                                 service_tools += 1;
