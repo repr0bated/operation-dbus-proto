@@ -15,6 +15,7 @@
 
 pub mod agents_server;
 pub mod compact;
+pub mod external_client;
 pub mod protocol;
 pub mod resources;
 pub mod server;
@@ -28,6 +29,9 @@ pub mod grpc;
 // Re-exports
 pub use agents_server::AgentsServer;
 pub use compact::{run_compact_stdio_server, CompactServer, SessionContext};
+pub use external_client::{
+    AuthMethod, ExternalMcpClient, ExternalMcpConfig, ExternalMcpManager, ExternalTool,
+};
 pub use op_core::SecurityLevel;
 pub use protocol::{JsonRpcError, McpError, McpRequest, McpResponse};
 pub use resources::ResourceRegistry;

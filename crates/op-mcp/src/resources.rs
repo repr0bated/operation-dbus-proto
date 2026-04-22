@@ -13,9 +13,19 @@ pub struct ResourceInfo {
     pub mime_type: Option<String>,
 }
 
+/// Resource template information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResourceTemplateInfo {
+    pub uri_template: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub mime_type: Option<String>,
+}
+
 /// Resource registry
 pub struct ResourceRegistry {
     resources: Vec<ResourceInfo>,
+    templates: Vec<ResourceTemplateInfo>,
 }
 
 impl Default for ResourceRegistry {
@@ -40,7 +50,16 @@ impl ResourceRegistry {
                 mime_type: Some("text/markdown".to_string()),
             },
         ];
-        Self { resources }
+        let templates = vec![ResourceTemplateInfo {
+            uri_template: "docs://{name}".to_string(),
+            name: "Documentation".to_string(),
+            description: Some("Read bundled op-mcp documentation resources".to_string()),
+            mime_type: Some("text/plain".to_string()),
+        }];
+        Self {
+            resources,
+            templates,
+        }
     }
 
     pub fn add_resource(&mut self, resource: ResourceInfo) {
@@ -49,6 +68,10 @@ impl ResourceRegistry {
 
     pub fn list_resources(&self) -> &[ResourceInfo] {
         &self.resources
+    }
+
+    pub fn list_templates(&self) -> &[ResourceTemplateInfo] {
+        &self.templates
     }
 
     pub fn get_resource(&self, uri: &str) -> Option<&ResourceInfo> {

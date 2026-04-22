@@ -4,6 +4,7 @@
 //! Operations: store, retrieve, query, delete, list_namespaces, stats.
 
 use crate::memory_store::{CognitiveMemoryStore, EntryQuery, NamespaceKind};
+use crate::notebooklm::register_notebooklm_tools;
 use anyhow::Result;
 use async_trait::async_trait;
 use op_mcp::tool_registry::{BoxedTool, Tool, ToolRegistry};
@@ -21,6 +22,7 @@ impl CognitiveToolRegistry {
         registry
             .register(Arc::new(MemoryTool::new(store.clone())) as BoxedTool)
             .await?;
+        register_notebooklm_tools(registry).await?;
         Ok(())
     }
 }

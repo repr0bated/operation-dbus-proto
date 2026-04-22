@@ -2,6 +2,7 @@
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
 use std::collections::HashMap;
 use std::process::Stdio;
@@ -140,23 +141,41 @@ impl ExternalMcpClient {
         let mut retry_count = 0;
 
         let init_result = loop {
-            match tokio::time::timeout(std::time::Duration::from_secs(10), self.initialize()).await {
+            match tokio::time::timeout(std::time::Duration::from_secs(10), self.initialize()).await
+            {
                 Ok(Ok(_)) => {
                     let init_duration = init_start.elapsed();
-                    tracing::info!("External MCP server initialized in {:.2}s", init_duration.as_secs_f32());
+                    tracing::info!(
+                        "External MCP server initialized in {:.2}s",
+                        init_duration.as_secs_f32()
+                    );
                     break Ok(());
                 }
                 Ok(Err(e)) => {
-                    tracing::error!("Failed to initialize external MCP server {}: {}", self.config.name, e);
+                    tracing::error!(
+                        "Failed to initialize external MCP server {}: {}",
+                        self.config.name,
+                        e
+                    );
                     break Err(e);
                 }
                 Err(_) => {
                     retry_count += 1;
                     if retry_count >= max_retries {
-                        tracing::error!("External MCP server {} initialization timed out after {} attempts", self.config.name, max_retries);
-                        break Err(anyhow::anyhow!("Initialization timeout after {} attempts", max_retries));
+                        tracing::error!(
+                            "External MCP server {} initialization timed out after {} attempts",
+                            self.config.name,
+                            max_retries
+                        );
+                        break Err(anyhow::anyhow!(
+                            "Initialization timeout after {} attempts",
+                            max_retries
+                        ));
                     }
-                    tracing::warn!("Initialization attempt {} timed out, retrying...", retry_count);
+                    tracing::warn!(
+                        "Initialization attempt {} timed out, retrying...",
+                        retry_count
+                    );
                     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                     continue;
                 }
@@ -169,19 +188,30 @@ impl ExternalMcpClient {
 
         // List available tools with timeout
         let tools_start = std::time::Instant::now();
-        let tools_result = tokio::time::timeout(std::time::Duration::from_secs(15), self.refresh_tools()).await;
+        let tools_result =
+            tokio::time::timeout(std::time::Duration::from_secs(15), self.refresh_tools()).await;
 
         match tools_result {
             Ok(Ok(_)) => {
                 let tools_duration = tools_start.elapsed();
-                tracing::info!("External MCP server tools loaded in {:.2}s", tools_duration.as_secs_f32());
+                tracing::info!(
+                    "External MCP server tools loaded in {:.2}s",
+                    tools_duration.as_secs_f32()
+                );
             }
             Ok(Err(e)) => {
-                tracing::error!("Failed to load tools from external MCP server {}: {}", self.config.name, e);
+                tracing::error!(
+                    "Failed to load tools from external MCP server {}: {}",
+                    self.config.name,
+                    e
+                );
                 return Err(e);
             }
             Err(_) => {
-                tracing::error!("External MCP server {} tools loading timed out (15s)", self.config.name);
+                tracing::error!(
+                    "External MCP server {} tools loading timed out (15s)",
+                    self.config.name
+                );
                 return Err(anyhow::anyhow!("Tools loading timeout"));
             }
         }
@@ -329,8 +359,9 @@ impl ExternalMcpClient {
             response_line
         );
 
-        let response: Value =
-            simd_json::from_str(&response_line).context("Failed to parse MCP response")?;
+        let mut response_line = response_line;
+        let response: Value = unsafe { simd_json::from_str(&mut response_line) }
+            .context("Failed to parse MCP response")?;
 
         Ok(response)
     }
@@ -391,8 +422,9 @@ impl ExternalMcpManager {
             .await
             .context("Failed to read MCP config file")?;
 
+        let mut content = content;
         let configs: Vec<ExternalMcpConfig> =
-            simd_json::from_str(&content).context("Failed to parse MCP config")?;
+            unsafe { simd_json::from_str(&mut content) }.context("Failed to parse MCP config")?;
 
         for config in configs {
             if let Err(e) = self.add_server(config.clone()).await {

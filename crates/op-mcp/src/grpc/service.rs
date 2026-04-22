@@ -281,6 +281,7 @@ impl McpService for McpGrpcService {
             id: proto_req.id.as_ref().map(|v| simd_json::json!(v)),
             method: proto_req.method.clone(),
             params: params_simd,
+            meta: None,
         };
 
         let server = crate::server::McpServer::with_executor(
@@ -409,6 +410,7 @@ impl McpService for McpGrpcService {
                     id: proto_req.id.as_ref().map(|v| simd_json::json!(v)),
                     method: proto_req.method.clone(),
                     params: params_simd,
+                    meta: None,
                 };
 
                 // Route through the MCP handler
@@ -438,10 +440,7 @@ impl McpService for McpGrpcService {
         ))
     }
 
-    async fn health(
-        &self,
-        _request: Request<()>,
-    ) -> Result<Response<HealthResponse>, Status> {
+    async fn health(&self, _request: Request<()>) -> Result<Response<HealthResponse>, Status> {
         Ok(Response::new(HealthResponse {
             healthy: true,
             version: SERVER_VERSION.to_string(),

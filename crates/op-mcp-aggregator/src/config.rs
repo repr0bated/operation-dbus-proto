@@ -687,7 +687,7 @@ mod tests {
     fn test_gemini_cli_detection() {
         let config = ClientDetectionConfig::default();
 
-        // All these should detect as Gemini CLI -> Compact mode
+        // All these should detect as Gemini CLI -> Full mode
         let gemini_clients = [
             "gemini-cli",
             "Gemini CLI",
@@ -700,7 +700,7 @@ mod tests {
 
         for client in gemini_clients {
             let mode = config.detect_mode(client);
-            assert_eq!(mode, ToolMode::Compact, "Failed for client: {}", client);
+            assert_eq!(mode, ToolMode::Full, "Failed for client: {}", client);
             assert!(
                 ClientDetectionConfig::is_gemini(client),
                 "is_gemini failed for: {}",
