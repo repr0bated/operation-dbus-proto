@@ -10,10 +10,10 @@ use tokio::time::{sleep, Duration};
 #[repr(C)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IdentitySled {
-    pub wireguard_pubkey: String,
+    pub wireguard_pubkey: [u8; 32],
     pub mutation_index: u64,
-    pub hashed_footprint: String, // The current "Thought" injected into Xray
-    pub trace_id: String,         // Links to Qdrant Semantic Memory
+    pub is_valid: bool,
+    pub hashed_footprint: [u8; 32], // The current "Thought" injected into Xray
 }
 
 pub struct SchemaShuttle;
@@ -29,6 +29,14 @@ impl SchemaShuttle {
             return Err("Invalid Schema State: Connection Rejected.".into());
         }
 
+        // Decode WG pubkey (assume base64)
+        use base64::Engine;
+        let wg_bytes: [u8; 32] = base64::engine::general_purpose::STANDARD
+            .decode(wg_pubkey.trim())
+            .map_err(|e| format!("Invalid WG key: {}", e))?
+            .try_into()
+            .map_err(|_| "WG key must be 32 bytes".to_string())?;
+
         // Serialize the PluginSchema to a simd_json Value for canonicalization
         let schema_json = serde_json::to_string(current_schema)
             .map_err(|e| format!("Serialization Failed: {}", e))?;
@@ -39,13 +47,16 @@ impl SchemaShuttle {
             .map_err(|e| format!("Canonical serialization failed: {}", e))?;
 
         let payload = format!("{}:{}", wg_pubkey, canonical_state);
-        let genesis_hash = format!("{:x}", md5::compute(payload.as_bytes()));
+        let genesis_hash = md5::compute(payload.as_bytes());
+        let mut hashed_footprint = [0u8; 32];
+        // MD5 is 16 bytes, we pad it into 32 bytes for the Sled layout
+        hashed_footprint[..16].copy_from_slice(&genesis_hash.0);
 
         Ok(IdentitySled {
-            wireguard_pubkey: wg_pubkey.to_string(),
+            wireguard_pubkey: wg_bytes,
             mutation_index: current_schema.mutation_index.unwrap_or(0),
-            hashed_footprint: genesis_hash.clone(),
-            trace_id: format!("trace-{}", genesis_hash),
+            is_valid: true,
+            hashed_footprint,
         })
     }
 }
@@ -76,9 +87,10 @@ pub async fn run_shuttle() -> Result<(), Box<dyn std::error::Error>> {
     let mut session_sled = SchemaShuttle::forge_sled(active_wg_key, &schema)?;
     let mut last_mutation_index = session_sled.mutation_index;
 
+    let footprint_hex = hex::encode(session_sled.hashed_footprint);
     println!(
         "[SUCCESS] Identity Sled Forged. Footprint: {}",
-        session_sled.hashed_footprint
+        footprint_hex
     );
 
     // The "Even Trade" Zero-Btrfs Loop
@@ -97,17 +109,23 @@ pub async fn run_shuttle() -> Result<(), Box<dyn std::error::Error>> {
             if current_index > last_mutation_index {
                 last_mutation_index = current_index;
 
-                let update_payload = format!("{}:{}", session_sled.hashed_footprint, current_index);
-                session_sled.hashed_footprint =
-                    format!("{:x}", md5::compute(update_payload.as_bytes()));
-                session_sled.trace_id = format!("trace-{}", session_sled.hashed_footprint);
+                let current_footprint_hex = hex::encode(session_sled.hashed_footprint);
+                let update_payload = format!("{}:{}", current_footprint_hex, current_index);
+                let new_hash = md5::compute(update_payload.as_bytes());
+                
+                let mut new_footprint = [0u8; 32];
+                new_footprint[..16].copy_from_slice(&new_hash.0);
+                session_sled.hashed_footprint = new_footprint;
+
+                let new_footprint_hex = hex::encode(session_sled.hashed_footprint);
+                let trace_id = format!("trace-{}", new_footprint_hex);
 
                 // Dynamically update Xray via Environment Injection to preserve NVMe I/O
                 Command::new("sh")
                     .arg("-c")
                     .arg(format!(
                         "export X_GHOSTBRIDGE_FOOTPRINT='{}' && export X_GHOSTBRIDGE_TRACE_ID='{}' && systemctl reload xray", 
-                        session_sled.hashed_footprint, session_sled.trace_id
+                        new_footprint_hex, trace_id
                     ))
                     .spawn()?;
             }

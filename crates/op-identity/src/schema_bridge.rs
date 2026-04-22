@@ -30,6 +30,8 @@ pub struct IdentitySled {
     pub wireguard_pubkey: [u8; 32],
     /// Monotonic mutation index — incremented on every schema change.
     pub mutation_index: u64,
+    /// Whether the current schema state is valid and notarized.
+    pub is_valid: bool,
     /// Blake3 / SHA-256 hashed footprint — the vectorized "Thought".
     pub hashed_footprint: [u8; 32],
 }
@@ -206,7 +208,12 @@ pub fn write_sled_from_wg(peer_pubkey: &str) -> std::io::Result<()> {
     let hashed_footprint: [u8; 32] = hasher.finalize().into();
     let mutation_index = MUTATION_INDEX.fetch_add(1, Ordering::Relaxed);
 
-    let sled = IdentitySled { wireguard_pubkey, mutation_index, hashed_footprint };
+    let sled = IdentitySled {
+        wireguard_pubkey,
+        mutation_index,
+        is_valid: true,
+        hashed_footprint,
+    };
     write_sled(&sled)
 }
 
