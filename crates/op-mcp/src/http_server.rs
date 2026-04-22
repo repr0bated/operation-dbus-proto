@@ -3,10 +3,10 @@
 //! This server acts as an HTTP proxy for MCP, allowing remote clients
 //! like Antigravity IDE to connect via HTTPS.
 //!
-//! Authentication priority:
-//! 1. Local/trusted IPs bypass all auth (localhost, private networks, mesh VPNs)
-//! 2. API key bypass (X-API-Key, Authorization: Bearer, X-Op-MCP-Token)
-//! 3. gcloud OAuth token validation (for public IPs without API key)
+//! Authentication:
+//! 1. HTTP/SSE requests must provide `Authorization: Bearer <wireguard-session-or-pubkey>`
+//! 2. No bypass API keys
+//! 3. No Google OAuth validation in the MCP transport layer
 
 use axum::{
     extract::State,
@@ -25,12 +25,7 @@ use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command as TokioCommand;
 use tracing::{debug, error, info, warn};
-
-/// API keys that bypass OAuth validation and grant full access
-/// Must match op-web/src/middleware/security.rs BYPASS_API_KEYS
-const BYPASS_API_KEYS: &[&str] = &[
-    "4f8c2b5d-9a1e-4b7c-8d2f-3a6b5c9e4d1f", // Primary MCP access key
-];
+use uuid::Uuid;
 
 /// Extract client IP from headers or connection info
 fn extract_client_ip(headers: &HeaderMap) -> String {
@@ -132,59 +127,29 @@ fn is_trusted_ip(ip: &str) -> bool {
     is_localhost(ip) || is_trusted_mesh(ip) || is_private_network(ip)
 }
 
-/// Check for API key in headers that bypasses OAuth validation
-fn check_bypass_api_key(headers: &HeaderMap) -> bool {
-    // Check X-API-Key header
-    if let Some(key) = headers.get("x-api-key").and_then(|v| v.to_str().ok()) {
-        let key = key.trim();
-        if BYPASS_API_KEYS.contains(&key) {
-            info!("API key auth: granted via X-API-Key");
-            return true;
-        }
-    }
-
-    // Check Authorization: Bearer <key> header (for API keys, not OAuth tokens)
-    if let Some(auth) = headers.get("authorization").and_then(|v| v.to_str().ok()) {
-        if let Some(key) = auth.trim().strip_prefix("Bearer ") {
-            let key = key.trim();
-            if BYPASS_API_KEYS.contains(&key) {
-                info!("API key auth: granted via Authorization Bearer");
-                return true;
-            }
-        }
-    }
-
-    // Check X-Op-MCP-Token header
-    if let Some(key) = headers.get("x-op-mcp-token").and_then(|v| v.to_str().ok()) {
-        let key = key.trim();
-        if BYPASS_API_KEYS.contains(&key) {
-            info!("API key auth: granted via X-Op-MCP-Token");
-            return true;
-        }
-    }
-
-    false
+fn extract_bearer_token(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().strip_prefix("Bearer "))
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
 }
 
-// Validate gcloud OAuth token via Google's tokeninfo API (only for public IPs)
-#[allow(dead_code)]
-async fn validate_gcloud_token(token: &str) -> Result<(), StatusCode> {
-    let url = format!("https://oauth2.googleapis.com/tokeninfo?access_token={}", token);
+fn is_wireguard_pubkey(token: &str) -> bool {
+    token.len() == 44
+        && token.ends_with('=')
+        && token
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '+' | '/' | '='))
+}
 
-    match reqwest::get(&url).await {
-        Ok(response) => {
-            if response.status().is_success() {
-                Ok(())
-            } else {
-                warn!("Token validation failed: HTTP {}", response.status());
-                Err(StatusCode::UNAUTHORIZED)
-            }
-        }
-        Err(e) => {
-            error!("Failed to validate token: {}", e);
-            Err(StatusCode::UNAUTHORIZED)
-        }
-    }
+fn is_wireguard_session_id(token: &str) -> bool {
+    Uuid::parse_str(token).is_ok()
+}
+
+fn is_wireguard_auth_token(token: &str) -> bool {
+    is_wireguard_pubkey(token) || is_wireguard_session_id(token)
 }
 
 // Authentication middleware
@@ -195,20 +160,20 @@ async fn auth_middleware(
 ) -> Result<axum::response::Response, StatusCode> {
     let client_ip = extract_client_ip(&headers);
 
-    // 1. Check for trusted IP (localhost, private network, mesh VPN) - no auth needed
-    if is_trusted_ip(&client_ip) {
-        debug!("IP auth: trusted IP {} - no auth required", client_ip);
-        return Ok(next.run(request).await);
+    let Some(token) = extract_bearer_token(&headers) else {
+        warn!("Rejected MCP HTTP request from {} without bearer token", client_ip);
+        return Err(StatusCode::UNAUTHORIZED);
+    };
+
+    if !is_wireguard_auth_token(token) {
+        warn!(
+            "Rejected MCP HTTP request from {} with non-WireGuard bearer token",
+            client_ip
+        );
+        return Err(StatusCode::UNAUTHORIZED);
     }
 
-    // 2. Check for bypass API key (fast path, no network call)
-    if check_bypass_api_key(&headers) {
-        return Ok(next.run(request).await);
-    }
-
-    // 3. For public IPs without API key, allow through without OAuth
-    //    (gcloud OAuth validation disabled - not required for MCP access)
-    debug!("IP auth: public IP {} - allowing without OAuth", client_ip);
+    debug!("Accepted MCP HTTP request from {} with WireGuard bearer auth", client_ip);
     Ok(next.run(request).await)
 }
 

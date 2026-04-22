@@ -12,6 +12,24 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 
+fn transport_root(url: &str) -> String {
+    let trimmed = url.trim_end_matches('/');
+    for suffix in ["/mcp", "/message", "/sse"] {
+        if let Some(root) = trimmed.strip_suffix(suffix) {
+            return root.trim_end_matches('/').to_string();
+        }
+    }
+    trimmed.to_string()
+}
+
+fn canonical_mcp_endpoint(url: &str) -> String {
+    format!("{}/mcp", transport_root(url))
+}
+
+fn legacy_message_endpoint(url: &str) -> String {
+    format!("{}/message", transport_root(url))
+}
+
 /// MCP JSON-RPC request
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpRequest {
@@ -213,17 +231,36 @@ impl McpClient {
     }
 
     async fn send_sse_request(&self, request: &McpRequest) -> Result<McpResponse> {
-        let url = format!("{}/message", self.config.url.trim_end_matches('/'));
+        let url = canonical_mcp_endpoint(&self.config.url);
+        let legacy_url = legacy_message_endpoint(&self.config.url);
 
         debug!("Sending MCP request to {}: {}", url, request.method);
 
-        let response = self
+        let mut response = self
             .http_client
             .post(&url)
             .json(request)
             .send()
             .await
             .with_context(|| format!("Failed to send request to {}", self.config.name))?;
+
+        if matches!(
+            response.status(),
+            reqwest::StatusCode::NOT_FOUND | reqwest::StatusCode::METHOD_NOT_ALLOWED
+        ) && url != legacy_url
+        {
+            warn!(
+                "Upstream {} does not expose /mcp, retrying legacy /message endpoint",
+                self.config.name
+            );
+            response = self
+                .http_client
+                .post(&legacy_url)
+                .json(request)
+                .send()
+                .await
+                .with_context(|| format!("Failed legacy request to {}", self.config.name))?;
+        }
 
         if !response.status().is_success() {
             let status = response.status();
@@ -333,7 +370,7 @@ impl McpClient {
     pub async fn health_check(&self) -> bool {
         match self.config.transport {
             TransportType::Sse => {
-                let url = format!("{}/health", self.config.url.trim_end_matches('/'));
+                let url = format!("{}/health", transport_root(&self.config.url));
                 self.http_client
                     .get(&url)
                     .send()
@@ -425,5 +462,21 @@ mod tests {
             UpstreamServer::sse("gh", "GitHub", "http://localhost:3000").with_prefix("github");
 
         assert_eq!(config.prefixed_name("search"), "github_search");
+    }
+
+    #[test]
+    fn should_normalize_transport_urls() {
+        assert_eq!(
+            canonical_mcp_endpoint("http://localhost:3000"),
+            "http://localhost:3000/mcp"
+        );
+        assert_eq!(
+            canonical_mcp_endpoint("http://localhost:3000/sse"),
+            "http://localhost:3000/mcp"
+        );
+        assert_eq!(
+            legacy_message_endpoint("http://localhost:3000/mcp"),
+            "http://localhost:3000/message"
+        );
     }
 }

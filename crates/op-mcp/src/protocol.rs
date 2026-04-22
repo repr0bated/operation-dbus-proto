@@ -14,6 +14,8 @@ pub struct McpRequest {
     pub method: String,
     #[serde(default)]
     pub params: Option<Value>,
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Value>,
 }
 
 impl McpRequest {
@@ -23,6 +25,7 @@ impl McpRequest {
             id: None,
             method: method.into(),
             params: None,
+            meta: None,
         }
     }
 
@@ -33,6 +36,11 @@ impl McpRequest {
 
     pub fn with_params(mut self, params: Value) -> Self {
         self.params = Some(params);
+        self
+    }
+
+    pub fn with_meta(mut self, meta: Value) -> Self {
+        self.meta = Some(meta);
         self
     }
 }
@@ -47,6 +55,8 @@ pub struct McpResponse {
     pub result: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<JsonRpcError>,
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Value>,
 }
 
 impl McpResponse {
@@ -56,6 +66,7 @@ impl McpResponse {
             id,
             result: Some(result),
             error: None,
+            meta: None,
         }
     }
 
@@ -65,7 +76,13 @@ impl McpResponse {
             id,
             result: None,
             error: Some(error),
+            meta: None,
         }
+    }
+
+    pub fn with_meta(mut self, meta: Value) -> Self {
+        self.meta = Some(meta);
+        self
     }
 
     pub fn is_success(&self) -> bool {
@@ -125,6 +142,7 @@ pub type McpError = JsonRpcError;
 mod tests {
     use super::*;
     use simd_json::json;
+    use simd_json::prelude::{ValueAsScalar, ValueObjectAccess};
 
     #[test]
     fn test_request_serialization() {
@@ -146,5 +164,46 @@ mod tests {
     fn test_response_error() {
         let resp = McpResponse::error(Some(json!(1)), JsonRpcError::method_not_found("unknown"));
         assert!(!resp.is_success());
+    }
+
+    #[test]
+    fn test_request_meta_round_trip() {
+        let req = McpRequest::new("initialize")
+            .with_id(json!("abc"))
+            .with_meta(json!({"traceId": "trace-123"}));
+
+        let json_str = simd_json::to_string(&req).unwrap();
+        assert!(json_str.contains("\"_meta\""));
+
+        let mut json_buf = json_str.clone();
+        let parsed: McpRequest = unsafe { simd_json::from_str(&mut json_buf) }.unwrap();
+        assert_eq!(
+            parsed
+                .meta
+                .as_ref()
+                .and_then(|meta| meta.get("traceId"))
+                .and_then(|v| v.as_str()),
+            Some("trace-123")
+        );
+    }
+
+    #[test]
+    fn test_response_meta_round_trip() {
+        let resp = McpResponse::success(Some(json!(7)), json!({"ok": true}))
+            .with_meta(json!({"progressToken": "tok-1"}));
+
+        let json_str = simd_json::to_string(&resp).unwrap();
+        assert!(json_str.contains("\"_meta\""));
+
+        let mut json_buf = json_str.clone();
+        let parsed: McpResponse = unsafe { simd_json::from_str(&mut json_buf) }.unwrap();
+        assert_eq!(
+            parsed
+                .meta
+                .as_ref()
+                .and_then(|meta| meta.get("progressToken"))
+                .and_then(|v| v.as_str()),
+            Some("tok-1")
+        );
     }
 }

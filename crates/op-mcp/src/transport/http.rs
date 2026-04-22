@@ -21,54 +21,44 @@ use axum::{
     Router,
 };
 use futures::stream::{self, Stream};
-use reqwest;
 use simd_json::{json, OwnedValue as Value};
 use std::convert::Infallible;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::broadcast;
 use tower_http::cors::{Any, CorsLayer};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
+use uuid::Uuid;
 
-fn auth_enforcement_enabled() -> bool {
-    std::env::var("OP_MCP_ENFORCE_GCLOUD_AUTH")
-        .ok()
-        .map(|v| {
-            matches!(
-                v.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            )
-        })
-        .unwrap_or(false)
+fn extract_bearer_token(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().strip_prefix("Bearer "))
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
 }
 
-/// Validate gcloud OAuth token via Google's tokeninfo API
-async fn validate_gcloud_token(token: &str) -> Result<(), StatusCode> {
-    let url = format!(
-        "https://oauth2.googleapis.com/tokeninfo?access_token={}",
-        token
-    );
-
-    match reqwest::get(&url).await {
-        Ok(response) => {
-            if response.status().is_success() {
-                Ok(())
-            } else {
-                warn!("Token validation failed: HTTP {}", response.status());
-                Err(StatusCode::UNAUTHORIZED)
-            }
-        }
-        Err(e) => {
-            error!("Failed to validate token: {}", e);
-            Err(StatusCode::UNAUTHORIZED)
-        }
-    }
+fn is_wireguard_pubkey(token: &str) -> bool {
+    token.len() == 44
+        && token.ends_with('=')
+        && token
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '+' | '/' | '='))
 }
 
-/// Authentication middleware - validates gcloud OAuth tokens
-async fn gcloud_auth_middleware(
+fn is_wireguard_session_id(token: &str) -> bool {
+    Uuid::parse_str(token).is_ok()
+}
+
+fn is_wireguard_auth_token(token: &str) -> bool {
+    is_wireguard_pubkey(token) || is_wireguard_session_id(token)
+}
+
+/// Authentication middleware - requires a WireGuard-derived bearer token.
+async fn wireguard_auth_middleware(
     headers: HeaderMap,
-    request: axum::extract::Request,
+    mut request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Result<axum::response::Response, StatusCode> {
     // Allow health check without auth
@@ -76,35 +66,19 @@ async fn gcloud_auth_middleware(
         return Ok(next.run(request).await);
     }
 
-    // Auth enforcement is optional; disabled by default.
-    // Set OP_MCP_ENFORCE_GCLOUD_AUTH=1 to require bearer auth.
-    if !auth_enforcement_enabled() {
-        debug!("gcloud auth middleware disabled; allowing request");
-        return Ok(next.run(request).await);
+    let Some(token) = extract_bearer_token(&headers) else {
+        warn!("Rejected HTTP MCP request without bearer token");
+        return Err(StatusCode::UNAUTHORIZED);
+    };
+
+    if !is_wireguard_auth_token(token) {
+        warn!("Rejected HTTP MCP request with non-WireGuard bearer token");
+        return Err(StatusCode::UNAUTHORIZED);
     }
 
-    // Check for Bearer token (gcloud OAuth or WireGuard identity)
-    if let Some(auth_header) = headers.get("authorization") {
-        if let Ok(auth_str) = auth_header.to_str() {
-            if auth_str.starts_with("Bearer ") {
-                let token = &auth_str[7..];
-
-                // Check for WireGuard public key format (Base64, 44 chars, ends with =)
-                if token.len() == 44 && token.ends_with('=') {
-                    info!("Authenticated via WireGuard identity: {}", token);
-                    // In a full implementation, we would validate this against sessions.db or op-gateway
-                    // For now, we accept the identity to allow the chatbot to connect
-                    return Ok(next.run(request).await);
-                }
-
-                // Validate via Google tokeninfo API
-                validate_gcloud_token(token).await?;
-                return Ok(next.run(request).await);
-            }
-        }
-    }
-
-    Err(StatusCode::UNAUTHORIZED)
+    debug!("Accepted HTTP MCP request with WireGuard bearer token");
+    request.extensions_mut().insert(token.to_string());
+    Ok(next.run(request).await)
 }
 
 /// Shared state for HTTP handlers
@@ -151,6 +125,7 @@ impl Transport for HttpTransport {
                 get(tools_list_handler::<H>).post(tools_list_handler::<H>),
             )
             .route("/tools/call", post(tools_call_handler::<H>))
+            .layer(middleware::from_fn(wireguard_auth_middleware))
             .with_state(state);
 
         if self.enable_cors {
@@ -196,6 +171,7 @@ impl Transport for SseTransport {
             .route("/sse", get(sse_handler::<H>))
             .route("/message", post(mcp_handler::<H>))
             .route("/health", get(health_handler))
+            .layer(middleware::from_fn(wireguard_auth_middleware))
             .layer(
                 CorsLayer::new()
                     .allow_origin(Any)
@@ -251,7 +227,7 @@ impl Transport for HttpSseTransport {
                 get(tools_list_handler::<H>).post(tools_list_handler::<H>),
             )
             .route("/tools/call", post(tools_call_handler::<H>))
-            .layer(middleware::from_fn(gcloud_auth_middleware))
+            .layer(middleware::from_fn(wireguard_auth_middleware))
             .layer(
                 CorsLayer::new()
                     .allow_origin(Any)
@@ -369,4 +345,36 @@ async fn sse_handler<H: McpHandler + 'static>(
             .interval(Duration::from_secs(30))
             .text("keepalive"),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{extract_bearer_token, is_wireguard_auth_token};
+    use axum::http::{HeaderMap, HeaderValue};
+
+    #[test]
+    fn should_extract_bearer_token() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "authorization",
+            HeaderValue::from_static("Bearer 123e4567-e89b-12d3-a456-426614174000"),
+        );
+
+        assert_eq!(
+            extract_bearer_token(&headers),
+            Some("123e4567-e89b-12d3-a456-426614174000")
+        );
+    }
+
+    #[test]
+    fn should_accept_wireguard_shaped_tokens() {
+        assert!(is_wireguard_auth_token(
+            "123e4567-e89b-12d3-a456-426614174000"
+        ));
+        assert!(is_wireguard_auth_token(
+            "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
+        ));
+        assert!(!is_wireguard_auth_token("ya29.google-oauth-token"));
+        assert!(!is_wireguard_auth_token("not-a-wireguard-token"));
+    }
 }

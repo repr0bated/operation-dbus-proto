@@ -308,8 +308,12 @@ mod tests {
     fn make_tool(name: &str, category: &str, namespace: &str) -> ToolDefinition {
         ToolDefinition {
             name: name.to_string(),
-            description: Some("Test".to_string()),
+            description: "Test".to_string(),
             input_schema: json!({}),
+            schema_version: String::new(),
+            category: category.to_string(),
+            tags: vec![],
+            namespace: namespace.to_string(),
             annotations: Some(json!({
                 "category": category,
                 "namespace": namespace

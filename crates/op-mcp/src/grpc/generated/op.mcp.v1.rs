@@ -56,9 +56,6 @@ pub struct McpEvent {
     #[prost(uint32, tag = "4")]
     pub sequence: u32,
 }
-/// Health check
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
-pub struct HealthRequest {}
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct HealthResponse {
     #[prost(bool, tag = "1")]
@@ -588,7 +585,7 @@ pub mod mcp_service_client {
         /// Health check
         pub async fn health(
             &mut self,
-            request: impl tonic::IntoRequest<super::HealthRequest>,
+            request: impl tonic::IntoRequest<()>,
         ) -> std::result::Result<tonic::Response<super::HealthResponse>, tonic::Status> {
             self.inner
                 .ready()
@@ -774,7 +771,7 @@ pub mod mcp_service_server {
         /// Health check
         async fn health(
             &self,
-            request: tonic::Request<super::HealthRequest>,
+            request: tonic::Request<()>,
         ) -> std::result::Result<tonic::Response<super::HealthResponse>, tonic::Status>;
         /// Initialize session (run-on-connection agents)
         async fn initialize(
@@ -1035,17 +1032,14 @@ pub mod mcp_service_server {
                 "/op.mcp.v1.McpService/Health" => {
                     #[allow(non_camel_case_types)]
                     struct HealthSvc<T: McpService>(pub Arc<T>);
-                    impl<T: McpService> tonic::server::UnaryService<super::HealthRequest>
+                    impl<T: McpService> tonic::server::UnaryService<()>
                     for HealthSvc<T> {
                         type Response = super::HealthResponse;
                         type Future = BoxFuture<
                             tonic::Response<Self::Response>,
                             tonic::Status,
                         >;
-                        fn call(
-                            &mut self,
-                            request: tonic::Request<super::HealthRequest>,
-                        ) -> Self::Future {
+                        fn call(&mut self, request: tonic::Request<()>) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
                                 <T as McpService>::health(&inner, request).await

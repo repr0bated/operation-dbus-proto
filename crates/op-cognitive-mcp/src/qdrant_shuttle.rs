@@ -74,10 +74,9 @@ impl QdrantSemanticShuttle {
             .build()
             .with_context(|| format!("failed to build Qdrant client for {qdrant_url}"))?;
 
-        client
-            .health_check()
-            .await
-            .with_context(|| format!("failed to reach Qdrant gRPC health endpoint at {qdrant_url}"))?;
+        client.health_check().await.with_context(|| {
+            format!("failed to reach Qdrant gRPC health endpoint at {qdrant_url}")
+        })?;
 
         tracing::info!(
             qdrant_url,
@@ -231,7 +230,9 @@ impl VoyageClient {
     fn from_env() -> Result<Self> {
         let api_key = std::env::var("COGNITIVE_MCP_VOYAGE_API_KEY")
             .or_else(|_| std::env::var("VOYAGE_API_KEY"))
-            .context("missing Voyage API key: set COGNITIVE_MCP_VOYAGE_API_KEY or VOYAGE_API_KEY")?;
+            .context(
+                "missing Voyage API key: set COGNITIVE_MCP_VOYAGE_API_KEY or VOYAGE_API_KEY",
+            )?;
         let api_url = std::env::var("COGNITIVE_MCP_VOYAGE_API_URL")
             .unwrap_or_else(|_| DEFAULT_VOYAGE_API_URL.into());
         let model = std::env::var("COGNITIVE_MCP_VOYAGE_QUERY_MODEL")
@@ -436,7 +437,10 @@ fn render_constraint(constraint: &op_state_store::Constraint) -> String {
         op_state_store::Constraint::Max { value } => format!("max={value}"),
         op_state_store::Constraint::Pattern { regex } => format!("pattern={regex}"),
         op_state_store::Constraint::OneOf { values } => {
-            format!("one_of={}", serde_json::to_string(values).unwrap_or_default())
+            format!(
+                "one_of={}",
+                serde_json::to_string(values).unwrap_or_default()
+            )
         }
         op_state_store::Constraint::RequiresField { field } => format!("requires_field={field}"),
         op_state_store::Constraint::Custom { validator } => format!("custom={validator}"),

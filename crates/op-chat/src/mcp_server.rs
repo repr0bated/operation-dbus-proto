@@ -8,8 +8,8 @@ use crate::ChatActor;
 use anyhow::Result;
 use op_mcp::grpc::proto::mcp_service_server::{McpService, McpServiceServer};
 use op_mcp::grpc::proto::{
-    CallToolRequest, CallToolResponse, GetToolSchemaRequest, GetToolSchemaResponse, HealthRequest,
-    HealthResponse, InitializeRequest, InitializeResponse, ListToolsRequest, ListToolsResponse,
+    CallToolRequest, CallToolResponse, GetToolSchemaRequest, GetToolSchemaResponse, HealthResponse,
+    InitializeRequest, InitializeResponse, ListToolsRequest, ListToolsResponse,
     McpError as ProtoMcpError, McpEvent as ProtoMcpEvent, McpRequest as ProtoMcpRequest,
     McpResponse as ProtoMcpResponse, SubscribeRequest, ToolOutput as ProtoToolOutput,
 };
@@ -331,6 +331,7 @@ impl McpService for ChatMcpServer {
             method: req.method,
             id: req.id.as_ref().map(|v: &String| json!(v.clone())),
             params,
+            meta: None,
         };
 
         let internal_resp = self.handle_internal_request(internal_req).await;
@@ -376,7 +377,7 @@ impl McpService for ChatMcpServer {
 
     async fn health(
         &self,
-        _request: Request<HealthRequest>,
+        _request: Request<()>,
     ) -> std::result::Result<Response<HealthResponse>, Status> {
         let tool_count = self.chat_actor.tool_registry().list().await.len();
         Ok(Response::new(HealthResponse {

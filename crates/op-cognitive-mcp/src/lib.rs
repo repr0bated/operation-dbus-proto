@@ -10,6 +10,7 @@
 pub mod activity_filter;
 pub mod cognitive_tools;
 pub mod memory_store;
+pub mod notebooklm;
 pub mod qdrant_shuttle;
 pub mod server;
 pub mod voyage;

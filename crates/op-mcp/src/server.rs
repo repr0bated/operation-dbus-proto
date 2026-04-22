@@ -10,7 +10,6 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
-use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
@@ -147,8 +146,8 @@ pub struct McpServer {
     resources: ResourceRegistry,
     /// Client info from last initialize
     client_info: RwLock<Option<ClientInfo>>,
-    /// Session data
-    sessions: RwLock<HashMap<String, SessionData>>,
+    /// Whether the current handler has completed initialize.
+    initialized: RwLock<bool>,
 }
 
 #[derive(Debug, Clone)]
@@ -156,13 +155,6 @@ pub struct McpServer {
 struct ClientInfo {
     name: String,
     version: Option<String>,
-}
-
-#[derive(Debug, Clone, Default)]
-#[allow(dead_code)]
-struct SessionData {
-    initialized: bool,
-    compact_mode: bool,
 }
 
 impl McpServer {
@@ -182,7 +174,7 @@ impl McpServer {
             tool_executor,
             resources: ResourceRegistry::new(),
             client_info: RwLock::new(None),
-            sessions: RwLock::new(HashMap::new()),
+            initialized: RwLock::new(false),
         }
     }
 
@@ -190,13 +182,25 @@ impl McpServer {
     pub async fn handle_request(&self, request: McpRequest) -> McpResponse {
         debug!(method = %request.method, "Handling MCP request");
 
+        if !self.is_lifecycle_method(&request.method) && !*self.initialized.read().await {
+            return McpResponse::error(
+                request.id,
+                JsonRpcError::new(
+                    -32002,
+                    "Server not initialized. Call initialize before using tools or resources.",
+                ),
+            );
+        }
+
         match request.method.as_str() {
             "initialize" => self.handle_initialize(request).await,
             "initialized" => self.handle_initialized(request).await,
+            "notifications/initialized" => self.handle_initialized(request).await,
             "ping" => McpResponse::success(request.id, json!({})),
             "tools/list" => self.handle_tools_list(request).await,
             "tools/call" => self.handle_tools_call(request).await,
             "resources/list" => self.handle_resources_list(request).await,
+            "resources/templates/list" => self.handle_resources_templates_list(request).await,
             "resources/read" => self.handle_resources_read(request).await,
             // Compact mode meta-tools
             "list_tools" | "search_tools" | "get_tool_schema" | "execute_tool" => {
@@ -232,6 +236,7 @@ impl McpServer {
             name: client_name.to_string(),
             version: client_version.map(String::from),
         });
+        *self.initialized.write().await = true;
 
         // Auto-detect compact mode for known clients
         let use_compact = self.config.compact_mode || Self::should_use_compact_mode(client_name);
@@ -257,6 +262,7 @@ impl McpServer {
                     "name": server_name,
                     "version": SERVER_VERSION
                 },
+                "instructions": "Initialize once, then use tools/list, tools/call, resources/list, resources/templates/list, and resources/read.",
                 "_meta": {
                     "compactMode": use_compact
                 }
@@ -403,6 +409,24 @@ impl McpServer {
             .collect();
 
         McpResponse::success(request.id, json!({ "resources": resources }))
+    }
+
+    async fn handle_resources_templates_list(&self, request: McpRequest) -> McpResponse {
+        let templates: Vec<_> = self
+            .resources
+            .list_templates()
+            .iter()
+            .map(|template| {
+                json!({
+                    "uriTemplate": template.uri_template,
+                    "name": template.name,
+                    "description": template.description,
+                    "mimeType": template.mime_type
+                })
+            })
+            .collect();
+
+        McpResponse::success(request.id, json!({ "resourceTemplates": templates }))
     }
 
     async fn handle_resources_read(&self, request: McpRequest) -> McpResponse {
@@ -596,6 +620,7 @@ impl McpServer {
                         "name": tool_name,
                         "arguments": arguments
                     })),
+                    meta: None,
                 };
                 self.handle_tools_call(call_request).await
             }
@@ -682,5 +707,123 @@ impl McpServer {
     /// Get tool executor reference
     pub fn tool_executor(&self) -> &Arc<dyn ToolExecutor> {
         &self.tool_executor
+    }
+
+    fn is_lifecycle_method(&self, method: &str) -> bool {
+        matches!(
+            method,
+            "initialize" | "initialized" | "notifications/initialized" | "ping"
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anyhow::Result;
+
+    struct MockToolExecutor;
+
+    #[async_trait::async_trait]
+    impl ToolExecutor for MockToolExecutor {
+        async fn list_tools(&self) -> Result<Vec<ToolInfo>> {
+            Ok(vec![ToolInfo {
+                name: "echo".to_string(),
+                description: "Echo input".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "message": { "type": "string" }
+                    }
+                }),
+                annotations: None,
+            }])
+        }
+
+        async fn execute_tool(&self, _name: &str, arguments: Value) -> Result<Value> {
+            Ok(arguments)
+        }
+
+        async fn get_tool_schema(&self, name: &str) -> Result<Option<Value>> {
+            Ok((name == "echo").then(|| {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "message": { "type": "string" }
+                    }
+                })
+            }))
+        }
+
+        async fn search_tools(&self, _query: &str, _limit: usize) -> Result<Vec<ToolInfo>> {
+            self.list_tools().await
+        }
+    }
+
+    fn test_server() -> McpServer {
+        McpServer::with_executor(Default::default(), Arc::new(MockToolExecutor))
+    }
+
+    #[tokio::test]
+    async fn should_reject_non_lifecycle_request_before_initialize() {
+        let server = test_server();
+        let response = server
+            .handle_request(McpRequest::new("tools/list").with_id(json!(1)))
+            .await;
+
+        assert_eq!(response.error.as_ref().map(|err| err.code), Some(-32002));
+    }
+
+    #[tokio::test]
+    async fn should_accept_initialized_notification_after_initialize() {
+        let server = test_server();
+
+        let init =
+            server
+                .handle_request(McpRequest::new("initialize").with_id(json!(1)).with_params(
+                    json!({
+                        "clientInfo": { "name": "test-client", "version": "1.0.0" }
+                    }),
+                ))
+                .await;
+        assert!(init.is_success());
+
+        let response = server
+            .handle_request(McpRequest::new("notifications/initialized"))
+            .await;
+        assert!(response.is_success());
+    }
+
+    #[tokio::test]
+    async fn should_list_resource_templates() {
+        let server = test_server();
+        let _ =
+            server
+                .handle_request(McpRequest::new("initialize").with_id(json!(1)).with_params(
+                    json!({
+                        "clientInfo": { "name": "test-client" }
+                    }),
+                ))
+                .await;
+
+        let response = server
+            .handle_request(McpRequest::new("resources/templates/list").with_id(json!(2)))
+            .await;
+
+        let templates = response
+            .result
+            .as_ref()
+            .and_then(|result| result.get("resourceTemplates"))
+            .and_then(|templates| templates.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        assert_eq!(templates.len(), 1);
+        assert_eq!(
+            templates[0]
+                .get("uriTemplate")
+                .and_then(|value| value.as_str()),
+            Some("docs://{name}")
+        );
     }
 }

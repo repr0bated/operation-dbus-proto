@@ -67,7 +67,7 @@ impl ToolRegistry {
             schema_version: String::new(),
             category: tool.category().to_string(),
             tags: tool.tags(),
-            namespace: String::new(),
+            namespace: tool.namespace().to_string(),
         };
 
         self.tools.write().await.insert(name.clone(), tool);
