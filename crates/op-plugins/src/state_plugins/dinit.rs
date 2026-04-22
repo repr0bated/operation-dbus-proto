@@ -182,6 +182,10 @@ impl StatePlugin for DinitStatePlugin {
         "1.0.0"
     }
 
+    fn schema(&self) -> Option<op_state_store::PluginSchema> {
+        Some(super::plugin_schema_defs::dinit_plugin_schema())
+    }
+
     fn is_available(&self) -> bool {
         std::path::Path::new("/run/dbus/system_bus_socket").exists()
     }

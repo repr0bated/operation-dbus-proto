@@ -151,6 +151,10 @@ impl StatePlugin for HardwarePlugin {
         "1.0.0"
     }
 
+    fn schema(&self) -> Option<op_state_store::PluginSchema> {
+        Some(super::plugin_schema_defs::hardware_plugin_schema())
+    }
+
     async fn query_current_state(&self) -> Result<Value> {
         let cpu = Self::get_cpu_info().await;
         let memory = Self::get_memory_info().await;

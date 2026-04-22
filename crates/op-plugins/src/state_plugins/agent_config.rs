@@ -42,6 +42,10 @@ impl StatePlugin for AgentConfigPlugin {
         "1.0.0"
     }
 
+    fn schema(&self) -> Option<op_state_store::PluginSchema> {
+        Some(super::plugin_schema_defs::agent_config_plugin_schema())
+    }
+
     async fn query_current_state(&self) -> Result<Value> {
         // Schema as Code: Define the authoritative list of agents here
         let agents = vec![

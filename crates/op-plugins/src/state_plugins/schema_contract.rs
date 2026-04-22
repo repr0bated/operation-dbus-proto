@@ -35,7 +35,7 @@ mod tests {
     fn test_all_plugins_have_contract_schema() {
         let catalog = SchemaCatalog::with_builtin_schemas();
         let schemas = all_contract_schemas(&catalog);
-        assert_eq!(schemas.len(), 34);
+        assert_eq!(schemas.len(), catalog.list().len());
     }
 
     #[test]

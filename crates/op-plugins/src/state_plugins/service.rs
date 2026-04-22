@@ -285,6 +285,10 @@ impl StatePlugin for ServicePlugin {
         "1.0.0"
     }
 
+    fn schema(&self) -> Option<op_state_store::PluginSchema> {
+        Some(super::plugin_schema_defs::service_plugin_schema())
+    }
+
     async fn query_current_state(&self) -> Result<Value> {
         let mut services = HashMap::new();
 

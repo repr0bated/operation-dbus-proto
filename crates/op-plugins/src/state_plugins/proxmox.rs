@@ -41,6 +41,10 @@ impl StatePlugin for ProxmoxPlugin {
         "1.0.0"
     }
 
+    fn schema(&self) -> Option<op_state_store::PluginSchema> {
+        Some(super::plugin_schema_defs::proxmox_plugin_schema())
+    }
+
     async fn query_current_state(&self) -> Result<Value> {
         Ok(simd_json::serde::to_owned_value(ProxmoxState {
             containers: vec![],

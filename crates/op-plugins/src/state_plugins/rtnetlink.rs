@@ -78,6 +78,10 @@ impl StatePlugin for RtnetlinkPlugin {
         "1.0.0"
     }
 
+    fn schema(&self) -> Option<op_state_store::PluginSchema> {
+        Some(super::plugin_schema_defs::rtnetlink_plugin_schema())
+    }
+
     fn is_available(&self) -> bool {
         // rtnetlink is always available — it's the kernel
         true

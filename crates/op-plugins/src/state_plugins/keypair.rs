@@ -42,6 +42,10 @@ impl StatePlugin for KeypairPlugin {
         "1.0.0"
     }
 
+    fn schema(&self) -> Option<op_state_store::PluginSchema> {
+        Some(super::plugin_schema_defs::keypair_plugin_schema())
+    }
+
     async fn query_current_state(&self) -> Result<Value> {
         let mut keypairs = Vec::new();
         if let Some(home) = dirs::home_dir() {

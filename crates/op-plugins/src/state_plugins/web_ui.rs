@@ -445,6 +445,10 @@ impl StatePlugin for WebUiPlugin {
         &self.identity.version
     }
 
+    fn schema(&self) -> Option<op_state_store::PluginSchema> {
+        Some(super::plugin_schema_defs::web_ui_plugin_schema())
+    }
+
     fn is_available(&self) -> bool {
         true // UI is always available (embedded)
     }

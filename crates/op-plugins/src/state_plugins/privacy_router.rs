@@ -295,6 +295,12 @@ fn default_privacy_flows() -> Vec<PrivacyFlowRule> {
             actions: vec!["output:wgcf".to_string()],
             description: Some("priv_xray -> wgcf".to_string()),
         },
+        PrivacyFlowRule {
+            priority: 200,
+            match_fields: HashMap::from([("dl_type".to_string(), "0x0806".to_string())]),
+            actions: vec!["arp_responder".to_string()],
+            description: Some("ARP Responder for Privacy Network".to_string()),
+        },
     ]
 }
 
@@ -890,6 +896,37 @@ impl PrivacyRouterPlugin {
                 .flows
                 .push(chain_flow(index + 1000, &path[1], &path[0]));
         }
+
+        // Include custom privacy flows from configuration
+        for (index, rule) in config.openflow.privacy_flows.iter().enumerate() {
+            let mut actions = Vec::new();
+            for action_str in &rule.actions {
+                if action_str.starts_with("output:") {
+                    actions.push(FlowAction::Output {
+                        port: action_str.strip_prefix("output:").unwrap().to_string(),
+                    });
+                } else if action_str == "arp_responder" {
+                    // Default ARP responder for the bridge IP
+                    actions.push(FlowAction::ArpResponder {
+                        mac: "00:11:22:33:44:55".to_string(), // Simplified default
+                        ip: "10.88.88.1".to_string(),
+                    });
+                } else if action_str == "drop" {
+                    actions.push(FlowAction::Drop);
+                }
+            }
+
+            bridge.flows.push(FlowEntry {
+                table: 0,
+                priority: rule.priority,
+                match_fields: rule.match_fields.clone(),
+                actions,
+                cookie: Some(SYSTEM_FLOW_COOKIE_PREFIX | 0x2000 | index as u64),
+                idle_timeout: 0,
+                hard_timeout: 0,
+            });
+        }
+
         bridge.flows.sort_by_key(flow_sort_key);
 
         current.bridges.push(bridge);
@@ -968,6 +1005,10 @@ impl StatePlugin for PrivacyRouterPlugin {
 
     fn version(&self) -> &str {
         "1.2.0"
+    }
+
+    fn schema(&self) -> Option<op_state_store::PluginSchema> {
+        Some(super::plugin_schema_defs::privacy_router_plugin_schema())
     }
 
     fn capabilities(&self) -> PluginCapabilities {
