@@ -189,6 +189,10 @@ impl StatePlugin for OvsBridgePlugin {
         "1.0.0"
     }
 
+    fn schema(&self) -> Option<op_state_store::PluginSchema> {
+        Some(super::plugin_schema_defs::ovsdb_bridge_plugin_schema())
+    }
+
     fn is_available(&self) -> bool {
         std::path::Path::new("/var/run/openvswitch/db.sock").exists()
     }

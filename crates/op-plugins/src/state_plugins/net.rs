@@ -678,6 +678,10 @@ impl StatePlugin for NetStatePlugin {
         "1.0.0"
     }
 
+    fn schema(&self) -> Option<op_state_store::PluginSchema> {
+        Some(super::plugin_schema_defs::net_plugin_schema())
+    }
+
     fn is_available(&self) -> bool {
         // Check if OVSDB socket is available
         std::path::Path::new("/var/run/openvswitch/db.sock").exists()

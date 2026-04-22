@@ -426,6 +426,10 @@ impl StatePlugin for IncusPlugin {
         "1.0.0"
     }
 
+    fn schema(&self) -> Option<op_state_store::PluginSchema> {
+        Some(super::plugin_schema_defs::incus_plugin_schema())
+    }
+
     fn is_available(&self) -> bool {
         std::path::Path::new("/usr/bin/incus").exists()
     }

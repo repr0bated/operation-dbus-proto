@@ -151,6 +151,9 @@ pub enum FlowAction {
 
     /// Send to controller
     Controller { max_len: Option<u16> },
+
+    /// ARP responder (OVS-specific action chain)
+    ArpResponder { mac: String, ip: String },
 }
 
 /// Socket port for containerless networking
@@ -804,6 +807,26 @@ impl OpenFlowPlugin {
                     "CONTROLLER".to_string()
                 }
             }
+            FlowAction::ArpResponder { mac, ip } => {
+                // IPv4 address to hex (e.g., 10.100.0.1 -> 0x0a640001)
+                let ip_hex = if let Ok(addr) = ip.parse::<std::net::Ipv4Addr>() {
+                    format!(
+                        "0x{:02x}{:02x}{:02x}{:02x}",
+                        addr.octets()[0],
+                        addr.octets()[1],
+                        addr.octets()[2],
+                        addr.octets()[3]
+                    )
+                } else {
+                    "0".to_string()
+                };
+
+                format!(
+                    "move:NXM_OF_ETH_SRC[]->NXM_OF_ETH_DST[],mod_dl_src:{mac},load:0x0002->NXM_OF_ARP_OP[],move:NXM_NX_ARP_SHA[]->NXM_NX_ARP_THA[],load:0x{}->NXM_NX_ARP_SHA[],move:NXM_OF_ARP_SPA[]->NXM_OF_ARP_TPA[],load:{}->NXM_OF_ARP_SPA[],IN_PORT",
+                    mac.replace(':', ""),
+                    ip_hex
+                )
+            }
         }
     }
 
@@ -1372,6 +1395,10 @@ impl StatePlugin for OpenFlowPlugin {
 
     fn version(&self) -> &str {
         "0.1.0"
+    }
+
+    fn schema(&self) -> Option<op_state_store::PluginSchema> {
+        Some(super::plugin_schema_defs::openflow_plugin_schema())
     }
 
     fn is_available(&self) -> bool {

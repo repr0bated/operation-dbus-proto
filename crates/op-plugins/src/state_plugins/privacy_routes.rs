@@ -88,6 +88,10 @@ impl StatePlugin for PrivacyRoutesPlugin {
         "1.0.0"
     }
 
+    fn schema(&self) -> Option<op_state_store::PluginSchema> {
+        Some(super::plugin_schema_defs::privacy_routes_plugin_schema())
+    }
+
     async fn query_current_state(&self) -> Result<Value> {
         let state = self.load_store().await?;
         Ok(simd_json::serde::to_owned_value(state)?)

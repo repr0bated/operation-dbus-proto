@@ -3,11 +3,12 @@ use async_trait::async_trait;
 use op_state::{
     ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
 };
+use op_state_store::{FieldSchema, FieldType, PluginSchema};
 use serde::{Deserialize, Serialize};
+use simd_json::json;
 use simd_json::OwnedValue as Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use tokio::sync::RwLock;
 
 const DEFAULT_CONFIG_STORE_PATH: &str = "/etc/op-dbus/config-store.json";
 
@@ -62,6 +63,30 @@ impl ConfigPlugin {
     }
 }
 
+fn config_plugin_schema() -> PluginSchema {
+    PluginSchema::builder("config")
+        .version("1.0.0")
+        .description("Global key/value config store")
+        .field(
+            "configs",
+            FieldSchema {
+                field_type: FieldType::Any,
+                required: true,
+                description: "Configuration map".to_string(),
+                default: Some(json!({})),
+                example: Some(json!({
+                    "anna_scribe": {
+                        "snowball_path": "/var/lib/op-dbus/snowball"
+                    }
+                })),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        )
+        .build()
+}
+
 #[async_trait]
 impl StatePlugin for ConfigPlugin {
     fn name(&self) -> &str {
@@ -70,6 +95,10 @@ impl StatePlugin for ConfigPlugin {
 
     fn version(&self) -> &str {
         "1.0.0"
+    }
+
+    fn schema(&self) -> Option<op_state_store::PluginSchema> {
+        Some(config_plugin_schema())
     }
 
     async fn query_current_state(&self) -> Result<Value> {
@@ -182,5 +211,22 @@ impl StatePlugin for ConfigPlugin {
             supports_verification: true,
             atomic_operations: false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn should_publish_plugin_owned_config_schema() {
+        let schema = ConfigPlugin::default().schema().expect("config schema");
+        let field = schema.fields.get("configs").expect("configs field");
+
+        assert_eq!(schema.name, "config");
+        assert_eq!(schema.version, "1.0.0");
+        assert_eq!(schema.description, "Global key/value config store");
+        assert!(matches!(field.field_type, FieldType::Any));
+        assert_eq!(field.default, Some(json!({})));
     }
 }

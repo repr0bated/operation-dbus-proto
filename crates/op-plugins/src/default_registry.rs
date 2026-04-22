@@ -11,9 +11,9 @@ use std::sync::Arc;
 use crate::state_plugins::{
     AdcPlugin, AgentConfigPlugin, ConfigPlugin, DinitStatePlugin, EndpointPlugin, GcloudAdcPlugin,
     HardwarePlugin, IncusPlugin, KeypairPlugin, McpStatePlugin, NetStatePlugin, OpenFlowPlugin,
-    OvsBridgePlugin, PrivacyRouterPlugin, PrivacyRoutesPlugin, ProxmoxPlugin, ProxyServerPlugin,
-    ProcfsPlugin, RtnetlinkPlugin, SessDeclPlugin, SoftwarePlugin, UsersPlugin, WebUiPlugin,
-    WireGuardPlugin,
+    OvsBridgePlugin, PrivacyRouterPlugin, PrivacyRoutesPlugin, ProcfsPlugin, ProxmoxPlugin,
+    ProxyServerPlugin, RtnetlinkPlugin, ServicePlugin, SessDeclPlugin, SoftwarePlugin, UsersPlugin,
+    WebUiPlugin, WireGuardPlugin,
 };
 
 /// Default plugin loader configuration
@@ -158,6 +158,7 @@ impl DefaultPluginRegistry {
             "users" => Arc::new(UsersPlugin::new()),
             "gcloud_adc" => Arc::new(GcloudAdcPlugin::new()),
             "keypair" => Arc::new(KeypairPlugin::new()),
+            "service" => Arc::new(ServicePlugin::new()),
             "wireguard" => Arc::new(WireGuardPlugin::new()),
             "agent_config" => Arc::new(AgentConfigPlugin::new()),
             "ovsdb_bridge" => Arc::new(OvsBridgePlugin::new()),
@@ -230,6 +231,76 @@ mod tests {
         // Load plugins
         let plugins = registry.load_default_plugins().await.unwrap();
         assert!(!plugins.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_auto_loaded_plugins_publish_schema() {
+        let store = Arc::new(SqliteStore::new(":memory:").await.unwrap());
+        let registry = DefaultPluginRegistry::new(store);
+
+        let plugins = registry.load_default_plugins().await.unwrap();
+        let missing: Vec<String> = plugins
+            .iter()
+            .filter(|plugin| plugin.schema().is_none())
+            .map(|plugin| plugin.name().to_string())
+            .collect();
+
+        assert!(
+            missing.is_empty(),
+            "auto-loaded plugins missing schema(): {:?}",
+            missing
+        );
+    }
+
+    #[tokio::test]
+    async fn test_loadable_plugins_publish_schema() {
+        let store = Arc::new(SqliteStore::new(":memory:").await.unwrap());
+        let registry = DefaultPluginRegistry::new(store);
+        let plugin_names = vec![
+            "mcp",
+            "config",
+            "dinit",
+            "systemd",
+            "incus",
+            "net",
+            "openflow",
+            "privacy_router",
+            "proxmox",
+            "hardware",
+            "software",
+            "users",
+            "gcloud_adc",
+            "keypair",
+            "service",
+            "wireguard",
+            "agent_config",
+            "ovsdb_bridge",
+            "privacy_routes",
+            "procfs",
+            "rtnetlink",
+            "sess_decl",
+            "adc",
+            "endpoint",
+            "proxy_server",
+            "web_ui",
+        ];
+
+        let mut missing = Vec::new();
+        for plugin_name in plugin_names {
+            let plugin = registry
+                .load_plugin(plugin_name)
+                .await
+                .unwrap_or_else(|error| panic!("failed to load {}: {}", plugin_name, error));
+            if plugin.schema().is_none() {
+                missing.push(plugin_name.to_string());
+            }
+        }
+
+        assert!(
+            missing.is_empty(),
+            "loadable plugins missing schema(): {:?}",
+            missing
+        );
     }
 
     #[tokio::test]
