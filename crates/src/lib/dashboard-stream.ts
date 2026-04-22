@@ -5,6 +5,15 @@ export type DashboardEventType =
   | "message"
   | "unknown";
 
+const knownDashboardEventTypes = [
+  "state_update",
+  "audit_event",
+  "system_stats",
+  "message",
+] as const;
+
+type KnownDashboardEventType = (typeof knownDashboardEventTypes)[number];
+
 export interface StateUpdatePayload {
   plugin_id: string;
   object_path: string;
@@ -78,20 +87,19 @@ function parseUnknownEvent(type: string, raw: string): DashboardStreamEvent {
   };
 }
 
+function isKnownDashboardEventType(
+  type: string,
+): type is KnownDashboardEventType {
+  return (knownDashboardEventTypes as readonly string[]).includes(type);
+}
+
 export function parseDashboardStreamEvent(
   type: string,
   raw: string,
 ): DashboardStreamEvent {
   try {
     const parsed = JSON.parse(raw) as DashboardEventPayload;
-    const normalizedType = ([
-      "state_update",
-      "audit_event",
-      "system_stats",
-      "message",
-    ] as const).includes(type as DashboardEventType)
-      ? (type as DashboardEventType)
-      : "unknown";
+    const normalizedType = isKnownDashboardEventType(type) ? type : "unknown";
 
     return {
       type: normalizedType,

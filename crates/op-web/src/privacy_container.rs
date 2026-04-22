@@ -67,7 +67,7 @@ impl PrivacyContainerConfig {
                     let value = value.trim().to_ascii_lowercase();
                     value == "1" || value == "true" || value == "yes"
                 })
-                .unwrap_or(false),
+                .unwrap_or(true),
         }
     }
 }

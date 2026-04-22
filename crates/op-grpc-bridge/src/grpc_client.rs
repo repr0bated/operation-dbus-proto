@@ -68,7 +68,7 @@ impl GrpcClientPool {
         }
     }
 
-    /// Get or create a channel to the specified endpoint
+    /// Get or create a channel to the specified address (supports comma-separated endpoints for load balancing)
     async fn get_channel(&self, address: &str) -> Result<Channel, GrpcClientError> {
         {
             let channels = self.channels.read().await;
@@ -77,22 +77,37 @@ impl GrpcClientPool {
             }
         }
 
-        let endpoint = Endpoint::from_shared(address.to_string())
-            .map_err(|e| GrpcClientError::ConnectionFailed(e.to_string()))?
-            .connect_timeout(self.default_config.connect_timeout)
-            .timeout(self.default_config.request_timeout);
+        let addrs: Vec<&str> = address.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+        
+        let channel = if addrs.len() > 1 {
+            // Native Tonic Load Balancing
+            let endpoints = addrs.into_iter().map(|addr| {
+                Endpoint::from_shared(addr.to_string())
+                    .map(|e| e.connect_timeout(self.default_config.connect_timeout)
+                              .timeout(self.default_config.request_timeout))
+            }).collect::<Result<Vec<_>, _>>()
+            .map_err(|e| GrpcClientError::ConnectionFailed(format!("Invalid endpoint: {}", e)))?;
+            
+            Channel::balance_list(endpoints.into_iter())
+        } else {
+            // Single endpoint
+            let endpoint = Endpoint::from_shared(address.to_string())
+                .map_err(|e| GrpcClientError::ConnectionFailed(e.to_string()))?
+                .connect_timeout(self.default_config.connect_timeout)
+                .timeout(self.default_config.request_timeout);
 
-        let channel = endpoint
-            .connect()
-            .await
-            .map_err(|e| GrpcClientError::ConnectionFailed(e.to_string()))?;
+            endpoint
+                .connect()
+                .await
+                .map_err(|e| GrpcClientError::ConnectionFailed(e.to_string()))?
+        };
 
         {
             let mut channels = self.channels.write().await;
             channels.insert(address.to_string(), channel.clone());
         }
 
-        info!("Connected to remote gRPC endpoint: {}", address);
+        info!("Connected to remote gRPC endpoint(s): {}", address);
         Ok(channel)
     }
 

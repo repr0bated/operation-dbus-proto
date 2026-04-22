@@ -23,37 +23,36 @@
 //! - `json_stream`: Real-time UI delivery
 //! - `access_control`: Access control and redaction
 
+pub mod access_control;
 pub mod data_models;
+pub mod dbus_reader;
+pub mod event_materializer;
+pub mod grpc_reader;
 pub mod interfaces;
+pub mod json_stream;
+pub mod ovsdb_mirror;
+pub mod plugin_reader;
+pub mod procfs_reader;
+pub mod projection_engine;
+pub mod projection_store;
 pub mod schema_engine;
 pub mod schema_validator;
-pub mod projection_store;
-pub mod projection_engine;
-pub mod event_materializer;
-pub mod json_stream;
-pub mod access_control;
-pub mod procfs_reader;
-pub mod dbus_reader;
-pub mod grpc_reader;
-pub mod plugin_reader;
-pub mod ovsdb_mirror;
 
 // Re-export core types
 pub mod sled_reader;
 
+pub use access_control::ProjectionAccessController;
 pub use data_models::*;
+pub use dbus_reader::SystemDbusReader;
+pub use event_materializer::ProjectionMaterializer;
+pub use grpc_reader::SystemGrpcReader;
 pub use interfaces::*;
+pub use json_stream::ProjectionStreamServer;
+pub use ovsdb_mirror::OvsdbMirrorProjectionImpl;
+pub use plugin_reader::SystemPluginReader;
+pub use procfs_reader::SystemProcfsReader;
+pub use projection_engine::ProjectionSystemEngine;
+pub use projection_store::ProjectionStore;
 pub use schema_engine::SchemaEngine;
 pub use schema_validator::SchemaValidator;
-pub use projection_store::ProjectionStore;
-pub use projection_engine::ProjectionSystemEngine;
-pub use event_materializer::ProjectionMaterializer;
-pub use json_stream::ProjectionStreamServer;
-pub use access_control::ProjectionAccessController;
-pub use procfs_reader::SystemProcfsReader;
-pub use dbus_reader::SystemDbusReader;
-pub use grpc_reader::SystemGrpcReader;
-pub use plugin_reader::SystemPluginReader;
-pub use ovsdb_mirror::OvsdbMirrorProjectionImpl;
 pub use sled_reader::IdentitySledReader;
-

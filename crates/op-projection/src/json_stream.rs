@@ -12,6 +12,7 @@ use axum::{
     routing::get,
     Router,
 };
+use dashmap::DashMap;
 use futures::stream::{self, Stream};
 use std::convert::Infallible;
 use std::sync::Arc;
@@ -25,6 +26,7 @@ struct ServerState {
     tx: broadcast::Sender<ProjectionUpdate>,
     client_count: Arc<std::sync::atomic::AtomicUsize>,
     total_clients: Arc<std::sync::atomic::AtomicU64>,
+    snapshot: Arc<DashMap<String, Projection>>,
 }
 
 /// Server that streams projection updates to connected clients.
@@ -42,6 +44,8 @@ pub struct ProjectionStreamServer {
     total_clients: Arc<std::sync::atomic::AtomicU64>,
     /// Total messages sent
     messages_sent: Arc<std::sync::atomic::AtomicU64>,
+    /// Latest known projection set for batch-on-connect delivery
+    snapshot: Arc<DashMap<String, Projection>>,
 }
 
 impl ProjectionStreamServer {
@@ -55,6 +59,7 @@ impl ProjectionStreamServer {
             client_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             total_clients: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             messages_sent: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            snapshot: Arc::new(DashMap::new()),
         }
     }
 }
@@ -69,11 +74,12 @@ impl JsonStreamServer for ProjectionStreamServer {
     fn start(&mut self, port: u16) -> Result<()> {
         self.port = port;
         self.running = true;
-        
+
         let state = Arc::new(ServerState {
             tx: self.tx.clone(),
             client_count: self.client_count.clone(),
             total_clients: self.total_clients.clone(),
+            snapshot: self.snapshot.clone(),
         });
 
         let app = Router::new()
@@ -81,9 +87,9 @@ impl JsonStreamServer for ProjectionStreamServer {
             .with_state(state);
 
         let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
-        
+
         info!(port = port, "Starting JSON-stream SSE server");
-        
+
         tokio::spawn(async move {
             let listener = match tokio::net::TcpListener::bind(addr).await {
                 Ok(l) => l,
@@ -92,7 +98,7 @@ impl JsonStreamServer for ProjectionStreamServer {
                     return;
                 }
             };
-            
+
             if let Err(e) = axum::serve(listener, app).await {
                 warn!(error = %e, "JSON-stream server error");
             }
@@ -103,6 +109,16 @@ impl JsonStreamServer for ProjectionStreamServer {
     }
 
     fn broadcast(&self, update: &ProjectionUpdate) {
+        match update.update_type {
+            UpdateType::Deleted => {
+                self.snapshot.remove(&update.projection.id);
+            }
+            _ => {
+                self.snapshot
+                    .insert(update.projection.id.clone(), update.projection.clone());
+            }
+        }
+
         if !self.running {
             return;
         }
@@ -110,20 +126,27 @@ impl JsonStreamServer for ProjectionStreamServer {
         if let Err(_e) = self.tx.send(update.clone()) {
             // This is expected if no clients are connected
         } else {
-            self.messages_sent.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.messages_sent
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
     }
 
     fn handle_client(&self, client_id: &str) -> Result<()> {
         info!(client_id = client_id, "New client connected to JSON-stream");
-        self.client_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        self.total_clients.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.client_count
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.total_clients
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(())
     }
 
     fn disconnect_client(&self, client_id: &str) {
-        info!(client_id = client_id, "Client disconnected from JSON-stream");
-        self.client_count.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        info!(
+            client_id = client_id,
+            "Client disconnected from JSON-stream"
+        );
+        self.client_count
+            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
     }
 
     fn client_count(&self) -> usize {
@@ -145,26 +168,44 @@ impl JsonStreamServer for ProjectionStreamServer {
 async fn sse_handler(
     State(state): State<Arc<ServerState>>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    state.client_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    state.total_clients.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    
+    state
+        .client_count
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    state
+        .total_clients
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
     let rx = state.tx.subscribe();
-    
-    let stream = BroadcastStream::new(rx).filter_map(|result| {
-        match result {
-            Ok(update) => {
-                let data = serde_json::to_string(&update).unwrap_or_default();
-                Some(Ok(Event::default().event("projection_update").data(data)))
-            }
-            Err(_) => None,
+    let mut snapshot = state
+        .snapshot
+        .iter()
+        .map(|projection| projection.value().clone())
+        .collect::<Vec<_>>();
+    snapshot.sort_by(|left, right| left.id.cmp(&right.id));
+
+    let initial = stream::iter(snapshot.into_iter().map(|projection| {
+        let data = serde_json::to_string(&ProjectionUpdate {
+            update_type: UpdateType::Created,
+            projection,
+            timestamp: chrono::Utc::now(),
+        })
+        .unwrap_or_default();
+        Ok(Event::default().event("projection_update").data(data))
+    }));
+
+    let live = BroadcastStream::new(rx).filter_map(|result| match result {
+        Ok(update) => {
+            let data = serde_json::to_string(&update).unwrap_or_default();
+            Some(Ok(Event::default().event("projection_update").data(data)))
         }
+        Err(_) => None,
     });
 
     // Add keepalive
     let keepalive = stream::repeat_with(|| Ok(Event::default().comment("keepalive")))
         .throttle(std::time::Duration::from_secs(30));
 
-    let combined = stream::select(stream, keepalive);
+    let combined = stream::select(initial.chain(live), keepalive);
 
     Sse::new(combined).keep_alive(
         axum::response::sse::KeepAlive::new()

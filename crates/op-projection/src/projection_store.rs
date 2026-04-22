@@ -34,7 +34,7 @@ impl ProjectionStore {
     /// Insert or update a projection
     pub fn upsert(&self, projection: Projection) {
         let id = projection.id.clone();
-        
+
         // Update history before replacing current
         if let Some(old) = self.projections.get(&id) {
             let historical = HistoricalProjection {
@@ -43,10 +43,13 @@ impl ProjectionStore {
                 timestamp: chrono::Utc::now(),
                 is_quarantined: old.state == ProjectionState::Quarantined,
             };
-            
-            self.history.entry(id.clone()).or_insert_with(Vec::new).push(historical);
+
+            self.history
+                .entry(id.clone())
+                .or_insert_with(Vec::new)
+                .push(historical);
         }
-        
+
         self.projections.insert(id, projection);
     }
 
@@ -75,10 +78,7 @@ impl ProjectionStore {
 
     /// Get all projections
     pub fn get_all(&self) -> Vec<Projection> {
-        self.projections
-            .iter()
-            .map(|p| p.value().clone())
-            .collect()
+        self.projections.iter().map(|p| p.value().clone()).collect()
     }
 
     /// Delete a projection
@@ -93,10 +93,7 @@ impl ProjectionStore {
 
     /// Get historical versions for a projection
     pub fn get_history(&self, id: &str) -> Vec<HistoricalProjection> {
-        self.history
-            .get(id)
-            .map(|h| h.clone())
-            .unwrap_or_default()
+        self.history.get(id).map(|h| h.clone()).unwrap_or_default()
     }
 
     /// Clear all projections and history

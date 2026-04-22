@@ -13,7 +13,7 @@ use oauth2::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::state::AppState;
 use crate::users::PrivacyUser;
@@ -93,6 +93,41 @@ pub async fn signup(
     Json(request): Json<SignupRequest>,
 ) -> (StatusCode, Json<SignupResponse>) {
     let email = request.email.trim().to_lowercase();
+
+    // 1. Basic Rate Limiting: Prevent magic link spam
+    // In production, use Redis or a proper rate limiting crate.
+    {
+        // Add a simple in-memory signup rate tracker to AppState if needed,
+        // but for now, we'll check magic_links map for existing tokens
+        // or add a simple static rate limiter for this prototype.
+        static LAST_SIGNUP: tokio::sync::Mutex<Option<std::collections::HashMap<String, std::time::Instant>>> = 
+            tokio::sync::Mutex::const_new(None);
+        
+        let mut map_guard = LAST_SIGNUP.lock().await;
+        if map_guard.is_none() {
+            *map_guard = Some(std::collections::HashMap::new());
+        }
+        
+        if let Some(ref mut map) = *map_guard {
+            if let Some(last_time) = map.get(&email) {
+                if last_time.elapsed().as_secs() < 60 {
+                    return (
+                        StatusCode::TOO_MANY_REQUESTS,
+                        Json(SignupResponse {
+                            success: false,
+                            message: "Please wait 60 seconds before requesting another login link".to_string(),
+                        }),
+                    );
+                }
+            }
+            map.insert(email.clone(), std::time::Instant::now());
+            
+            // Periodically clean up old entries
+            if map.len() > 1000 {
+                map.retain(|_, v| v.elapsed().as_secs() < 3600);
+            }
+        }
+    }
 
     // Basic email validation
     if !email.contains('@') || !email.contains('.') {
@@ -631,8 +666,7 @@ pub async fn google_auth(
     )
     .set_redirect_uri(RedirectUrl::new(config.redirect_url.clone()).unwrap());
 
-    // Generate the authorization URL without PKCE (since we have no session store)
-    // In production, implement a proper session store for CSRF and PKCE.
+    // Generate the authorization URL
     let (auth_url, csrf_token) = client
         .authorize_url(CsrfToken::new_random)
         .add_scope(Scope::new("openid".to_string()))
@@ -640,11 +674,16 @@ pub async fn google_auth(
         .add_scope(Scope::new("profile".to_string()))
         .url();
 
-    // Store CSRF token for later use
-    // For now, we'll use a simple in-memory store. In production, use a proper session store.
-    // TODO: Implement proper session management
-    let _session_key = csrf_token.secret().clone();
-    // Note: This is a simplified implementation. In production, use proper session storage.
+    // Store CSRF token to prevent CSRF attacks
+    {
+        let mut tokens = state.csrf_tokens.write().await;
+        tokens.insert(csrf_token.secret().clone(), csrf_token.secret().clone());
+        
+        // Cleanup old tokens (simple heuristic)
+        if tokens.len() > 1000 {
+            tokens.clear();
+        }
+    }
 
     info!("Initiating Google OAuth login: {}", auth_url);
     Ok(Redirect::to(auth_url.as_str()))
@@ -655,6 +694,24 @@ pub async fn google_callback(
     Extension(state): Extension<Arc<AppState>>,
     Query(query): Query<GoogleCallbackQuery>,
 ) -> Result<Redirect, (StatusCode, Json<VerifyResponse>)> {
+    // 1. Validate CSRF token
+    {
+        let mut tokens = state.csrf_tokens.write().await;
+        if tokens.remove(&query.state).is_none() {
+            warn!("Invalid CSRF token in Google OAuth callback: {}", query.state);
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(VerifyResponse {
+                    success: false,
+                    user_id: None,
+                    config: None,
+                    qr_code: None,
+                    message: "Invalid CSRF state".to_string(),
+                }),
+            ));
+        }
+    }
+
     let config = match state.google_oauth_config.as_ref() {
         Some(config) => config,
         None => {

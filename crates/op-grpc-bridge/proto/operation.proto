@@ -5,6 +5,7 @@ package operation.v1;
 import "google/protobuf/any.proto";
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/struct.proto";
+import "google/protobuf/empty.proto";
 
 // =============================================================================
 // Core State Synchronization Service
@@ -31,7 +32,7 @@ service StateSync {
 
 service PluginService {
   // List all registered plugins
-  rpc ListPlugins(ListPluginsRequest) returns (ListPluginsResponse);
+  rpc ListPlugins(google.protobuf.Empty) returns (ListPluginsResponse);
 
   // Get plugin schema (JSON Schema 2026)
   rpc GetSchema(GetSchemaRequest) returns (GetSchemaResponse);
@@ -241,8 +242,6 @@ message BatchMutateResponse {
 // =============================================================================
 // Message Types - Plugin Service
 // =============================================================================
-
-message ListPluginsRequest {}
 
 message ListPluginsResponse {
   repeated PluginInfo plugins = 1;
@@ -485,7 +484,7 @@ message SemanticTraceMatch {
 // All operations pass through to ovsdb-server via the D-Bus mirror.
 service OvsdbMirror {
   // RFC 7047 §4.1.1 — List available databases
-  rpc ListDbs(OvsdbListDbsRequest) returns (OvsdbListDbsResponse);
+  rpc ListDbs(google.protobuf.Empty) returns (OvsdbListDbsResponse);
 
   // RFC 7047 §4.1.2 — Get database schema (<database-schema>)
   rpc GetSchema(OvsdbGetSchemaRequest) returns (OvsdbGetSchemaResponse);
@@ -507,8 +506,6 @@ service OvsdbMirror {
 }
 
 // --- OVSDB Mirror Messages ---
-
-message OvsdbListDbsRequest {}
 
 message OvsdbListDbsResponse {
   repeated string databases = 1;
@@ -627,7 +624,7 @@ message OvsdbInterface {
 // Not stored in any database — queried directly from the running system.
 service RuntimeMirror {
   // Get overall system runtime info
-  rpc GetSystemInfo(RuntimeGetSystemInfoRequest) returns (RuntimeGetSystemInfoResponse);
+  rpc GetSystemInfo(google.protobuf.Empty) returns (RuntimeGetSystemInfoResponse);
 
   // List dinit services and their states
   rpc ListServices(RuntimeListServicesRequest) returns (RuntimeListServicesResponse);
@@ -639,15 +636,13 @@ service RuntimeMirror {
   rpc StreamMetrics(RuntimeStreamMetricsRequest) returns (stream RuntimeMetricUpdate);
 
   // Get network interface states (from rtnetlink)
-  rpc ListInterfaces(RuntimeListInterfacesRequest) returns (RuntimeListInterfacesResponse);
+  rpc ListInterfaces(google.protobuf.Empty) returns (RuntimeListInterfacesResponse);
 
   // Get NUMA topology
-  rpc GetNumaTopology(RuntimeGetNumaTopologyRequest) returns (RuntimeGetNumaTopologyResponse);
+  rpc GetNumaTopology(google.protobuf.Empty) returns (RuntimeGetNumaTopologyResponse);
 }
 
 // --- Runtime Messages ---
-
-message RuntimeGetSystemInfoRequest {}
 
 message RuntimeGetSystemInfoResponse {
   string hostname = 1;
@@ -702,8 +697,6 @@ message RuntimeMetricUpdate {
   google.protobuf.Timestamp timestamp = 6;
 }
 
-message RuntimeListInterfacesRequest {}
-
 message RuntimeListInterfacesResponse {
   repeated RuntimeNetworkInterface interfaces = 1;
 }
@@ -723,8 +716,6 @@ message RuntimeNetworkInterface {
   string driver = 12;
   uint32 speed_mbps = 13;
 }
-
-message RuntimeGetNumaTopologyRequest {}
 
 message RuntimeGetNumaTopologyResponse {
   repeated NumaNode nodes = 1;

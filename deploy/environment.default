@@ -7,11 +7,11 @@ OP_DBUS_GRPC_ADDR=http://10.88.88.1:50051
 # OpenFlow controller on ovsbr0
 OPENFLOW_CONTROLLER=tcp:10.88.88.1:6653
 
-# Email Configuration for Magic Links (Maddy Mail Server from MAIL-SERVER-FINAL-CONFIG.md)
+# Email Configuration for Magic Links
 SMTP_HOST=10.149.181.121
 SMTP_PORT=587
-SMTP_USER=jeremy@3tched.com
-SMTP_PASS=jeremy123
+SMTP_USER=noreply@3tched.com
+SMTP_PASS=${SMTP_PASS_SECRET:-please_set_smtp_pass}
 SMTP_FROM_EMAIL=noreply@3tched.com
 SMTP_FROM_NAME="Operation DBUS Registration"
 
@@ -19,7 +19,7 @@ SMTP_FROM_NAME="Operation DBUS Registration"
 BASE_URL=https://registration.3tched.com
 
 # Trusted networks for WireGuard/authenticated access (comma-separated CIDRs/prefixes)
-OP_TRUSTED_NETWORKS=10.0.0.0/24,10.200.0.0/24
+OP_TRUSTED_NETWORKS=10.0.0.0/24,10.200.0.0/24,10.88.88.0/24
 
 # OpenClaw Gateway Configuration
 OPENCLAW_TOKEN=your-openclaw-api-token-here

@@ -440,7 +440,7 @@ impl McpService for McpGrpcService {
 
     async fn health(
         &self,
-        _request: Request<HealthRequest>,
+        _request: Request<()>,
     ) -> Result<Response<HealthResponse>, Status> {
         Ok(Response::new(HealthResponse {
             healthy: true,

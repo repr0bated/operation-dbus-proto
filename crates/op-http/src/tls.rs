@@ -137,14 +137,7 @@ fn create_tls_acceptor(cert_path: &str, key_path: &str) -> Result<TlsAcceptor> {
 }
 
 /// Auto-detect SSL certificates from common locations
-/// Priority order:
-/// 1. Environment variables (SSL_CERT_PATH, SSL_KEY_PATH)
-/// 2. Cloudflare Origin certificates
-/// 3. Nginx/custom certificates
-/// 4. Let's Encrypt certificates
-/// 5. Proxmox cluster certificates
-/// 6. System default certificates
-fn detect_certificates() -> Result<Option<(String, String)>> {
+pub fn detect_certificates() -> Result<Option<(String, String)>> {
     // Priority 1: Environment variables
     if let (Ok(cert), Ok(key)) = (
         std::env::var("SSL_CERT_PATH"),

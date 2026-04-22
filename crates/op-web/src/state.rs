@@ -96,6 +96,8 @@ pub struct AppState {
     pub state_store: Arc<dyn StateStore>,
     /// Google OAuth configuration (optional)
     pub google_oauth_config: Option<GoogleOAuthConfig>,
+    /// CSRF tokens for Google OAuth
+    pub csrf_tokens: Arc<RwLock<HashMap<String, String>>>,
     /// Remote operation client (gRPC)
     pub grpc_client: Arc<RemoteOperationClient>,
 }
@@ -264,6 +266,7 @@ impl AppState {
             server_config,
             state_store,
             google_oauth_config,
+            csrf_tokens: Arc::new(RwLock::new(HashMap::new())),
             grpc_client,
         })
     }

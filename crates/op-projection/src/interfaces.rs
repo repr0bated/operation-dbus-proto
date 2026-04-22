@@ -187,11 +187,7 @@ pub struct JsonStreamStatus {
 /// This trait enforces access control policies and redacts sensitive data.
 pub trait AccessController {
     /// Enforce access control policies on projections
-    fn enforce_policy(
-        &self,
-        projection: &Projection,
-        requester: &Requester,
-    ) -> Result<Projection>;
+    fn enforce_policy(&self, projection: &Projection, requester: &Requester) -> Result<Projection>;
 
     /// Validate requester permissions
     fn validate_permissions(
@@ -205,13 +201,7 @@ pub trait AccessController {
     fn redact_sensitive(&self, data: &Value, requester: &Requester) -> Value;
 
     /// Log access control decisions
-    fn log_decision(
-        &self,
-        requester: &Requester,
-        action: &str,
-        resource: &str,
-        allowed: bool,
-    );
+    fn log_decision(&self, requester: &Requester, action: &str, resource: &str, allowed: bool);
 
     /// Check if data is accessible
     fn is_accessible(&self, data: &Value, requester: &Requester) -> bool;
@@ -254,7 +244,11 @@ pub trait HistoricalStore {
     fn store_historical(&mut self, projection: &Projection) -> Result<()>;
 
     /// Get historical projection at a specific timestamp
-    fn get_at_time(&self, entity_id: &str, timestamp: DateTime<Utc>) -> Option<&HistoricalProjection>;
+    fn get_at_time(
+        &self,
+        entity_id: &str,
+        timestamp: DateTime<Utc>,
+    ) -> Option<&HistoricalProjection>;
 
     /// Get historical projections in a time range
     fn get_in_range(

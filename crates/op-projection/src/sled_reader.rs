@@ -34,12 +34,12 @@ impl Default for IdentitySledReader {
 impl SourceReader for IdentitySledReader {
     fn read_all(&self) -> Result<Vec<RawEntity>> {
         let mut entities = Vec::new();
-        
+
         match self.read_sled_entity() {
             Ok(entity) => entities.push(entity),
             Err(e) => debug!("Sled not available: {}", e),
         }
-        
+
         Ok(entities)
     }
 
@@ -62,12 +62,13 @@ impl SourceReader for IdentitySledReader {
 
 impl IdentitySledReader {
     fn read_sled_entity(&self) -> Result<RawEntity> {
-        let (ptr, _mmap) = read_sled().map_err(|e| anyhow::anyhow!("Failed to read sled: {}", e))?;
+        let (ptr, _mmap) =
+            read_sled().map_err(|e| anyhow::anyhow!("Failed to read sled: {}", e))?;
         let sled = unsafe { &*ptr };
-        
+
         let footprint = hex::encode(sled.hashed_footprint);
         let pubkey = hex::encode(sled.wireguard_pubkey);
-        
+
         Ok(RawEntity {
             entity_type: "identity.sled".to_string(),
             entity_id: "current".to_string(),
@@ -75,7 +76,8 @@ impl IdentitySledReader {
                 "mutation_index": sled.mutation_index,
                 "hashed_footprint": footprint,
                 "wireguard_pubkey": pubkey,
-            }).into(),
+            })
+            .into(),
             source: self.source.clone(),
         })
     }

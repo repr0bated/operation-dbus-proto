@@ -95,23 +95,37 @@ impl GrpcAgentClient {
     // -----------------------------------------------------------------------
     // Connect + reflection discovery
     // -----------------------------------------------------------------------
+/// Connect to op-dbus and discover all available methods via reflection.
+/// Must be called before any execute() calls.
+pub async fn connect(&self) -> Result<()> {
+    info!(address = %self.config.address, "Connecting to op-dbus gRPC");
 
-    /// Connect to op-dbus and discover all available methods via reflection.
-    /// Must be called before any execute() calls.
-    pub async fn connect(&self) -> Result<()> {
-        info!(address = %self.config.address, "Connecting to op-dbus gRPC");
+    let addrs: Vec<&str> = self.config.address.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
 
+    let channel = if addrs.len() > 1 {
+        // Native Tonic Load Balancing
+        let endpoints = addrs.into_iter().map(|addr| {
+            Endpoint::from_shared(addr.to_string())
+                .map(|e| e.connect_timeout(self.config.connect_timeout)
+                          .timeout(self.config.request_timeout))
+        }).collect::<Result<Vec<_>, _>>()
+        .context("invalid gRPC address in list")?;
+
+        Channel::balance_list(endpoints.into_iter())
+    } else {
         let endpoint = Endpoint::from_shared(self.config.address.clone())
             .context("invalid gRPC address")?
             .connect_timeout(self.config.connect_timeout)
             .timeout(self.config.request_timeout);
 
-        let channel = endpoint
+        endpoint
             .connect()
             .await
-            .context("failed to connect to op-dbus gRPC")?;
+            .context("failed to connect to op-dbus")?
+    };
 
-        *self.channel.write().await = Some(channel.clone());
+    // Get clients
+    let plugin_client = PluginServiceClient::new(channel.clone());
 
         // Discover methods via gRPC server reflection
         match self.discover_methods(channel).await {

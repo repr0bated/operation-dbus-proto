@@ -3,6 +3,7 @@ syntax = "proto3";
 package op.mcp.v1;
 
 import "google/protobuf/struct.proto";
+import "google/protobuf/empty.proto";
 
 // MCP Service - Structured gRPC
 service McpService {
@@ -16,7 +17,7 @@ service McpService {
   rpc Stream(stream McpRequest) returns (stream McpResponse);
   
   // Health check
-  rpc Health(HealthRequest) returns (HealthResponse);
+  rpc Health(google.protobuf.Empty) returns (HealthResponse);
   
   // Initialize session (run-on-connection agents)
   rpc Initialize(InitializeRequest) returns (InitializeResponse);
@@ -64,7 +65,6 @@ message McpEvent {
 }
 
 // Health check
-message HealthRequest {}
 
 message HealthResponse {
   bool healthy = 1;

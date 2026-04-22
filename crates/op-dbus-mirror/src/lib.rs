@@ -201,18 +201,22 @@ impl DbusMirror {
     /// the D-Bus tree exactly matches the database state.
     pub async fn refresh_full_tree(&self) -> Result<()> {
         let mut active_paths = HashSet::new();
+        tracing::info!("DEBUG: Starting full tree refresh");
 
         // 1. Scan OVSDB (Authoritative for Network)
+        tracing::info!("DEBUG: Publishing OVSDB snapshot");
         if let Err(e) = self.publish_ovsdb_snapshot(&mut active_paths).await {
             tracing::warn!("OVSDB snapshot failed: {}", e);
         }
 
         // 2. Scan Procfs (Host state)
+        tracing::info!("DEBUG: Publishing host snapshot");
         if let Err(e) = self.publish_host_snapshot(&mut active_paths).await {
             tracing::warn!("Procfs snapshot failed: {}", e);
         }
 
         // 3. Scan NonNet (Authoritative for Plugins not in Enterprise DB)
+        tracing::info!("DEBUG: Publishing NonNet snapshot");
         if let Err(e) = self.publish_nonnet_snapshot(&mut active_paths).await {
             tracing::warn!("NonNet snapshot failed: {}", e);
         }
@@ -313,25 +317,16 @@ impl DbusMirror {
     async fn publish_ovsdb_snapshot(&self, active_paths: &mut HashSet<String>) -> Result<()> {
         tracing::debug!("Scanning OVSDB for projection...");
         let dump = self.ovsdb.dump_db("Open_vSwitch").await?;
+        tracing::info!("DEBUG: OVSDB dump retrieved");
 
         if let Value::Object(tables) = dump {
+            tracing::info!("DEBUG: OVSDB dump contains {} tables", tables.len());
             let table_list: Vec<_> = tables.iter().map(|(k, v)| (k.to_string(), v.clone())).collect();
             for (table_name, table_data) in table_list {
-                // Support both "dump" format (object mapping UUID to rows) 
-                // and "select" format (array of rows).
-                if let Some(rows_obj) = table_data.get("rows").and_then(|v| v.as_object()) {
-                    // Native OVSDB "dump" format
-                    let rows: Vec<_> = rows_obj.iter().map(|(k, v)| (k.to_string(), v.clone())).collect();
-                    for (uuid, row_data) in rows {
-                        let row_id = Self::sanitize_path_segment(&uuid);
-                        let path = format!("/org/opdbus/v1/ovsdb/{}/{}", table_name, row_id);
-                        self.publish_object(&path, row_data).await?;
-                        active_paths.insert(path);
-                    }
-                } else if let Some(rows_arr) = table_data.as_array() {
-                    // Internal "dump_open_vswitch" format (array of rows)
-                    let rows: Vec<_> = rows_arr.iter().cloned().collect();
-                    for (idx, row_data) in rows.into_iter().enumerate() {
+                if let Some(rows) = table_data.as_array() {
+                    tracing::info!("DEBUG: OVSDB table {} has {} rows", table_name, rows.len());
+                    let rows_vec: Vec<_> = rows.iter().cloned().collect();
+                    for (idx, row_data) in rows_vec.into_iter().enumerate() {
                         let row_id = Self::extract_uuid(&row_data);
                         let id = if row_id == "unknown" { idx.to_string() } else { row_id };
                         let path = format!("/org/opdbus/v1/ovsdb/{}/{}", table_name, id);
@@ -346,6 +341,7 @@ impl DbusMirror {
     }
 
     async fn publish_nonnet_snapshot(&self, active_paths: &mut HashSet<String>) -> Result<()> {
+        tracing::info!("DEBUG: NonNet snapshot started");
         let request = op_jsonrpc::protocol::JsonRpcRequest::new("list_dbs", Value::Array(vec![]));
         let response = self.nonnet.handle_request(request).await;
 
@@ -353,9 +349,12 @@ impl DbusMirror {
             .result
             .and_then(|v: Value| v.as_array().map(|a| a.to_vec()))
             .unwrap_or_default();
+        
+        tracing::info!("DEBUG: NonNet has {} databases", dbs.len());
 
         for db_name_val in dbs {
             if let Some(db_name) = db_name_val.as_str() {
+                tracing::info!("DEBUG: Scanning NonNet DB: {}", db_name);
                 let schema_req = op_jsonrpc::protocol::JsonRpcRequest::new(
                     "get_schema",
                     Value::Array(vec![Value::from(db_name)]),
@@ -366,6 +365,7 @@ impl DbusMirror {
                     .result
                     .and_then(|schema| schema.get("tables").and_then(|v| v.as_object().cloned()))
                 {
+                    tracing::info!("DEBUG: NonNet DB {} has {} tables", db_name, tables.len());
                     let table_names: Vec<String> = tables.keys().map(|k| k.to_string()).collect();
                     for table_name in table_names {
                         let dump_req = op_jsonrpc::protocol::JsonRpcRequest::new(
@@ -378,15 +378,17 @@ impl DbusMirror {
                             .result
                             .and_then(|r: Value| r.get(&table_name).cloned())
                             .and_then(|r: Value| r.get("rows").cloned())
-                            .and_then(|v: Value| v.as_array().map(|a| a.to_vec()))
+                            .and_then(|v| v.as_array().map(|a| a.to_vec()))
                         {
-                            for row in rows {
+                            tracing::info!("DEBUG: NonNet DB {} table {} has {} rows", db_name, table_name, rows.len());
+                            let rows_vec: Vec<_> = rows.iter().cloned().collect();
+                            for row in rows_vec {
                                 let id = Self::extract_uuid(&row);
                                 let path = format!(
                                     "/org/opdbus/v1/nonnet/{}/{}/{}",
                                     db_name, table_name, id
                                 );
-                                self.publish_object(&path, row.clone()).await?;
+                                self.publish_object(&path, row).await?;
                                 active_paths.insert(path);
                             }
                         }
@@ -915,10 +917,16 @@ impl DbusMirror {
     }
 
     fn extract_uuid(row: &Value) -> String {
-        if let Some(uuid) = row.get("uuid").and_then(|v| v.as_str()) {
-            return Self::sanitize_path_segment(uuid);
+        if let Some(uuid_val) = row.get("_uuid") {
+            if let Some(uuid_arr) = uuid_val.as_array() {
+                if uuid_arr.len() == 2 && uuid_arr[0].as_str() == Some("uuid") {
+                    if let Some(uuid_str) = uuid_arr[1].as_str() {
+                        return Self::sanitize_path_segment(uuid_str);
+                    }
+                }
+            }
         }
-        if let Some(uuid) = row.get("_uuid").and_then(|v| v.as_str()) {
+        if let Some(uuid) = row.get("uuid").and_then(|v| v.as_str()) {
             return Self::sanitize_path_segment(uuid);
         }
         if let Some(id) = row.get("id").and_then(|v| v.as_str()) {
