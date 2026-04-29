@@ -1,0 +1,9 @@
+#!/bin/execlineb -P
+envfile /etc/s6/config/op-xdp-watch-log.conf
+importas -sCuD "n3 s2000000 T" DIRECTIVES DIRECTIVES
+ifelse { test -w /var/log } {
+	foreground { install -d -o s6log -g s6log /var/log/op-xdp-watch }
+	s6-setuidgid s6log exec -c s6-log -d3 -b -- ${DIRECTIVES} /var/log/op-xdp-watch
+}
+foreground { install -d -o s6log -g s6log /run/log/op-xdp-watch }
+s6-setuidgid s6log exec -c s6-log -d3 -b -- ${DIRECTIVES} /run/log/op-xdp-watch
