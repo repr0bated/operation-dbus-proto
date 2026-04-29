@@ -1,0 +1,51 @@
+#!/bin/sh
+# Deploy op-xdp-wg: XDP steering + container network for wg-xray.
+set -eu
+
+REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
+S6_SV=/etc/s6/sv
+S6_MISC=$S6_SV/misc/contents.d
+S6_RC=/etc/s6/rc
+S6_CFG=/etc/s6/config
+
+log() { echo "op-xdp-wg: $*"; }
+
+# scripts
+log "installing scripts"
+install -m 755 "$REPO_DIR/bin/op-xdp-final.sh"    /usr/local/sbin/op-xdp-final.sh
+install -m 755 "$REPO_DIR/bin/op-xdp-hostside.sh" /usr/local/sbin/op-xdp-hostside.sh
+install -m 755 "$REPO_DIR/bin/op-xdp-watch.sh"    /usr/local/sbin/op-xdp-watch.sh
+
+# incus hook
+log "wiring incus post-start hook"
+incus config set wg-xray raw.lxc 'lxc.hook.post-start = /usr/local/sbin/op-xdp-hostside.sh'
+
+# s6 services
+for svc in op-xdp-final op-xdp-watch op-xdp-watch-log; do
+    log "syncing s6/$svc"
+    mkdir -p "$S6_SV/$svc/dependencies.d"
+    cp "$REPO_DIR/s6/$svc/type" "$S6_SV/$svc/type"
+    for f in up run producer-for consumer-for pipeline-name; do
+        [ -f "$REPO_DIR/s6/$svc/$f" ] && cp "$REPO_DIR/s6/$svc/$f" "$S6_SV/$svc/$f" || true
+    done
+    chmod +x "$S6_SV/$svc/up"  2>/dev/null || true
+    chmod +x "$S6_SV/$svc/run" 2>/dev/null || true
+    cp "$REPO_DIR/s6/$svc/dependencies.d/"* "$S6_SV/$svc/dependencies.d/" 2>/dev/null || true
+done
+
+# log config
+log "installing log config"
+mkdir -p $S6_CFG
+echo 'DIRECTIVES="n3 s2000000 T"' > $S6_CFG/op-xdp-watch-log.conf
+
+# misc bundle
+touch "$S6_MISC/op-xdp-final"
+touch "$S6_MISC/op-xdp-watch"
+touch "$S6_MISC/op-xdp-watch-log"
+
+# recompile
+log "recompiling s6-rc database"
+s6-rc-compile "$S6_RC/compiled.new" $S6_SV /etc/s6/adminsv
+ln -sfn compiled.new "$S6_RC/compiled"
+
+log "done — reboot or manually start services to activate"
