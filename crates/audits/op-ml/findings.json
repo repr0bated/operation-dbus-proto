@@ -1,0 +1,37 @@
+[
+  {
+    "crate": "op-ml",
+    "severity": "High",
+    "issue": "Immediate DoS / Thread Panic via synchronous `block_on` in active Tokio runtime threads during lazy loading.",
+    "evidence": "`crates/op-ml/src/model_manager.rs:163`",
+    "recommendation": "Refactor `ModelManager::embed` and `ModelManager::embed_batch` to be asynchronous (`async fn`). Avoid calling `block_on` inside the active Tokio executor pool, as it triggers an immediate runtime panic."
+  },
+  {
+    "crate": "op-ml",
+    "severity": "High",
+    "issue": "Local Privilege Escalation / Arbitrary Code Execution via loading unverified model files from a shared/world-writable cache directory.",
+    "evidence": "`crates/op-ml/src/config.rs:139`<br>`crates/op-ml/src/downloader.rs:125`",
+    "recommendation": "Secure the default model directory `/var/lib/op-dbus/models` with strict Unix permissions (`0700` owned by the service user). Implement cryptographic hash verification (SHA-256) of downloaded `model.onnx` and `tokenizer.json` files prior to committing them to the ONNX session."
+  },
+  {
+    "crate": "op-ml",
+    "severity": "High",
+    "issue": "Schema-as-Code & OSCAL Gap: Ad-hoc configuration representation without machine-readable schema constraint validation.",
+    "evidence": "`crates/op-ml/src/config.rs:121`",
+    "recommendation": "Migrate `VectorizationConfig` into a versioned Protocol Buffer schema or OSCAL-compliant component definition. Enforce constraint boundaries on parsing (e.g., validating that `batch_size > 0` and `num_threads` is within system limits) to prevent division-by-zero or resource exhaustion."
+  },
+  {
+    "crate": "op-ml",
+    "severity": "Medium",
+    "issue": "CPU & Thread Starvation via concurrent multi-threaded ONNX Runtime Session allocations.",
+    "evidence": "`crates/op-ml/src/embedder.rs:56`<br>`crates/op-ml/src/config.rs:142`",
+    "recommendation": "Bound `num_threads` dynamically instead of defaulting blindly to `num_cpus::get()` per session. Configure a shared, global thread pool for the ONNX Runtime sessions to prevent excessive thread context-switching overhead under concurrent loads."
+  },
+  {
+    "crate": "op-ml",
+    "severity": "Medium",
+    "issue": "Incompatible Tensor Names & Fallback Panic during model fallback procedures.",
+    "evidence": "`crates/op-ml/src/model_manager.rs:194`<br>`crates/op-ml/src/embedder.rs:209`",
+    "recommendation": "Implement model-agnostic output extraction. If the fallback model lacks a `\"sentence_embedding\"` tensor, dynamically check for and parse `\"last_hidden_state\"` with mean-pooling to prevent runtime extraction failures."
+  }
+]

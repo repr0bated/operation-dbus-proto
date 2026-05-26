@@ -1,0 +1,14 @@
+[Unit]
+Description=Start WARP wgcf with wg-quick
+After=systemd-resolved.service network-online.target wg-xray-network.service wg0.service
+Wants=systemd-resolved.service network-online.target
+Requires=wg-xray-network.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/wg-quick up wgcf
+ExecStop=/usr/bin/wg-quick down wgcf
+
+[Install]
+WantedBy=multi-user.target

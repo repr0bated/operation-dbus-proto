@@ -1,0 +1,16 @@
+[Unit]
+Description=wg-xray eth0 network setup (15.235.37.41 + 10.200.0.1 via 10.200.0.2)
+After=network-online.target dev-eth0.device
+Before=xray.service op-of-controller.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/wg-xray-set-network.sh
+CapabilityBoundingSet=CAP_NET_ADMIN
+AmbientCapabilities=CAP_NET_ADMIN
+User=root
+
+[Install]
+WantedBy=multi-user.target

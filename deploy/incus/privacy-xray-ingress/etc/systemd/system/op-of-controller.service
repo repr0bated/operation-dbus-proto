@@ -1,0 +1,17 @@
+[Unit]
+Description=Operation D-Bus OpenFlow controller
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/op-dbus/environment
+Environment=OF_CONTROLLER_ADDRESS=unix:/var/lib/ovs/ovsbr0.mgmt
+Environment=OF_FLOW_PAIRS=grpc-uplink0:ovsbr0
+Environment=OVSDB_SOCKET=/var/lib/ovs/db.sock
+ExecStart=/usr/local/sbin/op-of-controller
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

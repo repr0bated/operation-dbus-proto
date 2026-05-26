@@ -1,0 +1,20 @@
+#!/bin/sh
+set -eu
+MGMT_ADDR="${MGMT_ADDR:-148.113.204.83}"
+MGMT_PREFIX="${MGMT_PREFIX:-32}"
+GW="${GW:-148.113.204.1}"
+BR="${BR:-ovsbr0}"
+
+ip link set "$BR" up 2>/dev/null || true
+ip addr replace "${MGMT_ADDR}/${MGMT_PREFIX}" dev "$BR" 2>/dev/null \
+    || ip addr add "${MGMT_ADDR}/${MGMT_PREFIX}" dev "$BR" 2>/dev/null \
+    || true
+
+# Set static IP for the gRPC bridge
+ip addr add 10.200.0.2/30 dev grpc-bridge || true
+ip link set grpc-bridge up
+
+# Set default gateway via the bridge if needed
+ip route replace "$GW" dev "$BR" scope link 2>/dev/null || true
+ip route replace default via "$GW" dev "$BR" onlink 2>/dev/null || true
+echo "ovsbr0-static: ${MGMT_ADDR}/${MGMT_PREFIX} on ${BR}, default via ${GW} onlink"

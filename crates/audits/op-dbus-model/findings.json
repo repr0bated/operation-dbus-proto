@@ -1,0 +1,37 @@
+[
+  {
+    "crate": "op-dbus-model",
+    "severity": "High",
+    "issue": "Ad-hoc Struct Data Contracts (Lack of Versioned Schemas)",
+    "evidence": "`crates/op-dbus-model/src/models.rs:5`<br>`crates/op-dbus-model/src/models.rs:13`<br>`crates/op-dbus-model/src/models.rs:35`",
+    "recommendation": "Define versioned data schemas using Protocol Buffers or OSCAL JSON schemas. Generate the Rust data structures from these schemas to prevent drift."
+  },
+  {
+    "crate": "op-dbus-model",
+    "severity": "Medium",
+    "issue": "Unvalidated String Fields in Plugin Catalog Metadata",
+    "evidence": "`crates/op-dbus-model/src/models.rs:39`<br>`crates/op-dbus-model/src/models.rs:41`<br>`crates/op-dbus-model/src/models.rs:43`",
+    "recommendation": "Validate path and identifier strings during deserialization. Use strongly typed path/D-Bus name wrappers instead of raw `String` objects."
+  },
+  {
+    "crate": "op-dbus-model",
+    "severity": "Medium",
+    "issue": "Database Schema Defined via Ad-hoc Inline SQL Strings",
+    "evidence": "`crates/op-dbus-model/src/lib.rs:8`",
+    "recommendation": "Move schema generation to structured, versioned database migration files using SQLx's built-in migration utility."
+  },
+  {
+    "crate": "op-dbus-model",
+    "severity": "Low",
+    "issue": "Bypass of Structured Logging in Library via `eprintln!`",
+    "evidence": "`crates/op-dbus-model/src/lib.rs:84`",
+    "recommendation": "Replace direct stderr printing with structured `tracing::warn!` or `tracing::error!` logs for seamless system integration."
+  },
+  {
+    "crate": "op-dbus-model",
+    "severity": "Low",
+    "issue": "Confusing Field Mapping Naming Drift Between Rust Model and DB",
+    "evidence": "`crates/op-dbus-model/src/lib.rs:49`<br>`crates/op-dbus-model/src/lib.rs:58`",
+    "recommendation": "Rename database column from `base_object` to `catalog_document` to clearly indicate it stores serialized `PluginCatalogDocument`."
+  }
+]
