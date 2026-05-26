@@ -1,0 +1,37 @@
+[
+  {
+    "crate": "op-execution-tracker",
+    "severity": "Critical",
+    "issue": "Raw Byte Slicing on Untrusted UTF-8 Strings Causes Runtime Panic (Denial of Service)",
+    "evidence": "`crates/op-execution-tracker/src/record.rs:388`<br>`crates/op-execution-tracker/src/record.rs:198`<br>`crates/op-execution-tracker/src/record.rs:374`",
+    "recommendation": "`truncate_string` slices raw bytes using `&s[..max_len]` without verifying character boundaries. If a multi-byte character (e.g., CJK character, Cyrillic glyph, or emoji) spans the `max_len` (1000) boundary, the slice operation will immediately panic. Because this function is called automatically when finalizing execution output summaries, an attacker can crash the execution tracker (and the calling orchestrator) by crafting a tool output containing multi-byte UTF-8 sequences that span the 1000th byte. Re-implement truncation using safer methods such as `s.char_indices()` or `s.floor_char_boundary()` to ensure slices occur only on valid UTF-8 character boundaries."
+  },
+  {
+    "crate": "op-execution-tracker",
+    "severity": "High",
+    "issue": "Non-Deterministic JSON Serialization Breaks Cryptographic Hash and Audit Integrity",
+    "evidence": "`crates/op-execution-tracker/src/record.rs:396`<br>`crates/op-execution-tracker/src/record.rs:253`",
+    "recommendation": "`hash_execution` serializes arbitrary `simd_json::OwnedValue` objects (`input` and `output`) via `simd_json::to_vec` to compute a deterministic hash. Since JSON objects/maps do not guarantee insertion or key order, serialization is inherently non-deterministic. Consequently, `verify_integrity` will randomly fail for identical log entries when key ordering varies, disrupting audit validation. Enforce a deterministic canonicalization format (such as JCS / RFC 8785) or parse keys into a strictly sorted data structure (e.g., `BTreeMap`) prior to computing SHA-256 digests."
+  },
+  {
+    "crate": "op-execution-tracker",
+    "severity": "High",
+    "issue": "Severe Write-Lock Contention and $O(N)$ Starvation in In-Memory Execution Tracker",
+    "evidence": "`crates/op-execution-tracker/src/execution_tracker.rs:114`<br>`crates/op-execution-tracker/src/execution_tracker.rs:150`<br>`crates/op-execution-tracker/src/execution_tracker.rs:95`",
+    "recommendation": "The `ExecutionTracker` holds an asynchronous write lock (`self.records.write().await`) while executing linear searches (`.iter_mut().find(...)`) to transition status in `complete_execution` and `fail_execution`. Under high concurrent load, this locks out all readers and other writers. Furthermore, trimming the history via `records.remove(0)` forces an $O(N)$ shift of elements. These combined performance bottlenecks can lead to thread-pool starvation and a complete control plane lockup. Replace the centralized `RwLock<Vec<ExecutionRecord>>` with a concurrent key-value map (e.g., `DashMap<String, ExecutionRecord>`) for fast active trace lookups, and decouple the history ring buffer from the active lookup path."
+  },
+  {
+    "crate": "op-execution-tracker",
+    "severity": "High",
+    "issue": "Schema-as-Code Compliance Gap: Ad-Hoc Structs and Untyped Payloads in Audit Logs",
+    "evidence": "`crates/op-execution-tracker/src/execution_context.rs:26`<br>`crates/op-execution-tracker/src/record.rs:135`<br>`crates/op-execution-tracker/src/record.rs:136`<br>`crates/op-execution-tracker/src/record.rs:163`",
+    "recommendation": "Rather than declaring unified, version-controlled Protocol Buffers or standardizing audit outputs against compliance frameworks like OSCAL (System Security Plans / Assessment Results), the codebase relies on ad-hoc Rust structs, unstructured `simd_json::OwnedValue` types, and unstructured `HashMap<String, String>` fields. This lacks deterministic validation schema enforcement, leading to silent schema drifts. Refactor untyped payloads to versioned Protocol Buffer definitions and align the audit records with standardized OSCAL Assessment Results JSON schemas."
+  },
+  {
+    "crate": "op-execution-tracker",
+    "severity": "Medium",
+    "issue": "Clock-Drift Vulnerability: Non-Monotonic System Clock Used for Chronological Audit Sequencing",
+    "evidence": "`crates/op-execution-tracker/src/record.rs:104`<br>`crates/op-execution-tracker/src/record.rs:125`",
+    "recommendation": "`ExecutionTiming::capture_start` populates the `monotonic_ns` field using `std::time::SystemTime::now()`. `SystemTime` is subject to clock-drift, user modification, and backward jumps from NTP synchronizations. Using it to determine monotonic ordering can lead to negative execution durations, zero intervals, and out-of-order trace correlation. Rely strictly on `std::time::Instant` for monotonic tracking of elapsed durations and relative event sequencing, keeping `SystemTime` exclusively as a separate, distinct wall-clock timestamp (`Utc::now()`)."
+  }
+]

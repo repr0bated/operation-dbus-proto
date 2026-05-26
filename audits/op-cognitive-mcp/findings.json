@@ -1,0 +1,79 @@
+[
+  {
+    "crate": "op-cognitive-mcp",
+    "severity": "Critical",
+    "issue": "Remote Arbitrary File Read & Directory Traversal via `add_folder`",
+    "evidence": "`crates/op-cognitive-mcp/src/grpc_service.rs:564`<br>`crates/op-cognitive-mcp/src/grpc_service.rs:920`",
+    "recommendation": "Restrict directory walking to a pre-configured sandbox path. Canonicalize `req.folder_path` and assert that the canonicalized path starts with the canonicalized sandbox prefix. Ensure that authentication/authorization checks are enforced on all gRPC endpoints."
+  },
+  {
+    "crate": "op-cognitive-mcp",
+    "severity": "Critical",
+    "issue": "Out-Of-Bounds Memory Read & Crash Risk (Segfault) on Mmap'd Sled",
+    "evidence": "`crates/op-cognitive-mcp/src/interceptor.rs:36`",
+    "recommendation": "Ensure that the length of the memory map is verified before casting. Check that `mmap.len() >= std::mem::size_of::<IdentitySled>()` and return a gRPC precondition error if the file size is insufficient or if `/dev/shm/plugin_schema.dat` is truncated."
+  },
+  {
+    "crate": "op-cognitive-mcp",
+    "severity": "High",
+    "issue": "Severe Shared-Memory ABI Structural Layout Mismatch",
+    "evidence": "`crates/op-cognitive-mcp/src/qdrant_shuttle.rs:32`<br>`crates/op-cognitive-mcp/src/interceptor.rs:5`",
+    "recommendation": "Converge the workspace on a single canonical definition of `IdentitySled` (e.g. within `op-core` or `op-identity`) rather than declaring duplicate, structurally mismatched `#[repr(C)]` structs in separate modules."
+  },
+  {
+    "crate": "op-cognitive-mcp",
+    "severity": "High",
+    "issue": "Unbounded In-Memory Session Storage (Memory Leak / DoS via OOM)",
+    "evidence": "`crates/op-cognitive-mcp/src/session.rs:65`",
+    "recommendation": "Introduce a Time-To-Live (TTL) expiration policy or an LRU-cache mechanism for the `DashMap` sessions. Implement a background cleanup routine to evict inactive sessions after a configured duration (e.g., 1 hour)."
+  },
+  {
+    "crate": "op-cognitive-mcp",
+    "severity": "High",
+    "issue": "OSCAL Compliance Bypass via Mocked Control Source Verification",
+    "evidence": "`crates/op-cognitive-mcp/src/interceptor.rs:57`",
+    "recommendation": "Implement cryptographically sound policy checks on the OSCAL control source (e.g., checking a digital signature or comparing it against a verified ledger state) rather than solely decoding and logging the bytes as debug text."
+  },
+  {
+    "crate": "op-cognitive-mcp",
+    "severity": "High",
+    "issue": "Schema-as-Code Violation: Ad-hoc PII Metadata Matching",
+    "evidence": "`crates/op-cognitive-mcp/src/activity_filter.rs:164`",
+    "recommendation": "Refactor PII detection to rely on a versioned schema definition where sensitive fields are explicitly flagged with a structured `pii: true` Boolean or specialized metadata tag, rather than parsing unstructured descriptions for case-insensitive substrings."
+  },
+  {
+    "crate": "op-cognitive-mcp",
+    "severity": "High",
+    "issue": "Schema-as-Code Violation: Ad-hoc Tool Input Schema Definitions",
+    "evidence": "`crates/op-cognitive-mcp/src/cognitive_tools.rs:74`",
+    "recommendation": "Load the MCP input schemas from versioned, canonical Protocol Buffer or OSCAL schema files rather than generating them programmatically using the in-memory `json!` macro."
+  },
+  {
+    "crate": "op-cognitive-mcp",
+    "severity": "High",
+    "issue": "Schema-as-Code Violation: Ad-hoc Parsing of Diagnostic Query History",
+    "evidence": "`crates/op-cognitive-mcp/src/grpc_service.rs:904`",
+    "recommendation": "Modify `get_query_history` to return strongly-typed `QueryHistoryEntry` structs directly, eliminating the fragile deserialization and string-lookup of unstructured JSON fields."
+  },
+  {
+    "crate": "op-cognitive-mcp",
+    "severity": "Medium",
+    "issue": "High-Overhead Double Serialization & Deserialization Performance Bottleneck",
+    "evidence": "`crates/op-cognitive-mcp/src/cognitive_tools.rs:272`",
+    "recommendation": "Implement a direct zero-copy conversion layer or define unified traits that operate natively on both `simd_json::OwnedValue` and `serde_json::Value` without round-tripping through `String`."
+  },
+  {
+    "crate": "op-cognitive-mcp",
+    "severity": "Medium",
+    "issue": "Permanent Tool Denial-Of-Service on Stdio Client Sidecar Crash",
+    "evidence": "`crates/op-cognitive-mcp/src/notebooklm.rs:218`",
+    "recommendation": "Implement sidecar process monitoring and resurrection inside the retry loop. If `call_tool` returns a connection-lost or transport error, restart the external client process by calling `client.start()` before retrying."
+  },
+  {
+    "crate": "op-cognitive-mcp",
+    "severity": "Medium",
+    "issue": "Incorrect File and Chunk Metrics Tracking Logic",
+    "evidence": "`crates/op-cognitive-mcp/src/rag_pipeline.rs:194`",
+    "recommendation": "Move `stats.files_parsed += 1` outside the chunk-building loop (triggering only when a `<file path=\"...\">` tag is successfully parsed). Increment `stats.chunks_created += 1` once per yielded chunk rather than multiplying by the file total on each iteration."
+  }
+]

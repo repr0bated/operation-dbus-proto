@@ -1,0 +1,51 @@
+[
+  {
+    "crate": "op-projection",
+    "severity": "Critical",
+    "issue": "Stubbed Redaction Bypass (PII & Secret Leakage)",
+    "evidence": "`crates/op-projection/src/access_control.rs:113-118`",
+    "recommendation": "Replace the mock implementation of `redact_sensitive` with an active JSON path filtering engine. Read `secret_paths` and `pii_paths` from the `PluginSchema` and dynamically redact or mask matching JSON pointers within the `simd_json::OwnedValue` structure."
+  },
+  {
+    "crate": "op-projection",
+    "severity": "High",
+    "issue": "Unvalidated Shared Memory Unsafe Pointer Dereference",
+    "evidence": "`crates/op-projection/src/sled_reader.rs:60-63`",
+    "recommendation": "Before casting and dereferencing the pointer, validate that the shared memory file descriptor size matches `std::mem::size_of::<IdentitySled>()`. Implement a magic bytes header and checksum verification within `IdentitySled` to guarantee structure alignment and integrity."
+  },
+  {
+    "crate": "op-projection",
+    "severity": "High",
+    "issue": "Async Reactor Thread Starvation via Blocking Sync IO",
+    "evidence": "`crates/op-projection/src/bin/projection_server.rs:305-310`",
+    "recommendation": "Wrap all synchronous filesystem scans (`procfs_reader.read_all()`, `sled_reader.read_all()`) within a `tokio::task::spawn_blocking` closure to prevent blocking worker threads on the main tokio event loop."
+  },
+  {
+    "crate": "op-projection",
+    "severity": "High",
+    "issue": "Unbounded Memory Leak in Projection State History",
+    "evidence": "`crates/op-projection/src/projection_store.rs:32-47`",
+    "recommendation": "Introduce a maximum historical version limit (e.g., ring-buffer strategy) or a time-to-live (TTL) eviction policy for `HistoricalProjection` elements in `self.history` to prevent infinite memory growth under continuous metrics/process updates."
+  },
+  {
+    "crate": "op-projection",
+    "severity": "High",
+    "issue": "Schema-as-Code Violation: Ad-hoc Inline Schema Declarations",
+    "evidence": "`crates/op-projection/src/data_models.rs:16`<br>`crates/op-projection/src/bin/projection_server.rs:30-192`",
+    "recommendation": "Migrate `PluginSchema`, `FieldSchema`, and associated entities to versioned Protocol Buffers or standardized OSCAL models. Generate the Rust structures via compiler build-scripts (`prost`) rather than maintaining them as manually constructed ad-hoc structs inside application binaries."
+  },
+  {
+    "crate": "op-projection",
+    "severity": "High",
+    "issue": "Hardcoded Stub in `is_accessible` Authorization Gate",
+    "evidence": "`crates/op-projection/src/access_control.rs:136-139`",
+    "recommendation": "Remove the hardcoded `true` stub. Wire `is_accessible` to the permission validation and policy evaluation loop, matching the requester's active permissions against resources."
+  },
+  {
+    "crate": "op-projection",
+    "severity": "Medium",
+    "issue": "Repeated Regex Compilation Bottleneck / ReDoS Vector",
+    "evidence": "`crates/op-projection/src/access_control.rs:49`<br>`crates/op-projection/src/access_control.rs:69`<br>`crates/op-projection/src/schema_engine.rs:388`",
+    "recommendation": "Pre-compile and cache all `Regex` instances inside the `AccessPolicy` and `Constraint` structs during initialization or registration. Avoid re-compiling user-controlled regex strings on every policy validation check."
+  }
+]

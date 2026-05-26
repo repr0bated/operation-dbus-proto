@@ -1,0 +1,189 @@
+#!/usr/bin/env python3
+import json
+import os
+import subprocess
+import sys
+
+TRUE_VALUES = ("1", "true", "yes", "on")
+
+
+def env_flag(name, default=False):
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in TRUE_VALUES
+
+
+def gemini_preview_features_enabled():
+    settings_path = os.path.expanduser("~/.gemini/settings.json")
+    try:
+        with open(settings_path, "r", encoding="utf-8") as fh:
+            settings = json.load(fh)
+        return bool(settings.get("general", {}).get("previewFeatures", False))
+    except Exception:
+        return False
+
+
+def experimental_mode_enabled():
+    if "MCP_PROXY_EXPERIMENTAL" in os.environ:
+        return env_flag("MCP_PROXY_EXPERIMENTAL", False)
+    return gemini_preview_features_enabled()
+
+
+def normalize_model_name(model, experimental):
+    if not isinstance(model, str):
+        return model
+
+    norm = model.strip().lower()
+    aliases = {
+        "gemini-3.0-flash": "gemini-3-flash",
+        "gemini-3.0-pro": "gemini-3-pro",
+        "gemini-3.0-flash-preview": "gemini-3-flash-preview",
+        "gemini-3.0-pro-preview": "gemini-3-pro-preview",
+    }
+    mapped = aliases.get(norm, norm)
+
+    if experimental:
+        if mapped == "gemini-3-flash":
+            return "gemini-3-flash-preview"
+        if mapped == "gemini-3-pro":
+            return "gemini-3-pro-preview"
+
+    return mapped
+
+
+def extract_prompt(params):
+    prompt = params.get("prompt")
+    if isinstance(prompt, str):
+        return prompt
+
+    ref = params.get("ref")
+    if isinstance(ref, dict):
+        text = ref.get("text")
+        if isinstance(text, str):
+            return text
+
+    messages = params.get("messages")
+    if isinstance(messages, list):
+        parts = []
+        for msg in messages:
+            if not isinstance(msg, dict):
+                continue
+            content = msg.get("content")
+            if isinstance(content, str):
+                parts.append(content)
+            elif isinstance(content, dict):
+                text = content.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+        return "\n".join(parts)
+
+    return ""
+
+
+def should_use_pro(prompt_text, params):
+    threshold = int(os.environ.get("MCP_PROXY_AUTO_PRO_THRESHOLD_CHARS", "6000"))
+    if len(prompt_text) >= threshold:
+        return True
+
+    tools = params.get("tools")
+    if isinstance(tools, list) and len(tools) >= 8:
+        return True
+
+    lower = prompt_text.lower()
+    pro_hints = (
+        "```",
+        "architecture",
+        "refactor",
+        "analyze",
+        "design",
+        "root cause",
+        "incident",
+        "migration",
+        "compare",
+    )
+    return any(h in lower for h in pro_hints)
+
+
+def select_model(prompt_text, params, experimental):
+    default_flash = "gemini-3.1-flash-lite-preview" if experimental else "gemini-3.1-flash-lite"
+    default_pro = "gemini-3.1-pro-preview"
+    flash_model = os.environ.get("MCP_PROXY_AUTO_FLASH_MODEL", default_flash)
+    pro_model = os.environ.get("MCP_PROXY_AUTO_PRO_MODEL", default_pro)
+    flash_model = normalize_model_name(flash_model, experimental)
+    pro_model = normalize_model_name(pro_model, experimental)
+    return pro_model if should_use_pro(prompt_text, params) else flash_model
+
+
+def rewrite_request(line):
+    try:
+        req = json.loads(line)
+    except Exception:
+        return line, None
+
+    params = req.get("params")
+    if not isinstance(params, dict):
+        return line, None
+
+    model = params.get("model")
+    model_norm = model.strip().lower() if isinstance(model, str) else ""
+    experimental = experimental_mode_enabled()
+
+    if model_norm in ("", "auto", "gemini-auto", "gemini_auto"):
+        prompt_text = extract_prompt(params)
+        selected = select_model(prompt_text, params, experimental)
+        params["model"] = selected
+        req["params"] = params
+        return json.dumps(req, separators=(",", ":")), selected
+
+    rewritten_model = normalize_model_name(model_norm, experimental)
+    if rewritten_model != model_norm:
+        params["model"] = rewritten_model
+        req["params"] = params
+        return json.dumps(req, separators=(",", ":")), rewritten_model
+
+    return json.dumps(req, separators=(",", ":")), model_norm
+
+
+def main():
+    raw = sys.stdin.read()
+    if not raw:
+        return 0
+
+    rewritten = []
+    selected_model = None
+    for line in raw.splitlines():
+        if not line.strip():
+            continue
+        new_line, selected = rewrite_request(line)
+        rewritten.append(new_line)
+        if selected is not None:
+            selected_model = selected
+
+    payload = "\n".join(rewritten)
+    if rewritten:
+        payload += "\n"
+
+    real_bin = (
+        os.environ.get("OP_MCP_PROXY_REAL_BIN")
+        or os.environ.get("MCP_PROXY_REAL_BIN")
+        or "/usr/local/bin/op-mcp-proxy"
+    )
+
+    if os.environ.get("MCP_PROXY_AUTO_DEBUG", "0").lower() in ("1", "true", "yes", "on"):
+        print(f"[op-mcp-proxy-select3] selected_model={selected_model}", file=sys.stderr)
+
+    proc = subprocess.run(
+        [real_bin],
+        input=payload.encode(),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=os.environ.copy(),
+    )
+    sys.stdout.buffer.write(proc.stdout)
+    sys.stderr.buffer.write(proc.stderr)
+    return proc.returncode
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,58 @@
+[
+  {
+    "crate": "op-http",
+    "severity": "High",
+    "issue": "Exposing Unencrypted HTTP Control Plane API alongside HTTPS",
+    "evidence": "`crates/op-http/src/server.rs:103`",
+    "recommendation": "When TLS is enabled, the server binds to and starts an unencrypted HTTP listener on `http_port` in the background serving the exact same `http_router` without any redirect logic. Sensitive control plane APIs are exposed over cleartext HTTP. Implement a dedicated Axum redirect service on the HTTP port that unconditionally issues `301 Moved Permanently` or `308 Permanent Redirect` to the HTTPS endpoint."
+  },
+  {
+    "crate": "op-http",
+    "severity": "High",
+    "issue": "Malformed Compression Middleware Corrupts HTTP Payloads",
+    "evidence": "`crates/op-http/src/request_filters.rs:121`",
+    "recommendation": "The `compression` filter unconditionally inserts the `\"Content-Encoding: gzip\"` header into the response without checking if the client sent an `Accept-Encoding` header, and without actually compressing the payload body. This will corrupt all HTTP responses for clients that try to parse the uncompressed body as gzip. Remove this custom middleware and exclusively use the robust `tower_http::compression::CompressionLayer` configured in `middleware.rs`."
+  },
+  {
+    "crate": "op-http",
+    "severity": "High",
+    "issue": "Ad-hoc Data Contracts and Lack of OSCAL Alignment",
+    "evidence": "`crates/op-http/src/health.rs:12`, `crates/op-http/src/metrics.rs:202`",
+    "recommendation": "The health check and JSON metrics structures represent ad-hoc data contracts defined as raw Rust structs and arbitrary unstructured JSON maps (`simd_json::json!`) rather than versioned, validated schemas. This violates the schema-as-code discipline. Refactor these data structures using versioned Protocol Buffers (using workspace dependencies like `prost`) and generate compliance-auditable metadata using OSCAL (Open Security Controls Assessment Language) component definitions."
+  },
+  {
+    "crate": "op-http",
+    "severity": "Medium",
+    "issue": "Synchronous Blocking Filesystem I/O in Async Executor Context",
+    "evidence": "`crates/op-http/src/health.rs:211`",
+    "recommendation": "The filesystem health check executes synchronous, blocking file operations (`std::path::Path::new(path).exists()`) directly inside an async context. This blocks the cooperative Tokio worker threads, causing latency spikes and potential thread starvation. Wrap blocking file checks in a `tokio::task::spawn_blocking` call or transition to `tokio::fs::metadata`."
+  },
+  {
+    "crate": "op-http",
+    "severity": "Medium",
+    "issue": "Subprocess Spawning of OpenSSL Binary for Cert Verification",
+    "evidence": "`crates/op-http/src/tls.rs:265`",
+    "recommendation": "`validate_cert_key_match` spawns an external process using `Command::new(\"openssl\")`. This introduces runtime dependency on the system's `openssl` CLI being present (which fails on minimal scratch/distroless Docker images) and increases resource usage. Perform modulus extraction and cert validation entirely in-memory using pure Rust cryptographic libraries such as `x509-parser` or `rustls-pki-types`."
+  },
+  {
+    "crate": "op-http",
+    "severity": "Medium",
+    "issue": "Silent Security Bypasses in Stubbed Authentication & Rate Limiter",
+    "evidence": "`crates/op-http/src/request_filters.rs:81`, `crates/op-http/src/request_filters.rs:103`",
+    "recommendation": "`api_key_auth` and `rate_limit` are stubbed out as placeholders that simply log and let all requests pass. In production, this allows unauthorized actors to bypass control plane limits and authentication. Replace these stubs with active verification logic (e.g., verifying keys against a secure store) or reject requests if the security configuration is not complete."
+  },
+  {
+    "crate": "op-http",
+    "severity": "Low",
+    "issue": "Panics via Unhandled Clock Drift",
+    "evidence": "`crates/op-http/src/health.rs:64`, `crates/op-http/src/health.rs:74`, `crates/op-http/src/health.rs:79`",
+    "recommendation": "Several locations call `.unwrap()` on `duration_since(UNIX_EPOCH)`. If the host operating system clock drifts or synchronizes (via NTP) to a timestamp prior to the UNIX epoch (or prior to the server's start time), the server will panic and crash. Use `checked_duration_since` and handle the resulting error gracefully."
+  },
+  {
+    "crate": "op-http",
+    "severity": "Low",
+    "issue": "Hardcoded Developer Home Directories in Auto-Detection Paths",
+    "evidence": "`crates/op-http/src/tls.rs:217`",
+    "recommendation": "The certificate auto-detection logic contains a hardcoded developer path (`/home/jeremy/certs/cloudflare_origin.pem`). This introduces environment assumptions and leaks local setup context into production code. Remove hardcoded user home paths and rely entirely on environment variables (`SSL_CERT_PATH`, `SSL_KEY_PATH`) or standard system directories."
+  }
+]

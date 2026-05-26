@@ -1,0 +1,44 @@
+[
+  {
+    "crate": "op-deployment",
+    "severity": "High",
+    "issue": "Undefined Behavior: Memory safety violation via unsafe `simd-json` parsing of unpadded strings",
+    "evidence": "`crates/op-deployment/src/image_manager.rs:318`<br>`crates/op-deployment/src/image_manager.rs:335`",
+    "recommendation": "Allocate a padded buffer, use `simd_json::to_padded_bin`, or migrate to safe `serde_json` for local JSON parsing."
+  },
+  {
+    "crate": "op-deployment",
+    "severity": "High",
+    "issue": "Denial of Service: Process memory exhaustion via reading whole files into RAM during hashing",
+    "evidence": "`crates/op-deployment/src/image_manager.rs:241`",
+    "recommendation": "Stream file bytes incrementally to the `Sha256` hasher using a buffered reader."
+  },
+  {
+    "crate": "op-deployment",
+    "severity": "High",
+    "issue": "Arbitrary File Copy & Host Information Disclosure via unsafe symlink resolution",
+    "evidence": "`crates/op-deployment/src/image_manager.rs:224`",
+    "recommendation": "Resolve and canonicalize the symlink target, verifying it resides strictly within the authorized images directory before copying or symlinking."
+  },
+  {
+    "crate": "op-deployment",
+    "severity": "High",
+    "issue": "Schema-as-Code Violation: Ad-hoc metadata contracts defined via unversioned Rust structs",
+    "evidence": "`crates/op-deployment/src/image_manager.rs:18`<br>`crates/op-deployment/src/image_manager.rs:32`",
+    "recommendation": "Refactor deployment image metadata to utilize versioned Protocol Buffers or compliance-aligned OSCAL schemas."
+  },
+  {
+    "crate": "op-deployment",
+    "severity": "Medium",
+    "issue": "Thread Pool Starvation: Synchronous blocking symlink creation within an async Tokio task",
+    "evidence": "`crates/op-deployment/src/image_manager.rs:147`",
+    "recommendation": "Replace the synchronous `std::os::unix::fs::symlink` call with its non-blocking async counterpart, `tokio::fs::symlink`."
+  },
+  {
+    "crate": "op-deployment",
+    "severity": "Medium",
+    "issue": "System Command Hijacking via reliance on relative PATH resolution",
+    "evidence": "`crates/op-deployment/src/image_manager.rs:89`<br>`crates/op-deployment/src/image_manager.rs:285`<br>`crates/op-deployment/src/image_manager.rs:390`",
+    "recommendation": "Utilize absolute filesystem paths for system binaries (`/usr/bin/findmnt`, `/usr/bin/btrfs`) or enforce strict path sandboxing."
+  }
+]

@@ -1,0 +1,51 @@
+[
+  {
+    "crate": "op-grpc-bridge",
+    "severity": "High",
+    "issue": "Memory Safety & Undefined Behavior: Reading from a raw pointer of a memory-mapped file without verifying that the file length is at least as large as the struct layout.",
+    "evidence": "`crates/op-grpc-bridge/src/interceptor.rs:50`",
+    "recommendation": "Verify the file size using metadata checks (e.g., `file.metadata()?.len()`) and ensure that the memory map length (`mmap.len()`) is at least `std::mem::size_of::<IdentitySled>()` before performing raw pointer dereferences."
+  },
+  {
+    "crate": "op-grpc-bridge",
+    "severity": "High",
+    "issue": "Concurrency & Memory Model Violations (Data Tearing): Unsynchronized concurrent reads and writes on shared memory map leading to potential authentication bypass or state corruption.",
+    "evidence": "`crates/op-grpc-bridge/src/interceptor.rs:57`",
+    "recommendation": "Implement a robust synchronization mechanism, such as using atomic types (e.g., `AtomicBool` and atomic integer fields) or utilizing advisory file locking (e.g., `flock` or `fs2`) to guarantee mutual exclusion during reads and writes."
+  },
+  {
+    "crate": "op-grpc-bridge",
+    "severity": "High",
+    "issue": "Command Hijacking & Argument Injection: Direct invocation of system binaries without absolute paths, combined with passing client-controlled arguments directly to a sub-process.",
+    "evidence": "`crates/op-grpc-bridge/src/grpc_server.rs:698`",
+    "recommendation": "Invoke system binaries using their absolute paths (e.g., `/sbin/dinitctl`) to prevent `PATH` manipulation attacks, and strictly validate the input argument against an alphanumeric whitelist to prevent argument injection."
+  },
+  {
+    "crate": "op-grpc-bridge",
+    "severity": "High",
+    "issue": "Silent Security Bypass (Ignored TLS Configuration): Client pool endpoint configuration includes `tls_enabled` but completely ignores it, sending cleartext data over the wire.",
+    "evidence": "`crates/op-grpc-bridge/src/grpc_client.rs:82`",
+    "recommendation": "Conditionally configure the `Endpoint` connection channel to use TLS (e.g., `.tls_config(...)` on the Tonic `Endpoint`) if `tls_enabled` is set to `true`."
+  },
+  {
+    "crate": "op-grpc-bridge",
+    "severity": "High",
+    "issue": "OSCAL Compliance Gaps: Compliance and governance metadata is retrieved dynamically via unversioned, unstructured, and unvalidated environment variables.",
+    "evidence": "`crates/op-grpc-bridge/src/schema_engine.rs:718`",
+    "recommendation": "Replace ad-hoc environment variable reads with a typed, validated, and versioned configuration struct compiled from official OSCAL XML or JSON compliance schemas."
+  },
+  {
+    "crate": "op-grpc-bridge",
+    "severity": "High",
+    "issue": "Schema-as-Code Discipline Violations: Data contracts are expressed as ad-hoc C-repr structs or raw JSON strings rather than typed, versioned Protocol Buffer messages.",
+    "evidence": "`crates/op-grpc-bridge/src/interceptor.rs:18`",
+    "recommendation": "Refactor the shared-memory identity sled and dynamic states to utilize structured, versioned Protocol Buffer messages, eliminating raw pointer casts and unstructured JSON passing."
+  },
+  {
+    "crate": "op-grpc-bridge",
+    "severity": "Medium",
+    "issue": "Unrestricted D-Bus Interface Probing: Unvalidated routing of client-supplied plugin identifiers and object paths to system D-Bus interfaces.",
+    "evidence": "`crates/op-grpc-bridge/src/grpc_server.rs:373`",
+    "recommendation": "Apply strict validation to `plugin_id` and restrict `object_path` parsing to a whitelist of allowed schema-cataloged D-Bus endpoints."
+  }
+]

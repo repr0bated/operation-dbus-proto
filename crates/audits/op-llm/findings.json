@@ -1,0 +1,37 @@
+[
+  {
+    "crate": "op-llm",
+    "severity": "High",
+    "issue": "Memory Safety Violation: Out-of-bounds heap reads via unsafe, unpadded `simd_json::from_str` parsing.",
+    "evidence": "`crates/op-llm/src/gemini.rs:114`<br>`crates/op-llm/src/gemini.rs:144`<br>`crates/op-llm/src/gemini.rs:743`<br>`crates/op-llm/src/gemini.rs:957`<br>`crates/op-llm/src/huggingface.rs:242`<br>`crates/op-llm/src/openclaw.rs:125`<br>`crates/op-llm/src/openclaw.rs:281`",
+    "recommendation": "Do not pass arbitrary string slices directly to `unsafe simd_json::from_str` without ensuring the mandatory `simd_json::SIMDJSON_PADDING` bytes are allocated at the end of the buffer. Instead, read payloads into a padded mutable byte vector, or fallback to the safe `serde_json::from_str` parser when input padding cannot be guaranteed."
+  },
+  {
+    "crate": "op-llm",
+    "severity": "High",
+    "issue": "Command Injection / Privilege Escalation: Untrusted execution paths via relative PATH binary resolution.",
+    "evidence": "`crates/op-llm/src/gcloud_adc.rs:73`<br>`crates/op-llm/src/gcloud_adc.rs:84`<br>`crates/op-llm/src/gemini_cli.rs:136`<br>`crates/op-llm/src/pty_bridge.rs:217`<br>`crates/op-llm/src/mcp_proxy.rs:43`",
+    "recommendation": "Disallow execution of unvalidated binaries using the local system `PATH`. Always resolve and enforce absolute paths for external utilities (e.g., `/usr/bin/gcloud`) or explicitly validate that the target binaries are resolved from secure, system-owned locations."
+  },
+  {
+    "crate": "op-llm",
+    "severity": "High",
+    "issue": "Schema-as-Code Compliance Gap: Data contracts expressed as ad-hoc serialized Rust structs instead of versioned Proto/OSCAL schemas.",
+    "evidence": "`crates/op-llm/src/provider.rs:64`<br>`crates/op-llm/src/provider.rs:131`<br>`crates/op-llm/src/provider.rs:264`<br>`crates/op-llm/src/antigravity_replay.rs:43`<br>`crates/op-llm/src/anthropic.rs:53`<br>`crates/op-llm/src/perplexity.rs:69`",
+    "recommendation": "Refactor all key model contracts (such as `ChatMessage`, `ChatResponse`, `ToolDefinition`, and session states) to be automatically generated from versioned Protocol Buffer (`.proto`) schemas. Ensure compliance configurations are formally mapped to structured OSCAL schemas rather than maintaining raw, ad-hoc JSON/YAML structs."
+  },
+  {
+    "crate": "op-llm",
+    "severity": "Medium",
+    "issue": "Credential & Auth Token Leakage: Unsigned and unauthenticated webhook notifications containing raw OAuth credentials.",
+    "evidence": "`crates/op-llm/src/pty_bridge.rs:432`<br>`crates/op-llm/src/pty_bridge.rs:449`",
+    "recommendation": "Enforce HTTPS/TLS for all webhook communication. Implement a shared secret signing mechanism (e.g., a symmetric HMAC-SHA256 signature header) so that the receiving webhook endpoint can cryptographically verify that the credentials and URLs were sent by an authenticated parent service."
+  },
+  {
+    "crate": "op-llm",
+    "severity": "Medium",
+    "issue": "Denial of Service (OOM): Unbounded output buffers and stream-reading loops on spawned process handlers.",
+    "evidence": "`crates/op-llm/src/pty_bridge.rs:267`<br>`crates/op-llm/src/mcp_proxy.rs:52`",
+    "recommendation": "Impose strict upper limits on the buffer sizes when reading lines or appending output streams from child processes (e.g., truncate `stdout_buf` after a safe threshold, such as 10MB). Use size-limited line readers to prevent malicious or runaway processes from exhausting system RAM."
+  }
+]

@@ -1,0 +1,44 @@
+[
+  {
+    "crate": "op-compliance",
+    "severity": "High",
+    "issue": "Denial of Service (DoS) via Dynamic Meta-Schema Compilation",
+    "evidence": "`crates/op-compliance/src/lib.rs:81-86`",
+    "recommendation": "Parse and compile the JSON schema exactly once at startup. Use `std::sync::OnceLock` or `lazy_static` to store the compiled `JSONSchema` instead of re-parsing and re-compiling on every invocation."
+  },
+  {
+    "crate": "op-compliance",
+    "severity": "High",
+    "issue": "Bypassable GDPR PII Detection via Ad-Hoc Serialized String Search",
+    "evidence": "`crates/op-compliance/src/lib.rs:44-53`",
+    "recommendation": "Avoid serialized string searches. Transition to a schema-as-code approach where data contracts are defined in versioned Protobuf or structured schemas, allowing precise programmatic inspection of field annotations and metadata."
+  },
+  {
+    "crate": "op-compliance",
+    "severity": "High",
+    "issue": "Failure of OSCAL Compliance Integration (No-op Warnings)",
+    "evidence": "`crates/op-compliance/src/lib.rs:14-16`",
+    "recommendation": "Replace logging-only warnings with structured enforcement. Validate incoming schemas against machine-readable, versioned OSCAL XML/JSON compliance controls (e.g. NIST SP 800-53 profiles) and return concrete errors."
+  },
+  {
+    "crate": "op-compliance",
+    "severity": "High",
+    "issue": "Ad-Hoc untyped EU AI Act Validation Lacking Schema-as-Code Discipline",
+    "evidence": "`crates/op-compliance/src/lib.rs:25-33`",
+    "recommendation": "Enforce model transparency policies using strongly typed, versioned data contracts. Parse schemas into concrete Rust structs or Protocol Buffer messages rather than utilizing untyped `serde_json::Value` lookups."
+  },
+  {
+    "crate": "op-compliance",
+    "severity": "Medium",
+    "issue": "Mismatched Crate Dependencies (Duplicated Dependency Graph)",
+    "evidence": "`crates/op-compliance/Cargo.toml:8`<br>`Cargo.toml:29`",
+    "recommendation": "Align dependency versions by utilizing workspace inheritance. Change the local manifest dependency definition to `jsonschema.workspace = true` to resolve duplicate dependencies and bloat."
+  },
+  {
+    "crate": "op-compliance",
+    "severity": "Medium",
+    "issue": "Ad-hoc Key Presence Checks Mimicking OPA Policy Execution",
+    "evidence": "`crates/op-compliance/src/lib.rs:65-68`",
+    "recommendation": "Implement a genuine OPA Rego engine runtime to dynamically run policy documents, or map incoming schemas to structured data contracts that enforce policies declaratively."
+  }
+]

@@ -1,0 +1,3 @@
+| Pattern | File:Line | Crate Approach | Corpus Best Practice | Gap | Rating |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| `unwrap_expect` | `crates/op-dynamic-loader/src/dynamic_registry.rs:45` | Unwraps `NonZeroUsize::new(max_cache_size)` inline using `.unwrap()`, which will panic at runtime if `max_cache_size` is `0`. | Parse and validate configuration at the system boundary using strongly-typed schemas (e.g., deserializing directly into `NonZeroUsize`), or handle potential initialization errors gracefully by returning a `Result`. | The implementation relies on ad-hoc integer types rather than a schema-as-code configuration contract. Passing `0` triggers an unhandled panic instead of a validation error. | Minor Gap |
