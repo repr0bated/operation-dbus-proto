@@ -1,0 +1,34 @@
+### 1. Unified Schema-as-Code Contracts
+* **Suggestion**: Replace ad-hoc Rust structs and untyped JSON fields used for Disaster Recovery, state tracking, and tool cataloging with strictly versioned Protocol Buffers or OSCAL-compliant schemas.
+* **Rationale**: The current implementation defines multiple key control-plane data contracts as ad-hoc Rust structs with custom serialization formats (such as `SystemDependency`, `DisasterRecoveryExport`, and `ChainEvent`). Additionally, `StoredObject` and `ToolRecord` store arbitrarily unstructured data inside untyped string and raw JSON properties (`simd_json::OwnedValue`). This diverges from the strict schema-as-code discipline. Translating these entities to a unified Protocol Buffers format with OSCAL metadata guarantees backward-compatible API updates and formal contract structure across external control boundary integrations.
+* **Example**: `crates/op-state-store/src/disaster_recovery.rs:17` (ad-hoc `SystemDependency`), `crates/op-state-store/src/disaster_recovery.rs:48` (ad-hoc `DisasterRecoveryExport`), `crates/op-state-store/src/event_chain.rs:125` (ad-hoc `ChainEvent`), `crates/op-state-store/src/state_store.rs:7` (unstructured `ToolRecord`), and `crates/op-state-store/src/lib.rs:52` (unstructured `StoredObject`).
+
+### 2. Native Asynchronous PackageKit Signal Loop
+* **Suggestion**: Implement a proper asynchronous D-Bus signal listener event loop to await package resolution and installation instead of assuming synchronous termination of start-transaction calls.
+* **Rationale**: PackageKit transaction methods (`Resolve`, `InstallPackages`, `SearchNames`) are entirely asynchronous. They return an object path immediately upon successfully registering/starting the transaction, but emit the actual installation success, failures, and output packages over D-Bus signals (`Package`, `ErrorCode`, `Finished`). The current code mistakenly treats the transaction invocation itself as the success/failure boundary. This creates a logical "fake success" where dependencies are reported as installed even if they do not exist or installation fails.
+* **Example**: `crates/op-state-store/src/disaster_recovery.rs:232` (within `install_dependencies_via_packagekit`) and `crates/op-state-store/src/disaster_recovery.rs:319` (within `is_package_installed`).
+
+### 3. Move Cryptographic Auditing off Vulnerable Hash Algorithms
+* **Suggestion**: Migrate the cryptographic footprinting, ledger linking, and Merkle tree generation from `MD5` to a high-performance, secure hashing algorithm such as `BLAKE3` or `SHA-256`.
+* **Rationale**: The tamper-evident event compliance ledger uses `MD5` to chain state history and generate Merkle proofs. `MD5` is cryptographically broken and highly susceptible to fast chosen-prefix collision attacks. An attacker with write access to the state store could easily craft multiple distinct system payloads that compute to the identical state hash, rendering the entire compliance ledger and "tamper-evident proof" system bypassable and untrusted.
+* **Example**: `crates/op-state-store/src/event_chain.rs:374` (within `compute_hash`) and `crates/op-state-store/src/disaster_recovery.rs:101` (within `PluginStateExport::new`).
+
+### 4. Zero-Copy Safe Deserialization Strategy
+* **Suggestion**: Avoid mutating temporary string clones under `unsafe` boundaries with `simd_json::from_str` for owned state targets; switch to safe zero-copy deserialization using `simd_json::from_slice` on owned buffers, or leverage safe serde deserializers.
+* **Rationale**: Methods like `DisasterRecoveryExport::from_json` perform a complete heap allocation (`.to_string()`), bind it to a mutable variable, and run an `unsafe` block calling `simd_json::from_str`. In `simd_json`, `from_str` is marked `unsafe` because it mutates the source buffer. Using it on an ad-hoc cloned string that immediately gets dropped can lead to potential lifetime or memory unsafety issues if the parsed struct is ever refactored to borrow data (e.g., using `&str` instead of `String`).
+* **Example**: `crates/op-state-store/src/disaster_recovery.rs:114` (within `from_json`).
+
+### 5. Datalog Relational-Graph Dependency Resolution
+* **Suggestion**: Offload package dependency hierarchies and plugin execution ordering calculations to the embedded `CozoDB` Datalog storage engine instead of performing in-memory topological sorts.
+* **Rationale**: The Disaster Recovery module maintains hardcoded lists of package names and handles dependency ordering sequentially in-memory via `apply_order`. Since `CozoDB` (via the `cozo` library) is already included in the workspace dependencies and utilized in sister crates, package relationship graphs should be queryable using formal Datalog rules. This would remove brittle hand-rolled topological sorting code and guarantee cycle-detection at the database level.
+* **Example**: `crates/op-state-store/src/disaster_recovery.rs:194` (within `restore_from_export`).
+
+### 6. Elimination of Shell Forks for System Actions
+* **Suggestion**: Replace system command invocations that spawn a shell (`sh -c`) with native systemd D-Bus API reloads using the pre-existing `zbus` connection.
+* **Rationale**: The `SchemaShuttle` monitors state mutations and currently issues a shell reload command (`systemctl reload xray`) inside an arbitrary shell invocation. Spawning shell subprocesses introduces heavy OS process fork overheads, degrades performance on high-frequency NVMe hot-paths, and introduces shell-parsing vulnerability vectors. Since `zbus` is already a core dependency, the control plane can directly invoke the `ReloadUnit` method on the `org.freedesktop.systemd1.Manager` interface.
+* **Example**: `crates/op-state-store/src/schema_shuttle.rs:98` (within `run_shuttle`).
+
+### 7. Structured Tracing Spans for External Interactions
+* **Suggestion**: Instrument the async D-Bus transaction loops and external network loops with structured `tracing::span` properties instead of un-indexed string logs and stdout `println!` blocks.
+* **Rationale**: Crucial hot-paths like the `SchemaShuttle` event monitor and D-Bus PackageKit installations use standard `println!` or basic non-structured warning strings. When debugging control-plane issues under dense multi-tenant production conditions, it is extremely difficult to associate these events with a specific tenant, transaction, or trace. Leveraging structured tracing (e.g., `tracing::info_span!("install_packages", transaction_id = ?tx_path)`) enables comprehensive root-cause analysis.
+* **Example**: `crates/op-state-store/src/schema_shuttle.rs:46` (within `run_shuttle`) and `crates/op-state-store/src/disaster_recovery.rs:232` (within `install_dependencies_via_packagekit`).

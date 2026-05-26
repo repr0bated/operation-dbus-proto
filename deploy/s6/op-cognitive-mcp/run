@@ -1,0 +1,3 @@
+#!/bin/sh
+export COGNITIVE_MCP_DB_PATH="${COGNITIVE_MCP_DB_PATH:-/var/lib/op-dbus/cognitive.db}"
+exec s6-envdir -p ./env /usr/local/bin/op-cognitive-mcp --db "$COGNITIVE_MCP_DB_PATH"

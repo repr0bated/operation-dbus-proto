@@ -1,0 +1,13 @@
+[Match]
+Name=eth0
+
+[Network]
+Address=10.200.0.1/30
+Address=15.235.37.41/32
+
+[Route]
+Gateway=10.200.0.2
+
+[Route]
+Destination=15.235.37.41/32
+Type=local

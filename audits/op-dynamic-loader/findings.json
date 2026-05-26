@@ -1,0 +1,44 @@
+[
+  {
+    "crate": "op-dynamic-loader",
+    "severity": "High",
+    "issue": "Unhandled Panic / DoS via Zero-Size Cache Initialization",
+    "evidence": "`crates/op-dynamic-loader/src/dynamic_registry.rs:44`<br>`crates/op-dynamic-loader/src/execution_aware_loader.rs:20`",
+    "recommendation": "Check if `max_cache_size` is zero before attempting to instantiate `NonZeroUsize`. Return an error or gracefully disable caching instead of calling `.unwrap()` and panicking, which crashes the control plane during configuration load."
+  },
+  {
+    "crate": "op-dynamic-loader",
+    "severity": "High",
+    "issue": "Severe Concurrency Bottleneck via Exclusive Write Locks on Cache Reads",
+    "evidence": "`crates/op-dynamic-loader/src/dynamic_registry.rs:55-61`",
+    "recommendation": "Replace `LruCache` with a concurrent cache (e.g., `moka`) that supports lock-free concurrent reads, or use a sharded lock design. `LruCache::get` mutates the internal LRU order, which downgrades the `RwLock` to a global exclusive mutex for every tool lookup."
+  },
+  {
+    "crate": "op-dynamic-loader",
+    "severity": "High",
+    "issue": "Schema-as-Code Gap: Ad-hoc Tool Specifications, Contexts, and Error Contracts",
+    "evidence": "`crates/op-dynamic-loader/src/error.rs:4-19`<br>`crates/op-dynamic-loader/src/dynamic_registry.rs:51`<br>`crates/op-dynamic-loader/Cargo.toml:1-18`",
+    "recommendation": "Replace ad-hoc Rust error structs, tool names, and execution tracking fields with versioned Protocol Buffer schemas or OSCAL-compliant schemas. Generate the Rust data types via a `prost-build` step to enforce unified system contracts."
+  },
+  {
+    "crate": "op-dynamic-loader",
+    "severity": "Medium",
+    "issue": "High Contention statistics counters using `RwLock` instead of Atomics",
+    "evidence": "`crates/op-dynamic-loader/src/dynamic_registry.rs:24-25`<br>`crates/op-dynamic-loader/src/dynamic_registry.rs:59`<br>`crates/op-dynamic-loader/src/dynamic_registry.rs:71`",
+    "recommendation": "Replace `Arc<RwLock<u64>>` with `std::sync::atomic::AtomicU64`. Use `.fetch_add(1, Ordering::Relaxed)` to increment the hit/miss counters without locking, eliminating thread blocking and lock overhead."
+  },
+  {
+    "crate": "op-dynamic-loader",
+    "severity": "Medium",
+    "issue": "Ignored Cache TTL leading to Memory Bloat and Stale Cached Tools",
+    "evidence": "`crates/op-dynamic-loader/src/loading_strategy.rs:16`<br>`crates/op-dynamic-loader/src/loading_strategy.rs:88`<br>`crates/op-dynamic-loader/src/dynamic_registry.rs:16`",
+    "recommendation": "Integrate a cache backend that supports time-based eviction (TTL), or store insertion timestamps along with the tools in the `LruCache` to manually validate expiration on retrieval. Currently, the strategy's TTL is ignored, causing tools to live in memory indefinitely."
+  },
+  {
+    "crate": "op-dynamic-loader",
+    "severity": "Medium",
+    "issue": "Redundant History Tracker Queries in Loading Strategy",
+    "evidence": "`crates/op-dynamic-loader/src/loading_strategy.rs:37-56`",
+    "recommendation": "Remove the expensive database/execution-history queries from `should_load` if on-demand loading of all tools is the desired default. Currently, the function queries history but always returns `true` regardless of the outcome."
+  }
+]

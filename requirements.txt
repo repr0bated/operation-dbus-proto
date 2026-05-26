@@ -1,0 +1,10 @@
+# No specific third-party dependencies are required for the basic script,
+# as concurrent.futures and zipfile are built-in.
+#
+# If you plan to use a specific LLM provider, uncomment their client library:
+# openai
+# anthropic
+# google-generativeai
+#
+# If you use python-dotenv for environment variable management:
+# python-dotenv
