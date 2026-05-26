@@ -1369,7 +1369,7 @@ impl Tool for DbusSetPropertyTool {
             .set(
                 interface_name,
                 property.as_str(),
-                &zbus::zvariant::Value::from(zbus_value),
+                zbus::zvariant::Value::from(zbus_value),
             )
             .await
             .map_err(|e| anyhow::anyhow!("Failed to set property: {}", e))?;
@@ -1457,7 +1457,7 @@ impl Tool for DbusGetAllPropertiesTool {
 
             let interface_name = zbus::names::InterfaceName::try_from(iface.name.as_str())?;
             let props: HashMap<String, zbus::zvariant::OwnedValue> = properties_proxy
-                .get_all(Some(interface_name).into())
+                .get_all(interface_name)
                 .await
                 .unwrap_or_default();
 

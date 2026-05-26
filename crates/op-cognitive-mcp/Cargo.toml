@@ -9,6 +9,7 @@ op-mcp = { path = "../op-mcp" }
 op-state-store = { path = "../op-state-store" }
 op-dynamic-loader = { path = "../op-dynamic-loader" }
 op-cache = { path = "../op-cache" }
+op-cozo-store = { workspace = true }
 hex = { workspace = true }
 memmap2 = { workspace = true }
 serde = { version = "1.0", features = ["derive"] }
@@ -27,4 +28,34 @@ uuid = { version = "1.0", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 async-trait = "0.1"
 clap = { workspace = true, features = ["env"] }
-sqlx = { workspace = true, features = ["sqlite", "runtime-tokio", "chrono", "json"] }
+cozo = { workspace = true }
+
+# gRPC (NotebookLM CognitiveToolService)
+tonic = { workspace = true }
+prost = { workspace = true }
+tonic-reflection = { workspace = true }
+tonic-health = { workspace = true }
+tonic-web = { workspace = true }
+
+# RAG pipeline
+zip = "2"
+sha2 = { workspace = true }
+regex = { workspace = true }
+
+# Concurrency
+dashmap = { workspace = true }
+parking_lot = { workspace = true }
+
+# D-Bus
+zbus = { workspace = true }
+
+[[bin]]
+name = "rag-ingest"
+path = "src/bin/rag-ingest.rs"
+
+[[bin]]
+name = "op-cog-admin"
+path = "src/bin/op-cog-admin.rs"
+
+[build-dependencies]
+tonic-build = { version = "0.12" }

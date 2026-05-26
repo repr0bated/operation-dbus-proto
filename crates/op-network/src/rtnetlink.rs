@@ -140,7 +140,7 @@ async fn get_interface_addresses(
 }
 
 /// Get default route information
-pub async fn get_default_route() -> Result<Option<simd_json::OwnedValue>> {
+pub async fn get_default_route() -> Result<Option<serde_json::Value>> {
     use netlink_packet_route::route::RouteAttribute;
 
     let (connection, handle, _) = new_connection()?;
@@ -180,7 +180,7 @@ pub async fn get_default_route() -> Result<Option<simd_json::OwnedValue>> {
                 }
             }
 
-            return Ok(Some(simd_json::json!({
+            return Ok(Some(serde_json::json!({
                 "gateway": gateway,
                 "interface_index": oif_index,
                 "interface_name": oif_name,
@@ -371,6 +371,32 @@ pub async fn add_default_route(ifname: &str, gateway: &str) -> Result<()> {
     Ok(())
 }
 
+/// Add default route with `onlink` flag via `ip route replace`.
+///
+/// Required when the output interface is an OVS internal port: the kernel
+/// cannot verify gateway reachability until OVS is forwarding, so we must
+/// bypass nexthop validation. The netlink route-flag namespace does not cleanly
+/// expose RTNH_F_ONLINK for single-hop routes, so we delegate to iproute2
+/// which handles the encoding correctly.
+pub async fn add_default_route_onlink(ifname: &str, gateway: &str) -> Result<()> {
+    use std::process::Command;
+    let status = Command::new("ip")
+        .args([
+            "route", "replace", "default", "via", gateway, "dev", ifname, "onlink",
+        ])
+        .status()
+        .context("failed to execute ip")?;
+    if !status.success() {
+        anyhow::bail!(
+            "ip route replace default via {} dev {} onlink failed: {}",
+            gateway,
+            ifname,
+            status
+        );
+    }
+    Ok(())
+}
+
 /// Set MAC address on interface
 pub async fn set_mac_address(ifname: &str, mac: &str) -> Result<()> {
     let (connection, handle, _) = new_connection()?;
@@ -432,7 +458,7 @@ pub async fn del_default_route() -> Result<()> {
 }
 
 /// List IPv4 routes for a given interface (by name)
-pub async fn list_routes_for_interface(_ifname: &str) -> Result<Vec<simd_json::OwnedValue>> {
+pub async fn list_routes_for_interface(_ifname: &str) -> Result<Vec<serde_json::Value>> {
     // Minimal, compile-safe stub; route filtering can be added later.
     Ok(Vec::new())
 }

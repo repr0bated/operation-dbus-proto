@@ -25,8 +25,12 @@ pub struct DirectLLM {
 
 impl DirectLLM {
     pub async fn new() -> anyhow::Result<Self> {
+        Self::new_with_proxy(None).await
+    }
+
+    pub async fn new_with_proxy(socks_proxy: Option<&str>) -> anyhow::Result<Self> {
         Ok(Self {
-            companion: CloudAICompanion::new(),
+            companion: CloudAICompanion::new_with_proxy(socks_proxy),
             cached_token: Mutex::new(None),
             gcloud_auth: GCloudAuth::new(),
         })

@@ -29,7 +29,9 @@ const DEFAULT_MGMT_PORT: &str = "ovsbr0-mgmt";
 const DEFAULT_SOCKET_PORT: &str = "ovsbr0-sock";
 const DEFAULT_GRPC_BRIDGE_PORT: &str = "grpc-bridge";
 const DEFAULT_MGMT_CIDR: &str = "10.200.0.1/24";
-const DEFAULT_OPENFLOW_CONTROLLER: &str = "10.88.88.1:6653";
+const DEFAULT_OPENFLOW_CONTROLLER: &str = "10.200.0.1:6653";
+const DEFAULT_DATAPATH_TYPE: &str = "system";
+const DEFAULT_FAIL_MODE: &str = "secure";
 const DEFAULT_WARP_INTERFACE: &str = "wgcf";
 const DEFAULT_WGCF_CONFIG: &str = "/etc/wireguard/wgcf.conf";
 const SYSTEM_FLOW_COOKIE_PREFIX: u64 = 0x5053_0000_0000_0000;
@@ -172,6 +174,8 @@ struct PrivacyHostBootstrapConfig {
     grpc_bridge_port: String,
     management_cidr: String,
     openflow_controller: String,
+    datapath_type: String,
+    fail_mode: String,
 }
 
 impl PrivacyHostBootstrapConfig {
@@ -192,6 +196,10 @@ impl PrivacyHostBootstrapConfig {
                 .unwrap_or_else(|_| DEFAULT_MGMT_CIDR.to_string()),
             openflow_controller: std::env::var("PRIVACY_OPENFLOW_CONTROLLER")
                 .unwrap_or_else(|_| DEFAULT_OPENFLOW_CONTROLLER.to_string()),
+            datapath_type: std::env::var("PRIVACY_DATAPATH_TYPE")
+                .unwrap_or_else(|_| DEFAULT_DATAPATH_TYPE.to_string()),
+            fail_mode: std::env::var("PRIVACY_FAIL_MODE")
+                .unwrap_or_else(|_| DEFAULT_FAIL_MODE.to_string()),
         }
     }
 }
@@ -526,12 +534,18 @@ impl PrivacyRouterPlugin {
                 .with_context(|| format!("create bridge '{}'", host.bridge_name))?;
         }
 
-        ovs.set_bridge_property(&host.bridge_name, "datapath_type", "system")
+        log::info!(
+            "privacy_router bridge policy: {} datapath_type={} fail_mode={}",
+            host.bridge_name,
+            host.datapath_type,
+            host.fail_mode
+        );
+        ovs.set_bridge_property(&host.bridge_name, "datapath_type", &host.datapath_type)
             .await
-            .context("set bridge datapath_type=system")?;
-        ovs.set_bridge_property(&host.bridge_name, "fail_mode", "secure")
+            .with_context(|| format!("set bridge datapath_type={}", host.datapath_type))?;
+        ovs.set_bridge_property(&host.bridge_name, "fail_mode", &host.fail_mode)
             .await
-            .context("set bridge fail_mode=secure")?;
+            .with_context(|| format!("set bridge fail_mode={}", host.fail_mode))?;
 
         let existing_ports = ovs
             .list_bridge_ports(&host.bridge_name)
@@ -909,7 +923,7 @@ impl PrivacyRouterPlugin {
                     // Default ARP responder for the bridge IP
                     actions.push(FlowAction::ArpResponder {
                         mac: "00:11:22:33:44:55".to_string(), // Simplified default
-                        ip: "10.88.88.1".to_string(),
+                        ip: "10.200.0.1".to_string(),
                     });
                 } else if action_str == "drop" {
                     actions.push(FlowAction::Drop);

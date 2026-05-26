@@ -1,7 +1,6 @@
 //! Mirror Object D-Bus Interface
 
-use simd_json::prelude::*;
-use simd_json::OwnedValue as Value;
+use serde_json::Value;
 use zbus::interface;
 
 /// A generic D-Bus object representing a database row
@@ -29,18 +28,18 @@ impl MirrorObject {
     /// Get the full JSON representation of the row
     #[zbus(property)]
     async fn json_data(&self) -> String {
-        simd_json::to_string(&self.data).unwrap_or_default()
+        serde_json::to_string(&self.data).unwrap_or_default()
     }
 
     /// Get a specific property value by key
     async fn get_property(&self, key: String) -> String {
         self.data
             .get(&key)
-            .map(|v| simd_json::to_string(v).unwrap_or_default())
+            .map(|v| serde_json::to_string(v).unwrap_or_default())
             .unwrap_or_default()
     }
 
     /// Signal emitted when json_data changes
     #[zbus(signal)]
-    pub async fn data_updated(&self, ctxt: &zbus::SignalContext<'_>) -> zbus::Result<()>;
+    pub async fn data_updated(&self, ctxt: &zbus::object_server::SignalContext<'_>) -> zbus::Result<()>;
 }

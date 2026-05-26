@@ -8,7 +8,7 @@ SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 REPO_ROOT="$(CDPATH='' cd -- "$SCRIPT_DIR/.." && pwd)"
 
 BRIDGE="${OP_DBUS_BRIDGE_NAME:-ovsbr0}"
-UPLINK="${OP_DBUS_UPLINK_PORT:-ens3}"
+UPLINK="${OP_DBUS_UPLINK_PORT:-eth0}"
 ALLOW_UPLINK_CUTOVER="${OP_DBUS_ALLOW_UPLINK_CUTOVER:-0}"
 SECONDARY_UPLINK_IFACE="${OP_DBUS_SECONDARY_UPLINK_IFACE:-uplink1}"
 SECONDARY_UPLINK_IPV4="${OP_DBUS_SECONDARY_UPLINK_IPV4:-15.235.37.41/32}"
@@ -166,7 +166,7 @@ capture_state() {
 }
 
 write_rollback_script() {
-    local rollback="$BACKUP_DIR/rollback-ens3.sh"
+    local rollback="$BACKUP_DIR/rollback-eth0.sh"
     {
         echo '#!/bin/bash'
         echo 'set -euo pipefail'
@@ -300,7 +300,7 @@ main() {
     require_cmd busctl
     require_cmd install
 
-    [ -f "$REPO_ROOT/deploy/systemd/networkd/10-ens3.network" ] || die "missing repo file: deploy/systemd/networkd/10-ens3.network"
+    [ -f "$REPO_ROOT/deploy/systemd/networkd/10-eth0.network" ] || die "missing repo file: deploy/systemd/networkd/10-eth0.network"
     secondary_repo_netdev="$(find "$REPO_ROOT/deploy/systemd/networkd" -maxdepth 1 -type f -name "*${SECONDARY_UPLINK_IFACE}.netdev" | head -n1)"
     secondary_repo_network="$(find "$REPO_ROOT/deploy/systemd/networkd" -maxdepth 1 -type f -name "*${SECONDARY_UPLINK_IFACE}.network" | head -n1)"
     [ -n "$secondary_repo_netdev" ] || die "missing repo netdev file for secondary uplink interface $SECONDARY_UPLINK_IFACE"
@@ -328,7 +328,7 @@ main() {
     fi
 
     install -d "$BACKUP_DIR/etc-systemd-network" "$BACKUP_DIR/etc-dinit.d"
-    backup_file /etc/systemd/network/10-ens3.network "$BACKUP_DIR/etc-systemd-network"
+    backup_file /etc/systemd/network/10-eth0.network "$BACKUP_DIR/etc-systemd-network"
     backup_file "/etc/systemd/network/$(basename "$secondary_repo_netdev")" "$BACKUP_DIR/etc-systemd-network"
     backup_file "/etc/systemd/network/$(basename "$secondary_repo_network")" "$BACKUP_DIR/etc-systemd-network"
     backup_file /etc/systemd/network/20-ovsbr0.network "$BACKUP_DIR/etc-systemd-network"
@@ -352,7 +352,7 @@ main() {
     log "Post-cutover state:"
     show_state
     printf '\n'
-    log "If recovery is needed, run: $BACKUP_DIR/rollback-ens3.sh"
+    log "If recovery is needed, run: $BACKUP_DIR/rollback-eth0.sh"
 }
 
 main "$@"

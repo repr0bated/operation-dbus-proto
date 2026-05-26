@@ -7,6 +7,7 @@
 //! - Directly manages authoritative RCP stores (OVSDB, NonNet, SQLite)
 
 use async_trait::async_trait;
+use serde_json;
 use simd_json::prelude::{ValueAsContainer, ValueAsMutContainer, ValueAsScalar, ValueObjectAccess};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -14,7 +15,7 @@ use tokio::sync::{broadcast, OnceCell, RwLock, Semaphore};
 use zbus::zvariant::OwnedValue as ZOwnedValue;
 use zbus::{Connection, Proxy};
 
-use op_identity::write_sled_from_wg;
+use op_identity::write_sled_full;
 use op_jsonrpc::nonnet::NonNetDb;
 use op_network::ovsdb::OvsdbClient;
 use op_state_store::{Decision, EventChain, OperationType};
@@ -271,6 +272,19 @@ impl SchemaEngine {
                             if let Some(tables) = params[2].as_object() {
                                 for (table_name, table_update) in tables.iter() {
                                     let table_name_owned: String = table_name.to_string();
+                                    // monitor_db returns serde_json::Value; convert to
+                                    // simd_json::OwnedValue required by process_authoritative_change.
+                                    let simd_val: simd_json::OwnedValue = {
+                                        match serde_json::to_string(table_update)
+                                            .ok()
+                                            .and_then(|s| {
+                                                let mut b = s.into_bytes();
+                                                simd_json::to_owned_value(&mut b).ok()
+                                            }) {
+                                            Some(v) => v,
+                                            None => continue,
+                                        }
+                                    };
                                     let _ = ovsdb_self
                                         .process_authoritative_change(
                                             "net".to_string(),
@@ -278,7 +292,7 @@ impl SchemaEngine {
                                             ChangeType::PropertySet,
                                             Some(table_name_owned),
                                             None,
-                                            table_update.clone(),
+                                            simd_val,
                                             vec!["ovsdb".to_string(), "network".to_string()],
                                             "ovsdb-monitor".to_string(),
                                             ChangeSource::DBus,
@@ -399,16 +413,25 @@ impl SchemaEngine {
             .await
             .map_err(|e| anyhow::anyhow!(e))?;
 
-        // Write the Identity Sled — hash the event_hash + plugin_id as the footprint,
-        // use it as a pseudo-pubkey so the Xray shuttle sees the schema mutation.
+        // Write the Identity Sled with full OSCAL + NextDNS context.
         {
             let mut hasher = Sha256::new();
             hasher.update(change.event_hash.as_bytes());
             hasher.update(change.plugin_id.as_bytes());
             let footprint_hex = hex::encode(hasher.finalize());
-            // write_sled_from_wg accepts a base64 WG pubkey; pass the footprint hex
-            // encoded as the peer key so the sled reflects the schema footprint.
-            if let Err(e) = write_sled_from_wg(&footprint_hex) {
+            let uuid          = std::env::var("SCHEMA_UUID").unwrap_or_default();
+            let subid         = std::env::var("SCHEMA_SUBID").unwrap_or_default();
+            let ctrl          = std::env::var("SCHEMA_CONTROL_SOURCE")
+                                    .unwrap_or_else(|_| "NIST_SP_800_53_R5".into());
+            let ctrl_refs     = std::env::var("SCHEMA_CONTROL_REFS").unwrap_or_default();
+            let stmt_refs     = std::env::var("SCHEMA_STATEMENT_REFS").unwrap_or_default();
+            let nextdns       = std::env::var("NEXTDNS_PROFILE_ID")
+                                    .unwrap_or_else(|_| "689ec7".into());
+            if let Err(e) = write_sled_full(
+                &footprint_hex,
+                change.event_id,
+                &uuid, &subid, &ctrl, &ctrl_refs, &stmt_refs, &nextdns,
+            ) {
                 tracing::warn!("sled write after mutation failed: {}", e);
             }
         }

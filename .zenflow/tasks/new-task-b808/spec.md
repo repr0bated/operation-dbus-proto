@@ -1,4 +1,4 @@
-# Technical Specification: Agent Orchestration, Dynamic Personas & OpenClaw Integration
+# Technical Specification: Agent Orchestration, Dynamic Personas & Assistant Integration
 
 ## 1. Technical Context
 - **Languages & Frameworks**: Rust, Tonic/gRPC (utilizing the `prost` autocoding method for proto generation), Serde for configuration, JSON Schema for "schema as code" validation.
@@ -46,12 +46,12 @@
 - **`crates/op-agents/src/server.rs`**: (New) Implements the agent gRPC listener.
 - **`crates/op-chat/src/orchestration/workstacks.rs`**: (New) Missing workstack implementation.
 - **`crates/op-chat/src/orchestration/skills.rs`**: (New) Missing skills implementation.
-- **`crates/op-llm/src/openclaw.rs`**: (New) OpenClaw provider implementation.
+- **`crates/op-llm/src/assistant.rs`**: (New) Assistant provider implementation (replaces openclaw.rs)
 
 ## 4. Data Model / API / Interface Changes
 - **AgentConfig Schema**: A new JSON schema defining the shape of `PersonaAgent` configurations (name, capabilities, prompt).
 - **GrpcAgentClient Trait**: Method signatures remain the same, but internal structs will carry a persistent `tonic::transport::Channel`.
-- **LlmProvider**: `ProviderType` extended with `OpenClaw` variant.
+- **LlmProvider**: `ProviderType` extended with `Assistant` variant (replaces `OpenClaw`)
 
 ## 5. Verification Approach
 - **Schema Validation**: Unit tests verifying that `personas.yaml` fully complies with the `AgentConfig` JSON Schema.

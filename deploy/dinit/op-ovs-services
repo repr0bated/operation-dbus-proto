@@ -1,4 +1,0 @@
-type = scripted
-command = /etc/dinit.d/scripts/op-ovs-services-start.sh
-depends-on = dbus
-depends-on = dinit-dbus

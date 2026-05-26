@@ -1,7 +1,0 @@
-type = process
-command = ./op-mcp-server-start.sh
-depends-on = op-dbus
-logfile = /var/log/op-mcp-server.log
-restart = true
-smooth-recovery = true
-env-file = environment.op-dbus

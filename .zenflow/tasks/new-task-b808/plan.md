@@ -83,11 +83,11 @@ Save to `{@artifacts_path}/plan.md`.
 - Implement connection pooling and lifecycle management using `AgentPoolConfig` in `crates/op-chat/src/orchestration/grpc_pool.rs`.
 - [ ] Write tests with a mocked Tonic server to verify client request formatting, streaming handling, and connection fallback/circuit breaker logic.
 
-### [ ] Step: Task 5 - OpenClaw Provider and Cognitive MCP Integration
-- Implement `crates/op-llm/src/openclaw.rs` to expose the OpenClaw container as an `LlmProvider`.
-- Update `crates/op-chat/src/cognitive_orchestrator.rs` to utilize OpenClaw for context propagation and memory retrieval.
-- Wire up memory sync between `op-cognitive-mcp` and OpenClaw via HTTP/gRPC.
-- [ ] Write tests to verify the OpenClaw provider correctly formats requests and parses tool-calling responses.
+### [ ] Step: Task 5 - Assistant Provider and Cognitive MCP Integration
+- Implement `crates/op-llm/src/assistant.rs` to expose the Assistant container (Incus) as an `LlmProvider`.
+- Update `crates/op-chat/src/cognitive_orchestrator.rs` to utilize Assistant for context propagation and memory retrieval.
+- Wire up memory sync between `op-cognitive-mcp` and Assistant via HTTP/gRPC.
+- [ ] Write tests to verify the Assistant provider correctly formats requests and parses tool-calling responses.
 
 ### [ ] Step: Task 6 - Workstacks and Workflows Implementation
 - Implement `crates/op-chat/src/orchestration/workstacks.rs` to manage workflow executions using the pocketflow_rs engine.

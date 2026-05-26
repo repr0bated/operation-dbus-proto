@@ -573,7 +573,11 @@ async fn main() -> Result<()> {
         match state_manager.query_current_state().await {
             Ok(current_state) => {
                 authoritative_nonnet.load_from_plugins(&current_state).await;
-                mirror.load_plugin_state(&current_state).await;
+                let current_state_serde: std::collections::HashMap<String, serde_json::Value> =
+                    current_state.iter()
+                        .map(|(k, v)| (k.clone(), serde_json::to_value(v).unwrap_or_default()))
+                        .collect();
+                mirror.load_plugin_state(&current_state_serde).await;
                 tracing::info!(
                     "Seeded NonNet mirror state from {} plugins",
                     current_state.len()
@@ -754,7 +758,7 @@ async fn main() -> Result<()> {
                             let tls_config = tonic::transport::ServerTlsConfig::new()
                                 .identity(identity);
                             
-                            match builder.tls_config(tls_config) {
+                            match builder.clone().tls_config(tls_config) {
                                 Ok(tls_builder) => {
                                     builder = tls_builder;
                                     tracing::info!("gRPC TLS encryption enabled via auto-detected certificates");

@@ -3,7 +3,7 @@
 #
 # Topology:
 #   ens3 (148.113.204.83/32, standalone public uplink) → Host
-#   ovsbr0 (10.88.88.1/24, private OVS bridge)          → privacy datapath
+#   ovsbr0 (148.113.204.83/32, public OVS bridge)          → privacy datapath
 #   incusbr0 (10.149.181.1/24, Incus LAN)               → containers
 #
 # Containers:
@@ -788,7 +788,7 @@ WGCF_STATUS="DOWN"
 ip link show wgcf &>/dev/null && WGCF_STATUS="UP (wgcf interface present)"
 
 OVSBR0_STATUS="DOWN"
-ip link show ovsbr0 &>/dev/null && OVSBR0_STATUS="UP (10.88.88.1/24)"
+ip link show ovsbr0 &>/dev/null && OVSBR0_STATUS="UP (148.113.204.83/32)"
 
 cat <<EOF
 

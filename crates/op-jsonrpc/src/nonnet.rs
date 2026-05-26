@@ -26,10 +26,27 @@ pub struct NonNetUpdate {
     pub rows: Vec<Value>,
 }
 
+/// NonNet changed event for watch() method
+#[derive(Debug, Clone)]
+pub struct NonNetChanged {
+    pub key: String,
+    pub operation: NonNetOperation,
+}
+
+/// NonNet operation type
+#[derive(Debug, Clone)]
+pub enum NonNetOperation {
+    Insert,
+    Update,
+    Delete,
+}
+
 /// NonNet database state
 pub struct NonNetDb {
     state: Arc<RwLock<NonNetState>>,
     update_tx: broadcast::Sender<NonNetUpdate>,
+    /// Broadcast sender for watch() method
+    watch_tx: broadcast::Sender<NonNetChanged>,
 }
 
 /// Internal state structure
@@ -58,15 +75,22 @@ impl NonNetDb {
     /// Create a new NonNet database
     pub fn new() -> Self {
         let (update_tx, _) = broadcast::channel(100);
+        let (watch_tx, _) = broadcast::channel(100);
         Self {
             state: Arc::new(RwLock::new(NonNetState::default())),
             update_tx,
+            watch_tx,
         }
     }
 
     /// Subscribe to database updates
     pub fn subscribe(&self) -> broadcast::Receiver<NonNetUpdate> {
         self.update_tx.subscribe()
+    }
+
+    /// Watch for database changes
+    pub fn watch(&self) -> broadcast::Receiver<NonNetChanged> {
+        self.watch_tx.subscribe()
     }
 
     /// Set the tables/schema from plugin state
@@ -95,7 +119,13 @@ impl NonNetDb {
             let _ = self.update_tx.send(NonNetUpdate {
                 db_name: NONNET_DB_NAME.to_string(),
                 table: name.clone(),
-                rows,
+                rows: rows.clone(),
+            });
+
+            // Fire watch broadcast
+            let _ = self.watch_tx.send(NonNetChanged {
+                key: name.clone(),
+                operation: NonNetOperation::Insert,
             });
         }
 
@@ -127,7 +157,71 @@ impl NonNetDb {
         let _ = self.update_tx.send(NonNetUpdate {
             db_name: NONNET_DB_NAME.to_string(),
             table: name.to_string(),
-            rows,
+            rows: rows.clone(),
+        });
+
+        // Fire watch broadcast
+        let _ = self.watch_tx.send(NonNetChanged {
+            key: name.to_string(),
+            operation: NonNetOperation::Update,
+        });
+    }
+
+    /// Insert a new table with rows
+    pub async fn insert_table(&self, name: &str, rows: Vec<Value>) {
+        let mut state = self.state.write().await;
+        state.tables.insert(name.to_string(), rows.clone());
+
+        // Update schema
+        let mut schema_tables = simd_json::value::owned::Object::new();
+        for (table_name, table_rows) in state.tables.iter() {
+            let columns = infer_columns(&Value::Array(table_rows.clone()));
+            schema_tables.insert(table_name.clone(), json!({"columns": columns}));
+        }
+        state.schema = json!({
+            "name": NONNET_DB_NAME,
+            "tables": Value::Object(Box::new(schema_tables))
+        });
+
+        let _ = self.update_tx.send(NonNetUpdate {
+            db_name: NONNET_DB_NAME.to_string(),
+            table: name.to_string(),
+            rows: rows.clone(),
+        });
+
+        // Fire watch broadcast
+        let _ = self.watch_tx.send(NonNetChanged {
+            key: name.to_string(),
+            operation: NonNetOperation::Insert,
+        });
+    }
+
+    /// Delete a table
+    pub async fn delete_table(&self, name: &str) {
+        let mut state = self.state.write().await;
+        state.tables.remove(name);
+
+        // Update schema
+        let mut schema_tables = simd_json::value::owned::Object::new();
+        for (table_name, table_rows) in state.tables.iter() {
+            let columns = infer_columns(&Value::Array(table_rows.clone()));
+            schema_tables.insert(table_name.clone(), json!({"columns": columns}));
+        }
+        state.schema = json!({
+            "name": NONNET_DB_NAME,
+            "tables": Value::Object(Box::new(schema_tables))
+        });
+
+        let _ = self.update_tx.send(NonNetUpdate {
+            db_name: NONNET_DB_NAME.to_string(),
+            table: name.to_string(),
+            rows: vec![],
+        });
+
+        // Fire watch broadcast
+        let _ = self.watch_tx.send(NonNetChanged {
+            key: name.to_string(),
+            operation: NonNetOperation::Delete,
         });
     }
 

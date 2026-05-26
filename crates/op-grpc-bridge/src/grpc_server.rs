@@ -198,6 +198,20 @@ pub async fn run_grpc_server(
     use crate::proto::registry::component_registry_server::ComponentRegistryServer;
     use crate::proto::runtime_mirror_server::RuntimeMirrorServer;
     use crate::proto::state_sync_server::StateSyncServer;
+    use op_cache::grpc::{AgentServiceImpl, McpServiceImpl, OrchestratorServiceImpl};
+    use op_cache::proto::mcp_service_server::McpServiceServer;
+
+    // Build MCP service backed by agent registry.
+    let agent_svc = std::sync::Arc::new(AgentServiceImpl::new());
+    let cache_svc = std::sync::Arc::new(op_cache::grpc::CacheServiceImpl::with_ttl(3600));
+    let orch_svc = std::sync::Arc::new(OrchestratorServiceImpl::with_config(
+        agent_svc.clone(),
+        cache_svc,
+        2,    // workstack_threshold
+        true, // enable_caching
+        3,    // promotion_threshold
+    ));
+    let mcp_svc = std::sync::Arc::new(McpServiceImpl::new(agent_svc, orch_svc));
 
     let server = if let Some(provider) = plugin_provider {
         OperationGrpcServer::with_plugin_provider(schema_engine, provider)
@@ -271,6 +285,7 @@ pub async fn run_grpc_server(
         .add_service(tonic_web::enable(RegistrationServiceServer::new(
             server.clone(),
         )))
+        .add_service(tonic_web::enable(McpServiceServer::from_arc(mcp_svc)))
         .add_service(tonic_web::enable(reflection))
         .add_service(tonic_web::enable(health_service));
 
@@ -573,7 +588,7 @@ impl PluginService for OperationGrpcServer {
             simd_json_to_zvariant(&value).map_err(|e| Status::invalid_argument(e.to_string()))?;
 
         proxy
-            .set(iface, req.property_name.as_str(), &zval)
+            .set(iface, req.property_name.as_str(), zval.into())
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
@@ -3386,7 +3401,7 @@ impl PrivacyNetworkService for OperationGrpcServer {
                     management_ip: parsed
                         .get("management_ip")
                         .and_then(|v| v.as_str())
-                        .unwrap_or("10.88.88.1")
+                        .unwrap_or("10.200.0.1")
                         .to_string(),
                     xray_config: parsed
                         .get("xray_config")

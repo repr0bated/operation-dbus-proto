@@ -6,13 +6,27 @@
 //! - Dynamic content loading
 //! - Cognitive state management
 //! - Context-aware tool discovery
+//! - NotebookLM MCP bridge with gRPC ingress (R1-R16)
+//! - Typed namespace tools for Operation D-Bus (R16)
+//! - Conversation session management (R2, R10)
+//! - Quota awareness (R11)
 
 pub mod activity_filter;
+pub mod cozo_shuttle;
+pub mod dbus_interface;
+pub mod rag_pipeline;
 pub mod cognitive_tools;
+pub mod doctor;
+pub mod gemini_fallback;
+pub mod grpc_service;
 pub mod memory_store;
 pub mod notebooklm;
 pub mod qdrant_shuttle;
+pub mod quota;
 pub mod server;
+pub mod session;
+pub mod tool_profiles;
+pub mod typed_tools;
 pub mod voyage;
 
 pub use activity_filter::{
@@ -20,7 +34,22 @@ pub use activity_filter::{
     OpKind, Significance, SuppressReason,
 };
 pub use cognitive_tools::CognitiveToolRegistry;
+pub use cozo_shuttle::{CozoGraphShuttle, PolicyVerdict};
+pub use grpc_service::CognitiveGrpcService;
 pub use memory_store::CognitiveMemoryStore;
 pub use qdrant_shuttle::{IdentitySled, QdrantSemanticShuttle, SessionTraceContext};
+pub use quota::{QuotaManager, QuotaTier};
 pub use server::CognitiveMcpServer;
+pub use session::SessionManager;
 pub use voyage::VoyageClient;
+
+/// Generated protobuf types for the CognitiveToolService.
+/// Compiled from proto/cognitive.proto via tonic-build.
+pub mod proto {
+    tonic::include_proto!("operation.cognitive.v1");
+
+    /// Combined FileDescriptorSet for reflection.
+    pub const FILE_DESCRIPTOR_SET: &[u8] =
+        tonic::include_file_descriptor_set!("cognitive_descriptor");
+}
+pub mod interceptor;

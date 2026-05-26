@@ -48,7 +48,7 @@ server {
 
     # gRPC endpoints (if needed)
     location ~ ^/operation\.[^/]+/[^/]+$ {
-        proxy_pass http://10.88.88.1:50051;
+        proxy_pass http://10.200.0.2:50051;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -64,7 +64,7 @@ server {
     }
 
     location = /grpc.health.v1.Health/Check {
-        proxy_pass http://10.88.88.1:50051;
+        proxy_pass http://10.200.0.2:50051;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;

@@ -81,7 +81,7 @@ pub struct LxcContainer {
     pub uptime: Option<u64>,
     /// Additional fields
     #[serde(flatten)]
-    pub extra: HashMap<String, simd_json::OwnedValue>,
+    pub extra: HashMap<String, serde_json::Value>,
 }
 
 /// Request to create a new LXC container
@@ -180,10 +180,10 @@ pub struct ContainerStatus {
     pub pid: Option<u32>,
     /// HA state
     #[serde(default)]
-    pub ha: Option<HashMap<String, simd_json::OwnedValue>>,
+    pub ha: Option<HashMap<String, serde_json::Value>>,
     /// Additional fields
     #[serde(flatten)]
-    pub extra: HashMap<String, simd_json::OwnedValue>,
+    pub extra: HashMap<String, serde_json::Value>,
 }
 
 /// Proxmox API response wrapper
@@ -396,7 +396,7 @@ impl ProxmoxClient {
     pub async fn get_container_config(
         &self,
         vmid: u32,
-    ) -> Result<HashMap<String, simd_json::OwnedValue>> {
+    ) -> Result<HashMap<String, serde_json::Value>> {
         let path = format!("/api2/json/nodes/{}/lxc/{}/config", self.node, vmid);
         self.get(&path).await
     }
@@ -636,7 +636,7 @@ mod tests {
             ..Default::default()
         };
 
-        let json = simd_json::serde::to_owned_value(&req).unwrap();
+        let json: serde_json::Value = serde_json::to_value(&req).unwrap();
         assert_eq!(json["vmid"], 100);
         assert_eq!(json["hostname"], "test");
         assert_eq!(json["memory"], 512);

@@ -240,11 +240,7 @@ pub async fn openclaw_models_handler(Extension(_state): Extension<Arc<AppState>>
 
     let models_url = format!("{}/v1/models", base_url);
 
-    match client
-        .get(&models_url)
-        .send()
-        .await
-    {
+    match client.get(&models_url).send().await {
         Ok(resp) => {
             if resp.status().is_success() {
                 match resp.json::<Value>().await {

@@ -33,6 +33,7 @@ op-identity = { path = "../op-identity" }
 op-network = { path = "../op-network" }
 op-jsonrpc = { path = "../op-jsonrpc" }
 op-cognitive-mcp = { path = "../op-cognitive-mcp" }
+op-cache = { path = "../op-cache" }
 
 # Zero-copy shared memory (1:1 Direct Read)
 memmap2 = { workspace = true }

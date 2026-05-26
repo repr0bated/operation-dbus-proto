@@ -1,6 +1,6 @@
 use anyhow::Result;
 use op_dbus_mirror::object::MirrorObject;
-use simd_json::json;
+use serde_json::json;
 use std::time::Instant;
 use tracing_subscriber::EnvFilter;
 use zbus::connection::Builder;

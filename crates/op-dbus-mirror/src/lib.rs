@@ -14,18 +14,23 @@ use op_grpc_bridge::{OperationGrpcServer, SchemaEngine};
 use op_jsonrpc::nonnet::NonNetDb;
 use op_network::ovsdb::OvsdbClient;
 use op_state::manager::StateManager;
-use simd_json::prelude::*;
-use simd_json::OwnedValue as Value;
+use procfs::Current as _;
+use serde_json::{Map, Value};
 use std::collections::HashSet;
 use std::sync::Arc;
 use zbus::zvariant::{ObjectPath, OwnedObjectPath};
 use zbus::{connection::Builder, Connection};
 
 pub mod dbus_interface;
+pub mod event;
+pub mod event_dispatcher;
+pub mod event_sources;
+pub mod heartbeat;
 pub mod jsonrpc_interface;
 pub mod managed_objects;
 pub mod object;
 pub mod plugin_interface;
+pub mod session;
 pub mod tree;
 
 /// D-Bus publication service.
@@ -47,6 +52,10 @@ pub struct DbusMirror {
     grpc_server: Option<Arc<OperationGrpcServer>>,
     /// StateManager for enumerating all registered plugins (active or not).
     state_manager: Option<Arc<StateManager>>,
+    /// Current data and sequence numbers per object path
+    current_data: DashMap<String, (Value, u64)>,
+    /// Per-session state keyed by peer name
+    pub sessions: DashMap<String, session::MirrorSession>,
 }
 
 impl DbusMirror {
@@ -71,6 +80,8 @@ impl DbusMirror {
             plugin_registry: Arc::new(DashMap::new()),
             grpc_server: None,
             state_manager: None,
+            current_data: DashMap::new(),
+            sessions: DashMap::new(),
         })
     }
 
@@ -89,8 +100,8 @@ impl DbusMirror {
 
     /// Start the mirror service.
     ///
-    /// Performs an initial full-tree publication and then enters a loop
-    /// to periodically refresh and repair the mirror.
+    /// Performs an initial full-tree publication and then enters an event-driven
+    /// loop to publish deltas from all data sources.
     pub async fn start(self: Arc<Self>) -> Result<()> {
         tracing::info!("Starting D-Bus mirror publication service...");
 
@@ -139,20 +150,32 @@ impl DbusMirror {
             .at("/org/opdbus/v1/nonnet", nonnet_interface)
             .await?;
 
-        // Start background refresh task — also refreshes the fixed plugin objects.
-        let mirror = self.clone();
-        let plugin_snap_bg = plugin_snap.clone();
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
-            loop {
-                interval.tick().await;
-                // Refresh plugin snapshot.
-                mirror.refresh_plugin_snapshot(&plugin_snap_bg).await;
-                if let Err(e) = mirror.refresh_full_tree().await {
-                    tracing::error!("D-Bus mirror snapshot repair publication failed: {}", e);
-                }
-            }
-        });
+        // Create event dispatcher
+        let dispatcher = crate::event_dispatcher::EventDispatcher::new(
+            self.clone(),
+            self.ovsdb.clone(),
+            self.nonnet.clone(),
+            self.state_manager.clone(),
+            self.grpc_server.clone(),
+        );
+
+        // Spawn all event sources
+        if let Err(e) = dispatcher.spawn_event_sources().await {
+            tracing::error!("Failed to spawn event sources: {}", e);
+        }
+
+        // Spawn heartbeat task
+        if let Err(e) = crate::heartbeat::spawn_heartbeat_task(
+            self.clone(),
+            dispatcher.broadcast_tx.clone(),
+        ).await {
+            tracing::error!("Failed to spawn heartbeat task: {}", e);
+        }
+
+        // Run event loop
+        if let Err(e) = dispatcher.run_event_loop().await {
+            tracing::error!("Event loop failed: {}", e);
+        }
 
         // Populate fixed objects immediately on startup.
         self.refresh_plugin_snapshot(&plugin_snap).await;
@@ -254,7 +277,7 @@ impl DbusMirror {
                 "meminfo" => self.gather_meminfo().await?,
                 "cpuinfo" => self.gather_cpuinfo().await?,
                 "loadavg" => self.gather_loadavg().await?,
-                _ => simd_json::json!({ "status": "available" }),
+                _ => serde_json::json!({ "status": "available" }),
             };
             self.publish_object(&path, data).await?;
             active_paths.insert(path);
@@ -264,60 +287,46 @@ impl DbusMirror {
     }
 
     async fn gather_meminfo(&self) -> Result<Value> {
-        let content = tokio::fs::read_to_string("/proc/meminfo").await?;
-        let mut map = simd_json::owned::Object::new();
-        for line in content.lines() {
-            let parts: Vec<&str> = line.split(':').collect();
-            if parts.len() == 2 {
-                let key = parts[0].trim();
-                let val = parts[1].trim().split_whitespace().next().unwrap_or("0");
-                if let Ok(n) = val.parse::<i64>() {
-                    map.insert(key.to_string().into(), Value::from(n));
-                }
+        match procfs::Meminfo::current() {
+            Ok(meminfo) => Ok(serde_json::to_value(meminfo).unwrap_or_default()),
+            Err(e) => {
+                tracing::warn!("Failed to read /proc/meminfo: {}", e);
+                Ok(serde_json::json!({ "error": e.to_string() }))
             }
         }
-        Ok(Value::Object(Box::new(map)))
     }
 
     async fn gather_cpuinfo(&self) -> Result<Value> {
-        let content = tokio::fs::read_to_string("/proc/cpuinfo").await?;
-        let mut cores = Vec::new();
-        let mut current_core = simd_json::owned::Object::new();
-        for line in content.lines() {
-            if line.is_empty() {
-                if !current_core.is_empty() {
-                    cores.push(Value::Object(Box::new(current_core.clone())));
-                    current_core.clear();
-                }
-                continue;
-            }
-            let parts: Vec<&str> = line.split(':').collect();
-            if parts.len() == 2 {
-                let key = parts[0].trim().replace(' ', "_");
-                let val = parts[1].trim();
-                current_core.insert(key.into(), Value::from(val.to_string()));
+        match procfs::CpuInfo::current() {
+            Ok(cpuinfo) => Ok(serde_json::to_value(cpuinfo).unwrap_or_default()),
+            Err(e) => {
+                tracing::warn!("Failed to read /proc/cpuinfo: {}", e);
+                Ok(serde_json::json!({ "error": e.to_string() }))
             }
         }
-        Ok(simd_json::json!({ "cores": cores }))
     }
 
     async fn gather_loadavg(&self) -> Result<Value> {
-        let content = tokio::fs::read_to_string("/proc/loadavg").await?;
-        let parts: Vec<&str> = content.split_whitespace().collect();
-        if parts.len() >= 3 {
-            return Ok(simd_json::json!({
-                "1min": parts[0],
-                "5min": parts[1],
-                "15min": parts[2],
-            }));
+        match procfs::LoadAverage::current() {
+            Ok(loadavg) => Ok(serde_json::to_value(loadavg).unwrap_or_default()),
+            Err(e) => {
+                tracing::warn!("Failed to read /proc/loadavg: {}", e);
+                Ok(serde_json::json!({ "error": e.to_string() }))
+            }
         }
-        Ok(simd_json::json!({}))
     }
 
     async fn publish_ovsdb_snapshot(&self, active_paths: &mut HashSet<String>) -> Result<()> {
         tracing::debug!("Scanning OVSDB for projection...");
-        let dump = self.ovsdb.dump_db("Open_vSwitch").await?;
+        let dump_serde = self.ovsdb.dump_db("Open_vSwitch").await?;
         tracing::info!("DEBUG: OVSDB dump retrieved");
+        // Convert serde_json::Value → serde_json::Value for compatibility
+        let dump: Value = {
+            let s = serde_json::to_string(&dump_serde)
+                .map_err(|e| anyhow::anyhow!("dump_db serialize error: {}", e))?;
+            serde_json::from_str(&s)
+                .map_err(|e| anyhow::anyhow!("dump_db parse error: {}", e))?
+        };
 
         if let Value::Object(tables) = dump {
             tracing::info!("DEBUG: OVSDB dump contains {} tables", tables.len());
@@ -342,14 +351,14 @@ impl DbusMirror {
 
     async fn publish_nonnet_snapshot(&self, active_paths: &mut HashSet<String>) -> Result<()> {
         tracing::info!("DEBUG: NonNet snapshot started");
-        let request = op_jsonrpc::protocol::JsonRpcRequest::new("list_dbs", Value::Array(vec![]));
+        let request = op_jsonrpc::protocol::JsonRpcRequest::new("list_dbs", simd_json::json!([]));
         let response = self.nonnet.handle_request(request).await;
 
-        let dbs = response
-            .result
-            .and_then(|v: Value| v.as_array().map(|a| a.to_vec()))
+        let dbs: Vec<Value> = response.result
+            .and_then(|v| serde_json::to_value(&v).ok())
+            .and_then(|v| v.as_array().map(|a| a.to_vec()))
             .unwrap_or_default();
-        
+
         tracing::info!("DEBUG: NonNet has {} databases", dbs.len());
 
         for db_name_val in dbs {
@@ -357,32 +366,33 @@ impl DbusMirror {
                 tracing::info!("DEBUG: Scanning NonNet DB: {}", db_name);
                 let schema_req = op_jsonrpc::protocol::JsonRpcRequest::new(
                     "get_schema",
-                    Value::Array(vec![Value::from(db_name)]),
+                    simd_json::json!([db_name]),
                 );
                 let schema_resp = self.nonnet.handle_request(schema_req).await;
 
-                if let Some(tables) = schema_resp
-                    .result
-                    .and_then(|schema| schema.get("tables").and_then(|v| v.as_object().cloned()))
+                let schema_serde: Option<Value> = schema_resp.result
+                    .and_then(|v| serde_json::to_value(&v).ok());
+                if let Some(tables) = schema_serde
+                    .and_then(|s| s.get("tables").and_then(|v| v.as_object().cloned()))
                 {
                     tracing::info!("DEBUG: NonNet DB {} has {} tables", db_name, tables.len());
                     let table_names: Vec<String> = tables.keys().map(|k| k.to_string()).collect();
                     for table_name in table_names {
                         let dump_req = op_jsonrpc::protocol::JsonRpcRequest::new(
                             "dump",
-                            Value::Array(vec![Value::from(db_name)]),
+                            simd_json::json!([db_name]),
                         );
                         let dump_resp = self.nonnet.handle_request(dump_req).await;
 
-                        if let Some(rows) = dump_resp
-                            .result
-                            .and_then(|r: Value| r.get(&table_name).cloned())
-                            .and_then(|r: Value| r.get("rows").cloned())
+                        let dump_serde: Option<Value> = dump_resp.result
+                            .and_then(|v| serde_json::to_value(&v).ok());
+                        if let Some(rows) = dump_serde
+                            .and_then(|r| r.get(&table_name).cloned())
+                            .and_then(|r| r.get("rows").cloned())
                             .and_then(|v| v.as_array().map(|a| a.to_vec()))
                         {
                             tracing::info!("DEBUG: NonNet DB {} table {} has {} rows", db_name, table_name, rows.len());
-                            let rows_vec: Vec<_> = rows.iter().cloned().collect();
-                            for row in rows_vec {
+                            for row in rows {
                                 let id = Self::extract_uuid(&row);
                                 let path = format!(
                                     "/org/opdbus/v1/nonnet/{}/{}/{}",
@@ -465,7 +475,7 @@ impl DbusMirror {
                 }
             }
 
-            let service_data = simd_json::json!({
+            let service_data = serde_json::json!({
                 "service": name_str,
                 "interfaces": interfaces,
                 "methods": methods,
@@ -571,8 +581,8 @@ impl DbusMirror {
     }
 
     fn component_info_to_value(info: &op_grpc_bridge::proto::registry::ComponentInfo) -> Value {
-        use simd_json::owned::Object;
-        let mut map = Object::new();
+        use serde_json::Map;
+        let mut map = Map::new();
         map.insert(
             "component_id".into(),
             Value::from(info.component_id.clone()),
@@ -593,12 +603,12 @@ impl DbusMirror {
             .map(|s| Value::from(s.clone()))
             .collect();
         map.insert("capabilities".into(), Value::Array(caps));
-        let mut meta = Object::new();
+        let mut meta = Map::new();
         for (k, v) in &info.metadata {
             meta.insert(k.clone(), Value::from(v.clone()));
         }
-        map.insert("metadata".into(), Value::Object(Box::new(meta)));
-        Value::Object(Box::new(map))
+        map.insert("metadata".into(), Value::Object(meta));
+        Value::Object(map)
     }
 
     /// Push current plugin state into the fixed PluginInterface object.
@@ -607,21 +617,25 @@ impl DbusMirror {
             Some(sm) => sm.clone(),
             None => return,
         };
-        let live_state = sm.query_current_state().await.unwrap_or_default();
+        let live_state_raw = sm.query_current_state().await.unwrap_or_default();
+        let live_state: std::collections::HashMap<String, Value> = live_state_raw
+            .into_iter()
+            .map(|(k, v)| (k, serde_json::to_value(&v).unwrap_or_default()))
+            .collect();
         let mut map = std::collections::HashMap::new();
         for name in sm.list_plugins() {
             let json = match live_state.get(&name) {
                 Some(state) => {
                     let mut obj = match state {
-                        Value::Object(o) => *o.clone(),
+                        Value::Object(o) => o.clone(),
                         other => {
-                            let mut m = simd_json::owned::Object::new();
+                            let mut m = Map::new();
                             m.insert("state".into(), other.clone());
                             m
                         }
                     };
                     obj.insert("active".into(), Value::from(true));
-                    simd_json::to_string(&Value::Object(Box::new(obj))).unwrap_or_default()
+                    serde_json::to_string(&Value::Object(obj)).unwrap_or_default()
                 }
                 None => format!("{{\"active\":false,\"name\":{:?}}}", name),
             };
@@ -640,25 +654,29 @@ impl DbusMirror {
             None => return Ok(()),
         };
 
-        let live_state = sm.query_current_state().await.unwrap_or_default();
+        let live_state_raw = sm.query_current_state().await.unwrap_or_default();
+        let live_state: std::collections::HashMap<String, Value> = live_state_raw
+            .into_iter()
+            .map(|(k, v)| (k, serde_json::to_value(&v).unwrap_or_default()))
+            .collect();
 
         for plugin_name in sm.list_plugins() {
             let path = Self::plugin_dbus_path(&plugin_name);
             let data = match live_state.get(&plugin_name) {
                 Some(state) => {
                     let mut obj = match state {
-                        Value::Object(o) => *o.clone(),
+                        Value::Object(o) => o.clone(),
                         other => {
-                            let mut m = simd_json::owned::Object::new();
+                            let mut m = Map::new();
                             m.insert("state".into(), other.clone());
                             m
                         }
                     };
                     obj.insert("active".into(), Value::from(true));
                     obj.insert("name".into(), Value::from(plugin_name.clone()));
-                    Value::Object(Box::new(obj))
+                    Value::Object(obj)
                 }
-                None => simd_json::json!({
+                None => serde_json::json!({
                     "active": false,
                     "name": plugin_name.clone(),
                 }),
@@ -726,44 +744,60 @@ impl DbusMirror {
         match value {
             Value::Object(map) => Value::Object(map.clone()),
             Value::Array(items) => {
-                let mut payload = simd_json::owned::Object::new();
+                let mut payload = serde_json::Map::new();
                 payload.insert("items".into(), Value::Array(items.clone()));
-                Value::Object(Box::new(payload))
+                Value::Object(payload)
             }
             scalar => {
-                let mut payload = simd_json::owned::Object::new();
+                let mut payload = serde_json::Map::new();
                 payload.insert("value".into(), scalar.clone());
-                Value::Object(Box::new(payload))
+                Value::Object(payload)
             }
         }
     }
 
     async fn publish_object(&self, path: &str, data: Value) -> Result<()> {
-        if self.published_objects.contains_key(path) {
-            // Object already registered — update data in-place and signal if changed.
-            if let Ok(iface_ref) = self
-                .connection
-                .object_server()
-                .interface::<_, object::MirrorObject>(path)
-                .await
-            {
-                let changed = iface_ref.get_mut().await.update_data(data.clone());
-                if changed {
+        // Get current data and sequence from the store
+        let mut entry = self
+            .current_data
+            .entry(path.to_string())
+            .or_insert_with(|| (serde_json::json!({}), 0u64));
+        let (current_data, sequence) = &mut *entry;
+
+        // Check if data has changed
+        let changed = *current_data != data;
+        
+        if changed {
+            // Increment sequence number
+            *sequence += 1;
+            
+            // Update stored data
+            *current_data = data.clone();
+            
+            if self.published_objects.contains_key(path) {
+                // Object already registered — update data in-place and signal if changed.
+                if let Ok(iface_ref) = self
+                    .connection
+                    .object_server()
+                    .interface::<_, object::MirrorObject>(path)
+                    .await
+                {
+                    let _ = iface_ref.get_mut().await.update_data(data.clone());
+                    // Emit PropertiesChanged with only changed fields
                     let ctxt = iface_ref.signal_context();
                     let _ = iface_ref.get().await.data_updated(ctxt).await;
                     // Ensure the ObjectManager knows the properties changed as well
                     self.register_in_object_manager(path, &data).await;
                 }
+            } else {
+                let obj = object::MirrorObject::new(data.clone());
+                self.connection.object_server().at(path, obj).await?;
+                self.published_objects.insert(path.to_string(), ());
+                
+                self.register_in_object_manager(path, &data).await;
             }
-            return Ok(());
         }
-
-        let obj = object::MirrorObject::new(data.clone());
-        self.connection.object_server().at(path, obj).await?;
-        self.published_objects.insert(path.to_string(), ());
         
-        self.register_in_object_manager(path, &data).await;
-
         Ok(())
     }
 
@@ -804,7 +838,7 @@ impl DbusMirror {
             }
         };
 
-        let json_str = simd_json::to_string(data).unwrap_or_default();
+        let json_str = serde_json::to_string(data).unwrap_or_default();
         let existed = self
             .plugin_registry
             .insert(op.clone(), build_interface_map(&json_str))

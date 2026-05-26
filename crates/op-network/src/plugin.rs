@@ -5,7 +5,7 @@
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use simd_json::OwnedValue as Value;
+use serde_json::Value;
 use std::time::Duration;
 use tokio::time::sleep;
 use tracing::{info, warn};
@@ -83,7 +83,7 @@ pub struct OpenFlowConfig {
 }
 
 fn default_controller() -> String {
-    "tcp:10.88.88.1:6653".to_string()
+    "tcp:10.200.0.1:6653".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -197,13 +197,13 @@ impl NetworkPlugin {
                 .list_bridge_ports(bridge_name)
                 .await
                 .unwrap_or_default();
-            bridge_details.push(simd_json::json!({
+            bridge_details.push(serde_json::json!({
                 "name": bridge_name,
                 "ports": ports,
             }));
         }
 
-        Ok(simd_json::json!({
+        Ok(serde_json::json!({
             "bridges": bridge_details,
             "interfaces": self.interfaces,
             "ovsdb": {
@@ -429,9 +429,9 @@ impl NetworkPlugin {
             let addr_str = config.controller.trim_start_matches("tcp:");
             addr_str
                 .parse()
-                .unwrap_or_else(|_| std::net::SocketAddr::from(([10, 88, 88, 1], 6653)))
+                .unwrap_or_else(|_| std::net::SocketAddr::from(([10, 200, 0, 1], 6653)))
         } else {
-            std::net::SocketAddr::from(([10, 88, 88, 1], 6653))
+            std::net::SocketAddr::from(([10, 200, 0, 1], 6653))
         };
 
         // Connect to OpenFlow switch
@@ -479,7 +479,7 @@ mod tests {
         "#
         .to_string();
 
-        let plugin: NetworkPlugin = simd_json::from_str(&mut json).unwrap();
+        let plugin: NetworkPlugin = serde_json::from_str(&json).unwrap();
         assert_eq!(plugin.bridges.len(), 1);
         assert_eq!(plugin.bridges[0].name, "vmbr0");
         assert_eq!(plugin.bridges[0].datapath_type, "system");

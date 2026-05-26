@@ -8,6 +8,7 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Datelike, Utc};
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::process::Command;
@@ -261,33 +262,106 @@ impl StreamingBlockchain {
         Ok(snapshot_path)
     }
 
-    /// Stream snapshot to remote using btrfs send
-    pub async fn stream_to_remote(&self, snapshot_name: &str, remote_path: &str) -> Result<()> {
+    /// Stream snapshot to remote using btrfs send / btrfs receive.
+    ///
+    /// Security (audit item #2):
+    /// - The pipeline `btrfs send <snap> | ssh <host> btrfs receive <path>` is
+    ///   built as two argv-form `Command` children connected via
+    ///   `Stdio::piped()`. No shell is invoked locally; no string is
+    ///   interpolated into a shell command line.
+    /// - `remote_host` and `remote_path` are validated against strict ASCII
+    ///   allow-lists before being passed to `ssh`, because `ssh` will
+    ///   re-parse the remote argv through the destination shell.
+    ///
+    /// API note: this signature takes `remote_host` and `remote_path` as
+    /// separate arguments. The previous signature took a single `remote_path`
+    /// and (incorrectly) used it for both the ssh host slot and the receive
+    /// path slot of an interpolated shell command \u2014 the method as written
+    /// could not have transferred to a real remote. Callers must now supply
+    /// the host explicitly.
+    ///
+    /// TODO: replace `ssh`/`btrfs` CLI shelling with a librust SSH client and
+    /// the kernel ioctl in a follow-up. Tracked separately under AGENTS.md \u00a72.
+    pub async fn stream_to_remote(
+        &self,
+        snapshot_name: &str,
+        remote_host: &str,
+        remote_path: &str,
+    ) -> Result<()> {
         let snapshot_path = self.base_path.join("snapshots").join(snapshot_name);
 
         if !snapshot_path.exists() {
             anyhow::bail!("Snapshot not found: {}", snapshot_name);
         }
 
-        // btrfs send <snapshot> | ssh <remote> btrfs receive <path>
-        info!("Streaming snapshot {} to {}", snapshot_name, remote_path);
+        // ---- Hardened input validation (audit item #2) ----
+        validate_remote_host(remote_host).context("invalid remote host")?;
+        validate_btrfs_path(Path::new(remote_path)).context("invalid remote path")?;
+        // Defense in depth: also validate the local snapshot path even though
+        // it is constructed from our own `base_path`.
+        validate_btrfs_path(&snapshot_path).context("invalid local snapshot path")?;
 
-        let output = Command::new("sh")
-            .arg("-c")
-            .arg(format!(
-                "btrfs send {} | ssh {} 'btrfs receive {}'",
-                snapshot_path.display(),
-                remote_path,
-                remote_path
-            ))
-            .output()
-            .await?;
+        info!(
+            "Streaming snapshot {} to {}:{}",
+            snapshot_name, remote_host, remote_path
+        );
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("Stream failed: {}", stderr);
+        // ---- Argv-form two-process pipeline; no shell on the local side. ----
+        let mut send_child = Command::new("btrfs")
+            .arg("send")
+            .arg(&snapshot_path)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .context("Failed to spawn `btrfs send`")?;
+
+        let send_stdout = send_child
+            .stdout
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("Failed to capture stdout of `btrfs send`"))?;
+        let send_stdout: Stdio = send_stdout
+            .try_into()
+            .context("Failed to convert `btrfs send` stdout to Stdio")?;
+
+        // `--` defeats any future leading-dash sneakiness in `remote_host`
+        // (already rejected by the validator; belt-and-braces).
+        let mut recv_child = Command::new("ssh")
+            .arg("--")
+            .arg(remote_host)
+            .arg("btrfs")
+            .arg("receive")
+            .arg(remote_path)
+            .stdin(send_stdout)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .context("Failed to spawn `ssh ... btrfs receive`")?;
+
+        let send_status = send_child
+            .wait()
+            .await
+            .context("Failed to wait for `btrfs send`")?;
+        let recv_output = recv_child
+            .wait_with_output()
+            .await
+            .context("Failed to wait for `ssh ... btrfs receive`")?;
+
+        if !send_status.success() {
+            anyhow::bail!(
+                "`btrfs send` failed with status {:?}",
+                send_status.code()
+            );
+        }
+        if !recv_output.status.success() {
+            let stderr = String::from_utf8_lossy(&recv_output.stderr);
+            anyhow::bail!(
+                "`ssh ... btrfs receive` failed (status {:?}): {}",
+                recv_output.status.code(),
+                stderr
+            );
         }
 
+        info!("Successfully streamed snapshot {} to {}", snapshot_name, remote_host);
         Ok(())
     }
 
@@ -501,6 +575,90 @@ fn system_time_to_utc(ts: SystemTime) -> Option<DateTime<Utc>> {
     Some(DateTime::<Utc>::from(ts))
 }
 
+// ----------------------------------------------------------------------------
+// Security validators (audit item #2: shell-injection hardening)
+//
+// Intentionally duplicated from `op-cache::btrfs_cache` rather than crossing
+// the crate boundary, because the originals are private static methods.
+// Exposing them would re-open the API surface we just hardened in item #1.
+//
+// TODO: consolidate into an `op-core::path_safety` module once a second
+// audit item benefits from it. Tracked separately.
+// ----------------------------------------------------------------------------
+
+/// Validate a remote host specifier (e.g. "host", "user@host", "1.2.3.4").
+///
+/// Allowed: ASCII alphanumerics and `._@:-`. Rejected: anything that could be
+/// interpreted by a shell or alter ssh's argv parsing.
+fn validate_remote_host(host: &str) -> Result<()> {
+    if host.is_empty() {
+        anyhow::bail!("remote host must not be empty");
+    }
+    if host.len() > 253 {
+        anyhow::bail!("remote host exceeds 253 chars");
+    }
+    if host.starts_with('-') {
+        anyhow::bail!("remote host must not start with '-' (would look like an ssh flag)");
+    }
+    for (i, b) in host.bytes().enumerate() {
+        let ok = b.is_ascii_alphanumeric()
+            || b == b'.'
+            || b == b'_'
+            || b == b'-'
+            || b == b'@'
+            || b == b':';
+        if !ok {
+            anyhow::bail!(
+                "invalid byte 0x{:02x} at position {} in remote host",
+                b,
+                i
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Validate a path that will be forwarded to `btrfs send` / `btrfs receive`,
+/// including via `ssh` where the remote shell re-parses argv.
+///
+/// Requires absolute, no `..` components, no shell metacharacters, no
+/// control characters.
+fn validate_btrfs_path(path: &Path) -> Result<()> {
+    let s = path
+        .to_str()
+        .context("btrfs path is not valid UTF-8")?;
+    if s.is_empty() {
+        anyhow::bail!("btrfs path must not be empty");
+    }
+    if !path.is_absolute() {
+        anyhow::bail!("btrfs path must be absolute: {:?}", path);
+    }
+    if s.starts_with('-') {
+        anyhow::bail!("btrfs path must not start with '-'");
+    }
+    const FORBIDDEN: &[char] = &[
+        '\0', '\n', '\r', '\t', '\x0b', '\x0c', ' ', '`', '$', ';', '&', '|', '<', '>', '(', ')',
+        '{', '}', '*', '?', '[', ']', '!', '~', '#', '\\', '"', '\'',
+    ];
+    for ch in s.chars() {
+        if (ch as u32) < 0x20 {
+            anyhow::bail!(
+                "control character 0x{:02x} not allowed in btrfs path",
+                ch as u32
+            );
+        }
+        if FORBIDDEN.contains(&ch) {
+            anyhow::bail!("character {:?} not allowed in btrfs path", ch);
+        }
+    }
+    for comp in path.components() {
+        if let std::path::Component::ParentDir = comp {
+            anyhow::bail!("btrfs path must not contain '..' components: {:?}", path);
+        }
+    }
+    Ok(())
+}
+
 /// Recursively copy a directory
 async fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
     tokio::fs::create_dir_all(dst).await?;
@@ -518,4 +676,47 @@ async fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_remote_host_accepts_reasonable_inputs() {
+        assert!(validate_remote_host("example.com").is_ok());
+        assert!(validate_remote_host("user@example.com").is_ok());
+        assert!(validate_remote_host("10.0.0.1").is_ok());
+        assert!(validate_remote_host("host_with_underscore-1").is_ok());
+    }
+
+    #[test]
+    fn validate_remote_host_rejects_injection() {
+        assert!(validate_remote_host("").is_err());
+        assert!(validate_remote_host("host; rm -rf /").is_err());
+        assert!(validate_remote_host("host`whoami`").is_err());
+        assert!(validate_remote_host("host$(whoami)").is_err());
+        assert!(validate_remote_host("host|cat").is_err());
+        assert!(validate_remote_host("host with space").is_err());
+        assert!(validate_remote_host("host\nnewline").is_err());
+        assert!(validate_remote_host("-oProxyCommand=evil").is_err());
+    }
+
+    #[test]
+    fn validate_btrfs_path_accepts_clean_absolute_paths() {
+        assert!(validate_btrfs_path(Path::new("/var/lib/op-dbus/snap")).is_ok());
+        assert!(validate_btrfs_path(Path::new("/tmp/cache-001")).is_ok());
+    }
+
+    #[test]
+    fn validate_btrfs_path_rejects_injection_and_traversal() {
+        assert!(validate_btrfs_path(Path::new("")).is_err());
+        assert!(validate_btrfs_path(Path::new("relative/path")).is_err());
+        assert!(validate_btrfs_path(Path::new("/etc/../etc/passwd")).is_err());
+        assert!(validate_btrfs_path(Path::new("/tmp/foo; rm -rf /")).is_err());
+        assert!(validate_btrfs_path(Path::new("/tmp/$(whoami)")).is_err());
+        assert!(validate_btrfs_path(Path::new("/tmp/foo bar")).is_err());
+        assert!(validate_btrfs_path(Path::new("/tmp/foo\nbar")).is_err());
+        assert!(validate_btrfs_path(Path::new("/tmp/`whoami`")).is_err());
+    }
 }

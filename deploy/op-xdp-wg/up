@@ -1,51 +1,135 @@
 #!/bin/sh
-# Deploy op-xdp-wg: XDP steering + container network for wg-xray.
+# Deploy wg-xray XDP stack.
+# Covers: host binaries, LXC hooks, container rootfs, s6 services.
+# Idempotent — safe to re-run.
 set -eu
 
-REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
+DEPLOY_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_DIR="$(cd "$DEPLOY_DIR/../.." && pwd)"
+CT_DIR="$REPO_DIR/deploy/incus/privacy-xray-ingress"
+CT_ROOT=/var/lib/incus/containers/wg-xray/rootfs
+CT=wg-xray
 S6_SV=/etc/s6/sv
-S6_MISC=$S6_SV/misc/contents.d
 S6_RC=/etc/s6/rc
 S6_CFG=/etc/s6/config
 
-log() { echo "op-xdp-wg: $*"; }
+log() { printf 'deploy: %s\n' "$*"; }
+die() { printf 'deploy ERROR: %s\n' "$*" >&2; exit 1; }
+
+# ── 1. Build ──────────────────────────────────────────────────────────────────
+log "building op-xdp-wg"
+cargo build --release -p op-network --bin op-xdp-wg --manifest-path "$REPO_DIR/Cargo.toml"
+log "building op-ovsbr0-afxdp"
+cargo build --release -p op-network --bin op-ovsbr0-afxdp --manifest-path "$REPO_DIR/Cargo.toml"
+log "building op-ovsbr0-setup"
+cargo build --release -p op-network --bin op-ovsbr0-setup --manifest-path "$REPO_DIR/Cargo.toml"
+
+# ── 2. Host binaries ──────────────────────────────────────────────────────────
+log "installing host binaries"
+install -m 755 "$REPO_DIR/target/release/op-xdp-wg"  /usr/local/sbin/op-xdp-wg
+install -m 755 "$REPO_DIR/target/release/op-ovsbr0-afxdp" /usr/local/sbin/op-ovsbr0-afxdp
+install -m 755 "$REPO_DIR/target/release/op-ovsbr0-afxdp" /usr/local/bin/op-ovsbr0-afxdp
+install -m 755 "$REPO_DIR/target/release/op-ovsbr0-setup" /usr/local/bin/op-ovsbr0-setup
+install -m 755 "$DEPLOY_DIR/bin/op-xdp-hostside.sh"  /usr/local/sbin/op-xdp-hostside.sh
+install -m 755 "$DEPLOY_DIR/bin/op-xdp-detach.sh"    /usr/local/sbin/op-xdp-detach.sh
+install -m 755 "$DEPLOY_DIR/bin/op-xdp-watch.sh"     /usr/local/sbin/op-xdp-watch.sh
+install -m 755 "$DEPLOY_DIR/bin/op-xdp-final.sh"     /usr/local/sbin/op-xdp-final.sh
+
+# ── 3. LXC hooks ──────────────────────────────────────────────────────────────
+log "wiring LXC hooks on $CT"
+printf '%s\n' \
+    'lxc.hook.start-host = /usr/local/sbin/op-xdp-hostside.sh' \
+    'lxc.hook.stop       = /usr/local/sbin/op-xdp-detach.sh' \
+    | incus config set "$CT" raw.lxc -
+
+# ── 4. Container rootfs ───────────────────────────────────────────────────────
+log "syncing container rootfs"
+[ -d "$CT_ROOT" ] || die "rootfs not found: $CT_ROOT — create the container first"
 
 # scripts
-log "installing scripts"
-install -m 755 "$REPO_DIR/bin/op-xdp-final.sh"    /usr/local/sbin/op-xdp-final.sh
-install -m 755 "$REPO_DIR/bin/op-xdp-hostside.sh" /usr/local/sbin/op-xdp-hostside.sh
-install -m 755 "$REPO_DIR/bin/op-xdp-watch.sh"    /usr/local/sbin/op-xdp-watch.sh
+install -m 755 "$CT_DIR/usr/local/sbin/wg-xray-set-network.sh"  "$CT_ROOT/usr/local/sbin/wg-xray-set-network.sh"
+install -m 755 "$CT_DIR/usr/local/sbin/wg-xray-policy-rules.sh" "$CT_ROOT/usr/local/sbin/wg-xray-policy-rules.sh"
 
-# incus hook
-log "wiring incus post-start hook"
-incus config set wg-xray raw.lxc 'lxc.hook.post-start = /usr/local/sbin/op-xdp-hostside.sh'
+# systemd units
+install -m 644 "$CT_DIR/etc/systemd/system/wg-xray-network.service"  "$CT_ROOT/etc/systemd/system/wg-xray-network.service"
+install -m 644 "$CT_DIR/etc/systemd/system/wgcf-up.service"          "$CT_ROOT/etc/systemd/system/wgcf-up.service"
+install -m 644 "$CT_DIR/etc/systemd/system/op-of-controller.service" "$CT_ROOT/etc/systemd/system/op-of-controller.service"
+mkdir -p "$CT_ROOT/etc/systemd/system/wgcf-up.service.d"
+install -m 644 "$CT_DIR/etc/systemd/system/wgcf-up.service.d/10-policy-rules.conf" \
+               "$CT_ROOT/etc/systemd/system/wgcf-up.service.d/10-policy-rules.conf"
 
-# s6 services
+# networkd fallback (wg-xray-network.service overwrites at runtime)
+mkdir -p "$CT_ROOT/etc/systemd/network"
+install -m 644 "$CT_DIR/etc/systemd/network/eth0.network" "$CT_ROOT/etc/systemd/network/eth0.network"
+
+# xray config
+mkdir -p "$CT_ROOT/etc/xray"
+install -m 644 "$CT_DIR/etc/xray/config.json" "$CT_ROOT/etc/xray/config.json"
+
+# enable services
+WANTS="$CT_ROOT/etc/systemd/system/multi-user.target.wants"
+mkdir -p "$WANTS"
+for svc in wg-xray-network wgcf-up xray; do
+    ln -sf "/etc/systemd/system/$svc.service" "$WANTS/$svc.service"
+done
+# op-of-controller needs the OVS socket bind-mount — enable separately
+
+# ── 5. s6 services (host) ────────────────────────────────────────────────────
+log "syncing s6 services"
 for svc in op-xdp-final op-xdp-watch op-xdp-watch-log; do
-    log "syncing s6/$svc"
     mkdir -p "$S6_SV/$svc/dependencies.d"
-    cp "$REPO_DIR/s6/$svc/type" "$S6_SV/$svc/type"
-    for f in up run producer-for consumer-for pipeline-name; do
-        [ -f "$REPO_DIR/s6/$svc/$f" ] && cp "$REPO_DIR/s6/$svc/$f" "$S6_SV/$svc/$f" || true
+    cp "$DEPLOY_DIR/s6/$svc/type" "$S6_SV/$svc/type"
+    for f in up run producer-for consumer-for pipeline-name notification-fd; do
+        [ -f "$DEPLOY_DIR/s6/$svc/$f" ] && cp "$DEPLOY_DIR/s6/$svc/$f" "$S6_SV/$svc/$f" || true
     done
     chmod +x "$S6_SV/$svc/up"  2>/dev/null || true
     chmod +x "$S6_SV/$svc/run" 2>/dev/null || true
-    cp "$REPO_DIR/s6/$svc/dependencies.d/"* "$S6_SV/$svc/dependencies.d/" 2>/dev/null || true
+    if [ -d "$DEPLOY_DIR/s6/$svc/dependencies.d" ]; then
+        cp "$DEPLOY_DIR/s6/$svc/dependencies.d/"* "$S6_SV/$svc/dependencies.d/" 2>/dev/null || true
+    fi
 done
+[ -d "$S6_SV/op-network-apply" ] || rm -f "$S6_SV/op-xdp-final/dependencies.d/op-network-apply"
 
-# log config
-log "installing log config"
-mkdir -p $S6_CFG
-echo 'DIRECTIVES="n3 s2000000 T"' > $S6_CFG/op-xdp-watch-log.conf
+mkdir -p "$S6_CFG"
+echo 'DIRECTIVES="n3 s2000000 T"' > "$S6_CFG/op-xdp-watch-log.conf"
 
 # misc bundle
-touch "$S6_MISC/op-xdp-final"
-touch "$S6_MISC/op-xdp-watch"
-touch "$S6_MISC/op-xdp-watch-log"
+mkdir -p "$S6_SV/misc/contents.d"
+printf 'bundle\n' > "$S6_SV/misc/type"
+touch "$S6_SV/misc/contents.d/op-xdp-final"
+touch "$S6_SV/misc/contents.d/op-xdp-watch"
+touch "$S6_SV/misc/contents.d/op-xdp-watch-log"
+touch "$S6_SV/misc/contents.d/incus"
+touch "$S6_SV/misc/contents.d/incus-log"
 
-# recompile
+# ovs-stack bundle
+mkdir -p "$S6_SV/ovs-stack/contents.d"
+touch "$S6_SV/ovs-stack/contents.d/ovsbr0-afxdp"
+
+# default runlevel
+mkdir -p "$S6_SV/default"
+printf 'bundle\n' > "$S6_SV/default/type"
+printf '%s\n' boot sshd fail2ban misc ovs-stack > "$S6_SV/default/contents"
+
+# ── 6. s6-rc compile ─────────────────────────────────────────────────────────
 log "recompiling s6-rc database"
-s6-rc-compile "$S6_RC/compiled.new" $S6_SV /etc/s6/adminsv
-ln -sfn compiled.new "$S6_RC/compiled"
+tmp="$(mktemp -d "$S6_RC/compiled.new.XXXXXX")"
+s6-rc-compile "$tmp/db" "$S6_SV" /etc/s6/adminsv
+s6-rc-db -c "$tmp/db" check
+cp -a "$tmp/db" "$S6_RC/compiled.new"
+if [ -e "$S6_RC/compiled" ] || [ -L "$S6_RC/compiled" ]; then
+    mv "$S6_RC/compiled" "$S6_RC/compiled.previous-$(date +%Y%m%d%H%M%S)"
+fi
+mv "$S6_RC/compiled.new" "$S6_RC/compiled"
+rm -rf "$tmp"
 
-log "done — reboot or manually start services to activate"
+# ── 7. Apply ─────────────────────────────────────────────────────────────────
+if incus info "$CT" 2>/dev/null | grep -q 'Status: RUNNING'; then
+    log "container running — applying hostside setup now"
+    /usr/local/sbin/op-xdp-wg hostside || log "warning: hostside returned non-zero"
+    incus exec "$CT" -- systemctl daemon-reload 2>/dev/null || true
+else
+    log "container not running — hostside fires via LXC hook on next start"
+fi
+
+log "done"

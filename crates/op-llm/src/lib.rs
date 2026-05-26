@@ -38,6 +38,7 @@
 
 pub mod anthropic;
 pub mod antigravity;
+pub mod assistant;
 pub mod chat;
 pub mod gcloud_adc;
 pub mod gemini;
@@ -52,6 +53,7 @@ pub mod pty_bridge;
 
 pub use anthropic::AnthropicClient;
 pub use antigravity::AntigravityProvider;
+pub use assistant::AssistantProvider;
 pub use gcloud_adc::GCloudADCProvider;
 pub use gemini::GeminiClient;
 pub use headless_oauth::{HeadlessOAuthProvider, OAuthToken};
@@ -67,6 +69,7 @@ pub use provider::{
 pub mod prelude {
     pub use super::anthropic::AnthropicClient;
     pub use super::antigravity::AntigravityProvider;
+    pub use super::assistant::AssistantProvider;
     pub use super::gcloud_adc::GCloudADCProvider;
     pub use super::gemini::GeminiClient;
     pub use super::headless_oauth::{HeadlessOAuthProvider, OAuthToken};

@@ -1,7 +1,0 @@
-type = process
-command = /usr/local/bin/xray run -c /dev/shm/xray-ghostbridge.json
-env-file = /etc/op-dbus/environment
-logfile = /var/log/op-xray-ghostbridge.log
-depends-on = op-of-controller
-depends-on = wgcf
-restart = yes

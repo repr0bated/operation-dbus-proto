@@ -1,3 +1,0 @@
-type = scripted
-command = /usr/sbin/netplan apply
-depends-on = op-ovs-services
