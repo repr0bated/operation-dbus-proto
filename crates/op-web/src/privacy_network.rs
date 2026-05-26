@@ -4,10 +4,10 @@
 // - wgcf tunnel (WireGuard WARP) created by systemd-networkd + netplan
 // - ovsbr0 bridge managed by netplan with renderer: openvswitch
 // - ovs-attach-ports.sh attaches wgcf + internal ports via OVSDB
-// - Xray as privacy ingress on 10.88.88.1
+// - Xray as privacy ingress on 10.200.0.1
 // - priv_* internal ports for routing
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use op_network::{openflow::OpenFlowClient, OvsdbClient};
 use std::path::Path;
 use tracing::{info, warn};
@@ -21,8 +21,10 @@ const DEFAULT_PRIVACY_PORTS: &[&str] = &[
     "ovsbr0-mgmt",
     "ovsbr0-sock",
 ];
-const DEFAULT_MGMT_CIDR: &str = "10.88.88.1/24"; // Matches Xray binding
-const DEFAULT_OPENFLOW_CONTROLLER: &str = "10.88.88.1:6653";
+const DEFAULT_MGMT_CIDR: &str = "10.200.0.1/24"; // Matches Xray binding
+const DEFAULT_OPENFLOW_CONTROLLER: &str = "10.200.0.1:6653";
+const DEFAULT_DATAPATH_TYPE: &str = "system";
+const DEFAULT_FAIL_MODE: &str = "standalone";
 
 #[derive(Debug, Clone)]
 pub struct PrivacyNetworkHostConfig {
@@ -32,6 +34,8 @@ pub struct PrivacyNetworkHostConfig {
     pub management_cidr: String,
     pub openflow_controller: String,
     pub xray_ingress_ip: String,
+    pub datapath_type: String,
+    pub fail_mode: String,
 }
 
 impl PrivacyNetworkHostConfig {
@@ -54,7 +58,11 @@ impl PrivacyNetworkHostConfig {
             openflow_controller: std::env::var("PRIVACY_OPENFLOW_CONTROLLER")
                 .unwrap_or_else(|_| DEFAULT_OPENFLOW_CONTROLLER.to_string()),
             xray_ingress_ip: std::env::var("XRAY_INGRESS_IP")
-                .unwrap_or_else(|_| "10.88.88.1".to_string()),
+                .unwrap_or_else(|_| "10.200.0.1".to_string()),
+            datapath_type: std::env::var("PRIVACY_DATAPATH_TYPE")
+                .unwrap_or_else(|_| DEFAULT_DATAPATH_TYPE.to_string()),
+            fail_mode: std::env::var("PRIVACY_FAIL_MODE")
+                .unwrap_or_else(|_| DEFAULT_FAIL_MODE.to_string()),
         }
     }
 }
@@ -93,13 +101,18 @@ async fn ensure_host_privacy_network_with_config(cfg: &PrivacyNetworkHostConfig)
             .with_context(|| format!("Failed to create OVS bridge '{}'", cfg.bridge_name))?;
     }
 
-    // Configure bridge for controller-driven forwarding (matches deploy scripts)
-    ovs.set_bridge_property(&cfg.bridge_name, "datapath_type", "system")
+    // Configure bridge for controller-driven forwarding. AF_XDP cutover sets
+    // PRIVACY_DATAPATH_TYPE=netdev so this path does not undo the datapath.
+    info!(
+        "Configuring {} datapath_type={} fail_mode={}",
+        cfg.bridge_name, cfg.datapath_type, cfg.fail_mode
+    );
+    ovs.set_bridge_property(&cfg.bridge_name, "datapath_type", &cfg.datapath_type)
         .await
-        .context("Failed to set bridge datapath_type")?;
-    ovs.set_bridge_property(&cfg.bridge_name, "fail_mode", "standalone")
+        .with_context(|| format!("Failed to set bridge datapath_type={}", cfg.datapath_type))?;
+    ovs.set_bridge_property(&cfg.bridge_name, "fail_mode", &cfg.fail_mode)
         .await
-        .context("Failed to set bridge fail_mode=standalone")?;
+        .with_context(|| format!("Failed to set bridge fail_mode={}", cfg.fail_mode))?;
 
     let existing_ports = ovs
         .list_bridge_ports(&cfg.bridge_name)

@@ -60,7 +60,7 @@ impl ObjectManagerInterface {
     /// appears under this manager.
     #[zbus(signal)]
     pub async fn interfaces_added(
-        ctxt: &zbus::SignalContext<'_>,
+        ctxt: &zbus::object_server::SignalContext<'_>,
         object_path: OwnedObjectPath,
         interfaces_and_properties: InterfaceMap,
     ) -> zbus::Result<()>;
@@ -68,7 +68,7 @@ impl ObjectManagerInterface {
     /// Emitted when an object (or some of its interfaces) is removed.
     #[zbus(signal)]
     pub async fn interfaces_removed(
-        ctxt: &zbus::SignalContext<'_>,
+        ctxt: &zbus::object_server::SignalContext<'_>,
         object_path: OwnedObjectPath,
         interfaces: Vec<String>,
     ) -> zbus::Result<()>;

@@ -8,7 +8,7 @@ ActivationPolicy=up
 RequiredForOnline=no
 
 [Network]
-Address=10.88.88.1/24
+Address=148.113.204.83/32
 LinkLocalAddressing=no
 LLMNR=no
 MulticastDNS=no

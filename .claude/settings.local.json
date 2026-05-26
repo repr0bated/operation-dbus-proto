@@ -7,7 +7,8 @@
       "Bash(rustc --edition 2021 --crate-type lib /home/jeremy/git/operation-dbus-proto/crates/op-dbus-mirror/src/managed_objects.rs --edition 2021)",
       "Bash(python3 -c ':*)",
       "Bash(cp Cargo.toml /tmp/Cargo.toml.bak)",
-      "Bash(cp /tmp/Cargo_patched.toml Cargo.toml)"
+      "Bash(cp /tmp/Cargo_patched.toml Cargo.toml)",
+      "WebFetch(domain:claude.com)"
     ]
   }
 }

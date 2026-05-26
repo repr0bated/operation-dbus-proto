@@ -57,6 +57,10 @@ impl NotebookLmConfig {
                 disabled_tools.clone(),
             );
         }
+        // Pass through the NOTEBOOKLM_COOKIE from the parent environment for authentication.
+        if let Ok(cookie) = std::env::var("NOTEBOOKLM_COOKIE") {
+            env.insert("NOTEBOOKLM_COOKIE".to_string(), cookie);
+        }
 
         ExternalMcpConfig {
             name: self.server_name.clone(),
@@ -194,8 +198,46 @@ impl Tool for NotebookLmTool {
     }
 
     async fn execute(&self, input: Value) -> Result<Value> {
-        let mut client = self.client.lock().await;
-        client.call_tool(&self.upstream_name, input).await
+        // Robustness: retry with exponential backoff + session rotation
+        // per Operation_Dbus_Robustness_Recommendations.md
+        const MAX_RETRIES: u32 = 3;
+        const BASE_DELAY_MS: u64 = 100;
+
+        let mut last_error = None;
+        for attempt in 0..=MAX_RETRIES {
+            if attempt > 0 {
+                let delay = BASE_DELAY_MS * (1 << (attempt - 1));
+                tracing::warn!(
+                    tool = %self.name,
+                    attempt,
+                    delay_ms = delay,
+                    "Retrying NotebookLM tool call after backoff"
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+            }
+
+            let result = {
+                let mut client = self.client.lock().await;
+                client.call_tool(&self.upstream_name, input.clone()).await
+            };
+
+            match result {
+                Ok(value) => return Ok(value),
+                Err(e) => {
+                    tracing::warn!(
+                        tool = %self.name,
+                        attempt,
+                        error = %e,
+                        "NotebookLM tool call failed"
+                    );
+                    last_error = Some(e);
+                }
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| {
+            anyhow::anyhow!("NotebookLM tool '{}' failed after {} retries", self.name, MAX_RETRIES)
+        }))
     }
 }
 

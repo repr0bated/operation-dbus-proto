@@ -320,7 +320,7 @@ impl OpenFlowPlugin {
             "columns": ["ofport"]
         }]);
 
-        let result = self.ovsdb_client.transact(operations).await?;
+        let result = self.ovsdb_client.transact_simd(operations).await?;
 
         if let Some(rows) = result[0]["rows"].as_array() {
             if let Some(first_row) = rows.first() {
@@ -874,7 +874,7 @@ impl OpenFlowPlugin {
             }
         ]);
 
-        self.ovsdb_client.transact(operations).await?;
+        self.ovsdb_client.transact_simd(operations).await?;
         Ok(())
     }
 
@@ -887,7 +887,7 @@ impl OpenFlowPlugin {
             "columns": ["_uuid"]
         }]);
 
-        let result = self.ovsdb_client.transact(operations).await?;
+        let result = self.ovsdb_client.transact_simd(operations).await?;
 
         if let Some(rows) = result[0]["rows"].as_array() {
             if let Some(first_row) = rows.first() {
@@ -911,7 +911,7 @@ impl OpenFlowPlugin {
             "columns": ["_uuid"]
         }]);
 
-        let result = self.ovsdb_client.transact(operations).await?;
+        let result = self.ovsdb_client.transact_simd(operations).await?;
 
         if let Some(rows) = result[0]["rows"].as_array() {
             if let Some(first_row) = rows.first() {

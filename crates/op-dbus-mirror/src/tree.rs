@@ -1,6 +1,6 @@
 //! Tree-walking and path management for D-Bus mirror
 
-use simd_json::OwnedValue as Value;
+use serde_json::Value;
 use std::collections::HashMap;
 
 /// Represents a node in the D-Bus hierarchy

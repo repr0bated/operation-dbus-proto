@@ -7,7 +7,7 @@
       "tag": "socks-in",
       "protocol": "socks",
       "port": 1080,
-      "listen": "10.88.88.1",
+      "listen": "10.200.0.2",
       "sniffing": {
         "enabled": true,
         "destOverride": ["http", "tls"]
@@ -17,7 +17,7 @@
       "tag": "tproxy-in",
       "protocol": "dokodemo-door",
       "port": 12345,
-      "listen": "10.88.88.1",
+      "listen": "10.200.0.2",
       "settings": {
         "network": "tcp,udp",
         "followRedirect": true

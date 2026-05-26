@@ -13,8 +13,10 @@ pub use anna_scribe::{AnnaScribe, PluginSchema, SessionLedger};
 pub use gcloud_auth::GCloudAuth;
 pub use registration::{generate_magic_link_token, generate_wireguard_keypair, WireGuardKeyPair};
 pub use schema_bridge::{
-    read_sled, run_schema_shuttle, watch_wireguard_handshakes, write_sled_from_wg, IdentitySled,
-    SHM_SLED_PATH,
+    read_sled, run_schema_shuttle, socket_entries_from_env, watch_wireguard_handshakes,
+    write_sled, write_sled_from_wg, write_sled_full,
+    IdentitySled, SHM_SLED_PATH, SHM_XRAY_CONFIG,
+    SocketEntry, SubidCategory, SubidTaxonomy,
 };
 pub use session::{Session, SessionManager};
 pub use token::{CachedToken, TokenManager};

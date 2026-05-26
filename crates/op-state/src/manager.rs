@@ -14,6 +14,23 @@ pub struct StateManager {
     #[allow(dead_code)]
     store: Option<Arc<dyn StateStore>>,
     schema_catalog: Arc<RwLock<SchemaCatalog>>,
+    /// Broadcast sender for watch() method
+    watch_tx: Option<Arc<tokio::sync::broadcast::Sender<PluginEvent>>>,
+}
+
+/// Plugin event for broadcast
+#[derive(Debug, Clone)]
+pub struct PluginEvent {
+    pub plugin_id: String,
+    pub operation: PluginOperation,
+}
+
+/// Plugin operation type
+#[derive(Debug, Clone)]
+pub enum PluginOperation {
+    Register,
+    Deregister,
+    Update,
 }
 
 impl Default for StateManager {
@@ -25,19 +42,23 @@ impl Default for StateManager {
 impl StateManager {
     /// Create a new state manager
     pub fn new() -> Self {
+        let (watch_tx, _) = tokio::sync::broadcast::channel(100);
         Self {
             plugins: Arc::new(RwLock::new(HashMap::new())),
             store: None,
             schema_catalog: Arc::new(RwLock::new(SchemaCatalog::new())),
+            watch_tx: Some(Arc::new(watch_tx)),
         }
     }
 
     /// Preferred constructor: create with a specific schema catalog.
     pub fn with_schema_catalog(schema_catalog: Arc<RwLock<SchemaCatalog>>) -> Self {
+        let (watch_tx, _) = tokio::sync::broadcast::channel(100);
         Self {
             plugins: Arc::new(RwLock::new(HashMap::new())),
             store: None,
             schema_catalog,
+            watch_tx: Some(Arc::new(watch_tx)),
         }
     }
 
@@ -49,12 +70,25 @@ impl StateManager {
 
     /// Register a plugin
     pub fn register_plugin(&self, name: String, plugin: Arc<dyn StatePlugin>) {
-        self.plugins.write().insert(name, plugin);
+        self.plugins.write().insert(name.clone(), plugin);
+        
+        // Fire watch broadcast
+        if let Some(tx) = &self.watch_tx {
+            let _ = tx.send(PluginEvent {
+                plugin_id: name,
+                operation: PluginOperation::Register,
+            });
+        }
     }
 
     /// Get a plugin by name
     pub fn get_plugin(&self, name: &str) -> Option<Arc<dyn StatePlugin>> {
         self.plugins.read().get(name).cloned()
+    }
+
+    /// Watch for plugin state changes
+    pub fn watch(&self) -> Option<tokio::sync::broadcast::Receiver<PluginEvent>> {
+        self.watch_tx.as_ref().map(|tx| tx.subscribe())
     }
 
     /// List all registered plugins

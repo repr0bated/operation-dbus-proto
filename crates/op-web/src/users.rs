@@ -154,17 +154,15 @@ impl UserStore {
     pub async fn allocate_ip(&self) -> String {
         let mut next_ip_oct = self.next_ip.write().await;
         let users = self.users.read().await;
-        
+
         // Collect all currently assigned IPs to avoid collisions
-        let assigned_ips: std::collections::HashSet<String> = users
-            .values()
-            .map(|u| u.assigned_ip.clone())
-            .collect();
+        let assigned_ips: std::collections::HashSet<String> =
+            users.values().map(|u| u.assigned_ip.clone()).collect();
 
         // Try to find the next available IP in the 10.100.0.x range
         for _ in 0..254 {
             let ip = format!("10.100.0.{}/32", *next_ip_oct);
-            
+
             // Increment for next time, skipping .0, .1, and .255
             *next_ip_oct = next_ip_oct.wrapping_add(1);
             if *next_ip_oct > 254 || *next_ip_oct < 2 {

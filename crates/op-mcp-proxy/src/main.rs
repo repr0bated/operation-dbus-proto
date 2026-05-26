@@ -1,4 +1,10 @@
 //! MCP Proxy – thin shim with optional direct-to-subscription mode.
+//!
+//! Routing:
+//!   - gRPC calls → op-dbus at 10.200.0.2:50051 with Ghostbridge metadata headers
+//!     (x-ghostbridge-footprint, x-ghostbridge-trace-id) sourced from the identity sled.
+//!   - LLM HTTP calls → Xray SOCKS5 at 10.200.0.1:1080 when sled is valid,
+//!     so they pass through NextDNS + the privacy stack.
 
 use op_cache::proto::{mcp_service_client::McpServiceClient, McpRequest};
 use simd_json::prelude::*;
@@ -6,14 +12,18 @@ use simd_json::OwnedValue;
 use std::io::{BufRead, Write};
 use std::sync::Arc;
 use tonic::transport::Channel;
-use tracing::info;
+use tracing::{info, warn};
 
 mod cloudaicompanion;
 mod direct_llm;
 mod gcloud_auth;
+mod http_server;
 mod session;
+mod sled;
+mod vertex_grpc;
 
 use direct_llm::DirectLLM;
+use sled::SledSnapshot;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -21,25 +31,80 @@ async fn main() -> anyhow::Result<()> {
         .with_writer(std::io::stderr)
         .init();
 
+    // Read identity sled — footprint + trace-id for Ghostbridge header injection.
+    let snapshot = SledSnapshot::read();
+    if let Some(ref s) = snapshot {
+        if s.is_valid {
+            info!(
+                footprint = %s.footprint_hex,
+                trace_id  = %s.trace_id,
+                nextdns   = %s.nextdns_profile,
+                "Identity sled loaded"
+            );
+        } else {
+            warn!("Identity sled present but is_valid=false — headers will be omitted");
+        }
+    } else {
+        warn!("Identity sled not found at {} — Ghostbridge headers disabled", sled::SLED_PATH);
+    }
+
+    // Xray SOCKS5 proxy — only used when XRAY_SOCKS_ADDR is explicitly set to a non-empty value.
+    let xray_socks_env = std::env::var("XRAY_SOCKS_ADDR").unwrap_or_default();
+    let xray_socks = xray_socks_env.as_str();
+    let use_xray = !xray_socks.is_empty() && snapshot.as_ref().map(|s| s.is_valid).unwrap_or(false);
+
     // If DIRECT_MODE is set we handle LLM requests ourselves.
     let direct_mode = std::env::var("DIRECT_MODE").is_ok();
     let direct_llm = if direct_mode {
-        info!("Running in DIRECT_MODE – LLM calls go to cloudcode-pa.googleapis.com");
-        let llm = Arc::new(DirectLLM::new().await?);
+        info!(
+            via_xray = use_xray,
+            "Running in DIRECT_MODE – LLM calls go to cloudcode-pa.googleapis.com"
+        );
+        let llm = Arc::new(DirectLLM::new_with_proxy(if use_xray { Some(xray_socks) } else { None }).await?);
         llm.start_auto_refresh();
+
+        // Spawn OpenAI-compatible HTTP server in background only when not in HTTP_ONLY mode
+        // (HTTP_ONLY runs the server in the main thread instead).
+        if let Ok(http_addr) = std::env::var("HTTP_SERVER_ADDR") {
+            if std::env::var("HTTP_ONLY").is_err() {
+                let llm_clone = Arc::clone(&llm);
+                tokio::spawn(async move {
+                    if let Err(e) = http_server::run(Some(llm_clone), &http_addr).await {
+                        tracing::error!("HTTP server error: {}", e);
+                    }
+                });
+            }
+        }
+
         Some(llm)
     } else {
         None
     };
 
-    let mut client: Option<McpServiceClient<Channel>> = if direct_mode {
-        None
-    } else {
-        let daemon_addr =
-            std::env::var("OP_DBUS_ADDR").unwrap_or_else(|_| "http://[::1]:50051".to_string());
-        let channel = Channel::from_shared(daemon_addr)?.connect().await?;
-        Some(McpServiceClient::new(channel))
-    };
+    // gRPC client for op-dbus — always connect; DIRECT_MODE only changes LLM routing.
+    let daemon_addr = std::env::var("OP_DBUS_ADDR")
+        .unwrap_or_else(|_| "http://10.200.0.2:50051".to_string());
+    info!(addr = %daemon_addr, direct_mode, "Connecting to op-dbus gRPC");
+    let mut client: Option<McpServiceClient<Channel>> =
+        match Channel::from_shared(daemon_addr.clone()) {
+            Ok(builder) => Some(McpServiceClient::new(builder.connect_lazy())),
+            Err(e) => {
+                warn!("Invalid op-dbus address {}: {}", daemon_addr, e);
+                None
+            }
+        };
+
+    // HTTP-only mode: spawn the HTTP server (Vertex AI or CloudAI) and wait for signal.
+    if std::env::var("HTTP_ONLY").is_ok() {
+        if let Ok(http_addr) = std::env::var("HTTP_SERVER_ADDR") {
+            if let Err(e) = http_server::run(direct_llm.map(|l| Arc::clone(&l)), &http_addr).await {
+                tracing::error!("HTTP server error: {}", e);
+            }
+        } else {
+            tokio::signal::ctrl_c().await?;
+        }
+        return Ok(());
+    }
 
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
@@ -52,45 +117,30 @@ async fn main() -> anyhow::Result<()> {
         let req: simd_json::OwnedValue = unsafe { simd_json::from_str(&mut line) }?;
         let method = req["method"].as_str().unwrap_or("");
 
-        // Direct mode exposes LLM + minimal MCP protocol surface.
+        // Direct mode: intercept Gemini LLM methods only; everything else falls through to op-dbus.
         if let Some(ref llm) = direct_llm {
+            let is_gemini = req.get("params")
+                .and_then(|p| p.get("model"))
+                .and_then(|m| m.as_str())
+                .map(|m| m.to_ascii_lowercase().starts_with("gemini"))
+                .unwrap_or(false);
+
             let direct_resp = match method {
-                "completion/complete" | "sampling/createMessage" | "generate" => {
+                "completion/complete" | "sampling/createMessage" | "generate" if is_gemini => {
                     Some(llm.handle(&req).await)
                 }
-                "initialize" => Some(simd_json::json!({
-                    "jsonrpc": "2.0",
-                    "id": req["id"].clone(),
-                    "result": {
-                        "protocolVersion": "2024-11-05",
-                        "capabilities": { "tools": {}, "resources": {}, "prompts": {} },
-                        "serverInfo": { "name": "op-mcp-proxy", "version": "0.1.0" }
+                "tools/call" => {
+                    let tool_name = req.get("params")
+                        .and_then(|p| p.get("name"))
+                        .and_then(|n| n.as_str())
+                        .unwrap_or("");
+                    if tool_name == "generate" {
+                        Some(handle_tools_call(llm, &req).await)
+                    } else {
+                        None // forward op-dbus tools to gRPC
                     }
-                })),
-                "tools/list" => Some(simd_json::json!({
-                    "jsonrpc": "2.0",
-                    "id": req["id"].clone(),
-                    "result": {
-                        "tools": [{
-                            "name": "generate",
-                            "description": "Generate text using Gemini via Cloud AI Companion",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {
-                                    "prompt": { "type": "string", "description": "Prompt to send to model" },
-                                    "model": { "type": "string", "description": "Gemini model id" }
-                                },
-                                "required": ["prompt"]
-                            }
-                        }]
-                    }
-                })),
-                "tools/call" => Some(handle_tools_call(llm, &req).await),
-                _ => Some(simd_json::json!({
-                    "jsonrpc": "2.0",
-                    "id": req["id"].clone(),
-                    "error": { "code": -32601, "message": format!("Method not available in DIRECT_MODE: {}", method) }
-                })),
+                }
+                _ => None, // forward everything else (initialize, tools/list, op-dbus calls) to op-dbus
             };
 
             if let Some(resp) = direct_resp {
@@ -100,7 +150,7 @@ async fn main() -> anyhow::Result<()> {
             }
         }
 
-        // Otherwise forward to op-dbus daemon (original behaviour)
+        // Forward to op-dbus via gRPC with Ghostbridge identity headers.
         let json_resp = if let Some(client) = client.as_mut() {
             let grpc_req = McpRequest {
                 jsonrpc: "2.0".to_string(),
@@ -108,22 +158,46 @@ async fn main() -> anyhow::Result<()> {
                 id: req["id"].as_str().unwrap_or("null").to_string(),
                 params: simd_json::to_vec(&req["params"]).unwrap_or_default(),
             };
-            let grpc_resp = client.handle_request(grpc_req).await?.into_inner();
-            if let Some(err) = grpc_resp.error {
-                simd_json::json!({
+
+            // Wrap in tonic::Request and inject Ghostbridge headers from sled.
+            let mut tonic_req = tonic::Request::new(grpc_req);
+            if let Some(ref s) = snapshot {
+                if s.is_valid {
+                    if let (Ok(fp), Ok(tr)) = (
+                        s.footprint_hex.parse::<tonic::metadata::MetadataValue<_>>(),
+                        s.trace_id.parse::<tonic::metadata::MetadataValue<_>>(),
+                    ) {
+                        tonic_req.metadata_mut().insert("x-ghostbridge-footprint", fp);
+                        tonic_req.metadata_mut().insert("x-ghostbridge-trace-id", tr);
+                    }
+                }
+            }
+
+            match client.handle_request(tonic_req).await {
+                Ok(resp) => {
+                    let grpc_resp = resp.into_inner();
+                    if let Some(err) = grpc_resp.error {
+                        simd_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": grpc_resp.id,
+                            "error": { "code": err.code, "message": err.message }
+                        })
+                    } else {
+                        let mut result_bytes = grpc_resp.result;
+                        let result = simd_json::to_owned_value(&mut result_bytes)
+                            .unwrap_or_else(|_| simd_json::OwnedValue::null());
+                        simd_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": grpc_resp.id,
+                            "result": result
+                        })
+                    }
+                }
+                Err(e) => simd_json::json!({
                     "jsonrpc": "2.0",
-                    "id": grpc_resp.id,
-                    "error": { "code": err.code, "message": err.message }
-                })
-            } else {
-                let mut result_bytes = grpc_resp.result;
-                let result = simd_json::to_owned_value(&mut result_bytes)
-                    .unwrap_or_else(|_| simd_json::OwnedValue::null());
-                simd_json::json!({
-                    "jsonrpc": "2.0",
-                    "id": grpc_resp.id,
-                    "result": result
-                })
+                    "id": req["id"].clone(),
+                    "error": { "code": -32603, "message": format!("gRPC error: {}", e) }
+                }),
             }
         } else {
             simd_json::json!({
@@ -132,6 +206,7 @@ async fn main() -> anyhow::Result<()> {
                 "error": { "code": -32601, "message": format!("Method not available in DIRECT_MODE: {}", method) }
             })
         };
+
         writeln!(stdout, "{}", simd_json::to_string(&json_resp)?)?;
         stdout.flush()?;
     }

@@ -15,6 +15,7 @@ use std::str::FromStr;
 pub enum ProviderType {
     Anthropic,
     Antigravity,
+    Assistant,
     Gemini,
     GeminiCli,
     HuggingFace,
@@ -30,6 +31,7 @@ impl fmt::Display for ProviderType {
         match self {
             ProviderType::Anthropic => write!(f, "anthropic"),
             ProviderType::Antigravity => write!(f, "antigravity"),
+            ProviderType::Assistant => write!(f, "assistant"),
             ProviderType::Gemini => write!(f, "gemini"),
             ProviderType::GeminiCli => write!(f, "gemini-cli"),
             ProviderType::HuggingFace => write!(f, "huggingface"),
@@ -49,6 +51,7 @@ impl FromStr for ProviderType {
         match s.to_lowercase().as_str() {
             "anthropic" => Ok(ProviderType::Anthropic),
             "antigravity" => Ok(ProviderType::Antigravity),
+            "assistant" => Ok(ProviderType::Assistant),
             "gemini" => Ok(ProviderType::Gemini),
             "gemini-cli" | "gemini_cli" | "geminicli" => Ok(ProviderType::GeminiCli),
             "huggingface" | "hugging_face" | "hf" => Ok(ProviderType::HuggingFace),

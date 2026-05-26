@@ -2,6 +2,12 @@
 //!
 //! Each request gets its own RequestContext with all tools loaded.
 //! Tools are unloaded when the request completes.
+//!
+//! Security (audit item #7): `meta_execute_tool` is the compact-mode entry
+//! point for arbitrary tool invocation. The blocklist itself is enforced in
+//! `RequestContext::execute_tool` (single choke point covering both this path
+//! and the verbose `tools/call` path). The hardening here is purely
+//! input-shape validation plus a guard against meta-tool reflection.
 
 use anyhow::Result;
 use simd_json::{json, OwnedValue as Value};
@@ -13,6 +19,16 @@ use crate::protocol::{McpRequest, McpResponse, JsonRpcError};
 use crate::request_context::{RequestContext, RequestConfig};
 use crate::tools;
 use crate::{PROTOCOL_VERSION, SERVER_NAME, SERVER_VERSION};
+
+/// Meta-tool names. `meta_execute_tool` must reject these as targets to
+/// prevent trivial recursion / reflection from the compact path.
+const META_TOOL_NAMES: &[&str] = &[
+    "execute_tool",
+    "list_tools",
+    "search_tools",
+    "get_tool_schema",
+    "respond",
+];
 
 /// Request handler that creates per-request contexts
 pub struct RequestHandler {
@@ -228,7 +244,7 @@ impl RequestHandler {
         ctx.load_tool(Arc::new(tools::ovs::OvsAddFlowTool));
         ctx.load_tool(Arc::new(tools::ovs::OvsDelFlowsTool));
         
-        // Plugin state tools (9 plugins × 3 ops = 27 tools)
+        // Plugin state tools (9 plugins \u00d7 3 ops = 27 tools)
         for plugin in &["systemd", "network", "packagekit", "firewall", "users", "storage", "lxc", "openflow", "privacy"] {
             ctx.load_tool(Arc::new(tools::plugin::PluginQueryTool::new(plugin)));
             ctx.load_tool(Arc::new(tools::plugin::PluginDiffTool::new(plugin)));
@@ -319,11 +335,53 @@ impl RequestHandler {
 
     // Meta-tool implementations
 
+    /// Compact-mode `execute_tool` meta-tool.
+    ///
+    /// Security (audit item #7):
+    /// 1. `tool_name` MUST be a non-empty string. Reject everything else
+    ///    explicitly rather than silently falling through to a registry miss.
+    /// 2. `arguments` MUST be a JSON object (or absent). Strings, arrays, and
+    ///    nulls are rejected.
+    /// 3. Meta-tool reflection (e.g. `execute_tool("execute_tool", \u2026)`) is
+    ///    rejected outright.
+    /// 4. The actual blocklist (shell_execute, systemd_*, ovs_create, etc.)
+    ///    is enforced inside `ctx.execute_tool` so that the verbose
+    ///    `tools/call` path is covered by the same check.
     async fn meta_execute_tool(&self, ctx: &RequestContext, args: Value) -> Result<Value> {
-        let tool_name = args.as_object().and_then(|o| o.get("tool_name")).and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Missing tool_name"))?;
-        let arguments = args.as_object().and_then(|o| o.get("arguments")).cloned().unwrap_or(json!({}));
-        
+        let obj = args
+            .as_object()
+            .ok_or_else(|| anyhow::anyhow!("execute_tool: arguments must be a JSON object"))?;
+
+        let tool_name = obj
+            .get("tool_name")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("execute_tool: tool_name must be a non-empty string"))?
+            .trim();
+
+        if tool_name.is_empty() {
+            anyhow::bail!("execute_tool: tool_name must be a non-empty string");
+        }
+
+        if META_TOOL_NAMES.contains(&tool_name) {
+            warn!(
+                request_id = %ctx.request_id,
+                tool = %tool_name,
+                "Rejected meta-tool reflection via execute_tool"
+            );
+            anyhow::bail!(
+                "execute_tool cannot target meta-tool '{}'; call it directly via tools/call",
+                tool_name
+            );
+        }
+
+        // arguments defaults to {} but, if present, must be an object.
+        let arguments = match obj.get("arguments") {
+            None => json!({}),
+            Some(v) if v.is_object() => v.clone(),
+            Some(_) => anyhow::bail!("execute_tool: arguments must be a JSON object"),
+        };
+
+        // The blocklist check happens here, inside ctx.execute_tool.
         ctx.execute_tool(tool_name, arguments).await
     }
 

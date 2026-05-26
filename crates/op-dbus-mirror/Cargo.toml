@@ -12,13 +12,15 @@ op-grpc-bridge = { path = "../op-grpc-bridge" }
 op-network = { path = "../op-network" }
 anyhow = "1"
 tokio = { version = "1", features = ["full"] }
-zbus = { version = "4.0", features = ["tokio"] }
+zbus = { version = "5.12", features = ["tokio"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { workspace = true }
-simd-json = { version = "0.13", features = ["serde"] }
+simd-json = { workspace = true }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 futures = "0.3"
 async-trait = "0.1"
 dashmap = "5.0"
 zbus_xml = { workspace = true }
+procfs = { version = "0.17", features = ["serde1"] }
+inotify = "0.10"

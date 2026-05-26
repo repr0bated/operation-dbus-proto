@@ -43,6 +43,10 @@ pub struct CloudAICompanion {
 
 impl CloudAICompanion {
     pub fn new() -> Self {
+        Self::new_with_proxy(None)
+    }
+
+    pub fn new_with_proxy(socks_proxy: Option<&str>) -> Self {
         let antigravity_project = read_antigravity_project();
         let extension_quota_project = read_extension_adc_quota_project();
         let gcloud_adc_quota_project = read_gcloud_adc_quota_project();
@@ -116,11 +120,19 @@ impl CloudAICompanion {
             headers.user_agent
         );
 
+        let mut client_builder = Client::builder().timeout(Duration::from_secs(120));
+        if let Some(proxy_url) = socks_proxy {
+            match reqwest::Proxy::all(proxy_url) {
+                Ok(proxy) => {
+                    client_builder = client_builder.proxy(proxy);
+                    info!(proxy = %proxy_url, "LLM HTTP calls routed through Xray SOCKS5");
+                }
+                Err(e) => warn!("Invalid SOCKS proxy URL {}: {}", proxy_url, e),
+            }
+        }
+
         Self {
-            cli: Client::builder()
-                .timeout(std::time::Duration::from_secs(120))
-                .build()
-                .expect("http client"),
+            cli: client_builder.build().expect("http client"),
             project,
             quota_project,
             headers,

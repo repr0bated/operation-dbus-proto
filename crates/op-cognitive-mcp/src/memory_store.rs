@@ -1,22 +1,23 @@
 //! Cognitive Memory Store
 //!
 //! Namespace-based shared memory backend for the op-dbus chatbot and openclaw.
-//! Replaces openclaw's file-based memory with a SQLite-backed namespace model.
+//! Backed by the unified CozoDB store; no SQLite.
 //!
 //! Architecture:
 //! - **Namespace** = a named context (project, session, database, workflow, cron job, agent, etc.)
-//!   Maps directly to what openclaw calls a "memory file".
 //! - **Entry** = a key/value pair within a namespace, stored as JSON.
-//! - Both op-dbus chatbot and openclaw read/write through the cognitive MCP endpoint,
-//!   so they share the same memory without file sync or race conditions.
-//!
-//! Memory is scoped to the control plane / chatbot — not per end-user sessions.
+//! - Schema lives in [`CozoGraphShuttle::seed_schema`]; this module just exposes typed CRUD.
 
+use crate::cozo_shuttle::CozoGraphShuttle;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+use cozo::{DataValue, NamedRows, ScriptMutability};
 use serde::{Deserialize, Serialize};
-use sqlx::{Row, SqlitePool};
+use std::collections::BTreeMap;
+use std::sync::Arc;
 use uuid::Uuid;
+
+type Params = BTreeMap<String, DataValue>;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -60,7 +61,7 @@ impl std::str::FromStr for NamespaceKind {
     }
 }
 
-/// A named memory context. Equivalent to an openclaw memory file.
+/// A named memory context.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryNamespace {
     pub id: String,
@@ -68,11 +69,8 @@ pub struct MemoryNamespace {
     pub name: String,
     pub kind: NamespaceKind,
     pub description: Option<String>,
-    /// Linked Zenflow task or workflow ID.
     pub linked_task_id: Option<String>,
-    /// Cron expression if this namespace drives a scheduled job.
     pub linked_cron: Option<String>,
-    /// Arbitrary metadata as JSON.
     pub metadata: serde_json::Value,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -110,54 +108,19 @@ pub struct MemoryStats {
 }
 
 pub struct CognitiveMemoryStore {
-    pool: SqlitePool,
+    shuttle: Arc<CozoGraphShuttle>,
 }
 
 impl CognitiveMemoryStore {
-    pub async fn new(pool: SqlitePool) -> Result<Self> {
-        let store = Self { pool };
-        store.migrate().await?;
-        Ok(store)
+    pub async fn new(shuttle: Arc<CozoGraphShuttle>) -> Result<Self> {
+        Ok(Self { shuttle })
     }
 
-    async fn migrate(&self) -> Result<()> {
-        sqlx::query(
-            r#"
-            CREATE TABLE IF NOT EXISTS memory_namespaces (
-                id           TEXT PRIMARY KEY,
-                name         TEXT NOT NULL UNIQUE,
-                kind         TEXT NOT NULL,
-                description  TEXT,
-                linked_task_id TEXT,
-                linked_cron  TEXT,
-                metadata     TEXT NOT NULL DEFAULT '{}',
-                created_at   TEXT NOT NULL,
-                updated_at   TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS memory_entries (
-                id           TEXT PRIMARY KEY,
-                namespace_id TEXT NOT NULL REFERENCES memory_namespaces(id) ON DELETE CASCADE,
-                key          TEXT NOT NULL,
-                value        TEXT NOT NULL,
-                tags         TEXT NOT NULL DEFAULT '[]',
-                created_at   TEXT NOT NULL,
-                updated_at   TEXT NOT NULL,
-                expires_at   TEXT,
-                access_count INTEGER NOT NULL DEFAULT 0,
-                last_accessed TEXT NOT NULL,
-                UNIQUE(namespace_id, key)
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_entries_namespace ON memory_entries(namespace_id);
-            CREATE INDEX IF NOT EXISTS idx_entries_key ON memory_entries(key);
-            CREATE INDEX IF NOT EXISTS idx_namespaces_kind ON memory_namespaces(kind);
-            "#,
-        )
-        .execute(&self.pool)
-        .await
-        .context("memory schema migration failed")?;
-        Ok(())
+    fn run(&self, script: &str, params: Params) -> Result<NamedRows> {
+        self.shuttle
+            .db()
+            .run_script(script, params, ScriptMutability::Mutable)
+            .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
     pub async fn upsert_namespace(
@@ -169,35 +132,28 @@ impl CognitiveMemoryStore {
         linked_cron: Option<&str>,
         metadata: serde_json::Value,
     ) -> Result<MemoryNamespace> {
-        let now = Utc::now();
+        let now = Utc::now().to_rfc3339();
         let id = Uuid::new_v4().to_string();
         let kind_str = kind.to_string();
         let meta_str = serde_json::to_string(&metadata)?;
 
-        sqlx::query(
-            r#"
-            INSERT INTO memory_namespaces (id, name, kind, description, linked_task_id, linked_cron, metadata, created_at, updated_at)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)
-            ON CONFLICT(name) DO UPDATE SET
-                kind = excluded.kind,
-                description = excluded.description,
-                linked_task_id = excluded.linked_task_id,
-                linked_cron = excluded.linked_cron,
-                metadata = excluded.metadata,
-                updated_at = excluded.updated_at
-            "#,
-        )
-        .bind(&id)
-        .bind(name)
-        .bind(&kind_str)
-        .bind(description)
-        .bind(linked_task_id)
-        .bind(linked_cron)
-        .bind(&meta_str)
-        .bind(now.to_rfc3339())
-        .execute(&self.pool)
-        .await
-        .context("upsert namespace")?;
+        let q = r#"
+            ?[name, id, kind, description, linked_task_id, linked_cron, metadata, created_at, updated_at]
+                <- [[$name, $id, $kind, $desc, $task, $cron, $meta, $now, $now]]
+            :put memory_namespaces {
+                name => id, kind, description, linked_task_id, linked_cron, metadata, created_at, updated_at
+            }
+        "#;
+        let mut p: Params = BTreeMap::new();
+        p.insert("name".into(), DataValue::Str(name.into()));
+        p.insert("id".into(), DataValue::Str(id.into()));
+        p.insert("kind".into(), DataValue::Str(kind_str.into()));
+        p.insert("desc".into(), DataValue::Str(description.unwrap_or("").into()));
+        p.insert("task".into(), DataValue::Str(linked_task_id.unwrap_or("").into()));
+        p.insert("cron".into(), DataValue::Str(linked_cron.unwrap_or("").into()));
+        p.insert("meta".into(), DataValue::Str(meta_str.into()));
+        p.insert("now".into(), DataValue::Str(now.into()));
+        self.run(q, p).context("upsert namespace")?;
 
         self.get_namespace_by_name(name)
             .await?
@@ -205,46 +161,82 @@ impl CognitiveMemoryStore {
     }
 
     pub async fn get_namespace_by_name(&self, name: &str) -> Result<Option<MemoryNamespace>> {
-        let row = sqlx::query(
-            "SELECT id, name, kind, description, linked_task_id, linked_cron, metadata, created_at, updated_at FROM memory_namespaces WHERE name = ?1",
-        )
-        .bind(name)
-        .fetch_optional(&self.pool)
-        .await
-        .context("get namespace by name")?;
-
-        Ok(row.map(|r| self.row_to_namespace(&r)))
+        let q = r#"
+            ?[name, id, kind, description, linked_task_id, linked_cron, metadata, created_at, updated_at]
+                := *memory_namespaces[name, id, kind, description, linked_task_id, linked_cron, metadata, created_at, updated_at],
+                   name = $name
+        "#;
+        let mut p: Params = BTreeMap::new();
+        p.insert("name".into(), DataValue::Str(name.into()));
+        let rows = self.run(q, p).context("get namespace by name")?;
+        Ok(rows.rows.first().map(row_to_namespace))
     }
 
     pub async fn list_namespaces(
         &self,
         kind: Option<NamespaceKind>,
     ) -> Result<Vec<MemoryNamespace>> {
-        let rows = if let Some(k) = kind {
-            sqlx::query(
-                "SELECT id, name, kind, description, linked_task_id, linked_cron, metadata, created_at, updated_at FROM memory_namespaces WHERE kind = ?1 ORDER BY name",
+        let (q, params): (&str, Params) = if let Some(k) = kind {
+            let mut p: Params = BTreeMap::new();
+            p.insert("k".into(), DataValue::Str(k.to_string().into()));
+            (
+                r#"
+                ?[name, id, kind, description, linked_task_id, linked_cron, metadata, created_at, updated_at]
+                    := *memory_namespaces[name, id, kind, description, linked_task_id, linked_cron, metadata, created_at, updated_at],
+                       kind = $k
+                :order name
+                "#,
+                p,
             )
-            .bind(k.to_string())
-            .fetch_all(&self.pool)
-            .await?
         } else {
-            sqlx::query(
-                "SELECT id, name, kind, description, linked_task_id, linked_cron, metadata, created_at, updated_at FROM memory_namespaces ORDER BY name",
+            (
+                r#"
+                ?[name, id, kind, description, linked_task_id, linked_cron, metadata, created_at, updated_at]
+                    := *memory_namespaces[name, id, kind, description, linked_task_id, linked_cron, metadata, created_at, updated_at]
+                :order name
+                "#,
+                BTreeMap::new(),
             )
-            .fetch_all(&self.pool)
-            .await?
         };
-
-        Ok(rows.iter().map(|r| self.row_to_namespace(r)).collect())
+        let rows = self.run(q, params).context("list namespaces")?;
+        Ok(rows.rows.iter().map(row_to_namespace).collect())
     }
 
     pub async fn delete_namespace(&self, name: &str) -> Result<bool> {
-        let result = sqlx::query("DELETE FROM memory_namespaces WHERE name = ?1")
-            .bind(name)
-            .execute(&self.pool)
-            .await
-            .context("delete namespace")?;
-        Ok(result.rows_affected() > 0)
+        // Pre-check whether it exists; cozo :rm is silent.
+        if self.get_namespace_by_name(name).await?.is_none() {
+            return Ok(false);
+        }
+        // Cascade: remove all entries in this namespace first.
+        let entries_q = r#"
+            ?[ns, key]
+                := *memory_entries[ns, key, _, _, _, _, _, _, _, _],
+                   ns = $ns
+        "#;
+        let mut p: Params = BTreeMap::new();
+        p.insert("ns".into(), DataValue::Str(name.into()));
+        let entry_rows = self.run(entries_q, p).context("collect entries to cascade")?;
+        for row in &entry_rows.rows {
+            let ns = dv_as_str(&row[0]).unwrap_or("").to_string();
+            let key = dv_as_str(&row[1]).unwrap_or("").to_string();
+            let mut pe: Params = BTreeMap::new();
+            pe.insert("ns".into(), DataValue::Str(ns.into()));
+            pe.insert("key".into(), DataValue::Str(key.into()));
+            self.run(
+                "?[namespace, key] <- [[$ns, $key]] :rm memory_entries { namespace, key }",
+                pe,
+            )
+            .context("cascade delete entry")?;
+        }
+        // Remove namespace row.
+        let mut pn: Params = BTreeMap::new();
+        pn.insert("name".into(), DataValue::Str(name.into()));
+        self.run(
+            "?[name] <- [[$name]] :rm memory_namespaces { name }",
+            pn,
+        )
+        .context("delete namespace")?;
+        Ok(true)
     }
 
     pub async fn store_entry(
@@ -255,37 +247,52 @@ impl CognitiveMemoryStore {
         tags: Vec<String>,
         expires_at: Option<DateTime<Utc>>,
     ) -> Result<MemoryEntry> {
-        let ns = self
-            .get_namespace_by_name(namespace_name)
+        // Ensure namespace exists.
+        self.get_namespace_by_name(namespace_name)
             .await?
-            .context(format!("namespace '{}' not found", namespace_name))?;
+            .with_context(|| format!("namespace '{}' not found", namespace_name))?;
 
-        let now = Utc::now();
-        let id = Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
         let value_str = serde_json::to_string(&value)?;
         let tags_str = serde_json::to_string(&tags)?;
+        let exp_str = expires_at.map(|t| t.to_rfc3339()).unwrap_or_default();
 
-        sqlx::query(
-            r#"
-            INSERT INTO memory_entries (id, namespace_id, key, value, tags, created_at, updated_at, expires_at, access_count, last_accessed)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7, 0, ?6)
-            ON CONFLICT(namespace_id, key) DO UPDATE SET
-                value = excluded.value,
-                tags = excluded.tags,
-                updated_at = excluded.updated_at,
-                expires_at = excluded.expires_at
-            "#,
-        )
-        .bind(&id)
-        .bind(&ns.id)
-        .bind(key)
-        .bind(&value_str)
-        .bind(&tags_str)
-        .bind(now.to_rfc3339())
-        .bind(expires_at.map(|t| t.to_rfc3339()))
-        .execute(&self.pool)
-        .await
-        .context("store entry")?;
+        // Preserve created_at + access counters on update by reading existing row first.
+        let existing = self.fetch_entry_row(namespace_name, key)?;
+        let (id, created_at, access_count, last_accessed) = match existing {
+            Some(ref row) => (
+                dv_as_str(&row[2]).unwrap_or("").to_string(),
+                dv_as_str(&row[5]).unwrap_or(now.as_str()).to_string(),
+                dv_as_int(&row[8]).unwrap_or(0),
+                dv_as_str(&row[9]).unwrap_or(now.as_str()).to_string(),
+            ),
+            None => (
+                Uuid::new_v4().to_string(),
+                now.clone(),
+                0,
+                now.clone(),
+            ),
+        };
+
+        let q = r#"
+            ?[namespace, key, id, value, tags, created_at, updated_at, expires_at, access_count, last_accessed]
+                <- [[$ns, $key, $id, $val, $tags, $ca, $now, $exp, $ac, $la]]
+            :put memory_entries {
+                namespace, key => id, value, tags, created_at, updated_at, expires_at, access_count, last_accessed
+            }
+        "#;
+        let mut p: Params = BTreeMap::new();
+        p.insert("ns".into(), DataValue::Str(namespace_name.into()));
+        p.insert("key".into(), DataValue::Str(key.into()));
+        p.insert("id".into(), DataValue::Str(id.into()));
+        p.insert("val".into(), DataValue::Str(value_str.into()));
+        p.insert("tags".into(), DataValue::Str(tags_str.into()));
+        p.insert("ca".into(), DataValue::Str(created_at.into()));
+        p.insert("now".into(), DataValue::Str(now.into()));
+        p.insert("exp".into(), DataValue::Str(exp_str.into()));
+        p.insert("ac".into(), DataValue::Num(cozo::Num::Int(access_count)));
+        p.insert("la".into(), DataValue::Str(last_accessed.into()));
+        self.run(q, p).context("store entry")?;
 
         self.retrieve_entry(namespace_name, key)
             .await?
@@ -297,115 +304,175 @@ impl CognitiveMemoryStore {
         namespace_name: &str,
         key: &str,
     ) -> Result<Option<MemoryEntry>> {
-        let ns = self.get_namespace_by_name(namespace_name).await?;
-        let Some(ns) = ns else { return Ok(None) };
+        let Some(row) = self.fetch_entry_row(namespace_name, key)? else {
+            return Ok(None);
+        };
+        let entry = row_to_entry(&row);
 
-        let row = sqlx::query(
-            "SELECT id, namespace_id, key, value, tags, created_at, updated_at, expires_at, access_count, last_accessed FROM memory_entries WHERE namespace_id = ?1 AND key = ?2",
-        )
-        .bind(&ns.id)
-        .bind(key)
-        .fetch_optional(&self.pool)
-        .await
-        .context("retrieve entry")?;
+        // Bump access counters (best-effort; ignore errors).
+        let now = Utc::now().to_rfc3339();
+        let q = r#"
+            ?[namespace, key, id, value, tags, created_at, updated_at, expires_at, access_count, last_accessed]
+                <- [[$ns, $key, $id, $val, $tags, $ca, $ua, $exp, $ac, $la]]
+            :put memory_entries {
+                namespace, key => id, value, tags, created_at, updated_at, expires_at, access_count, last_accessed
+            }
+        "#;
+        let mut p: Params = BTreeMap::new();
+        p.insert("ns".into(), DataValue::Str(namespace_name.into()));
+        p.insert("key".into(), DataValue::Str(key.into()));
+        p.insert("id".into(), DataValue::Str(entry.id.clone().into()));
+        p.insert("val".into(), DataValue::Str(serde_json::to_string(&entry.value)?.into()));
+        p.insert("tags".into(), DataValue::Str(serde_json::to_string(&entry.tags)?.into()));
+        p.insert("ca".into(), DataValue::Str(entry.created_at.to_rfc3339().into()));
+        p.insert("ua".into(), DataValue::Str(entry.updated_at.to_rfc3339().into()));
+        p.insert(
+            "exp".into(),
+            DataValue::Str(entry.expires_at.map(|t| t.to_rfc3339()).unwrap_or_default().into()),
+        );
+        p.insert("ac".into(), DataValue::Num(cozo::Num::Int(entry.access_count + 1)));
+        p.insert("la".into(), DataValue::Str(now.into()));
+        let _ = self.run(q, p);
 
-        if let Some(ref r) = row {
-            let entry_id: String = r.get("id");
-            sqlx::query(
-                "UPDATE memory_entries SET access_count = access_count + 1, last_accessed = ?1 WHERE id = ?2",
-            )
-            .bind(Utc::now().to_rfc3339())
-            .bind(&entry_id)
-            .execute(&self.pool)
-            .await?;
-        }
-
-        Ok(row.map(|r| self.row_to_entry(&r)))
+        Ok(Some(entry))
     }
 
     pub async fn query_entries(&self, q: EntryQuery) -> Result<Vec<MemoryEntry>> {
-        let namespace_id = if let Some(ns_name) = &q.namespace_id {
-            self.get_namespace_by_name(ns_name).await?.map(|ns| ns.id)
-        } else {
-            None
+        let now = Utc::now().to_rfc3339();
+        let limit = q.limit.unwrap_or(100) as usize;
+        let offset = q.offset.unwrap_or(0) as usize;
+
+        let (script, params): (&str, Params) = match q.namespace_id.as_deref() {
+            Some(ns) => {
+                let mut p: Params = BTreeMap::new();
+                p.insert("ns".into(), DataValue::Str(ns.into()));
+                p.insert("now".into(), DataValue::Str(now.into()));
+                (
+                    r#"
+                    ?[namespace, key, id, value, tags, created_at, updated_at, expires_at, access_count, last_accessed]
+                        := *memory_entries[namespace, key, id, value, tags, created_at, updated_at, expires_at, access_count, last_accessed],
+                           namespace = $ns,
+                           (expires_at = "" || expires_at > $now)
+                    :order -updated_at
+                    "#,
+                    p,
+                )
+            }
+            None => {
+                let mut p: Params = BTreeMap::new();
+                p.insert("now".into(), DataValue::Str(now.into()));
+                (
+                    r#"
+                    ?[namespace, key, id, value, tags, created_at, updated_at, expires_at, access_count, last_accessed]
+                        := *memory_entries[namespace, key, id, value, tags, created_at, updated_at, expires_at, access_count, last_accessed],
+                           (expires_at = "" || expires_at > $now)
+                    :order -updated_at
+                    "#,
+                    p,
+                )
+            }
         };
+        let rows = self.run(script, params).context("query entries")?;
 
-        let limit = q.limit.unwrap_or(100);
-        let offset = q.offset.unwrap_or(0);
+        let mut entries: Vec<MemoryEntry> = rows.rows.iter().map(row_to_entry).collect();
 
-        let rows = sqlx::query(
-            r#"
-            SELECT id, namespace_id, key, value, tags, created_at, updated_at, expires_at, access_count, last_accessed
-            FROM memory_entries
-            WHERE (?1 IS NULL OR namespace_id = ?1)
-              AND (?2 IS NULL OR key LIKE '%' || ?2 || '%')
-              AND (expires_at IS NULL OR expires_at > ?3)
-            ORDER BY updated_at DESC
-            LIMIT ?4 OFFSET ?5
-            "#,
-        )
-        .bind(namespace_id)
-        .bind(q.key_pattern)
-        .bind(Utc::now().to_rfc3339())
-        .bind(limit)
-        .bind(offset)
-        .fetch_all(&self.pool)
-        .await
-        .context("query entries")?;
-
-        let mut entries: Vec<MemoryEntry> = rows.iter().map(|r| self.row_to_entry(r)).collect();
-
+        // Apply key_pattern (substring match) post-fetch.
+        if let Some(pat) = &q.key_pattern {
+            entries.retain(|e| e.key.contains(pat));
+        }
+        // Tag filter: every requested tag must be present.
         if let Some(tags) = &q.tags {
             entries.retain(|e| tags.iter().all(|t| e.tags.contains(t)));
         }
-
-        Ok(entries)
+        // Offset + limit.
+        Ok(entries.into_iter().skip(offset).take(limit).collect())
     }
 
     pub async fn delete_entry(&self, namespace_name: &str, key: &str) -> Result<bool> {
-        let ns = self.get_namespace_by_name(namespace_name).await?;
-        let Some(ns) = ns else { return Ok(false) };
-
-        let result = sqlx::query("DELETE FROM memory_entries WHERE namespace_id = ?1 AND key = ?2")
-            .bind(&ns.id)
-            .bind(key)
-            .execute(&self.pool)
-            .await
-            .context("delete entry")?;
-
-        Ok(result.rows_affected() > 0)
+        if self.fetch_entry_row(namespace_name, key)?.is_none() {
+            return Ok(false);
+        }
+        let mut p: Params = BTreeMap::new();
+        p.insert("ns".into(), DataValue::Str(namespace_name.into()));
+        p.insert("key".into(), DataValue::Str(key.into()));
+        self.run(
+            "?[namespace, key] <- [[$ns, $key]] :rm memory_entries { namespace, key }",
+            p,
+        )
+        .context("delete entry")?;
+        Ok(true)
     }
 
     pub async fn cleanup_expired(&self) -> Result<u64> {
-        let result = sqlx::query(
-            "DELETE FROM memory_entries WHERE expires_at IS NOT NULL AND expires_at < ?1",
-        )
-        .bind(Utc::now().to_rfc3339())
-        .execute(&self.pool)
-        .await
-        .context("cleanup expired")?;
-        Ok(result.rows_affected())
+        let now = Utc::now().to_rfc3339();
+        // Collect expired keys.
+        let q = r#"
+            ?[namespace, key]
+                := *memory_entries[namespace, key, _, _, _, _, _, expires_at, _, _],
+                   expires_at != "",
+                   expires_at < $now
+        "#;
+        let mut p: Params = BTreeMap::new();
+        p.insert("now".into(), DataValue::Str(now.into()));
+        let rows = self.run(q, p).context("collect expired")?;
+        let mut removed: u64 = 0;
+        for row in &rows.rows {
+            let ns = dv_as_str(&row[0]).unwrap_or("").to_string();
+            let key = dv_as_str(&row[1]).unwrap_or("").to_string();
+            let mut pr: Params = BTreeMap::new();
+            pr.insert("ns".into(), DataValue::Str(ns.into()));
+            pr.insert("key".into(), DataValue::Str(key.into()));
+            if self
+                .run(
+                    "?[namespace, key] <- [[$ns, $key]] :rm memory_entries { namespace, key }",
+                    pr,
+                )
+                .is_ok()
+            {
+                removed += 1;
+            }
+        }
+        Ok(removed)
     }
 
     pub async fn get_stats(&self) -> Result<MemoryStats> {
-        let total_namespaces: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM memory_namespaces")
-            .fetch_one(&self.pool)
-            .await?;
+        // Cheap counts: fetch all + count in Rust. Cozo aggregates would be tighter at scale.
+        let ns_rows = self
+            .run(
+                r#"
+                ?[name, kind]
+                    := *memory_namespaces[name, _, kind, _, _, _, _, _, _]
+                "#,
+                BTreeMap::new(),
+            )
+            .context("count namespaces")?;
+        let total_namespaces = ns_rows.rows.len() as i64;
 
-        let total_entries: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM memory_entries")
-            .fetch_one(&self.pool)
-            .await?;
+        let entry_rows = self
+            .run(
+                r#"
+                ?[namespace]
+                    := *memory_entries[namespace, _, _, _, _, _, _, _, _, _]
+                "#,
+                BTreeMap::new(),
+            )
+            .context("count entries")?;
+        let total_entries = entry_rows.rows.len() as i64;
 
-        let rows = sqlx::query(
-            "SELECT n.kind, COUNT(e.id) as cnt FROM memory_namespaces n LEFT JOIN memory_entries e ON e.namespace_id = n.id GROUP BY n.kind",
-        )
-        .fetch_all(&self.pool)
-        .await?;
-
-        let entries_by_kind = rows
-            .iter()
-            .map(|r| (r.get::<String, _>("kind"), r.get::<i64, _>("cnt")))
-            .collect();
+        // Build name → kind map, then count entries per kind.
+        let mut kind_by_ns: BTreeMap<String, String> = BTreeMap::new();
+        for row in &ns_rows.rows {
+            let name = dv_as_str(&row[0]).unwrap_or("").to_string();
+            let kind = dv_as_str(&row[1]).unwrap_or("custom").to_string();
+            kind_by_ns.insert(name, kind);
+        }
+        let mut tally: BTreeMap<String, i64> = BTreeMap::new();
+        for row in &entry_rows.rows {
+            let ns = dv_as_str(&row[0]).unwrap_or("").to_string();
+            let kind = kind_by_ns.get(&ns).cloned().unwrap_or_else(|| "custom".to_string());
+            *tally.entry(kind).or_insert(0) += 1;
+        }
+        let entries_by_kind: Vec<(String, i64)> = tally.into_iter().collect();
 
         Ok(MemoryStats {
             total_namespaces,
@@ -414,58 +481,110 @@ impl CognitiveMemoryStore {
         })
     }
 
-    fn row_to_namespace(&self, r: &sqlx::sqlite::SqliteRow) -> MemoryNamespace {
-        let kind_str: String = r.get("kind");
-        let meta_str: String = r.get("metadata");
-        let created: String = r.get("created_at");
-        let updated: String = r.get("updated_at");
-
-        MemoryNamespace {
-            id: r.get("id"),
-            name: r.get("name"),
-            kind: kind_str.parse().unwrap_or(NamespaceKind::Custom),
-            description: r.get("description"),
-            linked_task_id: r.get("linked_task_id"),
-            linked_cron: r.get("linked_cron"),
-            metadata: serde_json::from_str(&meta_str).unwrap_or(serde_json::Value::Null),
-            created_at: DateTime::parse_from_rfc3339(&created)
-                .map(|t| t.with_timezone(&Utc))
-                .unwrap_or_else(|_| Utc::now()),
-            updated_at: DateTime::parse_from_rfc3339(&updated)
-                .map(|t| t.with_timezone(&Utc))
-                .unwrap_or_else(|_| Utc::now()),
-        }
+    /// Internal helper: fetch a raw memory_entries row by (namespace, key).
+    /// Column order matches the relation declaration in `cozo_shuttle::seed_schema`.
+    fn fetch_entry_row(&self, namespace_name: &str, key: &str) -> Result<Option<Vec<DataValue>>> {
+        let q = r#"
+            ?[namespace, key, id, value, tags, created_at, updated_at, expires_at, access_count, last_accessed]
+                := *memory_entries[namespace, key, id, value, tags, created_at, updated_at, expires_at, access_count, last_accessed],
+                   namespace = $ns,
+                   key = $key
+        "#;
+        let mut p: Params = BTreeMap::new();
+        p.insert("ns".into(), DataValue::Str(namespace_name.into()));
+        p.insert("key".into(), DataValue::Str(key.into()));
+        let rows = self.run(q, p).context("fetch entry row")?;
+        Ok(rows.rows.into_iter().next())
     }
+}
 
-    fn row_to_entry(&self, r: &sqlx::sqlite::SqliteRow) -> MemoryEntry {
-        let value_str: String = r.get("value");
-        let tags_str: String = r.get("tags");
-        let created: String = r.get("created_at");
-        let updated: String = r.get("updated_at");
-        let last_accessed: String = r.get("last_accessed");
-        let expires_str: Option<String> = r.get("expires_at");
+// ── Row → typed struct conversion ─────────────────────────────────────────────
 
-        MemoryEntry {
-            id: r.get("id"),
-            namespace_id: r.get("namespace_id"),
-            key: r.get("key"),
-            value: serde_json::from_str(&value_str).unwrap_or(serde_json::Value::Null),
-            tags: serde_json::from_str(&tags_str).unwrap_or_default(),
-            created_at: DateTime::parse_from_rfc3339(&created)
-                .map(|t| t.with_timezone(&Utc))
-                .unwrap_or_else(|_| Utc::now()),
-            updated_at: DateTime::parse_from_rfc3339(&updated)
-                .map(|t| t.with_timezone(&Utc))
-                .unwrap_or_else(|_| Utc::now()),
-            expires_at: expires_str.and_then(|s| {
-                DateTime::parse_from_rfc3339(&s)
-                    .map(|t| t.with_timezone(&Utc))
-                    .ok()
-            }),
-            access_count: r.get("access_count"),
-            last_accessed: DateTime::parse_from_rfc3339(&last_accessed)
-                .map(|t| t.with_timezone(&Utc))
-                .unwrap_or_else(|_| Utc::now()),
-        }
+fn row_to_namespace(row: &Vec<DataValue>) -> MemoryNamespace {
+    // Order matches the rule head:
+    //   name, id, kind, description, linked_task_id, linked_cron, metadata, created_at, updated_at
+    let name = dv_as_str(&row[0]).unwrap_or("").to_string();
+    let id = dv_as_str(&row[1]).unwrap_or("").to_string();
+    let kind_str = dv_as_str(&row[2]).unwrap_or("custom").to_string();
+    let description = opt_string(&row[3]);
+    let linked_task_id = opt_string(&row[4]);
+    let linked_cron = opt_string(&row[5]);
+    let meta_str = dv_as_str(&row[6]).unwrap_or("{}");
+    let created = dv_as_str(&row[7]).unwrap_or("");
+    let updated = dv_as_str(&row[8]).unwrap_or("");
+
+    MemoryNamespace {
+        id,
+        name,
+        kind: kind_str.parse().unwrap_or(NamespaceKind::Custom),
+        description,
+        linked_task_id,
+        linked_cron,
+        metadata: serde_json::from_str(meta_str).unwrap_or(serde_json::Value::Null),
+        created_at: parse_ts(created),
+        updated_at: parse_ts(updated),
     }
+}
+
+fn row_to_entry(row: &Vec<DataValue>) -> MemoryEntry {
+    // Order matches the rule head:
+    //   namespace, key, id, value, tags, created_at, updated_at, expires_at, access_count, last_accessed
+    let namespace_id = dv_as_str(&row[0]).unwrap_or("").to_string();
+    let key = dv_as_str(&row[1]).unwrap_or("").to_string();
+    let id = dv_as_str(&row[2]).unwrap_or("").to_string();
+    let value_str = dv_as_str(&row[3]).unwrap_or("null");
+    let tags_str = dv_as_str(&row[4]).unwrap_or("[]");
+    let created = dv_as_str(&row[5]).unwrap_or("");
+    let updated = dv_as_str(&row[6]).unwrap_or("");
+    let expires = dv_as_str(&row[7]).unwrap_or("");
+    let access_count = dv_as_int(&row[8]).unwrap_or(0);
+    let last_accessed = dv_as_str(&row[9]).unwrap_or("");
+
+    MemoryEntry {
+        id,
+        namespace_id,
+        key,
+        value: serde_json::from_str(value_str).unwrap_or(serde_json::Value::Null),
+        tags: serde_json::from_str(tags_str).unwrap_or_default(),
+        created_at: parse_ts(created),
+        updated_at: parse_ts(updated),
+        expires_at: if expires.is_empty() {
+            None
+        } else {
+            DateTime::parse_from_rfc3339(expires)
+                .map(|t| t.with_timezone(&Utc))
+                .ok()
+        },
+        access_count,
+        last_accessed: parse_ts(last_accessed),
+    }
+}
+
+fn opt_string(dv: &DataValue) -> Option<String> {
+    match dv_as_str(dv) {
+        Some(s) if !s.is_empty() => Some(s.to_string()),
+        _ => None,
+    }
+}
+
+fn dv_as_str(dv: &DataValue) -> Option<&str> {
+    if let DataValue::Str(s) = dv {
+        Some(s.as_str())
+    } else {
+        None
+    }
+}
+
+fn dv_as_int(dv: &DataValue) -> Option<i64> {
+    if let DataValue::Num(cozo::Num::Int(i)) = dv {
+        Some(*i)
+    } else {
+        None
+    }
+}
+
+fn parse_ts(s: &str) -> DateTime<Utc> {
+    DateTime::parse_from_rfc3339(s)
+        .map(|t| t.with_timezone(&Utc))
+        .unwrap_or_else(|_| Utc::now())
 }

@@ -41,6 +41,7 @@ pub mod schema_contract;
 pub mod software;
 pub mod users;
 pub mod web_ui;
+pub mod unix_socket;
 pub mod wireguard;
 
 // Re-export plugin types
@@ -79,5 +80,6 @@ pub use software::SoftwarePlugin;
 // pub use systemd::SystemdStatePlugin;
 pub use users::UsersPlugin;
 pub use web_ui::WebUiPlugin;
+pub use unix_socket::UnixSocketPlugin;
 pub use wireguard::WireGuardPlugin;
 // pub use systemd_networkd::SystemdNetworkdPlugin; // TODO: Plugin not yet implemented

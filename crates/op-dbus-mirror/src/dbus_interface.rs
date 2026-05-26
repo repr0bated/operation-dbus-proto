@@ -31,11 +31,11 @@ impl DbusMirrorInterface {
 
     /// Get current publication statistics.
     async fn get_stats(&self) -> zbus::fdo::Result<String> {
-        let stats = simd_json::json!({
+        let stats = serde_json::json!({
             "published_objects": self.mirror.published_count(),
             "projected_objects": self.mirror.projected_count(),
         });
-        Ok(simd_json::to_string(&stats).unwrap_or_default())
+        Ok(serde_json::to_string(&stats).unwrap_or_default())
     }
 
     /// Get list of all published object paths.

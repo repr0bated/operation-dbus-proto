@@ -1,1 +1,1 @@
-exec /usr/local/sbin/op-shc /usr/local/sbin/op-s6-oneshot-log-run /var/log/op-xdp-final.log /usr/local/sbin/op-xdp-final.sh
+exec /usr/local/sbin/op-xdp-final.sh

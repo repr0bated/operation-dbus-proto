@@ -23,7 +23,7 @@ use tracing::{debug, error, info, warn};
 #[derive(Debug, Clone)]
 pub struct AgentClientConfig {
     /// Address of the op-dbus gRPC server.
-    /// Env: OP_DBUS_GRPC_ADDR (default: http://10.88.88.1:50051)
+    /// Env: OP_DBUS_GRPC_ADDR (default: http://10.200.0.2:50051)
     pub address: String,
     pub connect_timeout: Duration,
     pub request_timeout: Duration,
@@ -34,7 +34,7 @@ impl Default for AgentClientConfig {
     fn default() -> Self {
         Self {
             address: std::env::var("OP_DBUS_GRPC_ADDR")
-                .unwrap_or_else(|_| "http://10.88.88.1:50051".to_string()),
+                .unwrap_or_else(|_| "http://10.200.0.2:50051".to_string()),
             connect_timeout: Duration::from_secs(5),
             request_timeout: Duration::from_secs(30),
             max_retries: 3,

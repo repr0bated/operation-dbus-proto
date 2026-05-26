@@ -6,6 +6,7 @@
 //! - Memory freed between requests
 //! - Clean isolation per request
 //! - max_turns enforced per request (not session)
+//! - **Security blocklist enforced at the single choke point** (audit item #7)
 
 use anyhow::Result;
 use simd_json::OwnedValue;
@@ -18,6 +19,73 @@ use tracing::{debug, info, warn};
 
 use crate::compact::ToolDefinition;
 use crate::tool_registry::{BoxedTool, Tool};
+
+// =============================================================================
+// SECURITY BLOCKLIST (audit item #7)
+//
+// `meta_execute_tool` in `request_handler.rs` previously routed user-controlled
+// `tool_name` straight into `ctx.execute_tool`, turning the compact-mode API
+// (advertised as 5 meta-tools) into an unauthenticated control plane for the
+// full ~30-tool backing registry, including `shell_execute`, `write_file`,
+// every `systemd_*` mutation, and every OVS mutation.
+//
+// The fix is enforced HERE rather than in the handler so that *both* the
+// verbose `tools/call` path and the compact `execute_tool` path are gated by
+// the same check. Adding new entry points in the future automatically
+// inherits the protection.
+//
+// A controller session (gateway-authenticated, `is_controller == true`) may
+// invoke blocked tools \u2014 it represents the operator. Anonymous / regular
+// sessions cannot. Response tools are always allowed because they have no
+// system effect and the LLM needs them to terminate a turn.
+// =============================================================================
+
+/// Tool-name substring patterns that require controller privileges to execute.
+const BLOCKED_PATTERNS: &[&str] = &[
+    // Shell / arbitrary write
+    "shell_execute",
+    "write_file",
+    // Systemd mutations
+    "systemd_start",
+    "systemd_stop",
+    "systemd_restart",
+    "systemd_reload",
+    "systemd_enable",
+    "systemd_disable",
+    "systemd_apply",
+    // OVS mutations
+    "ovs_create",
+    "ovs_delete",
+    "ovs_add",
+    "ovs_set",
+    "ovs_del",
+    // Plugin mutations (matches any *_apply pattern)
+    "_apply",
+    // Btrfs mutations
+    "btrfs_create",
+    "btrfs_delete",
+    "btrfs_snapshot",
+];
+
+/// Tool names that are always permitted, regardless of session privilege.
+/// These tools have no system side effects and are required for the LLM to
+/// communicate with the user at the end of a turn.
+const ALWAYS_ALLOWED: &[&str] = &[
+    "respond_to_user",
+    "cannot_perform",
+    "request_clarification",
+];
+
+fn is_response_tool(name: &str) -> bool {
+    ALWAYS_ALLOWED.contains(&name)
+}
+
+fn is_tool_blocked(name: &str) -> bool {
+    if is_response_tool(name) {
+        return false;
+    }
+    BLOCKED_PATTERNS.iter().any(|pat| name.contains(pat))
+}
 
 /// Configuration for request handling
 #[derive(Debug, Clone)]
@@ -217,8 +285,41 @@ impl RequestContext {
         self.definitions.get(name)
     }
 
-    /// Execute a tool
+    /// Execute a tool.
+    ///
+    /// This is the **single choke point** for all tool execution in compact
+    /// mode. Both the verbose `tools/call` path and the compact-mode
+    /// `execute_tool` meta-tool route through here, so the security check
+    /// below covers both.
     pub async fn execute_tool(&self, name: &str, input: Value) -> Result<Value> {
+        // -----------------------------------------------------------------
+        // SECURITY GATE (audit item #7)
+        // -----------------------------------------------------------------
+        // Reject blocked tools unless the session is an authenticated
+        // controller (i.e. the operator's session, validated by the gateway).
+        if is_tool_blocked(name) {
+            if !self.is_controller {
+                warn!(
+                    request_id = %self.request_id,
+                    session_id = ?self.session_id,
+                    tool = %name,
+                    "Rejected blocked tool: non-controller session"
+                );
+                anyhow::bail!(
+                    "Tool '{}' is restricted to controller sessions and cannot be invoked from compact mode",
+                    name
+                );
+            }
+            // Controller is allowed, but we still log every privileged
+            // invocation so the audit trail records it.
+            info!(
+                request_id = %self.request_id,
+                session_id = ?self.session_id,
+                tool = %name,
+                "Controller session invoking privileged tool"
+            );
+        }
+
         // Check turn limit
         self.increment_turn()?;
         
@@ -341,6 +442,47 @@ pub struct RequestSummary {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
+    use simd_json::json;
+
+    // --- Test helpers -----------------------------------------------------
+
+    struct DummyTool {
+        name: &'static str,
+    }
+
+    #[async_trait]
+    impl Tool for DummyTool {
+        fn name(&self) -> &str {
+            self.name
+        }
+        fn description(&self) -> &str {
+            "dummy"
+        }
+        fn input_schema(&self) -> Value {
+            json!({})
+        }
+        async fn execute(&self, _input: Value) -> Result<Value> {
+            Ok(json!({ "ok": true }))
+        }
+    }
+
+    fn ctx(is_controller: bool) -> RequestContext {
+        let mut ctx = RequestContext::with_session(
+            "req-1".to_string(),
+            RequestConfig::default(),
+            "sess-1".to_string(),
+            is_controller,
+            None,
+        );
+        ctx.load_tool(Box::new(DummyTool { name: "shell_execute" }));
+        ctx.load_tool(Box::new(DummyTool { name: "systemd_start_unit" }));
+        ctx.load_tool(Box::new(DummyTool { name: "ovs_list_bridges" }));
+        ctx.load_tool(Box::new(DummyTool { name: "respond_to_user" }));
+        ctx
+    }
+
+    // --- Tests -------------------------------------------------------------
 
     #[test]
     fn test_turn_limit() {
@@ -367,5 +509,72 @@ mod tests {
         assert_eq!(ctx.remaining_turns(), 10);
         ctx.increment_turn().unwrap();
         assert_eq!(ctx.remaining_turns(), 9);
+    }
+
+    #[test]
+    fn blocklist_classification_matches_audit_intent() {
+        // Blocked:
+        assert!(is_tool_blocked("shell_execute"));
+        assert!(is_tool_blocked("write_file"));
+        assert!(is_tool_blocked("systemd_start_unit"));
+        assert!(is_tool_blocked("systemd_restart_unit"));
+        assert!(is_tool_blocked("ovs_create_bridge"));
+        assert!(is_tool_blocked("ovs_del_port"));
+        assert!(is_tool_blocked("plugin_systemd_apply"));
+        assert!(is_tool_blocked("btrfs_snapshot"));
+
+        // Allowed:
+        assert!(!is_tool_blocked("systemd_list_units"));
+        assert!(!is_tool_blocked("systemd_unit_status"));
+        assert!(!is_tool_blocked("ovs_list_bridges"));
+        assert!(!is_tool_blocked("ovs_list_ports"));
+        assert!(!is_tool_blocked("ovs_dump_flows"));
+        assert!(!is_tool_blocked("read_file"));
+        assert!(!is_tool_blocked("plugin_systemd_query"));
+
+        // Response tools always allowed even though name structure could otherwise trip a pattern:
+        assert!(!is_tool_blocked("respond_to_user"));
+        assert!(!is_tool_blocked("cannot_perform"));
+        assert!(!is_tool_blocked("request_clarification"));
+    }
+
+    #[tokio::test]
+    async fn blocks_shell_execute_for_non_controller() {
+        let c = ctx(/* is_controller */ false);
+        let err = c.execute_tool("shell_execute", json!({}))
+            .await
+            .expect_err("non-controller must be blocked");
+        let msg = err.to_string();
+        assert!(msg.contains("restricted to controller sessions"), "got: {}", msg);
+    }
+
+    #[tokio::test]
+    async fn blocks_systemd_mutation_for_non_controller() {
+        let c = ctx(false);
+        let err = c.execute_tool("systemd_start_unit", json!({}))
+            .await
+            .expect_err("non-controller must be blocked");
+        assert!(err.to_string().contains("restricted to controller sessions"));
+    }
+
+    #[tokio::test]
+    async fn allows_shell_execute_for_controller() {
+        let c = ctx(true);
+        let res = c.execute_tool("shell_execute", json!({})).await;
+        assert!(res.is_ok(), "controller must be allowed, got: {:?}", res);
+    }
+
+    #[tokio::test]
+    async fn allows_read_only_tool_for_non_controller() {
+        let c = ctx(false);
+        let res = c.execute_tool("ovs_list_bridges", json!({})).await;
+        assert!(res.is_ok(), "read-only must always be allowed, got: {:?}", res);
+    }
+
+    #[tokio::test]
+    async fn response_tools_always_allowed() {
+        let c = ctx(false);
+        let res = c.execute_tool("respond_to_user", json!({})).await;
+        assert!(res.is_ok(), "respond_to_user must always be allowed, got: {:?}", res);
     }
 }

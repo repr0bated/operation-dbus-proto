@@ -30,6 +30,7 @@ use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
 use crate::anthropic::AnthropicClient;
+use crate::assistant::AssistantProvider;
 use crate::gcloud_adc::GCloudADCProvider;
 use crate::gemini::GeminiClient;
 use crate::gemini_cli::create_gemini_cli_provider;
@@ -147,6 +148,27 @@ impl ChatManager {
                 }
                 Err(e) => {
                     debug!("Gemini provider failed: {}", e);
+                }
+            }
+        }
+
+        // =====================================================
+        // Assistant - trusted internal network (Incus container)
+        // =====================================================
+        if matches!(env_provider.as_deref(), Some("assistant"))
+            || std::env::var("ASSISTANT_BASE_URL").is_ok()
+            || std::env::var("ASSISTANT_DEFAULT_MODEL").is_ok()
+        {
+            match AssistantProvider::from_env() {
+                Ok(assistant) => {
+                    info!("✅ Assistant provider initialized");
+                    providers.insert(ProviderType::Assistant, Box::new(assistant));
+                    if default_provider.is_none() {
+                        default_provider = Some(ProviderType::Assistant);
+                    }
+                }
+                Err(e) => {
+                    debug!("Assistant provider failed: {}", e);
                 }
             }
         }
@@ -482,6 +504,10 @@ impl ChatManager {
                 ProviderType::OpenClaw => (
                     "Trusted internal network (OPENCLAW_BASE_URL)",
                     vec!["OpenAI-compatible API", "Agent platform", "Tool use"],
+                ),
+                ProviderType::Assistant => (
+                    "Trusted internal network (ASSISTANT_BASE_URL)",
+                    vec!["OpenAI-compatible API", "Incus container", "Tool use"],
                 ),
                 _ => ("API key", vec![]),
             };

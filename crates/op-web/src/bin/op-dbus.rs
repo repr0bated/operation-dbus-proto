@@ -1,6 +1,6 @@
 //! op-dbus: gRPC server for all Operation services
 //!
-//! Binds to 10.88.88.1:50051 (ovsbr0) so all Incus containers can reach it
+//! Binds to 10.200.0.2:50051 (ovsbr0) so all Incus containers can reach it
 //! through the single OVS choke point.
 //!
 //! Listen address override: OP_DBUS_GRPC_LISTEN (e.g. "0.0.0.0:50051" for dev)
@@ -26,10 +26,10 @@ async fn main() -> anyhow::Result<()> {
         .try_init();
 
     let listen =
-        std::env::var("OP_DBUS_GRPC_LISTEN").unwrap_or_else(|_| "10.88.88.1:50051".to_string());
+        std::env::var("OP_DBUS_GRPC_LISTEN").unwrap_or_else(|_| "10.200.0.2:50051".to_string());
     let addr: std::net::SocketAddr = listen
         .parse()
-        .unwrap_or_else(|_| "10.88.88.1:50051".parse().unwrap());
+        .unwrap_or_else(|_| "10.200.0.2:50051".parse().unwrap());
 
     let chain = Arc::new(RwLock::new(EventChain::new(ChainConfig::default())));
     let ovsdb = Arc::new(OvsdbClient::new());

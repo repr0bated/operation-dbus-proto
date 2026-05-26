@@ -1,9 +1,0 @@
-type = process
-command = /usr/local/sbin/op-of-controller
-env-file = /etc/op-dbus/environment
-logfile = /var/log/op-of-controller.log
-depends-on = ovs-vswitchd
-depends-on = ovsdb-server
-depends-on = op-dbus
-depends-on = ovs-attach-ports
-restart = yes

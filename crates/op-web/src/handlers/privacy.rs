@@ -100,14 +100,15 @@ pub async fn signup(
         // Add a simple in-memory signup rate tracker to AppState if needed,
         // but for now, we'll check magic_links map for existing tokens
         // or add a simple static rate limiter for this prototype.
-        static LAST_SIGNUP: tokio::sync::Mutex<Option<std::collections::HashMap<String, std::time::Instant>>> = 
-            tokio::sync::Mutex::const_new(None);
-        
+        static LAST_SIGNUP: tokio::sync::Mutex<
+            Option<std::collections::HashMap<String, std::time::Instant>>,
+        > = tokio::sync::Mutex::const_new(None);
+
         let mut map_guard = LAST_SIGNUP.lock().await;
         if map_guard.is_none() {
             *map_guard = Some(std::collections::HashMap::new());
         }
-        
+
         if let Some(ref mut map) = *map_guard {
             if let Some(last_time) = map.get(&email) {
                 if last_time.elapsed().as_secs() < 60 {
@@ -115,13 +116,14 @@ pub async fn signup(
                         StatusCode::TOO_MANY_REQUESTS,
                         Json(SignupResponse {
                             success: false,
-                            message: "Please wait 60 seconds before requesting another login link".to_string(),
+                            message: "Please wait 60 seconds before requesting another login link"
+                                .to_string(),
                         }),
                     );
                 }
             }
             map.insert(email.clone(), std::time::Instant::now());
-            
+
             // Periodically clean up old entries
             if map.len() > 1000 {
                 map.retain(|_, v| v.elapsed().as_secs() < 3600);
@@ -487,9 +489,7 @@ pub async fn get_config(
     let mut is_authorized = false;
 
     if let Some(token) = auth_token {
-        if crate::middleware::security::check_bypass_api_key(&headers).is_some() {
-            is_authorized = true;
-        } else if let Some(user) = state.user_store.get_user(&user_id).await {
+        if let Some(user) = state.user_store.get_user(&user_id).await {
             if let Some(creds) = &user.api_credentials {
                 if creds.token == token {
                     is_authorized = true;
@@ -678,7 +678,7 @@ pub async fn google_auth(
     {
         let mut tokens = state.csrf_tokens.write().await;
         tokens.insert(csrf_token.secret().clone(), csrf_token.secret().clone());
-        
+
         // Cleanup old tokens (simple heuristic)
         if tokens.len() > 1000 {
             tokens.clear();
@@ -698,7 +698,10 @@ pub async fn google_callback(
     {
         let mut tokens = state.csrf_tokens.write().await;
         if tokens.remove(&query.state).is_none() {
-            warn!("Invalid CSRF token in Google OAuth callback: {}", query.state);
+            warn!(
+                "Invalid CSRF token in Google OAuth callback: {}",
+                query.state
+            );
             return Err((
                 StatusCode::FORBIDDEN,
                 Json(VerifyResponse {
