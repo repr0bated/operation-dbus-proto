@@ -124,7 +124,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             post(handlers::llm::switch_provider_handler),
         )
         .route("/llm/model", post(handlers::llm::switch_model_handler))
-        // OpenClaw endpoints
+        // OpenClaw endpoints (internal/base layer)
         .route(
             "/openclaw/status",
             get(handlers::openclaw::openclaw_status_handler),
@@ -139,6 +139,23 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         )
         .route(
             "/openclaw/models",
+            get(handlers::openclaw::openclaw_models_handler),
+        )
+        // Assistant endpoints (user-facing aliases — same handlers, branded URLs)
+        .route(
+            "/assistant/status",
+            get(handlers::openclaw::openclaw_status_handler),
+        )
+        .route(
+            "/assistant/config",
+            get(handlers::openclaw::openclaw_config_handler),
+        )
+        .route(
+            "/assistant/chat",
+            post(handlers::openclaw::openclaw_chat_handler),
+        )
+        .route(
+            "/assistant/models",
             get(handlers::openclaw::openclaw_models_handler),
         )
         // MCP server management endpoints
