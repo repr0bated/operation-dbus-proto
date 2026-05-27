@@ -69,6 +69,7 @@ create_dns_record() {
 
 create_dns_record "mail" true
 create_dns_record "registration" true
+create_dns_record "assistant" true
 
 echo ""
 echo "DNS setup complete!"
@@ -76,7 +77,9 @@ echo ""
 echo "Records created/updated:"
 echo "  - mail.3tched.com         -> $SERVER_IP (proxied)"
 echo "  - registration.3tched.com -> $SERVER_IP (proxied)"
+echo "  - assistant.3tched.com    -> $SERVER_IP (proxied)"
 echo ""
 echo "Test with:"
 echo "  dig mail.3tched.com"
 echo "  dig registration.3tched.com"
+echo "  dig assistant.3tched.com"
