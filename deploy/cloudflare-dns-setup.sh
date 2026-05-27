@@ -69,7 +69,7 @@ create_dns_record() {
 
 create_dns_record "mail" true
 create_dns_record "registration" true
-create_dns_record "assistant" true
+create_dns_record "assistant" false
 
 echo ""
 echo "DNS setup complete!"
