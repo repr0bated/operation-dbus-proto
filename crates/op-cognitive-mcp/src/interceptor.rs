@@ -1,6 +1,7 @@
-use op_identity::read_sled;
+use op_identity::{read_sled, IdentitySled};
 use tonic::{Request, Status};
 
+#[allow(clippy::result_large_err)]
 pub fn ghostbridge_interceptor(mut req: Request<()>) -> Result<Request<()>, Status> {
     let footprint_value = req.metadata().get("x-ghostbridge-footprint").cloned();
     let trace_value = req.metadata().get("x-ghostbridge-trace-id").cloned();
@@ -13,7 +14,7 @@ pub fn ghostbridge_interceptor(mut req: Request<()>) -> Result<Request<()>, Stat
 
     // Zero-copy read from /dev/shm/plugin_schema.dat via mmap.
     // `_mmap` keeps the mapping alive for the duration of this function.
-    let (sled_ptr, _mmap) =
+    let (sled_ptr, _mmap): (*const IdentitySled, _) =
         read_sled().map_err(|_| Status::internal("SchemaEngine Memory Unreachable"))?;
 
     // SAFETY: read_sled() uses MmapOptions::len(IdentitySled::SIZE) so the
