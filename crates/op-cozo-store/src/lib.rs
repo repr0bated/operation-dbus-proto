@@ -1,9 +1,9 @@
-use std::collections::BTreeMap;
-use std::path::PathBuf;
-use std::sync::Arc;
 use anyhow::Result;
 use cozo::{DataValue, DbInstance, NamedRows, ScriptMutability};
 use serde_json::Value;
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+use std::sync::Arc;
 use tracing::{info, warn};
 
 type Params = BTreeMap<String, DataValue>;
@@ -180,7 +180,8 @@ impl CozoGraphShuttle {
             if let Err(e) = cozo_run(&self.db, script, BTreeMap::new()) {
                 let msg = e.to_string();
                 if !msg.contains("already exists") && !msg.contains("AlreadyExists") {
-                    eprintln!("COZO_SCHEMA_ERR: {}", msg); warn!(error = %msg, "CozoDB schema init warning");
+                    eprintln!("COZO_SCHEMA_ERR: {}", msg);
+                    warn!(error = %msg, "CozoDB schema init warning");
                 }
             }
         }
@@ -215,24 +216,35 @@ impl CozoGraphShuttle {
         p.insert("op".into(), DataValue::Str(operation.into()));
 
         match cozo_run(&self.db, query, p) {
-            Ok(rows) if rows.rows.is_empty() => {
-                PolicyVerdict { allow: true, reason: "no deny rule matched".into() }
-            }
+            Ok(rows) if rows.rows.is_empty() => PolicyVerdict {
+                allow: true,
+                reason: "no deny rule matched".into(),
+            },
             Ok(rows) => {
-                let reason = rows.rows[0].first()
+                let reason = rows.rows[0]
+                    .first()
                     .and_then(dv_as_str)
                     .unwrap_or("compliance rule violated")
                     .to_string();
-                PolicyVerdict { allow: false, reason }
+                PolicyVerdict {
+                    allow: false,
+                    reason,
+                }
             }
-            Err(_) => PolicyVerdict { allow: true, reason: "compliance graph not seeded".into() },
+            Err(_) => PolicyVerdict {
+                allow: true,
+                reason: "compliance graph not seeded".into(),
+            },
         }
     }
 
     pub fn store_compliance_rule(
         &self,
-        plugin: &str, op: &str, action: &str,
-        reason: &str, control_ref: &str,
+        plugin: &str,
+        op: &str,
+        action: &str,
+        reason: &str,
+        control_ref: &str,
     ) -> Result<()> {
         let query = r#"
             ?[plugin, op, action, reason, control_ref, created_at]
@@ -246,18 +258,25 @@ impl CozoGraphShuttle {
         p.insert("reason".into(), DataValue::Str(reason.into()));
         p.insert("control_ref".into(), DataValue::Str(control_ref.into()));
         p.insert("ts".into(), DataValue::Str(now_rfc3339().into()));
-        cozo_run(&self.db, query, p)
-            .map_err(|e| anyhow::anyhow!("store compliance rule: {e}"))?;
+        cozo_run(&self.db, query, p).map_err(|e| anyhow::anyhow!("store compliance rule: {e}"))?;
         Ok(())
     }
 
     // ── Subid registry ─────────────────────────────────────────────────────────
 
+    #[allow(clippy::too_many_arguments)]
     pub fn register_subid(
         &self,
-        subid: &str, category: &str, component_type: &str,
-        subject: &str, verb: &str, facet: &str, version: u8,
-        control_source: &str, control_refs: &str, statement_refs: &str,
+        subid: &str,
+        category: &str,
+        component_type: &str,
+        subject: &str,
+        verb: &str,
+        facet: &str,
+        version: u8,
+        control_source: &str,
+        control_refs: &str,
+        statement_refs: &str,
     ) -> Result<()> {
         let query = r#"
             ?[subid, category, component_type, subject, verb, facet, version,
@@ -281,8 +300,7 @@ impl CozoGraphShuttle {
         p.insert("crefs".into(), DataValue::Str(control_refs.into()));
         p.insert("srefs".into(), DataValue::Str(statement_refs.into()));
         p.insert("ts".into(), DataValue::Str(now_rfc3339().into()));
-        cozo_run(&self.db, query, p)
-            .map_err(|e| anyhow::anyhow!("register subid: {e}"))?;
+        cozo_run(&self.db, query, p).map_err(|e| anyhow::anyhow!("register subid: {e}"))?;
         Ok(())
     }
 
@@ -297,8 +315,7 @@ impl CozoGraphShuttle {
         p.insert("id".into(), DataValue::Str(id.into()));
         p.insert("label".into(), DataValue::Str(label.into()));
         p.insert("props".into(), DataValue::Str(props.to_string().into()));
-        cozo_run(&self.db, query, p)
-            .map_err(|e| anyhow::anyhow!("store graph node: {e}"))?;
+        cozo_run(&self.db, query, p).map_err(|e| anyhow::anyhow!("store graph node: {e}"))?;
         Ok(())
     }
 
@@ -311,11 +328,17 @@ impl CozoGraphShuttle {
         p.insert("src".into(), DataValue::Str(src.into()));
         p.insert("rel".into(), DataValue::Str(rel.into()));
         p.insert("dst".into(), DataValue::Str(dst.into()));
-        p.insert("props".into(), DataValue::Str(
-            props.as_ref().map(|v| v.to_string()).unwrap_or_else(|| "{}".into()).into(),
-        ));
-        cozo_run(&self.db, query, p)
-            .map_err(|e| anyhow::anyhow!("store graph edge: {e}"))?;
+        p.insert(
+            "props".into(),
+            DataValue::Str(
+                props
+                    .as_ref()
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "{}".into())
+                    .into(),
+            ),
+        );
+        cozo_run(&self.db, query, p).map_err(|e| anyhow::anyhow!("store graph edge: {e}"))?;
         Ok(())
     }
 
@@ -326,7 +349,8 @@ impl CozoGraphShuttle {
             &self.db,
             "?[src, rel, dst, props] := *graph_edge[src, rel, dst, props], src = $src",
             p,
-        ).map_err(|e| anyhow::anyhow!("query edges from: {e}"))?;
+        )
+        .map_err(|e| anyhow::anyhow!("query edges from: {e}"))?;
         Ok(named_rows_to_json(r))
     }
 
@@ -337,7 +361,8 @@ impl CozoGraphShuttle {
             &self.db,
             "?[src, rel, dst, props] := *graph_edge[src, rel, dst, props], dst = $dst",
             p,
-        ).map_err(|e| anyhow::anyhow!("query edges to: {e}"))?;
+        )
+        .map_err(|e| anyhow::anyhow!("query edges to: {e}"))?;
         Ok(named_rows_to_json(r))
     }
 
@@ -348,7 +373,8 @@ impl CozoGraphShuttle {
             &self.db,
             "?[id, label, props] := *graph_node[id, label, props], id = $id",
             p,
-        ).map_err(|e| anyhow::anyhow!("query node: {e}"))?;
+        )
+        .map_err(|e| anyhow::anyhow!("query node: {e}"))?;
         Ok(named_rows_to_json(r))
     }
 
@@ -364,17 +390,23 @@ impl CozoGraphShuttle {
         let mut p: Params = BTreeMap::new();
         p.insert("start".into(), DataValue::Str(start_node.into()));
         p.insert("max_depth".into(), dv_int(max_depth as i64));
-        let r = cozo_run(&self.db, query, p)
-            .map_err(|e| anyhow::anyhow!("traverse graph: {e}"))?;
+        let r = cozo_run(&self.db, query, p).map_err(|e| anyhow::anyhow!("traverse graph: {e}"))?;
         Ok(named_rows_to_json(r))
     }
 
     // ── Audit ──────────────────────────────────────────────────────────────────
 
+    #[allow(clippy::too_many_arguments)]
     pub fn append_audit_event(
         &self,
-        event_id: &str, subid: &str, plugin_id: &str, operation: &str,
-        actor: &str, verdict: bool, reason: &str, control_ref: &str,
+        event_id: &str,
+        subid: &str,
+        plugin_id: &str,
+        operation: &str,
+        actor: &str,
+        verdict: bool,
+        reason: &str,
+        control_ref: &str,
     ) -> Result<()> {
         let query = r#"
             ?[event_id, subid, plugin_id, operation, actor, verdict, reason, control_ref, timestamp]
@@ -389,12 +421,14 @@ impl CozoGraphShuttle {
         p.insert("plugin".into(), DataValue::Str(plugin_id.into()));
         p.insert("op".into(), DataValue::Str(operation.into()));
         p.insert("actor".into(), DataValue::Str(actor.into()));
-        p.insert("verdict".into(), DataValue::Str(if verdict { "allow" } else { "deny" }.into()));
+        p.insert(
+            "verdict".into(),
+            DataValue::Str(if verdict { "allow" } else { "deny" }.into()),
+        );
         p.insert("reason".into(), DataValue::Str(reason.into()));
         p.insert("cref".into(), DataValue::Str(control_ref.into()));
         p.insert("ts".into(), DataValue::Str(now_rfc3339().into()));
-        cozo_run(&self.db, query, p)
-            .map_err(|e| anyhow::anyhow!("append audit event: {e}"))?;
+        cozo_run(&self.db, query, p).map_err(|e| anyhow::anyhow!("append audit event: {e}"))?;
         Ok(())
     }
 
@@ -409,8 +443,7 @@ impl CozoGraphShuttle {
         let mut p: Params = BTreeMap::new();
         p.insert("wg".into(), DataValue::Str(wg_pubkey.into()));
         p.insert("ts".into(), DataValue::Str(now_rfc3339().into()));
-        cozo_run(&self.db, query, p)
-            .map_err(|e| anyhow::anyhow!("upsert user: {e}"))?;
+        cozo_run(&self.db, query, p).map_err(|e| anyhow::anyhow!("upsert user: {e}"))?;
         Ok(())
     }
 
@@ -422,7 +455,8 @@ impl CozoGraphShuttle {
             &self.db,
             "?[wg_pubkey] := *users[wg_pubkey, _], wg_pubkey = $wg",
             p,
-        ).map_err(|e| anyhow::anyhow!("user exists: {e}"))?;
+        )
+        .map_err(|e| anyhow::anyhow!("user exists: {e}"))?;
         Ok(!r.rows.is_empty())
     }
 
@@ -444,9 +478,11 @@ impl CozoGraphShuttle {
         p.insert("sid".into(), DataValue::Str(session_id.into()));
         p.insert("wg".into(), DataValue::Str(wg_pubkey.into()));
         p.insert("now".into(), DataValue::Str(now_rfc3339().into()));
-        p.insert("exp".into(), DataValue::Str(expires_at.unwrap_or("").into()));
-        cozo_run(&self.db, query, p)
-            .map_err(|e| anyhow::anyhow!("create session: {e}"))?;
+        p.insert(
+            "exp".into(),
+            DataValue::Str(expires_at.unwrap_or("").into()),
+        );
+        cozo_run(&self.db, query, p).map_err(|e| anyhow::anyhow!("create session: {e}"))?;
         Ok(())
     }
 
@@ -459,7 +495,8 @@ impl CozoGraphShuttle {
             "?[wg_pubkey, created_at, expires_at] := \
              *sessions[sid, wg_pubkey, created_at, expires_at], sid = $sid",
             p,
-        ).map_err(|e| anyhow::anyhow!("lookup session: {e}"))?;
+        )
+        .map_err(|e| anyhow::anyhow!("lookup session: {e}"))?;
         if let Some(row) = r.rows.first() {
             let wg = dv_as_str(&row[0]).unwrap_or("").to_string();
             let created = dv_as_str(&row[1]).unwrap_or("").to_string();
@@ -478,7 +515,8 @@ impl CozoGraphShuttle {
             &self.db,
             "?[session_id] <- [[$sid]] :rm sessions { session_id }",
             p,
-        ).map_err(|e| anyhow::anyhow!("delete session: {e}"))?;
+        )
+        .map_err(|e| anyhow::anyhow!("delete session: {e}"))?;
         Ok(())
     }
 
@@ -499,7 +537,11 @@ fn dv_int(i: i64) -> DataValue {
 }
 
 fn dv_as_str(dv: &DataValue) -> Option<&str> {
-    if let DataValue::Str(s) = dv { Some(s.as_str()) } else { None }
+    if let DataValue::Str(s) = dv {
+        Some(s.as_str())
+    } else {
+        None
+    }
 }
 
 fn json_obj_to_params(v: Value) -> Params {
@@ -531,9 +573,13 @@ fn json_to_dv(v: Value) -> DataValue {
 
 pub fn named_rows_to_json(rows: NamedRows) -> Value {
     let headers = &rows.headers;
-    let out: Vec<Value> = rows.rows.iter()
+    let out: Vec<Value> = rows
+        .rows
+        .iter()
         .map(|row| {
-            let obj: serde_json::Map<String, Value> = headers.iter().zip(row.iter())
+            let obj: serde_json::Map<String, Value> = headers
+                .iter()
+                .zip(row.iter())
                 .map(|(h, dv)| (h.clone(), dv_to_json(dv)))
                 .collect();
             Value::Object(obj)
@@ -547,9 +593,9 @@ fn dv_to_json(dv: &DataValue) -> Value {
         DataValue::Null => Value::Null,
         DataValue::Bool(b) => Value::Bool(*b),
         DataValue::Num(cozo::Num::Int(i)) => Value::Number((*i).into()),
-        DataValue::Num(cozo::Num::Float(f)) => {
-            serde_json::Number::from_f64(*f).map(Value::Number).unwrap_or(Value::Null)
-        }
+        DataValue::Num(cozo::Num::Float(f)) => serde_json::Number::from_f64(*f)
+            .map(Value::Number)
+            .unwrap_or(Value::Null),
         DataValue::Str(s) => Value::String(s.to_string()),
         DataValue::List(list) => Value::Array(list.iter().map(dv_to_json).collect()),
         other => Value::String(format!("{other:?}")),

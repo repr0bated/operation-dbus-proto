@@ -8,10 +8,10 @@ use simd_json::{json, OwnedValue as Value};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info};
 use uuid::Uuid;
 
-use crate::wireguard_auth::{ClientInfo, SessionFilter, WireGuardAuthManager, WireGuardSession};
+use crate::wireguard_auth::{SessionFilter, WireGuardAuthManager};
 use anyhow::Result;
 
 /// Client routing decision
