@@ -4,9 +4,21 @@
 //! - HTTP/SSE  (MCP protocol, port 3003)
 //! - gRPC      (CognitiveToolService, port 50052)
 //! - D-Bus     (org.opdbus.CognitiveMcp / /org/opdbus/v1/cognitive)
+//!
+//! On startup the server reads the local WireGuard public key (from the
+//! interface named by $WG_INTERFACE, defaulting to "netmaker") and writes the
+//! canonical IdentitySled to /dev/shm/plugin_schema.dat so the Ghostbridge
+//! interceptor and Qdrant shuttle can authenticate outbound gRPC calls.
+//!
+//! Bind address resolution order (highest priority first):
+//!   1. COGNITIVE_MCP_BIND / COGNITIVE_MCP_GRPC_BIND env vars
+//!   2. --http / --grpc CLI flags
+//!   3. WireGuard interface IP detected at startup (if interface is up)
+//!   4. 0.0.0.0 fallback
 
 use clap::Parser;
 use op_cognitive_mcp::CognitiveMcpServer;
+use op_identity::{write_sled_from_wg, WireGuardIdentity};
 use tracing::{info, warn, Level};
 use tracing_subscriber::FmtSubscriber;
 
@@ -14,11 +26,15 @@ use tracing_subscriber::FmtSubscriber;
 #[command(name = "cognitive-mcp-server")]
 #[command(about = "Cognitive MCP Server with memory, NotebookLM bridge, gRPC, and D-Bus")]
 struct Cli {
-    /// HTTP/SSE server address (MCP protocol)
+    /// HTTP/SSE server address (MCP protocol).
+    /// If left at 0.0.0.0 the WireGuard interface IP is used when available.
+    /// Override with COGNITIVE_MCP_BIND env var or this flag.
     #[arg(long, env = "COGNITIVE_MCP_BIND", default_value = "0.0.0.0:3003")]
     http: String,
 
-    /// gRPC server address (CognitiveToolService)
+    /// gRPC server address (CognitiveToolService).
+    /// If left at 0.0.0.0 the WireGuard interface IP is used when available.
+    /// Override with COGNITIVE_MCP_GRPC_BIND env var or this flag.
     #[arg(long, env = "COGNITIVE_MCP_GRPC_BIND", default_value = "0.0.0.0:50052")]
     grpc: String,
 
@@ -29,6 +45,10 @@ struct Cli {
         default_value = "/var/lib/op-cognitive-mcp/memory.db"
     )]
     db: String,
+
+    /// WireGuard interface to read identity from
+    #[arg(long, env = "WG_INTERFACE", default_value = "netmaker")]
+    wg_interface: String,
 
     /// Log level
     #[arg(long, env = "COGNITIVE_MCP_LOG_LEVEL", default_value = "info")]
@@ -45,6 +65,18 @@ struct Cli {
     /// Disable D-Bus registration
     #[arg(long, env = "COGNITIVE_MCP_DBUS_DISABLED")]
     no_dbus: bool,
+}
+
+/// Promote an `0.0.0.0:PORT` default address to `<wg_ip>:PORT` when the WG
+/// interface is up.  Explicit addresses (not starting with `0.0.0.0:`) are
+/// returned unchanged so env-var or flag overrides always win.
+fn resolve_bind(addr: &str, wg_ip: Option<&str>) -> String {
+    if let Some(rest) = addr.strip_prefix("0.0.0.0:") {
+        if let Some(ip) = wg_ip {
+            return format!("{ip}:{rest}");
+        }
+    }
+    addr.to_string()
 }
 
 #[tokio::main]
@@ -65,10 +97,46 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .finish();
     tracing::subscriber::set_global_default(subscriber)?;
 
+    // ── WireGuard identity ────────────────────────────────────────────────────
+    // 1. Detect local WG IP for bind address resolution.
+    // 2. Write canonical IdentitySled to /dev/shm for Ghostbridge auth.
+    let wg_id = WireGuardIdentity::with_interface(&cli.wg_interface);
+    let wg_ip = wg_id.get_local_ip();
+
+    match wg_id.get_local_pubkey() {
+        Ok(pubkey) => {
+            info!(
+                interface = %cli.wg_interface,
+                pubkey = %pubkey,
+                wg_ip = ?wg_ip,
+                "Writing WireGuard identity sled to /dev/shm/plugin_schema.dat"
+            );
+            if let Err(e) = write_sled_from_wg(&pubkey) {
+                warn!(
+                    error = %e,
+                    "Failed to write identity sled — gRPC Ghostbridge auth will not work"
+                );
+            }
+        }
+        Err(e) => {
+            warn!(
+                interface = %cli.wg_interface,
+                error = %e,
+                "Could not read WireGuard public key — identity sled not written; \
+                 set WG_PUBKEY env var to override"
+            );
+        }
+    }
+
+    // Resolve bind addresses: promote 0.0.0.0 defaults to WG interface IP.
+    let http_addr = resolve_bind(&cli.http, wg_ip.as_deref());
+    let grpc_addr = resolve_bind(&cli.grpc, wg_ip.as_deref());
+
     info!(
-        http = %cli.http,
-        grpc = %cli.grpc,
+        http = %http_addr,
+        grpc = %grpc_addr,
         db = %cli.db,
+        wg_interface = %cli.wg_interface,
         "Starting Cognitive MCP Server"
     );
 
@@ -97,15 +165,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         (true, false) => {
             info!("Running HTTP/SSE only");
-            server.start_http_server(&cli.http).await?;
+            server.start_http_server(&http_addr).await?;
         }
         (false, true) => {
             info!("Running gRPC only");
-            server.start_grpc_server(&cli.grpc).await?;
+            server.start_grpc_server(&grpc_addr).await?;
         }
         (false, false) => {
             info!("Running HTTP/SSE + gRPC");
-            server.start_dual(&cli.http, &cli.grpc).await?;
+            server.start_dual(&http_addr, &grpc_addr).await?;
         }
     }
 

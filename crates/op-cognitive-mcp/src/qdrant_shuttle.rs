@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{ensure, Context, Result};
 use memmap2::MmapOptions;
+use op_identity::IdentitySled;
 use op_state_store::{FieldType, PluginSchema};
 use qdrant_client::qdrant::{
     Condition, Filter, QueryPointsBuilder, RetrievedPoint, ScoredPoint, ScrollPointsBuilder,
@@ -20,18 +21,6 @@ const DEFAULT_TRACE_LIMIT: u32 = 5;
 const DEFAULT_VOYAGE_API_URL: &str = "https://api.voyageai.com/v1/embeddings";
 const DEFAULT_VOYAGE_QUERY_MODEL: &str = "voyage-4";
 const DEFAULT_VOYAGE_OUTPUT_DIMENSION: u32 = 1024;
-
-/// THE SLED: 1:1 Zero-copy shared memory layout mapping directly to the SchemaEngine.
-/// Keep this ABI aligned with the gRPC Ghostbridge interceptor until the workspace
-/// converges on a single canonical sled definition.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct IdentitySled {
-    pub wireguard_pubkey: [u8; 32],
-    pub mutation_index: u64,
-    pub is_valid: bool,
-    pub hashed_footprint: [u8; 32],
-}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionTraceContext {
@@ -495,9 +484,11 @@ mod tests {
 
     #[test]
     fn should_preserve_identity_sled_abi_shape() {
+        // Canonical sled from op-identity: wireguard_pubkey(32) + mutation_index(8)
+        // + is_valid(1) + _pad(7) + hashed_footprint(32) + subid taxonomy + compliance fields.
         assert!(
-            size_of::<IdentitySled>() >= 32 + 8 + 1 + 32,
-            "IdentitySled ABI unexpectedly shrank"
+            size_of::<IdentitySled>() >= 32 + 8 + 1 + 7 + 32,
+            "IdentitySled ABI unexpectedly shrank (using canonical op-identity layout)"
         );
     }
 
