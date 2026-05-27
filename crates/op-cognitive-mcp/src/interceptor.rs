@@ -1,19 +1,5 @@
-use memmap2::MmapOptions;
-use std::fs::File;
+use op_identity::{read_sled, IdentitySled};
 use tonic::{Request, Status};
-
-#[repr(C)]
-pub struct IdentitySled {
-    pub wireguard_pubkey: [u8; 32],
-    pub mutation_index: u64,
-    pub is_valid: bool,
-    pub _pad: [u8; 7],
-    pub hashed_footprint: [u8; 32],
-    pub schema_uuid: [u8; 16],
-    pub subid: [u8; 64],
-    pub control_source: [u8; 32],
-    pub nextdns_profile: [u8; 16],
-}
 
 pub fn ghostbridge_interceptor(mut req: Request<()>) -> Result<Request<()>, Status> {
     let footprint_value = req.metadata().get("x-ghostbridge-footprint").cloned();
@@ -23,18 +9,17 @@ pub fn ghostbridge_interceptor(mut req: Request<()>) -> Result<Request<()>, Stat
         return Err(Status::unauthenticated("Missing Ghostbridge Identity Sled."));
     }
 
-    let file = File::open("/dev/shm/plugin_schema.dat")
+    // Zero-copy read from /dev/shm/plugin_schema.dat via mmap.
+    // `_mmap` keeps the mapping alive for the duration of this function.
+    let (sled_ptr, _mmap) = read_sled()
         .map_err(|_| Status::internal("SchemaEngine Memory Unreachable"))?;
 
-    let mmap = unsafe {
-        MmapOptions::new()
-            .map(&file)
-            .map_err(|_| Status::internal("Mmap failed"))?
-    };
-    let sled_ptr = mmap.as_ptr() as *const IdentitySled;
-
+    // SAFETY: read_sled() uses MmapOptions::len(IdentitySled::SIZE) so the
+    // mapping is at least SIZE bytes, and write_sled() uses atomic rename so
+    // readers never see a partial write.
     let is_valid = unsafe { (*sled_ptr).is_valid };
     let current_footprint = unsafe { (*sled_ptr).hashed_footprint };
+    let control_source_bytes = unsafe { (*sled_ptr).control_source };
 
     if !is_valid {
         return Err(Status::failed_precondition("Invalid Schema State."));
@@ -51,12 +36,9 @@ pub fn ghostbridge_interceptor(mut req: Request<()>) -> Result<Request<()>, Stat
         return Err(Status::permission_denied("Temporal Hash Mismatch."));
     }
 
-    // Verify OSCAL header
-    let control_source = unsafe { &(*sled_ptr).control_source };
-    let end = control_source.iter().position(|&b| b == 0).unwrap_or(32);
-    let oscal_header = std::str::from_utf8(&control_source[..end]).unwrap_or("");
-    
-    // Log or check the OSCAL header if needed
+    // Log the OSCAL control-source for audit / debug.
+    let end = control_source_bytes.iter().position(|&b| b == 0).unwrap_or(32);
+    let oscal_header = std::str::from_utf8(&control_source_bytes[..end]).unwrap_or("");
     tracing::debug!("Validated request with OSCAL control source: {}", oscal_header);
 
     if let Some(trace_val) = trace_value {

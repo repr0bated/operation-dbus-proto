@@ -1,0 +1,16 @@
+#!/bin/sh
+# op-assistant-grpc — gRPC gateway for the self-hosted Assistant.
+#
+# Targets op-grpc-bridge inside the wg-xray Incus container (10.200.0.1:50051).
+# Injects x-ghostbridge-footprint / x-ghostbridge-trace-id from the
+# IdentitySled in /dev/shm/plugin_schema.dat for Xray OpenFlow routing.
+
+export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/op-dbus/session-bus.sock}"
+export OP_ASSISTANT_RPC_ENDPOINT="${OP_ASSISTANT_RPC_ENDPOINT:-http://10.200.0.1:50051}"
+export OP_ASSISTANT_GRPC_HOST="${OP_ASSISTANT_GRPC_HOST:-127.0.0.1}"
+export OP_ASSISTANT_GRPC_PORT="${OP_ASSISTANT_GRPC_PORT:-50052}"
+export OP_ASSISTANT_COZO_PATH="${OP_ASSISTANT_COZO_PATH:-/var/lib/op-dbus/assistant-grpc.db}"
+export OP_ASSISTANT_SCHEMA_PATH="${OP_ASSISTANT_SCHEMA_PATH:-/dev/shm/plugin_schema.dat}"
+export RUST_LOG="${RUST_LOG:-op_assistant_grpc=info,info}"
+
+exec /usr/local/bin/op-assistant-grpc
