@@ -3,6 +3,7 @@
 //! MCP tools backed by the SQLite namespace/entry memory store.
 //! Operations: store, retrieve, query, delete, list_namespaces, stats.
 
+use crate::agent_tools::register_agent_tools;
 use crate::memory_store::{CognitiveMemoryStore, EntryQuery, NamespaceKind};
 use crate::notebooklm::register_notebooklm_tools;
 use anyhow::Result;
@@ -22,6 +23,7 @@ impl CognitiveToolRegistry {
         registry
             .register(Arc::new(MemoryTool::new(store.clone())) as BoxedTool)
             .await?;
+        register_agent_tools(registry).await?;
         register_notebooklm_tools(registry).await?;
         Ok(())
     }

@@ -155,6 +155,25 @@ impl CozoGraphShuttle {
                 access_count: Int default 0,
                 last_accessed: String default ""
             }"#,
+            // persistent agent identity / personality (Soul Memory)
+            r#":create soul_memories {
+                agent_id: String
+                =>
+                identity: String default "",
+                personality: String default "",
+                traits: String default "{}",
+                version: Int default 1,
+                created_at: String default "",
+                updated_at: String default ""
+            }"#,
+            // 1:1 binding from agent → owning memory namespace
+            r#":create agent_namespace_bindings {
+                agent_id: String
+                =>
+                namespace: String default "",
+                created_at: String default "",
+                updated_at: String default ""
+            }"#,
         ];
 
         for script in &relations {

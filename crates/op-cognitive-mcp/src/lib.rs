@@ -12,6 +12,7 @@
 //! - Quota awareness (R11)
 
 pub mod activity_filter;
+pub mod agent_tools;
 pub mod cozo_shuttle;
 pub mod dbus_interface;
 pub mod rag_pipeline;
@@ -25,6 +26,7 @@ pub mod qdrant_shuttle;
 pub mod quota;
 pub mod server;
 pub mod session;
+pub mod soul_memory;
 pub mod tool_profiles;
 pub mod typed_tools;
 pub mod voyage;
@@ -37,10 +39,12 @@ pub use cognitive_tools::CognitiveToolRegistry;
 pub use cozo_shuttle::{CozoGraphShuttle, PolicyVerdict};
 pub use grpc_service::CognitiveGrpcService;
 pub use memory_store::CognitiveMemoryStore;
-pub use qdrant_shuttle::{IdentitySled, QdrantSemanticShuttle, SessionTraceContext};
+pub use op_identity::IdentitySled;
+pub use qdrant_shuttle::{QdrantSemanticShuttle, SessionTraceContext};
 pub use quota::{QuotaManager, QuotaTier};
 pub use server::CognitiveMcpServer;
 pub use session::SessionManager;
+pub use soul_memory::{AgentNamespaceBinding, SoulMemory, SoulMemoryStore, SoulUpdate};
 pub use voyage::VoyageClient;
 
 /// Generated protobuf types for the CognitiveToolService.
