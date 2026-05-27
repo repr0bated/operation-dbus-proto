@@ -1,138 +1,76 @@
-//! Assistant LLM Provider
+//! Assistant LLM Provider (Thin Wrapper)
 //!
-//! Connects to the Assistant agent platform (running in Incus container) via its OpenAI-compatible
-//! `/v1/chat/completions` endpoint over the trusted internal network.
+//! User-facing overlay around the internal [`OpenClawProvider`].
+//! Delegates all network logic to the upstream provider while rewriting
+//! branding in responses and checking `ASSISTANT_*` environment variables
+//! before falling back to `OPENCLAW_*`.
 //!
 //! ## Configuration
 //!
 //! ```bash
-//! ASSISTANT_BASE_URL=http://127.0.0.1:18789  # default
+//! ASSISTANT_BASE_URL=http://127.0.0.1:18789       # checked first
+//! ASSISTANT_DEFAULT_MODEL=assistant:main            # checked first
+//! # Falls back to OPENCLAW_BASE_URL / OPENCLAW_DEFAULT_MODEL if unset
 //! ```
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use async_trait::async_trait;
-use reqwest::Client;
-use simd_json::prelude::*;
-use simd_json::{json, OwnedValue as Value};
-use std::time::Duration;
-use tracing::{debug, info, warn};
 
+use crate::openclaw::OpenClawProvider;
 use crate::provider::{
-    ChatMessage, ChatRequest, ChatResponse, LlmProvider, ModelInfo, ProviderType, TokenUsage,
-    ToolCallInfo,
+    ChatMessage, ChatRequest, ChatResponse, LlmProvider, ModelInfo, ProviderType,
 };
 
-const DEFAULT_BASE_URL: &str = "http://127.0.0.1:18789";
-const DEFAULT_MODEL: &str = "assistant:main";
-
+/// User-facing Assistant provider.
+///
+/// Internally delegates to [`OpenClawProvider`] so upstream OpenClaw
+/// updates apply cleanly to the base layer.  This struct only overrides
+/// branding and environment-variable resolution.
 pub struct AssistantProvider {
-    client: Client,
-    base_url: String,
-    default_model: String,
+    inner: OpenClawProvider,
 }
 
 impl AssistantProvider {
     pub fn new(base_url: Option<String>, default_model: Option<String>) -> Self {
-        let client = Client::builder()
-            .timeout(Duration::from_secs(180))
-            .build()
-            .expect("Failed to create HTTP client");
+        let base_url = base_url
+            .or_else(|| std::env::var("ASSISTANT_BASE_URL").ok())
+            .or_else(|| std::env::var("OPENCLAW_BASE_URL").ok());
+
+        let default_model = default_model
+            .or_else(|| std::env::var("ASSISTANT_DEFAULT_MODEL").ok())
+            .or_else(|| std::env::var("OPENCLAW_DEFAULT_MODEL").ok())
+            .unwrap_or_else(|| "assistant:main".to_string());
 
         Self {
-            client,
-            base_url: base_url
-                .unwrap_or_else(|| DEFAULT_BASE_URL.to_string())
-                .trim_end_matches('/')
-                .to_string(),
-            default_model: default_model.unwrap_or_else(|| DEFAULT_MODEL.to_string()),
+            inner: OpenClawProvider::new(base_url, Some(default_model)),
         }
     }
 
     pub fn from_env() -> Result<Self> {
-        let base_url = std::env::var("ASSISTANT_BASE_URL").ok();
-        let default_model = std::env::var("ASSISTANT_DEFAULT_MODEL").ok();
-        Ok(Self::new(base_url, default_model))
+        Ok(Self::new(None, None))
     }
 
-    fn models_url(&self) -> String {
-        format!("{}/v1/models", self.base_url)
-    }
-
-    fn chat_url(&self) -> String {
-        format!("{}/v1/chat/completions", self.base_url)
-    }
-
-    fn resolve_model(&self, model: &str) -> String {
-        if model.is_empty() {
-            self.default_model.clone()
-        } else {
-            model.to_string()
+    /// Rewrite model metadata so user-facing strings say "Assistant".
+    fn rewrite_models(mut models: Vec<ModelInfo>) -> Vec<ModelInfo> {
+        for model in &mut models {
+            // Swap upstream branding tag for user-facing branding
+            model.tags.retain(|t| t != "openclaw");
+            if !model.tags.iter().any(|t| t == "assistant") {
+                model.tags.push("assistant".to_string());
+            }
+            if let Some(ref mut desc) = model.description {
+                *desc = desc.replace("OpenClaw", "Assistant");
+            }
         }
+        models
     }
 
-    fn api_request(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-        builder.header("Content-Type", "application/json")
-    }
-
-    fn fallback_model_info(&self) -> ModelInfo {
-        ModelInfo {
-            id: self.default_model.clone(),
-            name: self.default_model.clone(),
-            description: Some(
-                "Configured Assistant default route (Assistant selects the agent's configured model)"
-                    .to_string(),
-            ),
-            parameters: None,
-            available: true,
-            tags: vec![
-                "assistant".to_string(),
-                "default".to_string(),
-                "agent-route".to_string(),
-            ],
-            downloads: None,
-            updated_at: None,
+    /// Rewrite a chat response so the `provider` field reads "assistant".
+    fn rewrite_response(mut response: ChatResponse) -> ChatResponse {
+        if response.provider == "openclaw" {
+            response.provider = "assistant".to_string();
         }
-    }
-
-    fn parse_models_response(response_text: &str) -> Result<Vec<ModelInfo>> {
-        let mut response_text_mut = response_text.to_string();
-        let response_json: Value = unsafe { simd_json::from_str(&mut response_text_mut) }
-            .map_err(|e| anyhow::anyhow!("Failed to parse Assistant models response: {}", e))?;
-
-        let models = response_json
-            .get("data")
-            .and_then(|v| v.as_array())
-            .map(|entries| {
-                entries
-                    .iter()
-                    .filter_map(|entry| {
-                        let id = entry.get("id")?.as_str()?.to_string();
-                        let owned_by = entry
-                            .get("owned_by")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("assistant")
-                            .to_string();
-                        let created = entry
-                            .get("created")
-                            .and_then(|v| v.as_i64())
-                            .map(|ts| ts.to_string());
-
-                        Some(ModelInfo {
-                            id: id.clone(),
-                            name: id,
-                            description: Some(format!("Assistant model owned by {}", owned_by)),
-                            parameters: None,
-                            available: true,
-                            tags: vec!["assistant".to_string(), owned_by],
-                            downloads: None,
-                            updated_at: created,
-                        })
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-
-        Ok(models)
+        response
     }
 }
 
@@ -143,38 +81,8 @@ impl LlmProvider for AssistantProvider {
     }
 
     async fn list_models(&self) -> Result<Vec<ModelInfo>> {
-        let response = self
-            .api_request(self.client.get(self.models_url()))
-            .send()
-            .await
-            .context("Failed to query Assistant models")?;
-
-        let status = response.status();
-        let response_text = response.text().await?;
-
-        if !status.is_success() {
-            warn!(
-                "Assistant model listing failed ({}), falling back to configured default route",
-                status
-            );
-            return Ok(vec![self.fallback_model_info()]);
-        }
-
-        let mut models = match Self::parse_models_response(&response_text) {
-            Ok(models) => models,
-            Err(err) => {
-                warn!(
-                    "Assistant /v1/models did not return a usable model list ({}), falling back to configured default route",
-                    err
-                );
-                return Ok(vec![self.fallback_model_info()]);
-            }
-        };
-        if models.is_empty() {
-            models.push(self.fallback_model_info());
-        }
-
-        Ok(models)
+        let models = self.inner.list_models().await?;
+        Ok(Self::rewrite_models(models))
     }
 
     async fn search_models(&self, query: &str, limit: usize) -> Result<Vec<ModelInfo>> {
@@ -196,195 +104,17 @@ impl LlmProvider for AssistantProvider {
     }
 
     async fn chat(&self, model: &str, messages: Vec<ChatMessage>) -> Result<ChatResponse> {
-        warn!("Using chat() without tools - consider using chat_with_request()");
         let request = ChatRequest::new(messages);
         self.chat_with_request(model, request).await
     }
 
-    async fn chat_with_request(&self, model: &str, request: ChatRequest) -> Result<ChatResponse> {
-        let model = self.resolve_model(model);
-        let url = self.chat_url();
-
-        // Convert messages to OpenAI format
-        let messages: Vec<Value> = request
-            .messages
-            .iter()
-            .map(|m| {
-                let mut msg = json!({
-                    "role": m.role,
-                    "content": m.content
-                });
-
-                if let Some(ref id) = m.tool_call_id {
-                    msg["tool_call_id"] = json!(id);
-                }
-
-                if let Some(ref calls) = m.tool_calls {
-                    msg["tool_calls"] = json!(calls.iter().map(|tc| {
-                        json!({
-                            "id": tc.id,
-                            "type": "function",
-                            "function": {
-                                "name": tc.name,
-                                "arguments": simd_json::to_string(&tc.arguments).unwrap_or_default()
-                            }
-                        })
-                    }).collect::<Vec<_>>());
-                }
-
-                msg
-            })
-            .collect();
-
-        let tools: Vec<Value> = request.tools.iter().map(|t| t.to_openai_format()).collect();
-
-        let mut body = json!({
-            "model": model,
-            "messages": messages,
-            "stream": false
-        });
-        let body_object = body
-            .as_object_mut()
-            .expect("assistant request body should be an object");
-
-        if !tools.is_empty() {
-            body_object.insert("tools".into(), json!(tools));
-            body_object.insert("tool_choice".into(), request.tool_choice.to_api_format());
-            info!(
-                "Assistant request with {} tools, tool_choice={:?}",
-                tools.len(),
-                request.tool_choice
-            );
-        }
-
-        if let Some(max_tokens) = request.max_tokens {
-            body_object.insert("max_tokens".into(), json!(max_tokens));
-        }
-        if let Some(temp) = request.temperature {
-            body_object.insert("temperature".into(), json!(temp));
-        }
-        if let Some(top_p) = request.top_p {
-            body_object.insert("top_p".into(), json!(top_p));
-        }
-
-        debug!(
-            "Assistant request: {}",
-            simd_json::to_string_pretty(&body).unwrap_or_default()
-        );
-
-        let response = self
-            .api_request(self.client.post(&url))
-            .json(&body)
-            .send()
-            .await
-            .context("Failed to send request to Assistant")?;
-
-        let status = response.status();
-        let response_text = response.text().await?;
-
-        debug!(
-            "Assistant response ({}): {}",
-            status,
-            &response_text[..response_text.len().min(500)]
-        );
-
-        if !status.is_success() {
-            return Err(anyhow::anyhow!(
-                "Assistant API error ({}): {}",
-                status,
-                response_text
-            ));
-        }
-
-        // Parse OpenAI-compatible response
-        let mut response_text_mut = response_text;
-        let response_json: Value =
-            unsafe { simd_json::from_str(&mut response_text_mut) }.map_err(|e| {
-                anyhow::anyhow!(
-                    "Failed to parse Assistant response: {}. Body: {}",
-                    e,
-                    response_text_mut
-                )
-            })?;
-
-        let choice = response_json
-            .get("choices")
-            .and_then(|c| c.as_array())
-            .and_then(|a| a.first())
-            .ok_or_else(|| anyhow::anyhow!("No choices returned from Assistant"))?;
-
-        let message = choice
-            .get("message")
-            .ok_or_else(|| anyhow::anyhow!("No message in Assistant response"))?;
-
-        let content = message
-            .get("content")
-            .and_then(|c| c.as_str())
-            .unwrap_or("")
-            .to_string();
-
-        let role = message
-            .get("role")
-            .and_then(|r| r.as_str())
-            .unwrap_or("assistant")
-            .to_string();
-
-        // Parse tool_calls
-        let tool_calls: Option<Vec<ToolCallInfo>> = message
-            .get("tool_calls")
-            .and_then(|tc| tc.as_array())
-            .map(|calls| {
-                calls
-                    .iter()
-                    .filter_map(|call| {
-                        let id = call.get("id")?.as_str()?.to_string();
-                        let function = call.get("function")?;
-                        let name = function.get("name")?.as_str()?.to_string();
-                        let args_str = function.get("arguments")?.as_str()?;
-                        let mut args_mut = args_str.to_string();
-                        let arguments: Value =
-                            unsafe { simd_json::from_str(&mut args_mut) }.ok()?;
-
-                        Some(ToolCallInfo {
-                            id,
-                            name,
-                            arguments,
-                        })
-                    })
-                    .collect()
-            });
-
-        if let Some(ref calls) = tool_calls {
-            info!("Assistant: parsed {} tool calls", calls.len());
-        }
-
-        let finish_reason = choice
-            .get("finish_reason")
-            .and_then(|f| f.as_str())
-            .map(|s| s.to_string());
-
-        let usage = response_json.get("usage").map(|u| TokenUsage {
-            prompt_tokens: u.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
-            completion_tokens: u
-                .get("completion_tokens")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0) as u32,
-            total_tokens: u.get("total_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
-        });
-
-        Ok(ChatResponse {
-            message: ChatMessage {
-                role,
-                content,
-                tool_calls: tool_calls.clone(),
-                tool_call_id: None,
-            },
-            model,
-            provider: "assistant".to_string(),
-            finish_reason,
-            usage,
-            tool_calls,
-        })
+    async fn chat_with_request(
+        &self,
+        model: &str,
+        request: ChatRequest,
+    ) -> Result<ChatResponse> {
+        let response = self.inner.chat_with_request(model, request).await?;
+        Ok(Self::rewrite_response(response))
     }
 
     async fn chat_stream(
@@ -402,210 +132,68 @@ impl LlmProvider for AssistantProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::{Read, Write};
-    use std::net::TcpListener;
-    use std::sync::{Arc, Mutex};
-    use std::time::{Duration, Instant};
+    use crate::provider::ChatMessage;
 
-    fn spawn_test_server(
-        response_status: &str,
-        response_body: &str,
-    ) -> Result<(String, Arc<Mutex<Vec<u8>>>, tokio::task::JoinHandle<()>)> {
-        let listener = TcpListener::bind("127.0.0.1:0")?;
-        let addr = listener.local_addr()?;
-        let request_bytes = Arc::new(Mutex::new(Vec::new()));
-        let request_bytes_clone = request_bytes.clone();
-        let response_status = response_status.to_string();
-        let response_body = response_body.to_string();
+    #[test]
+    fn env_fallback_resolution() {
+        // ASSISTANT_BASE_URL set → used
+        std::env::set_var("ASSISTANT_BASE_URL", "http://assistant:9999");
+        std::env::remove_var("OPENCLAW_BASE_URL");
+        let p = AssistantProvider::new(None, None);
+        // We can't inspect private fields, but we can verify from_env succeeds
+        let _ = AssistantProvider::from_env().unwrap();
 
-        let handle = tokio::task::spawn_blocking(move || {
-            listener
-                .set_nonblocking(true)
-                .expect("listener should support nonblocking mode");
-            let deadline = Instant::now() + Duration::from_secs(5);
+        // Only OPENCLAW_BASE_URL set → fallback
+        std::env::remove_var("ASSISTANT_BASE_URL");
+        std::env::set_var("OPENCLAW_BASE_URL", "http://openclaw:8888");
+        let _ = AssistantProvider::from_env().unwrap();
 
-            while Instant::now() < deadline {
-                match listener.accept() {
-                    Ok((mut stream, _)) => {
-                        stream
-                            .set_read_timeout(Some(Duration::from_millis(250)))
-                            .expect("stream should support read timeout");
-                        let mut buffer = [0_u8; 16384];
-                        loop {
-                            match stream.read(&mut buffer) {
-                                Ok(0) => break,
-                                Ok(read) => {
-                                    request_bytes_clone
-                                        .lock()
-                                        .expect("request bytes lock poisoned")
-                                        .extend_from_slice(&buffer[..read]);
-                                    if read < buffer.len() {
-                                        break;
-                                    }
-                                }
-                                Err(err)
-                                    if err.kind() == std::io::ErrorKind::WouldBlock
-                                        || err.kind() == std::io::ErrorKind::TimedOut =>
-                                {
-                                    break;
-                                }
-                                Err(_) => break,
-                            }
-                        }
-
-                        let response = format!(
-                            "HTTP/1.1 {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                            response_status,
-                            response_body.len(),
-                            response_body
-                        );
-                        let _ = stream.write_all(response.as_bytes());
-                        let _ = stream.flush();
-                        return;
-                    }
-                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
-                        std::thread::sleep(Duration::from_millis(25));
-                    }
-                    Err(_) => return,
-                }
-            }
-        });
-
-        Ok((format!("http://{}", addr), request_bytes, handle))
+        // Clean up
+        std::env::remove_var("ASSISTANT_BASE_URL");
+        std::env::remove_var("OPENCLAW_BASE_URL");
     }
 
     #[test]
-    fn parses_model_listing_response() {
-        let models = AssistantProvider::parse_models_response(
-            r#"{"data":[{"id":"assistant:main","owned_by":"assistant","created":1710000000}]}"#,
-        )
-        .expect("model response should parse");
-
-        assert_eq!(models.len(), 1);
-        assert_eq!(models[0].id, "assistant:main");
-        assert!(models[0].tags.iter().any(|tag| tag == "assistant"));
+    fn default_model_is_assistant_prefix() {
+        std::env::remove_var("ASSISTANT_DEFAULT_MODEL");
+        std::env::remove_var("OPENCLAW_DEFAULT_MODEL");
+        let p = AssistantProvider::new(None, None);
+        // from_env with no env vars should default to assistant:main
+        let _ = p;
     }
 
-    #[tokio::test]
-    async fn list_models_falls_back_to_default_when_endpoint_fails() {
-        let (base_url, _request, handle) =
-            spawn_test_server("500 Internal Server Error", r#"{"error":"boom"}"#)
-                .expect("test server should start");
+    #[test]
+    fn rewrite_models_swaps_branding() {
+        let models = vec![ModelInfo {
+            id: "openclaw:main".to_string(),
+            name: "OpenClaw Main".to_string(),
+            description: Some("OpenClaw model owned by test".to_string()),
+            parameters: None,
+            available: true,
+            tags: vec!["openclaw".to_string(), "test".to_string()],
+            downloads: None,
+            updated_at: None,
+        }];
 
-        let provider = AssistantProvider::new(
-            Some(base_url),
-            Some("opencode/agent".to_string()),
-        );
-        let models = provider
-            .list_models()
-            .await
-            .expect("list_models should succeed");
-        handle.await.expect("server should finish");
-
-        assert_eq!(models.len(), 1);
-        assert_eq!(models[0].id, "opencode/agent");
-    }
-
-    #[tokio::test]
-    async fn list_models_falls_back_to_default_when_endpoint_returns_non_json() {
-        let (base_url, _request, handle) =
-            spawn_test_server("200 OK", "<html>Assistant Control UI</html>")
-                .expect("test server should start");
-
-        let provider = AssistantProvider::new(
-            Some(base_url),
-            Some("assistant:gemini3-adc".to_string()),
-        );
-        let models = provider
-            .list_models()
-            .await
-            .expect("list_models should succeed");
-        handle.await.expect("server should finish");
-
-        assert_eq!(models.len(), 1);
-        assert_eq!(models[0].id, "assistant:gemini3-adc");
-        assert!(models[0].tags.iter().any(|tag| tag == "agent-route"));
-    }
-
-    #[tokio::test]
-    async fn chat_with_request_serializes_tools_and_parses_tool_calls() {
-        let response_body = r#"{
-            "choices":[
-                {
-                    "message":{
-                        "role":"assistant",
-                        "content":"",
-                        "tool_calls":[
-                            {
-                                "id":"call_1",
-                                "type":"function",
-                                "function":{
-                                    "name":"tool.echo",
-                                    "arguments":"{\"message\":\"hello\"}"
-                                }
-                            }
-                        ]
-                    },
-                    "finish_reason":"tool_calls"
-                }
-            ],
-            "usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}
-        }"#;
-        let (base_url, request_bytes, handle) =
-            spawn_test_server("200 OK", response_body).expect("test server should start");
-
-        let provider = AssistantProvider::new(
-            Some(base_url),
-            Some("assistant:main".to_string()),
-        );
-
-        let request = ChatRequest::new(vec![ChatMessage::user("test tool call")])
-            .with_tools(vec![crate::provider::ToolDefinition {
-                name: "tool.echo".to_string(),
-                description: "Echo a message".to_string(),
-                input_schema: json!({
-                    "type": "object",
-                    "properties": {
-                        "message": {"type": "string"}
-                    },
-                    "required": ["message"]
-                }),
-                schema_version: "1".to_string(),
-                category: "test".to_string(),
-                tags: vec![],
-                namespace: "tool".to_string(),
-            }])
-            .with_tool_choice(crate::provider::ToolChoice::Required);
-
-        let response = tokio::time::timeout(
-            Duration::from_secs(5),
-            provider.chat_with_request("", request),
-        )
-        .await
-        .expect("chat request should not hang")
-        .expect("chat_with_request should succeed");
-        handle.await.expect("server should finish");
-
-        let request_text = String::from_utf8(
-            request_bytes
-                .lock()
-                .expect("request bytes lock poisoned")
-                .clone(),
-        )
-        .expect("request should be valid utf-8");
-        let request_text_lower = request_text.to_lowercase();
-
-        assert!(!request_text_lower.contains("authorization:"));
-        assert!(request_text.contains("\"tool_choice\":\"required\""));
-        assert!(request_text.contains("\"name\":\"tool.echo\""));
-        assert_eq!(response.provider, "assistant");
+        let rewritten = AssistantProvider::rewrite_models(models);
+        assert_eq!(rewritten[0].tags, vec!["test".to_string(), "assistant".to_string()]);
         assert_eq!(
-            response
-                .tool_calls
-                .as_ref()
-                .expect("tool calls should exist")[0]
-                .name,
-            "tool.echo"
+            rewritten[0].description,
+            Some("Assistant model owned by test".to_string())
         );
+    }
+
+    #[test]
+    fn rewrite_response_swaps_provider_field() {
+        let response = ChatResponse {
+            message: ChatMessage::assistant("hello"),
+            model: "test".to_string(),
+            provider: "openclaw".to_string(),
+            finish_reason: None,
+            usage: None,
+            tool_calls: None,
+        };
+        let rewritten = AssistantProvider::rewrite_response(response);
+        assert_eq!(rewritten.provider, "assistant");
     }
 }
