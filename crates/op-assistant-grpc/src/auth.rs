@@ -13,6 +13,7 @@ pub struct WireGuardIdentity {
     pub pubkey: String,
 }
 
+#[allow(clippy::result_large_err)]
 pub fn extract_wireguard_identity(metadata: &MetadataMap) -> Result<WireGuardIdentity, Status> {
     let raw = metadata
         .get(WIREGUARD_PUBKEY_HEADER)
