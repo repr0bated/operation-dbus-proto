@@ -1,6 +1,6 @@
 [submodule "operation-dashboard-ui"]
 	path = operation-dashboard-ui
-	url = /home/jeremy/git/operation-dashboard-ui
+	url = https://github.com/repr0bated/operation-dashboard-ui.git
 [submodule "ui/axon-trace-ui"]
 	path = ui/axon-trace-ui
 	url = https://github.com/repr0bated/axon-trace-ui.git
