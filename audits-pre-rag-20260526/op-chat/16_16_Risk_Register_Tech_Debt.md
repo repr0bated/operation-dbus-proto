@@ -1,5 +1,0 @@
-# Error
-
-```
-Error code: 502 - {'error': {'message': 'status: NotFound, message: "Publisher Model `projects/dbus-enterprise-2026/locations/global/publishers/google/models/gemini-3-pro` was not found or your project does not have access to it. Please ensure you are using a valid model version. For more information, see: https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions", details: [], metadata: MetadataMap { headers: {"pcx-high-bwd-bin": "KgOYAQM", "grpc-server-stats-bin": "AADCNd8EAAAAAA", "endpoint-load-metrics-bin": "MTA5t8F8IwpAOYt7IFHxjQhASXjRU8Vo19k/", "content-type": "application/grpc", "grpc-accept-encoding": "identity, deflate, gzip", "content-length": "0", "date": "Tue, 26 May 2026 07:18:17 GMT", "alt-svc": "h3=\\":443\\"; ma=2592000,h3-29=\\":443\\"; ma=2592000"} }'}}
-```
