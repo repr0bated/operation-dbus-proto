@@ -1,0 +1,9 @@
+#!/bin/sh
+export HOME="${HOME:-/home/jeremy}"
+export DBUS_SYSTEM_BUS_ADDRESS="${DBUS_SYSTEM_BUS_ADDRESS:-unix:path=/run/dbus/system_bus_socket}"
+export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/op-dbus/session-bus.sock}"
+export RUST_LOG="${RUST_LOG:-op_mcp=info,op_tools=info,info}"
+exec s6-setuidgid jeremy /usr/local/bin/op-mcp-server \
+    --mode compact \
+    --http "${OP_MCP_COMPACT_ADDR:-127.0.0.1:11436}" \
+    --name op-mcp-compact

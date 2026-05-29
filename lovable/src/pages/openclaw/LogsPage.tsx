@@ -1,9 +1,17 @@
 import { useState, useEffect, useRef } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Search, Download, Pause, Play, Filter } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { getDashboardProjections } from "@/lib/api";
 
 interface LogEntry {
   id: number;
@@ -13,24 +21,6 @@ interface LogEntry {
   message: string;
 }
 
-const generateLogs = (): LogEntry[] => [
-  { id: 1, timestamp: "14:32:05.123", level: "info", source: "gateway", message: "chat.complete runId=r_abc123 tokens_in=1247 tokens_out=892 latency=3.2s" },
-  { id: 2, timestamp: "14:32:03.456", level: "debug", source: "skill:web-search", message: "query='server health monitoring' results=3 cached=false" },
-  { id: 3, timestamp: "14:32:01.789", level: "info", source: "gateway", message: "chat.send session=default model=claude-4-opus runId=r_abc123" },
-  { id: 4, timestamp: "14:30:00.001", level: "info", source: "cron", message: "job='Check Server Health' started schedule='*/15 * * * *'" },
-  { id: 5, timestamp: "14:30:02.334", level: "info", source: "cron", message: "job='Check Server Health' completed status=success duration=2.3s" },
-  { id: 6, timestamp: "14:15:02.100", level: "info", source: "session", message: "session.create key=coding model=claude-4-opus" },
-  { id: 7, timestamp: "14:10:00.001", level: "info", source: "cron", message: "job='Check Server Health' started" },
-  { id: 8, timestamp: "14:10:01.890", level: "info", source: "cron", message: "job='Check Server Health' completed status=success duration=1.9s" },
-  { id: 9, timestamp: "14:05:12.456", level: "warn", source: "gateway", message: "ws connection from 192.168.1.50 — device not paired, sending 1008" },
-  { id: 10, timestamp: "14:00:00.000", level: "info", source: "gateway", message: "health check ok sessions=3 memory=128MB ws=2" },
-  { id: 11, timestamp: "13:55:33.221", level: "error", source: "skill:email", message: "IMAP connection failed: ETIMEDOUT after 30s host=imap.gmail.com:993" },
-  { id: 12, timestamp: "13:50:00.001", level: "info", source: "cron", message: "job='News Digest' started" },
-  { id: 13, timestamp: "13:50:15.678", level: "error", source: "cron", message: "job='News Digest' failed: provider rate limit exceeded (429)" },
-  { id: 14, timestamp: "13:45:00.001", level: "info", source: "cron", message: "job='Check Server Health' completed status=success" },
-  { id: 15, timestamp: "13:30:12.345", level: "debug", source: "gateway", message: "config.get client=control-ui hash=a3f8b2c1" },
-];
-
 const levelColors: Record<string, string> = {
   info: "text-blue-600 dark:text-blue-400 bg-blue-500/10",
   warn: "text-yellow-600 dark:text-yellow-400 bg-yellow-500/10",
@@ -38,26 +28,157 @@ const levelColors: Record<string, string> = {
   debug: "text-muted-foreground bg-muted",
 };
 
+function projectionsToLogs(data: any, prev: LogEntry[]): LogEntry[] {
+  if (!data || typeof data !== "object") return prev;
+
+  const now = new Date();
+  const ts =
+    now.toTimeString().split(" ")[0] +
+    "." +
+    String(now.getMilliseconds()).padStart(3, "0");
+  const baseId = prev.length > 0 ? prev[prev.length - 1].id : 0;
+  const entries: LogEntry[] = [];
+
+  // Memory log
+  const mem = data["system.memory"];
+  if (mem) {
+    const used =
+      mem.memtotal && mem.memfree
+        ? Math.round(
+            ((parseInt(mem.memtotal) - parseInt(mem.memfree)) /
+              parseInt(mem.memtotal)) *
+              100,
+          )
+        : "—";
+    entries.push({
+      id: baseId + entries.length + 1,
+      timestamp: ts,
+      level: "info",
+      source: "system.memory",
+      message: `memtotal=${mem.memtotal ?? "?"} memfree=${mem.memfree ?? "?"} used=${used}%`,
+    });
+  }
+
+  // Load log
+  const load = data["system.load"];
+  if (load) {
+    entries.push({
+      id: baseId + entries.length + 1,
+      timestamp: ts,
+      level: load.load1 > load.count ? "warn" : "info",
+      source: "system.load",
+      message: `load1=${load.load1 ?? "?"} load5=${load.load5 ?? "?"} procs_running=${load.procs_running ?? "?"} procs_total=${load.procs_total ?? "?"}`,
+    });
+  }
+
+  // CPU log
+  const cpu = data["system.cpu"];
+  if (cpu) {
+    entries.push({
+      id: baseId + entries.length + 1,
+      timestamp: ts,
+      level: "info",
+      source: "system.cpu",
+      message: `cores=${cpu.count ?? "?"} model=${cpu.cpus?.[0]?.model_name ?? "?"}`,
+    });
+  }
+
+  // Network log
+  const net = data["system.network"];
+  if (net && Array.isArray(net.interfaces)) {
+    const ifaces = net.interfaces
+      .map((i: any) => i.name)
+      .filter(Boolean)
+      .join(", ");
+    entries.push({
+      id: baseId + entries.length + 1,
+      timestamp: ts,
+      level: "info",
+      source: "system.network",
+      message: `interfaces=[${ifaces}]`,
+    });
+  }
+
+  // Processes log
+  const procs = data["system.processes"];
+  if (procs) {
+    entries.push({
+      id: baseId + entries.length + 1,
+      timestamp: ts,
+      level: "info",
+      source: "system.processes",
+      message: `total=${procs.processes ?? "?"} running=${procs.procs_running ?? "?"} blocked=${procs.procs_blocked ?? "?"}`,
+    });
+  }
+
+  // Filesystems log
+  const fs = data["system.filesystems"];
+  if (fs && Array.isArray(fs)) {
+    entries.push({
+      id: baseId + entries.length + 1,
+      timestamp: ts,
+      level: "info",
+      source: "system.filesystems",
+      message: `mounts=${fs.length}`,
+    });
+  }
+
+  // Keep only the last 200 entries to avoid unbounded growth
+  const combined = [...prev, ...entries];
+  if (combined.length > 200) return combined.slice(combined.length - 200);
+  return combined;
+}
+
 export default function LogsPage() {
-  const [logs] = useState(generateLogs);
+  const [logs, setLogs] = useState<LogEntry[]>([]);
   const [filter, setFilter] = useState("");
   const [level, setLevel] = useState("all");
   const [paused, setPaused] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
+  const projections = useQuery({
+    queryKey: ["dashboardProjections"],
+    queryFn: getDashboardProjections,
+    refetchInterval: paused ? false : 5000,
+  });
+
+  // Append new projection data as log entries when it arrives
+  useEffect(() => {
+    if (projections.data && !paused) {
+      setLogs((prev) => projectionsToLogs(projections.data, prev));
+    }
+  }, [projections.data, paused]);
+
+  // Auto-scroll to bottom
+  useEffect(() => {
+    if (containerRef.current && !paused) {
+      containerRef.current.scrollTop = containerRef.current.scrollHeight;
+    }
+  }, [logs, paused]);
+
   const filtered = logs.filter((log) => {
     if (level !== "all" && log.level !== level) return false;
-    if (filter && !log.message.toLowerCase().includes(filter.toLowerCase()) && !log.source.toLowerCase().includes(filter.toLowerCase())) return false;
+    if (
+      filter &&
+      !log.message.toLowerCase().includes(filter.toLowerCase()) &&
+      !log.source.toLowerCase().includes(filter.toLowerCase())
+    )
+      return false;
     return true;
   });
 
   const exportLogs = () => {
-    const text = filtered.map((l) => `${l.timestamp} [${l.level.toUpperCase()}] ${l.source}: ${l.message}`).join("\n");
+    const text = filtered
+      .map(
+        (l) =>
+          `${l.timestamp} [${l.level.toUpperCase()}] ${l.source}: ${l.message}`,
+      )
+      .join("\n");
     const blob = new Blob([text], { type: "text/plain" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = "openclaw-logs.txt";
+    a.download = "dbus-projection-logs.txt";
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -66,15 +187,35 @@ export default function LogsPage() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-foreground">Logs</h1>
-          <p className="text-sm text-muted-foreground mt-1">Live tail of gateway file logs</p>
+          <h1 className="text-2xl font-bold tracking-tight text-foreground">
+            Logs
+          </h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            Live tail of D-Bus projection tree (
+            {projections.data ? Object.keys(projections.data).length : 0}{" "}
+            schemas)
+          </p>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setPaused(!paused)}>
-            {paused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-1.5"
+            onClick={() => setPaused(!paused)}
+          >
+            {paused ? (
+              <Play className="h-4 w-4" />
+            ) : (
+              <Pause className="h-4 w-4" />
+            )}
             {paused ? "Resume" : "Pause"}
           </Button>
-          <Button variant="outline" size="sm" className="gap-1.5" onClick={exportLogs}>
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-1.5"
+            onClick={exportLogs}
+          >
             <Download className="h-4 w-4" /> Export
           </Button>
         </div>
@@ -110,16 +251,33 @@ export default function LogsPage() {
         className="bg-card border border-border rounded-lg overflow-auto max-h-[calc(100vh-280px)] font-mono text-xs"
       >
         <div className="p-1">
+          {filtered.length === 0 && projections.isLoading && (
+            <div className="px-3 py-8 text-center text-muted-foreground">
+              Loading projections...
+            </div>
+          )}
+          {filtered.length === 0 && !projections.isLoading && (
+            <div className="px-3 py-8 text-center text-muted-foreground">
+              No projection data yet. Waiting for D-Bus tree...
+            </div>
+          )}
           {filtered.map((log) => (
             <div
               key={log.id}
               className="flex items-start gap-2 px-3 py-1.5 hover:bg-accent/50 transition-colors rounded"
             >
-              <span className="text-muted-foreground shrink-0 w-24">{log.timestamp}</span>
-              <Badge className={`text-[10px] h-5 shrink-0 w-12 justify-center ${levelColors[log.level]}`} variant="secondary">
+              <span className="text-muted-foreground shrink-0 w-24">
+                {log.timestamp}
+              </span>
+              <Badge
+                className={`text-[10px] h-5 shrink-0 w-12 justify-center ${levelColors[log.level]}`}
+                variant="secondary"
+              >
                 {log.level.toUpperCase()}
               </Badge>
-              <span className="text-primary shrink-0 w-28 truncate">{log.source}</span>
+              <span className="text-primary shrink-0 w-28 truncate">
+                {log.source}
+              </span>
               <span className="text-foreground break-all">{log.message}</span>
             </div>
           ))}
@@ -127,10 +285,14 @@ export default function LogsPage() {
       </div>
 
       <div className="flex items-center justify-between text-xs text-muted-foreground">
-        <span>{filtered.length} entries shown</span>
+        <span>
+          {filtered.length} entries shown ({logs.length} total)
+        </span>
         <span className="flex items-center gap-1">
-          <span className={`h-1.5 w-1.5 rounded-full ${paused ? "bg-yellow-500" : "bg-green-500 animate-pulse"}`} />
-          {paused ? "Paused" : "Live"}
+          <span
+            className={`h-1.5 w-1.5 rounded-full ${paused ? "bg-yellow-500" : projections.isFetching ? "bg-green-500 animate-pulse" : "bg-green-500"}`}
+          />
+          {paused ? "Paused" : projections.isFetching ? "Fetching..." : "Live"}
         </span>
       </div>
     </div>

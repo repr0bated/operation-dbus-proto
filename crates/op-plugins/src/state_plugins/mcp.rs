@@ -101,6 +101,7 @@ fn default_meta_tools() -> Vec<String> {
         "search_tools".to_string(),
         "get_tool_schema".to_string(),
         "execute_tool".to_string(),
+        "respond".to_string(),
     ]
 }
 
@@ -359,7 +360,7 @@ fn mcp_plugin_schema() -> PluginSchema {
                 default: Some(json!({})),
                 example: Some(json!({
                     "enabled": true,
-                    "meta_tools": ["list_tools", "search_tools", "get_tool_schema", "execute_tool"]
+                    "meta_tools": ["list_tools", "search_tools", "get_tool_schema", "execute_tool", "respond"]
                 })),
                 constraints: Vec::new(),
                 read_only: false,

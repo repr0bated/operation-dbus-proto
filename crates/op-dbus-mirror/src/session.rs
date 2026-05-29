@@ -1,10 +1,10 @@
 //! MirrorSession module for per-peer session management
 
+use crate::event::MirrorEvent;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::sync::broadcast;
-use crate::event::MirrorEvent;
 
 /// Per-peer session tracking state
 #[derive(Debug)]

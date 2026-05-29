@@ -492,10 +492,7 @@ mod tests {
             spawn_test_server("500 Internal Server Error", r#"{"error":"boom"}"#)
                 .expect("test server should start");
 
-        let provider = OpenClawProvider::new(
-            Some(base_url),
-            Some("opencode/agent".to_string()),
-        );
+        let provider = OpenClawProvider::new(Some(base_url), Some("opencode/agent".to_string()));
         let models = provider
             .list_models()
             .await
@@ -512,10 +509,8 @@ mod tests {
             spawn_test_server("200 OK", "<html>OpenClaw Control UI</html>")
                 .expect("test server should start");
 
-        let provider = OpenClawProvider::new(
-            Some(base_url),
-            Some("openclaw:gemini3-adc".to_string()),
-        );
+        let provider =
+            OpenClawProvider::new(Some(base_url), Some("openclaw:gemini3-adc".to_string()));
         let models = provider
             .list_models()
             .await
@@ -554,10 +549,7 @@ mod tests {
         let (base_url, request_bytes, handle) =
             spawn_test_server("200 OK", response_body).expect("test server should start");
 
-        let provider = OpenClawProvider::new(
-            Some(base_url),
-            Some("openclaw:main".to_string()),
-        );
+        let provider = OpenClawProvider::new(Some(base_url), Some("openclaw:main".to_string()));
 
         let request = ChatRequest::new(vec![ChatMessage::user("test tool call")])
             .with_tools(vec![crate::provider::ToolDefinition {

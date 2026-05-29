@@ -18,7 +18,6 @@ use tracing::{debug, info, warn};
 use op_agents::agent_registry::AgentRegistry;
 use op_grpc_bridge::{GrpcClientPool, RemoteOperationClient};
 use op_llm::chat::ChatManager;
-use op_llm::provider::ChatMessage;
 use op_state_store::{SqliteStore, StateStore};
 use op_tools::registry::ToolDefinition;
 use op_tools::tool::{BoxedTool, Tool};
@@ -84,8 +83,8 @@ pub struct AppState {
     pub sse_broadcaster: Arc<SseEventBroadcaster>,
     /// Server start time
     pub start_time: std::time::Instant,
-    /// Conversation history (for WebSocket sessions)
-    pub conversations: Arc<RwLock<HashMap<String, Vec<ChatMessage>>>>,
+    /// Conversation history — JSON flat file, no SQLite, no drift.
+    pub conversations: Arc<crate::chat_store::ChatSessionStore>,
     /// Privacy router user store
     pub user_store: Arc<UserStore>,
     /// Email sender for magic links
@@ -100,6 +99,12 @@ pub struct AppState {
     pub csrf_tokens: Arc<RwLock<HashMap<String, String>>>,
     /// Remote operation client (gRPC)
     pub grpc_client: Arc<RemoteOperationClient>,
+    /// Cached system stats from live monitor (procfs/D-Bus projection tree)
+    pub system_stats: Arc<RwLock<simd_json::OwnedValue>>,
+    /// Recent activity feed from projection/D-Bus events
+    pub activity_log: Arc<RwLock<Vec<simd_json::OwnedValue>>>,
+    /// Cached projection data from D-Bus tree (schema-validated procfs, etc.)
+    pub projection_cache: crate::projection_client::ProjectionCache,
 }
 
 impl AppState {
@@ -181,15 +186,15 @@ impl AppState {
         let sse_broadcaster = Arc::new(SseEventBroadcaster::new());
 
         // Initialize privacy router components
-        let user_store = match UserStore::new("/var/lib/op-dbus/privacy-users.json").await {
+        // User database in CozoDB — graph-native, no JSON drift.
+        let user_store = match UserStore::new("/var/lib/op-dbus/users-cozo").await {
             Ok(store) => Arc::new(store),
             Err(e) => {
-                warn!("Failed to load user store: {}, creating new", e);
-                // Create empty store
+                warn!("Failed to open CozoDB user store: {}, falling back to in-memory", e);
                 Arc::new(
-                    UserStore::new("/var/lib/op-dbus/privacy-users.json")
+                    UserStore::new("")
                         .await
-                        .expect("Failed to create user store"),
+                        .expect("Failed to create in-memory user store"),
                 )
             }
         };
@@ -224,22 +229,14 @@ impl AppState {
             info!("Using shared state store from main binary");
             store
         } else {
-            let state_store_path = "/var/lib/op-dbus/state.db";
-            match SqliteStore::new(state_store_path).await {
-                Ok(store) => Arc::new(store),
-                Err(e) => {
-                    warn!(
-                        "Failed to initialize state store at {}: {}, using in-memory",
-                        state_store_path, e
-                    );
-                    // Fallback to in-memory if file access fails
-                    Arc::new(
-                        SqliteStore::new(":memory:")
-                            .await
-                            .expect("Failed to create in-memory state store"),
-                    )
-                }
-            }
+            // No persistent database — SHM is the single source of truth.
+            // All ephemeral state (chat sessions, execution jobs) lives in-memory only.
+            info!("Using in-memory state store (no persistent DB — SHM is source of truth)");
+            Arc::new(
+                SqliteStore::new(":memory:")
+                    .await
+                    .expect("Failed to create in-memory state store"),
+            )
         };
 
         info!("✅ Application state initialized");
@@ -249,6 +246,14 @@ impl AppState {
             .unwrap_or_else(|_| "http://10.200.0.2:50051".to_string());
         let pool = Arc::new(GrpcClientPool::new());
         let grpc_client = Arc::new(RemoteOperationClient::new(pool, &grpc_addr, "op-web"));
+
+        let projection_cache = Arc::new(RwLock::new(HashMap::new()));
+
+        // Start D-Bus projection monitor in background
+        let cache_clone = projection_cache.clone();
+        tokio::spawn(async move {
+            crate::projection_client::start_projection_monitor(cache_clone).await;
+        });
 
         Ok(Self {
             orchestrator,
@@ -260,7 +265,7 @@ impl AppState {
             broadcast_tx,
             sse_broadcaster,
             start_time: std::time::Instant::now(),
-            conversations: Arc::new(RwLock::new(HashMap::new())),
+            conversations: Arc::new(crate::chat_store::ChatSessionStore::default_store().await?),
             user_store,
             email_sender,
             server_config,
@@ -268,6 +273,9 @@ impl AppState {
             google_oauth_config,
             csrf_tokens: Arc::new(RwLock::new(HashMap::new())),
             grpc_client,
+            system_stats: Arc::new(RwLock::new(simd_json::json!(null))),
+            activity_log: Arc::new(RwLock::new(Vec::new())),
+            projection_cache,
         })
     }
 

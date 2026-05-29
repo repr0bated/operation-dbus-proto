@@ -13,10 +13,9 @@
 
 pub mod activity_filter;
 pub mod agent_tools;
+pub mod cognitive_tools;
 pub mod cozo_shuttle;
 pub mod dbus_interface;
-pub mod rag_pipeline;
-pub mod cognitive_tools;
 pub mod doctor;
 pub mod gemini_fallback;
 pub mod grpc_service;
@@ -24,6 +23,7 @@ pub mod memory_store;
 pub mod notebooklm;
 pub mod qdrant_shuttle;
 pub mod quota;
+pub mod rag_pipeline;
 pub mod server;
 pub mod session;
 pub mod soul_memory;

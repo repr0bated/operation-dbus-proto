@@ -8,7 +8,7 @@
     },
     "op-dbus-compact": {
       "serverUrl": "https://op-dbus.ghostbridge.tech/mcp/compact",
-      "description": "op-dbus tools in compact mode (4 meta-tools for efficient discovery)",
+      "description": "op-dbus tools in compact mode (5 lazy meta-tools for efficient discovery)",
       "transport": "sse"
     },
     "op-dbus-full": {

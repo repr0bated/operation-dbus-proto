@@ -1,14 +1,39 @@
 import { useState } from "react";
 import {
-  Home, MessageSquare, Users, Shield, Mail, Zap, BarChart3, Settings,
-  Wrench, Bot, GitBranch, Layers, Radio, ScrollText, Bug,
-  Terminal, Blocks, Clock, Cog, Activity, FileText,
+  Home,
+  MessageSquare,
+  Users,
+  Shield,
+  Mail,
+  Zap,
+  BarChart3,
+  Settings,
+  Wrench,
+  Bot,
+  GitBranch,
+  Layers,
+  Radio,
+  ScrollText,
+  Bug,
+  Terminal,
+  Blocks,
+  Clock,
+  Cog,
+  Activity,
+  FileText,
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { useLocation } from "react-router-dom";
 import {
-  Sidebar, SidebarContent, SidebarGroup, SidebarGroupLabel, SidebarGroupContent,
-  SidebarMenu, SidebarMenuButton, SidebarMenuItem, useSidebar,
+  Sidebar,
+  SidebarContent,
+  SidebarGroup,
+  SidebarGroupLabel,
+  SidebarGroupContent,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  useSidebar,
 } from "@/components/ui/sidebar";
 import { cn } from "@/lib/utils";
 
@@ -78,7 +103,7 @@ export function AppSidebar() {
   const collapsed = state === "collapsed";
   const location = useLocation();
   const [activeTab, setActiveTab] = useState<Tab>(
-    location.pathname.startsWith("/openclaw") ? "openclaw" : "dbus"
+    location.pathname.startsWith("/openclaw") ? "openclaw" : "dbus",
   );
 
   const groups = activeTab === "dbus" ? dbusGroups : openclawGroups;
@@ -87,7 +112,9 @@ export function AppSidebar() {
     <Sidebar collapsible="icon" className="border-r border-sidebar-border">
       <SidebarContent className="pt-4">
         {/* Logo */}
-        <div className={`px-4 mb-2 flex items-center gap-2.5 ${collapsed ? "justify-center" : ""}`}>
+        <div
+          className={`px-4 mb-2 flex items-center gap-2.5 ${collapsed ? "justify-center" : ""}`}
+        >
           <div className="h-8 w-8 rounded-lg bg-primary flex items-center justify-center shrink-0">
             {activeTab === "dbus" ? (
               <Shield className="h-4 w-4 text-primary-foreground" />
@@ -98,10 +125,12 @@ export function AppSidebar() {
           {!collapsed && (
             <div className="flex flex-col">
               <span className="text-sm font-bold tracking-tight text-foreground leading-none">
-                {activeTab === "dbus" ? "Operation-DBUS" : "OpenClaw"}
+                {activeTab === "dbus" ? "Operation-DBUS" : "Assistant"}
               </span>
               <span className="text-[10px] text-muted-foreground leading-tight mt-0.5">
-                {activeTab === "dbus" ? "Privacy Router" : "AI Control UI"}
+                {activeTab === "dbus"
+                  ? "Privacy Router"
+                  : "Zero-Trust Control UI"}
               </span>
             </div>
           )}
@@ -111,7 +140,12 @@ export function AppSidebar() {
         {!collapsed && (
           <div className="px-3 mb-3">
             <div className="flex rounded-lg bg-muted p-0.5">
-              {([["dbus", "DBUS"], ["openclaw", "OpenClaw"]] as const).map(([key, label]) => (
+              {(
+                [
+                  ["dbus", "DBUS"],
+                  ["openclaw", "Assistant"],
+                ] as const
+              ).map(([key, label]) => (
                 <button
                   key={key}
                   onClick={() => setActiveTab(key)}
@@ -119,7 +153,7 @@ export function AppSidebar() {
                     "flex-1 text-xs font-medium py-1.5 rounded-md transition-all",
                     activeTab === key
                       ? "bg-background text-foreground shadow-sm"
-                      : "text-muted-foreground hover:text-foreground"
+                      : "text-muted-foreground hover:text-foreground",
                   )}
                 >
                   {label}
@@ -140,9 +174,12 @@ export function AppSidebar() {
             <SidebarGroupContent>
               <SidebarMenu>
                 {group.items.map((item) => {
-                  const isActive = item.url === "/"
-                    ? location.pathname === "/"
-                    : location.pathname === item.url || (item.url !== "/openclaw" && location.pathname.startsWith(item.url));
+                  const isActive =
+                    item.url === "/"
+                      ? location.pathname === "/"
+                      : location.pathname === item.url ||
+                        (item.url !== "/openclaw" &&
+                          location.pathname.startsWith(item.url));
                   return (
                     <SidebarMenuItem key={item.title}>
                       <SidebarMenuButton asChild>

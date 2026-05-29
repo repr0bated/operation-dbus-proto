@@ -1,3 +1,5 @@
 #!/bin/sh
 export COGNITIVE_MCP_DB_PATH="${COGNITIVE_MCP_DB_PATH:-/var/lib/op-dbus/cognitive.db}"
-exec s6-envdir -p ./env /usr/local/bin/op-cognitive-mcp --db "$COGNITIVE_MCP_DB_PATH"
+export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/op-dbus/session-bus.sock}"
+export WG_INTERFACE="${WG_INTERFACE:-netmaker}"
+exec s6-envdir ./env /usr/local/bin/op-cognitive-mcp --db "$COGNITIVE_MCP_DB_PATH"

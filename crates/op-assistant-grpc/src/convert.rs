@@ -84,7 +84,10 @@ pub fn pvalue_to_json(p: PValue) -> Value {
 pub fn json_to_struct(v: Value) -> Struct {
     match v {
         Value::Object(map) => Struct {
-            fields: map.into_iter().map(|(k, v)| (k, json_to_pvalue(v))).collect(),
+            fields: map
+                .into_iter()
+                .map(|(k, v)| (k, json_to_pvalue(v)))
+                .collect(),
         },
         _ => Struct::default(),
     }
@@ -100,7 +103,10 @@ pub fn json_to_pvalue(v: Value) -> PValue {
             values: arr.into_iter().map(json_to_pvalue).collect(),
         }),
         Value::Object(map) => Kind::StructValue(Struct {
-            fields: map.into_iter().map(|(k, v)| (k, json_to_pvalue(v))).collect(),
+            fields: map
+                .into_iter()
+                .map(|(k, v)| (k, json_to_pvalue(v)))
+                .collect(),
         }),
     };
     PValue { kind: Some(kind) }

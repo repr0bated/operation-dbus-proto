@@ -21,6 +21,7 @@ pub mod event_chain;
 pub mod execution_job;
 pub mod metrics;
 pub mod plugin_schema;
+pub mod memory_store;
 pub mod redis_stream;
 pub mod schema_shuttle;
 pub mod schema_validator;
@@ -42,6 +43,7 @@ pub use plugin_schema::{
     PluginSchema, ReadOnlyCondition, SchemaCatalog, SchemaLoadError, SchemaRegistry,
     ValidationResult as SchemaValidationResult, DEFAULT_SCHEMA_DIALECT,
 };
+pub use memory_store::MemoryStore;
 pub use redis_stream::RedisStream;
 pub use schema_shuttle::{IdentitySled, SchemaShuttle};
 pub use schema_validator::{

@@ -103,104 +103,18 @@ impl FootprintGenerator {
         })
     }
 
-    /// Generate vector features for blockchain vectorization
+    /// Generate vector features for blockchain vectorization.
+    /// Heuristic-based only — ML feature is not compiled in this crate.
     fn generate_vector_features(
         &self,
         operation: &str,
         data: &simd_json::OwnedValue,
         metadata: &Option<HashMap<String, simd_json::OwnedValue>>,
     ) -> Result<Vec<f32>> {
-        // Check vectorization level
-        #[cfg(feature = "ml")]
-        {
-            let model_manager = crate::ml::ModelManager::global();
-
-            if model_manager.is_enabled() {
-                // Use transformer-based vectorization
-                return self.generate_transformer_features(operation, data, metadata);
-            }
-        }
-
-        // Fall back to heuristic vectorization
         self.generate_heuristic_features(operation, data, metadata)
     }
 
-    /// Generate transformer-based vector features
-    #[cfg(feature = "ml")]
-    fn generate_transformer_features(
-        &self,
-        operation: &str,
-        data: &simd_json::OwnedValue,
-        metadata: &Option<HashMap<String, simd_json::OwnedValue>>,
-    ) -> Result<Vec<f32>> {
-        // Prepare text for embedding
-        let text = self.prepare_text_for_embedding(operation, data, metadata);
-
-        // Get model manager and embed
-        let model_manager = crate::ml::ModelManager::global();
-
-        match model_manager.embed(&text) {
-            Ok(vector) => Ok(vector),
-            Err(e) => {
-                log::warn!(
-                    "Transformer embedding failed: {}, falling back to heuristic",
-                    e
-                );
-                // Fall back to heuristic if transformer fails
-                self.generate_heuristic_features(operation, data, metadata)
-            }
-        }
-    }
-
-    /// Prepare text from footprint data for embedding
-    #[cfg(feature = "ml")]
-    fn prepare_text_for_embedding(
-        &self,
-        operation: &str,
-        data: &simd_json::OwnedValue,
-        metadata: &Option<HashMap<String, simd_json::OwnedValue>>,
-    ) -> String {
-        let mut parts = Vec::new();
-
-        // Add plugin and operation context
-        parts.push(format!("plugin: {}", self.plugin_id));
-        parts.push(format!("operation: {}", operation));
-
-        // Add data summary
-        match data {
-            simd_json::OwnedValue::Object(obj) => {
-                for (key, value) in obj {
-                    let value_str = match value {
-                        simd_json::OwnedValue::String(s) => s.clone(),
-                        _ => value.to_string(),
-                    };
-                    parts.push(format!("{}: {}", key, value_str));
-                }
-            }
-            simd_json::OwnedValue::String(s) => {
-                parts.push(format!("data: {}", s));
-            }
-            _ => {
-                parts.push(format!("data: {}", data));
-            }
-        }
-
-        // Add metadata
-        if let Some(meta) = metadata {
-            for (key, value) in meta {
-                let value_str = match value {
-                    simd_json::OwnedValue::String(s) => s.clone(),
-                    _ => value.to_string(),
-                };
-                parts.push(format!("meta.{}: {}", key, value_str));
-            }
-        }
-
-        // Join all parts with newlines
-        parts.join("\n")
-    }
-
-    /// Generate heuristic-based features (original method, now extracted)
+    /// Generate heuristic-based features (original method)
     fn generate_heuristic_features(
         &self,
         operation: &str,

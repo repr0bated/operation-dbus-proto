@@ -248,123 +248,61 @@ pub struct ServiceDef {
 }
 
 impl ServiceDef {
-    /// Generate dinit service file content from validated schema
-    pub fn to_dinit(&self) -> String {
+    /// Generate an s6 `run` script from the service definition.
+    ///
+    /// The resulting script follows the s6 convention:
+    /// ```sh
+    /// #!/bin/sh
+    /// exec <command>
+    /// ```
+    /// Environment variables and working directory are set up before the exec.
+    pub fn to_s6_run(&self) -> String {
         let mut out = String::new();
-
-        // Type
-        out.push_str(&format!(
-            "type = {}\n",
-            match self.service_type {
-                ServiceType::Simple => "process",
-                ServiceType::Forking { .. } => "bgprocess",
-                ServiceType::Oneshot => "scripted",
-                ServiceType::Notify => "process",
-            }
-        ));
-
-        // Command
-        out.push_str(&format!(
-            "command = {}\n",
-            self.exec_start.to_command_line()
-        ));
-
-        // Stop command
-        if let Some(ref stop) = self.exec_stop {
-            out.push_str(&format!("stop-command = {}\n", stop.to_command_line()));
-        }
-
-        // PID file for forking services
-        if let ServiceType::Forking {
-            pid_file: Some(ref p),
-        } = self.service_type
-        {
-            out.push_str(&format!("pid-file = {}\n", p.display()));
-        }
+        out.push_str("#!/bin/sh\n");
 
         // Working directory
         if let Some(ref dir) = self.working_dir {
-            out.push_str(&format!("working-dir = {}\n", dir.display()));
+            out.push_str(&format!("cd {} || exit 1\n", dir.display()));
         }
 
-        // User/group
+        // User/group — s6 uses s6-setuidgid for privilege dropping
         if let Some(ref user) = self.user {
-            out.push_str(&format!("run-as = {}\n", user));
-        }
-        if let Some(ref group) = self.group {
-            // dinit usually implies group from run-as, but explicit group can be set via setgid wrapper or future dinit features
-            // For now, we note it in comments or if dinit adds direct group support
-            out.push_str(&format!("# group = {}\n", group));
-        }
-
-        // Hard Dependencies (depends-on)
-        for dep in &self.depends_on {
-            out.push_str(&format!("depends-on = {}\n", dep));
-        }
-
-        // Soft Dependencies (waits-for)
-        for wait in &self.waits_for {
-            out.push_str(&format!("waits-for = {}\n", wait));
-        }
-
-        // Chain To
-        if let Some(ref chain) = self.chain_to {
-            out.push_str(&format!("chain-to = {}\n", chain));
-        }
-
-        // Restart policy
-        match self.restart.condition {
-            RestartCondition::Always => out.push_str("restart = yes\n"),
-            RestartCondition::OnFailure => out.push_str("restart = on-failure\n"),
-            RestartCondition::Never => out.push_str("restart = false\n"),
-        }
-        if self.restart.delay_secs > 0 {
-            out.push_str(&format!("restart-delay = {}\n", self.restart.delay_secs));
-        }
-        if self.smooth_recovery {
-            out.push_str("smooth-recovery = true\n");
-        }
-
-        // Environment
-        if let Some(ref env_file) = self.env_file {
-            out.push_str(&format!("env-file = {}\n", env_file.display()));
-        }
-        for (k, v) in &self.environment {
-            out.push_str(&format!("env = {}={}\n", k, v));
-        }
-
-        // Logging
-        match &self.log_type {
-            LogType::Buffer => out.push_str("log-type = buffer\n"),
-            LogType::Syslog => out.push_str("log-type = syslog\n"),
-            LogType::File(path) => {
-                out.push_str("log-type = file\n");
-                out.push_str(&format!("logfile = {}\n", path.display()));
-            }
-            LogType::None => {}
-        }
-
-        // Ready Notification
-        match self.ready_notification {
-            ReadyNotification::Pipefd(fd) => {
-                out.push_str(&format!("ready-notification = pipefd:{}\n", fd))
-            }
-            ReadyNotification::SdNotify => {
-                // dinit doesn't support sd_notify natively in the same way, usually requires a wrapper or pipefd usage.
-                // However, newer versions or plugins might. For now, we map it to a comment or specific wrapper if defined.
-                // Assuming standard dinit:
-                out.push_str("# ready-notification = sd_notify (requires wrapper)\n");
-            }
-            ReadyNotification::None => {}
+            let group_suffix = self
+                .group
+                .as_deref()
+                .map(|g| format!(":{g}"))
+                .unwrap_or_default();
+            out.push_str(&format!(
+                "exec s6-setuidgid {user}{group_suffix} {}\n",
+                self.exec_start.to_command_line()
+            ));
+        } else {
+            out.push_str(&format!("exec {}\n", self.exec_start.to_command_line()));
         }
 
         out
     }
 
-    /// Write dinit service file to /etc/dinit.d/
+    /// Write the s6 service definition to `/etc/s6/sv/<name>/run`.
+    ///
+    /// Creates the service directory if it does not exist and makes the run
+    /// script executable (mode 0o755).
     pub fn install(&self) -> std::io::Result<()> {
-        let path = format!("/etc/dinit.d/{}", self.name);
-        std::fs::write(&path, self.to_dinit())
+        let svc_dir = format!("/etc/s6/sv/{}", self.name);
+        std::fs::create_dir_all(&svc_dir)?;
+
+        let run_path = format!("{svc_dir}/run");
+        let content = self.to_s6_run();
+        std::fs::write(&run_path, &content)?;
+
+        // Make the run script executable
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&run_path, std::fs::Permissions::from_mode(0o755))?;
+        }
+
+        Ok(())
     }
 }
 

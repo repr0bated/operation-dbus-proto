@@ -48,8 +48,8 @@ impl VertexGrpcClient {
             .tls_config(tls)?
             .connect_lazy();
 
-        let inner = PredictionServiceClient::new(channel)
-            .max_decoding_message_size(64 * 1024 * 1024); // 64 MiB for large responses
+        let inner =
+            PredictionServiceClient::new(channel).max_decoding_message_size(64 * 1024 * 1024); // 64 MiB for large responses
 
         let client = Arc::new(Self {
             project,
@@ -110,7 +110,8 @@ impl VertexGrpcClient {
             return s.to_string();
         }
         if let Some(arr) = content.as_array() {
-            return arr.iter()
+            return arr
+                .iter()
                 .filter(|part| part["type"].as_str() == Some("text"))
                 .filter_map(|part| part["text"].as_str())
                 .collect::<Vec<_>>()
@@ -149,7 +150,9 @@ impl VertexGrpcClient {
 
             contents.push(Content {
                 role: vertex_role,
-                parts: vec![Part { data: Some(proto::part::Data::Text(text)) }],
+                parts: vec![Part {
+                    data: Some(proto::part::Data::Text(text)),
+                }],
             });
         }
 
@@ -192,7 +195,11 @@ impl VertexGrpcClient {
         }
     }
 
-    fn inject_headers(req: &mut Request<impl Sized>, token: &str, model_resource: &str) -> anyhow::Result<()> {
+    fn inject_headers(
+        req: &mut Request<impl Sized>,
+        token: &str,
+        model_resource: &str,
+    ) -> anyhow::Result<()> {
         req.metadata_mut().insert(
             "authorization",
             format!("Bearer {}", token).parse::<MetadataValue<_>>()?,
@@ -229,7 +236,11 @@ impl VertexGrpcClient {
             .and_then(|c| c.content)
             .and_then(|c| c.parts.into_iter().next())
             .and_then(|p| {
-                if let Some(proto::part::Data::Text(t)) = p.data { Some(t) } else { None }
+                if let Some(proto::part::Data::Text(t)) = p.data {
+                    Some(t)
+                } else {
+                    None
+                }
             })
             .unwrap_or_default();
 
@@ -244,7 +255,9 @@ impl VertexGrpcClient {
         max_tokens: Option<u32>,
         id: String,
         created: i64,
-    ) -> anyhow::Result<impl tokio_stream::Stream<Item = Result<axum::response::sse::Event, std::convert::Infallible>>> {
+    ) -> anyhow::Result<
+        impl tokio_stream::Stream<Item = Result<axum::response::sse::Event, std::convert::Infallible>>,
+    > {
         use tokio_stream::StreamExt as _;
 
         let token = self.get_token().await?;
@@ -254,7 +267,12 @@ impl VertexGrpcClient {
         Self::inject_headers(&mut req, &token, &model_resource)?;
 
         let model_str = model.to_string();
-        let stream = self.inner.clone().stream_generate_content(req).await?.into_inner();
+        let stream = self
+            .inner
+            .clone()
+            .stream_generate_content(req)
+            .await?
+            .into_inner();
 
         let sse_stream = stream
             .map(move |result| {
@@ -288,22 +306,20 @@ impl VertexGrpcClient {
                                 "finish_reason": null
                             }]
                         });
-                        Ok(axum::response::sse::Event::default()
-                            .data(chunk.to_string()))
+                        Ok(axum::response::sse::Event::default().data(chunk.to_string()))
                     }
                     Err(e) => {
                         warn!("Vertex AI stream error: {}", e);
                         let chunk = serde_json::json!({
                             "error": { "message": e.to_string() }
                         });
-                        Ok(axum::response::sse::Event::default()
-                            .data(chunk.to_string()))
+                        Ok(axum::response::sse::Event::default().data(chunk.to_string()))
                     }
                 }
             })
-            .chain(tokio_stream::once(Ok(
-                axum::response::sse::Event::default().data("[DONE]")
-            )));
+            .chain(tokio_stream::once(Ok(axum::response::sse::Event::default(
+            )
+            .data("[DONE]"))));
 
         Ok(sse_stream)
     }

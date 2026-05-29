@@ -7,12 +7,14 @@ description = "1:1 D-Bus projection of internal databases (OVSDB, NonNet)"
 [dependencies]
 op-core = { path = "../op-core" }
 op-state = { path = "../op-state" }
+op-state-store = { path = "../op-state-store" }
+op-plugins = { path = "../op-plugins" }
 op-jsonrpc = { path = "../op-jsonrpc" }
 op-grpc-bridge = { path = "../op-grpc-bridge" }
 op-network = { path = "../op-network" }
 anyhow = "1"
 tokio = { version = "1", features = ["full"] }
-zbus = { version = "5.12", features = ["tokio"] }
+zbus = { workspace = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = { workspace = true }
 simd-json = { workspace = true }

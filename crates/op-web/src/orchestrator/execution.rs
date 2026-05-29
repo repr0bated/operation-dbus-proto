@@ -108,7 +108,9 @@ impl UnifiedOrchestrator {
                 .filter(|t| match category {
                     "ovs" => t.name.starts_with("ovs_"),
                     "systemd" => {
-                        t.name.starts_with("dbus_systemd_") || t.name.starts_with("dbus_dinit_")
+                        t.name.starts_with("dbus_systemd_")
+                            || t.name.starts_with("dbus_dinit_")
+                            || t.name.starts_with("s6_")
                     }
                     "dbus" => t.name.starts_with("dbus_"),
                     "file" => t.name.starts_with("file_"),

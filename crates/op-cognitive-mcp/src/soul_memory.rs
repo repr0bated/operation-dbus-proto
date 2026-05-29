@@ -93,7 +93,10 @@ impl SoulMemoryStore {
         p.insert("id".into(), DataValue::Str(agent_id.into()));
         p.insert("ident".into(), DataValue::Str(identity.into()));
         p.insert("pers".into(), DataValue::Str(personality.into()));
-        p.insert("traits".into(), DataValue::Str(serde_json::to_string(&traits)?.into()));
+        p.insert(
+            "traits".into(),
+            DataValue::Str(serde_json::to_string(&traits)?.into()),
+        );
         p.insert("ver".into(), DataValue::Num(cozo::Num::Int(version)));
         p.insert("ca".into(), DataValue::Str(created_at.into()));
         p.insert("now".into(), DataValue::Str(now_s.into()));
@@ -122,11 +125,8 @@ impl SoulMemoryStore {
         }
         let mut p: Params = BTreeMap::new();
         p.insert("id".into(), DataValue::Str(agent_id.into()));
-        self.run(
-            "?[agent_id] <- [[$id]] :rm soul_memories { agent_id }",
-            p,
-        )
-        .context("delete soul")?;
+        self.run("?[agent_id] <- [[$id]] :rm soul_memories { agent_id }", p)
+            .context("delete soul")?;
         Ok(true)
     }
 

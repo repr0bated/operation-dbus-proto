@@ -148,9 +148,18 @@ impl CognitiveMemoryStore {
         p.insert("name".into(), DataValue::Str(name.into()));
         p.insert("id".into(), DataValue::Str(id.into()));
         p.insert("kind".into(), DataValue::Str(kind_str.into()));
-        p.insert("desc".into(), DataValue::Str(description.unwrap_or("").into()));
-        p.insert("task".into(), DataValue::Str(linked_task_id.unwrap_or("").into()));
-        p.insert("cron".into(), DataValue::Str(linked_cron.unwrap_or("").into()));
+        p.insert(
+            "desc".into(),
+            DataValue::Str(description.unwrap_or("").into()),
+        );
+        p.insert(
+            "task".into(),
+            DataValue::Str(linked_task_id.unwrap_or("").into()),
+        );
+        p.insert(
+            "cron".into(),
+            DataValue::Str(linked_cron.unwrap_or("").into()),
+        );
         p.insert("meta".into(), DataValue::Str(meta_str.into()));
         p.insert("now".into(), DataValue::Str(now.into()));
         self.run(q, p).context("upsert namespace")?;
@@ -215,7 +224,9 @@ impl CognitiveMemoryStore {
         "#;
         let mut p: Params = BTreeMap::new();
         p.insert("ns".into(), DataValue::Str(name.into()));
-        let entry_rows = self.run(entries_q, p).context("collect entries to cascade")?;
+        let entry_rows = self
+            .run(entries_q, p)
+            .context("collect entries to cascade")?;
         for row in &entry_rows.rows {
             let ns = dv_as_str(&row[0]).unwrap_or("").to_string();
             let key = dv_as_str(&row[1]).unwrap_or("").to_string();
@@ -231,11 +242,8 @@ impl CognitiveMemoryStore {
         // Remove namespace row.
         let mut pn: Params = BTreeMap::new();
         pn.insert("name".into(), DataValue::Str(name.into()));
-        self.run(
-            "?[name] <- [[$name]] :rm memory_namespaces { name }",
-            pn,
-        )
-        .context("delete namespace")?;
+        self.run("?[name] <- [[$name]] :rm memory_namespaces { name }", pn)
+            .context("delete namespace")?;
         Ok(true)
     }
 
@@ -266,12 +274,7 @@ impl CognitiveMemoryStore {
                 dv_as_int(&row[8]).unwrap_or(0),
                 dv_as_str(&row[9]).unwrap_or(now.as_str()).to_string(),
             ),
-            None => (
-                Uuid::new_v4().to_string(),
-                now.clone(),
-                0,
-                now.clone(),
-            ),
+            None => (Uuid::new_v4().to_string(), now.clone(), 0, now.clone()),
         };
 
         let q = r#"
@@ -322,15 +325,36 @@ impl CognitiveMemoryStore {
         p.insert("ns".into(), DataValue::Str(namespace_name.into()));
         p.insert("key".into(), DataValue::Str(key.into()));
         p.insert("id".into(), DataValue::Str(entry.id.clone().into()));
-        p.insert("val".into(), DataValue::Str(serde_json::to_string(&entry.value)?.into()));
-        p.insert("tags".into(), DataValue::Str(serde_json::to_string(&entry.tags)?.into()));
-        p.insert("ca".into(), DataValue::Str(entry.created_at.to_rfc3339().into()));
-        p.insert("ua".into(), DataValue::Str(entry.updated_at.to_rfc3339().into()));
+        p.insert(
+            "val".into(),
+            DataValue::Str(serde_json::to_string(&entry.value)?.into()),
+        );
+        p.insert(
+            "tags".into(),
+            DataValue::Str(serde_json::to_string(&entry.tags)?.into()),
+        );
+        p.insert(
+            "ca".into(),
+            DataValue::Str(entry.created_at.to_rfc3339().into()),
+        );
+        p.insert(
+            "ua".into(),
+            DataValue::Str(entry.updated_at.to_rfc3339().into()),
+        );
         p.insert(
             "exp".into(),
-            DataValue::Str(entry.expires_at.map(|t| t.to_rfc3339()).unwrap_or_default().into()),
+            DataValue::Str(
+                entry
+                    .expires_at
+                    .map(|t| t.to_rfc3339())
+                    .unwrap_or_default()
+                    .into(),
+            ),
         );
-        p.insert("ac".into(), DataValue::Num(cozo::Num::Int(entry.access_count + 1)));
+        p.insert(
+            "ac".into(),
+            DataValue::Num(cozo::Num::Int(entry.access_count + 1)),
+        );
         p.insert("la".into(), DataValue::Str(now.into()));
         let _ = self.run(q, p);
 
@@ -469,7 +493,10 @@ impl CognitiveMemoryStore {
         let mut tally: BTreeMap<String, i64> = BTreeMap::new();
         for row in &entry_rows.rows {
             let ns = dv_as_str(&row[0]).unwrap_or("").to_string();
-            let kind = kind_by_ns.get(&ns).cloned().unwrap_or_else(|| "custom".to_string());
+            let kind = kind_by_ns
+                .get(&ns)
+                .cloned()
+                .unwrap_or_else(|| "custom".to_string());
             *tally.entry(kind).or_insert(0) += 1;
         }
         let entries_by_kind: Vec<(String, i64)> = tally.into_iter().collect();

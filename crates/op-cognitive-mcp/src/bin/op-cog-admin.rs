@@ -12,7 +12,11 @@ use std::path::PathBuf;
 #[derive(Parser)]
 #[command(name = "op-cog-admin", about = "Cozo store admin for op-cognitive-mcp")]
 struct Cli {
-    #[arg(long, env = "COGNITIVE_MCP_DB_PATH", default_value = "/var/lib/op-dbus/cognitive.db")]
+    #[arg(
+        long,
+        env = "COGNITIVE_MCP_DB_PATH",
+        default_value = "/var/lib/op-dbus/cognitive.db"
+    )]
     db: String,
     #[command(subcommand)]
     cmd: Cmd,

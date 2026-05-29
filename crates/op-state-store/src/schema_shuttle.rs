@@ -112,7 +112,7 @@ pub async fn run_shuttle() -> Result<(), Box<dyn std::error::Error>> {
                 let current_footprint_hex = hex::encode(session_sled.hashed_footprint);
                 let update_payload = format!("{}:{}", current_footprint_hex, current_index);
                 let new_hash = md5::compute(update_payload.as_bytes());
-                
+
                 let mut new_footprint = [0u8; 32];
                 new_footprint[..16].copy_from_slice(&new_hash.0);
                 session_sled.hashed_footprint = new_footprint;

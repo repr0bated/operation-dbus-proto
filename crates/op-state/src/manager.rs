@@ -71,7 +71,7 @@ impl StateManager {
     /// Register a plugin
     pub fn register_plugin(&self, name: String, plugin: Arc<dyn StatePlugin>) {
         self.plugins.write().insert(name.clone(), plugin);
-        
+
         // Fire watch broadcast
         if let Some(tx) = &self.watch_tx {
             let _ = tx.send(PluginEvent {

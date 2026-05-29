@@ -4,7 +4,7 @@
     "servers": {
         "op-dbus-compact": {
             "name": "op-dbus-compact",
-            "description": "Compact mode with 4 meta-tools: list_tools, search_tools, get_tool_schema, execute_tool. Recommended for AI clients with limited context windows.",
+            "description": "Compact mode with 5 lazy meta-tools: list_tools, search_tools, get_tool_schema, execute_tool, respond. Recommended for AI clients with limited context windows.",
             "transport": {
                 "type": "sse",
                 "url": "https://op-dbus.ghostbridge.tech/mcp/compact",

@@ -27,7 +27,9 @@ impl CronService for CronServiceImpl {
         req: Request<ListCronJobsRequest>,
     ) -> Result<Response<ListCronJobsResponse>, Status> {
         let mut params = json!({});
-        if let Some(a) = req.into_inner().agent_id { params["agent_id"] = json!(a); }
+        if let Some(a) = req.into_inner().agent_id {
+            params["agent_id"] = json!(a);
+        }
         let result = self.client.call("cron.list", params).await?;
         let jobs = result
             .get("jobs")
@@ -49,7 +51,9 @@ impl CronService for CronServiceImpl {
             "task_name": req.task_name,
             "enabled": req.enabled,
         });
-        if let Some(p) = req.parameters { params["parameters"] = struct_to_json(p); }
+        if let Some(p) = req.parameters {
+            params["parameters"] = struct_to_json(p);
+        }
         let result = self.client.call("cron.create", params).await?;
         Ok(Response::new(cron_job_from_json(&result)))
     }
@@ -74,7 +78,10 @@ impl CronService for CronServiceImpl {
         if id.is_empty() {
             return Err(Status::invalid_argument("cron id required"));
         }
-        let result = self.client.call("cron.trigger", json!({ "id": id })).await?;
+        let result = self
+            .client
+            .call("cron.trigger", json!({ "id": id }))
+            .await?;
         Ok(Response::new(cron_job_from_json(&result)))
     }
 }

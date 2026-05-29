@@ -78,7 +78,10 @@ pub async fn register_typed_tools(
         registry.register(tool).await?;
     }
 
-    tracing::info!(registered = count, "Registered typed NotebookLM tools (R16)");
+    tracing::info!(
+        registered = count,
+        "Registered typed NotebookLM tools (R16)"
+    );
     Ok(count)
 }
 
@@ -173,9 +176,7 @@ impl Tool for TypedQueryTool {
             }));
         }
 
-        let conversation_id = input["conversation_id"]
-            .as_str()
-            .unwrap_or("");
+        let conversation_id = input["conversation_id"].as_str().unwrap_or("");
 
         let session = self
             .sessions
@@ -328,12 +329,7 @@ impl Tool for TypedStoreTool {
             .unwrap_or_default();
 
         // Ensure namespace exists
-        if self
-            .store
-            .get_namespace_by_name(namespace)
-            .await?
-            .is_none()
-        {
+        if self.store.get_namespace_by_name(namespace).await?.is_none() {
             let kind = if namespace.starts_with("project:") {
                 crate::memory_store::NamespaceKind::Project
             } else {
@@ -349,7 +345,10 @@ impl Tool for TypedStoreTool {
             "content": content,
         });
 
-        let entry = self.store.store_entry(namespace, key, value, tags, None).await?;
+        let entry = self
+            .store
+            .store_entry(namespace, key, value, tags, None)
+            .await?;
         Ok(json!({
             "ok": true,
             "id": entry.id,

@@ -9,13 +9,13 @@ use std::sync::Arc;
 use tokio::sync::broadcast;
 use tracing::{info, warn};
 
-use crate::DbusMirror;
 use crate::event::MirrorEvent;
 use crate::event_sources::component_registry;
 use crate::event_sources::nonnet;
 use crate::event_sources::ovsdb;
 use crate::event_sources::procfs;
 use crate::event_sources::state_manager;
+use crate::DbusMirror;
 
 /// Event dispatcher that wires all event sources to the broadcast channel
 pub struct EventDispatcher {
@@ -66,12 +66,17 @@ impl EventDispatcher {
 
         // Spawn StateManager watcher
         if let Some(sm) = &self.state_manager {
-            state_manager::spawn_state_manager_watcher(sm.clone(), self.broadcast_tx.clone()).await?;
+            state_manager::spawn_state_manager_watcher(sm.clone(), self.broadcast_tx.clone())
+                .await?;
         }
 
         // Spawn ComponentRegistry watcher
         if let Some(grpc) = &self.grpc_server {
-            component_registry::spawn_component_registry_watcher(grpc.clone(), self.broadcast_tx.clone()).await?;
+            component_registry::spawn_component_registry_watcher(
+                grpc.clone(),
+                self.broadcast_tx.clone(),
+            )
+            .await?;
         }
 
         Ok(())
@@ -82,7 +87,7 @@ impl EventDispatcher {
         info!("Starting event loop");
 
         let mut rx = self.broadcast_tx.subscribe();
-        
+
         loop {
             match rx.recv().await {
                 Ok(event) => {
@@ -120,7 +125,9 @@ impl EventDispatcher {
                 *data = event.delta();
                 *seq = event_seq;
             } else {
-                self.mirror.current_data.insert(path.clone(), (event.delta(), event_seq));
+                self.mirror
+                    .current_data
+                    .insert(path.clone(), (event.delta(), event_seq));
             }
 
             // Update session pending queues
@@ -129,8 +136,10 @@ impl EventDispatcher {
                 session_entry.value_mut().add_event(event.clone());
 
                 if session_entry.value().is_queue_full() {
-                    warn!("Session {} queue full, dropping",
-                          session_entry.value().peer_name);
+                    warn!(
+                        "Session {} queue full, dropping",
+                        session_entry.value().peer_name
+                    );
                     sessions_to_drop.push(session_entry.key().clone());
                 }
             }

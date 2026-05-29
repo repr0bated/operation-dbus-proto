@@ -25,6 +25,7 @@
 //! └─────────────────────────────────────────────────────────────────┘
 //! ```
 
+pub mod chat_store;
 pub mod email;
 pub mod embedded_ui;
 pub mod groups_admin;
@@ -39,6 +40,7 @@ pub mod privacy_container;
 pub mod privacy_network;
 pub mod privacy_openflow;
 pub mod privacy_routes;
+pub mod projection_client;
 pub mod routes;
 pub mod sse;
 pub mod state;

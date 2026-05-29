@@ -8,7 +8,7 @@ import { AppSidebar } from "@/components/AppSidebar";
 import { DashboardLayout } from "@/components/DashboardLayout";
 // Core pages
 import Dashboard from "./pages/Dashboard";
-import ChatPage from "./pages/ChatPage";
+import ChatPage from "./pages/openclaw/ChatPage";
 import NotFound from "./pages/NotFound";
 
 // Operation-DBUS pages
@@ -25,15 +25,16 @@ import AnalyticsPage from "./pages/AnalyticsPage";
 import ExecutionLogsPage from "./pages/ExecutionLogsPage";
 import DebuggerPage from "./pages/DebuggerPage";
 import SettingsPage from "./pages/SettingsPage";
-// OpenClaw pages
-import OpenClawChat from "./pages/openclaw/ChatPage";
-import OpenClawSessions from "./pages/openclaw/SessionsPage";
-import OpenClawChannels from "./pages/openclaw/ChannelsPage";
-import OpenClawSkills from "./pages/openclaw/SkillsPage";
-import OpenClawCron from "./pages/openclaw/CronPage";
-import OpenClawDebug from "./pages/openclaw/DebugPage";
-import OpenClawLogs from "./pages/openclaw/LogsPage";
-import OpenClawConfig from "./pages/openclaw/ConfigPage";
+import AccountabilityPage from "./pages/AccountabilityPage";
+// Assistant pages (zero-trust via gRPC bridge)
+import AssistantChat from "./pages/openclaw/ChatPage";
+import AssistantSessions from "./pages/openclaw/SessionsPage";
+import AssistantChannels from "./pages/openclaw/ChannelsPage";
+import AssistantSkills from "./pages/openclaw/SkillsPage";
+import AssistantCron from "./pages/openclaw/CronPage";
+import AssistantDebug from "./pages/openclaw/DebugPage";
+import AssistantLogs from "./pages/openclaw/LogsPage";
+import AssistantConfig from "./pages/openclaw/ConfigPage";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 5000 } },
@@ -65,16 +66,26 @@ const App = () => (
                 <Route path="/analytics" element={<AnalyticsPage />} />
                 <Route path="/logs" element={<ExecutionLogsPage />} />
                 <Route path="/debugger" element={<DebuggerPage />} />
+                <Route
+                  path="/accountability"
+                  element={<AccountabilityPage />}
+                />
                 <Route path="/settings" element={<SettingsPage />} />
-                {/* OpenClaw routes */}
-                <Route path="/openclaw" element={<OpenClawChat />} />
-                <Route path="/openclaw/sessions" element={<OpenClawSessions />} />
-                <Route path="/openclaw/channels" element={<OpenClawChannels />} />
-                <Route path="/openclaw/skills" element={<OpenClawSkills />} />
-                <Route path="/openclaw/cron" element={<OpenClawCron />} />
-                <Route path="/openclaw/debug" element={<OpenClawDebug />} />
-                <Route path="/openclaw/logs" element={<OpenClawLogs />} />
-                <Route path="/openclaw/config" element={<OpenClawConfig />} />
+                {/* Assistant routes (zero-trust via gRPC bridge) */}
+                <Route path="/openclaw" element={<AssistantChat />} />
+                <Route
+                  path="/openclaw/sessions"
+                  element={<AssistantSessions />}
+                />
+                <Route
+                  path="/openclaw/channels"
+                  element={<AssistantChannels />}
+                />
+                <Route path="/openclaw/skills" element={<AssistantSkills />} />
+                <Route path="/openclaw/cron" element={<AssistantCron />} />
+                <Route path="/openclaw/debug" element={<AssistantDebug />} />
+                <Route path="/openclaw/logs" element={<AssistantLogs />} />
+                <Route path="/openclaw/config" element={<AssistantConfig />} />
                 <Route path="*" element={<NotFound />} />
               </Routes>
             </DashboardLayout>

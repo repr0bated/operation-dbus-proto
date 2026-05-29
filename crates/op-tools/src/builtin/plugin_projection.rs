@@ -39,7 +39,8 @@ impl PluginProjectionTool {
         let name = format!(
             "projection_{}_{}",
             sanitize_segment(service.split('.').last().unwrap_or(service)).to_ascii_lowercase(),
-            sanitize_segment(object_path.split('/').last().unwrap_or(&object_path)).to_ascii_lowercase()
+            sanitize_segment(object_path.split('/').last().unwrap_or(&object_path))
+                .to_ascii_lowercase()
         );
         Self {
             name,
@@ -93,11 +94,14 @@ impl Tool for PluginProjectionTool {
             .build()
             .await?;
 
-        let json_text: String = if let Some(property) = input.get("property").and_then(|v| v.as_str()) {
-            proxy.call::<_, _, String>("get_property", &(property.to_string(),)).await?
-        } else {
-            proxy.get_property::<String>("json_data").await?
-        };
+        let json_text: String =
+            if let Some(property) = input.get("property").and_then(|v| v.as_str()) {
+                proxy
+                    .call::<_, _, String>("get_property", &(property.to_string(),))
+                    .await?
+            } else {
+                proxy.get_property::<String>("json_data").await?
+            };
 
         let mut buf = json_text.into_bytes();
         let data = simd_json::from_slice::<Value>(&mut buf).unwrap_or_else(|_| Value::null());

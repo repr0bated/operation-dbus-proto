@@ -3,7 +3,7 @@
 use crate::service_def::{
     ExecCommand, LogType, ReadyNotification, RestartPolicy, ServiceDef, ServiceName, ServiceType,
 };
-use anyhow::{Context, Result};
+use anyhow::Result;
 use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
 use serde::{Deserialize, Serialize};
@@ -11,7 +11,6 @@ use simd_json::{json, OwnedValue as Value};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
-use zbus::{proxy, Connection};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceLifecycle {
@@ -21,42 +20,23 @@ pub struct ServiceLifecycle {
     pub orphan_reason: Option<String>,
 }
 
+/// Path to the s6-rc live database.
+const S6_RC_LIVE: &str = "/run/s6-rc";
+
 pub struct ServicePlugin {
     backend: ServiceBackend,
 }
 
 enum ServiceBackend {
-    Dinit,
+    S6,
     Systemd,
-}
-
-type DinitFlags = HashMap<String, bool>;
-type DinitServiceRecord = (
-    String,
-    String,
-    String,
-    String,
-    String,
-    DinitFlags,
-    u32,
-    i32,
-    i32,
-);
-
-#[proxy(
-    interface = "org.chimera.dinit.Manager",
-    default_service = "org.chimera.dinit",
-    default_path = "/org/chimera/dinit"
-)]
-trait DinitManager {
-    #[zbus(name = "ListServices")]
-    fn list_services(&self) -> zbus::Result<Vec<DinitServiceRecord>>;
 }
 
 impl ServicePlugin {
     pub fn new() -> Self {
-        let backend = if Path::new("/etc/dinit.d").exists() {
-            ServiceBackend::Dinit
+        // Prefer s6 when the live directory exists; fall back to systemd.
+        let backend = if Path::new(S6_RC_LIVE).exists() || Path::new("/etc/s6/sv").exists() {
+            ServiceBackend::S6
         } else {
             ServiceBackend::Systemd
         };
@@ -175,8 +155,8 @@ impl ServicePlugin {
         })
     }
 
-    /// Convert all systemd units to dinit
-    pub async fn convert_systemd_to_dinit(&self) -> Result<Vec<ServiceDef>> {
+    /// Convert all systemd units to s6 service definitions
+    pub async fn convert_systemd_to_s6(&self) -> Result<Vec<ServiceDef>> {
         let mut services = vec![];
         let systemd_dir = Path::new("/etc/systemd/system");
 
@@ -206,31 +186,37 @@ impl ServicePlugin {
     /// Install service definition
     pub async fn install_service(&self, svc: &ServiceDef) -> Result<()> {
         match self.backend {
-            ServiceBackend::Dinit => {
+            ServiceBackend::S6 => {
                 svc.install()?;
-                log::info!("Installed dinit service: {}", svc.name);
+                log::info!("Installed s6 service: {}", svc.name);
             }
             ServiceBackend::Systemd => {
-                anyhow::bail!("systemd installation not implemented - use dinit");
+                anyhow::bail!("systemd installation not implemented - use s6");
             }
         }
 
         Ok(())
     }
 
-    async fn list_dinit_services(&self) -> Result<Vec<String>> {
-        let conn = Connection::system()
+    /// List running services via `s6-rc -a -l /run/s6-rc list`.
+    async fn list_s6_services(&self) -> Result<Vec<String>> {
+        let out = tokio::process::Command::new("s6-rc")
+            .arg("-l")
+            .arg(S6_RC_LIVE)
+            .args(["-a", "list"])
+            .output()
             .await
-            .context("failed to connect to system D-Bus for dinit service enumeration")?;
-        let proxy = DinitManagerProxy::new(&conn)
-            .await
-            .context("failed to create dinit D-Bus proxy for service enumeration")?;
-        let services = proxy
-            .list_services()
-            .await
-            .context("failed to list dinit services over D-Bus")?;
+            .map_err(|e| anyhow::anyhow!("failed to run s6-rc: {e}"))?;
 
-        Ok(services.into_iter().map(|service| service.0).collect())
+        if !out.status.success() {
+            return Ok(Vec::new());
+        }
+
+        Ok(String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect())
     }
 
     async fn check_lifecycle(&self, name: &str) -> Result<ServiceLifecycle> {
@@ -251,7 +237,8 @@ impl ServicePlugin {
                     })
                 })
             }
-            ServiceBackend::Dinit => None,
+            // s6 does not expose activation timestamps via CLI
+            ServiceBackend::S6 => None,
         };
 
         let days_since_active = last_active.map(|t| (now - t) / 86400);
@@ -309,7 +296,7 @@ impl StatePlugin for ServicePlugin {
                     .filter_map(|l| l.split_whitespace().next().map(String::from))
                     .collect::<Vec<_>>()
             }
-            ServiceBackend::Dinit => self.list_dinit_services().await?,
+            ServiceBackend::S6 => self.list_s6_services().await?,
         };
 
         for svc_name in service_list {

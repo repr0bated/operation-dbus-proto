@@ -127,6 +127,34 @@ impl WireGuardIdentity {
         Ok(peers)
     }
 
+    /// Get the primary IPv4 address of the WireGuard interface.
+    ///
+    /// Uses `ip -4 addr show <iface>` and parses the first `inet` address.
+    /// Returns `None` if the interface has no IPv4 address or the command fails.
+    pub fn get_local_ip(&self) -> Option<String> {
+        let output = Command::new("ip")
+            .args(["-4", "addr", "show", &self.interface])
+            .output()
+            .ok()?;
+
+        if !output.status.success() {
+            return None;
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines() {
+            let trimmed = line.trim();
+            if let Some(rest) = trimmed.strip_prefix("inet ") {
+                // rest is e.g. "100.90.37.254/32 scope global netmaker"
+                let ip = rest.split('/').next()?.trim();
+                if !ip.is_empty() {
+                    return Some(ip.to_string());
+                }
+            }
+        }
+        None
+    }
+
     /// Get allowed IPs for a specific peer
     fn get_allowed_ips_for_peer(&self, pubkey: &str) -> anyhow::Result<Vec<String>> {
         let output = Command::new("wg")

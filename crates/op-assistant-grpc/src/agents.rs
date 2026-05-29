@@ -91,11 +91,21 @@ impl AgentService for AgentServiceImpl {
             return Err(Status::invalid_argument("agent id is required"));
         }
         let mut params = json!({ "id": req.id, "tools": req.tools });
-        if let Some(v) = req.name { params["name"] = json!(v); }
-        if let Some(v) = req.description { params["description"] = json!(v); }
-        if let Some(v) = req.model { params["model"] = json!(v); }
-        if let Some(v) = req.system_prompt { params["system_prompt"] = json!(v); }
-        if let Some(meta) = req.metadata { params["metadata"] = struct_to_json(meta); }
+        if let Some(v) = req.name {
+            params["name"] = json!(v);
+        }
+        if let Some(v) = req.description {
+            params["description"] = json!(v);
+        }
+        if let Some(v) = req.model {
+            params["model"] = json!(v);
+        }
+        if let Some(v) = req.system_prompt {
+            params["system_prompt"] = json!(v);
+        }
+        if let Some(meta) = req.metadata {
+            params["metadata"] = struct_to_json(meta);
+        }
         let result = self.client.call("agents.update", params).await?;
         Ok(Response::new(agent_from_json(&result)))
     }
@@ -108,7 +118,9 @@ impl AgentService for AgentServiceImpl {
         if id.is_empty() {
             return Err(Status::invalid_argument("agent id is required"));
         }
-        self.client.call("agents.delete", json!({ "id": id })).await?;
+        self.client
+            .call("agents.delete", json!({ "id": id }))
+            .await?;
         Ok(Response::new(Empty {}))
     }
 
@@ -118,8 +130,12 @@ impl AgentService for AgentServiceImpl {
             "agent_id": req.agent_id,
             "input": req.input,
         });
-        if let Some(sid) = req.session_id { params["session_id"] = json!(sid); }
-        if let Some(p) = req.parameters { params["parameters"] = struct_to_json(p); }
+        if let Some(sid) = req.session_id {
+            params["session_id"] = json!(sid);
+        }
+        if let Some(p) = req.parameters {
+            params["parameters"] = struct_to_json(p);
+        }
         let result = self.client.call("agents.start_run", params).await?;
         Ok(Response::new(run_from_json(&result)))
     }
@@ -150,10 +166,7 @@ impl AgentService for AgentServiceImpl {
         Ok(Response::new(Box::pin(stream)))
     }
 
-    async fn cancel_run(
-        &self,
-        req: Request<CancelRunRequest>,
-    ) -> Result<Response<Empty>, Status> {
+    async fn cancel_run(&self, req: Request<CancelRunRequest>) -> Result<Response<Empty>, Status> {
         let run_id = req.into_inner().run_id;
         if run_id.is_empty() {
             return Err(Status::invalid_argument("run_id is required"));

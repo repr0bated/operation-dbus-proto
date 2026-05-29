@@ -15,11 +15,12 @@ use tokio::sync::{broadcast, OnceCell, RwLock, Semaphore};
 use zbus::zvariant::OwnedValue as ZOwnedValue;
 use zbus::{Connection, Proxy};
 
-use op_identity::write_sled_full;
+use base64::Engine;
+use op_identity::{read_sled, write_sled_full};
 use op_jsonrpc::nonnet::NonNetDb;
 use op_network::ovsdb::OvsdbClient;
 use op_state_store::{Decision, EventChain, OperationType};
-use sha2::{Digest, Sha256};
+
 
 /// A state change projected from the authoritative system bus
 #[derive(Debug, Clone)]
@@ -243,7 +244,10 @@ impl SchemaEngine {
                         let _ = nonnet_self
                             .process_authoritative_change(
                                 update.table.clone(),
-                                format!("/org/opdbus/v1/nonnet/{}/{}", update.db_name, update.table),
+                                format!(
+                                    "/org/opdbus/v1/nonnet/{}/{}",
+                                    update.db_name, update.table
+                                ),
                                 ChangeType::PropertySet,
                                 None,
                                 None,
@@ -275,12 +279,12 @@ impl SchemaEngine {
                                     // monitor_db returns serde_json::Value; convert to
                                     // simd_json::OwnedValue required by process_authoritative_change.
                                     let simd_val: simd_json::OwnedValue = {
-                                        match serde_json::to_string(table_update)
-                                            .ok()
-                                            .and_then(|s| {
+                                        match serde_json::to_string(table_update).ok().and_then(
+                                            |s| {
                                                 let mut b = s.into_bytes();
                                                 simd_json::to_owned_value(&mut b).ok()
-                                            }) {
+                                            },
+                                        ) {
                                             Some(v) => v,
                                             None => continue,
                                         }
@@ -413,24 +417,25 @@ impl SchemaEngine {
             .await
             .map_err(|e| anyhow::anyhow!(e))?;
 
-        // Write the Identity Sled with full OSCAL + NextDNS context.
+        // Write the Identity Sled with the updated mutation index.
         {
-            let mut hasher = Sha256::new();
-            hasher.update(change.event_hash.as_bytes());
-            hasher.update(change.plugin_id.as_bytes());
-            let footprint_hex = hex::encode(hasher.finalize());
-            let uuid          = std::env::var("SCHEMA_UUID").unwrap_or_default();
-            let subid         = std::env::var("SCHEMA_SUBID").unwrap_or_default();
-            let ctrl          = std::env::var("SCHEMA_CONTROL_SOURCE")
-                                    .unwrap_or_else(|_| "NIST_SP_800_53_R5".into());
-            let ctrl_refs     = std::env::var("SCHEMA_CONTROL_REFS").unwrap_or_default();
-            let stmt_refs     = std::env::var("SCHEMA_STATEMENT_REFS").unwrap_or_default();
-            let nextdns       = std::env::var("NEXTDNS_PROFILE_ID")
-                                    .unwrap_or_else(|_| "689ec7".into());
+            let (existing_pubkey_b64, existing_trace_hex) =
+                if let Ok((ptr, _mmap)) = read_sled() {
+                    unsafe {
+                        let sled = &*ptr;
+                        (
+                            base64::engine::general_purpose::STANDARD
+                                .encode(sled.wireguard_pubkey),
+                            sled.trace_id_hex(),
+                        )
+                    }
+                } else {
+                    (String::new(), String::new())
+                };
             if let Err(e) = write_sled_full(
-                &footprint_hex,
+                &existing_pubkey_b64,
                 change.event_id,
-                &uuid, &subid, &ctrl, &ctrl_refs, &stmt_refs, &nextdns,
+                &existing_trace_hex,
             ) {
                 tracing::warn!("sled write after mutation failed: {}", e);
             }

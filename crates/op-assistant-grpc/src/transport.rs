@@ -6,7 +6,9 @@
 //! specific transport explicitly.
 
 use crate::error::{AssistantError, Result};
-use crate::incus::{SchemaTags, DEFAULT_WG_XRAY_ENDPOINT, ENV_RPC_ENDPOINT, HEADER_FOOTPRINT, HEADER_TRACE_ID};
+use crate::incus::{
+    SchemaTags, DEFAULT_WG_XRAY_ENDPOINT, ENV_RPC_ENDPOINT, HEADER_FOOTPRINT, HEADER_TRACE_ID,
+};
 use serde_json::Value;
 use std::time::Duration;
 
@@ -149,7 +151,11 @@ impl Transport {
     }
 
     async fn rpc_call(&self, method: &str, body: Value) -> Result<Value> {
-        let url = format!("{}/rpc/{}", self.cfg.rpc_endpoint.trim_end_matches('/'), method);
+        let url = format!(
+            "{}/rpc/{}",
+            self.cfg.rpc_endpoint.trim_end_matches('/'),
+            method
+        );
         let tags = SchemaTags::load();
         let mut req = self.http.post(&url).json(&body);
         if tags.is_valid() {

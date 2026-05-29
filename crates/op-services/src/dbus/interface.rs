@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 use tracing::info;
-use zbus::{interface, Connection, SignalContext};
+use zbus::{interface, object_server::SignalEmitter as SignalContext, Connection};
 
 use crate::manager::ServiceManager;
 use crate::schema::ServiceName;

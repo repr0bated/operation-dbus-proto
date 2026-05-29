@@ -81,7 +81,8 @@ impl MemoryService for MemoryServiceImpl {
 
         let mut written = 0u32;
         for entry in req.entries {
-            let value: Value = serde_json::from_str(&entry.value).unwrap_or(Value::String(entry.value));
+            let value: Value =
+                serde_json::from_str(&entry.value).unwrap_or(Value::String(entry.value));
             let tags = tags_from_metadata(&entry.metadata);
             self.store
                 .store_entry(&req.namespace, &entry.key, value, tags, None)
@@ -171,17 +172,21 @@ impl MemoryService for MemoryServiceImpl {
         let bytes_used: u64 = entries
             .iter()
             .map(|e| {
-                e.key.len() as u64 + serde_json::to_string(&e.value).map(|s| s.len() as u64).unwrap_or(0)
+                e.key.len() as u64
+                    + serde_json::to_string(&e.value)
+                        .map(|s| s.len() as u64)
+                        .unwrap_or(0)
             })
             .sum();
-        let last_updated = entries
-            .iter()
-            .map(|e| e.updated_at)
-            .max()
-            .map(|t| prost_types::Timestamp {
-                seconds: t.timestamp(),
-                nanos: t.timestamp_subsec_nanos() as i32,
-            });
+        let last_updated =
+            entries
+                .iter()
+                .map(|e| e.updated_at)
+                .max()
+                .map(|t| prost_types::Timestamp {
+                    seconds: t.timestamp(),
+                    nanos: t.timestamp_subsec_nanos() as i32,
+                });
 
         Ok(Response::new(MemoryStats {
             namespace: ns,

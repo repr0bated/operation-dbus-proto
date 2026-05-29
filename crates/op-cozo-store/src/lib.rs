@@ -1,5 +1,6 @@
 use anyhow::Result;
-use cozo::{DataValue, DbInstance, NamedRows, ScriptMutability};
+pub use cozo::{DataValue, Num};
+use cozo::{DbInstance, NamedRows, ScriptMutability};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -33,6 +34,7 @@ pub struct PolicyVerdict {
 ///   - `sessions`            — session_id → wg_pubkey, with expiry
 ///   - `memory_namespaces`   — named MCP memory contexts
 ///   - `memory_entries`      — key/value entries within a namespace
+#[derive(Clone)]
 pub struct CozoGraphShuttle {
     pub(crate) db: Arc<DbInstance>,
 }
@@ -119,6 +121,26 @@ impl CozoGraphShuttle {
             r#":create users {
                 wg_pubkey: String
                 =>
+                created_at: String default ""
+            }"#,
+            // full privacy router user accounts (PII stored per explicit directive)
+            r#":create privacy_users {
+                id: String
+                =>
+                email: String default "",
+                email_verified: String default "false",
+                wg_public_key: String default "",
+                wg_private_key_encrypted: String default "",
+                assigned_ip: String default "",
+                privacy_quota_bytes: Int default 1073741824,
+                privacy_quota_used_bytes: Int default 0,
+                privacy_container_name: String default "",
+                privacy_route_id: String default "",
+                privacy_network_connected: String default "false",
+                privacy_network_connected_at: String default "",
+                google_id: String default "",
+                google_email: String default "",
+                api_credentials_json: String default "null",
                 created_at: String default ""
             }"#,
             // session_id → wg_pubkey with optional expiry (RFC3339)
@@ -458,6 +480,163 @@ impl CozoGraphShuttle {
         )
         .map_err(|e| anyhow::anyhow!("user exists: {e}"))?;
         Ok(!r.rows.is_empty())
+    }
+
+    // ── Privacy Users (full PII per explicit directive) ─────────────────────────
+
+    pub fn upsert_privacy_user(
+        &self,
+        id: &str,
+        email: &str,
+        email_verified: bool,
+        wg_public_key: &str,
+        wg_private_key_encrypted: &str,
+        assigned_ip: &str,
+        privacy_quota_bytes: i64,
+        privacy_quota_used_bytes: i64,
+        privacy_container_name: &str,
+        privacy_route_id: &str,
+        privacy_network_connected: bool,
+        privacy_network_connected_at: &str,
+        google_id: &str,
+        google_email: &str,
+        api_credentials_json: &str,
+        created_at: &str,
+    ) -> Result<()> {
+        let query = r#"
+            ?[id, email, email_verified, wg_public_key, wg_private_key_encrypted,
+              assigned_ip, privacy_quota_bytes, privacy_quota_used_bytes,
+              privacy_container_name, privacy_route_id, privacy_network_connected,
+              privacy_network_connected_at, google_id, google_email,
+              api_credentials_json, created_at]
+                <- [[$id, $email, $ev, $wg, $wg_priv, $ip, $quota, $used,
+                     $container, $route, $pnc, $pnc_at, $gid, $gmail,
+                     $api_json, $ts]]
+            :put privacy_users {
+                id => email, email_verified, wg_public_key, wg_private_key_encrypted,
+                      assigned_ip, privacy_quota_bytes, privacy_quota_used_bytes,
+                      privacy_container_name, privacy_route_id, privacy_network_connected,
+                      privacy_network_connected_at, google_id, google_email,
+                      api_credentials_json, created_at
+            }
+        "#;
+        let mut p: Params = BTreeMap::new();
+        p.insert("id".into(), DataValue::Str(id.into()));
+        p.insert("email".into(), DataValue::Str(email.into()));
+        p.insert("ev".into(), DataValue::Str(email_verified.to_string().into()));
+        p.insert("wg".into(), DataValue::Str(wg_public_key.into()));
+        p.insert("wg_priv".into(), DataValue::Str(wg_private_key_encrypted.into()));
+        p.insert("ip".into(), DataValue::Str(assigned_ip.into()));
+        p.insert("quota".into(), dv_int(privacy_quota_bytes));
+        p.insert("used".into(), dv_int(privacy_quota_used_bytes));
+        p.insert("container".into(), DataValue::Str(privacy_container_name.into()));
+        p.insert("route".into(), DataValue::Str(privacy_route_id.into()));
+        p.insert("pnc".into(), DataValue::Str(privacy_network_connected.to_string().into()));
+        p.insert("pnc_at".into(), DataValue::Str(privacy_network_connected_at.into()));
+        p.insert("gid".into(), DataValue::Str(google_id.into()));
+        p.insert("gmail".into(), DataValue::Str(google_email.into()));
+        p.insert("api_json".into(), DataValue::Str(api_credentials_json.into()));
+        p.insert("ts".into(), DataValue::Str(created_at.into()));
+        cozo_run(&self.db, query, p)
+            .map_err(|e| anyhow::anyhow!("upsert privacy user: {e}"))?;
+        Ok(())
+    }
+
+    pub fn get_privacy_user(&self, id: &str) -> Result<Option<Vec<DataValue>>> {
+        let mut p: Params = BTreeMap::new();
+        p.insert("id".into(), DataValue::Str(id.into()));
+        let r = cozo_run(
+            &self.db,
+            "?[email, email_verified, wg_public_key, wg_private_key_encrypted, \
+             assigned_ip, privacy_quota_bytes, privacy_quota_used_bytes, \
+             privacy_container_name, privacy_route_id, privacy_network_connected, \
+             privacy_network_connected_at, google_id, google_email, \
+             api_credentials_json, created_at] := \
+             *privacy_users[id, email, email_verified, wg_public_key, wg_private_key_encrypted, \
+             assigned_ip, privacy_quota_bytes, privacy_quota_used_bytes, \
+             privacy_container_name, privacy_route_id, privacy_network_connected, \
+             privacy_network_connected_at, google_id, google_email, \
+             api_credentials_json, created_at], id = $id",
+            p,
+        )
+        .map_err(|e| anyhow::anyhow!("get privacy user: {e}"))?;
+        Ok(r.rows.into_iter().next())
+    }
+
+    pub fn get_privacy_user_by_email(&self, email: &str) -> Result<Option<Vec<DataValue>>> {
+        let mut p: Params = BTreeMap::new();
+        p.insert("email".into(), DataValue::Str(email.into()));
+        let r = cozo_run(
+            &self.db,
+            "?[id, email_verified, wg_public_key, wg_private_key_encrypted, \
+             assigned_ip, privacy_quota_bytes, privacy_quota_used_bytes, \
+             privacy_container_name, privacy_route_id, privacy_network_connected, \
+             privacy_network_connected_at, google_id, google_email, \
+             api_credentials_json, created_at] := \
+             *privacy_users[id, email, email_verified, wg_public_key, wg_private_key_encrypted, \
+             assigned_ip, privacy_quota_bytes, privacy_quota_used_bytes, \
+             privacy_container_name, privacy_route_id, privacy_network_connected, \
+             privacy_network_connected_at, google_id, google_email, \
+             api_credentials_json, created_at], email = $email",
+            p,
+        )
+        .map_err(|e| anyhow::anyhow!("get privacy user by email: {e}"))?;
+        Ok(r.rows.into_iter().next())
+    }
+
+    pub fn get_privacy_user_by_google_id(
+        &self,
+        google_id: &str,
+    ) -> Result<Option<Vec<DataValue>>> {
+        let mut p: Params = BTreeMap::new();
+        p.insert("gid".into(), DataValue::Str(google_id.into()));
+        let r = cozo_run(
+            &self.db,
+            "?[id, email, email_verified, wg_public_key, wg_private_key_encrypted, \
+             assigned_ip, privacy_quota_bytes, privacy_quota_used_bytes, \
+             privacy_container_name, privacy_route_id, privacy_network_connected, \
+             privacy_network_connected_at, google_email, \
+             api_credentials_json, created_at] := \
+             *privacy_users[id, email, email_verified, wg_public_key, wg_private_key_encrypted, \
+             assigned_ip, privacy_quota_bytes, privacy_quota_used_bytes, \
+             privacy_container_name, privacy_route_id, privacy_network_connected, \
+             privacy_network_connected_at, google_id, google_email, \
+             api_credentials_json, created_at], google_id = $gid",
+            p,
+        )
+        .map_err(|e| anyhow::anyhow!("get privacy user by google id: {e}"))?;
+        Ok(r.rows.into_iter().next())
+    }
+
+    pub fn list_privacy_users(&self) -> Result<Vec<Vec<DataValue>>> {
+        let r = cozo_run(
+            &self.db,
+            "?[id, email, email_verified, wg_public_key, wg_private_key_encrypted, \
+             assigned_ip, privacy_quota_bytes, privacy_quota_used_bytes, \
+             privacy_container_name, privacy_route_id, privacy_network_connected, \
+             privacy_network_connected_at, google_id, google_email, \
+             api_credentials_json, created_at] := \
+             *privacy_users[id, email, email_verified, wg_public_key, wg_private_key_encrypted, \
+             assigned_ip, privacy_quota_bytes, privacy_quota_used_bytes, \
+             privacy_container_name, privacy_route_id, privacy_network_connected, \
+             privacy_network_connected_at, google_id, google_email, \
+             api_credentials_json, created_at]",
+            BTreeMap::new(),
+        )
+        .map_err(|e| anyhow::anyhow!("list privacy users: {e}"))?;
+        Ok(r.rows)
+    }
+
+    pub fn delete_privacy_user(&self, id: &str) -> Result<()> {
+        let mut p: Params = BTreeMap::new();
+        p.insert("id".into(), DataValue::Str(id.into()));
+        cozo_run(
+            &self.db,
+            "?[id] <- [[$id]] :rm privacy_users { id }",
+            p,
+        )
+        .map_err(|e| anyhow::anyhow!("delete privacy user: {e}"))?;
+        Ok(())
     }
 
     // ── Sessions ───────────────────────────────────────────────────────────────

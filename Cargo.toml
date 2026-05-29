@@ -162,6 +162,7 @@ aes-gcm = "0.10"
 argon2 = "0.5"
 rand = "0.8"
 md5 = "0.7"
+blake3 = "1.5"
 opentelemetry = { version = "0.22", features = ["metrics", "trace"] }
 prometheus = { version = "0.13", features = ["process"] }
 rustls = "0.23"

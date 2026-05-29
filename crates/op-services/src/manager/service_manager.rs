@@ -1,17 +1,32 @@
-//! Core service manager
+//! Core service manager — uses s6-rc CLI for service control on Artix Linux.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
-use super::{DinitProxy, ProcessManager};
+use super::ProcessManager;
 use crate::schema::{ManagerState, ServiceDef, ServiceName, ServiceStatus};
 use crate::store::Store;
 
+/// Path to the s6-rc live database.
+const S6_RC_LIVE: &str = "/run/s6-rc";
+
+/// Run `s6-rc -l /run/s6-rc <args…>` and return the raw output.
+async fn s6rc(args: &[&str]) -> anyhow::Result<std::process::Output> {
+    tokio::process::Command::new("s6-rc")
+        .arg("-l")
+        .arg(S6_RC_LIVE)
+        .args(args)
+        .output()
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to run s6-rc: {e}"))
+}
+
 pub struct ServiceManager {
     store: Arc<Store>,
-    dinit: Option<DinitProxy>,
+    /// True when the s6-rc live directory was present at construction time.
+    s6_available: bool,
     process_mgr: ProcessManager,
     statuses: Arc<RwLock<HashMap<ServiceName, ServiceStatus>>>,
     events: broadcast::Sender<ServiceEvent>,
@@ -26,22 +41,18 @@ pub struct ServiceEvent {
 
 impl ServiceManager {
     pub async fn new(store: Arc<Store>) -> anyhow::Result<Self> {
-        let dinit = match DinitProxy::new().await {
-            Ok(d) => {
-                info!("Connected to dinit-dbus");
-                Some(d)
-            }
-            Err(e) => {
-                warn!("dinit-dbus unavailable, using fallback: {}", e);
-                None
-            }
-        };
+        let s6_available = std::path::Path::new(S6_RC_LIVE).exists();
+        if s6_available {
+            info!("s6-rc live directory found at {S6_RC_LIVE}");
+        } else {
+            warn!("s6-rc live directory not found at {S6_RC_LIVE}, using process fallback");
+        }
 
         let (events, _) = broadcast::channel(256);
 
         Ok(Self {
             store,
-            dinit,
+            s6_available,
             process_mgr: ProcessManager::new(),
             statuses: Arc::new(RwLock::new(HashMap::new())),
             events,
@@ -57,8 +68,18 @@ impl ServiceManager {
 
         self.set_state(name, ManagerState::Starting).await;
 
-        let result = if let Some(ref dinit) = self.dinit {
-            dinit.start_service(name.as_str()).await
+        let result: anyhow::Result<u32> = if self.s6_available {
+            let out = s6rc(&["start", name.as_str()]).await?;
+            if out.status.success() {
+                Ok(0) // s6 doesn't hand us a PID directly
+            } else {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                if stderr.contains("already") {
+                    Ok(0)
+                } else {
+                    Err(anyhow::anyhow!("s6-rc start {} failed: {}", name, stderr))
+                }
+            }
         } else {
             self.process_mgr.start(&service).await
         };
@@ -80,8 +101,18 @@ impl ServiceManager {
     pub async fn stop(&self, name: &ServiceName) -> anyhow::Result<ServiceStatus> {
         self.set_state(name, ManagerState::Stopping).await;
 
-        let result = if let Some(ref dinit) = self.dinit {
-            dinit.stop_service(name.as_str()).await
+        let result: anyhow::Result<()> = if self.s6_available {
+            let out = s6rc(&["stop", name.as_str()]).await?;
+            if out.status.success() {
+                Ok(())
+            } else {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                if stderr.contains("already") {
+                    Ok(())
+                } else {
+                    Err(anyhow::anyhow!("s6-rc stop {} failed: {}", name, stderr))
+                }
+            }
         } else {
             self.process_mgr.stop(name).await
         };
@@ -121,11 +152,11 @@ impl ServiceManager {
     }
 
     pub async fn create(&self, service: &ServiceDef) -> anyhow::Result<()> {
-        // Persist to the store and install the dinit service file
+        // Persist to the store and install the s6 run script
         self.store.save_service(service).await?;
         if let Err(e) = service.install() {
             warn!(
-                "Failed to install dinit service file for {}: {}",
+                "Failed to install s6 service files for {}: {}",
                 service.name, e
             );
         }
@@ -141,11 +172,11 @@ impl ServiceManager {
         // Remove from store
         self.store.delete_service(name).await?;
 
-        // Remove the dinit service file if it exists
-        let path = format!("/etc/dinit.d/{}", name);
-        if let Err(e) = tokio::fs::remove_file(&path).await {
+        // Remove the s6 service directory if it exists
+        let path = format!("/etc/s6/sv/{}", name);
+        if let Err(e) = tokio::fs::remove_dir_all(&path).await {
             if e.kind() != std::io::ErrorKind::NotFound {
-                warn!("Failed to remove dinit service file {}: {}", path, e);
+                warn!("Failed to remove s6 service directory {}: {}", path, e);
             }
         }
 

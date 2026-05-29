@@ -1,4 +1,5 @@
 #!/bin/sh
+export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/op-dbus/session-bus.sock}"
 export PRIVACY_DATAPATH_TYPE="${PRIVACY_DATAPATH_TYPE:-netdev}"
 export PRIVACY_FAIL_MODE="${PRIVACY_FAIL_MODE:-standalone}"
 export PRIVACY_UPLINK_PORT="${PRIVACY_UPLINK_PORT:-eth0}"

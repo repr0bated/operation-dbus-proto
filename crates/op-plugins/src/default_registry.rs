@@ -9,11 +9,12 @@ use simd_json::prelude::*;
 use std::sync::Arc;
 
 use crate::state_plugins::{
-    AdcPlugin, AgentConfigPlugin, ConfigPlugin, DinitStatePlugin, EndpointPlugin, GcloudAdcPlugin,
-    HardwarePlugin, IncusPlugin, KeypairPlugin, McpStatePlugin, NetStatePlugin, OpenFlowPlugin,
-    OvsBridgePlugin, PrivacyRouterPlugin, PrivacyRoutesPlugin, ProcfsPlugin, ProxmoxPlugin,
-    ProxyServerPlugin, RtnetlinkPlugin, ServicePlugin, SessDeclPlugin, SoftwarePlugin, UsersPlugin,
-    WebUiPlugin, WireGuardPlugin,
+    AdcPlugin, AgentConfigPlugin, CognitiveMcpPlugin, CompactMcpPlugin, ConfigPlugin,
+    EndpointPlugin, GcloudAdcPlugin, HardwarePlugin, IncusPlugin, KeypairPlugin, MailServerPlugin,
+    McpStatePlugin, NetStatePlugin, OpenFlowPlugin, OvsBridgePlugin, PrivacyRouterPlugin,
+    PrivacyRoutesPlugin, ProcfsPlugin, ProxmoxPlugin, ProxyServerPlugin, RtnetlinkPlugin,
+    S6StatePlugin, ServicePlugin, SessDeclPlugin, SoftwarePlugin, UsersPlugin, WebUiPlugin,
+    WireGuardPlugin,
 };
 
 /// Default plugin loader configuration
@@ -41,19 +42,23 @@ fn default_auto_load() -> Vec<String> {
         return vec![
             "config".to_string(),
             "service".to_string(),
-            "dinit".to_string(),
+            "s6".to_string(),
             "net".to_string(),
             "rtnetlink".to_string(),
             "procfs".to_string(),
             "wireguard".to_string(),
+            "agent_config".to_string(),
         ];
     }
 
     vec![
         "mcp".to_string(),
+        "cognitive_mcp".to_string(),
+        "compact_mcp".to_string(),
         "config".to_string(),
-        "dinit".to_string(),
+        "s6".to_string(),
         "incus".to_string(),
+        "mail_server".to_string(),
         "net".to_string(),
         "openflow".to_string(),
         "ovsdb_bridge".to_string(),
@@ -61,6 +66,7 @@ fn default_auto_load() -> Vec<String> {
         "privacy_routes".to_string(),
         "procfs".to_string(),
         "rtnetlink".to_string(),
+        "agent_config".to_string(),
     ]
 }
 
@@ -141,9 +147,12 @@ impl DefaultPluginRegistry {
                     self.get_plugin_config_path("config", "/etc/op-dbus/config-store.json");
                 Arc::new(ConfigPlugin::new(config_path))
             }
-            "dinit" => Arc::new(DinitStatePlugin::new()),
-            "systemd" => Arc::new(DinitStatePlugin::new()), // compatibility alias
+            "cognitive_mcp" => Arc::new(CognitiveMcpPlugin::new()),
+            "compact_mcp" => Arc::new(CompactMcpPlugin::new()),
+            "s6" | "service_s6" => Arc::new(S6StatePlugin::new()),
+            "systemd" | "dinit" => Arc::new(S6StatePlugin::new()), // compatibility aliases
             "incus" => Arc::new(IncusPlugin::new()),
+            "mail_server" => Arc::new(MailServerPlugin::new()),
             "net" => Arc::new(NetStatePlugin::new()),
             "openflow" => Arc::new(OpenFlowPlugin::new()),
             "privacy_router" => {
@@ -194,7 +203,7 @@ impl DefaultPluginRegistry {
         vec![
             "mcp",
             "config",
-            "dinit",
+            "s6",
             "incus",
             "net",
             "privacy_routes",
@@ -225,7 +234,7 @@ mod tests {
         // Check default auto-load plugins
         assert!(registry.is_auto_load("mcp"));
         assert!(registry.is_auto_load("config"));
-        assert!(registry.is_auto_load("dinit"));
+        assert!(registry.is_auto_load("s6"));
         assert!(registry.is_auto_load("net"));
 
         // Load plugins
@@ -259,8 +268,9 @@ mod tests {
         let plugin_names = vec![
             "mcp",
             "config",
-            "dinit",
+            "s6",
             "systemd",
+            "dinit",
             "incus",
             "net",
             "openflow",
@@ -308,13 +318,13 @@ mod tests {
         let store = Arc::new(SqliteStore::new(":memory:").await.unwrap());
 
         let config = PluginRegistryConfig {
-            auto_load: vec!["dinit".to_string()],
+            auto_load: vec!["s6".to_string()],
             plugin_configs: std::collections::HashMap::new(),
         };
 
         let registry = DefaultPluginRegistry::with_config(store, config);
 
-        assert!(registry.is_auto_load("dinit"));
+        assert!(registry.is_auto_load("s6"));
         assert!(!registry.is_auto_load("mcp"));
         assert!(!registry.is_auto_load("config"));
     }

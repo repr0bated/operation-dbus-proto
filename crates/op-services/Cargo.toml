@@ -26,10 +26,7 @@ prost = "0.13"
 prost-types = "0.13"
 
 # D-Bus
-zbus = { version = "4.0", features = ["tokio"] }
-
-# Database
-sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
+zbus = { workspace = true }
 
 # Async
 tokio = { version = "1", features = ["full", "signal"] }

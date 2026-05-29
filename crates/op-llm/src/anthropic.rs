@@ -46,6 +46,16 @@ pub mod endpoints {
 }
 
 // =============================================================================
+// AUTHENTICATION
+// =============================================================================
+
+#[derive(Debug, Clone)]
+enum AuthMethod {
+    ApiKey(String),
+    BearerToken(String),
+}
+
+// =============================================================================
 // DATA STRUCTURES
 // =============================================================================
 
@@ -153,7 +163,7 @@ struct AnthropicUsage {
 
 pub struct AnthropicClient {
     client: Client,
-    api_key: String,
+    auth: AuthMethod,
     api_url: String,
 }
 
@@ -164,7 +174,18 @@ impl AnthropicClient {
                 .timeout(Duration::from_secs(120))
                 .build()
                 .unwrap_or_default(),
-            api_key: api_key.into(),
+            auth: AuthMethod::ApiKey(api_key.into()),
+            api_url: endpoints::BASE_URL.to_string(),
+        }
+    }
+
+    pub fn with_oauth_token(token: impl Into<String>) -> Self {
+        Self {
+            client: Client::builder()
+                .timeout(Duration::from_secs(120))
+                .build()
+                .unwrap_or_default(),
+            auth: AuthMethod::BearerToken(token.into()),
             api_url: endpoints::BASE_URL.to_string(),
         }
     }
@@ -177,6 +198,12 @@ impl AnthropicClient {
 
     pub fn with_endpoint(api_key: impl Into<String>, endpoint: impl Into<String>) -> Self {
         let mut client = Self::new(api_key);
+        client.api_url = endpoint.into();
+        client
+    }
+
+    pub fn with_oauth_endpoint(token: impl Into<String>, endpoint: impl Into<String>) -> Self {
+        let mut client = Self::with_oauth_token(token);
         client.api_url = endpoint.into();
         client
     }
@@ -269,12 +296,20 @@ impl AnthropicClient {
             url, request.tool_choice
         );
 
-        let response = self
+        let mut req_builder = self
             .client
             .post(&url)
-            .header("x-api-key", &self.api_key)
             .header("anthropic-version", endpoints::API_VERSION)
-            .header("Content-Type", "application/json")
+            .header("Content-Type", "application/json");
+
+        req_builder = match &self.auth {
+            AuthMethod::ApiKey(key) => req_builder.header("x-api-key", key.as_str()),
+            AuthMethod::BearerToken(token) => {
+                req_builder.header("Authorization", format!("Bearer {}", token))
+            }
+        };
+
+        let response = req_builder
             .json(&api_request)
             .send()
             .await

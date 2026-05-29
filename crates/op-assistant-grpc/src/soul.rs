@@ -81,8 +81,16 @@ impl SoulService for SoulServiceImpl {
         req: Request<ListSoulMemoriesRequest>,
     ) -> Result<Response<ListSoulMemoriesResponse>, Status> {
         let req = req.into_inner();
-        let limit = req.pagination.as_ref().map(|p| p.limit as usize).unwrap_or(0);
-        let offset = req.pagination.as_ref().map(|p| p.offset as usize).unwrap_or(0);
+        let limit = req
+            .pagination
+            .as_ref()
+            .map(|p| p.limit as usize)
+            .unwrap_or(0);
+        let offset = req
+            .pagination
+            .as_ref()
+            .map(|p| p.offset as usize)
+            .unwrap_or(0);
 
         let souls = self
             .store

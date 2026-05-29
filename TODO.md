@@ -55,3 +55,74 @@
 - [ ] Migration of legacy shell scripts to native Rust tools.
 - [ ] Hardened security policy for D-Bus object access (polkit integration).
 - [ ] Multi-node state synchronization via SyncEngine clusters.
+
+---
+
+## Status Snapshot: 2026-05-29
+
+### [DONE] Schema Single Source of Truth
+- [x] Factory discovered schema was not in SHM and had multiple differing sources
+- [x] Fixed: all components now read schema from registered SHM source — single ground truth
+
+---
+
+### [FUTURE] Tiered CoW Object Store + CozoDB as Primary Store
+Future architecture — endgame, not current sprint. Factory velocity may bring this closer than expected.
+
+- DBus object tree → Btrfs CoW tiered store (replaces state.db)
+- Services registry → flat TOML on Btrfs (replaces services.db)
+- DBus tree + services queryable via CozoDB graph engine
+- SQLite eliminated entirely
+- [ ] **Btrfs lower layer** — NVMe, subvolumes per tenant/namespace, `metacopy=off` for overlayfs compat
+- [ ] **overlayfs upper = tmpfs/SHM** — hot working set, COW promotion on first write
+- [ ] **Eviction daemon** — flush stale upper-layer objects back to lower (overlayfs has no LRU)
+- [ ] **Boot prerequisite** — schema registration to SHM before any service starts; hard fail if absent
+- [ ] **`btrfs send` replication** — incremental snapshot deltas as peer sync primitive
+- [ ] **Snapshot-before-delete** — required for GDPR erasure audit trail
+
+---
+
+### [DESIGN] Schema-Based Tag Routing + Compliance
+Three orthogonal tag classes, routing rules in TOML, enforced on every mutation:
+
+**Tag classes:**
+- [ ] OSCAL tags — NIST vocabulary (impact levels, information types, control baselines); operator read-only; ingestor accepts signed OSCAL docs only; tag store append-only
+- [ ] 3tched tags — internal workflow routing (tier-hint, dbus-scope, replication-zone, queue, assigned-agent); operator-writable
+- [ ] UI tags — presentation only (display-name, icon, pinned, color-group); user-writable; router discards entirely
+
+**Enforcement:**
+- [ ] Tag router as single enforcement point — pre-mutation (BLOCK / COERCE / PERMIT), post-mutation audit record
+- [ ] Compliance rules NEVER reference 3tched or UI tags — enforced at rule parse time
+- [ ] Cascading mutation closure — evaluate full object graph before any CoW lands (atomic Btrfs tx + tag router tx)
+- [ ] Rule conflict resolution — `override: true` compliance rules always win (strictest constraint)
+- [ ] OSCAL schema update path — Btrfs snapshot → re-evaluate all objects → mutation ledger records schema version delta
+
+**Sample compliance rules to implement:**
+- [ ] `gdpr-residency` — route eu-tagged objects to eu-west subvolume, deny non-EU replication
+- [ ] `gdpr-pii` — force cold tier, credentialed-only DBus subscribers, erasure audit on delete
+- [ ] `nis2-critical` — 60s snapshot interval, 7-year audit retention, SOC alert on change
+- [ ] `soc2-confidential` — cold tier, encrypt at rest, immutable access log
+
+---
+
+### [TODO] OVS Tool Layer — Migrate CLI stubs to rovs/native
+
+Discovered: `op-chat/src/tool_loader.rs` inline OVS tool stubs all call `ovs-vsctl`/`ovs-ofctl` via subprocess.
+`op-network::OvsdbClient` (rovs-ovsdb backed) already exists and is correct — tools just need to use it.
+
+- [ ] Replace `OvsListBridgesTool` — use `op_network::OvsdbClient` instead of `ovs-vsctl list-br`
+- [ ] Replace `OvsListPortsTool` — use `op_network::OvsdbClient` instead of `ovs-vsctl list-ports`
+- [ ] Replace `OvsShowBridgeTool` — native OVSDB query
+- [ ] Replace `OvsDumpFlowsTool` — use rovs-openflow instead of `ovs-ofctl dump-flows`
+- [ ] Register write tools: `OvsAddBridgeTool`, `OvsDelBridgeTool`, `OvsAddPortTool`, `OvsDelPortTool` — wired to `op_network::OvsdbClient`
+- [ ] Remove `systemd_*` tools from registration — this host uses s6, they do nothing useful
+- [ ] Add s6 service management tools (`s6_restart`, `s6_status`, `s6_start`, `s6_stop`)
+
+---
+
+### [BACKLOG] Infrastructure
+- [ ] Fix `ovsbr0-static` `shell_up` — references `grpc-bridge` but interface is `grpc-uplink`
+- [ ] Qdrant container setup — previous attempt failed; needs Debian trixie image
+- [ ] Re-vectorize 97 repos lost in Btrfs failure (OSCAL + compliance repos)
+- [ ] NVIDIA Inception application
+- [ ] axon-trace-ui — connect to live DBus object tree via tag-routed signal feed

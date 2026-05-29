@@ -236,7 +236,11 @@ impl Tool for NotebookLmTool {
         }
 
         Err(last_error.unwrap_or_else(|| {
-            anyhow::anyhow!("NotebookLM tool '{}' failed after {} retries", self.name, MAX_RETRIES)
+            anyhow::anyhow!(
+                "NotebookLM tool '{}' failed after {} retries",
+                self.name,
+                MAX_RETRIES
+            )
         }))
     }
 }

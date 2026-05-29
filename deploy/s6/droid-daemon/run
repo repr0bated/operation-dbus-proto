@@ -1,0 +1,10 @@
+#!/bin/sh
+export HOME="${HOME:-/home/jeremy}"
+export PATH="/home/jeremy/.local/bin:/usr/local/bin:/usr/bin:/bin"
+
+# Load local secrets (e.g. FACTORY_API_KEY) if available
+if [ -f /home/jeremy/.bash_secrets ]; then
+    . /home/jeremy/.bash_secrets
+fi
+
+exec s6-setuidgid jeremy /home/jeremy/.local/bin/droid daemon

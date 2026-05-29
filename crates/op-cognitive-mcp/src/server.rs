@@ -113,10 +113,12 @@ impl CognitiveMcpServer {
 
         tonic::transport::Server::builder()
             .accept_http1(true)
-            .add_service(tonic_web::enable(CognitiveToolServiceServer::with_interceptor(
-                grpc_service,
-                crate::interceptor::ghostbridge_interceptor,
-            )))
+            .add_service(tonic_web::enable(
+                CognitiveToolServiceServer::with_interceptor(
+                    grpc_service,
+                    crate::interceptor::ghostbridge_interceptor,
+                ),
+            ))
             .add_service(tonic_web::enable(reflection))
             .add_service(tonic_web::enable(health_service))
             .serve(socket_addr)
@@ -139,9 +141,8 @@ impl CognitiveMcpServer {
         let grpc_gemini = self.gemini_fallback.clone();
 
         let grpc_handle = tokio::spawn(async move {
-            let grpc_service = CognitiveGrpcService::new(
-                grpc_memory, grpc_session, grpc_quota, grpc_gemini,
-            );
+            let grpc_service =
+                CognitiveGrpcService::new(grpc_memory, grpc_session, grpc_quota, grpc_gemini);
 
             let reflection = tonic_reflection::server::Builder::configure()
                 .register_encoded_file_descriptor_set(crate::proto::FILE_DESCRIPTOR_SET)
@@ -158,10 +159,12 @@ impl CognitiveMcpServer {
 
             tonic::transport::Server::builder()
                 .accept_http1(true)
-                .add_service(tonic_web::enable(CognitiveToolServiceServer::with_interceptor(
-                    grpc_service,
-                    crate::interceptor::ghostbridge_interceptor,
-                )))
+                .add_service(tonic_web::enable(
+                    CognitiveToolServiceServer::with_interceptor(
+                        grpc_service,
+                        crate::interceptor::ghostbridge_interceptor,
+                    ),
+                ))
                 .add_service(tonic_web::enable(reflection))
                 .add_service(tonic_web::enable(health_service))
                 .serve(socket_addr)

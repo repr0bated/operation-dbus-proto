@@ -322,10 +322,7 @@ mod tests {
     #[test]
     fn extract_ip_accepts_unbracketed_ipv6_without_port() {
         let mut h = HeaderMap::new();
-        h.insert(
-            "x-forwarded-for",
-            HeaderValue::from_static("2001:db8::1"),
-        );
+        h.insert("x-forwarded-for", HeaderValue::from_static("2001:db8::1"));
         let peer = loopback();
         assert_eq!(extract_ip(&h, Some(&peer)), "2001:db8::1");
     }

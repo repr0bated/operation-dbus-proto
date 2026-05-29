@@ -11,11 +11,11 @@
 
 use memmap2::MmapOptions;
 use std::collections::HashSet;
+use std::env;
 use std::fs::{self, File};
 use std::io::Write;
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::env;
 
 pub const SHM_SLED_PATH: &str = "/dev/shm/plugin_schema.dat";
 pub const SHM_XRAY_CONFIG: &str = "/dev/shm/xray-ghostbridge.json";
@@ -108,12 +108,25 @@ impl SubidTaxonomy {
 
         // Basic segment validation: lowercase ASCII + hyphens only
         for seg in [&component_type, &subject, &verb] {
-            if seg.is_empty() || !seg.chars().all(|c| c.is_ascii_lowercase() || c == '-' || c.is_ascii_digit()) {
-                return Err(format!("invalid segment '{seg}': must be lowercase ascii/digits/hyphens"));
+            if seg.is_empty()
+                || !seg
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c == '-' || c.is_ascii_digit())
+            {
+                return Err(format!(
+                    "invalid segment '{seg}': must be lowercase ascii/digits/hyphens"
+                ));
             }
         }
 
-        Ok(Self { category, component_type, subject, verb, facet, version })
+        Ok(Self {
+            category,
+            component_type,
+            subject,
+            verb,
+            facet,
+            version,
+        })
     }
 
     /// Reconstruct the canonical subid string.
@@ -147,106 +160,87 @@ impl std::fmt::Display for SubidTaxonomy {
 /// Written by SchemaEngine (`write_sled`), read by the Shuttle via mmap.
 /// Never touches disk; lives entirely in tmpfs (`/dev/shm`).
 ///
-/// ── Identity block ────────────────────────────────────────────────────────────
-///   wireguard_pubkey    [u8; 32]    raw Curve25519 peer key
-///   mutation_index      u64         monotonic schema mutation counter
-///   is_valid            bool        schema notarized and ready
-///   _pad                [u8; 7]     alignment
-///   hashed_footprint    [u8; 32]    SHA-256(wg_pubkey ∥ mutation_index)
-///   schema_uuid         [u8; 16]    OSCAL UUID (UUIDv5 bytes, network order)
-///
-/// ── Subid taxonomy block ──────────────────────────────────────────────────────
-///   subid               [u8; 64]    full subid string  "sch.network.plugin-schema.resolve@v1"
-///   subid_category      [u8; 8]     category segment   "sch"
-///   subid_component_type[u8; 32]    component-type     "network"
-///   subid_subject       [u8; 64]    subject segment    "plugin-schema"
-///   subid_verb          [u8; 32]    verb segment       "resolve"
-///   subid_facet         [u8; 32]    optional facet     "read-path"
-///   subid_version       u8          @vN number (0=unset)
-///   _pad2               [u8; 7]     alignment
-///
-/// ── Compliance block ──────────────────────────────────────────────────────────
-///   control_source      [u8; 32]    "NIST_SP_800_53_R5"
-///   control_refs        [u8; 128]   space-delimited control IDs  "AC-2 AC-3 CM-2"
-///   statement_refs      [u8; 128]   space-delimited statement refs
-///
-/// ── Routing block ─────────────────────────────────────────────────────────────
-///   nextdns_profile     [u8; 16]    NextDNS profile ID  "689ec7"
+/// Matches `.kiro/specs/3tched-schema-shuttle-xray-pipeline` exactly.
+/// Layout (152 bytes total):
+///   wireguard_pubkey    [u8; 32]   offset 0
+///   mutation_index      u64        offset 32
+///   hashed_footprint    [u8; 32]   offset 40   (Blake3)
+///   trace_id            [u8; 16]   offset 72   (UUID v4, network order)
+///   schema_version      u32        offset 88
+///   reserved            [u8; 60]   offset 92
 #[repr(C)]
 pub struct IdentitySled {
-    // ── Identity ──────────────────────────────────────────────────────────────
+    /// Raw Curve25519 WireGuard peer key.
     pub wireguard_pubkey: [u8; 32],
+    /// Monotonic schema mutation counter.
     pub mutation_index: u64,
-    pub is_valid: bool,
-    pub _pad: [u8; 7],
+    /// Blake3 hashed footprint of the canonicalized schema state.
     pub hashed_footprint: [u8; 32],
-    pub schema_uuid: [u8; 16],
-
-    // ── Subid taxonomy ────────────────────────────────────────────────────────
-    /// Full subid string, e.g. `"sch.network.plugin-schema.resolve@v1"`.
-    pub subid: [u8; 64],
-    /// Category segment: `"src"|"prj"|"sch"|"mut"|"obs"|"evt"|"exp"`.
-    pub subid_category: [u8; 8],
-    /// OSCAL component-type: `"software"|"service"|"network"|…`.
-    pub subid_component_type: [u8; 32],
-    /// Subject segment, e.g. `"plugin-schema"`.
-    pub subid_subject: [u8; 64],
-    /// Verb segment, e.g. `"resolve"`.
-    pub subid_verb: [u8; 32],
-    /// Optional facet, e.g. `"read-path"` (empty = unset).
-    pub subid_facet: [u8; 32],
-    /// `@vN` version number (0 = unset).
-    pub subid_version: u8,
-    pub _pad2: [u8; 7],
-
-    // ── Compliance ────────────────────────────────────────────────────────────
-    /// Compliance framework source, e.g. `"NIST_SP_800_53_R5"`.
-    pub control_source: [u8; 32],
-    /// Space-delimited control IDs, e.g. `"AC-2 AC-3 CM-2"`.
-    pub control_refs: [u8; 128],
-    /// Space-delimited statement-level refs (optional).
-    pub statement_refs: [u8; 128],
-
-    // ── Routing ───────────────────────────────────────────────────────────────
-    /// NextDNS profile ID, e.g. `"689ec7"`.
-    pub nextdns_profile: [u8; 16],
+    /// UUID v4 trace ID (16 raw bytes, network order).
+    pub trace_id: [u8; 16],
+    /// Schema version for compatibility.
+    pub schema_version: u32,
+    /// Reserved for future use (zero-initialized).
+    pub reserved: [u8; 60],
 }
 
 impl IdentitySled {
     pub const SIZE: usize = std::mem::size_of::<Self>();
 
-    fn read_fixed<const N: usize>(buf: &[u8; N]) -> &str {
-        let end = buf.iter().position(|&b| b == 0).unwrap_or(N);
-        std::str::from_utf8(&buf[..end]).unwrap_or("")
+    /// Hex-encode the trace_id field for header injection.
+    pub fn trace_id_hex(&self) -> String {
+        hex::encode(self.trace_id)
     }
 
-    pub fn subid_str(&self) -> &str { Self::read_fixed(&self.subid) }
-    pub fn subid_category_str(&self) -> &str { Self::read_fixed(&self.subid_category) }
-    pub fn subid_component_type_str(&self) -> &str { Self::read_fixed(&self.subid_component_type) }
-    pub fn subid_subject_str(&self) -> &str { Self::read_fixed(&self.subid_subject) }
-    pub fn subid_verb_str(&self) -> &str { Self::read_fixed(&self.subid_verb) }
-    pub fn subid_facet_str(&self) -> &str { Self::read_fixed(&self.subid_facet) }
-    pub fn control_source_str(&self) -> &str { Self::read_fixed(&self.control_source) }
-    pub fn control_refs_str(&self) -> &str { Self::read_fixed(&self.control_refs) }
-    pub fn statement_refs_str(&self) -> &str { Self::read_fixed(&self.statement_refs) }
-    pub fn nextdns_profile_str(&self) -> &str { Self::read_fixed(&self.nextdns_profile) }
-
-    /// Parse the subid fields back into a `SubidTaxonomy`, if the sled
-    /// carries a valid subid.
-    pub fn subid_taxonomy(&self) -> Option<SubidTaxonomy> {
-        let s = self.subid_str();
-        if s.is_empty() { return None; }
-        SubidTaxonomy::parse(s).ok()
+    /// Absolute Base validity check per the spec:
+    /// a sled is valid only if its footprint and trace_id are non-zero.
+    pub fn is_sled_valid(&self) -> bool {
+        self.hashed_footprint != [0u8; 32] && self.trace_id != [0u8; 16]
     }
 }
 
-/// Copy at most `N` bytes of `s` into a zeroed `[u8; N]` buffer.
-fn str_to_fixed<const N: usize>(s: &str) -> [u8; N] {
-    let mut buf = [0u8; N];
-    let bytes = s.as_bytes();
-    let len = bytes.len().min(N);
-    buf[..len].copy_from_slice(&bytes[..len]);
-    buf
+// ── Zero-Btrfs disk-I/O guard ───────────────────────────────────────────────
+
+/// Linux tmpfs magic number (`TMPFS_MAGIC`).
+const TMPFS_MAGIC: libc::c_long = 0x01021994;
+
+/// Abort if the directory backing `path` is not mounted on tmpfs.
+///
+/// The Shuttle must never trigger unintended Btrfs mutation loops.
+/// NVMe I/O is reserved strictly for the vectorized footprint transport
+/// (blockchain); all sled and Xray config writes must live in tmpfs.
+fn assert_tmpfs_or_abort(path: &str) -> std::io::Result<()> {
+    let parent = std::path::Path::new(path)
+        .parent()
+        .unwrap_or(std::path::Path::new("/"));
+
+    let c_path = std::ffi::CString::new(parent.as_os_str().as_encoded_bytes())
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+
+    let mut buf: libc::statfs = unsafe { std::mem::zeroed() };
+    let rc = unsafe { libc::statfs(c_path.as_ptr(), &mut buf) };
+    if rc != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+
+    if buf.f_type as libc::c_long != TMPFS_MAGIC {
+        tracing::error!(
+            path = %path,
+            parent = %parent.display(),
+            f_type = buf.f_type,
+            "ABORT: sled write would hit disk (not tmpfs). Zero-Btrfs rule violated."
+        );
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            format!(
+                "Zero-Btrfs Overhead violation: {} is on filesystem type {}, not tmpfs",
+                parent.display(),
+                buf.f_type
+            ),
+        ));
+    }
+
+    Ok(())
 }
 
 // ── Writer side (called from SchemaEngine) ───────────────────────────────────
@@ -254,7 +248,10 @@ fn str_to_fixed<const N: usize>(s: &str) -> [u8; N] {
 /// Atomically write the active sled into `/dev/shm`.
 ///
 /// Uses a tmp-file + rename so readers never see a partial write.
+/// Aborts if the target path is not on tmpfs (Zero-Btrfs Overhead rule).
 pub fn write_sled(sled: &IdentitySled) -> std::io::Result<()> {
+    assert_tmpfs_or_abort(SHM_SLED_PATH)?;
+
     let tmp = format!("{}.tmp", SHM_SLED_PATH);
     let bytes: &[u8] = unsafe {
         std::slice::from_raw_parts(sled as *const IdentitySled as *const u8, IdentitySled::SIZE)
@@ -301,7 +298,9 @@ pub struct SocketEntry {
 /// Format: `label:/path/to/sock:port[,…]`
 /// Example: `qdrant:/run/qdrant.sock:6334`
 pub fn socket_entries_from_env() -> Vec<SocketEntry> {
-    let Ok(raw) = env::var("UNIX_SOCKET_ENDPOINTS") else { return vec![] };
+    let Ok(raw) = env::var("UNIX_SOCKET_ENDPOINTS") else {
+        return vec![];
+    };
     raw.split(',')
         .filter_map(|entry| {
             // Split into exactly 3 parts: label, path, port
@@ -325,7 +324,15 @@ fn write_xray_config(
     short_id: &str,
 ) -> std::io::Result<()> {
     let sockets = socket_entries_from_env();
-    write_xray_config_with_sockets(footprint, trace_id, nextdns_profile, uuid, private_key, short_id, &sockets)
+    write_xray_config_with_sockets(
+        footprint,
+        trace_id,
+        nextdns_profile,
+        uuid,
+        private_key,
+        short_id,
+        &sockets,
+    )
 }
 
 fn write_xray_config_with_sockets(
@@ -340,8 +347,9 @@ fn write_xray_config_with_sockets(
     // Build socket inbounds: one dokodemo-door per unix socket endpoint.
     let socket_inbounds: String = sockets
         .iter()
-        .map(|s| format!(
-            r#",
+        .map(|s| {
+            format!(
+                r#",
     {{
       "tag": "{label}-in",
       "port": {port},
@@ -349,16 +357,18 @@ fn write_xray_config_with_sockets(
       "protocol": "dokodemo-door",
       "settings": {{ "network": "tcp", "address": "127.0.0.1", "port": {port} }}
     }}"#,
-            label = s.label,
-            port = s.port,
-        ))
+                label = s.label,
+                port = s.port,
+            )
+        })
         .collect();
 
     // Build socket outbounds: freedom via xray domain-socket transport.
     let socket_outbounds: String = sockets
         .iter()
-        .map(|s| format!(
-            r#",
+        .map(|s| {
+            format!(
+                r#",
     {{
       "tag": "to-{label}",
       "protocol": "freedom",
@@ -367,19 +377,22 @@ fn write_xray_config_with_sockets(
         "dsSettings": {{ "path": "{path}", "abstract": false, "padding": false }}
       }}
     }}"#,
-            label = s.label,
-            path = s.path,
-        ))
+                label = s.label,
+                path = s.path,
+            )
+        })
         .collect();
 
     // Build socket routing rules: inbound tag → outbound tag.
     let socket_rules: String = sockets
         .iter()
-        .map(|s| format!(
-            r#",
+        .map(|s| {
+            format!(
+                r#",
       {{ "type": "field", "inboundTag": ["{label}-in"], "outboundTag": "to-{label}" }}"#,
-            label = s.label,
-        ))
+                label = s.label,
+            )
+        })
         .collect();
 
     let config = format!(
@@ -431,8 +444,7 @@ fn write_xray_config_with_sockets(
     {{
       "tag": "to-grpc-bridge",
       "protocol": "freedom",
-      "sendThrough": "10.200.0.1",
-      "settings": {{ "redirect": "10.200.0.2:50051" }},
+      "settings": {{ "redirect": "127.0.0.1:18789" }},
       "streamSettings": {{
         "network": "grpc",
         "sockopt": {{ "tcpNoDelay": true, "mark": 255 }},
@@ -523,147 +535,89 @@ fn decode_wg_pubkey(b64: &str) -> [u8; 32] {
         .unwrap_or([0u8; 32])
 }
 
-/// Decompose a subid string into taxonomy fixed buffers.
-///
-/// Parses the string (best-effort; invalid subids are stored as-is in `subid`
-/// with the component fields left zeroed).
-fn subid_to_fields(subid_str: &str) -> (
-    [u8; 64],  // subid
-    [u8; 8],   // category
-    [u8; 32],  // component_type
-    [u8; 64],  // subject
-    [u8; 32],  // verb
-    [u8; 32],  // facet
-    u8,        // version
-) {
-    let subid = str_to_fixed::<64>(subid_str);
-    match SubidTaxonomy::parse(subid_str) {
-        Ok(tax) => (
-            subid,
-            str_to_fixed::<8>(tax.category.as_str()),
-            str_to_fixed::<32>(&tax.component_type),
-            str_to_fixed::<64>(&tax.subject),
-            str_to_fixed::<32>(&tax.verb),
-            str_to_fixed::<32>(tax.facet.as_deref().unwrap_or("")),
-            tax.version,
-        ),
-        Err(_) => (
-            subid,
-            [0u8; 8],
-            [0u8; 32],
-            [0u8; 64],
-            [0u8; 32],
-            [0u8; 32],
-            0,
-        ),
-    }
-}
-
 /// Build and atomically write the sled from live WireGuard state.
 ///
-/// Fields read from environment variables:
-///   SCHEMA_UUID, SCHEMA_SUBID, SCHEMA_CONTROL_SOURCE,
-///   SCHEMA_CONTROL_REFS, SCHEMA_STATEMENT_REFS, NEXTDNS_PROFILE_ID
+/// Reads `GB_TRACE_ID` from environment to propagate an existing trace;
+/// if absent, mints a fresh UUID v4.  All extra metadata (subid, compliance,
+/// routing) lives in environment variables — the sled itself is the spec
+/// layout and nothing more.
 pub fn write_sled_from_wg(peer_pubkey: &str) -> std::io::Result<()> {
-    use sha2::{Digest, Sha256};
-
     let wireguard_pubkey = decode_wg_pubkey(peer_pubkey);
     let mutation_index = MUTATION_INDEX.fetch_add(1, Ordering::Relaxed);
-    let mut hasher = Sha256::new();
-    hasher.update(&wireguard_pubkey);
-    hasher.update(mutation_index.to_le_bytes());
-    let hashed_footprint: [u8; 32] = hasher.finalize().into();
 
-    let subid_str = env::var("SCHEMA_SUBID").unwrap_or_default();
-    if !subid_str.is_empty() {
-        if let Err(e) = SubidTaxonomy::parse(&subid_str) {
-            tracing::warn!(subid = %subid_str, error = %e, "SCHEMA_SUBID failed taxonomy validation — stored as-is");
-        }
-    }
-    let (subid, subid_category, subid_component_type, subid_subject, subid_verb, subid_facet, subid_version) =
-        subid_to_fields(&subid_str);
+    // Blake3 Strike/Etch: bind pubkey to the canonical schema catalog in shm.
+    // The footprint is a direct function of the single source of truth.
+    let schema_catalog_hash = std::fs::read("/dev/shm/plugin_schemas.json")
+        .map(|bytes| blake3::hash(&bytes))
+        .unwrap_or_else(|_| blake3::Hash::from([0u8; 32]));
+
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(&wireguard_pubkey);
+    hasher.update(schema_catalog_hash.as_bytes());
+    hasher.update(&mutation_index.to_le_bytes());
+    let hashed_footprint = hasher.finalize().into();
+
+    // Trace propagation: reuse existing UUID if present, else mint v4
+    let trace_id: [u8; 16] = if let Ok(existing) = env::var("GB_TRACE_ID") {
+        hex::decode(existing.trim())
+            .ok()
+            .and_then(|v| v.try_into().ok())
+            .unwrap_or_else(|| uuid::Uuid::new_v4().into_bytes())
+    } else {
+        uuid::Uuid::new_v4().into_bytes()
+    };
 
     let sled = IdentitySled {
         wireguard_pubkey,
         mutation_index,
-        is_valid: true,
-        _pad: [0u8; 7],
         hashed_footprint,
-        schema_uuid: parse_uuid_bytes(&env::var("SCHEMA_UUID").unwrap_or_default()),
-        subid,
-        subid_category,
-        subid_component_type,
-        subid_subject,
-        subid_verb,
-        subid_facet,
-        subid_version,
-        _pad2: [0u8; 7],
-        control_source: str_to_fixed::<32>(
-            &env::var("SCHEMA_CONTROL_SOURCE").unwrap_or_else(|_| "NIST_SP_800_53_R5".into()),
-        ),
-        control_refs: str_to_fixed::<128>(&env::var("SCHEMA_CONTROL_REFS").unwrap_or_default()),
-        statement_refs: str_to_fixed::<128>(&env::var("SCHEMA_STATEMENT_REFS").unwrap_or_default()),
-        nextdns_profile: str_to_fixed::<16>(
-            &env::var("NEXTDNS_PROFILE_ID").unwrap_or_else(|_| "689ec7".into()),
-        ),
+        trace_id,
+        schema_version: 1,
+        reserved: [0u8; 60],
     };
     write_sled(&sled)
 }
 
 /// Write the sled with fully explicit fields — called from SchemaEngine on mutation.
+///
+/// `trace_id` is passed as hex; if empty a fresh UUID v4 is minted.
 pub fn write_sled_full(
     peer_pubkey: &str,
     mutation_index: u64,
-    uuid_str: &str,
-    subid_str: &str,
-    control_source_str: &str,
-    control_refs_str: &str,
-    statement_refs_str: &str,
-    nextdns_profile_str: &str,
+    trace_id_hex: &str,
 ) -> std::io::Result<()> {
-    use sha2::{Digest, Sha256};
-
     let wireguard_pubkey = decode_wg_pubkey(peer_pubkey);
-    let mut hasher = Sha256::new();
-    hasher.update(&wireguard_pubkey);
-    hasher.update(mutation_index.to_le_bytes());
-    let hashed_footprint: [u8; 32] = hasher.finalize().into();
 
-    let (subid, subid_category, subid_component_type, subid_subject, subid_verb, subid_facet, subid_version) =
-        subid_to_fields(subid_str);
+    // Blake3 Strike/Etch: bind pubkey to the canonical schema catalog in shm.
+    // The footprint is a direct function of the single source of truth.
+    let schema_catalog_hash = std::fs::read("/dev/shm/plugin_schemas.json")
+        .map(|bytes| blake3::hash(&bytes))
+        .unwrap_or_else(|_| blake3::Hash::from([0u8; 32]));
+
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(&wireguard_pubkey);
+    hasher.update(schema_catalog_hash.as_bytes());
+    hasher.update(&mutation_index.to_le_bytes());
+    let hashed_footprint = hasher.finalize().into();
+
+    let trace_id: [u8; 16] = if trace_id_hex.is_empty() {
+        uuid::Uuid::new_v4().into_bytes()
+    } else {
+        hex::decode(trace_id_hex.trim())
+            .ok()
+            .and_then(|v| v.try_into().ok())
+            .unwrap_or_else(|| uuid::Uuid::new_v4().into_bytes())
+    };
 
     let sled = IdentitySled {
         wireguard_pubkey,
         mutation_index,
-        is_valid: true,
-        _pad: [0u8; 7],
         hashed_footprint,
-        schema_uuid: parse_uuid_bytes(uuid_str),
-        subid,
-        subid_category,
-        subid_component_type,
-        subid_subject,
-        subid_verb,
-        subid_facet,
-        subid_version,
-        _pad2: [0u8; 7],
-        control_source: str_to_fixed::<32>(control_source_str),
-        control_refs: str_to_fixed::<128>(control_refs_str),
-        statement_refs: str_to_fixed::<128>(statement_refs_str),
-        nextdns_profile: str_to_fixed::<16>(nextdns_profile_str),
+        trace_id,
+        schema_version: 1,
+        reserved: [0u8; 60],
     };
     write_sled(&sled)
-}
-
-/// Parse a hyphenated UUID string into 16 raw bytes. Returns zeros on failure.
-fn parse_uuid_bytes(s: &str) -> [u8; 16] {
-    let hex: String = s.chars().filter(|c| c.is_ascii_hexdigit()).collect();
-    if hex.len() != 32 { return [0u8; 16]; }
-    let mut out = [0u8; 16];
-    for i in 0..16 {
-        out[i] = u8::from_str_radix(&hex[i*2..i*2+2], 16).unwrap_or(0);
-    }
-    out
 }
 
 /// Poll `wg show <iface> latest-handshakes` and re-write the sled + xray config
@@ -678,28 +632,48 @@ pub fn watch_wireguard_handshakes(iface: &str) {
 
         // wg0 lives inside the wg-xray Incus container, not on the host.
         let Ok(out) = Command::new("incus")
-            .args(["exec", "wg-xray", "--", "wg", "show", &iface, "latest-handshakes"])
+            .args([
+                "exec",
+                "wg-xray",
+                "--",
+                "wg",
+                "show",
+                &iface,
+                "latest-handshakes",
+            ])
             .output()
-        else { continue };
+        else {
+            continue;
+        };
 
-        if !out.status.success() { continue }
+        if !out.status.success() {
+            continue;
+        }
 
         let stdout = String::from_utf8_lossy(&out.stdout);
         for line in stdout.lines() {
             let mut parts = line.split('\t');
-            let (Some(pubkey), Some(ts_str)) = (parts.next(), parts.next()) else { continue };
+            let (Some(pubkey), Some(ts_str)) = (parts.next(), parts.next()) else {
+                continue;
+            };
             let ts: u64 = ts_str.trim().parse().unwrap_or(0);
-            if ts == 0 { continue }
+            if ts == 0 {
+                continue;
+            }
 
             // Treat any handshake within the last 3 minutes as "new" if not yet seen
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
-            if now.saturating_sub(ts) > 180 { continue }
+            if now.saturating_sub(ts) > 180 {
+                continue;
+            }
 
             let key = format!("{}:{}", pubkey, ts);
-            if seen.contains(&key) { continue }
+            if seen.contains(&key) {
+                continue;
+            }
             seen.insert(key);
 
             tracing::info!(peer = %pubkey, "WireGuard handshake → updating identity sled");
@@ -709,19 +683,22 @@ pub fn watch_wireguard_handshakes(iface: &str) {
                 continue;
             }
 
-            // Re-bake xray config — pull NextDNS profile from sled, not env.
+            // Re-bake xray config — NextDNS profile from env, trace_id from sled.
             if let Ok((ptr, _mmap)) = read_sled() {
                 let sled = unsafe { &*ptr };
                 let footprint_hex = hex::encode(sled.hashed_footprint);
-                let trace_id = format!("{}-{}", hex::encode(&sled.wireguard_pubkey[..4]), sled.mutation_index);
-                let profile = {
-                    let p = sled.nextdns_profile_str();
-                    if p.is_empty() { "689ec7".into() } else { p.to_string() }
-                };
-                let uuid    = env::var("XRAY_UUID").unwrap_or_else(|_| "40813c05-4a7c-4d5b-b027-33912551287f".to_string());
-                let privkey = env::var("XRAY_PRIVATE_KEY").unwrap_or_else(|_| "-MULA7gIbk_58CKa4TNHovpYNt192NUkPlQF7f3caWo".to_string());
-                let short   = env::var("XRAY_SHORT_ID").unwrap_or_else(|_| "2a32c53278372687".to_string());
-                if let Err(e) = write_xray_config(&footprint_hex, &trace_id, &profile, &uuid, &privkey, &short) {
+                let trace_id = sled.trace_id_hex();
+                let profile = env::var("NEXTDNS_PROFILE_ID")
+                    .unwrap_or_else(|_| "689ec7".to_string());
+                let uuid = env::var("XRAY_UUID")
+                    .unwrap_or_else(|_| "40813c05-4a7c-4d5b-b027-33912551287f".to_string());
+                let privkey = env::var("XRAY_PRIVATE_KEY")
+                    .unwrap_or_else(|_| "-MULA7gIbk_58CKa4TNHovpYNt192NUkPlQF7f3caWo".to_string());
+                let short =
+                    env::var("XRAY_SHORT_ID").unwrap_or_else(|_| "2a32c53278372687".to_string());
+                if let Err(e) =
+                    write_xray_config(&footprint_hex, &trace_id, &profile, &uuid, &privkey, &short)
+                {
                     tracing::warn!("write_xray_config failed: {}", e);
                 }
             }
@@ -742,32 +719,31 @@ pub fn run_schema_shuttle() -> Result<(), Box<dyn std::error::Error>> {
 
     // 2. Extract Strike/Etch — hex-encode for env injection
     let footprint_hex = hex::encode(sled.hashed_footprint);
-    let trace_id = format!(
-        "{}-{}",
-        hex::encode(&sled.wireguard_pubkey[..4]),
-        sled.mutation_index
-    );
+    let trace_id = sled.trace_id_hex();
+    let wg_pubkey_hex = hex::encode(sled.wireguard_pubkey);
 
     // 3. Stamp into environment — zero Btrfs, zero disk I/O
     env::set_var("GB_FOOTPRINT", &footprint_hex);
     env::set_var("GB_TRACE_ID", &trace_id);
+    env::set_var("GB_WIREGUARD_PUBKEY", &wg_pubkey_hex);
 
-    // 4. Write stateless Xray config — NextDNS profile comes from sled, not env.
-    let nextdns_profile = {
-        let p = sled.nextdns_profile_str();
-        if p.is_empty() {
-            env::var("NEXTDNS_PROFILE_ID").unwrap_or_else(|_| "689ec7".to_string())
-        } else {
-            p.to_string()
-        }
-    };
+    // 4. Write stateless Xray config — NextDNS profile from env, not sled.
+    let nextdns_profile = env::var("NEXTDNS_PROFILE_ID")
+        .unwrap_or_else(|_| "689ec7".to_string());
     let xray_uuid = env::var("XRAY_UUID")
         .unwrap_or_else(|_| "40813c05-4a7c-4d5b-b027-33912551287f".to_string());
     let xray_privkey = env::var("XRAY_PRIVATE_KEY")
         .unwrap_or_else(|_| "-MULA7gIbk_58CKa4TNHovpYNt192NUkPlQF7f3caWo".to_string());
-    let xray_short_id = env::var("XRAY_SHORT_ID")
-        .unwrap_or_else(|_| "2a32c53278372687".to_string());
-    write_xray_config(&footprint_hex, &trace_id, &nextdns_profile, &xray_uuid, &xray_privkey, &xray_short_id)?;
+    let xray_short_id =
+        env::var("XRAY_SHORT_ID").unwrap_or_else(|_| "2a32c53278372687".to_string());
+    write_xray_config(
+        &footprint_hex,
+        &trace_id,
+        &nextdns_profile,
+        &xray_uuid,
+        &xray_privkey,
+        &xray_short_id,
+    )?;
 
     tracing::info!(
         footprint = %footprint_hex,

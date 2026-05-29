@@ -11,7 +11,8 @@ use crate::state::AppState;
 fn categorize_tool(name: &str) -> &'static str {
     if name.starts_with("ovs_") {
         "ovs"
-    } else if name.starts_with("systemd_") || name.starts_with("dinit_") {
+    } else if name.starts_with("systemd_") || name.starts_with("dinit_") || name.starts_with("s6_")
+    {
         "service"
     } else if name.starts_with("nm_") || name.starts_with("connman.") {
         "network"
@@ -194,26 +195,21 @@ async fn get_key_services(_client: &op_grpc_bridge::RemoteOperationClient) -> Ve
         "op-web",
     ];
 
-    // Try to get statuses via doas dinitctl list
-    let out = tokio::process::Command::new("doas")
-        .arg("dinitctl")
-        .arg("list")
+    // Try to get statuses via s6-rc -a -l /run/s6-rc list
+    let out = tokio::process::Command::new("s6-rc")
+        .args(["-a", "-l", "/run/s6-rc", "list"])
         .output()
         .await;
 
     if let Ok(output) = out {
         let stdout = String::from_utf8_lossy(&output.stdout);
+        // s6-rc -a list prints one running service name per line
+        let running: std::collections::HashSet<&str> = stdout.lines().map(|l| l.trim()).collect();
         for name in key_services {
-            // Check for [{+}] which means started/active
-            let status = if stdout
-                .lines()
-                .any(|l| l.contains(name) && (l.contains("{+}") || l.contains("[+]")))
-            {
+            let status = if running.contains(name) {
                 "active".to_string()
-            } else if stdout.lines().any(|l| l.contains(name)) {
-                "inactive".to_string()
             } else {
-                "unknown".to_string()
+                "inactive".to_string()
             };
             services.push(ServiceStatus {
                 name: name.to_string(),
@@ -221,7 +217,7 @@ async fn get_key_services(_client: &op_grpc_bridge::RemoteOperationClient) -> Ve
             });
         }
     } else {
-        // Fallback if dinitctl fails
+        // Fallback if s6-rc is unavailable
         for name in key_services {
             services.push(ServiceStatus {
                 name: name.to_string(),

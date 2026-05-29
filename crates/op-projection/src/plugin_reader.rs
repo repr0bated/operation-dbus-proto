@@ -11,15 +11,13 @@ use op_plugins::DefaultPluginRegistry;
 use op_state::StatePlugin;
 use op_state_store::{
     builtin_plugin_schema, Constraint as RuntimeConstraint, FieldSchema as RuntimeFieldSchema,
-    FieldType as RuntimeFieldType, PluginSchema as RuntimePluginSchema, SqliteStore, StateStore,
+    FieldType as RuntimeFieldType, PluginSchema as RuntimePluginSchema, MemoryStore, StateStore,
 };
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
 use std::future::Future;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
-
-const STATE_STORE_PATH: &str = "/var/lib/op-dbus/state.db";
 
 struct LoadedPlugin {
     name: String,
@@ -59,22 +57,9 @@ impl SystemPluginReader {
     }
 
     /// Creates a new SystemPluginReader backed by the default runtime plugins.
+    /// Uses MemoryStore — no SQLite, zero drift. Current state = desired state.
     pub async fn new() -> Result<Self> {
-        let state_store: Arc<dyn StateStore> = match SqliteStore::new(STATE_STORE_PATH).await {
-            Ok(store) => Arc::new(store),
-            Err(error) => {
-                warn!(
-                    path = STATE_STORE_PATH,
-                    error = %error,
-                    "Falling back to in-memory state store for plugin projection bootstrap"
-                );
-                Arc::new(
-                    SqliteStore::new(":memory:")
-                        .await
-                        .context("failed to create in-memory state store")?,
-                )
-            }
-        };
+        let state_store: Arc<dyn StateStore> = Arc::new(MemoryStore::new());
 
         let registry = DefaultPluginRegistry::new(state_store);
         let plugins = registry.load_default_plugins().await?;
@@ -419,7 +404,8 @@ impl PluginReader for SystemPluginReader {
     }
 }
 
-fn convert_schema(schema: &RuntimePluginSchema) -> PluginSchema {
+/// Convert an `op_state_store::PluginSchema` into an `op_projection::PluginSchema`.
+pub fn convert_schema(schema: &RuntimePluginSchema) -> PluginSchema {
     PluginSchema {
         name: schema.name.clone(),
         version: schema.version.clone(),
