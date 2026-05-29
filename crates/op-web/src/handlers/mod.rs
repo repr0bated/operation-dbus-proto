@@ -1,6 +1,7 @@
 //! HTTP Request Handlers
 
 pub mod agents;
+pub mod analytics;
 pub mod chat;
 pub mod dashboard;
 pub mod health;
@@ -10,6 +11,7 @@ pub mod mail;
 pub mod mcp;
 pub mod openclaw;
 pub mod privacy;
+pub mod schema;
 pub mod status;
 pub mod tools;
 pub mod users;

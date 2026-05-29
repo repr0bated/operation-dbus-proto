@@ -23,6 +23,8 @@ pub struct ChatSession {
     pub is_controller: bool,
     /// WireGuard peer public key
     pub peer_pubkey: Option<String>,
+    /// Container ID for memory scoping (work/home/barmitzvah)
+    pub container_id: Option<String>,
 }
 
 impl ChatSession {
@@ -39,6 +41,7 @@ impl ChatSession {
             auth_session_id: None,
             is_controller: false,
             peer_pubkey: None,
+            container_id: None,
         }
     }
 
@@ -55,6 +58,7 @@ impl ChatSession {
             auth_session_id: None,
             is_controller: false,
             peer_pubkey: None,
+            container_id: None,
         }
     }
 
@@ -75,6 +79,7 @@ impl ChatSession {
             auth_session_id: Some(auth_session_id),
             is_controller,
             peer_pubkey,
+            container_id: None,
         }
     }
 

@@ -30,6 +30,8 @@ pub struct ChatRequest {
     pub model: Option<String>,
     #[serde(default)]
     pub user_id: Option<String>, // For user-specific API credentials
+    #[serde(default)]
+    pub container_id: Option<String>, // Privacy container for memory scoping
 }
 
 #[derive(Debug, Deserialize)]
@@ -42,11 +44,18 @@ pub struct CreateSessionRequest {
 pub struct ChatResponse {
     pub success: bool,
     pub message: String,
+    // Frontend-compatible aliases (openclaw/ChatPage.tsx expects these)
+    pub content: String,
+    pub role: String,
+    pub id: String,
+    pub tool_name: Option<String>,
     pub error: Option<String>,
     pub tools_executed: Vec<String>,
     pub session_id: String,
     pub model: String,
     pub provider: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub container_id: Option<String>,
 }
 
 /// POST /api/chat - Main chat endpoint (Blocking)
@@ -64,11 +73,27 @@ pub async fn chat_handler(
         .session_id
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
-    {
-        let mut conversations = state.conversations.write().await;
-        let history = conversations.entry(session_id.clone()).or_default();
-        history.push(ChatMessage::user(request.message.clone()));
-    }
+    // Ensure session exists
+    let _ = state.conversations.create_session(session_id.clone(), None).await;
+
+    // Resolve container_id: session-persisted first, then request, then user store
+    let container_id = if let Some(cid) = state.conversations.get_container_id(&session_id).await {
+        Some(cid)
+    } else if let Some(cid) = request.container_id.clone() {
+        // Persist in session for subsequent messages
+        let _ = state.conversations.set_container_id(&session_id, cid.clone()).await;
+        Some(cid)
+    } else if let Some(user_id) = request.user_id.clone() {
+        let cid = state.user_store.get_user(&user_id).await
+            .and_then(|u| u.privacy_container_name);
+        if let Some(ref c) = cid {
+            let _ = state.conversations.set_container_id(&session_id, c.clone()).await;
+        }
+        cid
+    } else {
+        None
+    };
+    let _ = state.conversations.append_message(&session_id, ChatMessage::user(request.message.clone())).await;
 
     match state
         .orchestrator
@@ -81,10 +106,7 @@ pub async fn chat_handler(
             let response_message = result.message.clone();
 
             if result.success {
-                let mut conversations = state.conversations.write().await;
-                if let Some(history) = conversations.get_mut(&session_id) {
-                    history.push(ChatMessage::assistant(response_message.clone()));
-                }
+                let _ = state.conversations.append_message(&session_id, ChatMessage::assistant(response_message.clone())).await;
             }
 
             Json(ChatResponse {
@@ -94,6 +116,14 @@ pub async fn chat_handler(
                 } else {
                     String::new()
                 },
+                content: if result.success {
+                    response_message.clone()
+                } else {
+                    String::new()
+                },
+                role: "assistant".to_string(),
+                id: format!("msg-{}", uuid::Uuid::new_v4()),
+                tool_name: None,
                 error: if result.success {
                     None
                 } else {
@@ -103,6 +133,7 @@ pub async fn chat_handler(
                 session_id,
                 model,
                 provider,
+                container_id: container_id.clone(),
             })
         }
         Err(e) => {
@@ -111,11 +142,16 @@ pub async fn chat_handler(
             Json(ChatResponse {
                 success: false,
                 message: String::new(),
+                content: e.to_string(),
+                role: "assistant".to_string(),
+                id: format!("msg-{}", uuid::Uuid::new_v4()),
+                tool_name: None,
                 error: Some(e.to_string()),
                 tools_executed: vec![],
                 session_id,
                 model,
                 provider,
+                container_id,
             })
         }
     }
@@ -135,11 +171,8 @@ pub async fn chat_stream_handler(
     let message = request.message.clone();
     let session_clone = session_id.clone();
 
-    {
-        let mut conversations = state.conversations.write().await;
-        let history = conversations.entry(session_id.clone()).or_default();
-        history.push(ChatMessage::user(request.message.clone()));
-    }
+    let _ = state.conversations.create_session(session_id.clone(), None).await;
+    let _ = state.conversations.append_message(&session_id, ChatMessage::user(request.message.clone())).await;
 
     tokio::spawn(async move {
         let result = state_clone
@@ -186,9 +219,7 @@ pub async fn get_history_handler(
     Extension(state): Extension<Arc<AppState>>,
     Path(session_id): Path<String>,
 ) -> Json<Value> {
-    let conversations = state.conversations.read().await;
-
-    if let Some(history) = conversations.get(&session_id) {
+    if let Some(history) = state.conversations.get_history(&session_id).await {
         Json(json!({
             "session_id": session_id,
             "messages": history.iter().map(|m| json!({
@@ -206,27 +237,19 @@ pub async fn get_history_handler(
 
 /// GET /api/chat/sessions - List all chat sessions
 pub async fn list_sessions_handler(Extension(state): Extension<Arc<AppState>>) -> Json<Value> {
-    let conversations = state.conversations.read().await;
-
-    let sessions: Vec<Value> = conversations
-        .iter()
-        .map(|(session_id, history)| {
-            let title = if let Some(first_msg) = history.first() {
-                first_msg.content.chars().take(50).collect::<String>()
-            } else {
-                "Empty session".to_string()
-            };
-
+    let sessions: Vec<Value> = state.conversations.list_sessions().await
+        .into_iter()
+        .map(|(id, msg_count, title)| {
             json!({
-                "id": session_id,
+                "id": id,
                 "title": title,
                 "date": chrono::Utc::now().to_rfc3339(),
-                "messages": history.len()
+                "messages": msg_count
             })
         })
         .collect();
 
-    Json(json!(sessions))
+    Json(json!({ "sessions": sessions }))
 }
 
 /// POST /api/chat/sessions - Create a new chat session
@@ -237,10 +260,7 @@ pub async fn create_session_handler(
     let session_id = uuid::Uuid::new_v4().to_string();
     let title = payload.title.unwrap_or_else(|| "New Chat".to_string());
 
-    // Initialize empty conversation history
-    let mut conversations = state.conversations.write().await;
-    conversations.insert(session_id.clone(), vec![]);
-    drop(conversations);
+    let _ = state.conversations.create_session(session_id.clone(), Some(title.clone())).await;
 
     Json(json!({
         "id": session_id,
@@ -256,8 +276,7 @@ pub async fn delete_session_handler(
     Extension(state): Extension<Arc<AppState>>,
     Path(session_id): Path<String>,
 ) -> Json<Value> {
-    let mut conversations = state.conversations.write().await;
-    conversations.remove(&session_id);
+    let _ = state.conversations.delete_session(&session_id).await;
 
     Json(json!({
         "success": true,
@@ -326,16 +345,14 @@ pub async fn save_transcript_handler(
 
     // Check if session_id is provided (for existing conversations)
     if let Some(session_id) = params.get("session_id").and_then(|v| v.as_str()) {
-        let conversations = state.conversations.read().await;
-
-        if let Some(history) = conversations.get(session_id) {
+        if let Some(history) = state.conversations.get_history(session_id).await {
             if history.is_empty() {
                 return Json(json!({
                     "success": false,
                     "error": "No messages in conversation"
                 }));
             }
-            return save_transcript_to_file(history, filename.as_str(), Some(session_id)).await;
+            return save_transcript_to_file(&history, filename.as_str(), Some(session_id)).await;
         } else {
             return Json(json!({
                 "success": false,

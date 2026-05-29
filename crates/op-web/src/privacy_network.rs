@@ -1,11 +1,13 @@
-//! Host-level privacy network provisioning for wgcf-based architecture.
+//! Host-level privacy network provisioning — OVS switching fabric only.
 //
-// This matches the network design from the recent commit:
-// - wgcf tunnel (WireGuard WARP) created by systemd-networkd + netplan
-// - ovsbr0 bridge managed by netplan with renderer: openvswitch
-// - ovs-attach-ports.sh attaches wgcf + internal ports via OVSDB
-// - Xray as privacy ingress on 10.200.0.1
-// - priv_* internal ports for routing
+// Current architecture (Artix Linux + s6 + Incus + rovs):
+// - Host runs ovsbr0 via OVSDB (datapath=system or netdev for AF_XDP)
+// - All privacy services (Xray, mail) run inside Incus containers
+// - Containers have NO host interface — they communicate via Unix sockets
+//   through OVS internal ports using OpenFlow routing
+// - Xray ingress lives in wg-xray Incus container, NOT on host
+// - OpenFlow controller (also in wg-xray container) drives forwarding
+// - priv_* internal ports are created by ovs-attach-ports.sh
 
 use anyhow::{Context, Result};
 use op_network::{openflow::OpenFlowClient, OvsdbClient};
@@ -13,7 +15,6 @@ use std::path::Path;
 use tracing::{info, warn};
 
 const DEFAULT_BRIDGE: &str = "ovsbr0";
-const DEFAULT_WGCF_TUNNEL: &str = "wgcf";
 const DEFAULT_PRIVACY_PORTS: &[&str] = &[
     "priv_xray",
     "priv_warp",
@@ -21,15 +22,14 @@ const DEFAULT_PRIVACY_PORTS: &[&str] = &[
     "ovsbr0-mgmt",
     "ovsbr0-sock",
 ];
-const DEFAULT_MGMT_CIDR: &str = "10.200.0.1/24"; // Matches Xray binding
-const DEFAULT_OPENFLOW_CONTROLLER: &str = "10.200.0.1:6653";
+const DEFAULT_MGMT_CIDR: &str = "10.200.0.1/24"; // Xray ingress IP (inside wg-xray container)
+const DEFAULT_OPENFLOW_CONTROLLER: &str = "10.200.0.1:6653"; // Controller inside wg-xray
 const DEFAULT_DATAPATH_TYPE: &str = "system";
 const DEFAULT_FAIL_MODE: &str = "standalone";
 
 #[derive(Debug, Clone)]
 pub struct PrivacyNetworkHostConfig {
     pub bridge_name: String,
-    pub wgcf_tunnel: String,
     pub privacy_ports: Vec<String>,
     pub management_cidr: String,
     pub openflow_controller: String,
@@ -43,8 +43,6 @@ impl PrivacyNetworkHostConfig {
         Self {
             bridge_name: std::env::var("PRIVACY_BRIDGE_NAME")
                 .unwrap_or_else(|_| DEFAULT_BRIDGE.to_string()),
-            wgcf_tunnel: std::env::var("PRIVACY_WGCF_TUNNEL")
-                .unwrap_or_else(|_| DEFAULT_WGCF_TUNNEL.to_string()),
             privacy_ports: std::env::var("PRIVACY_PORTS")
                 .map(|s| s.split(',').map(|s| s.trim().to_string()).collect())
                 .unwrap_or_else(|_| {
@@ -78,8 +76,8 @@ pub async fn ensure_host_privacy_network() -> Result<()> {
 
 async fn ensure_host_privacy_network_with_config(cfg: &PrivacyNetworkHostConfig) -> Result<()> {
     info!(
-        "Ensuring wgcf-based privacy network: bridge={} wgcf={} ports={:?}",
-        cfg.bridge_name, cfg.wgcf_tunnel, cfg.privacy_ports
+        "Ensuring OVS privacy fabric: bridge={} ports={:?}",
+        cfg.bridge_name, cfg.privacy_ports
     );
 
     let ovs = OvsdbClient::new();
@@ -89,7 +87,7 @@ async fn ensure_host_privacy_network_with_config(cfg: &PrivacyNetworkHostConfig)
         .await
         .context("Open vSwitch DB is unavailable; cannot provision privacy network")?;
 
-    // The bridge should be created by netplan, but ensure it exists
+    // The bridge should be created by netplan/op-ovsbr0-setup, but ensure it exists
     if !ovs
         .bridge_exists(&cfg.bridge_name)
         .await
@@ -119,17 +117,9 @@ async fn ensure_host_privacy_network_with_config(cfg: &PrivacyNetworkHostConfig)
         .await
         .context("Failed to list bridge ports")?;
 
-    // Ensure wgcf tunnel is attached to bridge (this is the key privacy tunnel)
-    if !existing_ports.iter().any(|p| p == &cfg.wgcf_tunnel) {
-        if Path::new(&format!("/sys/class/net/{}", cfg.wgcf_tunnel)).exists() {
-            ovs.add_port(&cfg.bridge_name, &cfg.wgcf_tunnel)
-                .await
-                .with_context(|| format!("Failed to add wgcf tunnel to bridge"))?;
-            info!("Attached wgcf tunnel to {}", cfg.bridge_name);
-        } else {
-            warn!("wgcf interface not found yet - will be attached by ovs-attach-ports service");
-        }
-    }
+    // NOTE: wgcf/Xray run inside Incus containers (wg-xray), not as host interfaces.
+    // Container traffic reaches the bridge via Unix sockets + OpenFlow routing.
+    // Do NOT attach wgcf as a host port — it does not exist on the host.
 
     // Ensure all privacy internal ports exist (created by ovs-attach-ports.sh)
     for port in &cfg.privacy_ports {
@@ -141,16 +131,14 @@ async fn ensure_host_privacy_network_with_config(cfg: &PrivacyNetworkHostConfig)
         }
     }
 
-    // Bring up critical interfaces
-    for iface in [&cfg.bridge_name, &cfg.wgcf_tunnel] {
-        if Path::new(&format!("/sys/class/net/{}", iface)).exists() {
-            op_network::rtnetlink::link_up(iface)
-                .await
-                .with_context(|| format!("Failed to bring up interface {}", iface))?;
-        }
+    // Bring up host bridge only (containers have no host interfaces)
+    if Path::new(&format!("/sys/class/net/{}", cfg.bridge_name)).exists() {
+        op_network::rtnetlink::link_up(&cfg.bridge_name)
+            .await
+            .with_context(|| format!("Failed to bring up interface {}", cfg.bridge_name))?;
     }
 
-    // Bring up privacy ports
+    // Bring up privacy internal ports
     for port in &cfg.privacy_ports {
         if Path::new(&format!("/sys/class/net/{}", port)).exists() {
             op_network::rtnetlink::link_up(port)
@@ -160,19 +148,22 @@ async fn ensure_host_privacy_network_with_config(cfg: &PrivacyNetworkHostConfig)
     }
 
     // Verify Xray ingress is available on the management IP
+    // NOTE: Xray runs inside the wg-xray Incus container, not on the host.
+    // The management IP is reachable through OVS internal ports + OpenFlow.
     info!(
-        "Privacy network ready. Xray ingress should be listening on {}",
+        "Privacy network ready. Xray ingress (in wg-xray container) should be listening on {}",
         cfg.xray_ingress_ip
     );
 
     // Probe OpenFlow controller if available
+    // NOTE: Controller runs inside wg-xray container, reachable via OVS tunnel.
     if let Ok(controller_addr) = cfg.openflow_controller.parse::<std::net::SocketAddr>() {
         match OpenFlowClient::connect(controller_addr).await {
-            Ok(_) => info!("OpenFlow controller reachable"),
+            Ok(_) => info!("OpenFlow controller reachable (via container path)"),
             Err(e) => warn!("OpenFlow controller not ready yet: {}", e),
         }
     }
 
-    info!("wgcf-based privacy network provisioning complete");
+    info!("OVS privacy fabric provisioning complete (containerized services via Unix sockets)");
     Ok(())
 }

@@ -7,15 +7,17 @@ use memmap2::MmapOptions;
 use op_identity::IdentitySled;
 use op_state_store::{FieldType, PluginSchema};
 use qdrant_client::qdrant::{
-    Condition, Filter, QueryPointsBuilder, RetrievedPoint, ScoredPoint, ScrollPointsBuilder,
+    Condition, Filter, PointStruct, QueryPointsBuilder, RetrievedPoint, ScoredPoint,
+    ScrollPointsBuilder, UpsertPointsBuilder,
 };
-use qdrant_client::Qdrant;
+use qdrant_client::{Payload, Qdrant};
 use reqwest::Client;
 use serde::Serialize;
 use serde_json::Value;
 
 const DEFAULT_QDRANT_URL: &str = "http://127.0.0.1:6334";
 const DEFAULT_COLLECTION_NAME: &str = "ctl_plane_reasoning_episodes";
+const DEFAULT_USER_MEMORY_COLLECTION: &str = "user_memory";
 const DEFAULT_SCHEMA_SLED_PATH: &str = "/dev/shm/plugin_schema.dat";
 const DEFAULT_TRACE_LIMIT: u32 = 5;
 const DEFAULT_VOYAGE_API_URL: &str = "https://api.voyageai.com/v1/embeddings";
@@ -33,6 +35,7 @@ pub struct SessionTraceContext {
 pub struct QdrantSemanticShuttle {
     client: Qdrant,
     collection_name: String,
+    user_memory_collection: String,
     sled_path: PathBuf,
     voyage_client: VoyageClient,
 }
@@ -44,20 +47,31 @@ impl QdrantSemanticShuttle {
             std::env::var("COGNITIVE_MCP_QDRANT_URL").unwrap_or_else(|_| DEFAULT_QDRANT_URL.into());
         let collection_name = std::env::var("COGNITIVE_MCP_QDRANT_COLLECTION")
             .unwrap_or_else(|_| DEFAULT_COLLECTION_NAME.into());
+        let user_memory_collection = std::env::var("COGNITIVE_MCP_USER_MEMORY_COLLECTION")
+            .unwrap_or_else(|_| DEFAULT_USER_MEMORY_COLLECTION.into());
         let sled_path = std::env::var("COGNITIVE_MCP_SCHEMA_SLED_PATH")
             .unwrap_or_else(|_| DEFAULT_SCHEMA_SLED_PATH.into());
         let voyage_client = VoyageClient::from_env()?;
 
-        Self::new_with_clients(&qdrant_url, collection_name, sled_path, voyage_client).await
+        Self::new_with_clients(
+            &qdrant_url,
+            collection_name,
+            user_memory_collection,
+            sled_path,
+            voyage_client,
+        )
+        .await
     }
 
     async fn new_with_clients(
         qdrant_url: &str,
         collection_name: impl Into<String>,
+        user_memory_collection: impl Into<String>,
         sled_path: impl Into<PathBuf>,
         voyage_client: VoyageClient,
     ) -> Result<Self> {
         let collection_name = collection_name.into();
+        let user_memory_collection = user_memory_collection.into();
         let sled_path = sled_path.into();
         let client = Qdrant::from_url(qdrant_url)
             .build()
@@ -70,6 +84,7 @@ impl QdrantSemanticShuttle {
         tracing::info!(
             qdrant_url,
             collection = %collection_name,
+            user_memory_collection = %user_memory_collection,
             sled_path = %sled_path.display(),
             "Qdrant Semantic Shuttle linked to the gRPC interface"
         );
@@ -77,6 +92,7 @@ impl QdrantSemanticShuttle {
         Ok(Self {
             client,
             collection_name,
+            user_memory_collection,
             sled_path,
             voyage_client,
         })
@@ -86,7 +102,7 @@ impl QdrantSemanticShuttle {
     pub fn current_trace_context(&self) -> Result<SessionTraceContext> {
         let sled = read_identity_sled(&self.sled_path)?;
         ensure!(
-            sled.is_valid,
+            sled.is_sled_valid(),
             "A.N.N.A. Scribe: Invalid Schema State. No active trace available."
         );
 
@@ -188,10 +204,103 @@ impl QdrantSemanticShuttle {
         Ok(response.result)
     }
 
+    // ── User Memory Methods ──────────────────────────────────────────────
+
+    /// Embed text as a query vector (for semantic search)
+    pub async fn embed_query_text(&self, text: &str) -> Result<Vec<f32>> {
+        self.voyage_client.embed_query(text).await
+    }
+
+    /// Embed text as a document vector (for storage in Qdrant)
+    pub async fn embed_document(&self, text: &str) -> Result<Vec<f32>> {
+        self.voyage_client.embed_document(text).await
+    }
+
+    /// Upsert a memory entry into the user_memory collection
+    ///
+    /// Payload includes `container_id` and `entry_key` for scoped retrieval.
+    pub async fn upsert_user_memory(
+        &self,
+        point_id: impl Into<String>,
+        vector: Vec<f32>,
+        container_id: &str,
+        entry_key: &str,
+        content: &str,
+    ) -> Result<()> {
+        let payload: Payload = serde_json::json!({
+            "container_id": container_id,
+            "entry_key": entry_key,
+            "content": content,
+        })
+        .try_into()
+        .context("failed to build user_memory payload")?;
+
+        let point = PointStruct::new(point_id.into(), vector, payload);
+
+        self.client
+            .upsert_points(UpsertPointsBuilder::new(
+                self.user_memory_collection.clone(),
+                vec![point],
+            ))
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to upsert user_memory point into collection {}",
+                    self.user_memory_collection
+                )
+            })?;
+
+        tracing::info!(
+            collection = %self.user_memory_collection,
+            container_id = %container_id,
+            entry_key = %entry_key,
+            "User memory upserted to Qdrant"
+        );
+
+        Ok(())
+    }
+
+    /// Semantic search over user_memory scoped to a container_id
+    pub async fn search_user_memory(
+        &self,
+        query_embedding: Vec<f32>,
+        container_id: &str,
+        limit: u64,
+    ) -> Result<Vec<ScoredPoint>> {
+        let response = self
+            .client
+            .query(
+                QueryPointsBuilder::new(self.user_memory_collection.clone())
+                    .query(query_embedding)
+                    .filter(Filter::must([Condition::matches(
+                        "container_id",
+                        container_id.to_string(),
+                    )]))
+                    .limit(limit)
+                    .with_payload(true),
+            )
+            .await
+            .with_context(|| {
+                format!(
+                    "failed semantic query against user_memory collection {} for container {}",
+                    self.user_memory_collection, container_id
+                )
+            })?;
+
+        tracing::info!(
+            collection = %self.user_memory_collection,
+            container_id = %container_id,
+            matches = response.result.len(),
+            "User memory semantic search completed"
+        );
+
+        Ok(response.result)
+    }
+
     fn active_schema_query_text(&self) -> Result<(SessionTraceContext, String)> {
         let (sled, schema) = read_identity_sled_and_schema(&self.sled_path)?;
         ensure!(
-            sled.is_valid,
+            sled.is_sled_valid(),
             "A.N.N.A. Scribe: Invalid Schema State. No active trace available."
         );
 
@@ -241,10 +350,18 @@ impl VoyageClient {
     }
 
     async fn embed_query(&self, input: &str) -> Result<Vec<f32>> {
+        self.embed(input, "query").await
+    }
+
+    async fn embed_document(&self, input: &str) -> Result<Vec<f32>> {
+        self.embed(input, "document").await
+    }
+
+    async fn embed(&self, input: &str, input_type: &str) -> Result<Vec<f32>> {
         let body = VoyageEmbeddingRequest {
             input,
             model: &self.model,
-            input_type: "query",
+            input_type,
             truncation: true,
             output_dimension: self.output_dimension,
             output_dtype: "float",

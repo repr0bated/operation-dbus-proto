@@ -90,7 +90,7 @@ impl ResourceRegistry {
         // Try to get from op_chat if available
         #[cfg(feature = "op-chat")]
         {
-            let msg = op_chat::generate_system_prompt().await;
+            let msg = op_chat::generate_system_prompt(None).await;
             return msg.content;
         }
 
@@ -127,7 +127,7 @@ Abstract `Transport` trait with implementations for each protocol.
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `compact_mode` | false | Use 4 meta-tools instead of all |
+| `compact_mode` | false | Use 5 lazy meta-tools instead of all |
 | `max_tools` | 500 | Maximum tools to expose |
 | `blocked_patterns` | [...] | Tool patterns to block |
 "#;

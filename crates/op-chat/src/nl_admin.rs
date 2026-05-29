@@ -285,7 +285,7 @@ impl NLAdminOrchestrator {
     /// Generate the system prompt that instructs the LLM to use tools
     pub async fn generate_system_prompt(&self) -> String {
         // Use the comprehensive system prompt from system_prompt.rs
-        let base_prompt = crate::system_prompt::generate_system_prompt().await;
+        let base_prompt = crate::system_prompt::generate_system_prompt(None).await;
         let mut prompt = base_prompt.content;
 
         // Add dynamically generated tool list
