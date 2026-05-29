@@ -18,6 +18,7 @@ use simd_json::{json, OwnedValue as Value};
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
+use op_network::OvsdbClient;
 use op_tools::registry::{ToolDefinition, ToolRegistry};
 use op_tools::tool::{BoxedTool, Tool};
 
@@ -1454,21 +1455,10 @@ impl Tool for OvsListBridgesTool {
     }
 
     async fn execute(&self, _input: Value) -> Result<Value> {
-        let output = tokio::process::Command::new("ovs-vsctl")
-            .arg("list-br")
-            .output()
-            .await?;
-
-        if output.status.success() {
-            let bridges: Vec<String> = String::from_utf8_lossy(&output.stdout)
-                .lines()
-                .map(|s| s.to_string())
-                .filter(|s| !s.is_empty())
-                .collect();
-
-            Ok(json!({"success": true, "bridges": bridges, "count": bridges.len()}))
-        } else {
-            Ok(json!({"success": false, "error": String::from_utf8_lossy(&output.stderr).to_string()}))
+        let client = OvsdbClient::new();
+        match client.list_bridges().await {
+            Ok(bridges) => Ok(json!({"success": true, "bridges": bridges, "count": bridges.len()})),
+            Err(e) => Ok(json!({"success": false, "error": e.to_string()})),
         }
     }
 }
@@ -1508,15 +1498,10 @@ impl Tool for OvsShowBridgeTool {
         let bridge = input.get("bridge").and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing required field: bridge"))?;
 
-        let output = tokio::process::Command::new("ovs-vsctl")
-            .args(["show"])
-            .output()
-            .await?;
-
-        if output.status.success() {
-            Ok(json!({"success": true, "bridge": bridge, "info": String::from_utf8_lossy(&output.stdout).to_string()}))
-        } else {
-            Ok(json!({"success": false, "error": String::from_utf8_lossy(&output.stderr).to_string()}))
+        let client = OvsdbClient::new();
+        match client.get_bridge_info(bridge).await {
+            Ok(info) => Ok(json!({"success": true, "bridge": bridge, "info": info})),
+            Err(e) => Ok(json!({"success": false, "error": e.to_string()})),
         }
     }
 }
@@ -1556,21 +1541,10 @@ impl Tool for OvsListPortsTool {
         let bridge = input.get("bridge").and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing required field: bridge"))?;
 
-        let output = tokio::process::Command::new("ovs-vsctl")
-            .args(["list-ports", bridge])
-            .output()
-            .await?;
-
-        if output.status.success() {
-            let ports: Vec<String> = String::from_utf8_lossy(&output.stdout)
-                .lines()
-                .map(|s| s.to_string())
-                .filter(|s| !s.is_empty())
-                .collect();
-
-            Ok(json!({"success": true, "bridge": bridge, "ports": ports, "count": ports.len()}))
-        } else {
-            Ok(json!({"success": false, "error": String::from_utf8_lossy(&output.stderr).to_string()}))
+        let client = OvsdbClient::new();
+        match client.list_bridge_ports(bridge).await {
+            Ok(ports) => Ok(json!({"success": true, "bridge": bridge, "ports": ports, "count": ports.len()})),
+            Err(e) => Ok(json!({"success": false, "error": e.to_string()})),
         }
     }
 }
@@ -1610,27 +1584,29 @@ impl Tool for OvsDumpFlowsTool {
         let bridge = input.get("bridge").and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing required field: bridge"))?;
 
-        let mut args = vec!["dump-flows".to_string(), bridge.to_string()];
-        if let Some(table) = input.get("table").and_then(|v| v.as_u64()) {
-            args.push(format!("table={}", table));
+        // Connect to OpenFlow controller (default OVS controller ports)
+        let addrs = [
+            std::net::SocketAddr::from(([127, 0, 0, 1], 6653)),
+            std::net::SocketAddr::from(([127, 0, 0, 1], 6633)),
+        ];
+
+        for addr in &addrs {
+            match op_network::openflow::OpenFlowClient::connect(*addr).await {
+                Ok(mut client) => {
+                    match client.query_flows().await {
+                        Ok(flows) => {
+                            return Ok(json!({"success": true, "bridge": bridge, "flows": flows, "count": flows.len(), "controller": addr.to_string()}));
+                        }
+                        Err(e) => {
+                            return Ok(json!({"success": false, "error": e.to_string(), "controller": addr.to_string()}));
+                        }
+                    }
+                }
+                Err(_) => continue,
+            }
         }
 
-        let output = tokio::process::Command::new("ovs-ofctl")
-            .args(&args)
-            .output()
-            .await?;
-
-        if output.status.success() {
-            let flows: Vec<String> = String::from_utf8_lossy(&output.stdout)
-                .lines()
-                .map(|s| s.to_string())
-                .filter(|s| !s.is_empty())
-                .collect();
-
-            Ok(json!({"success": true, "bridge": bridge, "flows": flows, "count": flows.len()}))
-        } else {
-            Ok(json!({"success": false, "error": String::from_utf8_lossy(&output.stderr).to_string()}))
-        }
+        Ok(json!({"success": false, "error": "OpenFlow controller not reachable on 127.0.0.1:6653 or :6633"}))
     }
 }
 
@@ -1669,15 +1645,10 @@ impl Tool for OvsAddBridgeTool {
         let bridge = input.get("bridge").and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing required field: bridge"))?;
 
-        let output = tokio::process::Command::new("ovs-vsctl")
-            .args(["add-br", bridge])
-            .output()
-            .await?;
-
-        if output.status.success() {
-            Ok(json!({"success": true, "bridge": bridge, "action": "created"}))
-        } else {
-            Ok(json!({"success": false, "error": String::from_utf8_lossy(&output.stderr).to_string()}))
+        let client = OvsdbClient::new();
+        match client.create_bridge(bridge).await {
+            Ok(()) => Ok(json!({"success": true, "bridge": bridge, "action": "created"})),
+            Err(e) => Ok(json!({"success": false, "error": e.to_string()})),
         }
     }
 }
@@ -1717,15 +1688,10 @@ impl Tool for OvsDelBridgeTool {
         let bridge = input.get("bridge").and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing required field: bridge"))?;
 
-        let output = tokio::process::Command::new("ovs-vsctl")
-            .args(["del-br", bridge])
-            .output()
-            .await?;
-
-        if output.status.success() {
-            Ok(json!({"success": true, "bridge": bridge, "action": "deleted"}))
-        } else {
-            Ok(json!({"success": false, "error": String::from_utf8_lossy(&output.stderr).to_string()}))
+        let client = OvsdbClient::new();
+        match client.delete_bridge(bridge).await {
+            Ok(()) => Ok(json!({"success": true, "bridge": bridge, "action": "deleted"})),
+            Err(e) => Ok(json!({"success": false, "error": e.to_string()})),
         }
     }
 }
@@ -1767,15 +1733,10 @@ impl Tool for OvsAddPortTool {
         let port = input.get("port").and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing required field: port"))?;
 
-        let output = tokio::process::Command::new("ovs-vsctl")
-            .args(["add-port", bridge, port])
-            .output()
-            .await?;
-
-        if output.status.success() {
-            Ok(json!({"success": true, "bridge": bridge, "port": port, "action": "added"}))
-        } else {
-            Ok(json!({"success": false, "error": String::from_utf8_lossy(&output.stderr).to_string()}))
+        let client = OvsdbClient::new();
+        match client.add_port(bridge, port).await {
+            Ok(()) => Ok(json!({"success": true, "bridge": bridge, "port": port, "action": "added"})),
+            Err(e) => Ok(json!({"success": false, "error": e.to_string()})),
         }
     }
 }
@@ -1817,15 +1778,10 @@ impl Tool for OvsDelPortTool {
         let port = input.get("port").and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing required field: port"))?;
 
-        let output = tokio::process::Command::new("ovs-vsctl")
-            .args(["del-port", bridge, port])
-            .output()
-            .await?;
-
-        if output.status.success() {
-            Ok(json!({"success": true, "bridge": bridge, "port": port, "action": "deleted"}))
-        } else {
-            Ok(json!({"success": false, "error": String::from_utf8_lossy(&output.stderr).to_string()}))
+        let client = OvsdbClient::new();
+        match client.delete_port(bridge, port).await {
+            Ok(()) => Ok(json!({"success": true, "bridge": bridge, "port": port, "action": "deleted"})),
+            Err(e) => Ok(json!({"success": false, "error": e.to_string()})),
         }
     }
 }
@@ -1867,16 +1823,28 @@ impl Tool for OvsAddFlowTool {
         let flow = input.get("flow").and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing required field: flow"))?;
 
-        let output = tokio::process::Command::new("ovs-ofctl")
-            .args(["add-flow", bridge, flow])
-            .output()
-            .await?;
+        let addrs = [
+            std::net::SocketAddr::from(([127, 0, 0, 1], 6653)),
+            std::net::SocketAddr::from(([127, 0, 0, 1], 6633)),
+        ];
 
-        if output.status.success() {
-            Ok(json!({"success": true, "bridge": bridge, "action": "flow_added"}))
-        } else {
-            Ok(json!({"success": false, "error": String::from_utf8_lossy(&output.stderr).to_string()}))
+        for addr in &addrs {
+            match op_network::openflow::OpenFlowClient::connect(*addr).await {
+                Ok(mut client) => {
+                    match client.add_flow_rule(flow).await {
+                        Ok(()) => {
+                            return Ok(json!({"success": true, "bridge": bridge, "action": "flow_added", "controller": addr.to_string(), "note": "String-based flow rules use rovs-openflow native protocol; full ovs-ofctl format parsing is pending"}));
+                        }
+                        Err(e) => {
+                            return Ok(json!({"success": false, "error": e.to_string(), "controller": addr.to_string()}));
+                        }
+                    }
+                }
+                Err(_) => continue,
+            }
         }
+
+        Ok(json!({"success": false, "error": "OpenFlow controller not reachable on 127.0.0.1:6653 or :6633"}))
     }
 }
 
@@ -1915,21 +1883,37 @@ impl Tool for OvsDelFlowsTool {
         let bridge = input.get("bridge").and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing required field: bridge"))?;
 
-        let mut args = vec!["del-flows".to_string(), bridge.to_string()];
-        if let Some(match_str) = input.get("match").and_then(|v| v.as_str()) {
-            args.push(match_str.to_string());
+        let has_match = input.get("match").and_then(|v| v.as_str()).is_some();
+        if has_match {
+            return Ok(json!({
+                "success": false,
+                "bridge": bridge,
+                "error": "Selective flow deletion by match requires full rovs-openflow flow parsing (not yet implemented). Use ovs_del_flows without 'match' to delete all flows, or use shell_execute with op-ovsbr0-setup for bridge-level mutations."
+            }));
         }
 
-        let output = tokio::process::Command::new("ovs-ofctl")
-            .args(&args)
-            .output()
-            .await?;
+        let addrs = [
+            std::net::SocketAddr::from(([127, 0, 0, 1], 6653)),
+            std::net::SocketAddr::from(([127, 0, 0, 1], 6633)),
+        ];
 
-        if output.status.success() {
-            Ok(json!({"success": true, "bridge": bridge, "action": "flows_deleted"}))
-        } else {
-            Ok(json!({"success": false, "error": String::from_utf8_lossy(&output.stderr).to_string()}))
+        for addr in &addrs {
+            match op_network::openflow::OpenFlowClient::connect(*addr).await {
+                Ok(mut client) => {
+                    match client.delete_all_flows().await {
+                        Ok(()) => {
+                            return Ok(json!({"success": true, "bridge": bridge, "action": "flows_deleted", "controller": addr.to_string()}));
+                        }
+                        Err(e) => {
+                            return Ok(json!({"success": false, "error": e.to_string(), "controller": addr.to_string()}));
+                        }
+                    }
+                }
+                Err(_) => continue,
+            }
         }
+
+        Ok(json!({"success": false, "error": "OpenFlow controller not reachable on 127.0.0.1:6653 or :6633"}))
     }
 }
 
