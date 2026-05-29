@@ -9,11 +9,15 @@ use crate::data_models::*;
 use crate::interfaces::{RawEntity, SchemaRegistry};
 use anyhow::Result;
 use regex::Regex;
-use sha2::Digest;
 use simd_json::prelude::*;
 use simd_json::{OwnedValue as Value, StaticNode};
 use std::collections::HashMap;
+use std::io::Write;
 use tracing::{debug, error, info, warn};
+
+/// Shared-memory path for the canonical PluginSchema catalog.
+/// This is the single source of truth for UI, blockchain, and all components.
+const SHM_SCHEMA_PATH: &str = "/dev/shm/plugin_schemas.json";
 
 /// Schema version identifier
 pub type SchemaVersion = u64;
@@ -80,14 +84,20 @@ impl Default for SchemaEngine {
 }
 
 impl SchemaEngine {
-    /// Creates a new SchemaEngine instance
+    /// Creates a new SchemaEngine instance.
+    /// If tmpfs is available, writes an empty schema catalog to enforce
+    /// the Absolute Base rule: without a valid schema, no entity exists.
     pub fn new() -> Self {
-        Self {
+        let engine = Self {
             schemas: HashMap::new(),
             quarantined: HashMap::new(),
             version_counter: HashMap::new(),
             audit_trail: Vec::new(),
-        }
+        };
+        // Write initial (empty) schema catalog to shared memory so consumers
+        // can immediately detect whether the projection system is alive.
+        let _ = engine.write_schemas_to_shm();
+        engine
     }
 
     /// Creates a new SchemaEngine with the given actor and trace ID
@@ -95,14 +105,46 @@ impl SchemaEngine {
         Self::new()
     }
 
-    /// Generates a footprint hash for audit trail
+    /// Generates a footprint hash for audit trail using Blake3 (Strike/Etch).
     fn generate_footprint(&self, schema_name: &str, version: SchemaVersion) -> String {
-        // The Strike/Etch: Generate a deterministic hash for accountability
-        // Format: "schema_name:version:timestamp"
         let timestamp = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0);
         let data = format!("{}:{}:{}", schema_name, version, timestamp);
-        // Simple hash for demonstration - in production, use a proper cryptographic hash
-        format!("0x{:x}", sha2::Sha256::digest(data.as_bytes()))
+        let hash = blake3::hash(data.as_bytes());
+        hash.to_hex().to_string()
+    }
+
+    /// Write the entire schema catalog to shared memory as JSON.
+    /// This is the single source of truth: UI, blockchain, gRPC reflection,
+    /// and all downstream consumers read from this file.
+    pub fn write_schemas_to_shm(&self) -> Result<String> {
+        let catalog: std::collections::HashMap<String, Vec<&PluginSchema>> = self
+            .schemas
+            .iter()
+            .map(|(k, v)| (k.clone(), v.iter().collect()))
+            .collect();
+
+        let json_bytes = serde_json::to_vec_pretty(&catalog)
+            .map_err(|e| anyhow::anyhow!("Failed to serialize schema catalog: {}", e))?;
+
+        let mut file = std::fs::File::create(SHM_SCHEMA_PATH)
+            .map_err(|e| anyhow::anyhow!("Cannot write schema SHM: {}", e))?;
+        file.write_all(&json_bytes)
+            .map_err(|e| anyhow::anyhow!("Failed to write schema SHM: {}", e))?;
+        file.sync_all()
+            .map_err(|e| anyhow::anyhow!("Failed to sync schema SHM: {}", e))?;
+
+        let hash = blake3::hash(&json_bytes);
+        let hex = hash.to_hex().to_string();
+        info!(path = SHM_SCHEMA_PATH, footprint = %hex, "Schema catalog written to shared memory");
+        Ok(hex)
+    }
+
+    /// Read the Blake3 footprint of the current schema catalog on disk.
+    pub fn read_schema_footprint(&self) -> Result<String> {
+        let bytes = std::fs::read(SHM_SCHEMA_PATH)
+            .map_err(|e| anyhow::anyhow!("Cannot read schema SHM: {}", e))?;
+        let hash = blake3::hash(&bytes);
+        Ok(hash.to_hex().to_string())
     }
 
     /// Generates a trace ID for audit trail
@@ -172,6 +214,12 @@ impl SchemaRegistry for SchemaEngine {
             SchemaChangeType::Registered,
             &format!("Registered schema version {}", schema_version),
         );
+
+        // Write the updated canonical catalog to shared memory.
+        // This is the single source of truth for UI, blockchain, everything.
+        if let Err(e) = self.write_schemas_to_shm() {
+            warn!(error = %e, "Failed to sync schema catalog to shared memory");
+        }
 
         info!(
             schema_name = schema_name,
@@ -288,6 +336,11 @@ impl SchemaRegistry for SchemaEngine {
 
         // Record audit entry
         self.record_audit(name, SchemaChangeType::Quarantined, reason);
+
+        // Sync updated catalog (quarantine changes validity) to shared memory
+        if let Err(e) = self.write_schemas_to_shm() {
+            warn!(error = %e, "Failed to sync schema catalog after quarantine");
+        }
 
         error!(schema_name = name, reason = reason, "Schema quarantined");
     }

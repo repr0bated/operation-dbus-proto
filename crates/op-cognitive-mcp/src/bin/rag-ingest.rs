@@ -65,9 +65,7 @@ struct Cli {
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter(
-            std::env::var("RUST_LOG").unwrap_or_else(|_| "info".into()),
-        )
+        .with_env_filter(std::env::var("RUST_LOG").unwrap_or_else(|_| "info".into()))
         .init();
 
     let mut cli = Cli::parse();
@@ -80,7 +78,9 @@ async fn main() -> Result<()> {
         }
     }
 
-    let zip_path = cli.zip.canonicalize()
+    let zip_path = cli
+        .zip
+        .canonicalize()
         .with_context(|| format!("zip not found: {}", cli.zip.display()))?;
 
     // List available entries
@@ -101,9 +101,7 @@ async fn main() -> Result<()> {
         // Match by repo name substring
         entries
             .into_iter()
-            .filter(|(_, repo)| {
-                cli.repo.iter().any(|r| repo.contains(r.as_str()))
-            })
+            .filter(|(_, repo)| cli.repo.iter().any(|r| repo.contains(r.as_str())))
             .collect()
     } else {
         anyhow::bail!("Specify --repo <name>, --all, or --list");
@@ -112,9 +110,7 @@ async fn main() -> Result<()> {
     // Apply skip filter
     let targets: Vec<_> = targets
         .into_iter()
-        .filter(|(_, repo)| {
-            !cli.skip.iter().any(|s| repo.contains(s.as_str()))
-        })
+        .filter(|(_, repo)| !cli.skip.iter().any(|s| repo.contains(s.as_str())))
         .collect();
 
     if targets.is_empty() {
@@ -135,14 +131,17 @@ async fn main() -> Result<()> {
         }
     }
     let estimated_tokens = estimated_chunks * AVG_TOKENS_PER_CHUNK;
-    let estimated_cost   = estimated_tokens as f64 / 1_000_000.0 * VOYAGE_COST_PER_MILLION;
+    let estimated_cost = estimated_tokens as f64 / 1_000_000.0 * VOYAGE_COST_PER_MILLION;
 
     println!("\n=== Cost estimate ===");
     println!("  Repos          : {}", targets.len());
     println!("  Est. chunks    : ~{estimated_chunks}");
     println!("  Est. tokens    : ~{}M", estimated_tokens / 1_000_000);
     println!("  Est. cost      : ~${estimated_cost:.2}  (voyage-code-3 @ ${VOYAGE_COST_PER_MILLION}/M tokens)");
-    println!("  Token cap      : {}M  (--max-tokens)", cli.max_tokens / 1_000_000);
+    println!(
+        "  Token cap      : {}M  (--max-tokens)",
+        cli.max_tokens / 1_000_000
+    );
 
     if cli.dry_run {
         println!("\n[dry-run] Exiting without embedding.");
@@ -175,13 +174,13 @@ async fn main() -> Result<()> {
         "Starting ingest"
     );
 
-    let pipeline = RagPipeline::from_env()
-        .context("Failed to init pipeline — is VOYAGE_API_KEY set?")?;
+    let pipeline =
+        RagPipeline::from_env().context("Failed to init pipeline — is VOYAGE_API_KEY set?")?;
 
-    let mut total_files   = 0usize;
-    let mut total_chunks  = 0usize;
-    let mut total_errors  = 0usize;
-    let mut total_tokens  = 0usize;
+    let mut total_files = 0usize;
+    let mut total_chunks = 0usize;
+    let mut total_errors = 0usize;
+    let mut total_tokens = 0usize;
 
     'outer: for (entry_name, repo) in &targets {
         info!(repo = %repo, "Processing");
@@ -198,7 +197,7 @@ async fn main() -> Result<()> {
                     errors = stats.errors,
                     "Done"
                 );
-                total_files  += stats.files_parsed;
+                total_files += stats.files_parsed;
                 total_chunks += stats.chunks_upserted;
                 total_errors += stats.errors;
                 total_tokens += stats.chunks_upserted * AVG_TOKENS_PER_CHUNK;
@@ -265,9 +264,7 @@ fn list_repomix_entries(zip_path: &std::path::Path) -> Result<Vec<(String, Strin
 }
 
 fn repo_name_from_entry(entry_name: &str) -> String {
-    let base = entry_name
-        .trim_end_matches(".md")
-        .trim_end_matches(".xml");
+    let base = entry_name.trim_end_matches(".md").trim_end_matches(".xml");
     let base = if let Some(pos) = base.rfind("-repomix") {
         &base[..pos]
     } else {

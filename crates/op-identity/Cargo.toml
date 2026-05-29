@@ -7,8 +7,9 @@ edition = "2021"
 anyhow = "1"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
+serde_json = { workspace = true }
 simd-json = { workspace = true }
-zbus = { version = "5.12", features = ["tokio"] }
+zbus = { workspace = true }
 chrono = { version = "0.4", features = ["serde"] }
 sha2 = { workspace = true }
 uuid = { version = "1.6", features = ["v4", "serde"] }
@@ -24,6 +25,8 @@ base64 = { workspace = true }
 hex = { workspace = true }
 memmap2 = { workspace = true }
 md5 = { workspace = true }
+blake3 = { workspace = true }
+libc = { workspace = true }
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 
 [dev-dependencies]

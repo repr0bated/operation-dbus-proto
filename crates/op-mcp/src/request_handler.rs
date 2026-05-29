@@ -10,15 +10,52 @@
 //! input-shape validation plus a guard against meta-tool reflection.
 
 use anyhow::Result;
+use async_trait::async_trait;
 use simd_json::{json, OwnedValue as Value};
 use std::sync::Arc;
-use tracing::{info, warn, error};
+use tracing::{error, info, warn};
 
 use crate::compact::{ToolDefinition, CompactServerConfig};
 use crate::protocol::{McpRequest, McpResponse, JsonRpcError};
 use crate::request_context::{RequestContext, RequestConfig};
+use crate::tool_registry::Tool;
 use crate::tools;
 use crate::{PROTOCOL_VERSION, SERVER_NAME, SERVER_VERSION};
+
+struct OpToolsAdapter {
+    inner: op_tools::BoxedTool,
+}
+
+#[async_trait]
+impl Tool for OpToolsAdapter {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    fn description(&self) -> &str {
+        self.inner.description()
+    }
+
+    fn input_schema(&self) -> Value {
+        self.inner.input_schema()
+    }
+
+    fn category(&self) -> &str {
+        self.inner.category()
+    }
+
+    fn namespace(&self) -> &str {
+        self.inner.namespace()
+    }
+
+    fn tags(&self) -> Vec<String> {
+        self.inner.tags()
+    }
+
+    async fn execute(&self, input: Value) -> Result<Value> {
+        self.inner.execute(input).await
+    }
+}
 
 /// Meta-tool names. `meta_execute_tool` must reject these as targets to
 /// prevent trivial recursion / reflection from the compact path.
@@ -206,6 +243,17 @@ impl RequestHandler {
 
     /// Load all tools into context
     async fn load_tools(&self, ctx: &mut RequestContext) -> Result<()> {
+        // Load the authoritative op-tools registry per request. The chatbot
+        // only sees five meta-tools, while execute_tool can reach every live
+        // system, D-Bus, OVS, and PluginSchema projection tool.
+        let registry = op_tools::ToolRegistry::new();
+        op_tools::register_builtin_tools(&registry).await?;
+        for definition in registry.list().await {
+            if let Some(tool) = registry.get(&definition.name).await {
+                ctx.load_tool(Arc::new(OpToolsAdapter { inner: tool }));
+            }
+        }
+
         // Response tools
         ctx.load_tool(Arc::new(tools::response::RespondToUserTool));
         ctx.load_tool(Arc::new(tools::response::CannotPerformTool));

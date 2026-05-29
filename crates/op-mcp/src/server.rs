@@ -19,7 +19,7 @@ use tracing::{debug, error, info, warn};
 pub struct McpServerConfig {
     /// Server name override
     pub name: Option<String>,
-    /// Enable compact mode (4 meta-tools instead of all tools)
+    /// Enable compact mode (5 meta-tools instead of all tools)
     pub compact_mode: bool,
     /// Tool categories to expose (None = all)
     pub allowed_categories: Option<Vec<String>>,
@@ -203,7 +203,7 @@ impl McpServer {
             "resources/templates/list" => self.handle_resources_templates_list(request).await,
             "resources/read" => self.handle_resources_read(request).await,
             // Compact mode meta-tools
-            "list_tools" | "search_tools" | "get_tool_schema" | "execute_tool" => {
+            "list_tools" | "search_tools" | "get_tool_schema" | "execute_tool" | "respond" => {
                 self.handle_compact_tool(request).await
             }
             _ => McpResponse::error(request.id, JsonRpcError::method_not_found(&request.method)),
@@ -624,6 +624,24 @@ impl McpServer {
                 };
                 self.handle_tools_call(call_request).await
             }
+            "respond" => {
+                let message = params
+                    .as_object()
+                    .and_then(|obj| obj.get("message"))
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("");
+
+                McpResponse::success(
+                    request.id,
+                    json!({
+                        "content": [{
+                            "type": "text",
+                            "text": message
+                        }],
+                        "isError": false
+                    }),
+                )
+            }
             _ => McpResponse::error(request.id, JsonRpcError::method_not_found(&request.method)),
         }
     }
@@ -675,6 +693,17 @@ impl McpServer {
                         "arguments": { "type": "object", "description": "Tool arguments" }
                     },
                     "required": ["tool_name"]
+                }
+            }),
+            json!({
+                "name": "respond",
+                "description": "Send the final response to the user.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "message": { "type": "string", "description": "Response message" }
+                    },
+                    "required": ["message"]
                 }
             }),
         ];

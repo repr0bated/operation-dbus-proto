@@ -23,7 +23,7 @@ pub mod schema_validator;
 pub use manager::StateManager;
 pub use plugin::{
     ApplyResult, ChangeOperation, Checkpoint, DesiredState, DiffMetadata, PluginCapabilities,
-    StateAction, StateChange, StateDiff, StatePlugin, StateSource, ValidationError,
+    PluginMetadata, StateAction, StateChange, StateDiff, StatePlugin, StateSource, ValidationError,
     ValidationResult,
 };
 pub use plugtree::PlugTree;

@@ -13,7 +13,7 @@ use rust_embed::RustEmbed;
 /// Embedded UI assets from ui/dist
 /// Built at compile time via build.rs
 #[derive(RustEmbed)]
-#[folder = "ui/dist"]
+#[folder = "../../lovable/dist"]
 #[prefix = ""]
 pub struct UiAssets;
 

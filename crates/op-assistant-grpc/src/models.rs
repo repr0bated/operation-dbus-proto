@@ -52,8 +52,12 @@ impl ModelService for ModelServiceImpl {
     ) -> Result<Response<Model>, Status> {
         let req = req.into_inner();
         let mut params = json!({ "model_id": req.model_id });
-        if let Some(a) = req.agent_id { params["agent_id"] = json!(a); }
-        if let Some(s) = req.session_id { params["session_id"] = json!(s); }
+        if let Some(a) = req.agent_id {
+            params["agent_id"] = json!(a);
+        }
+        if let Some(s) = req.session_id {
+            params["session_id"] = json!(s);
+        }
         let result = self.client.call("models.switch", params).await?;
         Ok(Response::new(model_from_json(&result)))
     }

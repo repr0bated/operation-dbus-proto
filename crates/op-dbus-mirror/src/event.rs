@@ -30,15 +30,9 @@ pub enum MirrorEvent {
         sequence: u64,
     },
     /// Procfs memory info event
-    ProcMem {
-        delta: Value,
-        sequence: u64,
-    },
+    ProcMem { delta: Value, sequence: u64 },
     /// Procfs load average event
-    ProcLoad {
-        delta: Value,
-        sequence: u64,
-    },
+    ProcLoad { delta: Value, sequence: u64 },
     /// Procfs static section event
     ProcStatic {
         section: String,
@@ -51,12 +45,10 @@ impl MirrorEvent {
     /// Get the target path for this event
     pub fn target_path(&self) -> Option<String> {
         match self {
-            MirrorEvent::OvsdbRow { table_name, uuid, .. } => {
-                Some(format!("/org/opdbus/v1/ovsdb/{}/{}", table_name, uuid))
-            }
-            MirrorEvent::NonNet { key, .. } => {
-                Some(format!("/org/opdbus/v1/nonnet/{}", key))
-            }
+            MirrorEvent::OvsdbRow {
+                table_name, uuid, ..
+            } => Some(format!("/org/opdbus/v1/ovsdb/{}/{}", table_name, uuid)),
+            MirrorEvent::NonNet { key, .. } => Some(format!("/org/opdbus/v1/nonnet/{}", key)),
             MirrorEvent::Plugin { plugin_id, .. } => {
                 Some(format!("/org/opdbus/v1/plugins/{}", plugin_id))
             }
@@ -65,12 +57,8 @@ impl MirrorEvent {
                 let safe = component.component_id.replace(['.', '-', ':'], "_");
                 Some(format!("/org/opdbus/v1/registry/{}", safe))
             }
-            MirrorEvent::ProcMem { .. } => {
-                Some("/org/opdbus/v1/host/meminfo".to_string())
-            }
-            MirrorEvent::ProcLoad { .. } => {
-                Some("/org/opdbus/v1/host/loadavg".to_string())
-            }
+            MirrorEvent::ProcMem { .. } => Some("/org/opdbus/v1/host/meminfo".to_string()),
+            MirrorEvent::ProcLoad { .. } => Some("/org/opdbus/v1/host/loadavg".to_string()),
             MirrorEvent::ProcStatic { section, .. } => {
                 Some(format!("/org/opdbus/v1/host/{}", section))
             }

@@ -16,7 +16,7 @@ flowchart TB
         MCP_HTTP["HTTP/SSE Transport"]
         MCP_WS["WebSocket Transport"]
         MCP_STDIO["stdio Transport"]
-        MCP_MODES["Modes: compact (4 meta-tools)\nagents (cognitive)\nfull (148+ tools)"]
+        MCP_MODES["Modes: compact (5 lazy meta-tools)\nagents (cognitive)\nfull system tools"]
     end
 
     subgraph chat_layer["op-chat :50052"]

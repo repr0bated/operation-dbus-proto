@@ -4,7 +4,7 @@
 # Usage:
 #   sudo ./deploy/deploy.sh [--skip-network] [SERVICE|all]
 #
-# Services: op-dbus, op-web-server, op-chat, op-services, op-projection
+# Services: op-dbus, op-web-server, op-chat, op-services, op-projection, op-dbus-mirror
 
 set -euo pipefail
 
@@ -17,7 +17,8 @@ S6_DB="/etc/s6/db"
 SERVICES=(
     "op-web:op-dbus:op-dbus"
     "op-web:op-web-server:op-web-server"
-    "op-chat:op-chat:op-chat"
+    "op-chat:op-chat:chatmanager"
+    "op-dbus-mirror:ovs-dbus-init:op-dbus-mirror"
     "op-projection:projection_server:op-projection"
     "op-cognitive-mcp:op-cognitive-mcp:op-cognitive-mcp"
 )
@@ -85,6 +86,9 @@ install_system_files() {
     # s6 service definitions
     for svc_dir in "${DEPLOY_DIR}/s6"/*/; do
         svc="$(basename "$svc_dir")"
+        if [ ! -f "${svc_dir}/type" ]; then
+            continue
+        fi
         install -d "${S6_SV}/${svc}"
         cp -a "${svc_dir}/." "${S6_SV}/${svc}/"
         chmod 0755 "${S6_SV}/${svc}/run" 2>/dev/null || true

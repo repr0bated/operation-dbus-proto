@@ -19,8 +19,8 @@ async fn main() -> anyhow::Result<()> {
 
     info!("Starting op-services daemon");
 
-    // Initialize store
-    let store = Arc::new(Store::new("/var/lib/op-dbus/services.db").await?);
+    // Initialize store — JSON flat file, no SQLite, no drift.
+    let store = Arc::new(Store::default_store().await?);
 
     // Initialize service manager
     let manager = Arc::new(ServiceManager::new(store).await?);

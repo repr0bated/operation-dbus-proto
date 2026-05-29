@@ -1,34 +1,37 @@
 // 🟢 🛡️ The Tonic gRPC Gatekeeper (Middleware Interceptor)
-// Sits on the primary gRPC ingress at port 50051. Intercepts Xray-injected headers,
-// performs a zero-copy check against the PluginSchema in shared memory, and either
+// Sits on the primary gRPC ingress at port 18789. Intercepts Xray-injected headers,
+// performs a zero-copy check against the IdentitySled in shared memory, and either
 // allows the gRPC payload through or drops the connection instantly.
 //
 // Operated by A.N.N.A. Scribe. No payload enters the system without a cryptographic
 // "Snowball" session. No SQL databases, no D-Bus watchers. 1:1 Direct Read only.
 
 use memmap2::MmapOptions;
+use op_identity::IdentitySled;
 use std::fs::File;
 use tonic::{Request, Status};
 
-/// THE SLED: 1:1 Zero-copy shared memory layout mapping directly to the SchemaEngine.
-/// Because gRPC streams (especially for vectorized Qdrant payloads) are continuous,
-/// this middleware intercepts the initial HTTP/2 metadata and casts a raw C-pointer
-/// to the IdentitySled in shared memory to validate the request in nanoseconds.
-#[repr(C)]
-pub struct IdentitySled {
-    pub wireguard_pubkey: [u8; 32],
-    pub mutation_index: u64,
-    pub is_valid: bool,
-    pub hashed_footprint: [u8; 32], // The vectorized "Thought"
+/// Check whether a sled is "valid" per the Absolute Base rule.
+fn is_sled_valid(sled: &IdentitySled) -> bool {
+    sled.hashed_footprint != [0u8; 32] && sled.trace_id != [0u8; 16]
 }
 
-/// THE GATEKEEPER: Tonic gRPC Interceptor on port 50051.
+/// THE GATEKEEPER: Tonic gRPC Interceptor on port 18789.
 ///
 /// Enforces the Absolute Base rule: if the `x-ghostbridge-footprint` provided by Xray
 /// does not perfectly match the hashed footprint sitting in shared memory, the payload
 /// is rejected. Once validated, embeds the `x-ghostbridge-trace-id` into Tonic Request
 /// extensions so the Chatbot and Qdrant semantic search on the Accountability Page
 /// have the exact Trace ID needed to link the session.
+#[derive(Clone, Debug)]
+pub struct GhostbridgeInterceptor;
+
+impl tonic::service::Interceptor for GhostbridgeInterceptor {
+    fn call(&mut self, req: Request<()>) -> Result<Request<()>, Status> {
+        ghostbridge_interceptor(req)
+    }
+}
+
 #[allow(clippy::result_large_err)]
 pub fn ghostbridge_interceptor(mut req: Request<()>) -> Result<Request<()>, Status> {
     // 1. Extract the Xray-injected Identity Headers (The Accountability Loop)
@@ -53,16 +56,16 @@ pub fn ghostbridge_interceptor(mut req: Request<()>) -> Result<Request<()>, Stat
             .map_err(|_| Status::internal("Mmap failed"))?
     };
     let sled_ptr = mmap.as_ptr() as *const IdentitySled;
-
-    let is_valid = unsafe { (*sled_ptr).is_valid };
-    let current_footprint = unsafe { (*sled_ptr).hashed_footprint };
+    let sled = unsafe { &*sled_ptr };
 
     // The Absolute Base: No valid schema, it does not exist.
-    if !is_valid {
+    if !is_sled_valid(sled) {
         return Err(Status::failed_precondition(
             "A.N.N.A. Scribe: Invalid Schema State. Cease and Desist.",
         ));
     }
+
+    let current_footprint = sled.hashed_footprint;
 
     // 3. The Strike/Etch Validation: Check if the payload is in sync with Btrfs.
     //    If a Btrfs mutation has occurred and the client's footprint is stale,
@@ -144,12 +147,11 @@ mod tests {
 
     #[test]
     fn test_identity_sled_repr_c_layout() {
-        // Verify the IdentitySled struct fits all fields with #[repr(C)]
+        // Verify the IdentitySled struct matches the spec exactly (152 bytes)
         let size = std::mem::size_of::<IdentitySled>();
-        // wireguard_pubkey[32] + mutation_index(u64) + is_valid(bool) + padding + hashed_footprint[32]
-        assert!(
-            size >= 32 + 8 + 1 + 32,
-            "IdentitySled too small: {} bytes",
+        assert_eq!(
+            size, 152,
+            "IdentitySled must be exactly 152 bytes per spec, got {} bytes",
             size
         );
     }
@@ -157,7 +159,6 @@ mod tests {
     #[test]
     fn test_footprint_hex_encoding_roundtrip() {
         // Verify that the hex encoding of a footprint matches expected format
-        // 32 bytes: starts with 0xDEADBEEF, rest sequential
         let footprint: [u8; 32] = [
             0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A,
             0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
@@ -215,26 +216,29 @@ mod tests {
     }
 
     #[test]
-    fn test_invalid_schema_returns_failed_precondition() {
-        // Verify that is_valid=false in the sled means failed_precondition
-        // (Logic verification — the is_valid field is at a known offset in #[repr(C)])
+    fn test_invalid_sled_rejected() {
+        // A sled with zero footprint and trace_id is invalid
         let sled = IdentitySled {
             wireguard_pubkey: [0u8; 32],
             mutation_index: 1,
-            is_valid: false,
             hashed_footprint: [0u8; 32],
+            trace_id: [0u8; 16],
+            schema_version: 0,
+            reserved: [0u8; 60],
         };
-        assert!(!sled.is_valid);
+        assert!(!is_sled_valid(&sled));
     }
 
     #[test]
-    fn test_valid_schema_has_is_valid_true() {
+    fn test_valid_sled_accepted() {
         let sled = IdentitySled {
             wireguard_pubkey: [0xCC; 32],
             mutation_index: 42,
-            is_valid: true,
             hashed_footprint: [0xDD; 32],
+            trace_id: [0xEE; 16],
+            schema_version: 1,
+            reserved: [0u8; 60],
         };
-        assert!(sled.is_valid);
+        assert!(is_sled_valid(&sled));
     }
 }

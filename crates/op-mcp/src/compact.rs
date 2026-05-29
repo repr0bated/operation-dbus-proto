@@ -1,20 +1,92 @@
 //! Compact Mode
 //!
-//! Provides 4 meta-tools for discovering and executing 148+ tools:
+//! Provides 5 meta-tools for discovering and executing system tools:
 //! - list_tools: Browse available tools with filtering
 //! - search_tools: Search tools by keyword
 //! - get_tool_schema: Get input schema for a specific tool
 //! - execute_tool: Execute any tool by name
+//! - respond: Send the final user response
 //!
 //! This mode saves ~95% of context tokens compared to exposing all tools.
 
-use crate::{JsonRpcError, McpRequest, McpResponse, ToolExecutor};
+use crate::{JsonRpcError, McpRequest, McpResponse, ToolExecutor, ToolInfo};
 use anyhow::Result;
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info};
+
+pub struct LazyOpToolsExecutor;
+
+impl LazyOpToolsExecutor {
+    async fn load_registry() -> Result<op_tools::ToolRegistry> {
+        let registry = op_tools::ToolRegistry::new();
+        op_tools::register_builtin_tools(&registry).await?;
+        Ok(registry)
+    }
+}
+
+#[async_trait::async_trait]
+impl ToolExecutor for LazyOpToolsExecutor {
+    async fn list_tools(&self) -> Result<Vec<ToolInfo>> {
+        let registry = Self::load_registry().await?;
+        Ok(registry
+            .list()
+            .await
+            .into_iter()
+            .map(|tool| ToolInfo {
+                name: tool.name,
+                description: tool.description,
+                input_schema: tool.input_schema,
+                annotations: None,
+            })
+            .collect())
+    }
+
+    async fn execute_tool(&self, name: &str, arguments: Value) -> Result<Value> {
+        let registry = Self::load_registry().await?;
+        let tool = registry
+            .get(name)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("Tool not found: {}", name))?;
+        tool.execute(arguments).await
+    }
+
+    async fn get_tool_schema(&self, name: &str) -> Result<Option<Value>> {
+        let registry = Self::load_registry().await?;
+        Ok(registry
+            .get_definition(name)
+            .await
+            .map(|definition| definition.input_schema))
+    }
+
+    async fn search_tools(&self, query: &str, limit: usize) -> Result<Vec<ToolInfo>> {
+        let query = query.to_lowercase();
+        let registry = Self::load_registry().await?;
+        Ok(registry
+            .list()
+            .await
+            .into_iter()
+            .filter(|tool| {
+                tool.name.to_lowercase().contains(&query)
+                    || tool.description.to_lowercase().contains(&query)
+                    || tool.category.to_lowercase().contains(&query)
+                    || tool
+                        .tags
+                        .iter()
+                        .any(|tag| tag.to_lowercase().contains(&query))
+            })
+            .take(limit)
+            .map(|tool| ToolInfo {
+                name: tool.name,
+                description: tool.description,
+                input_schema: tool.input_schema,
+                annotations: None,
+            })
+            .collect())
+    }
+}
 
 /// Session context passed through from gateway
 #[derive(Debug, Clone, Default)]
@@ -24,7 +96,7 @@ pub struct SessionContext {
     pub peer_pubkey: Option<String>,
 }
 
-/// Compact server wraps a tool executor and exposes 4 meta-tools
+/// Compact server wraps a tool executor and exposes 5 meta-tools
 pub struct CompactServer {
     executor: Arc<dyn ToolExecutor>,
     server_name: String,
@@ -89,7 +161,7 @@ impl CompactServer {
                     "name": self.server_name,
                     "version": crate::SERVER_VERSION
                 },
-                "instructions": "This server uses compact mode with 4 meta-tools. Use list_tools to discover available tools, get_tool_schema to get the input schema, then execute_tool to run any tool."
+                "instructions": "This server uses compact mode with 5 meta-tools. Use list_tools to discover available tools, get_tool_schema to get the input schema, execute_tool to run tools, and respond for the final answer."
             }),
         )
     }
@@ -141,10 +213,11 @@ impl CompactServer {
             "search_tools" => self.meta_search_tools(request.id, arguments).await,
             "get_tool_schema" => self.meta_get_tool_schema(request.id, arguments).await,
             "execute_tool" => self.meta_execute_tool(request.id, arguments).await,
+            "respond" => self.meta_respond(request.id, arguments).await,
             _ => McpResponse::error(
                 request.id,
                 JsonRpcError::new(-32001, format!(
-                    "Unknown meta-tool: {}. Use list_tools, search_tools, get_tool_schema, or execute_tool.",
+                    "Unknown meta-tool: {}. Use list_tools, search_tools, get_tool_schema, execute_tool, or respond.",
                     tool_name
                 )),
             ),
@@ -376,9 +449,28 @@ impl CompactServer {
             }
         }
     }
+
+    async fn meta_respond(&self, id: Option<Value>, args: Value) -> McpResponse {
+        let message = args
+            .as_object()
+            .and_then(|o| o.get("message"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        McpResponse::success(
+            id,
+            json!({
+                "content": [{
+                    "type": "text",
+                    "text": message
+                }],
+                "isError": false
+            }),
+        )
+    }
 }
 
-/// Get the 4 compact meta-tool schemas
+/// Get the 5 compact meta-tool schemas
 pub fn compact_tools_schema() -> Vec<Value> {
     vec![
         json!({
@@ -455,13 +547,26 @@ pub fn compact_tools_schema() -> Vec<Value> {
                 "required": ["tool_name"]
             }
         }),
+        json!({
+            "name": "respond",
+            "description": "Send the final response to the user.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "message": {
+                        "type": "string",
+                        "description": "Response message"
+                    }
+                },
+                "required": ["message"]
+            }
+        }),
     ]
 }
 
 /// Run compact server in stdio mode
 pub async fn run_compact_stdio_server() -> Result<()> {
     use crate::transport::{StdioTransport, Transport};
-    use crate::DefaultToolExecutor;
 
     // Initialize logging to stderr
     let subscriber = tracing_subscriber::FmtSubscriber::builder()
@@ -470,12 +575,39 @@ pub async fn run_compact_stdio_server() -> Result<()> {
         .finish();
     tracing::subscriber::set_global_default(subscriber)?;
 
-    // Create tool registry and executor
-    let registry = Arc::new(op_tools::ToolRegistry::new());
-    op_tools::register_builtin_tools(&registry).await?;
+    // ── WireGuard identity ────────────────────────────────────────────────────
+    // Read the local WG pubkey, write the canonical IdentitySled to /dev/shm,
+    // and stamp peer_pubkey into the session so tools can use it for auth.
+    let wg_iface = std::env::var("WG_INTERFACE").unwrap_or_else(|_| "netmaker".to_string());
+    let wg_id = op_identity::WireGuardIdentity::with_interface(&wg_iface);
+    let peer_pubkey = match wg_id.get_local_pubkey() {
+        Ok(pubkey) => {
+            if let Err(e) = op_identity::write_sled_from_wg(&pubkey) {
+                tracing::warn!(error = %e, "Failed to write identity sled to /dev/shm");
+            } else {
+                info!(interface = %wg_iface, pubkey = %pubkey, "WG identity sled written");
+            }
+            Some(pubkey)
+        }
+        Err(e) => {
+            tracing::warn!(interface = %wg_iface, error = %e, "Could not read WG public key; set WG_PUBKEY env var to override");
+            None
+        }
+    };
 
-    let executor: Arc<dyn ToolExecutor> = Arc::new(DefaultToolExecutor::new(registry));
+    // Load the authoritative op-tools registry lazily per request so the
+    // chatbot sees five stable meta-tools while retaining access to every
+    // live system, D-Bus, OVS, and PluginSchema projection tool.
+    let executor: Arc<dyn ToolExecutor> = Arc::new(LazyOpToolsExecutor);
     let server = Arc::new(CompactServer::new(executor));
+
+    // Stamp the WG identity into the session context.
+    server
+        .set_session(SessionContext {
+            peer_pubkey,
+            ..Default::default()
+        })
+        .await;
 
     info!("Starting compact MCP server (stdio)");
 

@@ -44,21 +44,40 @@ impl Default for ToolProfile {
 pub fn tools_for_profile(profile: ToolProfile) -> Vec<&'static str> {
     match profile {
         ToolProfile::Minimal => vec![
-            "ask_question", "list_notebooks", "select_notebook",
-            "get_notebook", "get_health",
+            "ask_question",
+            "list_notebooks",
+            "select_notebook",
+            "get_notebook",
+            "get_health",
         ],
         ToolProfile::Standard => vec![
-            "ask_question", "query_notebook", "list_notebooks",
-            "select_notebook", "get_notebook", "add_source_url",
-            "add_source_text", "list_sources", "get_source_content",
+            "ask_question",
+            "query_notebook",
+            "list_notebooks",
+            "select_notebook",
+            "get_notebook",
+            "add_source_url",
+            "add_source_text",
+            "list_sources",
+            "get_source_content",
             "get_health",
         ],
         ToolProfile::Full => vec![
-            "ask_question", "query_notebook", "list_notebooks",
-            "select_notebook", "get_notebook", "create_notebook",
-            "batch_create_notebooks", "add_source_url", "add_source_text",
-            "add_folder", "list_sources", "remove_source",
-            "get_source_content", "generate_data_table", "get_health",
+            "ask_question",
+            "query_notebook",
+            "list_notebooks",
+            "select_notebook",
+            "get_notebook",
+            "create_notebook",
+            "batch_create_notebooks",
+            "add_source_url",
+            "add_source_text",
+            "add_folder",
+            "list_sources",
+            "remove_source",
+            "get_source_content",
+            "generate_data_table",
+            "get_health",
             "doctor",
         ],
     }
@@ -78,13 +97,19 @@ pub struct ProfileTokenEstimate {
 pub fn token_estimate(profile: ToolProfile) -> ProfileTokenEstimate {
     match profile {
         ToolProfile::Minimal => ProfileTokenEstimate {
-            tool_count: 5, schema_tokens: 800, savings_percent: 69,
+            tool_count: 5,
+            schema_tokens: 800,
+            savings_percent: 69,
         },
         ToolProfile::Standard => ProfileTokenEstimate {
-            tool_count: 10, schema_tokens: 1600, savings_percent: 38,
+            tool_count: 10,
+            schema_tokens: 1600,
+            savings_percent: 38,
         },
         ToolProfile::Full => ProfileTokenEstimate {
-            tool_count: 16, schema_tokens: 2600, savings_percent: 0,
+            tool_count: 16,
+            schema_tokens: 2600,
+            savings_percent: 0,
         },
     }
 }
@@ -117,7 +142,10 @@ mod tests {
 
     #[test]
     fn should_parse_profile_names() {
-        assert_eq!("minimal".parse::<ToolProfile>().unwrap(), ToolProfile::Minimal);
+        assert_eq!(
+            "minimal".parse::<ToolProfile>().unwrap(),
+            ToolProfile::Minimal
+        );
         assert_eq!("full".parse::<ToolProfile>().unwrap(), ToolProfile::Full);
     }
 

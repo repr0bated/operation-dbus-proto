@@ -1,0 +1,11 @@
+#!/bin/sh
+# chatmanager — Standalone op-chat MCP server and actor daemon.
+#
+# Listens on OP_CHAT_LISTEN (defaults to 0.0.0.0:50053).
+# Connects to the dbus-session bus at unix:path=/run/op-dbus/session-bus.sock.
+
+export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/op-dbus/session-bus.sock}"
+export OP_CHAT_LISTEN="${OP_CHAT_LISTEN:-0.0.0.0:50053}"
+export RUST_LOG="${RUST_LOG:-info}"
+
+exec /usr/local/bin/op-chat

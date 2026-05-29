@@ -11,7 +11,7 @@
     },
     "compact": {
       "url": "http://localhost:8080/mcp/compact",
-      "description": "Compact mode - 4 meta-tools for efficient discovery"
+      "description": "Compact mode - 5 lazy meta-tools for efficient discovery"
     },
     "agents": {
       "url": "http://localhost:8080/mcp/agents",

@@ -81,7 +81,11 @@ impl SessionManager {
     }
 
     /// Append a query turn to the conversation and return the updated session.
-    pub fn append_turn(&self, conversation_id: &str, turn: QueryTurn) -> Result<ConversationSession> {
+    pub fn append_turn(
+        &self,
+        conversation_id: &str,
+        turn: QueryTurn,
+    ) -> Result<ConversationSession> {
         let mut entry = self
             .sessions
             .get_mut(conversation_id)

@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use async_stream::stream;
 use chrono::{DateTime, Utc};
+use futures::StreamExt as _;
 use op_cognitive_mcp::QdrantSemanticShuttle;
 use prost_types::{Struct as ProstStruct, Timestamp as ProstTimestamp, Value as ProstValue};
 use simd_json::prelude::{ValueAsContainer, ValueAsScalar};
@@ -15,6 +16,8 @@ use tokio_stream::Stream;
 use tonic::{Request, Response, Status};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
+
+use crate::interceptor;
 
 use crate::proto::{
     event_chain_service_server::EventChainService, ovsdb_mirror_server::OvsdbMirror,
@@ -31,12 +34,11 @@ use crate::proto::{
     OperationType as ProtoOperationType, OvsdbBridge as ProtoOvsdbBridge, OvsdbDumpDbRequest,
     OvsdbDumpDbResponse, OvsdbEchoRequest, OvsdbEchoResponse, OvsdbGetBridgeStateRequest,
     OvsdbGetBridgeStateResponse, OvsdbGetSchemaRequest, OvsdbGetSchemaResponse,
-    OvsdbInterface as ProtoOvsdbInterface, OvsdbListDbsResponse,
-    OvsdbMonitorRequest, OvsdbPort as ProtoOvsdbPort, OvsdbTransactRequest, OvsdbTransactResponse,
-    OvsdbUpdate, PluginInfo, ProveTagImmutabilityRequest, ProveTagImmutabilityResponse,
-    ReadOnlyViolation as ProtoReadOnlyViolation,
-    RuntimeGetNumaTopologyResponse, RuntimeGetServiceRequest,
-    RuntimeGetSystemInfoResponse, RuntimeListInterfacesResponse,
+    OvsdbInterface as ProtoOvsdbInterface, OvsdbListDbsResponse, OvsdbMonitorRequest,
+    OvsdbPort as ProtoOvsdbPort, OvsdbTransactRequest, OvsdbTransactResponse, OvsdbUpdate,
+    PluginInfo, ProveTagImmutabilityRequest, ProveTagImmutabilityResponse,
+    ReadOnlyViolation as ProtoReadOnlyViolation, RuntimeGetNumaTopologyResponse,
+    RuntimeGetServiceRequest, RuntimeGetSystemInfoResponse, RuntimeListInterfacesResponse,
     RuntimeListServicesRequest, RuntimeListServicesResponse, RuntimeMetricUpdate,
     RuntimeNetworkInterface as ProtoRuntimeNetworkInterface,
     RuntimeServiceInfo as ProtoRuntimeServiceInfo, RuntimeStreamMetricsRequest,
@@ -189,6 +191,7 @@ pub async fn run_grpc_server(
     schema_engine: Arc<SchemaEngine>,
     plugin_provider: Option<Arc<dyn PluginSchemaProvider>>,
 ) -> Result<(), tonic::transport::Error> {
+    use crate::proto::dbus_passthrough_server::DbusPassthroughServer;
     use crate::proto::event_chain_service_server::EventChainServiceServer;
     use crate::proto::mail::mail_service_server::MailServiceServer;
     use crate::proto::ovsdb_mirror_server::OvsdbMirrorServer;
@@ -263,29 +266,57 @@ pub async fn run_grpc_server(
         .set_serving::<RegistrationServiceServer<OperationGrpcServer>>()
         .await;
 
-    info!(addr = %addr, "FORCE BINDING gRPC server to 0.0.0.0:50051");
+    info!(addr = %addr, "gRPC bridge listening");
 
-    // Wrap services with gRPC-Web support and allow JSON encoding
+    // Wrap services with gRPC-Web support and allow JSON encoding.
+    // The GhostbridgeInterceptor enforces the Absolute Base rule on every
+    // inbound request before it reaches a service handler.
     let server = tonic::transport::Server::builder()
         .accept_http1(true)
-        .add_service(tonic_web::enable(StateSyncServer::new(server.clone())))
-        .add_service(tonic_web::enable(PluginServiceServer::new(server.clone())))
-        .add_service(tonic_web::enable(EventChainServiceServer::new(
+        .add_service(tonic_web::enable(StateSyncServer::with_interceptor(
             server.clone(),
+            interceptor::ghostbridge_interceptor,
         )))
-        .add_service(tonic_web::enable(OvsdbMirrorServer::new(server.clone())))
-        .add_service(tonic_web::enable(RuntimeMirrorServer::new(server.clone())))
-        .add_service(tonic_web::enable(ComponentRegistryServer::new(
+        .add_service(tonic_web::enable(PluginServiceServer::with_interceptor(
             server.clone(),
+            interceptor::ghostbridge_interceptor,
         )))
-        .add_service(tonic_web::enable(MailServiceServer::new(server.clone())))
-        .add_service(tonic_web::enable(PrivacyNetworkServiceServer::new(
+        .add_service(tonic_web::enable(EventChainServiceServer::with_interceptor(
             server.clone(),
+            interceptor::ghostbridge_interceptor,
         )))
-        .add_service(tonic_web::enable(RegistrationServiceServer::new(
+        .add_service(tonic_web::enable(OvsdbMirrorServer::with_interceptor(
             server.clone(),
+            interceptor::ghostbridge_interceptor,
         )))
-        .add_service(tonic_web::enable(McpServiceServer::from_arc(mcp_svc)))
+        .add_service(tonic_web::enable(RuntimeMirrorServer::with_interceptor(
+            server.clone(),
+            interceptor::ghostbridge_interceptor,
+        )))
+        .add_service(tonic_web::enable(ComponentRegistryServer::with_interceptor(
+            server.clone(),
+            interceptor::ghostbridge_interceptor,
+        )))
+        .add_service(tonic_web::enable(MailServiceServer::with_interceptor(
+            server.clone(),
+            interceptor::ghostbridge_interceptor,
+        )))
+        .add_service(tonic_web::enable(PrivacyNetworkServiceServer::with_interceptor(
+            server.clone(),
+            interceptor::ghostbridge_interceptor,
+        )))
+        .add_service(tonic_web::enable(RegistrationServiceServer::with_interceptor(
+            server.clone(),
+            interceptor::ghostbridge_interceptor,
+        )))
+        .add_service(tonic_web::enable(DbusPassthroughServer::with_interceptor(
+            server.clone(),
+            interceptor::ghostbridge_interceptor,
+        )))
+        .add_service(tonic_web::enable(tonic::codegen::InterceptedService::new(
+            McpServiceServer::from_arc(mcp_svc),
+            interceptor::ghostbridge_interceptor,
+        )))
         .add_service(tonic_web::enable(reflection))
         .add_service(tonic_web::enable(health_service));
 
@@ -1631,11 +1662,13 @@ impl RuntimeMirror for OperationGrpcServer {
             .unwrap_or(1);
         let arch = std::env::consts::ARCH.to_string();
 
-        // Detect init system
-        let init_system = if std::path::Path::new("/run/dinitctl").exists() {
-            "dinit"
-        } else {
+        // Detect init system — prefer s6 (Artix/Chimera) over systemd
+        let init_system = if std::path::Path::new("/run/s6-rc").exists() {
+            "s6"
+        } else if std::path::Path::new("/run/systemd").exists() {
             "systemd"
+        } else {
+            "unknown"
         }
         .to_string();
 
@@ -1661,58 +1694,31 @@ impl RuntimeMirror for OperationGrpcServer {
         &self,
         _request: Request<RuntimeListServicesRequest>,
     ) -> Result<Response<RuntimeListServicesResponse>, Status> {
-        // Query dinit via dinitctl list
-        let output = tokio::process::Command::new("dinitctl")
-            .arg("list")
+        // Query s6 via s6-rc -a -l /run/s6-rc list
+        let output = tokio::process::Command::new("s6-rc")
+            .args(["-a", "-l", "/run/s6-rc", "list"])
             .output()
             .await
-            .map_err(|e| Status::internal(format!("dinitctl failed: {}", e)))?;
+            .map_err(|e| Status::internal(format!("s6-rc list failed: {}", e)))?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let mut services = Vec::new();
 
         for line in stdout.lines() {
-            let line = line.trim();
-            if line.is_empty() {
+            let name = line.trim().to_string();
+            if name.is_empty() {
                 continue;
             }
-            // dinitctl list format: [{+}] service-name (pid: NNN)
-            let state = if line.starts_with("[{+}]") {
-                "STARTED"
-            } else if line.starts_with("[{-}]") {
-                "STOPPED"
-            } else {
-                "UNKNOWN"
-            };
-            let name = line
-                .split(']')
-                .nth(1)
-                .unwrap_or("")
-                .split_whitespace()
-                .next()
-                .unwrap_or("")
-                .to_string();
-            let pid = line
-                .find("(pid:")
-                .and_then(|i| {
-                    line[i + 5..]
-                        .split(')')
-                        .next()
-                        .and_then(|s| s.trim().parse::<u32>().ok())
-                })
-                .unwrap_or(0);
-
-            if !name.is_empty() {
-                services.push(ProtoRuntimeServiceInfo {
-                    name,
-                    state: state.to_string(),
-                    pid,
-                    enabled: state == "STARTED",
-                    description: String::new(),
-                    dependencies: vec![],
-                    started_at: None,
-                });
-            }
+            // All entries returned by s6-rc -a list are currently running
+            services.push(ProtoRuntimeServiceInfo {
+                name,
+                state: "STARTED".to_string(),
+                pid: 0,
+                enabled: true,
+                description: String::new(),
+                dependencies: vec![],
+                started_at: None,
+            });
         }
 
         Ok(Response::new(RuntimeListServicesResponse { services }))
@@ -1723,20 +1729,16 @@ impl RuntimeMirror for OperationGrpcServer {
         request: Request<RuntimeGetServiceRequest>,
     ) -> Result<Response<ProtoRuntimeServiceInfo>, Status> {
         let name = &request.get_ref().service_name;
-        let output = tokio::process::Command::new("dinitctl")
-            .args(["status", name])
+        // Check running services via s6-rc -a list and look for this service
+        let output = tokio::process::Command::new("s6-rc")
+            .args(["-a", "-l", "/run/s6-rc", "list"])
             .output()
             .await
-            .map_err(|e| Status::internal(format!("dinitctl status failed: {}", e)))?;
+            .map_err(|e| Status::internal(format!("s6-rc list failed: {}", e)))?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let state = if stdout.contains("STARTED") {
-            "STARTED"
-        } else if stdout.contains("STOPPED") {
-            "STOPPED"
-        } else {
-            "UNKNOWN"
-        };
+        let is_running = stdout.lines().any(|l| l.trim() == name.as_str());
+        let state = if is_running { "STARTED" } else { "STOPPED" };
 
         Ok(Response::new(ProtoRuntimeServiceInfo {
             name: name.clone(),
@@ -3512,7 +3514,7 @@ impl PrivacyNetworkService for OperationGrpcServer {
                     severity: "critical".to_string(),
                     message: "Privacy D-Bus service (org.opdbus.PrivacyV1) is not running"
                         .to_string(),
-                    suggested_fix: "Start the privacy-router dinit service".to_string(),
+                    suggested_fix: "Start the privacy-router s6 service".to_string(),
                 }],
                 overall_status: "unhealthy".to_string(),
                 checked_at: Some(OperationGrpcServer::now_ts()),
@@ -4324,5 +4326,208 @@ impl RegistrationService for OperationGrpcServer {
                 }))
             }
         }
+    }
+}
+
+// =============================================================================
+// D-Bus Passthrough Service
+// =============================================================================
+
+#[tonic::async_trait]
+impl crate::proto::dbus_passthrough_server::DbusPassthrough for OperationGrpcServer {
+    type WatchStream =
+        Pin<Box<dyn Stream<Item = Result<crate::proto::DbusSignalEvent, Status>> + Send>>;
+
+    async fn call(
+        &self,
+        request: Request<crate::proto::DbusCallRequest>,
+    ) -> Result<Response<crate::proto::DbusCallResponse>, Status> {
+        let req = request.into_inner();
+        let conn = self
+            .schema_engine
+            .dbus_connection()
+            .await
+            .map_err(|e| Status::unavailable(format!("D-Bus not available: {e}")))?;
+
+        let bus_conn = match req.bus.as_str() {
+            "session" => {
+                let session = Connection::session()
+                    .await
+                    .map_err(|e| Status::unavailable(format!("session bus unavailable: {e}")))?;
+                session
+            }
+            _ => conn,
+        };
+
+        let proxy = Proxy::new(
+            &bus_conn,
+            req.destination.clone(),
+            req.path.clone(),
+            req.interface.clone(),
+        )
+        .await
+        .map_err(|e| Status::internal(format!("proxy build failed: {e}")))?;
+
+        let result: String = proxy
+            .call(req.method.clone(), &(req.json_body.clone(),))
+            .await
+            .map_err(|e| Status::internal(format!("D-Bus call '{}' failed: {e}", req.method)))?;
+
+        Ok(Response::new(crate::proto::DbusCallResponse {
+            success: true,
+            json_result: result,
+            error: String::new(),
+        }))
+    }
+
+    async fn get(
+        &self,
+        request: Request<crate::proto::DbusGetPropertyRequest>,
+    ) -> Result<Response<crate::proto::DbusGetPropertyResponse>, Status> {
+        let req = request.into_inner();
+        let bus_conn = match req.bus.as_str() {
+            "session" => Connection::session()
+                .await
+                .map_err(|e| Status::unavailable(format!("session bus: {e}")))?,
+            _ => Connection::system()
+                .await
+                .map_err(|e| Status::unavailable(format!("system bus: {e}")))?,
+        };
+
+        let props = zbus::fdo::PropertiesProxy::builder(&bus_conn)
+            .destination(req.destination.clone())
+            .map_err(|e| Status::invalid_argument(e.to_string()))?
+            .path(req.path.as_str())
+            .map_err(|e| Status::invalid_argument(e.to_string()))?
+            .build()
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        let iface = zbus::names::InterfaceName::try_from(req.interface.as_str())
+            .map_err(|e| Status::invalid_argument(e.to_string()))?;
+        let val: ZOwnedValue = props
+            .get(iface, &req.property)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        let json = serde_json::to_string(&val).map_err(|e| Status::internal(e.to_string()))?;
+
+        Ok(Response::new(crate::proto::DbusGetPropertyResponse {
+            success: true,
+            json_value: json,
+            error: String::new(),
+        }))
+    }
+
+    async fn set(
+        &self,
+        request: Request<crate::proto::DbusSetPropertyRequest>,
+    ) -> Result<Response<crate::proto::DbusSetPropertyResponse>, Status> {
+        let req = request.into_inner();
+        let bus_conn = match req.bus.as_str() {
+            "session" => Connection::session()
+                .await
+                .map_err(|e| Status::unavailable(format!("session bus: {e}")))?,
+            _ => Connection::system()
+                .await
+                .map_err(|e| Status::unavailable(format!("system bus: {e}")))?,
+        };
+
+        let props = zbus::fdo::PropertiesProxy::builder(&bus_conn)
+            .destination(req.destination.clone())
+            .map_err(|e| Status::invalid_argument(e.to_string()))?
+            .path(req.path.as_str())
+            .map_err(|e| Status::invalid_argument(e.to_string()))?
+            .build()
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        let iface = zbus::names::InterfaceName::try_from(req.interface.as_str())
+            .map_err(|e| Status::invalid_argument(e.to_string()))?;
+        let value: serde_json::Value = serde_json::from_str(&req.json_value)
+            .map_err(|e| Status::invalid_argument(format!("bad JSON: {e}")))?;
+        let zval = simd_json_to_zvariant(
+            &simd_json::serde::to_owned_value(&value)
+                .map_err(|e| Status::internal(e.to_string()))?,
+        )
+        .map_err(|e| Status::invalid_argument(e.to_string()))?;
+
+        props
+            .set(iface, &req.property, zval.into())
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        Ok(Response::new(crate::proto::DbusSetPropertyResponse {
+            success: true,
+            error: String::new(),
+        }))
+    }
+
+    async fn watch(
+        &self,
+        request: Request<crate::proto::DbusWatchRequest>,
+    ) -> Result<Response<Self::WatchStream>, Status> {
+        let req = request.into_inner();
+        let bus_conn = match req.bus.as_str() {
+            "session" => Connection::session()
+                .await
+                .map_err(|e| Status::unavailable(format!("session bus: {e}")))?,
+            _ => Connection::system()
+                .await
+                .map_err(|e| Status::unavailable(format!("system bus: {e}")))?,
+        };
+
+        let proxy = Proxy::new(
+            &bus_conn,
+            req.destination.clone(),
+            req.path.clone(),
+            req.interface.clone(),
+        )
+        .await
+        .map_err(|e| Status::internal(format!("proxy build failed: {e}")))?;
+
+        // zbus v5: receive_all_signals() or receive_signal(name) -> SignalStream
+        // SignalStream implements futures::Stream<Item = Message>
+        let mut sig_stream = if req.signal_names.is_empty() {
+            proxy
+                .receive_all_signals()
+                .await
+                .map_err(|e| Status::internal(format!("signal subscribe failed: {e}")))?
+        } else {
+            // Subscribe to the first named signal; filter others in-stream
+            let sig_name = zbus::names::MemberName::try_from(req.signal_names[0].clone())
+                .map_err(|e| Status::invalid_argument(format!("invalid signal name: {e}")))?;
+            proxy
+                .receive_signal(sig_name)
+                .await
+                .map_err(|e| Status::internal(format!("signal subscribe failed: {e}")))?
+        };
+
+        let signal_names = req.signal_names.clone();
+        let stream = stream! {
+            while let Some(msg) = sig_stream.next().await {
+                let hdr = msg.header();
+                let member = hdr.member().map(|m| m.as_str().to_string()).unwrap_or_default();
+                if !signal_names.is_empty() && !signal_names.contains(&member) { continue; }
+                let iface = hdr.interface().map(|i| i.as_str().to_string()).unwrap_or_default();
+                let path = hdr.path().map(|p| p.as_str().to_string()).unwrap_or_default();
+                let body: String = msg.body()
+                    .deserialize::<zbus::zvariant::OwnedValue>()
+                    .map(|b| format!("{b:?}"))
+                    .unwrap_or_default();
+                yield Ok(crate::proto::DbusSignalEvent {
+                    signal_name: member,
+                    path,
+                    interface: iface,
+                    json_body: body,
+                    timestamp: Some(ProstTimestamp {
+                        seconds: Utc::now().timestamp(),
+                        nanos: Utc::now().timestamp_subsec_nanos() as i32,
+                    }),
+                });
+            }
+        };
+
+        Ok(Response::new(Box::pin(stream)))
     }
 }

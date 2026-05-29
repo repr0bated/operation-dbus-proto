@@ -42,6 +42,7 @@ sha2 = { workspace = true }
 
 # Utilities
 tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 async-trait = { workspace = true }
@@ -51,6 +52,10 @@ futures = "0.3"
 async-stream = "0.3"
 base64 = "0.21"
 qdrant-client = "1.17"
+
+[[bin]]
+name = "op-grpc-bridge"
+path = "src/bin/op-grpc-bridge.rs"
 
 [build-dependencies]
 tonic-build = { workspace = true }

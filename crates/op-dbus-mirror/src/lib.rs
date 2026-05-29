@@ -165,10 +165,10 @@ impl DbusMirror {
         }
 
         // Spawn heartbeat task
-        if let Err(e) = crate::heartbeat::spawn_heartbeat_task(
-            self.clone(),
-            dispatcher.broadcast_tx.clone(),
-        ).await {
+        if let Err(e) =
+            crate::heartbeat::spawn_heartbeat_task(self.clone(), dispatcher.broadcast_tx.clone())
+                .await
+        {
             tracing::error!("Failed to spawn heartbeat task: {}", e);
         }
 
@@ -254,6 +254,16 @@ impl DbusMirror {
             tracing::warn!("System services snapshot failed: {}", e);
         }
 
+        // 5. Network interfaces and WireGuard peers
+        if let Err(e) = self.publish_network_snapshot(&mut active_paths).await {
+            tracing::warn!("Network snapshot failed: {}", e);
+        }
+
+        // 7. Running processes
+        if let Err(e) = self.publish_process_snapshot(&mut active_paths).await {
+            tracing::warn!("Process snapshot failed: {}", e);
+        }
+
         // 8. Keep plugin objects published even when a plugin is currently inactive.
         if let Err(e) = self.publish_plugin_snapshot(&mut active_paths).await {
             tracing::warn!("Plugin snapshot failed: {}", e);
@@ -267,8 +277,15 @@ impl DbusMirror {
 
     async fn publish_host_snapshot(&self, active_paths: &mut HashSet<String>) -> Result<()> {
         let sections = vec![
-            "cpuinfo", "meminfo", "loadavg", "uptime", "stat", "vmstat", 
-            "diskstats", "mounts", "version"
+            "cpuinfo",
+            "meminfo",
+            "loadavg",
+            "uptime",
+            "stat",
+            "vmstat",
+            "diskstats",
+            "mounts",
+            "version",
         ];
 
         for section in sections {
@@ -318,29 +335,89 @@ impl DbusMirror {
 
     async fn publish_ovsdb_snapshot(&self, active_paths: &mut HashSet<String>) -> Result<()> {
         tracing::debug!("Scanning OVSDB for projection...");
+        self.publish_object(
+            "/org/opdbus/v1/ovsdb",
+            serde_json::json!({
+                "kind": "database",
+                "database": "Open_vSwitch",
+                "source": "ovsdb",
+            }),
+        )
+        .await?;
+        active_paths.insert("/org/opdbus/v1/ovsdb".to_string());
+        self.publish_object(
+            "/org/opdbus/v1/ovs",
+            serde_json::json!({
+                "kind": "database_alias",
+                "database": "Open_vSwitch",
+                "source": "ovsdb",
+                "canonical_path": "/org/opdbus/v1/ovsdb",
+            }),
+        )
+        .await?;
+        active_paths.insert("/org/opdbus/v1/ovs".to_string());
+
         let dump_serde = self.ovsdb.dump_db("Open_vSwitch").await?;
         tracing::info!("DEBUG: OVSDB dump retrieved");
         // Convert serde_json::Value → serde_json::Value for compatibility
         let dump: Value = {
             let s = serde_json::to_string(&dump_serde)
                 .map_err(|e| anyhow::anyhow!("dump_db serialize error: {}", e))?;
-            serde_json::from_str(&s)
-                .map_err(|e| anyhow::anyhow!("dump_db parse error: {}", e))?
+            serde_json::from_str(&s).map_err(|e| anyhow::anyhow!("dump_db parse error: {}", e))?
         };
 
         if let Value::Object(tables) = dump {
             tracing::info!("DEBUG: OVSDB dump contains {} tables", tables.len());
-            let table_list: Vec<_> = tables.iter().map(|(k, v)| (k.to_string(), v.clone())).collect();
+            let table_list: Vec<_> = tables
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.clone()))
+                .collect();
             for (table_name, table_data) in table_list {
-                if let Some(rows) = table_data.as_array() {
+                let rows = table_data
+                    .get("rows")
+                    .and_then(|r| r.as_array())
+                    .cloned()
+                    .unwrap_or_default();
+                let table_payload = serde_json::json!({
+                    "kind": "table",
+                    "database": "Open_vSwitch",
+                    "table": table_name,
+                    "row_count": rows.len(),
+                });
+                let table_path = format!("/org/opdbus/v1/ovsdb/{}", table_name);
+                self.publish_object(&table_path, table_payload.clone())
+                    .await?;
+                active_paths.insert(table_path);
+
+                let ovs_table_path = format!("/org/opdbus/v1/ovs/{}", table_name);
+                self.publish_object(&ovs_table_path, table_payload).await?;
+                active_paths.insert(ovs_table_path);
+
+                if let Some(rows) = table_data.get("rows").and_then(|r| r.as_array()) {
                     tracing::info!("DEBUG: OVSDB table {} has {} rows", table_name, rows.len());
                     let rows_vec: Vec<_> = rows.iter().cloned().collect();
                     for (idx, row_data) in rows_vec.into_iter().enumerate() {
                         let row_id = Self::extract_uuid(&row_data);
-                        let id = if row_id == "unknown" { idx.to_string() } else { row_id };
+                        let id = if row_id == "unknown" {
+                            idx.to_string()
+                        } else {
+                            row_id
+                        };
                         let path = format!("/org/opdbus/v1/ovsdb/{}/{}", table_name, id);
                         self.publish_object(&path, row_data).await?;
-                        active_paths.insert(path);
+                        active_paths.insert(path.clone());
+
+                        let ovs_path = format!("/org/opdbus/v1/ovs/{}/{}", table_name, id);
+                        self.publish_object(
+                            &ovs_path,
+                            serde_json::json!({
+                                "canonical_path": path,
+                                "database": "Open_vSwitch",
+                                "table": table_name,
+                            }),
+                        )
+                        .await?;
+                        active_paths.insert(ovs_path);
                     }
                 }
             }
@@ -351,10 +428,21 @@ impl DbusMirror {
 
     async fn publish_nonnet_snapshot(&self, active_paths: &mut HashSet<String>) -> Result<()> {
         tracing::info!("DEBUG: NonNet snapshot started");
+        self.publish_object(
+            "/org/opdbus/v1/nonnet",
+            serde_json::json!({
+                "kind": "database_root",
+                "source": "nonnet",
+            }),
+        )
+        .await?;
+        active_paths.insert("/org/opdbus/v1/nonnet".to_string());
+
         let request = op_jsonrpc::protocol::JsonRpcRequest::new("list_dbs", simd_json::json!([]));
         let response = self.nonnet.handle_request(request).await;
 
-        let dbs: Vec<Value> = response.result
+        let dbs: Vec<Value> = response
+            .result
             .and_then(|v| serde_json::to_value(&v).ok())
             .and_then(|v| v.as_array().map(|a| a.to_vec()))
             .unwrap_or_default();
@@ -364,46 +452,189 @@ impl DbusMirror {
         for db_name_val in dbs {
             if let Some(db_name) = db_name_val.as_str() {
                 tracing::info!("DEBUG: Scanning NonNet DB: {}", db_name);
+                let db_path = format!(
+                    "/org/opdbus/v1/nonnet/{}",
+                    Self::sanitize_dbus_path_segment(db_name)
+                );
+                self.publish_object(
+                    &db_path,
+                    serde_json::json!({
+                        "kind": "database",
+                        "database": db_name,
+                        "source": "nonnet",
+                    }),
+                )
+                .await?;
+                active_paths.insert(db_path.clone());
+
                 let schema_req = op_jsonrpc::protocol::JsonRpcRequest::new(
                     "get_schema",
                     simd_json::json!([db_name]),
                 );
                 let schema_resp = self.nonnet.handle_request(schema_req).await;
 
-                let schema_serde: Option<Value> = schema_resp.result
+                let schema_serde: Option<Value> = schema_resp
+                    .result
                     .and_then(|v| serde_json::to_value(&v).ok());
-                if let Some(tables) = schema_serde
-                    .and_then(|s| s.get("tables").and_then(|v| v.as_object().cloned()))
+                if let Some(tables) =
+                    schema_serde.and_then(|s| s.get("tables").and_then(|v| v.as_object().cloned()))
                 {
                     tracing::info!("DEBUG: NonNet DB {} has {} tables", db_name, tables.len());
                     let table_names: Vec<String> = tables.keys().map(|k| k.to_string()).collect();
                     for table_name in table_names {
+                        let table_path = format!(
+                            "{}/{}",
+                            db_path,
+                            Self::sanitize_dbus_path_segment(&table_name)
+                        );
                         let dump_req = op_jsonrpc::protocol::JsonRpcRequest::new(
-                            "dump",
-                            simd_json::json!([db_name]),
+                            "transact",
+                            simd_json::json!([
+                                db_name,
+                                {
+                                    "op": "select",
+                                    "table": table_name,
+                                    "where": []
+                                }
+                            ]),
                         );
                         let dump_resp = self.nonnet.handle_request(dump_req).await;
 
-                        let dump_serde: Option<Value> = dump_resp.result
-                            .and_then(|v| serde_json::to_value(&v).ok());
-                        if let Some(rows) = dump_serde
-                            .and_then(|r| r.get(&table_name).cloned())
-                            .and_then(|r| r.get("rows").cloned())
+                        let rows = dump_resp.result.and_then(|v| serde_json::to_value(&v).ok());
+                        let rows = rows
+                            .as_ref()
+                            .and_then(|r| r.as_array())
+                            .and_then(|results| results.first())
+                            .and_then(|result| result.get("rows"))
                             .and_then(|v| v.as_array().map(|a| a.to_vec()))
-                        {
-                            tracing::info!("DEBUG: NonNet DB {} table {} has {} rows", db_name, table_name, rows.len());
-                            for row in rows {
-                                let id = Self::extract_uuid(&row);
-                                let path = format!(
-                                    "/org/opdbus/v1/nonnet/{}/{}/{}",
-                                    db_name, table_name, id
-                                );
-                                self.publish_object(&path, row).await?;
-                                active_paths.insert(path);
-                            }
+                            .unwrap_or_default();
+
+                        self.publish_object(
+                            &table_path,
+                            serde_json::json!({
+                                "kind": "table",
+                                "database": db_name,
+                                "table": table_name,
+                                "row_count": rows.len(),
+                            }),
+                        )
+                        .await?;
+                        active_paths.insert(table_path.clone());
+
+                        tracing::info!(
+                            "DEBUG: NonNet DB {} table {} has {} rows",
+                            db_name,
+                            table_name,
+                            rows.len()
+                        );
+                        for (idx, row) in rows.into_iter().enumerate() {
+                            let id = Self::extract_uuid(&row);
+                            let id = if id == "unknown" { idx.to_string() } else { id };
+                            let path =
+                                format!("{}/{}", table_path, Self::sanitize_dbus_path_segment(&id));
+                            self.publish_object(&path, row).await?;
+                            active_paths.insert(path);
                         }
                     }
                 }
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn publish_network_snapshot(&self, active_paths: &mut HashSet<String>) -> Result<()> {
+        use std::process::Command;
+
+        // Read network interfaces from /proc/net/dev
+        if let Ok(content) = std::fs::read_to_string("/proc/net/dev") {
+            for line in content.lines().skip(2) {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.is_empty() {
+                    continue;
+                }
+                let name = parts[0].trim_end_matches(':');
+                let path = format!(
+                    "/org/opdbus/v1/network/interface/{}",
+                    Self::sanitize_path_segment(name)
+                );
+                let data = serde_json::json!({ "name": name, "source": "/proc/net/dev" });
+                self.publish_object(&path, data).await?;
+                active_paths.insert(path);
+            }
+        }
+
+        // Read WireGuard peers from `wg show all dump`
+        if let Ok(out) = Command::new("wg").args(["show", "all", "dump"]).output() {
+            let text = String::from_utf8_lossy(&out.stdout);
+            let mut current_iface = String::new();
+            for line in text.lines() {
+                let cols: Vec<&str> = line.split('\t').collect();
+                if cols.len() == 5 {
+                    // Interface line: iface pubkey privkey listen_port fwmark
+                    current_iface = cols[0].to_string();
+                    let path = format!(
+                        "/org/opdbus/v1/network/wireguard/{}",
+                        Self::sanitize_path_segment(&current_iface)
+                    );
+                    let data = serde_json::json!({
+                        "interface": current_iface,
+                        "public_key": cols[1],
+                        "listen_port": cols[3],
+                        "fwmark": cols[4],
+                    });
+                    self.publish_object(&path, data).await?;
+                    active_paths.insert(path);
+                } else if cols.len() >= 8 && !current_iface.is_empty() {
+                    // Peer line: iface pubkey preshared endpoint allowed_ips latest_handshake rx tx keepalive
+                    let peer_key = cols[1];
+                    let safe_key = peer_key
+                        .replace('/', "_")
+                        .replace('+', "_")
+                        .replace('=', "");
+                    let path = format!(
+                        "/org/opdbus/v1/network/wireguard/{}/peer/{}",
+                        Self::sanitize_path_segment(&current_iface),
+                        safe_key
+                    );
+                    let data = serde_json::json!({
+                        "interface": current_iface,
+                        "public_key": peer_key,
+                        "endpoint": cols[3],
+                        "allowed_ips": cols[4],
+                        "latest_handshake": cols[5].parse::<u64>().unwrap_or(0),
+                        "transfer_rx": cols[6].parse::<u64>().unwrap_or(0),
+                        "transfer_tx": cols[7].parse::<u64>().unwrap_or(0),
+                    });
+                    self.publish_object(&path, data).await?;
+                    active_paths.insert(path);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn publish_process_snapshot(&self, active_paths: &mut HashSet<String>) -> Result<()> {
+        use procfs::process::all_processes;
+
+        if let Ok(procs) = all_processes() {
+            for proc in procs.flatten() {
+                let pid = proc.pid();
+                let stat = match proc.stat() {
+                    Ok(s) => s,
+                    Err(_) => continue,
+                };
+                let path = format!("/org/opdbus/v1/process/_{}", pid);
+                let data = serde_json::json!({
+                    "pid": pid,
+                    "name": stat.comm,
+                    "state": stat.state().map(|s| format!("{:?}", s)).unwrap_or_default(),
+                    "ppid": stat.ppid,
+                    "threads": stat.num_threads,
+                });
+                self.publish_object(&path, data).await?;
+                active_paths.insert(path);
             }
         }
 
@@ -425,7 +656,6 @@ impl DbusMirror {
 
         for name in names {
             let name_str = name.as_str();
-            // Skip unique connections, our own service, and known-huge services
             if name_str.starts_with(':')
                 || name_str.starts_with("org.opdbus")
                 || Self::SKIP_SERVICES.iter().any(|s| *s == name_str)
@@ -433,59 +663,96 @@ impl DbusMirror {
                 continue;
             }
 
-            // Sanitize for D-Bus object path: replace dots and hyphens with underscores
-            let safe_name = name_str.replace('.', "/").replace('-', "_");
+            // Walk the full object tree for this service recursively
+            let mut queue: Vec<String> = vec!["/".to_string()];
+            while let Some(obj_path) = queue.pop() {
+                let proxy = match zbus::fdo::IntrospectableProxy::builder(&system_conn)
+                    .destination(name_str)
+                    .and_then(|b| b.path(obj_path.as_str()))
+                {
+                    Ok(b) => match b.build().await {
+                        Ok(p) => p,
+                        Err(_) => continue,
+                    },
+                    Err(_) => continue,
+                };
 
-            let introspect_proxy = zbus::fdo::IntrospectableProxy::builder(&system_conn)
-                .destination(name_str)?
-                .path("/")?
-                .build()
-                .await?;
+                let xml = match proxy.introspect().await {
+                    Ok(x) => x,
+                    Err(_) => continue,
+                };
 
-            let mut interfaces = Vec::new();
-            let mut methods = Vec::new();
-            let mut properties = Vec::new();
-            let mut signals = Vec::new();
+                let node = match zbus_xml::Node::try_from(xml.as_str()) {
+                    Ok(n) => n,
+                    Err(_) => continue,
+                };
 
-            if let Ok(xml) = introspect_proxy.introspect().await {
-                if let Ok(node) = zbus_xml::Node::try_from(xml.as_str()) {
-                    for iface in node.interfaces() {
-                        let iface_name: String = iface.name().to_string();
-                        // Skip standard D-Bus plumbing interfaces
-                        if iface_name == "org.freedesktop.DBus.Introspectable"
-                            || iface_name == "org.freedesktop.DBus.Peer"
-                            || iface_name == "org.freedesktop.DBus.Properties"
-                        {
-                            continue;
-                        }
-                        interfaces.push(Value::from(iface_name));
-                        for m in iface.methods() {
-                            let n: String = m.name().to_string();
-                            methods.push(Value::from(n));
-                        }
-                        for p in iface.properties() {
-                            let n: String = p.name().to_string();
-                            properties.push(Value::from(n));
-                        }
-                        for s in iface.signals() {
-                            let n: String = s.name().to_string();
-                            signals.push(Value::from(n));
-                        }
+                // Enqueue child paths for recursive walk
+                for child in node.nodes() {
+                    if let Some(child_name) = child.name() {
+                        let child_path = if obj_path == "/" {
+                            format!("/{}", child_name)
+                        } else {
+                            format!("{}/{}", obj_path.trim_end_matches('/'), child_name)
+                        };
+                        queue.push(child_path);
                     }
                 }
+
+                // Only publish nodes that have meaningful interfaces
+                let mut interfaces = Vec::new();
+                let mut methods = Vec::new();
+                let mut properties = Vec::new();
+                let mut signals = Vec::new();
+
+                for iface in node.interfaces() {
+                    let iface_name: String = iface.name().to_string();
+                    if iface_name == "org.freedesktop.DBus.Introspectable"
+                        || iface_name == "org.freedesktop.DBus.Peer"
+                        || iface_name == "org.freedesktop.DBus.Properties"
+                    {
+                        continue;
+                    }
+                    interfaces.push(Value::from(iface_name));
+                    for m in iface.methods() {
+                        methods.push(Value::from(m.name().to_string()));
+                    }
+                    for p in iface.properties() {
+                        properties.push(Value::from(p.name().to_string()));
+                    }
+                    for s in iface.signals() {
+                        signals.push(Value::from(s.name().to_string()));
+                    }
+                }
+
+                if interfaces.is_empty() {
+                    continue;
+                }
+
+                // Map the real object path into our namespace
+                let safe_obj = obj_path
+                    .trim_start_matches('/')
+                    .replace('/', "_")
+                    .replace('-', "_");
+                let safe_svc = name_str.replace('.', "/").replace('-', "_");
+                let mirror_path = if safe_obj.is_empty() {
+                    format!("/org/opdbus/v1/system/{}", safe_svc)
+                } else {
+                    format!("/org/opdbus/v1/system/{}/{}", safe_svc, safe_obj)
+                };
+
+                let data = serde_json::json!({
+                    "service": name_str,
+                    "path": obj_path,
+                    "interfaces": interfaces,
+                    "methods": methods,
+                    "properties": properties,
+                    "signals": signals,
+                });
+
+                self.publish_object(&mirror_path, data).await?;
+                active_paths.insert(mirror_path);
             }
-
-            let service_data = serde_json::json!({
-                "service": name_str,
-                "interfaces": interfaces,
-                "methods": methods,
-                "properties": properties,
-                "signals": signals,
-            });
-
-            let path = format!("/org/opdbus/v1/system/{}", safe_name);
-            self.publish_object(&path, service_data).await?;
-            active_paths.insert(path);
         }
 
         Ok(())
@@ -766,14 +1033,14 @@ impl DbusMirror {
 
         // Check if data has changed
         let changed = *current_data != data;
-        
+
         if changed {
             // Increment sequence number
             *sequence += 1;
-            
+
             // Update stored data
             *current_data = data.clone();
-            
+
             if self.published_objects.contains_key(path) {
                 // Object already registered — update data in-place and signal if changed.
                 if let Ok(iface_ref) = self
@@ -793,11 +1060,11 @@ impl DbusMirror {
                 let obj = object::MirrorObject::new(data.clone());
                 self.connection.object_server().at(path, obj).await?;
                 self.published_objects.insert(path.to_string(), ());
-                
+
                 self.register_in_object_manager(path, &data).await;
             }
         }
-        
+
         Ok(())
     }
 

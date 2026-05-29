@@ -8,12 +8,12 @@
 
 use anyhow::{Context, Result};
 use qdrant_client::{
-    Payload, Qdrant,
     qdrant::{
-        Condition, CreateCollectionBuilder, Distance, Filter, PointStruct,
-        SearchPointsBuilder, UpsertPointsBuilder, VectorParamsBuilder, VectorsConfig,
-        vectors_config::Config as VectorsConfigEnum,
+        vectors_config::Config as VectorsConfigEnum, Condition, CreateCollectionBuilder, Distance,
+        Filter, PointStruct, SearchPointsBuilder, UpsertPointsBuilder, VectorParamsBuilder,
+        VectorsConfig,
     },
+    Payload, Qdrant,
 };
 use regex::Regex;
 use reqwest::Client;
@@ -43,10 +43,10 @@ const VOYAGE_RATE_DELAY_MS: u64 = 120; // ms between Voyage calls
 pub struct FileMeta {
     pub language: &'static str,
     pub file_type: FileType,
-    pub symbols: Vec<String>,    // top-level pub items
+    pub symbols: Vec<String>, // top-level pub items
     pub doc_comments: Vec<String>,
-    pub imports: Vec<String>,    // use / import / require
-    pub tags: Vec<String>,       // semantic auto-tags
+    pub imports: Vec<String>, // use / import / require
+    pub tags: Vec<String>,    // semantic auto-tags
     pub is_test: bool,
 }
 
@@ -165,7 +165,14 @@ impl RagPipeline {
         let mut archive = zip::ZipArchive::new(file)?;
 
         let entry_idx = (0..archive.len())
-            .find(|&i| archive.by_index(i).map(|e| e.name().to_string()).ok().as_deref() == Some(entry_name))
+            .find(|&i| {
+                archive
+                    .by_index(i)
+                    .map(|e| e.name().to_string())
+                    .ok()
+                    .as_deref()
+                    == Some(entry_name)
+            })
             .with_context(|| format!("Entry '{entry_name}' not found in zip"))?;
 
         let entry = archive.by_index(entry_idx)?;
@@ -248,8 +255,7 @@ impl RagPipeline {
     ) -> Result<Vec<RagResult>> {
         let vector = self.embed_query(query_text).await?;
 
-        let mut builder = SearchPointsBuilder::new(collection, vector, limit)
-            .with_payload(true);
+        let mut builder = SearchPointsBuilder::new(collection, vector, limit).with_payload(true);
 
         if let Some(repo) = repo_filter {
             builder = builder.filter(Filter::must([Condition::matches("repo", repo.to_string())]));
@@ -288,13 +294,13 @@ impl RagPipeline {
     async fn ensure_collection(&self, name: &str) -> Result<()> {
         if !self.qdrant.collection_exists(name).await? {
             self.qdrant
-                .create_collection(
-                    CreateCollectionBuilder::new(name).vectors_config(VectorsConfig {
+                .create_collection(CreateCollectionBuilder::new(name).vectors_config(
+                    VectorsConfig {
                         config: Some(VectorsConfigEnum::Params(
                             VectorParamsBuilder::new(VECTOR_DIM, Distance::Cosine).build(),
                         )),
-                    }),
-                )
+                    },
+                ))
                 .await?;
             info!(collection = %name, "Created Qdrant collection");
         }
@@ -309,7 +315,10 @@ impl RagPipeline {
     ) {
         match self
             .qdrant
-            .upsert_points(UpsertPointsBuilder::new(collection, batch.drain(..).collect::<Vec<_>>()))
+            .upsert_points(UpsertPointsBuilder::new(
+                collection,
+                batch.drain(..).collect::<Vec<_>>(),
+            ))
             .await
         {
             Ok(_) => stats.chunks_upserted += VOYAGE_BATCH.min(batch.capacity()),
@@ -375,10 +384,7 @@ impl RagPipeline {
 
 /// Stream-parse a repomix file and yield enriched, chunked entries.
 /// Never loads the whole file into memory.
-fn parse_and_chunk(
-    reader: impl BufRead,
-    repo: &str,
-) -> impl Iterator<Item = Chunk> {
+fn parse_and_chunk(reader: impl BufRead, repo: &str) -> impl Iterator<Item = Chunk> {
     let repo = repo.to_string();
     let mut lines_iter = reader.lines();
     let mut pending: Option<(String, Vec<String>, usize)> = None; // (path, lines, start_lineno)
@@ -427,7 +433,9 @@ fn enrich(file_path: &str, lines: &[String]) -> FileMeta {
     let language = detect_language(file_path);
     let file_type = classify_file(file_path, lines);
     let is_test = file_type == FileType::Test
-        || lines.iter().any(|l| l.contains("#[test]") || l.contains("#[cfg(test)]"));
+        || lines
+            .iter()
+            .any(|l| l.contains("#[test]") || l.contains("#[cfg(test)]"));
 
     let (symbols, doc_comments, imports) = match language {
         "rust" => extract_rust(lines),
@@ -439,7 +447,15 @@ fn enrich(file_path: &str, lines: &[String]) -> FileMeta {
 
     let tags = auto_tags(file_path, &symbols, &imports, language);
 
-    FileMeta { language, file_type, symbols, doc_comments, imports, tags, is_test }
+    FileMeta {
+        language,
+        file_type,
+        symbols,
+        doc_comments,
+        imports,
+        tags,
+        is_test,
+    }
 }
 
 fn detect_language(path: &str) -> &'static str {
@@ -470,21 +486,30 @@ fn classify_file(path: &str, lines: &[String]) -> FileType {
     if lower.contains("test") || lower.contains("spec") || lower.ends_with("_test.rs") {
         return FileType::Test;
     }
-    if lower.ends_with("cargo.toml") || lower.ends_with("package.json")
-        || lower.ends_with("pyproject.toml") || lower.ends_with("go.mod")
-        || lower.ends_with("build.rs") || lower.ends_with("makefile")
+    if lower.ends_with("cargo.toml")
+        || lower.ends_with("package.json")
+        || lower.ends_with("pyproject.toml")
+        || lower.ends_with("go.mod")
+        || lower.ends_with("build.rs")
+        || lower.ends_with("makefile")
     {
         return FileType::Build;
     }
     if lower.ends_with(".md") || lower.ends_with(".rst") || lower.ends_with(".txt") {
         return FileType::Docs;
     }
-    if lower.ends_with(".toml") || lower.ends_with(".yaml") || lower.ends_with(".yml")
-        || lower.ends_with(".json") || lower.ends_with(".env")
+    if lower.ends_with(".toml")
+        || lower.ends_with(".yaml")
+        || lower.ends_with(".yml")
+        || lower.ends_with(".json")
+        || lower.ends_with(".env")
     {
         return FileType::Config;
     }
-    if lines.iter().any(|l| l.contains("#[cfg(test)]") || l.contains("#[test]")) {
+    if lines
+        .iter()
+        .any(|l| l.contains("#[cfg(test)]") || l.contains("#[test]"))
+    {
         return FileType::Test;
     }
     FileType::Source
@@ -559,9 +584,8 @@ fn extract_ts(lines: &[String]) -> (Vec<String>, Vec<String>, Vec<String>) {
     let re_export = RE_EXPORT.get_or_init(|| {
         Regex::new(r"^export\s+(?:default\s+)?(?:async\s+)?(?:function|class|interface|type|const|enum)\s+(\w+)").unwrap()
     });
-    let re_import = RE_IMPORT.get_or_init(|| {
-        Regex::new(r#"^import\s+.+from\s+['"]([^'"]+)['"]"#).unwrap()
-    });
+    let re_import =
+        RE_IMPORT.get_or_init(|| Regex::new(r#"^import\s+.+from\s+['"]([^'"]+)['"]"#).unwrap());
 
     let mut symbols = Vec::new();
     let mut imports = Vec::new();
@@ -576,11 +600,15 @@ fn extract_ts(lines: &[String]) -> (Vec<String>, Vec<String>, Vec<String>) {
             let src = caps.get(1).map(|m| m.as_str()).unwrap_or("").to_string();
             let pkg = src.split('/').next().unwrap_or(&src);
             let pkg = pkg.trim_start_matches('@').to_string();
-            if !imports.contains(&pkg) { imports.push(pkg); }
+            if !imports.contains(&pkg) {
+                imports.push(pkg);
+            }
         }
         if trimmed.starts_with("/**") || trimmed.starts_with("* ") {
             let doc = trimmed.trim_start_matches(['/', '*', ' ']).to_string();
-            if !doc.is_empty() { doc_comments.push(doc); }
+            if !doc.is_empty() {
+                doc_comments.push(doc);
+            }
         }
     }
 
@@ -594,12 +622,8 @@ fn extract_python(lines: &[String]) -> (Vec<String>, Vec<String>, Vec<String>) {
     static RE_DEF: OnceLock<Regex> = OnceLock::new();
     static RE_IMP: OnceLock<Regex> = OnceLock::new();
 
-    let re_def = RE_DEF.get_or_init(|| {
-        Regex::new(r"^(?:class|def|async def)\s+(\w+)").unwrap()
-    });
-    let re_imp = RE_IMP.get_or_init(|| {
-        Regex::new(r"^(?:import|from)\s+([\w.]+)").unwrap()
-    });
+    let re_def = RE_DEF.get_or_init(|| Regex::new(r"^(?:class|def|async def)\s+(\w+)").unwrap());
+    let re_imp = RE_IMP.get_or_init(|| Regex::new(r"^(?:import|from)\s+([\w.]+)").unwrap());
 
     let mut symbols = Vec::new();
     let mut imports = Vec::new();
@@ -612,7 +636,9 @@ fn extract_python(lines: &[String]) -> (Vec<String>, Vec<String>, Vec<String>) {
         if let Some(caps) = re_imp.captures(trimmed) {
             let pkg = caps.get(1).map(|m| m.as_str()).unwrap_or("").to_string();
             let top = pkg.split('.').next().unwrap_or(&pkg).to_string();
-            if !imports.contains(&top) { imports.push(top); }
+            if !imports.contains(&top) {
+                imports.push(top);
+            }
         }
     }
 
@@ -626,11 +652,10 @@ fn extract_go(lines: &[String]) -> (Vec<String>, Vec<String>, Vec<String>) {
     static RE_IMP: OnceLock<Regex> = OnceLock::new();
 
     let re_decl = RE_DECL.get_or_init(|| {
-        Regex::new(r"^func\s+(?:\(\w+\s+\*?\w+\)\s+)?(\w+)|^type\s+(\w+)\s+(?:struct|interface)").unwrap()
+        Regex::new(r"^func\s+(?:\(\w+\s+\*?\w+\)\s+)?(\w+)|^type\s+(\w+)\s+(?:struct|interface)")
+            .unwrap()
     });
-    let re_imp = RE_IMP.get_or_init(|| {
-        Regex::new(r#"^\s+"([^"]+)""#).unwrap()
-    });
+    let re_imp = RE_IMP.get_or_init(|| Regex::new(r#"^\s+"([^"]+)""#).unwrap());
 
     let mut symbols = Vec::new();
     let mut imports = Vec::new();
@@ -638,14 +663,22 @@ fn extract_go(lines: &[String]) -> (Vec<String>, Vec<String>, Vec<String>) {
     for line in lines {
         let trimmed = line.trim();
         if let Some(caps) = re_decl.captures(trimmed) {
-            let name = caps.get(1).or_else(|| caps.get(2))
-                .map(|m| m.as_str()).unwrap_or("").to_string();
-            if !name.is_empty() { symbols.push(name); }
+            let name = caps
+                .get(1)
+                .or_else(|| caps.get(2))
+                .map(|m| m.as_str())
+                .unwrap_or("")
+                .to_string();
+            if !name.is_empty() {
+                symbols.push(name);
+            }
         }
         if let Some(caps) = re_imp.captures(trimmed) {
             let pkg = caps.get(1).map(|m| m.as_str()).unwrap_or("");
             let top = pkg.split('/').last().unwrap_or(pkg).to_string();
-            if !imports.contains(&top) { imports.push(top); }
+            if !imports.contains(&top) {
+                imports.push(top);
+            }
         }
     }
 
@@ -662,17 +695,24 @@ fn auto_tags(path: &str, symbols: &[String], imports: &[String], lang: &str) -> 
 
     // Path-based tags
     let lower = path.to_lowercase();
-    for keyword in ["server", "client", "handler", "router", "auth", "error",
-                     "config", "test", "bench", "proto", "grpc", "http",
-                     "async", "stream", "channel", "database", "cache"] {
-        if lower.contains(keyword) { tags.push(keyword); }
+    for keyword in [
+        "server", "client", "handler", "router", "auth", "error", "config", "test", "bench",
+        "proto", "grpc", "http", "async", "stream", "channel", "database", "cache",
+    ] {
+        if lower.contains(keyword) {
+            tags.push(keyword);
+        }
     }
 
     // Symbol-based tags
     let sym_text = symbols.join(" ").to_lowercase();
-    for keyword in ["trait", "impl", "async", "handler", "service", "client",
-                     "server", "error", "config", "builder", "stream"] {
-        if sym_text.contains(keyword) { tags.push(keyword); }
+    for keyword in [
+        "trait", "impl", "async", "handler", "service", "client", "server", "error", "config",
+        "builder", "stream",
+    ] {
+        if sym_text.contains(keyword) {
+            tags.push(keyword);
+        }
     }
 
     // Import-based tags
@@ -692,7 +732,9 @@ fn auto_tags(path: &str, symbols: &[String], imports: &[String], lang: &str) -> 
     let mut deduped: Vec<String> = Vec::new();
     for t in tags {
         let s = t.to_string();
-        if !deduped.contains(&s) { deduped.push(s); }
+        if !deduped.contains(&s) {
+            deduped.push(s);
+        }
     }
     deduped.truncate(20);
     deduped
@@ -717,7 +759,8 @@ fn build_chunks(repo: &str, file_path: &str, meta: FileMeta, lines: Vec<String>)
         let chunk_lines = &lines[idx..end];
         let content = chunk_lines.join("\n");
         let embed_text = build_embed_text(repo, file_path, &meta, &content);
-        let content_hash = hex_hash(format!("{repo}:{file_path}:{chunk_index}:{content}").as_bytes());
+        let content_hash =
+            hex_hash(format!("{repo}:{file_path}:{chunk_index}:{content}").as_bytes());
 
         chunks.push(Chunk {
             repo: repo.to_string(),
@@ -772,9 +815,7 @@ fn build_embed_text(repo: &str, file_path: &str, meta: &FileMeta, content: &str)
 fn repo_name_from_entry(entry_name: &str) -> String {
     // "rust-analyzer-repomix.md" → "rust-analyzer"
     // "google-cloud-rust-repomix-2.md" → "google-cloud-rust"
-    let base = entry_name
-        .trim_end_matches(".md")
-        .trim_end_matches(".xml");
+    let base = entry_name.trim_end_matches(".md").trim_end_matches(".xml");
 
     // Strip trailing "-repomix" and any "-N" suffix
     let base = if let Some(pos) = base.rfind("-repomix") {
@@ -822,7 +863,9 @@ fn stable_uuid(hash: &str) -> String {
 pub fn qdrant_client_from_env() -> Result<Qdrant> {
     let url = std::env::var("COGNITIVE_MCP_QDRANT_URL")
         .unwrap_or_else(|_| "http://127.0.0.1:6334".into());
-    Qdrant::from_url(&url).build().context("Failed to build Qdrant client")
+    Qdrant::from_url(&url)
+        .build()
+        .context("Failed to build Qdrant client")
 }
 
 fn str_field(v: &serde_json::Value, key: &str) -> String {
@@ -832,6 +875,10 @@ fn str_field(v: &serde_json::Value, key: &str) -> String {
 fn str_arr(v: &serde_json::Value, key: &str) -> Vec<String> {
     v[key]
         .as_array()
-        .map(|arr| arr.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|x| x.as_str().map(str::to_string))
+                .collect()
+        })
         .unwrap_or_default()
 }

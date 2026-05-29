@@ -8,6 +8,9 @@ use op_projection::*;
 use parking_lot::Mutex;
 use std::sync::Arc;
 use tracing::{info, warn, Level};
+
+// Builtin schemas from op-state-store — the absolute base for all projections.
+use op_state_store;
 use tracing_subscriber::FmtSubscriber;
 
 #[tokio::main]
@@ -196,7 +199,15 @@ async fn main() -> Result<()> {
         register_schema_if_missing(&mut schema_engine, schema)?;
     }
 
-    info!("Registered initial schemas");
+    // Register all builtin schemas from op-state-store so the shm catalog
+    // is the single source of truth for UI, blockchain, everything.
+    // These include web_ui, mcp, wireguard, incus, openflow, etc.
+    for runtime_schema in op_state_store::builtin_plugin_schemas() {
+        let schema = convert_schema(&runtime_schema);
+        register_schema_if_missing(&mut schema_engine, schema)?;
+    }
+
+    info!("Registered initial schemas ({} total)", schema_engine.list_schemas().len());
 
     // 2. Initialize Projection Store and Engine
     let store = ProjectionStore::new();
@@ -217,6 +228,9 @@ async fn main() -> Result<()> {
     // 4. Initialize JSON-stream Server
     let mut stream_server = ProjectionStreamServer::new();
     stream_server.start(8082)?;
+    let mut dbus_server = ProjectionDbusServer::new()
+        .await
+        .context("failed to start projection D-Bus server")?;
 
     // 5. Initial Scan and Projection
     {
@@ -241,9 +255,12 @@ async fn main() -> Result<()> {
             }
         }
 
-        let mut engine_lock = engine.lock();
         for entity in initial_entities {
-            let projection = engine_lock.create_projection(entity)?;
+            let projection = {
+                let mut engine_lock = engine.lock();
+                engine_lock.create_projection(entity)?
+            };
+            dbus_server.upsert(&projection).await?;
             stream_server.broadcast(&ProjectionUpdate {
                 update_type: UpdateType::Created,
                 projection,
@@ -291,9 +308,12 @@ async fn main() -> Result<()> {
             }
         }
 
-        let mut engine_lock = engine.lock();
         for entity in refresh_entities {
-            let update = engine_lock.create_projection(entity)?;
+            let update = {
+                let mut engine_lock = engine.lock();
+                engine_lock.create_projection(entity)?
+            };
+            dbus_server.upsert(&update).await?;
 
             stream_server.broadcast(&ProjectionUpdate {
                 update_type: UpdateType::Updated,

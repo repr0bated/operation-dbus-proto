@@ -8,16 +8,17 @@ The op-dbus MCP server exposes three main modes at `https://op-dbus.ghostbridge.
 
 | Mode | SSE Endpoint | POST Endpoint | Description |
 |------|--------------|---------------|-------------|
-| **Compact** | `/mcp/compact` | `/mcp/compact/message` | 4 meta-tools for efficient tool discovery |
+| **Compact** | `/mcp/compact` | `/mcp/compact/message` | 5 lazy meta-tools for efficient tool discovery |
 | **Standard** | `/mcp/sse` | `/mcp/message` | All tools exposed directly |
 | **Agents** | `/mcp/agents` | `/mcp/agents/message` | Specialized AI agents |
 
 ### Compact Mode (Recommended for AI Clients)
-Exposes 4 meta-tools instead of the full tool list:
+Exposes 5 lazy meta-tools instead of the full tool list:
 - `list_tools` - Browse tools with pagination
 - `search_tools` - Search tools by keyword
 - `get_tool_schema` - Get schema for a specific tool
 - `execute_tool` - Execute any underlying tool
+- `respond` - Return the final response
 
 ### Standard Mode
 Exposes all tools directly via `tools/list`. Best for clients that can handle large tool lists.

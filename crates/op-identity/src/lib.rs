@@ -9,14 +9,13 @@ pub mod session;
 pub mod token; // Keeping for now if needed internally
 pub mod wireguard;
 
-pub use anna_scribe::{AnnaScribe, PluginSchema, SessionLedger};
+pub use anna_scribe::{AnnaScribe, SessionLedger};
 pub use gcloud_auth::GCloudAuth;
 pub use registration::{generate_magic_link_token, generate_wireguard_keypair, WireGuardKeyPair};
 pub use schema_bridge::{
-    read_sled, run_schema_shuttle, socket_entries_from_env, watch_wireguard_handshakes,
-    write_sled, write_sled_from_wg, write_sled_full,
-    IdentitySled, SHM_SLED_PATH, SHM_XRAY_CONFIG,
-    SocketEntry, SubidCategory, SubidTaxonomy,
+    read_sled, run_schema_shuttle, socket_entries_from_env, watch_wireguard_handshakes, write_sled,
+    write_sled_from_wg, write_sled_full, IdentitySled, SocketEntry, SubidCategory, SubidTaxonomy,
+    SHM_SLED_PATH, SHM_XRAY_CONFIG,
 };
 pub use session::{Session, SessionManager};
 pub use token::{CachedToken, TokenManager};

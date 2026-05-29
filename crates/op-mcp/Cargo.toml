@@ -32,7 +32,7 @@ tower-http = { version = "0.5", features = ["cors"] }
 reqwest.workspace = true
 
 # D-Bus (for agent executor)
-zbus = "4.0"
+zbus = { workspace = true }
 
 # CLI
 clap = { version = "4.0", features = ["derive"] }
@@ -43,6 +43,7 @@ prost = { workspace = true, optional = true }
 
 # Internal crates
 op-core = { path = "../op-core" }
+op-identity = { path = "../op-identity" }
 op-tools = { path = "../op-tools" }
 op-plugins = { path = "../op-plugins" }
 op-introspection = { path = "../op-introspection" }

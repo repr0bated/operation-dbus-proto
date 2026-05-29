@@ -155,11 +155,11 @@ impl ProjectionEngine {
 
                         // Register tools for properties (ProjectedObjectV1)
                         if iface.name == "org.opdbus.ProjectedObjectV1" {
-                             let tool = crate::builtin::plugin_projection::PluginProjectionTool::new_generic(
+                            let tool = crate::builtin::plugin_projection::PluginProjectionTool::new_generic(
                                 &service,
                                 path.clone(),
                             );
-                            
+
                             let definition = crate::registry::ToolDefinition {
                                 name: tool.name().to_string(),
                                 description: format!(
@@ -167,7 +167,8 @@ impl ProjectionEngine {
                                     path, service
                                 ),
                                 input_schema: tool.input_schema(),
-                                schema_version: "https://json-schema.org/draft/next/schema".to_string(),
+                                schema_version: "https://json-schema.org/draft/next/schema"
+                                    .to_string(),
                                 category: "plugin-projection".to_string(),
                                 namespace: "mirrored.v1".to_string(),
                                 tags: vec![
@@ -177,9 +178,13 @@ impl ProjectionEngine {
                                     service.clone(),
                                 ],
                             };
-                            
+
                             if let Ok(_) = registry
-                                .register(tool.name().to_string().into(), Arc::new(tool), definition)
+                                .register(
+                                    tool.name().to_string().into(),
+                                    Arc::new(tool),
+                                    definition,
+                                )
                                 .await
                             {
                                 service_tools += 1;

@@ -113,9 +113,7 @@ impl CognitiveToolService for CognitiveGrpcService {
                     format!(
                         "[{}] {}",
                         e.key,
-                        e.value
-                            .as_str()
-                            .unwrap_or(&e.value.to_string())
+                        e.value.as_str().unwrap_or(&e.value.to_string())
                     )
                 })
                 .collect::<Vec<_>>()
@@ -246,9 +244,7 @@ impl CognitiveToolService for CognitiveGrpcService {
         let kind = if req.kind_filter.is_empty() {
             None
         } else {
-            req.kind_filter
-                .parse::<NamespaceKind>()
-                .ok()
+            req.kind_filter.parse::<NamespaceKind>().ok()
         };
 
         let namespaces = self
@@ -299,7 +295,9 @@ impl CognitiveToolService for CognitiveGrpcService {
             .get_namespace_by_name(&req.notebook_id)
             .await
             .map_err(|e| Status::internal(e.to_string()))?
-            .ok_or_else(|| Status::not_found(format!("Notebook '{}' not found", req.notebook_id)))?;
+            .ok_or_else(|| {
+                Status::not_found(format!("Notebook '{}' not found", req.notebook_id))
+            })?;
 
         let metadata_json =
             serde_json::to_string(&ns.metadata).unwrap_or_else(|_| "{}".to_string());
@@ -546,9 +544,7 @@ impl CognitiveToolService for CognitiveGrpcService {
                     .file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_default();
-                let matches = req.patterns.iter().any(|pat| {
-                    glob_match(pat, &file_name)
-                });
+                let matches = req.patterns.iter().any(|pat| glob_match(pat, &file_name));
                 if !matches {
                     skipped += 1;
                     continue;
@@ -604,11 +600,7 @@ impl CognitiveToolService for CognitiveGrpcService {
         info!(notebook_id = %req.notebook_id, "ListSources");
 
         let namespace = format!("project:{}", req.notebook_id);
-        let limit = if req.limit > 0 {
-            req.limit as i64
-        } else {
-            100
-        };
+        let limit = if req.limit > 0 { req.limit as i64 } else { 100 };
 
         let entries = self
             .memory_store
@@ -666,9 +658,7 @@ impl CognitiveToolService for CognitiveGrpcService {
             .retrieve_entry(&namespace, &req.source_id)
             .await
             .map_err(|e| Status::internal(e.to_string()))?
-            .ok_or_else(|| {
-                Status::not_found(format!("Source '{}' not found", req.source_id))
-            })?;
+            .ok_or_else(|| Status::not_found(format!("Source '{}' not found", req.source_id)))?;
 
         let content = entry
             .value
@@ -702,7 +692,7 @@ impl CognitiveToolService for CognitiveGrpcService {
         info!(notebook_id = %req.notebook_id, "GenerateDataTable");
 
         let namespace = format!("project:{}", req.notebook_id);
-        
+
         // Step 1: Get all sources in the notebook
         let entries = self
             .memory_store
@@ -799,15 +789,12 @@ impl CognitiveToolService for CognitiveGrpcService {
                     });
                 }
                 Err(e) => {
-                    components["memory_store"] =
-                        serde_json::json!(format!("error: {}", e));
+                    components["memory_store"] = serde_json::json!(format!("error: {}", e));
                 }
             }
 
-            components["active_sessions"] =
-                serde_json::json!(self.session_manager.active_count());
-            components["total_sessions"] =
-                serde_json::json!(self.session_manager.count());
+            components["active_sessions"] = serde_json::json!(self.session_manager.active_count());
+            components["total_sessions"] = serde_json::json!(self.session_manager.count());
         }
 
         Ok(Response::new(GetHealthResponse {
@@ -899,7 +886,7 @@ impl CognitiveToolService for CognitiveGrpcService {
         );
 
         let namespace = format!("project:{}", req.notebook_id);
-        
+
         self.memory_store
             .delete_entry(&namespace, &req.source_id)
             .await
@@ -932,14 +919,20 @@ impl CognitiveToolService for CognitiveGrpcService {
                 .await
                 .map_err(|e| Status::internal(e.to_string()))?;
 
-            let sections_json = serde_json::to_string(&result.sections)
-                .unwrap_or_else(|_| "[]".to_string());
+            let sections_json =
+                serde_json::to_string(&result.sections).unwrap_or_else(|_| "[]".to_string());
 
-            let citations = result.sections.iter().flat_map(|s| &s.citations).cloned().map(|c| Citation {
-                text: c.text,
-                source: c.source,
-                page: c.page,
-            }).collect();
+            let citations = result
+                .sections
+                .iter()
+                .flat_map(|s| &s.citations)
+                .cloned()
+                .map(|c| Citation {
+                    text: c.text,
+                    source: c.source,
+                    page: c.page,
+                })
+                .collect();
 
             Ok(Response::new(GeminiQueryResponse {
                 answer: result.summary,
@@ -955,11 +948,15 @@ impl CognitiveToolService for CognitiveGrpcService {
                 .await
                 .map_err(|e| Status::internal(e.to_string()))?;
 
-            let citations = result.citations.into_iter().map(|c| Citation {
-                text: c.text,
-                source: c.source,
-                page: c.page,
-            }).collect();
+            let citations = result
+                .citations
+                .into_iter()
+                .map(|c| Citation {
+                    text: c.text,
+                    source: c.source,
+                    page: c.page,
+                })
+                .collect();
 
             Ok(Response::new(GeminiQueryResponse {
                 answer: result.answer,
@@ -984,7 +981,9 @@ impl CognitiveToolService for CognitiveGrpcService {
         let profile = if req.profile_name.is_empty() {
             crate::tool_profiles::current_profile()
         } else {
-            req.profile_name.parse().unwrap_or(crate::tool_profiles::current_profile())
+            req.profile_name
+                .parse()
+                .unwrap_or(crate::tool_profiles::current_profile())
         };
 
         let estimate = crate::tool_profiles::token_estimate(profile);
@@ -1019,8 +1018,8 @@ impl CognitiveToolService for CognitiveGrpcService {
         )
         .await;
 
-        let components_json = serde_json::to_string(&report.components)
-            .unwrap_or_else(|_| "[]".to_string());
+        let components_json =
+            serde_json::to_string(&report.components).unwrap_or_else(|_| "[]".to_string());
 
         Ok(Response::new(DoctorResponse {
             overall_status: report.overall_status,
@@ -1040,15 +1039,22 @@ impl CognitiveToolService for CognitiveGrpcService {
         let req = request.into_inner();
         info!("GetQueryHistory");
 
-        let limit = if req.limit > 0 { req.limit as usize } else { 50 };
-        
+        let limit = if req.limit > 0 {
+            req.limit as usize
+        } else {
+            50
+        };
+
         let history = crate::doctor::get_query_history(&self.session_manager, limit);
         let total = history.len() as i32;
 
         let entries = history
             .into_iter()
             .map(|v| QueryHistoryEntry {
-                conversation_id: v["conversation_id"].as_str().unwrap_or_default().to_string(),
+                conversation_id: v["conversation_id"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
                 notebook_id: v["notebook_id"].as_str().unwrap_or_default().to_string(),
                 query: v["query"].as_str().unwrap_or_default().to_string(),
                 answer_preview: v["answer_preview"].as_str().unwrap_or_default().to_string(),
@@ -1060,10 +1066,7 @@ impl CognitiveToolService for CognitiveGrpcService {
             .filter(|e| req.conversation_id.is_empty() || e.conversation_id == req.conversation_id)
             .collect();
 
-        Ok(Response::new(GetQueryHistoryResponse {
-            entries,
-            total,
-        }))
+        Ok(Response::new(GetQueryHistoryResponse { entries, total }))
     }
 }
 

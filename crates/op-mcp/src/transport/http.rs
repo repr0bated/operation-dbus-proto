@@ -279,7 +279,11 @@ impl Transport for HttpTransport {
         let listener = tokio::net::TcpListener::bind(&self.bind_addr).await?;
         info!(addr = %self.bind_addr, "HTTP transport listening");
 
-        axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await?;
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await?;
         Ok(())
     }
 }
@@ -333,7 +337,11 @@ impl Transport for SseTransport {
         let listener = tokio::net::TcpListener::bind(&self.bind_addr).await?;
         info!(addr = %self.bind_addr, "SSE transport listening");
 
-        axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await?;
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await?;
         Ok(())
     }
 }
@@ -372,9 +380,10 @@ impl Transport for HttpSseTransport {
 
         let (event_tx, _) = broadcast::channel(100);
         let state = Arc::new(HttpState { handler, event_tx });
+        let base_path = self.base_path.trim_end_matches('/').to_string();
         let validator = self.validator;
 
-        let app = Router::new()
+        let mut app = Router::new()
             .route("/", get(root_handler).post(mcp_handler::<H>))
             .route("/sse", get(sse_handler::<H>))
             .route("/mcp", post(mcp_handler::<H>))
@@ -384,7 +393,24 @@ impl Transport for HttpSseTransport {
                 "/tools/list",
                 get(tools_list_handler::<H>).post(tools_list_handler::<H>),
             )
-            .route("/tools/call", post(tools_call_handler::<H>))
+            .route("/tools/call", post(tools_call_handler::<H>));
+
+        if !base_path.is_empty() {
+            app = app
+                .route(&base_path, get(sse_handler::<H>).post(mcp_handler::<H>))
+                .route(&format!("{}/sse", base_path), get(sse_handler::<H>))
+                .route(&format!("{}/message", base_path), post(mcp_handler::<H>))
+                .route(
+                    &format!("{}/tools/list", base_path),
+                    get(tools_list_handler::<H>).post(tools_list_handler::<H>),
+                )
+                .route(
+                    &format!("{}/tools/call", base_path),
+                    post(tools_call_handler::<H>),
+                );
+        }
+
+        let app = app
             .layer(middleware::from_fn_with_state(
                 validator,
                 wireguard_auth_middleware,
@@ -400,7 +426,11 @@ impl Transport for HttpSseTransport {
         let listener = tokio::net::TcpListener::bind(&self.bind_addr).await?;
         info!(addr = %self.bind_addr, "HTTP+SSE transport listening");
 
-        axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await?;
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await?;
         Ok(())
     }
 }
@@ -569,6 +599,9 @@ mod tests {
     async fn validator_with_no_entries_rejects_everything() {
         let v = EnvAllowListValidator::new(Vec::<String>::new());
         assert!(!v.validate("123e4567-e89b-12d3-a456-426614174000").await);
-        assert!(!v.validate("MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=").await);
+        assert!(
+            !v.validate("MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=")
+                .await
+        );
     }
 }

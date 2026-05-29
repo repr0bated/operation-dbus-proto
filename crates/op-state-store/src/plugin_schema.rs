@@ -1006,7 +1006,7 @@ impl SchemaRegistry {
             "incus_xray_reality_client" => "incus-xray-reality-client",
             "incus_xray_reality_server" => "incus-xray-reality-server",
             "network" => "net",
-            "systemd" => "dinit",
+            "systemd" | "dinit" => "s6",
             "web-ui" => "web_ui",
             other => other,
         }
@@ -1036,7 +1036,7 @@ pub fn builtin_plugin_schemas() -> Vec<PluginSchema> {
         "net",
         "rtnetlink",
         "openflow",
-        "dinit",
+        "s6",
         "privacy_router",
         "privacy_routes",
         "netmaker",
@@ -1106,7 +1106,7 @@ fn builtin_plugin_schema_from_canonical_name(name: &str) -> Option<PluginSchema>
         "net" => create_net_schema(),
         "rtnetlink" => create_rtnetlink_schema(),
         "openflow" => create_openflow_schema(),
-        "dinit" => create_dinit_schema(),
+        "s6" | "service" => create_s6_schema(),
         "privacy_router" => create_privacy_router_schema(),
         "privacy_routes" => create_privacy_routes_schema(),
         "netmaker" => create_netmaker_schema(),
@@ -1319,7 +1319,7 @@ fn create_full_system_schema() -> PluginSchema {
     simple_schema(
         "full_system",
         "Full system recovery snapshot",
-        &["net", "service", "software", "users", "lxc", "dinit"],
+        &["net", "service", "software", "users", "lxc", "s6"],
         vec![
             (
                 "version",
@@ -4048,7 +4048,7 @@ fn create_openflow_schema() -> PluginSchema {
         .build()
 }
 
-fn create_dinit_schema() -> PluginSchema {
+fn create_s6_schema() -> PluginSchema {
     let unit_fields = {
         let mut fields = HashMap::new();
         fields.insert(
@@ -4058,7 +4058,7 @@ fn create_dinit_schema() -> PluginSchema {
                 required: true,
                 description: "Unit name".to_string(),
                 default: None,
-                example: Some(json!("nginx.service")),
+                example: Some(json!("nginx")),
                 constraints: Vec::new(),
                 read_only: true, // Unit name is identity
                 read_only_when: None,
@@ -4097,19 +4097,14 @@ fn create_dinit_schema() -> PluginSchema {
         fields
     };
 
-    PluginSchema::builder("dinit")
+    PluginSchema::builder("s6")
         .version("1.0.0")
-        .description("Dinit service management")
-        .array_field(
-            "units",
-            FieldType::Object(unit_fields),
-            true,
-            "Dinit services",
-        )
+        .description("S6 service management")
+        .array_field("units", FieldType::Object(unit_fields), true, "S6 services")
         .example(json!({
             "units": [
                 {
-                    "name": "nginx.service",
+                    "name": "nginx",
                     "state": "active",
                     "enabled": true
                 }

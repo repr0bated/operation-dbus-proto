@@ -4,7 +4,7 @@
     "op-compact": {
       "serverUrl": "https://op-dbus.ghostbridge.tech/mcp/compact",
       "transport": "sse",
-      "description": "Compact MCP - 4 meta-tools for discovering 148+ tools. Recommended for LLMs."
+      "description": "Compact MCP - 5 lazy meta-tools for discovering system tools. Recommended for LLMs."
     },
     "op-agents": {
       "serverUrl": "https://op-dbus.ghostbridge.tech/mcp/agents",

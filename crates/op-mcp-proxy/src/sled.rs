@@ -14,20 +14,20 @@
 //!   [160..192]  control_source     [u8; 32]
 //!   [192..208]  nextdns_profile    [u8; 16]
 
-use std::fs::File;
 use memmap2::MmapOptions;
+use std::fs::File;
 
 pub const SLED_SIZE: usize = 208;
 pub const SLED_PATH: &str = "/dev/shm/plugin_schema.dat";
 
 pub struct SledSnapshot {
-    pub is_valid:         bool,
-    pub mutation_index:   u64,
-    pub footprint_hex:    String,
-    pub trace_id:         String,
-    pub nextdns_profile:  String,
-    pub subid:            String,
-    pub control_source:   String,
+    pub is_valid: bool,
+    pub mutation_index: u64,
+    pub footprint_hex: String,
+    pub trace_id: String,
+    pub nextdns_profile: String,
+    pub subid: String,
+    pub control_source: String,
 }
 
 impl SledSnapshot {
@@ -35,18 +35,20 @@ impl SledSnapshot {
     pub fn read() -> Option<Self> {
         let file = File::open(SLED_PATH).ok()?;
         let mmap = unsafe { MmapOptions::new().len(SLED_SIZE).map(&file).ok()? };
-        if mmap.len() < SLED_SIZE { return None; }
+        if mmap.len() < SLED_SIZE {
+            return None;
+        }
 
         let bytes = &mmap[..SLED_SIZE];
 
-        let wg_pubkey     = &bytes[0..32];
+        let wg_pubkey = &bytes[0..32];
         let mutation_index = u64::from_le_bytes(bytes[32..40].try_into().ok()?);
-        let is_valid       = bytes[40] != 0;
-        let footprint      = &bytes[48..80];
+        let is_valid = bytes[40] != 0;
+        let footprint = &bytes[48..80];
         // subid at [96..160], control_source at [160..192], nextdns at [192..208]
         let nextdns_profile = fixed_str(&bytes[192..208]);
-        let subid           = fixed_str(&bytes[96..160]);
-        let control_source  = fixed_str(&bytes[160..192]);
+        let subid = fixed_str(&bytes[96..160]);
+        let control_source = fixed_str(&bytes[160..192]);
 
         let footprint_hex = hex::encode(footprint);
         let trace_id = format!("{}-{}", hex::encode(&wg_pubkey[..4]), mutation_index);

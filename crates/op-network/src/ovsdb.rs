@@ -639,17 +639,74 @@ impl OvsdbClient {
     /// Dump all rows in all tables of the given database as a JSON object.
     ///
     /// The returned value is `{ "TableName": { "rows": [...] }, ... }`.
+    ///
+    /// For `Open_vSwitch` this reuses the shared persistent client connection —
+    /// no new monitoring connection is created and no "Loaded schema" / "Monitoring
+    /// started" spam is emitted.  For other databases a one-shot connection is still
+    /// used (those databases are not monitored by the shared client).
     pub async fn dump_db(&self, db: &str) -> Result<Value> {
-        // Use a separate one-shot connection for alternate databases.
-        let mut client = Self::do_connect_db(&self.socket_path, db).await?;
+        if db == "Open_vSwitch" {
+            return self.dump_open_vswitch().await;
+        }
 
-        // Collect table names from the schema that was loaded on connect.
+        // Other databases: one-shot connection (they are not monitored by the shared client).
+        let mut client = Self::do_connect_db(&self.socket_path, db).await?;
         let table_names: Vec<String> = client
             .schema()
             .map(|s| s.tables.keys().cloned().collect())
             .unwrap_or_default();
+        Self::select_all_tables_raw(&mut client, &table_names).await
+    }
 
-        // Build SELECT ops for every table.
+    /// Dump Open_vSwitch via the shared persistent client (no new monitoring connection).
+    async fn dump_open_vswitch(&self) -> Result<Value> {
+        // Phase 1 — read table names from the already-loaded schema.  Hold the
+        // lock only as long as needed to avoid blocking the IDL pump.
+        let table_names: Vec<String> = {
+            let guard = self.get_client().await?;
+            let client = guard.as_ref().expect("get_client ensures Some");
+            client
+                .schema()
+                .map(|s| s.tables.keys().cloned().collect())
+                .unwrap_or_default()
+        };
+
+        if table_names.is_empty() {
+            return Ok(Value::Object(serde_json::Map::new()));
+        }
+
+        // Phase 2 — run SELECT transacts on the shared connection.
+        let ops: Vec<Value> = table_names
+            .iter()
+            .map(|t| json!({ "op": "select", "table": t, "where": [] }))
+            .collect();
+
+        let result = {
+            let mut guard = self.get_client().await?;
+            let client = guard.as_mut().expect("get_client ensures Some");
+            client
+                .transact(json!(ops))
+                .await
+                .context("OVSDB dump_db transact")?
+        };
+
+        // Assemble { TableName: { rows: [...] } } — same wire format as before.
+        let mut out = serde_json::Map::new();
+        if let Some(results) = result.as_array() {
+            for (i, table_name) in table_names.iter().enumerate() {
+                let rows = results
+                    .get(i)
+                    .and_then(|r| r.get("rows"))
+                    .cloned()
+                    .unwrap_or_else(|| json!([]));
+                out.insert(table_name.clone(), json!({ "rows": rows }));
+            }
+        }
+        Ok(Value::Object(out))
+    }
+
+    /// Run `SELECT *` on a list of tables and assemble `{ TableName: { rows: [...] } }`.
+    async fn select_all_tables_raw(client: &mut Client, table_names: &[String]) -> Result<Value> {
         let ops: Vec<Value> = table_names
             .iter()
             .map(|t| json!({ "op": "select", "table": t, "where": [] }))
@@ -658,9 +715,8 @@ impl OvsdbClient {
         let result = client
             .transact(json!(ops))
             .await
-            .context("OVSDB dump_db transact")?;
+            .context("OVSDB select_all_tables transact")?;
 
-        // Assemble results into { TableName: { rows: [...] } }.
         let mut out = serde_json::Map::new();
         if let Some(results) = result.as_array() {
             for (i, table_name) in table_names.iter().enumerate() {
@@ -679,10 +735,20 @@ impl OvsdbClient {
 
     /// Subscribe to OVSDB update notifications for the given database.
     ///
-    /// Returns an `mpsc::Receiver` that receives a `serde_json::Value` for
-    /// each IDL update.  The background task calls `client.wait()` in a loop
-    /// and reconnects with exponential backoff on failure.  It stops when the
-    /// receiver is dropped.
+    /// Returns an `mpsc::Receiver` that receives a full IDL snapshot as a
+    /// `serde_json::Value` on every database change.  The snapshot format is:
+    ///
+    /// ```json
+    /// { "TableName": [ { "_uuid": ["uuid", "..."], "col": val, ... }, ... ], ... }
+    /// ```
+    ///
+    /// The first message is sent immediately after the initial connection (it
+    /// carries the current database state at connect time).  Subsequent messages
+    /// are sent each time `wait()` signals an update.
+    ///
+    /// The background task uses `rovs_ovsdb::Client::wait()` (which handles OVS
+    /// echo keepalives) and reconnects with exponential backoff capped at 30 s.
+    /// It stops when the receiver is dropped.
     pub async fn monitor_db(&self, db: &str) -> Result<mpsc::Receiver<Value>> {
         let (tx, rx) = mpsc::channel(100);
         let socket_path = self.socket_path.clone();
@@ -697,12 +763,12 @@ impl OvsdbClient {
                 // Wait out any current backoff before attempting the connection.
                 if !reconnect.should_connect() {
                     let backoff = reconnect.current_backoff();
-                    log::debug!("monitor_db({}): backing off for {:?}", db, backoff);
+                    tracing::debug!("monitor_db({}): backing off for {:?}", db, backoff);
                     tokio::time::sleep(backoff).await;
                 }
 
                 reconnect.connecting();
-                log::debug!("monitor_db({}): connecting to {}", db, socket_path);
+                tracing::debug!("monitor_db({}): connecting to {}", db, socket_path);
 
                 let config = ClientConfig::default().database(&db);
                 let addr = socket_addr(&socket_path);
@@ -710,33 +776,44 @@ impl OvsdbClient {
                 let mut client = match Client::connect_with_config(&addr, config).await {
                     Ok(c) => {
                         reconnect.connected();
-                        log::info!("monitor_db({}): connected", db);
+                        tracing::info!(
+                            "monitor_db({}): connected, seqno={}",
+                            db,
+                            c.idl().change_seqno()
+                        );
                         c
                     }
                     Err(e) => {
-                        log::warn!("monitor_db({}): failed to connect: {}", db, e);
+                        tracing::warn!("monitor_db({}): failed to connect: {}", db, e);
                         reconnect.disconnected();
                         reconnect.increase_backoff();
                         continue;
                     }
                 };
 
+                // Send the initial snapshot — IDL was populated by initialize() inside
+                // Client::connect_with_config(), so it already holds the current DB state.
+                let snapshot = idl_snapshot(client.idl());
+                if tx.send(snapshot).await.is_err() {
+                    return; // receiver dropped
+                }
+                reconnect.activity();
+
                 // Pump update notifications until the connection drops.
                 loop {
                     match client.wait().await {
                         Err(e) => {
-                            log::warn!("monitor_db({}): connection error: {}", db, e);
+                            tracing::warn!("monitor_db({}): connection error: {}", db, e);
                             reconnect.disconnected();
                             reconnect.increase_backoff();
                             break;
                         }
                         Ok(()) => {
                             reconnect.activity();
-                            // Forward the current IDL change sequence number.
-                            let update = json!({ "seqno": client.idl().change_seqno() });
-                            if tx.send(update).await.is_err() {
-                                // Receiver was dropped — stop the task entirely.
-                                return;
+                            // Snapshot the IDL — wait() already merged the update into it.
+                            let snapshot = idl_snapshot(client.idl());
+                            if tx.send(snapshot).await.is_err() {
+                                return; // receiver dropped
                             }
                         }
                     }
@@ -812,6 +889,47 @@ impl Default for OvsdbClient {
     fn default() -> Self {
         Self::new()
     }
+}
+
+// ── IDL snapshot helper ───────────────────────────────────────────────────────
+
+/// Build a full snapshot of an [`rovs_ovsdb::Idl`] as a plain JSON value.
+///
+/// The returned shape is:
+///
+/// ```json
+/// {
+///   "TableName": [
+///     { "_uuid": ["uuid", "<uuid-str>"], "col1": val, "col2": val, … },
+///     …
+///   ],
+///   …
+/// }
+/// ```
+///
+/// This is a zero-RPC operation — it reads directly from the in-memory replica
+/// that `wait()` / `run()` keep up to date.
+fn idl_snapshot(idl: &rovs_ovsdb::Idl) -> Value {
+    let mut out = serde_json::Map::new();
+    if let Some(schema) = idl.schema() {
+        for table_name in schema.tables.keys() {
+            let rows: Vec<Value> = idl
+                .rows(table_name)
+                .map(|row| {
+                    let mut obj = serde_json::Map::new();
+                    // Expose the UUID in the canonical OVSDB wire form so that
+                    // callers can use extract_uuid() / similar helpers.
+                    obj.insert("_uuid".to_string(), json!(["uuid", row.uuid.to_string()]));
+                    for (col, val) in &row.columns {
+                        obj.insert(col.clone(), val.clone());
+                    }
+                    Value::Object(obj)
+                })
+                .collect();
+            out.insert(table_name.clone(), Value::Array(rows));
+        }
+    }
+    Value::Object(out)
 }
 
 // ── UUID-set parsing ───────────────────────────────────────────────────────────

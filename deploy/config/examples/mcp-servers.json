@@ -10,7 +10,7 @@
     "op-compact": {
       "serverUrl": "https://op-dbus.ghostbridge.tech/mcp/compact",
       "transport": "sse",
-      "description": "Compact mode with 4 meta-tools for discovering 148+ tools"
+      "description": "Compact mode with 5 lazy meta-tools for discovering system tools"
     }
   },
   
@@ -46,7 +46,7 @@
   },
   
   "_compact_tools": {
-    "comment": "These 4 tools are exposed by op-compact for discovering 148+ other tools",
+    "comment": "These 5 tools are exposed by op-compact for discovering and executing other tools",
     "tools": [
       {
         "name": "list_tools",
@@ -63,6 +63,10 @@
       {
         "name": "execute_tool",
         "description": "Execute any discovered tool"
+      },
+      {
+        "name": "respond",
+        "description": "Return the final response"
       }
     ]
   },

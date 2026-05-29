@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 op-cache = { path = "../op-cache" }
 op-identity = { path = "../op-identity" }
+op-llm = { path = "../op-llm" }
 tokio     = { version = "1", features = ["full"] }
 tonic     = { workspace = true }
 prost     = { workspace = true }

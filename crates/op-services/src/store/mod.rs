@@ -1,103 +1,105 @@
-//! SQLite storage
+//! JSON flat-file service store.
+//!
+//! No SQLite, no drift. Desired state = file contents.
+//! Every mutation rewrites the entire services file atomically (write+rename).
+//! Audit log uses append-only JSON-lines for efficient logging.
 
-use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
-use std::path::Path;
-use tracing::info;
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use tokio::io::AsyncWriteExt;
+use tokio::sync::RwLock;
+use tracing::{debug, info, warn};
 
 use crate::schema::{ServiceDef, ServiceName};
 
+const DEFAULT_SERVICES_PATH: &str = "/var/lib/op-dbus/services.json";
+const DEFAULT_AUDIT_PATH: &str = "/var/lib/op-dbus/services-audit.jsonl";
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct ServicesCatalog {
+    services: HashMap<String, ServiceDef>,
+}
+
+/// In-memory projection of service definitions with atomic JSON persistence.
 pub struct Store {
-    pool: SqlitePool,
+    services_path: PathBuf,
+    audit_path: PathBuf,
+    data: RwLock<ServicesCatalog>,
 }
 
 impl Store {
-    pub async fn new(path: impl AsRef<Path>) -> anyhow::Result<Self> {
-        let url = format!("sqlite:{}?mode=rwc", path.as_ref().display());
-        let pool = SqlitePoolOptions::new()
-            .max_connections(5)
-            .connect(&url)
-            .await?;
-
-        let store = Self { pool };
-        store.migrate().await?;
-        Ok(store)
+    pub async fn new(path: impl AsRef<Path>) -> Result<Self> {
+        let services_path = path.as_ref().to_path_buf();
+        let audit_path = services_path.with_extension("audit.jsonl");
+        Self::with_paths(services_path, audit_path).await
     }
 
-    async fn migrate(&self) -> anyhow::Result<()> {
-        sqlx::query(
-            r#"
-            CREATE TABLE IF NOT EXISTS services (
-                name TEXT PRIMARY KEY,
-                definition TEXT NOT NULL,
-                enabled INTEGER DEFAULT 0,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-            )
-        "#,
-        )
-        .execute(&self.pool)
-        .await?;
+    pub async fn default_store() -> Result<Self> {
+        Self::with_paths(DEFAULT_SERVICES_PATH.into(), DEFAULT_AUDIT_PATH.into()).await
+    }
 
-        sqlx::query(
-            r#"
-            CREATE TABLE IF NOT EXISTS audit_log (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                service_name TEXT,
-                action TEXT NOT NULL,
-                details TEXT,
-                timestamp TEXT DEFAULT CURRENT_TIMESTAMP
-            )
-        "#,
-        )
-        .execute(&self.pool)
-        .await?;
+    async fn with_paths(services_path: PathBuf, audit_path: PathBuf) -> Result<Self> {
+        let catalog = if services_path.exists() {
+            match tokio::fs::read_to_string(&services_path).await {
+                Ok(contents) => {
+                    match serde_json::from_str::<ServicesCatalog>(&contents) {
+                        Ok(c) => {
+                            info!(services = c.services.len(), "Loaded services from JSON");
+                            c
+                        }
+                        Err(e) => {
+                            warn!(error = %e, "Corrupt services JSON, starting fresh");
+                            ServicesCatalog::default()
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!(error = %e, "Failed to read services JSON, starting fresh");
+                    ServicesCatalog::default()
+                }
+            }
+        } else {
+            info!("No services file found, starting fresh");
+            ServicesCatalog::default()
+        };
 
-        info!("Database migrated");
+        Ok(Self {
+            services_path,
+            audit_path,
+            data: RwLock::new(catalog),
+        })
+    }
+
+    pub async fn get_service(&self, name: &ServiceName) -> Result<Option<ServiceDef>> {
+        let guard = self.data.read().await;
+        Ok(guard.services.get(name.as_str()).cloned())
+    }
+
+    pub async fn save_service(&self, service: &ServiceDef) -> Result<()> {
+        let mut guard = self.data.write().await;
+        guard
+            .services
+            .insert(service.name.as_str().to_string(), service.clone());
+        drop(guard);
+        self.flush().await?;
         Ok(())
     }
 
-    pub async fn get_service(&self, name: &ServiceName) -> anyhow::Result<Option<ServiceDef>> {
-        let row: Option<(String,)> =
-            sqlx::query_as("SELECT definition FROM services WHERE name = ?")
-                .bind(name.as_str())
-                .fetch_optional(&self.pool)
-                .await?;
-
-        match row {
-            Some((json,)) => Ok(Some(serde_json::from_str(&json)?)),
-            None => Ok(None),
+    pub async fn delete_service(&self, name: &ServiceName) -> Result<()> {
+        let mut guard = self.data.write().await;
+        let removed = guard.services.remove(name.as_str()).is_some();
+        drop(guard);
+        if removed {
+            self.flush().await?;
         }
-    }
-
-    pub async fn save_service(&self, service: &ServiceDef) -> anyhow::Result<()> {
-        let json = serde_json::to_string(service)?;
-        sqlx::query(
-            "INSERT OR REPLACE INTO services (name, definition, enabled, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)"
-        )
-        .bind(service.name.as_str())
-        .bind(&json)
-        .bind(service.enabled)
-        .execute(&self.pool)
-        .await?;
         Ok(())
     }
 
-    pub async fn delete_service(&self, name: &ServiceName) -> anyhow::Result<()> {
-        sqlx::query("DELETE FROM services WHERE name = ?")
-            .bind(name.as_str())
-            .execute(&self.pool)
-            .await?;
-        Ok(())
-    }
-
-    pub async fn list_services(&self) -> anyhow::Result<Vec<ServiceDef>> {
-        let rows: Vec<(String,)> = sqlx::query_as("SELECT definition FROM services")
-            .fetch_all(&self.pool)
-            .await?;
-
-        rows.into_iter()
-            .map(|(json,)| serde_json::from_str(&json).map_err(Into::into))
-            .collect()
+    pub async fn list_services(&self) -> Result<Vec<ServiceDef>> {
+        let guard = self.data.read().await;
+        Ok(guard.services.values().cloned().collect())
     }
 
     pub async fn audit(
@@ -105,13 +107,35 @@ impl Store {
         service: Option<&str>,
         action: &str,
         details: Option<&str>,
-    ) -> anyhow::Result<()> {
-        sqlx::query("INSERT INTO audit_log (service_name, action, details) VALUES (?, ?, ?)")
-            .bind(service)
-            .bind(action)
-            .bind(details)
-            .execute(&self.pool)
+    ) -> Result<()> {
+        let entry = serde_json::json!({
+            "timestamp": chrono::Utc::now().to_rfc3339(),
+            "service_name": service,
+            "action": action,
+            "details": details,
+        });
+        let line = format!("{}\n", serde_json::to_string(&entry)?);
+        tokio::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.audit_path)
+            .await?
+            .write_all(line.as_bytes())
             .await?;
+        Ok(())
+    }
+
+    /// Atomic flush: write to temp file, then rename.
+    async fn flush(&self) -> Result<()> {
+        let guard = self.data.read().await;
+        let json = serde_json::to_string_pretty(&*guard)?;
+        drop(guard);
+
+        let tmp = self.services_path.with_extension("tmp");
+        tokio::fs::write(&tmp, json).await?;
+        tokio::fs::rename(&tmp, &self.services_path).await?;
+
+        debug!(path = %self.services_path.display(), "Flushed services to JSON");
         Ok(())
     }
 }

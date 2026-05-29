@@ -1,7 +1,7 @@
 //! op-mcp: Unified MCP Protocol Server
 //!
 //! Supports three server modes:
-//! - **Compact**: 4 meta-tools for discovering 148+ tools (recommended for LLMs)
+//! - **Compact**: 5 meta-tools with per-request lazy tool loading (recommended for LLMs)
 //! - **Agents**: Always-on cognitive agents (memory, sequential_thinking, etc.)
 //! - **Full**: All tools directly exposed (may hit client limits)
 //!
@@ -54,7 +54,7 @@ pub const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Server mode
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ServerMode {
-    /// 4 meta-tools for tool discovery
+    /// 5 meta-tools for tool discovery and response
     Compact,
     /// Always-on cognitive agents
     Agents,

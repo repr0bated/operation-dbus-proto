@@ -1,0 +1,6 @@
+#!/bin/sh
+mkdir -p /run/op-dbus
+exec dbus-daemon \
+    --session \
+    --address=unix:path=/run/op-dbus/session-bus.sock \
+    --nofork

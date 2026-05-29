@@ -58,3 +58,9 @@ This file provides essential guidelines for agentic coding agents working in thi
   3.  **Code Implementation:** The exact, copy-pasteable Rust/Bash code.
 *   Before edits: `cargo check -p <crate>`, `npm run typecheck`.
 *   Mimic existing patterns: Search similar code. No new deps without PR justification.
+
+#### 8. Personal Preferences & Coding Standards
+* Refer to `~/.factory/memories.md` for personal development preferences and past decisions.
+* Follow the conventions documented in:
+  * `.factory/rules/typescript.md` - TypeScript and React conventions
+  * `.factory/rules/testing.md` - Testing and mocking standards

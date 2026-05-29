@@ -256,7 +256,9 @@ impl GeminiFallback {
             "Provide a comprehensive overview of: {}\n\nExisting context:\n{}",
             topic, accumulated_knowledge
         );
-        let overview_result = self.gemini_query(&overview_prompt, Some(&accumulated_knowledge)).await?;
+        let overview_result = self
+            .gemini_query(&overview_prompt, Some(&accumulated_knowledge))
+            .await?;
         accumulated_knowledge.push_str("\n\n");
         accumulated_knowledge.push_str(&overview_result.answer);
 
@@ -281,7 +283,10 @@ impl GeminiFallback {
                 topic, drill_prompts[prompt_idx], accumulated_knowledge
             );
 
-            match self.gemini_query(&drill_prompt, Some(&accumulated_knowledge)).await {
+            match self
+                .gemini_query(&drill_prompt, Some(&accumulated_knowledge))
+                .await
+            {
                 Ok(result) => {
                     accumulated_knowledge.push_str("\n\n");
                     accumulated_knowledge.push_str(&result.answer);
@@ -337,13 +342,7 @@ impl GeminiFallback {
                 tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
             }
 
-            match self
-                .client
-                .post(&url)
-                .json(request)
-                .send()
-                .await
-            {
+            match self.client.post(&url).json(request).send().await {
                 Ok(resp) => {
                     if resp.status().is_success() {
                         return resp
@@ -368,9 +367,8 @@ impl GeminiFallback {
             }
         }
 
-        Err(last_error.unwrap_or_else(|| {
-            anyhow::anyhow!("Gemini API failed after {} retries", MAX_RETRIES)
-        }))
+        Err(last_error
+            .unwrap_or_else(|| anyhow::anyhow!("Gemini API failed after {} retries", MAX_RETRIES)))
     }
 }
 

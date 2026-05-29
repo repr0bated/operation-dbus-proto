@@ -32,14 +32,19 @@ impl SessionService for SessionServiceImpl {
             "limit": req.pagination.as_ref().map(|p| p.limit).unwrap_or(0),
             "offset": req.pagination.as_ref().map(|p| p.offset).unwrap_or(0),
         });
-        if let Some(a) = req.agent_id { params["agent_id"] = json!(a); }
+        if let Some(a) = req.agent_id {
+            params["agent_id"] = json!(a);
+        }
         let result = self.client.call("sessions.list", params).await?;
         let sessions: Vec<Session> = result
             .get("sessions")
             .and_then(|v| v.as_array())
             .map(|arr| arr.iter().map(session_from_json).collect())
             .unwrap_or_default();
-        let total = result.get("total").and_then(|t| t.as_u64()).unwrap_or(sessions.len() as u64) as u32;
+        let total = result
+            .get("total")
+            .and_then(|t| t.as_u64())
+            .unwrap_or(sessions.len() as u64) as u32;
         Ok(Response::new(ListSessionsResponse { sessions, total }))
     }
 
@@ -51,7 +56,10 @@ impl SessionService for SessionServiceImpl {
         if id.is_empty() {
             return Err(Status::invalid_argument("session id required"));
         }
-        let result = self.client.call("sessions.get", json!({ "id": id })).await?;
+        let result = self
+            .client
+            .call("sessions.get", json!({ "id": id }))
+            .await?;
         Ok(Response::new(session_from_json(&result)))
     }
 
@@ -61,8 +69,12 @@ impl SessionService for SessionServiceImpl {
     ) -> Result<Response<Session>, Status> {
         let req = req.into_inner();
         let mut params = json!({ "agent_id": req.agent_id });
-        if let Some(t) = req.title { params["title"] = json!(t); }
-        if let Some(m) = req.metadata { params["metadata"] = struct_to_json(m); }
+        if let Some(t) = req.title {
+            params["title"] = json!(t);
+        }
+        if let Some(m) = req.metadata {
+            params["metadata"] = struct_to_json(m);
+        }
         let result = self.client.call("sessions.create", params).await?;
         Ok(Response::new(session_from_json(&result)))
     }
@@ -75,7 +87,9 @@ impl SessionService for SessionServiceImpl {
         if id.is_empty() {
             return Err(Status::invalid_argument("session id required"));
         }
-        self.client.call("sessions.delete", json!({ "id": id })).await?;
+        self.client
+            .call("sessions.delete", json!({ "id": id }))
+            .await?;
         Ok(Response::new(Empty {}))
     }
 
@@ -116,8 +130,12 @@ impl SessionService for SessionServiceImpl {
             "session_id": req.session_id,
             "content": req.content,
         });
-        if let Some(r) = req.role { params["role"] = json!(r); }
-        if let Some(m) = req.metadata { params["metadata"] = struct_to_json(m); }
+        if let Some(r) = req.role {
+            params["role"] = json!(r);
+        }
+        if let Some(m) = req.metadata {
+            params["metadata"] = struct_to_json(m);
+        }
         let result = self.client.call("sessions.send_message", params).await?;
         Ok(Response::new(message_from_json(&result)))
     }

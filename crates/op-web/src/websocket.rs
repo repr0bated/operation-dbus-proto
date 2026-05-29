@@ -144,12 +144,9 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                         Ok(result) => {
                             // Store in conversation history
                             {
-                                let mut conversations = state_clone.conversations.write().await;
-                                let history = conversations
-                                    .entry(session_clone.clone())
-                                    .or_insert_with(Vec::new);
-                                history.push(ChatMessage::user(&message_text));
-                                history.push(ChatMessage::assistant(&result.message));
+                                let _ = state_clone.conversations.create_session(session_clone.clone(), None).await;
+                                let _ = state_clone.conversations.append_message(&session_clone, ChatMessage::user(&message_text)).await;
+                                let _ = state_clone.conversations.append_message(&session_clone, ChatMessage::assistant(&result.message)).await;
                             }
 
                             let response = WsMessage::Response {

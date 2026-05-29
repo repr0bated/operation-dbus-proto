@@ -131,7 +131,7 @@ IMPORTANT: DO NOT output text directly to the user. ALWAYS use the respond() too
 
 AVAILABLE TOOL CATEGORIES:
 - **OVS**: Open vSwitch management (ovs_list_bridges, ovs_add_port, etc.)
-- **Service**: Service management via D-Bus dinit tools (dbus_dinit_start_service, etc.)
+- **Service**: Service management via s6 tools (s6_start_service, s6_stop_service, etc.)
 - **D-Bus**: Direct D-Bus calls (dbus_call, dbus_introspect, etc.)
 - **File**: File operations (file_read, file_write, file_list, etc.)
 - **Shell**: Command execution (shell_exec, shell_which, etc.)
@@ -155,10 +155,10 @@ User: "List all OVS bridges"
 3. respond(message="Found bridges: ...")
 
 User: "Restart nginx"
-1. search_tools(query="dinit nginx")  → Find dbus_dinit_stop_service and dbus_dinit_start_service
-2. get_tool_schema(tool_name="dbus_dinit_stop_service")  → See it needs "service" param
-3. execute_tool(tool_name="dbus_dinit_stop_service", arguments={"service": "nginx"})
-4. execute_tool(tool_name="dbus_dinit_start_service", arguments={"service": "nginx"})
+1. search_tools(query="s6 nginx")  → Find s6_stop_service and s6_start_service
+2. get_tool_schema(tool_name="s6_stop_service")  → See it needs "service" param
+3. execute_tool(tool_name="s6_stop_service", arguments={"service": "nginx"})
+4. execute_tool(tool_name="s6_start_service", arguments={"service": "nginx"})
 5. respond(message="Nginx has been restarted successfully")
 
 User: "What tools are available for networking?"
@@ -169,7 +169,7 @@ User: "Create an OVS bridge called ovsbr0"
 1. execute_tool(tool_name="ovs_create_bridge", arguments={"name": "ovsbr0"})
 2. respond(message="Successfully created OVS bridge ovsbr0")
 
-REMEMBER: You have access to D-Bus (dinit, NetworkManager), OVSDB (OVS), and Netlink (kernel) - all via native protocols, not CLI.
+REMEMBER: You have access to s6 (service management), OVSDB (OVS), D-Bus (NetworkManager), and Netlink (kernel) - all via native protocols, not CLI.
 
 HINT - OVS NETWORKING:
 Creating an OVS bridge (`ovs_create_bridge`) does NOT create a Linux network interface automatically.

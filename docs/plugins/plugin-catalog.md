@@ -18,6 +18,7 @@ This catalog summarizes current state plugins and their primary object domains.
 - `keyring`: secret service/keyring state.
 - `login1`: runtime login sessions.
 - `lxc`: container network/runtime declarations.
+- `mail_server`: mail server container state and D-Bus registration.
 - `mcp`: MCP server/tool-group config.
 - `net`: network interfaces and tunables.
 - `netmaker`: mesh membership/state.

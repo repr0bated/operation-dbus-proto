@@ -54,9 +54,15 @@ impl TaskService for TaskServiceImpl {
             return Err(Status::invalid_argument("tool_name required"));
         }
         let mut params = json!({ "tool_name": req.tool_name });
-        if let Some(a) = req.arguments { params["arguments"] = struct_to_json(a); }
-        if let Some(s) = req.session_id { params["session_id"] = json!(s); }
-        if let Some(a) = req.agent_id { params["agent_id"] = json!(a); }
+        if let Some(a) = req.arguments {
+            params["arguments"] = struct_to_json(a);
+        }
+        if let Some(s) = req.session_id {
+            params["session_id"] = json!(s);
+        }
+        if let Some(a) = req.agent_id {
+            params["agent_id"] = json!(a);
+        }
         let result = self.client.call("tasks.execute", params).await?;
         Ok(Response::new(task_result_from_json(&result)))
     }

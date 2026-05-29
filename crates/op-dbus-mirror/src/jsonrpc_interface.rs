@@ -25,8 +25,7 @@ fn to_simd(val: &Value) -> simd_json::OwnedValue {
 
 fn str_to_simd(s: &str) -> Result<simd_json::OwnedValue, zbus::fdo::Error> {
     let mut bytes = s.as_bytes().to_vec();
-    simd_json::to_owned_value(&mut bytes)
-        .map_err(|e| zbus::fdo::Error::InvalidArgs(e.to_string()))
+    simd_json::to_owned_value(&mut bytes).map_err(|e| zbus::fdo::Error::InvalidArgs(e.to_string()))
 }
 
 /// OVSDB D-Bus interface - mirrors JSON-RPC methods

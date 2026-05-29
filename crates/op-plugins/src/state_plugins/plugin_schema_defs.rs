@@ -940,7 +940,7 @@ pub(crate) fn openflow_plugin_schema() -> PluginSchema {
         .build()
 }
 
-pub(crate) fn dinit_plugin_schema() -> PluginSchema {
+pub(crate) fn s6_plugin_schema() -> PluginSchema {
     let unit_fields = {
         let mut fields = HashMap::new();
         fields.insert(
@@ -989,19 +989,14 @@ pub(crate) fn dinit_plugin_schema() -> PluginSchema {
         fields
     };
 
-    PluginSchema::builder("dinit")
+    PluginSchema::builder("s6")
         .version("1.0.0")
-        .description("Dinit service management")
-        .array_field(
-            "units",
-            FieldType::Object(unit_fields),
-            true,
-            "Dinit services",
-        )
+        .description("s6 service management")
+        .array_field("units", FieldType::Object(unit_fields), true, "s6 services")
         .example(json!({
             "units": [
                 {
-                    "name": "nginx.service",
+                    "name": "nginx",
                     "state": "active",
                     "enabled": true
                 }
@@ -1325,7 +1320,10 @@ pub(crate) fn unix_socket_plugin_schema() -> PluginSchema {
             description: "Local TCP port xray listens on and proxies into this socket".to_string(),
             default: None,
             example: Some(json!(6334)),
-            constraints: vec![Constraint::Min { value: 1.0 }, Constraint::Max { value: 65535.0 }],
+            constraints: vec![
+                Constraint::Min { value: 1.0 },
+                Constraint::Max { value: 65535.0 },
+            ],
             read_only: false,
             read_only_when: None,
         },
@@ -1335,7 +1333,8 @@ pub(crate) fn unix_socket_plugin_schema() -> PluginSchema {
         FieldSchema {
             field_type: FieldType::String,
             required: false,
-            description: "Transport protocol carried over the socket (grpc, jsonrpc, …)".to_string(),
+            description: "Transport protocol carried over the socket (grpc, jsonrpc, …)"
+                .to_string(),
             default: Some(json!("grpc")),
             example: None,
             constraints: Vec::new(),
@@ -1588,6 +1587,235 @@ pub(crate) fn privacy_routes_plugin_schema() -> PluginSchema {
                     "updated_at": "2026-01-01T00:00:00Z"
                 }
             ]
+        }))
+        .build()
+}
+
+pub(crate) fn mail_server_plugin_schema() -> PluginSchema {
+    use op_state_store::FieldType;
+
+    let endpoint_fields = {
+        let mut fields = HashMap::new();
+        fields.insert(
+            "smtp_submission".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "SMTP submission endpoint (port 587)".to_string(),
+                default: Some(json!("0.0.0.0:587")),
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "smtp_tls".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "SMTP TLS endpoint (port 465)".to_string(),
+                default: Some(json!("0.0.0.0:465")),
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "imap".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "IMAP endpoint (port 143)".to_string(),
+                default: Some(json!("0.0.0.0:143")),
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "imaps".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "IMAPS endpoint (port 993)".to_string(),
+                default: Some(json!("0.0.0.0:993")),
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "dovecot_lmtp".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Dovecot LMTP unix socket path inside container".to_string(),
+                default: Some(json!("/var/spool/postfix/private/dovecot-lmtp")),
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "postfix_pickup".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Postfix pickup unix socket path inside container".to_string(),
+                default: Some(json!("/var/spool/postfix/private/pickup")),
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields
+    };
+
+    PluginSchema::builder("mail_server")
+        .version("1.0.0")
+        .description("Mail server container state and D-Bus registration for 3tched.com")
+        .dependency("incus")
+        .dependency("unix_socket")
+        .field(
+            "container_name",
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "Incus container name running the mail stack".to_string(),
+                default: Some(json!("mail-3tched")),
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        )
+        .field(
+            "container_status",
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "Container runtime status".to_string(),
+                default: Some(json!("Unknown")),
+                example: None,
+                constraints: Vec::new(),
+                read_only: true,
+                read_only_when: None,
+            },
+        )
+        .field(
+            "domain",
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "Primary mail domain".to_string(),
+                default: Some(json!("3tched.com")),
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        )
+        .field(
+            "xray_socket_path",
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "Unix socket path for Xray naive routing integration".to_string(),
+                default: Some(json!("/run/xray/mail-naive.sock")),
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        )
+        .field(
+            "dbus_service_name",
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "D-Bus service name registered for this mail instance".to_string(),
+                default: Some(json!("org.opdbus.MailServer.3tched")),
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        )
+        .field(
+            "endpoints",
+            FieldSchema {
+                field_type: FieldType::Object(endpoint_fields),
+                required: true,
+                description: "Active mail service endpoints".to_string(),
+                default: Some(json!({})),
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        )
+        .field(
+            "container_ip",
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Container IPv4 address".to_string(),
+                default: None,
+                example: None,
+                constraints: Vec::new(),
+                read_only: true,
+                read_only_when: None,
+            },
+        )
+        .field(
+            "healthy",
+            FieldSchema {
+                field_type: FieldType::Boolean,
+                required: true,
+                description: "Whether the mail stack is healthy".to_string(),
+                default: Some(json!(false)),
+                example: None,
+                constraints: Vec::new(),
+                read_only: true,
+                read_only_when: None,
+            },
+        )
+        .field(
+            "last_error",
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Last error message if unhealthy".to_string(),
+                default: None,
+                example: None,
+                constraints: Vec::new(),
+                read_only: true,
+                read_only_when: None,
+            },
+        )
+        .example(json!({
+            "container_name": "mail-3tched",
+            "container_status": "Running",
+            "domain": "3tched.com",
+            "xray_socket_path": "/run/xray/mail-naive.sock",
+            "dbus_service_name": "org.opdbus.MailServer.3tched",
+            "endpoints": {
+                "smtp_submission": "0.0.0.0:587",
+                "smtp_tls": "0.0.0.0:465",
+                "imap": "0.0.0.0:143",
+                "imaps": "0.0.0.0:993",
+                "dovecot_lmtp": "/var/spool/postfix/private/dovecot-lmtp",
+                "postfix_pickup": "/var/spool/postfix/private/pickup"
+            },
+            "container_ip": "10.200.0.2",
+            "healthy": true,
+            "last_error": null
         }))
         .build()
 }

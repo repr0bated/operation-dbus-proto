@@ -15,6 +15,7 @@ use tonic::transport::Channel;
 use tracing::{info, warn};
 
 mod cloudaicompanion;
+mod codex;
 mod direct_llm;
 mod gcloud_auth;
 mod http_server;
@@ -45,13 +46,19 @@ async fn main() -> anyhow::Result<()> {
             warn!("Identity sled present but is_valid=false — headers will be omitted");
         }
     } else {
-        warn!("Identity sled not found at {} — Ghostbridge headers disabled", sled::SLED_PATH);
+        warn!(
+            "Identity sled not found at {} — Ghostbridge headers disabled",
+            sled::SLED_PATH
+        );
     }
 
     // Xray SOCKS5 proxy — only used when XRAY_SOCKS_ADDR is explicitly set to a non-empty value.
     let xray_socks_env = std::env::var("XRAY_SOCKS_ADDR").unwrap_or_default();
     let xray_socks = xray_socks_env.as_str();
     let use_xray = !xray_socks.is_empty() && snapshot.as_ref().map(|s| s.is_valid).unwrap_or(false);
+
+    // Initialize ChatManager to discover active providers/models.
+    let chat_manager = Arc::new(op_llm::chat::ChatManager::new());
 
     // If DIRECT_MODE is set we handle LLM requests ourselves.
     let direct_mode = std::env::var("DIRECT_MODE").is_ok();
@@ -60,7 +67,9 @@ async fn main() -> anyhow::Result<()> {
             via_xray = use_xray,
             "Running in DIRECT_MODE – LLM calls go to cloudcode-pa.googleapis.com"
         );
-        let llm = Arc::new(DirectLLM::new_with_proxy(if use_xray { Some(xray_socks) } else { None }).await?);
+        let llm = Arc::new(
+            DirectLLM::new_with_proxy(if use_xray { Some(xray_socks) } else { None }).await?,
+        );
         llm.start_auto_refresh();
 
         // Spawn OpenAI-compatible HTTP server in background only when not in HTTP_ONLY mode
@@ -68,8 +77,9 @@ async fn main() -> anyhow::Result<()> {
         if let Ok(http_addr) = std::env::var("HTTP_SERVER_ADDR") {
             if std::env::var("HTTP_ONLY").is_err() {
                 let llm_clone = Arc::clone(&llm);
+                let cm_clone = Arc::clone(&chat_manager);
                 tokio::spawn(async move {
-                    if let Err(e) = http_server::run(Some(llm_clone), &http_addr).await {
+                    if let Err(e) = http_server::run(Some(llm_clone), cm_clone, &http_addr).await {
                         tracing::error!("HTTP server error: {}", e);
                     }
                 });
@@ -82,8 +92,8 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // gRPC client for op-dbus — always connect; DIRECT_MODE only changes LLM routing.
-    let daemon_addr = std::env::var("OP_DBUS_ADDR")
-        .unwrap_or_else(|_| "http://10.200.0.2:50051".to_string());
+    let daemon_addr =
+        std::env::var("OP_DBUS_ADDR").unwrap_or_else(|_| "http://10.200.0.2:50051".to_string());
     info!(addr = %daemon_addr, direct_mode, "Connecting to op-dbus gRPC");
     let mut client: Option<McpServiceClient<Channel>> =
         match Channel::from_shared(daemon_addr.clone()) {
@@ -97,7 +107,7 @@ async fn main() -> anyhow::Result<()> {
     // HTTP-only mode: spawn the HTTP server (Vertex AI or CloudAI) and wait for signal.
     if std::env::var("HTTP_ONLY").is_ok() {
         if let Ok(http_addr) = std::env::var("HTTP_SERVER_ADDR") {
-            if let Err(e) = http_server::run(direct_llm.map(|l| Arc::clone(&l)), &http_addr).await {
+            if let Err(e) = http_server::run(direct_llm.map(|l| Arc::clone(&l)), Arc::clone(&chat_manager), &http_addr).await {
                 tracing::error!("HTTP server error: {}", e);
             }
         } else {
@@ -119,7 +129,8 @@ async fn main() -> anyhow::Result<()> {
 
         // Direct mode: intercept Gemini LLM methods only; everything else falls through to op-dbus.
         if let Some(ref llm) = direct_llm {
-            let is_gemini = req.get("params")
+            let is_gemini = req
+                .get("params")
                 .and_then(|p| p.get("model"))
                 .and_then(|m| m.as_str())
                 .map(|m| m.to_ascii_lowercase().starts_with("gemini"))
@@ -130,7 +141,8 @@ async fn main() -> anyhow::Result<()> {
                     Some(llm.handle(&req).await)
                 }
                 "tools/call" => {
-                    let tool_name = req.get("params")
+                    let tool_name = req
+                        .get("params")
                         .and_then(|p| p.get("name"))
                         .and_then(|n| n.as_str())
                         .unwrap_or("");
@@ -167,8 +179,12 @@ async fn main() -> anyhow::Result<()> {
                         s.footprint_hex.parse::<tonic::metadata::MetadataValue<_>>(),
                         s.trace_id.parse::<tonic::metadata::MetadataValue<_>>(),
                     ) {
-                        tonic_req.metadata_mut().insert("x-ghostbridge-footprint", fp);
-                        tonic_req.metadata_mut().insert("x-ghostbridge-trace-id", tr);
+                        tonic_req
+                            .metadata_mut()
+                            .insert("x-ghostbridge-footprint", fp);
+                        tonic_req
+                            .metadata_mut()
+                            .insert("x-ghostbridge-trace-id", tr);
                     }
                 }
             }

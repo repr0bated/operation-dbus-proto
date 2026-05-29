@@ -728,3 +728,84 @@ message NumaNode {
   uint64 memory_free_bytes = 4;
   uint64 memory_used_bytes = 5;
 }
+
+// =============================================================================
+// D-Bus Passthrough Service
+// =============================================================================
+
+// Generic D-Bus method call passthrough. Allows gRPC-Web clients (browser UI)
+// to invoke any method on any D-Bus interface reachable from the session or
+// system bus. This is the extension point for services that register on the
+// bus (e.g. ai.assistant.v1) without needing dedicated gRPC proto definitions.
+service DbusPassthrough {
+  // Call a D-Bus method and return the JSON result.
+  rpc Call(DbusCallRequest) returns (dbusCallResponse);
+
+  // Get a D-Bus property value as JSON.
+  rpc Get(DbusGetPropertyRequest) returns (DbusGetPropertyResponse);
+
+  // Set a D-Bus property value from JSON.
+  rpc Set(DbusSetPropertyRequest) returns (DbusSetPropertyResponse);
+
+  // Subscribe to a D-Bus signal, streaming events as JSON.
+  rpc Watch(DbusWatchRequest) returns (stream DbusSignalEvent);
+}
+
+message DbusCallRequest {
+  string bus = 1;            // "session" | "system"
+  string destination = 2;    // e.g. "ai.assistant.v1"
+  string path = 3;           // e.g. "/ai/assistant"
+  string interface = 4;      // e.g. "ai.assistant.v1"
+  string method = 5;         // e.g. "GetSoulMemory"
+  string json_body = 6;      // JSON-encoded argument(s)
+}
+
+message dbusCallResponse {
+  bool success = 1;
+  string json_result = 2;    // JSON-encoded return value
+  string error = 3;          // error message if failed
+}
+
+message DbusGetPropertyRequest {
+  string bus = 1;
+  string destination = 2;
+  string path = 3;
+  string interface = 4;
+  string property = 5;
+}
+
+message DbusGetPropertyResponse {
+  bool success = 1;
+  string json_value = 2;
+  string error = 3;
+}
+
+message DbusSetPropertyRequest {
+  string bus = 1;
+  string destination = 2;
+  string path = 3;
+  string interface = 4;
+  string property = 5;
+  string json_value = 6;
+}
+
+message DbusSetPropertyResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message DbusWatchRequest {
+  string bus = 1;
+  string destination = 2;
+  string path = 3;
+  string interface = 4;
+  repeated string signal_names = 5;  // empty = all signals
+}
+
+message DbusSignalEvent {
+  string signal_name = 1;
+  string path = 2;
+  string interface = 3;
+  string json_body = 4;
+  google.protobuf.Timestamp timestamp = 5;
+}

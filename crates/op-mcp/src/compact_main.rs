@@ -1,6 +1,6 @@
 //! Compact MCP Server Main
 //!
-//! Runs the compact MCP server in stdio mode with only 4 meta-tools.
+//! Runs the compact MCP server in stdio mode with five meta-tools.
 
 use op_mcp::compact::run_compact_stdio_server;
 

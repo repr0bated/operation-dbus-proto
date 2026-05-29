@@ -9,7 +9,7 @@
     "op-dbus-compact": {
       "url": "http://localhost:8080/mcp/compact",
       "transport": "sse",
-      "description": "op-dbus compact mode (4 meta-tools for efficient discovery)"
+      "description": "op-dbus compact mode (5 lazy meta-tools for efficient discovery)"
     },
     "op-dbus-agents": {
       "url": "http://localhost:8080/mcp/agents",

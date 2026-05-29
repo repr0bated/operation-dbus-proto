@@ -20,11 +20,10 @@ pub fn ghostbridge_interceptor(mut req: Request<()>) -> Result<Request<()>, Stat
     // SAFETY: read_sled() uses MmapOptions::len(IdentitySled::SIZE) so the
     // mapping is at least SIZE bytes, and write_sled() uses atomic rename so
     // readers never see a partial write.
-    let is_valid = unsafe { (*sled_ptr).is_valid };
-    let current_footprint = unsafe { (*sled_ptr).hashed_footprint };
-    let control_source_bytes = unsafe { (*sled_ptr).control_source };
+    let sled = unsafe { &*sled_ptr };
+    let current_footprint = sled.hashed_footprint;
 
-    if !is_valid {
+    if !sled.is_sled_valid() {
         return Err(Status::failed_precondition("Invalid Schema State."));
     }
 
@@ -39,15 +38,10 @@ pub fn ghostbridge_interceptor(mut req: Request<()>) -> Result<Request<()>, Stat
         return Err(Status::permission_denied("Temporal Hash Mismatch."));
     }
 
-    // Log the OSCAL control-source for audit / debug.
-    let end = control_source_bytes
-        .iter()
-        .position(|&b| b == 0)
-        .unwrap_or(32);
-    let oscal_header = std::str::from_utf8(&control_source_bytes[..end]).unwrap_or("");
     tracing::debug!(
-        "Validated request with OSCAL control source: {}",
-        oscal_header
+        "Validated request with footprint {} and trace_id {}",
+        hex::encode(current_footprint),
+        sled.trace_id_hex()
     );
 
     if let Some(trace_val) = trace_value {

@@ -41,5 +41,8 @@ impl MirrorObject {
 
     /// Signal emitted when json_data changes
     #[zbus(signal)]
-    pub async fn data_updated(&self, ctxt: &zbus::object_server::SignalContext<'_>) -> zbus::Result<()>;
+    pub async fn data_updated(
+        &self,
+        ctxt: &zbus::object_server::SignalContext<'_>,
+    ) -> zbus::Result<()>;
 }

@@ -347,10 +347,7 @@ impl StreamingBlockchain {
             .context("Failed to wait for `ssh ... btrfs receive`")?;
 
         if !send_status.success() {
-            anyhow::bail!(
-                "`btrfs send` failed with status {:?}",
-                send_status.code()
-            );
+            anyhow::bail!("`btrfs send` failed with status {:?}", send_status.code());
         }
         if !recv_output.status.success() {
             let stderr = String::from_utf8_lossy(&recv_output.stderr);
@@ -361,7 +358,10 @@ impl StreamingBlockchain {
             );
         }
 
-        info!("Successfully streamed snapshot {} to {}", snapshot_name, remote_host);
+        info!(
+            "Successfully streamed snapshot {} to {}",
+            snapshot_name, remote_host
+        );
         Ok(())
     }
 
@@ -608,11 +608,7 @@ fn validate_remote_host(host: &str) -> Result<()> {
             || b == b'@'
             || b == b':';
         if !ok {
-            anyhow::bail!(
-                "invalid byte 0x{:02x} at position {} in remote host",
-                b,
-                i
-            );
+            anyhow::bail!("invalid byte 0x{:02x} at position {} in remote host", b, i);
         }
     }
     Ok(())
@@ -624,9 +620,7 @@ fn validate_remote_host(host: &str) -> Result<()> {
 /// Requires absolute, no `..` components, no shell metacharacters, no
 /// control characters.
 fn validate_btrfs_path(path: &Path) -> Result<()> {
-    let s = path
-        .to_str()
-        .context("btrfs path is not valid UTF-8")?;
+    let s = path.to_str().context("btrfs path is not valid UTF-8")?;
     if s.is_empty() {
         anyhow::bail!("btrfs path must not be empty");
     }

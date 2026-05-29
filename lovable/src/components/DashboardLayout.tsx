@@ -1,14 +1,24 @@
 import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-  Shield, Bell, Search, Sun, Moon, LogOut, User, Settings,
+  Shield,
+  Bell,
+  Search,
+  Sun,
+  Moon,
+  LogOut,
+  User,
+  Settings,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { useTheme } from "@/hooks/use-theme";
 import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem,
-  DropdownMenuSeparator, DropdownMenuTrigger,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { SidebarTrigger } from "@/components/ui/sidebar";
@@ -29,18 +39,24 @@ const searchPages = [
   { title: "Logs", url: "/logs" },
   { title: "Debugger", url: "/debugger" },
   { title: "Settings", url: "/settings" },
-  { title: "OpenClaw", url: "/openclaw" },
+  { title: "Assistant", url: "/openclaw" },
   { title: "Models", url: "/openclaw/models" },
   { title: "Plugins", url: "/openclaw/plugins" },
   { title: "Scripts", url: "/openclaw/scripts" },
   { title: "Config", url: "/openclaw/config" },
 ];
 
-function CommandSearch({ open, onClose }: { open: boolean; onClose: () => void }) {
+function CommandSearch({
+  open,
+  onClose,
+}: {
+  open: boolean;
+  onClose: () => void;
+}) {
   const [query, setQuery] = useState("");
   const navigate = useNavigate();
   const filtered = searchPages.filter((p) =>
-    p.title.toLowerCase().includes(query.toLowerCase())
+    p.title.toLowerCase().includes(query.toLowerCase()),
   );
 
   return (
@@ -55,19 +71,29 @@ function CommandSearch({ open, onClose }: { open: boolean; onClose: () => void }
             className="border-none bg-transparent focus-visible:ring-0 text-sm h-12"
             autoFocus
           />
-          <kbd className="text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-mono">ESC</kbd>
+          <kbd className="text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-mono">
+            ESC
+          </kbd>
         </div>
         <div className="max-h-64 overflow-auto p-2">
-          {filtered.length > 0 ? filtered.map((p) => (
-            <button
-              key={p.url}
-              onClick={() => { navigate(p.url); onClose(); setQuery(""); }}
-              className="w-full text-left px-3 py-2 rounded-md text-sm text-foreground hover:bg-accent transition-colors"
-            >
-              {p.title}
-            </button>
-          )) : (
-            <p className="text-sm text-muted-foreground text-center py-4">No results</p>
+          {filtered.length > 0 ? (
+            filtered.map((p) => (
+              <button
+                key={p.url}
+                onClick={() => {
+                  navigate(p.url);
+                  onClose();
+                  setQuery("");
+                }}
+                className="w-full text-left px-3 py-2 rounded-md text-sm text-foreground hover:bg-accent transition-colors"
+              >
+                {p.title}
+              </button>
+            ))
+          ) : (
+            <p className="text-sm text-muted-foreground text-center py-4">
+              No results
+            </p>
           )}
         </div>
       </DialogContent>
@@ -106,7 +132,9 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
             >
               <Search className="h-3.5 w-3.5" />
               <span>Search...</span>
-              <kbd className="ml-auto text-xs bg-muted px-1.5 py-0.5 rounded font-mono">⌘K</kbd>
+              <kbd className="ml-auto text-xs bg-muted px-1.5 py-0.5 rounded font-mono">
+                ⌘K
+              </kbd>
             </button>
 
             <div className="flex items-center gap-2">
@@ -115,7 +143,11 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
                 className="p-2 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
                 aria-label="Toggle theme"
               >
-                {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+                {theme === "dark" ? (
+                  <Sun className="h-4 w-4" />
+                ) : (
+                  <Moon className="h-4 w-4" />
+                )}
               </button>
 
               <button className="relative p-2 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors">

@@ -2,7 +2,7 @@
 //!
 //! ## Authentication Priority
 //!
-//! 1. **MCP Proxy** (VS Code extension emulation through `op-mcp-proxy`)
+//! 1. **Factory** (local proxy — the AI you are talking to right now)
 //! 2. **GCloud ADC** (direct OAuth via gcloud)
 //! 3. **Gemini** (API key fallback)
 //! 4. **Anthropic** (API key)
@@ -10,12 +10,14 @@
 //! ## Environment Variables
 //!
 //! ```bash
-//! # Preferred: MCP proxy bridge
-//! ENABLE_MCP_PROXY_PROVIDER=true
-//! OP_MCP_PROXY_BIN=op-mcp-proxy
+//! # Preferred: Factory local proxy (default)
+//! LLM_PROVIDER=factory
+//! FACTORY_BASE_URL=http://127.0.0.1:11435/v1
+//! FACTORY_API_KEY=local-codex-proxy
+//! FACTORY_DEFAULT_MODEL=local-oauth-proxy
 //!
-//! # Provider selection
-//! LLM_PROVIDER=mcp-proxy  # or openclaw, gemini, gemini-cli, anthropic
+//! # Provider selection override
+//! LLM_PROVIDER=factory  # or openclaw, gemini, gemini-cli, anthropic
 //! LLM_MODEL=gemini-2.5-flash
 //!
 //! # Optional API key fallbacks
@@ -26,15 +28,15 @@
 use anyhow::{anyhow, Result};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use std::sync::RwLock;
 use tracing::{debug, info, warn};
 
 use crate::anthropic::AnthropicClient;
 use crate::assistant::AssistantProvider;
+use crate::factory::FactoryProvider;
 use crate::gcloud_adc::GCloudADCProvider;
 use crate::gemini::GeminiClient;
 use crate::gemini_cli::create_gemini_cli_provider;
-use crate::mcp_proxy::McpProxyProvider;
 use crate::openclaw::OpenClawProvider;
 use crate::provider::{
     BoxedProvider, ChatMessage, ChatRequest, ChatResponse, LlmProvider, ModelInfo, ProviderType,
@@ -54,15 +56,16 @@ impl ChatManager {
     ///
     /// Initialization order:
     /// 1. Check LLM_PROVIDER environment variable
-    /// 2. Try MCP Proxy (VS Code extension emulation)
-    /// 3. Try GCloud ADC
-    /// 4. Try Gemini (API key)
-    /// 5. Try Anthropic (API key)
+    /// 2. Factory — Local proxy (default)
+    /// 3. GCloud ADC
+    /// 4. Gemini (API key)
+    /// 5. Anthropic (API key)
     pub fn new() -> Self {
         let mut providers: HashMap<ProviderType, BoxedProvider> = HashMap::new();
         let mut default_provider = None;
-        let mut default_model = std::env::var("OPENCLAW_DEFAULT_MODEL")
-            .unwrap_or_else(|_| "gemini-2.0-flash".to_string());
+        let mut default_model = std::env::var("FACTORY_DEFAULT_MODEL")
+            .or_else(|_| std::env::var("OPENCLAW_DEFAULT_MODEL"))
+            .unwrap_or_else(|_| "local-oauth-proxy".to_string());
 
         // Check environment variables
         let env_provider = std::env::var("LLM_PROVIDER").ok();
@@ -77,24 +80,18 @@ impl ChatManager {
         }
 
         // =====================================================
-        // MCP Proxy - Gemini through op-mcp-proxy DIRECT_MODE
+        // Factory — Local proxy (default, the AI you are talking to)
         // =====================================================
-        if std::env::var("ENABLE_MCP_PROXY_PROVIDER")
-            .ok()
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or(true)
-        {
-            match McpProxyProvider::from_env() {
-                Ok(proxy) => {
-                    info!("✅ MCP Proxy provider initialized");
-                    providers.insert(ProviderType::McpProxy, Box::new(proxy));
-                    if default_provider.is_none() {
-                        default_provider = Some(ProviderType::McpProxy);
-                    }
+        match FactoryProvider::from_env() {
+            Ok(factory) => {
+                info!("✅ Factory provider initialized (local proxy)");
+                providers.insert(ProviderType::Factory, Box::new(factory));
+                if default_provider.is_none() {
+                    default_provider = Some(ProviderType::Factory);
                 }
-                Err(e) => {
-                    debug!("MCP Proxy provider failed: {}", e);
-                }
+            }
+            Err(e) => {
+                debug!("Factory provider failed: {}", e);
             }
         }
 
@@ -195,12 +192,19 @@ impl ChatManager {
         }
 
         // =====================================================
-        // Anthropic - API key
+        // Anthropic - OAuth2 Bearer token (preferred) or API key
         // =====================================================
-        if std::env::var("ANTHROPIC_API_KEY").is_ok() {
+        if let Ok(token) = std::env::var("ANTHROPIC_OAUTH_TOKEN") {
+            let anthropic = AnthropicClient::with_oauth_token(token);
+            info!("✅ Anthropic provider initialized (OAuth2 Bearer)");
+            providers.insert(ProviderType::Anthropic, Box::new(anthropic));
+            if default_provider.is_none() {
+                default_provider = Some(ProviderType::Anthropic);
+            }
+        } else if std::env::var("ANTHROPIC_API_KEY").is_ok() {
             match AnthropicClient::from_env() {
                 Ok(anthropic) => {
-                    info!("✅ Anthropic provider initialized");
+                    info!("✅ Anthropic provider initialized (API key)");
                     providers.insert(ProviderType::Anthropic, Box::new(anthropic));
                     if default_provider.is_none() {
                         default_provider = Some(ProviderType::Anthropic);
@@ -220,20 +224,20 @@ impl ChatManager {
                     pt
                 } else {
                     warn!("⚠️  LLM_PROVIDER '{}' not available", provider_name);
-                    default_provider.unwrap_or(ProviderType::McpProxy)
+                    default_provider.unwrap_or(ProviderType::Factory)
                 }
             } else {
                 warn!("⚠️  Invalid LLM_PROVIDER '{}'", provider_name);
-                default_provider.unwrap_or(ProviderType::McpProxy)
+                default_provider.unwrap_or(ProviderType::Factory)
             }
         } else {
-            default_provider.unwrap_or(ProviderType::McpProxy)
+            default_provider.unwrap_or(ProviderType::Factory)
         };
 
         if providers.is_empty() {
             warn!("⚠️  No LLM providers available!");
             warn!("   Configure authentication:");
-            warn!("   1. Install/build op-mcp-proxy and set OP_MCP_PROXY_BIN");
+            warn!("   1. Factory proxy should auto-start (FACTORY_BASE_URL)");
             warn!("   2. Authenticate: gcloud auth login");
             warn!("   3. Or set OPENCLAW_BASE_URL and LLM_PROVIDER=openclaw");
             warn!("   4. Or set GEMINI_API_KEY environment variable");
@@ -259,12 +263,12 @@ impl ChatManager {
 
     /// Get current provider type
     pub async fn current_provider(&self) -> ProviderType {
-        self.current_provider.read().await.clone()
+        self.current_provider.read().unwrap().clone()
     }
 
     /// Get current model
     pub async fn current_model(&self) -> String {
-        self.current_model.read().await.clone()
+        self.current_model.read().unwrap().clone()
     }
 
     /// Switch provider
@@ -277,13 +281,13 @@ impl ChatManager {
             ));
         }
 
-        *self.current_provider.write().await = provider_type.clone();
+        *self.current_provider.write().unwrap() = provider_type.clone();
         info!("Switched to provider: {:?}", provider_type);
 
         // Get first available model for this provider
         let models = self.list_models().await?;
         if let Some(first) = models.first() {
-            *self.current_model.write().await = first.id.clone();
+            *self.current_model.write().unwrap() = first.id.clone();
             info!("Default model set to: {}", first.id);
         }
 
@@ -293,7 +297,7 @@ impl ChatManager {
     /// Switch model
     pub async fn switch_model(&self, model_id: impl Into<String>) -> Result<()> {
         let model_id = model_id.into();
-        *self.current_model.write().await = model_id.clone();
+        *self.current_model.write().unwrap() = model_id.clone();
         info!("Switched to model: {}", model_id);
         Ok(())
     }
@@ -309,7 +313,7 @@ impl ChatManager {
     }
 
     async fn resolve_provider(&self) -> Result<ProviderType> {
-        let current = self.current_provider.read().await.clone();
+        let current = self.current_provider.read().unwrap().clone();
         if self.providers.contains_key(&current) {
             return Ok(current);
         }
@@ -319,28 +323,27 @@ impl ChatManager {
                 "Provider {:?} not available, falling back to {:?}",
                 current, fallback
             );
-            *self.current_provider.write().await = fallback.clone();
+            *self.current_provider.write().unwrap() = fallback.clone();
             return Ok(fallback);
         }
 
         Err(anyhow!(
             "No LLM providers configured.\n\n\
             To authenticate:\n\
-            1. Build/install op-mcp-proxy and set OP_MCP_PROXY_BIN\n\
+            1. Factory proxy should auto-start (FACTORY_BASE_URL)\n\
             2. Run: gcloud auth login\n\
-            3. Optional: set LLM_PROVIDER=mcp-proxy\n\
-            4. Or set OPENCLAW_BASE_URL and LLM_PROVIDER=openclaw\n\n\
+            3. Or set OPENCLAW_BASE_URL and LLM_PROVIDER=openclaw\n\n\
             Or set GEMINI_API_KEY environment variable."
         ))
     }
 
     /// List models from current provider
     pub async fn list_models(&self) -> Result<Vec<ModelInfo>> {
-        let provider_type = self.current_provider.read().await.clone();
+        let provider_type = self.current_provider.read().unwrap().clone();
 
         // Check cache first
         {
-            let cache = self.model_cache.read().await;
+            let cache = self.model_cache.read().unwrap();
             if let Some(models) = cache.get(&provider_type) {
                 return Ok(models.clone());
             }
@@ -355,7 +358,7 @@ impl ChatManager {
 
         // Cache
         {
-            let mut cache = self.model_cache.write().await;
+            let mut cache = self.model_cache.write().unwrap();
             cache.insert(provider_type, models.clone());
         }
 
@@ -377,7 +380,7 @@ impl ChatManager {
 
     /// Search models
     pub async fn search_models(&self, query: &str) -> Result<Vec<ModelInfo>> {
-        let provider_type = self.current_provider.read().await.clone();
+        let provider_type = self.current_provider.read().unwrap().clone();
         let provider = self
             .providers
             .get(&provider_type)
@@ -388,9 +391,9 @@ impl ChatManager {
 
     /// Refresh models (clear cache)
     pub async fn refresh_models(&self) -> Result<Vec<ModelInfo>> {
-        let provider_type = self.current_provider.read().await.clone();
+        let provider_type = self.current_provider.read().unwrap().clone();
         {
-            let mut cache = self.model_cache.write().await;
+            let mut cache = self.model_cache.write().unwrap();
             cache.remove(&provider_type);
         }
         self.list_models().await
@@ -398,7 +401,7 @@ impl ChatManager {
 
     /// Get model info
     pub async fn get_model(&self, model_id: &str) -> Result<Option<ModelInfo>> {
-        let provider_type = self.current_provider.read().await.clone();
+        let provider_type = self.current_provider.read().unwrap().clone();
         let provider = self
             .providers
             .get(&provider_type)
@@ -409,7 +412,7 @@ impl ChatManager {
 
     /// Check if model is available
     pub async fn is_model_available(&self, model_id: &str) -> Result<bool> {
-        let provider_type = self.current_provider.read().await.clone();
+        let provider_type = self.current_provider.read().unwrap().clone();
         let provider = self
             .providers
             .get(&provider_type)
@@ -421,7 +424,7 @@ impl ChatManager {
     /// Send chat message
     pub async fn chat(&self, messages: Vec<ChatMessage>) -> Result<ChatResponse> {
         let provider_type = self.resolve_provider().await?;
-        let model = self.current_model.read().await.clone();
+        let model = self.current_model.read().unwrap().clone();
 
         let provider = self
             .providers
@@ -446,10 +449,78 @@ impl ChatManager {
         provider.chat(model, messages).await
     }
 
+    /// Send chat stream with specific provider and model
+    pub async fn chat_stream_with(
+        &self,
+        provider_type: &ProviderType,
+        model: &str,
+        messages: Vec<ChatMessage>,
+    ) -> Result<tokio::sync::mpsc::Receiver<Result<String>>> {
+        let provider = self
+            .providers
+            .get(provider_type)
+            .ok_or_else(|| anyhow!("Provider {:?} not available", provider_type))?;
+
+        provider.chat_stream(model, messages).await
+    }
+
+    /// Find which provider supports the given model
+    pub async fn find_provider_for_model(&self, model: &str) -> Option<ProviderType> {
+        let providers = self.available_providers();
+        // 1. Direct match in list_models_for_provider
+        for ptype in &providers {
+            if let Ok(models) = self.list_models_for_provider(ptype).await {
+                if models.iter().any(|m| m.id == model) {
+                    return Some(ptype.clone());
+                }
+            }
+        }
+
+        // 2. Prefix / substring match
+        let model_lower = model.to_lowercase();
+        if model_lower.contains("factory") || model_lower.contains("droid") || model_lower.contains("kimi") {
+            if providers.contains(&ProviderType::Factory) {
+                return Some(ProviderType::Factory);
+            }
+        }
+        if model_lower.contains("claude") {
+            if providers.contains(&ProviderType::Anthropic) {
+                return Some(ProviderType::Anthropic);
+            }
+        }
+        if model_lower.contains("gemini") {
+            // Check in order of preference
+            if providers.contains(&ProviderType::Antigravity) {
+                return Some(ProviderType::Antigravity);
+            }
+            if providers.contains(&ProviderType::Gemini) {
+                return Some(ProviderType::Gemini);
+            }
+            if providers.contains(&ProviderType::GeminiCli) {
+                return Some(ProviderType::GeminiCli);
+            }
+        }
+        if model_lower.contains("gpt") {
+            if providers.contains(&ProviderType::OpenClaw) {
+                return Some(ProviderType::OpenClaw);
+            }
+            if providers.contains(&ProviderType::Assistant) {
+                return Some(ProviderType::Assistant);
+            }
+            if providers.contains(&ProviderType::OpenAI) {
+                return Some(ProviderType::OpenAI);
+            }
+        }
+
+        // 3. Fallback to first available provider
+        providers.first().cloned()
+    }
+
+
     /// Get status
     pub async fn get_status(&self) -> simd_json::OwnedValue {
-        let provider = self.current_provider.read().await.clone();
-        let model = self.current_model.read().await.clone();
+        let provider = self.current_provider.read().unwrap().clone();
+        let model = self.current_model.read().unwrap().clone();
         let providers: Vec<String> = self
             .available_providers()
             .iter()
@@ -465,14 +536,22 @@ impl ChatManager {
 
     /// Get detailed status
     pub async fn get_detailed_status(&self) -> simd_json::OwnedValue {
-        let current_provider = self.current_provider.read().await.clone();
-        let current_model = self.current_model.read().await.clone();
+        let current_provider = self.current_provider.read().unwrap().clone();
+        let current_model = self.current_model.read().unwrap().clone();
 
         let mut provider_status = simd_json::value::owned::Object::new();
 
         for ptype in self.providers.keys() {
             let models = self.list_models_for_provider(ptype).await.ok();
             let (auth_type, features) = match ptype {
+                ProviderType::Factory => (
+                    "Factory AI local proxy (FACTORY_BASE_URL)",
+                    vec![
+                        "OpenAI-compatible API",
+                        "Local proxy at 127.0.0.1:11435",
+                        "Default for op-web chat",
+                    ],
+                ),
                 ProviderType::McpProxy => (
                     "OAuth via op-mcp-proxy (VS Code extension emulation)",
                     vec![
@@ -534,7 +613,7 @@ impl ChatManager {
 #[async_trait]
 impl LlmProvider for ChatManager {
     fn provider_type(&self) -> ProviderType {
-        self.current_provider.blocking_read().clone()
+        self.current_provider.read().unwrap().clone()
     }
 
     async fn list_models(&self) -> Result<Vec<ModelInfo>> {
