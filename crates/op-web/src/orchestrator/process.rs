@@ -92,7 +92,7 @@ impl UnifiedOrchestrator {
         };
 
         // Build system prompt: Capabilities + Compact Instructions + Tool Directory
-        let system_msg_core = op_chat::system_prompt::generate_system_prompt().await;
+        let system_msg_core = op_chat::system_prompt::generate_system_prompt(None).await;
         let compact_instructions = self.build_compact_mode_system_prompt();
 
         let combined_prompt = format!(

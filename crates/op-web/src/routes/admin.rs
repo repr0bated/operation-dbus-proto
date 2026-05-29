@@ -105,7 +105,7 @@ pub struct AdminConfigResponse {
 /// GET /admin/prompt - Get full system prompt with metadata
 async fn get_system_prompt(Extension(_state): Extension<Arc<AppState>>) -> impl IntoResponse {
     let metadata = op_chat::system_prompt::get_prompt_metadata().await;
-    let full_prompt = op_chat::generate_system_prompt().await;
+    let full_prompt = op_chat::generate_system_prompt(None).await;
 
     let char_count = full_prompt.content.len();
     // Rough token estimate: ~4 chars per token

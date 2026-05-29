@@ -40,10 +40,16 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         // Health & Status
         .route("/health", get(handlers::health::health_handler))
         .route("/status", get(handlers::status::status_handler))
+        // Schema — single source of truth from shared memory
+        .route("/schema", get(handlers::schema::schema_handler))
         // Dashboard
         .route(
             "/dashboard/metrics",
             get(handlers::dashboard::dashboard_metrics_handler),
+        )
+        .route(
+            "/dashboard/projections",
+            get(handlers::dashboard::dashboard_projections_handler),
         )
         // Users
         .route("/users", get(handlers::users::list_users_handler))
@@ -90,6 +96,11 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route(
             "/chat/system-prompt",
             axum::routing::put(handlers::chat::update_system_prompt_handler),
+        )
+        // Analytics / Accountability
+        .route(
+            "/analytics/semantic-search",
+            get(handlers::analytics::semantic_search_handler),
         )
         // Tool endpoints
         .route("/tools", get(handlers::tools::list_tools_handler))
@@ -247,7 +258,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .nest("/admin", admin::admin_routes());
 
     // Use filesystem static files if available, otherwise fallback to embedded UI
-    let static_dir = std::env::var("OP_WEB_STATIC_DIR").unwrap_or_else(|_| "static".to_string());
+    let static_dir = std::env::var("OP_WEB_STATIC_DIR").unwrap_or_else(|_| "lovable/dist".to_string());
     if std::path::Path::new(&static_dir).exists() {
         router = router.fallback_service(
             ServeDir::new(static_dir).fallback(get(crate::embedded_ui::serve_embedded_ui)),

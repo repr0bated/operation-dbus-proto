@@ -1,13 +1,15 @@
-//! Privacy Router User Storage
+//! Privacy Router User Storage — CozoDB backend.
 //!
-//! Manages user accounts for the privacy router VPN service.
+//! No JSON flat file, no drift. Desired state = CozoDB graph.
+//! Magic links remain ephemeral (in-memory only).
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, Utc};
+use op_cozo_store::{CozoGraphShuttle, DataValue, Num};
 use op_identity::generate_magic_link_token;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::PathBuf;
 use tokio::sync::RwLock;
 use tracing::{info, warn};
 
@@ -64,120 +66,181 @@ pub struct MagicLink {
     pub expires_at: DateTime<Utc>,
 }
 
-/// User storage with persistence
+/// User storage backed by CozoDB — no JSON, no drift.
 pub struct UserStore {
-    users: RwLock<HashMap<String, PrivacyUser>>,
-    users_by_email: RwLock<HashMap<String, String>>, // email -> user_id
-    users_by_google_id: RwLock<HashMap<String, String>>, // google_id -> user_id
+    cozo: CozoGraphShuttle,
     magic_links: RwLock<HashMap<String, MagicLink>>,
     next_ip: RwLock<u8>, // Last octet for IP assignment (10.100.0.x)
-    storage_path: String,
 }
 
 fn default_privacy_quota_bytes() -> u64 {
     1024 * 1024 * 1024 // 1 GiB
 }
 
+/// Extract &str from DataValue
+fn dv_str(dv: &DataValue) -> Option<&str> {
+    if let DataValue::Str(s) = dv { Some(s.as_str()) } else { None }
+}
+
+fn dv_bool(dv: &DataValue) -> bool {
+    dv_str(dv) == Some("true")
+}
+
+fn dv_int(dv: &DataValue) -> Option<i64> {
+    if let DataValue::Num(Num::Int(i)) = dv { Some(*i) } else { None }
+}
+
+/// Parse a PrivacyUser from a CozoDB row vector.
+/// Row order must match the query column order in get_privacy_user / list_privacy_users.
+fn parse_user_row(id: &str, row: &[DataValue]) -> Option<PrivacyUser> {
+    if row.len() < 15 {
+        return None;
+    }
+    let api_json = dv_str(&row[13]).unwrap_or("null");
+    let api_credentials = if api_json == "null" || api_json.is_empty() {
+        None
+    } else {
+        serde_json::from_str(api_json).ok()
+    };
+
+    Some(PrivacyUser {
+        id: id.to_string(),
+        email: dv_str(&row[0])?.to_string(),
+        email_verified: dv_bool(&row[1]),
+        wg_public_key: dv_str(&row[2])?.to_string(),
+        wg_private_key_encrypted: dv_str(&row[3])?.to_string(),
+        assigned_ip: dv_str(&row[4])?.to_string(),
+        privacy_quota_bytes: dv_int(&row[5]).unwrap_or(1_073_741_824) as u64,
+        privacy_quota_used_bytes: dv_int(&row[6]).unwrap_or(0) as u64,
+        privacy_container_name: {
+            let s = dv_str(&row[7])?;
+            if s.is_empty() { None } else { Some(s.to_string()) }
+        },
+        privacy_route_id: {
+            let s = dv_str(&row[8])?;
+            if s.is_empty() { None } else { Some(s.to_string()) }
+        },
+        privacy_network_connected: dv_bool(&row[9]),
+        privacy_network_connected_at: {
+            let s = dv_str(&row[10])?;
+            if s.is_empty() { None } else { DateTime::parse_from_rfc3339(s).ok().map(|d| d.with_timezone(&Utc)) }
+        },
+        google_id: {
+            let s = dv_str(&row[11])?;
+            if s.is_empty() { None } else { Some(s.to_string()) }
+        },
+        google_email: {
+            let s = dv_str(&row[12])?;
+            if s.is_empty() { None } else { Some(s.to_string()) }
+        },
+        api_credentials,
+        created_at: DateTime::parse_from_rfc3339(dv_str(&row[14])?).ok()?.with_timezone(&Utc),
+    })
+}
+
+fn user_to_cozo_fields(user: &PrivacyUser) -> (String, String, String, String, String, i64, i64, String, String, String, String, String, String, String, String) {
+    let api_json = user.api_credentials.as_ref()
+        .map(|c| serde_json::to_string(c).unwrap_or_else(|_| "null".to_string()))
+        .unwrap_or_else(|| "null".to_string());
+    (
+        user.email.clone(),
+        user.email_verified.to_string(),
+        user.wg_public_key.clone(),
+        user.wg_private_key_encrypted.clone(),
+        user.assigned_ip.clone(),
+        user.privacy_quota_bytes as i64,
+        user.privacy_quota_used_bytes as i64,
+        user.privacy_container_name.clone().unwrap_or_default(),
+        user.privacy_route_id.clone().unwrap_or_default(),
+        user.privacy_network_connected.to_string(),
+        user.privacy_network_connected_at.map(|d| d.to_rfc3339()).unwrap_or_default(),
+        user.google_id.clone().unwrap_or_default(),
+        user.google_email.clone().unwrap_or_default(),
+        api_json,
+        user.created_at.to_rfc3339(),
+    )
+}
+
 impl UserStore {
-    /// Create a new user store with persistence path
-    pub async fn new(storage_path: impl Into<String>) -> Result<Self> {
-        let storage_path = storage_path.into();
-        let store = Self {
-            users: RwLock::new(HashMap::new()),
-            users_by_email: RwLock::new(HashMap::new()),
-            users_by_google_id: RwLock::new(HashMap::new()),
-            magic_links: RwLock::new(HashMap::new()),
-            next_ip: RwLock::new(2), // Start at 10.100.0.2
-            storage_path,
+    /// Create a new user store backed by CozoDB.
+    pub async fn new(cozo_db_path: impl Into<String>) -> Result<Self> {
+        let path = cozo_db_path.into();
+        let cozo = if path.is_empty() {
+            CozoGraphShuttle::new_in_memory()?
+        } else {
+            CozoGraphShuttle::new_persistent(PathBuf::from(path))?
         };
-
-        // Load existing users if file exists
-        store.load().await.ok();
-
+        let store = Self {
+            cozo,
+            magic_links: RwLock::new(HashMap::new()),
+            next_ip: RwLock::new(2),
+        };
+        // Load highest IP from existing users
+        store.load_next_ip().await.ok();
         Ok(store)
     }
 
-    /// Load users from disk
-    async fn load(&self) -> Result<()> {
-        let path = Path::new(&self.storage_path);
-        if !path.exists() {
-            return Ok(());
-        }
-
-        let content = tokio::fs::read_to_string(path).await?;
-        let mut raw = content.clone();
-        let data: StoredData = unsafe { simd_json::from_str(&mut raw) }?;
-
-        let mut users = self.users.write().await;
-        let mut users_by_email = self.users_by_email.write().await;
-        let mut users_by_google_id = self.users_by_google_id.write().await;
-        let mut next_ip = self.next_ip.write().await;
-
-        for user in data.users {
-            users_by_email.insert(user.email.clone(), user.id.clone());
-            if let Some(ref google_id) = user.google_id {
-                users_by_google_id.insert(google_id.clone(), user.id.clone());
+    async fn load_next_ip(&self) -> Result<()> {
+        let users = self.list_users().await;
+        let mut max_octet = 2u8;
+        for user in users {
+            if let Some(octet) = user.assigned_ip.strip_prefix("10.100.0.")
+                .and_then(|s| s.strip_suffix("/32"))
+                .and_then(|s| s.parse::<u8>().ok())
+            {
+                if octet > max_octet && octet < 255 {
+                    max_octet = octet;
+                }
             }
-            users.insert(user.id.clone(), user);
         }
-
-        *next_ip = data.next_ip;
-        info!("Loaded {} users from {}", users.len(), self.storage_path);
-
-        Ok(())
-    }
-
-    /// Save users to disk safely using a temporary file
-    async fn save(&self) -> Result<()> {
-        let users = self.users.read().await;
-        let next_ip = self.next_ip.read().await;
-
-        let data = StoredData {
-            users: users.values().cloned().collect(),
-            next_ip: *next_ip,
-        };
-
-        let content = simd_json::to_string_pretty(&data)?;
-
-        // Ensure parent directory exists
-        if let Some(parent) = Path::new(&self.storage_path).parent() {
-            tokio::fs::create_dir_all(parent).await.ok();
+        let mut next_ip = self.next_ip.write().await;
+        *next_ip = max_octet.wrapping_add(1);
+        if *next_ip > 254 || *next_ip < 2 {
+            *next_ip = 2;
         }
-
-        let temp_path = format!("{}.tmp", self.storage_path);
-        tokio::fs::write(&temp_path, content).await?;
-        tokio::fs::rename(&temp_path, &self.storage_path).await?;
         Ok(())
     }
 
     /// Get the next available IP address, ensuring no collisions
     pub async fn allocate_ip(&self) -> String {
         let mut next_ip_oct = self.next_ip.write().await;
-        let users = self.users.read().await;
-
-        // Collect all currently assigned IPs to avoid collisions
+        let users = self.list_users().await;
         let assigned_ips: std::collections::HashSet<String> =
-            users.values().map(|u| u.assigned_ip.clone()).collect();
+            users.into_iter().map(|u| u.assigned_ip).collect();
 
-        // Try to find the next available IP in the 10.100.0.x range
         for _ in 0..254 {
             let ip = format!("10.100.0.{}/32", *next_ip_oct);
-
-            // Increment for next time, skipping .0, .1, and .255
             *next_ip_oct = next_ip_oct.wrapping_add(1);
             if *next_ip_oct > 254 || *next_ip_oct < 2 {
                 *next_ip_oct = 2;
             }
-
             if !assigned_ips.contains(&ip) {
                 return ip;
             }
         }
-
-        // Fallback: If 10.100.0.x is full, we should probably expand the range
-        // For now, just return what we have and log a warning
         warn!("IP address range 10.100.0.x is exhausted!");
         format!("10.100.0.{}/32", *next_ip_oct)
+    }
+
+    fn cozo_clone(&self) -> CozoGraphShuttle {
+        self.cozo.clone()
+    }
+
+    async fn upsert_in_cozo(&self, user: &PrivacyUser) -> Result<()> {
+        let c = self.cozo_clone();
+        let (email, ev, wg, wg_priv, ip, quota, used, container, route, pnc, pnc_at, gid, gmail, api_json, ts)
+            = user_to_cozo_fields(user);
+        let id = user.id.clone();
+        tokio::task::spawn_blocking(move || {
+            c.upsert_privacy_user(
+                &id, &email, ev == "true", &wg, &wg_priv, &ip,
+                quota, used, &container, &route, pnc == "true", &pnc_at,
+                &gid, &gmail, &api_json, &ts,
+            )
+        })
+        .await
+        .context("spawn_blocking")??;
+        Ok(())
     }
 
     /// Create a new user (unverified)
@@ -187,12 +250,8 @@ impl UserStore {
         wg_public_key: String,
         wg_private_key_encrypted: String,
     ) -> Result<PrivacyUser> {
-        // Check if email already exists
-        {
-            let users_by_email = self.users_by_email.read().await;
-            if users_by_email.contains_key(email) {
-                anyhow::bail!("Email already registered");
-            }
+        if self.get_user_by_email(email).await.is_some() {
+            anyhow::bail!("Email already registered");
         }
 
         let ip = self.allocate_ip().await;
@@ -215,17 +274,7 @@ impl UserStore {
             api_credentials: None,
         };
 
-        // Store user
-        {
-            let mut users = self.users.write().await;
-            let mut users_by_email = self.users_by_email.write().await;
-            users_by_email.insert(user.email.clone(), user.id.clone());
-            users.insert(user.id.clone(), user.clone());
-        }
-
-        // Persist
-        self.save().await.context("Failed to save user")?;
-
+        self.upsert_in_cozo(&user).await?;
         info!("Created user {} with IP {}", user.id, user.assigned_ip);
         Ok(user)
     }
@@ -233,67 +282,71 @@ impl UserStore {
     /// Create a magic link for a user
     pub async fn create_magic_link(&self, user_id: &str) -> Result<MagicLink> {
         let token = generate_magic_link_token(32);
-
         let link = MagicLink {
             token: token.clone(),
             user_id: user_id.to_string(),
             expires_at: Utc::now() + Duration::minutes(15),
         };
-
         let mut links = self.magic_links.write().await;
         links.insert(token, link.clone());
-
         Ok(link)
     }
 
     /// Verify a magic link and mark user as verified
     pub async fn verify_magic_link(&self, token: &str) -> Result<PrivacyUser> {
-        // Find and remove the magic link
         let link = {
             let mut links = self.magic_links.write().await;
             links.remove(token).context("Invalid or expired link")?
         };
-
-        // Check expiration
         if link.expires_at < Utc::now() {
             anyhow::bail!("Link has expired");
         }
-
-        // Mark user as verified
-        let user = {
-            let mut users = self.users.write().await;
-            let user = users.get_mut(&link.user_id).context("User not found")?;
-            user.email_verified = true;
-            user.clone()
-        };
-
-        // Persist
-        self.save().await?;
-
+        let mut user = self.get_user(&link.user_id).await.context("User not found")?;
+        user.email_verified = true;
+        self.upsert_in_cozo(&user).await?;
         info!("User {} verified via magic link", user.id);
         Ok(user)
     }
 
     /// Get user by ID
     pub async fn get_user(&self, user_id: &str) -> Option<PrivacyUser> {
-        let users = self.users.read().await;
-        users.get(user_id).cloned()
+        let c = self.cozo_clone();
+        let id = user_id.to_string();
+        let row = tokio::task::spawn_blocking(move || c.get_privacy_user(&id))
+            .await
+            .ok()?;
+        let row = row.ok()?;
+        row.and_then(|r| parse_user_row(user_id, &r))
     }
 
     /// Get user by email
     pub async fn get_user_by_email(&self, email: &str) -> Option<PrivacyUser> {
-        let users_by_email = self.users_by_email.read().await;
-        let user_id = users_by_email.get(email)?;
-        let users = self.users.read().await;
-        users.get(user_id).cloned()
+        let c = self.cozo_clone();
+        let email = email.to_string();
+        let row = tokio::task::spawn_blocking(move || c.get_privacy_user_by_email(&email))
+            .await
+            .ok()?;
+        let (id, row) = row.ok()?.and_then(|mut r| {
+            if r.is_empty() { return None; }
+            let id = dv_str(&r.remove(0))?.to_string();
+            Some((id, r))
+        })?;
+        parse_user_row(&id, &row)
     }
 
     /// Get user by Google ID
     pub async fn get_user_by_google_id(&self, google_id: &str) -> Option<PrivacyUser> {
-        let users_by_google_id = self.users_by_google_id.read().await;
-        let user_id = users_by_google_id.get(google_id)?;
-        let users = self.users.read().await;
-        users.get(user_id).cloned()
+        let c = self.cozo_clone();
+        let gid = google_id.to_string();
+        let row = tokio::task::spawn_blocking(move || c.get_privacy_user_by_google_id(&gid))
+            .await
+            .ok()?;
+        let (id, row) = row.ok()?.and_then(|mut r| {
+            if r.is_empty() { return None; }
+            let id = dv_str(&r.remove(0))?.to_string();
+            Some((id, r))
+        })?;
+        parse_user_row(&id, &row)
     }
 
     /// Create or link user with Google identity
@@ -304,36 +357,24 @@ impl UserStore {
         wg_public_key: String,
         wg_private_key_encrypted: String,
     ) -> Result<PrivacyUser> {
-        // Check if user already exists with this Google ID
         if let Some(existing) = self.get_user_by_google_id(google_id).await {
             return Ok(existing);
         }
 
-        // Check if user exists with this email (link Google account)
         if let Some(mut existing) = self.get_user_by_email(google_email).await {
-            // Link Google identity to existing user
             existing.google_id = Some(google_id.to_string());
             existing.google_email = Some(google_email.to_string());
-            existing.email_verified = true; // Google accounts are pre-verified
-
-            {
-                let mut users = self.users.write().await;
-                let mut users_by_google_id = self.users_by_google_id.write().await;
-                users.insert(existing.id.clone(), existing.clone());
-                users_by_google_id.insert(google_id.to_string(), existing.id.clone());
-            }
-
-            self.save().await?;
+            existing.email_verified = true;
+            self.upsert_in_cozo(&existing).await?;
             info!("Linked Google identity to existing user {}", existing.id);
             return Ok(existing);
         }
 
-        // Create new user with Google identity
         let ip = self.allocate_ip().await;
         let user = PrivacyUser {
             id: uuid::Uuid::new_v4().to_string(),
             email: google_email.to_string(),
-            email_verified: true, // Google accounts are pre-verified
+            email_verified: true,
             created_at: Utc::now(),
             wg_public_key,
             wg_private_key_encrypted,
@@ -349,19 +390,7 @@ impl UserStore {
             api_credentials: None,
         };
 
-        // Store user
-        {
-            let mut users = self.users.write().await;
-            let mut users_by_email = self.users_by_email.write().await;
-            let mut users_by_google_id = self.users_by_google_id.write().await;
-            users_by_email.insert(user.email.clone(), user.id.clone());
-            users_by_google_id.insert(google_id.to_string(), user.id.clone());
-            users.insert(user.id.clone(), user.clone());
-        }
-
-        // Persist
-        self.save().await.context("Failed to save user")?;
-
+        self.upsert_in_cozo(&user).await?;
         info!("Created new user {} with Google identity", user.id);
         Ok(user)
     }
@@ -384,23 +413,11 @@ impl UserStore {
         user_id: &str,
         credentials: UserApiCredentials,
     ) -> Result<()> {
-        let user_exists = {
-            let mut users = self.users.write().await;
-            if let Some(user) = users.get_mut(user_id) {
-                user.api_credentials = Some(credentials);
-                true
-            } else {
-                false
-            }
-        };
-
-        if user_exists {
-            self.save().await?;
-            info!("Updated API credentials for user {}", user_id);
-            Ok(())
-        } else {
-            anyhow::bail!("User not found: {}", user_id);
-        }
+        let mut user = self.get_user(user_id).await.context("User not found")?;
+        user.api_credentials = Some(credentials);
+        self.upsert_in_cozo(&user).await?;
+        info!("Updated API credentials for user {}", user_id);
+        Ok(())
     }
 
     /// Mark a user as connected to the privacy network and persist container mapping.
@@ -410,39 +427,57 @@ impl UserStore {
         container_name: String,
         route_id: String,
     ) -> Result<PrivacyUser> {
-        let updated_user = {
-            let mut users = self.users.write().await;
-            let user = users.get_mut(user_id).context("User not found")?;
-            user.privacy_container_name = Some(container_name.clone());
-            user.privacy_route_id = Some(route_id.clone());
-            user.privacy_network_connected = true;
-            user.privacy_network_connected_at = Some(Utc::now());
-            user.clone()
-        };
-
-        self.save().await?;
+        let mut user = self.get_user(user_id).await.context("User not found")?;
+        user.privacy_container_name = Some(container_name.clone());
+        user.privacy_route_id = Some(route_id.clone());
+        user.privacy_network_connected = true;
+        user.privacy_network_connected_at = Some(Utc::now());
+        self.upsert_in_cozo(&user).await?;
         info!(
             "User {} connected to privacy network via container {} route {}",
             user_id, container_name, route_id
         );
-        Ok(updated_user)
+        Ok(user)
     }
 
     /// Get API credentials for a user
     pub async fn get_user_api_credentials(&self, user_id: &str) -> Option<UserApiCredentials> {
-        let users = self.users.read().await;
-        users.get(user_id)?.api_credentials.clone()
+        let user = self.get_user(user_id).await?;
+        user.api_credentials
     }
 
     /// List all users
     pub async fn list_users(&self) -> Vec<PrivacyUser> {
-        let users = self.users.read().await;
-        users.values().cloned().collect()
+        let c = self.cozo_clone();
+        let rows = match tokio::task::spawn_blocking(move || c.list_privacy_users())
+            .await
+            .ok()
+        {
+            Some(Ok(r)) => r,
+            _ => return Vec::new(),
+        };
+        let mut users = Vec::new();
+        for mut row in rows {
+            if row.is_empty() { continue; }
+            let id = match dv_str(&row.remove(0)) {
+                Some(s) => s.to_string(),
+                None => continue,
+            };
+            if let Some(user) = parse_user_row(&id, &row) {
+                users.push(user);
+            }
+        }
+        users
+    }
+
+    /// Delete a user by ID
+    pub async fn delete_user(&self, user_id: &str) -> Result<()> {
+        let c = self.cozo_clone();
+        let id = user_id.to_string();
+        tokio::task::spawn_blocking(move || c.delete_privacy_user(&id))
+            .await
+            .context("spawn_blocking")??;
+        Ok(())
     }
 }
 
-#[derive(Serialize, Deserialize)]
-struct StoredData {
-    users: Vec<PrivacyUser>,
-    next_ip: u8,
-}

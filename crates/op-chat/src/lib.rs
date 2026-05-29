@@ -11,6 +11,7 @@ pub mod actor;
 pub mod agent_tools;
 pub mod forced_execution;
 pub mod forced_tool_pipeline;
+pub mod memory_loop;
 pub mod mcp_server;
 pub mod nl_admin;
 pub mod orchestration;

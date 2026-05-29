@@ -26,6 +26,8 @@ op-identity = { workspace = true }
 op-introspection = { workspace = true }
 op-grpc-bridge = { path = "../op-grpc-bridge" }
 op-jsonrpc = { path = "../op-jsonrpc" }
+op-cozo-store = { path = "../op-cozo-store" }
+op-cognitive-mcp = { path = "../op-cognitive-mcp" }
 
 # Rate limiting
 tower_governor = "0.4"
@@ -39,6 +41,7 @@ hyper = { workspace = true }
 
 # Serialization
 serde = { workspace = true }
+serde_json = { workspace = true }
 simd-json = { workspace = true }
 toml = { workspace = true }
 

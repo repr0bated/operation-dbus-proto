@@ -9,6 +9,7 @@ description = "Chat functionality and LLM integration for op-dbus-v2"
 # Workspace dependencies
 tokio = { workspace = true, features = ["full"] }
 serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 simd-json = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 uuid = { workspace = true, features = ["v4", "serde"] }
@@ -31,6 +32,7 @@ regex = { workspace = true }
 libc = { workspace = true }
 op-agents = { path = "../op-agents" }
 op-mcp = { path = "../op-mcp", features = ["grpc"] }
+op-cognitive-mcp = { path = "../op-cognitive-mcp" }
 tonic = { workspace = true }
 tonic-reflection = { workspace = true }
 tokio-stream = { workspace = true }

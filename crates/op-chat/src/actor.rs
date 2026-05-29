@@ -18,6 +18,7 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, info, warn};
 
 use crate::forced_tool_pipeline::ForcedToolPipeline;
+use crate::memory_loop::{MemoryLoop, SessionMemory, CHATBOT_CONTAINER_ID};
 use crate::session::SessionManager;
 use crate::system_prompt::generate_system_prompt;
 use crate::tool_executor::TrackedToolExecutor;
@@ -78,6 +79,8 @@ pub enum RpcRequest {
         session_id: String,
         #[serde(default)]
         model: Option<String>,
+        #[serde(default)]
+        container_id: Option<String>,
     },
 
     /// Get execution history
@@ -221,6 +224,7 @@ impl ChatActorHandle {
             message: message.to_string(),
             session_id,
             model: None,
+            container_id: None,
         })
         .await
         .unwrap_or_else(|e| RpcResponse::error(e.to_string()))
@@ -259,6 +263,7 @@ pub struct ChatActor {
     pipeline: Arc<ForcedToolPipeline>,
     llm_provider: Arc<dyn LlmProvider>,
     receiver: mpsc::Receiver<ActorMessage>,
+    memory_loop: Option<Arc<MemoryLoop>>,
 }
 
 impl ChatActor {
@@ -315,6 +320,7 @@ impl ChatActor {
             pipeline,
             llm_provider,
             receiver,
+            memory_loop: None,
         };
 
         let handle = ChatActorHandle { sender };
@@ -367,7 +373,8 @@ impl ChatActor {
                 message,
                 session_id,
                 model,
-            } => self.handle_chat(&message, &session_id, model).await,
+                container_id,
+            } => self.handle_chat(&message, &session_id, model, container_id).await,
 
             RpcRequest::GetHistory { limit } => self.handle_get_history(limit.unwrap_or(50)).await,
 
@@ -456,22 +463,51 @@ impl ChatActor {
         message: &str,
         session_id: &str,
         model: Option<String>,
+        container_id: Option<String>,
     ) -> RpcResponse {
         let model = model.as_deref().unwrap_or(&self.config.default_model);
 
-        info!(session_id = %session_id, model = %model, "Processing chat message");
+        info!(
+            session_id = %session_id,
+            model = %model,
+            container_id = ?container_id,
+            "Processing chat message"
+        );
 
         // Get or create session, retrieve history
         let session = self.session_manager.get_or_create(session_id).await;
 
+        // Inject session memory if container_id present and memory_loop configured
+        let session_memory = if let (Some(c_id), Some(mem_loop)) = (&container_id, &self.memory_loop) {
+            match mem_loop
+                .inject_session_memory(CHATBOT_CONTAINER_ID, c_id, message)
+                .await
+            {
+                Ok(mem) => {
+                    info!(session_id = %session_id, container_id = %c_id, "Memory injected");
+                    Some(mem)
+                }
+                Err(e) => {
+                    warn!(
+                        session_id = %session_id,
+                        error = %e,
+                        "Failed to inject session memory"
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         // Build LLM message history
         let mut messages = Vec::new();
 
-        // 1. System prompt
-        let system_msg = generate_system_prompt().await;
+        // 1. Base system prompt with optional memory appended
+        let system_msg = generate_system_prompt(session_memory.as_ref()).await;
         messages.push(system_msg);
 
-        // 2. Convert session history (op_core::ChatMessage -> op_llm::ChatMessage)
+        // 3. Convert session history (op_core::ChatMessage -> op_llm::ChatMessage)
         for hist_msg in &session.messages {
             let role = match hist_msg.role {
                 op_core::ChatRole::User => "user",
@@ -487,7 +523,7 @@ impl ChatActor {
             });
         }
 
-        // 3. Add new user message
+        // 4. Add new user message
         messages.push(LlmChatMessage::user(message));
 
         // Store user message in session
@@ -495,8 +531,8 @@ impl ChatActor {
             .add_message(session_id, op_core::ChatMessage::user(message))
             .await;
 
-        // 4. Process through ForcedToolPipeline
-        match self
+        // 5. Process through ForcedToolPipeline
+        let pipeline_result = self
             .pipeline
             .process_message(
                 self.llm_provider.as_ref(),
@@ -504,8 +540,9 @@ impl ChatActor {
                 messages,
                 Some(session_id.to_string()),
             )
-            .await
-        {
+            .await;
+
+        match pipeline_result {
             Ok(result) => {
                 // Store assistant response in session
                 self.session_manager
@@ -514,6 +551,16 @@ impl ChatActor {
                         op_core::ChatMessage::assistant(&result.response),
                     )
                     .await;
+
+                // Spawn non-blocking post-turn memory task
+                if let (Some(c_id), Some(mem_loop)) = (container_id.clone(), self.memory_loop.clone()) {
+                    mem_loop.spawn_post_turn_memory_task(
+                        c_id,
+                        message.to_string(),
+                        result.response.clone(),
+                        Vec::new(), // TODO: extract tool args from pipeline result
+                    );
+                }
 
                 if !result.verified {
                     warn!(
