@@ -1,74 +1,368 @@
 # Product Baseline: Branding & Marketing Brief
 
 This document is the source-of-truth feed for LLM-assisted branding and marketing work.
-It covers three distinct product angles drawn from the same underlying platform.
+It covers the full platform, all major components, and three primary market angles.
 
 ---
 
 ## Platform Overview
 
 **3tched** (pronounced "etched") is a native Linux system control plane built in pure Rust.
-It replaces legacy infrastructure stacks — systemd, NetworkManager, Active Directory, Docker —
-with a unified, database-driven, privacy-first orchestration layer. The name signals
-permanence: every action is etched into an immutable audit trail.
+It replaces entire legacy infrastructure stacks — systemd, NetworkManager, Active Directory,
+Docker, LVM — with a unified, database-driven, privacy-first orchestration layer.
 
-**Underlying tech in one line**: D-Bus introspection + WireGuard networking + gRPC control plane
-+ SQLite/BTRFS state store + LLM-powered agents — all in a single, zero-dependency Rust binary.
+Every action is etched: recorded on Chronicle, the platform's distributed blockchain.
+Every capability is discoverable: 16,000+ system tools indexed natively from D-Bus.
+Every component is replaceable: 40+ state plugins cover network, identity, storage, containers,
+services, and compliance — each independently swappable.
 
-**Scale**: Native D-Bus introspection indexes 16,000+ system tools directly from the kernel and
-session buses — no shell wrappers, no external tool registries. This is the tool surface that
-agents and workflows operate against.
-
-**Chronicle — 3tched's distributed blockchain**: Every event on the system is recorded in
-Chronicle. Events originate from D-Bus nodes across the system tree and are synchronized via
-the gRPC network into a single cryptographically chained record on BTRFS. Each block hashes
-the one before it — the chain spans the entire D-Bus node network and cannot be silently
-altered. An AI recall layer (Qdrant) is architected to ingest the blockchain and make it
-queryable in plain language — embedding pipeline in active development.
+**Underlying tech in one line**: D-Bus introspection + WireGuard networking + gRPC control
+plane + SQLite/BTRFS state store + 70+ AI agents + distributed blockchain — pure Rust,
+zero shell dependencies, single binary.
 
 ---
 
-## Angle 1 — Ghostbridge: Privacy Network
+## Chronicle (Crate: op-chronicle)
 
-### What It Is
-Ghostbridge is the privacy networking layer of 3tched. It gives each user their own encrypted
-network container — a private tunnel that isolates traffic, masks identity, and routes
-communications through cryptographically derived paths.
+**Chronicle** is 3tched's distributed blockchain. Every event on the system — every tool
+execution, every state change, every policy decision, every login — is appended to Chronicle
+as a time-stamped, cryptographically linked block stored on BTRFS.
 
-### How It Works (non-technical summary)
-- Every user gets a unique WireGuard keypair generated on-device.
-- Traffic is routed through a private IP assigned exclusively to that user.
-- Routes are derived via HKDF (a cryptographic key derivation function) so they cannot be
-  reverse-engineered or predicted.
-- Network containers are ephemeral and namespaced — no shared surfaces with other users.
-- No logs of user traffic are kept; only Chronicle records authentication events.
+**Package name**: `op-chronicle` (Rust crate, renamed from `op-blockchain`)
 
-### Core Features
-| Feature | What It Means for Users |
+### What makes it a blockchain
+Each block contains the cryptographic hash of the previous block. The chain spans every D-Bus
+node across the system tree, with events distributed and synchronized via the gRPC network.
+You cannot insert, modify, or delete any block without breaking every subsequent hash.
+Tamper-proof by construction — not by policy, not by access control, by math.
+
+### The two layers
+- **Layer 1 — the chain**: Hash-linked, append-only blocks on BTRFS. Immutable, time-stamped,
+  distributed across D-Bus nodes via gRPC. This is the proof.
+- **Layer 2 — the recall**: An AI layer (Qdrant) designed to vectorize all Chronicle events
+  for plain-language query — "what changed on this host between 2am and 4am?" The embedding
+  pipeline is in active development.
+
+### Tagline candidates
+- "Every event. Chained. Proven."
+- "The blockchain your system runs on."
+- "Immutable by math, not policy."
+- "3tched's blockchain. Your proof."
+
+---
+
+## Platform Components
+
+### 1. The Bus — D-Bus Introspection Engine (op-introspection)
+
+**What it is**: A native D-Bus introspection engine that auto-discovers and catalogs every
+capability on the system — no shell wrappers, no hand-coded tool lists.
+
+**How it works**:
+- Calls `org.freedesktop.DBus.ListNames()` natively via `zbus` to enumerate all services
+- Calls the D-Bus Introspectable interface on each service to get XML schemas
+- Parses XML to typed JSON structs (methods, properties, signals, interfaces)
+- Indexes everything into an FTS5 full-text search index for semantic tool discovery
+- Each D-Bus method becomes a callable tool; aggregated across all active services = 16,000+
+
+**Why 16,000+ tools**: systemd alone exposes 100+ methods; NetworkManager 150+; CUPS 200+.
+Multiplied across all active services on system + session bus, plus 70+ agent tool wrappers
+registered as D-Bus services, plus MCP tool endpoints = 16,000+ discoverable, callable tools.
+None are hand-coded. All are auto-discovered at startup.
+
+**Who benefits**:
+- AI agents: access the entire system's capabilities without manual tool definitions
+- Platform engineers: introspect any service without `dbus-send` CLI parsing
+- Security teams: full inventory of every callable interface on the system
+
+**Tagline candidates**:
+- "Every capability on your system. Discovered. Callable."
+- "16,000 tools. Zero shell scripts."
+- "The bus knows everything. So do your agents."
+
+---
+
+### 2. gRPC Bridge (op-grpc-bridge)
+
+**What it is**: Bidirectional D-Bus ↔ gRPC synchronization layer. D-Bus state changes
+project in real time to gRPC streaming subscribers; gRPC mutations flow back through the
+same event chain.
+
+**Architecture**:
+```
+D-Bus property change → SchemaEngine → Chronicle block → broadcast to gRPC subscribers
+gRPC client mutate()  → SchemaEngine → Chronicle block → broadcast to D-Bus watchers
+```
+
+**Services exposed**:
+- `StateSync` — subscribe to live state changes (server-streaming), mutate, batch mutate
+- `PluginService` — list plugins, get schema, call method, subscribe signals
+- `EventChainService` — get Chronicle blocks, subscribe events, verify chain, get cryptographic proof
+- `OvsdbMirror` — full OVSDB network state as gRPC messages
+- `RuntimeMirror` — system info, service list, metrics streaming, NUMA topology
+- `ComponentRegistry` — service discovery with Watch streaming
+
+**Why it matters**: Remote clients (web dashboard, mobile, cloud services) get real-time
+system state over gRPC-Web. The audit trail is unified — Chronicle doesn't care whether
+a mutation came from D-Bus or gRPC; both go through the same SchemaEngine.
+
+**Technical**: port 50051, TLS-ready, gRPC-Web enabled, built-in reflection for `grpcurl`,
+tonic-health liveness probes on all services.
+
+---
+
+### 3. Agent Platform (op-agents)
+
+**What it is**: 70+ specialized AI agents, each a domain expert, running in sandboxed
+execution environments and exposed as D-Bus services.
+
+**Structure**: Trait-based (`AgentTrait`), lifecycle-managed registry (Idle/Running/Paused/
+Error/Stopped), path validation and resource limits per agent, registered to D-Bus as
+`org.dbusmcp.Agent.<Name>` so any tool or workflow can invoke them.
+
+**Agent categories** (70+ total):
+| Category | Agents |
 |---|---|
-| Per-user WireGuard containers | Your traffic never shares a path with anyone else |
-| Cryptographically derived route IDs | Routes cannot be guessed or mapped by outsiders |
-| Private IP assignment | You appear as a known identity only within your authorized namespace |
-| Network namespace isolation | System-level separation — not just a VPN app |
-| Zero shell dependencies | No OpenVPN, no NetworkManager, no iptables scripts |
+| Languages (15) | rust-pro, python-pro, javascript-pro, typescript-pro, golang-pro, java-pro, c#-pro, c++-pro, ruby-pro, php-pro, scala-pro, elixir-pro, julia-pro, bash-pro |
+| Infrastructure (5) | network-engineer, deployment, kubernetes, terraform, cloud-architect |
+| Database (3) | database-architect, database-optimizer, sql-pro |
+| Architecture (3) | backend-architect, frontend-developer, graphql-architect |
+| Analysis (4) | code-reviewer, debugger, performance-engineer, security-auditor |
+| AI/ML (6) | ai-engineer, data-engineer, data-scientist, ml-engineer, ml-ops-engineer, prompt-engineer |
+| Orchestration (5) | context-manager, memory-agent, sequential-thinking-agent, tdd-orchestrator, dx-optimizer |
+| Operations (3) | devops-troubleshooter, incident-responder, test-automator |
+| Mobile (3) | flutter-expert, ios-developer, mobile-developer |
+| Content/Docs (4) | api-documenter, docs-architect, mermaid-expert, tutorial-engineer |
+| Security/Business (18+) | security-auditor, prompt-engineer, and more |
 
-### Target Personas
-- **Privacy-conscious professionals**: journalists, lawyers, activists, remote workers in high-risk environments
+**Memory Agent**: Persistent cross-session memory with fuzzy match + access frequency +
+tag matching. Memory types: Ephemeral (session), Persistent (CozoDB), Shared (cross-agent).
+Optional ONNX vector embeddings for semantic similarity.
+
+**Tagline candidates**:
+- "70 domain experts. One platform. No context switching."
+- "Agents that know your system — because they run on it."
+
+---
+
+### 4. Workstacks & DAG Workflows (op-workflows)
+
+**Workstacks**: Immutable execution containers with causality tracking.
+- **Vector clocks**: Distributed causality guarantees (happens-before ordering)
+- **Content-addressable**: SHA256 hash of the execution sequence; identical patterns hit cache
+- **Promotion threshold**: After 25 executions, promoted to BTRFS cache — cache hit returns
+  pre-computed result in ~10ms instead of multi-second execution
+- **Immutable records**: Workstacks can be extended, never modified
+- **Topological sort**: Execution order respects declared dependencies
+
+**DAG Workflows**: Define a goal; the engine routes it through agents in the optimal order.
+- Sequential, parallel, and conditional execution
+- Configurable concurrency limits
+- Intermediate LRU caching within a workflow
+- Pattern tracking: frequently used patterns become workstack candidates
+
+**Who benefits**:
+- DevOps teams: reproducible multi-step pipelines with immutable causality records
+- Researchers: notebook-style workflows with full execution history on Chronicle
+- Compliance: every step of every workflow is on the blockchain
+
+**Tagline candidates**:
+- "Workflows that remember. Results that scale."
+- "Immutable execution. Every step. Proven."
+
+---
+
+### 5. Ghostbridge — Per-User Privacy Network (op-network)
+
+**What it is**: A privacy networking layer that gives each user their own encrypted network
+container — WireGuard tunnel, private IP, kernel namespace. Not a VPN app. OS-level isolation.
+
+**How it works**:
+- Unique WireGuard keypair generated per user, on-device
+- Route IDs derived via HKDF — cannot be guessed or reverse-engineered
+- Per-user network namespace: kernel-enforced, not application-enforced
+- OVS bridges with OpenFlow rules handle traffic isolation between namespaces
+- No logs of user traffic — only Chronicle records authentication events
+
+**Key differentiators**:
+- vs. Tailscale/WireGuard apps: kernel namespace, not userspace daemon
+- vs. Tor/Mullvad: deterministic routing under your control, not anonymizing relays
+- vs. Corporate VPNs: per-user containers mean a compromised account can't pivot to others
+
+**Tagline candidates**:
+- "Your network. Your namespace. Nobody else's."
+- "Cryptographically isolated. Operationally invisible."
+- "Every user gets their own internet."
+- "WireGuard, without the setup. Privacy, without the tradeoffs."
+
+---
+
+### 6. op-identity — Zero-Password Identity
+
+**What it is**: Native identity management that replaces LDAP and Active Directory.
+Authentication is a WireGuard public key — no passwords, no LDAP queries, no AD trust.
+
+**How it works**:
+- WireGuard pubkey IS the identity — possession of the private key proves who you are
+- Magic link registration: email token → WireGuard keypair provisioned automatically
+- OAuth token cache via `org.freedesktop.secrets` (native secrets service)
+- SQLite identity database with Argon2 hashing for any legacy password path
+- Session management with expiry, built into the platform
+
+**Who benefits**:
+- Enterprise teams replacing AD/LDAP: no more LDAP servers, no more AD domain join
+- Zero-trust architectures: identity is cryptographic, not credential-based
+- Privacy-first deployments: no central directory server to breach
+
+**Tagline candidates**:
+- "No passwords. No LDAP. No Active Directory. Just keys."
+- "Your WireGuard key is your identity."
+
+---
+
+### 7. System Replacement Stack
+
+3tched replaces the following Linux infrastructure components natively:
+
+| Replaced | 3tched Component | How |
+|---|---|---|
+| **systemd** | op-services + dinit-dbus | Service definitions in SQLite; dinit (2-5MB) as PID 1 vs systemd (20-40MB); lifecycle managed via D-Bus |
+| **NetworkManager** | op-network | Native netlink ops (rtnetlink); OVSDB JSON-RPC; OpenFlow (all versions, pure Rust); no NetworkManager daemon |
+| **Active Directory / LDAP** | op-identity | WireGuard pubkey identity; SQLite backend; magic link provisioning |
+| **Docker / Podman** | op-container (Incus/LXC) | 5-10% overhead vs Docker's 20-30%; per-user WireGuard tunnels built in |
+| **LVM / mdadm** | op-storage (BTRFS) | Subvolume management, snapshots, incremental replication, retention policy with auto-pruning |
+
+**The pitch**: One platform, one binary, one audit trail — instead of five different tools
+with five different log formats and five different permission models.
+
+---
+
+### 8. Compliance Engine (op-compliance + CozoDB)
+
+**Policy Engine**: Pre-execution rule evaluation.
+- Rule types: ToolWhitelist, ToolBlacklist, ParameterConstraint, NetworkZone, Custom
+- Approval workflows: route to human approvers before tool execution proceeds
+- Compliance profiles: CIS-L1, PCI-DSS, HIPAA, GDPR mapped to platform controls
+- Every decision written to Chronicle: Allowed, Denied, RequiresApproval + deny reason
+
+**OSCAL integration**:
+- NIST 800-53, FedRAMP, EU AI Act, GDPR controls mapped to platform events
+- CozoDB subid_registry: canonical OSCAL subid taxonomy as queryable graph
+- Compliance validators named after their frameworks: Olivia Scal (OSCAL), E.U.gene
+  Risk (EU AI Act), Penny Privacy (GDPR), Reggie O.P.A. (OPA Rego policy)
+
+**CozoDB knowledge graph**:
+- Datalog-based graph database, embedded in Sled (pure Rust, no native lib)
+- Stores: compliance rules, OSCAL subids, audit events, memory namespaces,
+  user/session records, identity graph
+- All relations queryable: "show me all NIST controls violated in the last 7 days"
+
+**Who benefits**:
+- FedRAMP teams: continuous monitoring with OSCAL-mapped Chronicle events
+- Healthcare/finance: HIPAA/PCI controls enforced at execution time, not audit time
+- DevSecOps: compliance guardrails baked into infrastructure — can't be bypassed
+
+---
+
+### 9. Plugin Architecture (op-plugins)
+
+**40+ state plugins**, each managing one domain of system state:
+
+| Category | Plugins |
+|---|---|
+| Core | adc, agent_config, config, dinit, endpoint, full_system, hardware, keypair, keyring, mcp |
+| Network | net, netmaker, openflow, ovsdb_bridge, rtnetlink, privacy_router, privacy_routes |
+| Identity/Auth | login1, users, wireguard, gcloud_adc |
+| Container | incus, lxc |
+| Services | service, packagekit, systemd, dinit |
+| Storage/Security | pcidecl, privacy, schemas, software, web_ui |
+
+**Plugin model** (`get_state`, `get_desired_state`, `set_desired_state`, `apply_state`,
+`diff`, `validate`, `capabilities`): Declarative like `kubectl apply` — declare what you
+want, the plugin reconciles the system to match.
+
+**Immutable paths**: Plugins declare creation-only fields; the engine refuses to mutate them.
+Every plugin change goes through Chronicle.
+
+---
+
+### 10. MCP / Cognitive Layer (op-mcp + op-cognitive-mcp)
+
+**op-mcp (port 3000)** — Standard Model Context Protocol server:
+- Compact mode: 4 meta-tools expose 148+ underlying tools (token-efficient for LLMs)
+- Full mode: all tools directly, no filtering
+- Transports: stdio (Claude Desktop), HTTP, SSE, WebSocket, gRPC
+- Real-time streaming: long-running tool results streamed as SSE
+
+**op-cognitive-mcp (port 3001)** — Knowledge and reasoning:
+- CozoDB knowledge graph (see Compliance Engine above)
+- Qdrant vector database for semantic search over code corpus and events
+- RAG pipeline: ingest codebase via repomix → chunk → embed → store → query
+- Voyage AI embeddings; ONNX models for multi-modal
+- PII filtering: PII events go to Chronicle but are stripped before Qdrant
+
+**LLM provider support** (configurable per deployment):
+- Local: MCP proxy, in-process models
+- External APIs: Gemini, Anthropic, Gemini CLI
+- Operators choose their data residency model
+
+---
+
+### 11. Web Dashboard (op-web)
+
+**Unified server on :8080** serving:
+- REST API (health, status, tools, agents, chat, events)
+- gRPC-Web proxy to op-grpc-bridge
+- WebSocket chat with streaming
+- MCP endpoint for Claude Desktop
+- React/TypeScript/WASM frontend (axon-trace-ui)
+
+**Frontend routes** (30+):
+Overview, Chat, Tools, Agents, Models, LLM, Services, Security, Config, Inspector,
+State, Logs, Workflows, Orchestration, Skills, Containers, Privacy Network, OVS,
+OpenFlow, Knowledge, gRPC Diagnostics, Accountability (Chronicle), BTRFS, Data Stores,
+Embedding
+
+**Real-time**: Live metrics via gRPC Server-Streaming; event log (1000-entry ring buffer);
+agent status; service health indicators.
+
+---
+
+### 12. NUMA-Aware Performance Caching (op-cache)
+
+- Detect NUMA topology via CPU affinity; allocate BTRFS subvolumes on specific NUMA nodes
+- Bind execution threads to the node's CPUs for cache locality
+- BTRFS subvolume layout: `timing/` (Chronicle), `vectors/` (ML embeddings),
+  `state/` (DR snapshots), `snapshots/` (incremental replication)
+- Workstack promotion: 25 executions → promoted to BTRFS; cache hit ~10ms vs multi-second
+
+---
+
+## Three Market Angles
+
+### Angle 1 — Ghostbridge: Privacy Network
+
+**Primary buyer**: Security architects, enterprise zero-trust teams, privacy-focused developers
+**Primary pain**: Network exposure; shared VPN blast radius; application-layer "privacy" that doesn't hold
+**Core promise**: Kernel-enforced isolation — not an app, not a policy, the kernel
+
+#### Target Personas
+- **Privacy-conscious professionals**: journalists, lawyers, activists, high-risk remote workers
 - **Enterprise security teams**: zero-trust network access without third-party VPN vendors
 - **Developers building privacy products**: embed Ghostbridge as infrastructure
 
-### Key Differentiators vs. Competitors
-- **vs. Tailscale/WireGuard apps**: Ghostbridge is OS-level, not application-level. Isolation is enforced by the kernel namespace, not a userspace daemon.
-- **vs. Tor/Mullvad**: Deterministic routing under your control, not anonymizing relays. Speed + privacy, not anonymity theater.
-- **vs. Corporate VPNs**: Per-user containers mean a compromised account can't pivot to other users' traffic.
+#### Key Differentiators
+- **vs. Tailscale/WireGuard apps**: OS-level, kernel namespace — not a userspace daemon
+- **vs. Tor/Mullvad**: Deterministic routing you control, not anonymizing relays
+- **vs. Corporate VPNs**: Per-user containers; a compromised account can't pivot to others
 
-### Tagline Candidates
+#### Taglines
 - "Your network. Your namespace. Nobody else's."
 - "Cryptographically isolated. Operationally invisible."
-- "WireGuard, without the setup. Privacy, without the tradeoffs."
+- "One shared VPN tunnel is one shared blast radius."
 - "Every user gets their own internet."
 
-### Marketing Angles
+#### Marketing Angles
 1. **Fear/Risk**: "One shared VPN tunnel is one shared blast radius."
 2. **Simplicity**: "No config files. No scripts. One command to provision a private network."
 3. **Compliance**: "Prove isolation — don't just claim it. Every route change is in Chronicle."
@@ -76,128 +370,97 @@ communications through cryptographically derived paths.
 
 ---
 
-## Angle 2 — 3tched: Compliance Platform
+### Angle 2 — 3tched: Compliance Platform
 
-### What It Is
-3tched is the compliance and governance layer of the platform. It gives enterprises,
-regulated industries, and security teams a verifiable, immutable record of every system
-action — mapped to regulatory frameworks like GDPR, FedRAMP, SOC 2, and NIST OSCAL.
+**Primary buyer**: CISOs, compliance officers, FedRAMP teams, regulated industries
+**Primary pain**: Audit burden; reconstructing timelines from logs; policy that can't be enforced pre-execution
+**Core promise**: Chronicle — your distributed blockchain, your continuous proof
 
-At the center is **Chronicle — 3tched's distributed blockchain**: events from D-Bus nodes
-across the system tree are synchronized via gRPC into a single cryptographically chained
-record. Every event, every state change, every approval — on the blockchain, with AI-powered
-recall (Qdrant) in active development.
+#### How Chronicle Works (compliance context)
+- D-Bus nodes generate events; gRPC bridge synchronizes them into Chronicle's chain
+- Each block hashes the previous — chain cannot be altered without breaking subsequent hashes
+- OSCAL compliance mappings connect Chronicle events to regulatory controls automatically
+- Pre-execution policy engine blocks non-compliant actions before they happen
+- Role-based access + approval workflows enforced at the OS level
+- AI recall layer (Qdrant) in active development — embedding pipeline shipping
 
-### How Chronicle Works
-- D-Bus nodes across the system tree generate events. The gRPC bridge collects and
-  synchronizes them into Chronicle's chain — distributed by topology, unified by the chain.
-- Each event block contains the cryptographic hash of the previous block. The chain spans
-  the entire D-Bus node network and cannot be altered without breaking every subsequent hash.
-- An AI recall layer (Qdrant) is designed to vectorize all blockchain events for plain-language
-  query — embedding pipeline in active development.
-- Compliance mappings are built in: OSCAL schemas connect Chronicle events to regulatory
-  controls automatically.
-- Role-based access control with approval workflows means no action happens outside policy.
-
-### Core Features
-| Feature | What It Means for Compliance Teams |
+#### Core Features
+| Feature | What It Means |
 |---|---|
-| Chronicle — distributed blockchain | Events from D-Bus nodes across the system, chained via gRPC — tamper-proof by construction |
-| Chronicle recall via Qdrant *(roadmap)* | Designed to query blockchain history in plain language once embedding pipeline ships |
+| Chronicle — distributed blockchain | Hash-linked blocks across D-Bus nodes; tamper-proof by construction |
+| Pre-execution policy engine | Block non-compliant actions before they execute |
 | OSCAL-native compliance mapping | FedRAMP, NIST 800-53 controls tracked automatically |
-| Pre-execution policy engine | Block non-compliant actions before they happen |
-| Role-based access + approval workflows | Segregation of duties enforced at the OS level |
-| Change tracking across 40+ state domains | Full visibility: network, identity, storage, containers, services |
-| gRPC event chain | Real-time Chronicle event streaming to SIEM or dashboard |
+| Role-based access + approval workflows | Segregation of duties enforced at OS level |
+| Change tracking across 40+ state domains | Network, identity, storage, containers, services |
+| gRPC event streaming | Real-time Chronicle events to SIEM or assessor portal |
+| Chronicle recall via Qdrant *(roadmap)* | Plain-language query of blockchain history |
 
-### Target Personas
-- **CISOs and compliance officers**: need audit-ready evidence without manual log wrangling
-- **FedRAMP/FISMA teams**: building systems that must meet federal control requirements
+#### Target Personas
+- **CISOs and compliance officers**: audit-ready evidence without manual log wrangling
+- **FedRAMP/FISMA teams**: continuous monitoring with OSCAL-mapped events
 - **Regulated industries**: healthcare (HIPAA), finance (SOX/PCI), defense contractors
-- **DevSecOps engineers**: want compliance guardrails baked into infrastructure, not bolted on
+- **DevSecOps engineers**: compliance guardrails in infrastructure, not bolted on
 
-### Key Differentiators vs. Competitors
-- **vs. Splunk/SIEM tools**: Chronicle generates structured, blockchain-backed events at the source across D-Bus nodes — not scraped log noise. Less false positives, less tuning.
-- **vs. HashiCorp Vault + Terraform**: 3tched replaces the whole stack (identity, network, state, Chronicle) — not a collection of tools requiring integration.
-- **vs. Chef InSpec / OpenSCAP**: Passive scanners check what happened. 3tched's policy engine prevents non-compliant states from occurring.
-- **vs. Manual audit processes**: Chronicle is a distributed blockchain ready for automated assessor review; plain-language query via Qdrant is on the roadmap.
+#### Key Differentiators
+- **vs. Splunk/SIEM**: Chronicle generates structured blockchain events at the source — not scraped log noise
+- **vs. HashiCorp Vault + Terraform**: replaces the whole stack, not a collection of tools
+- **vs. Chef InSpec / OpenSCAP**: prevents non-compliant states; doesn't just scan for them
+- **vs. Manual audits**: Chronicle is machine-readable — ready for automated assessor review
 
-### Tagline Candidates
+#### Taglines
 - "Compliance isn't a report. It's a system property."
 - "Every action. Every change. Every approval. In Chronicle."
 - "Built for auditors. Run by engineers."
-- "The first infrastructure that proves itself."
 - "3tched's blockchain. Distributed. Proven. Yours."
+- "Don't detect policy violations. Prevent them."
 
-### Marketing Angles
-1. **Pain relief**: "Stop reconstructing what happened from logs. Chronicle has the proof."
-2. **Proof over promises**: "Your auditors want evidence. Chronicle's distributed blockchain generates it continuously."
-3. **Prevention over detection**: "Don't detect policy violations. Prevent them."
-4. **Cost**: "Reduce audit prep from months to a query."
-
-### Use Case Scenarios
-- A FedRAMP contractor needs to show continuous monitoring — 3tched streams OSCAL-mapped Chronicle events to their assessor portal automatically.
-- A healthcare org gets breached; forensics needs an exact timeline — Chronicle's distributed blockchain provides hash-verified proof of every state transition across every D-Bus node, in the exact order it happened.
-- A financial services firm needs segregation of duties for privileged access — 3tched's approval workflows enforce it at the kernel level, and every approval is on the blockchain.
+#### Use Case Scenarios
+- FedRAMP contractor: 3tched streams OSCAL-mapped Chronicle events to assessor portal automatically
+- Healthcare breach: Chronicle's blockchain provides hash-verified proof of every state transition, exact order
+- Financial firm: approval workflows enforce segregation of duties; every approval is on the blockchain
 
 ---
 
-## Angle 3 — Personal Workspace Platform
+### Angle 3 — Personal Workspace Platform
 
-### What It Is
-The personal workspace is 3tched's end-user face: a unified, encrypted, AI-assisted
-environment where a person's identity, files, network, and tools travel with them —
-isolated from other users and governed by their own policy.
+**Primary buyer**: Power developers, privacy-first individuals, AI-native teams
+**Primary pain**: Tool fragmentation; stateless AI with no memory; cloud services that own your data
+**Core promise**: A workspace that knows your system, remembers your context, and runs on your hardware
 
-### How It Works (non-technical summary)
-- A "workspace" is a namespaced container combining: a private network route (Ghostbridge),
-  a personal identity record, a BTRFS subvolume for files, and an agent runtime.
-- 70+ AI agents are available within the workspace — coding, networking, memory, search —
-  running in sandboxed execution environments with no cross-user bleed.
-- Workflows are DAG-based: the user defines a goal and the platform routes it through
-  the right agents in parallel.
-- A semantic memory layer (CozoDB knowledge graph + Qdrant vector DB) is architected to
-  give the workspace persistent context across sessions.
+#### How It Works
+- Workspace = Ghostbridge container + identity record + BTRFS subvolume + agent runtime
+- 70+ specialized agents run sandboxed, with full system access via D-Bus
+- DAG workflow orchestration: define a goal, agents execute in parallel automatically
+- Semantic memory (CozoDB + Qdrant) architected for persistent cross-session recall
+- Every action recorded on Chronicle; every workspace is its own auditable namespace
 
-### Core Features
-| Feature | What It Means for Users |
+#### Core Features
+| Feature | What It Means |
 |---|---|
-| Isolated network container (Ghostbridge) | Your browsing, tools, and communications in a private namespace |
-| 70+ specialized AI agents | Domain experts (Rust, Python, Kubernetes, network, memory) on demand |
-| Semantic memory (CozoDB + Qdrant) | Workspace context architecture for persistent cross-session recall |
-| Chronicle blockchain trail | Every workspace action recorded on the distributed blockchain |
-| BTRFS subvolume per user | Your files are isolated, snapshotted, and rollback-ready |
-| DAG workflow orchestration | Multi-step tasks run in parallel automatically |
-| Multi-protocol access | Use via browser, gRPC client, MCP tool, or CLI |
+| Ghostbridge container | Private network namespace per workspace |
+| 70+ specialized AI agents | Domain experts on demand, sandboxed, full system access |
+| Semantic memory architecture | CozoDB + Qdrant designed for cross-session context |
+| Chronicle blockchain trail | Every workspace action on the distributed blockchain |
+| BTRFS subvolume per workspace | Isolated, snapshotted, rollback-ready |
+| DAG workflow orchestration | Multi-step tasks in parallel, automatically |
+| Multi-protocol access | Browser, gRPC, MCP, CLI |
 
-### Target Personas
-- **Power users and developers**: want a persistent, intelligent environment that keeps up with their work
-- **Privacy-first individuals**: want a workspace that doesn't leak data to cloud providers
-- **Remote teams**: need isolated, reproducible environments per team member
-- **AI-native workers**: want agents that have real context about their work, not generic chatbots
+#### Key Differentiators
+- **vs. GitHub Codespaces**: includes identity, network, AI agents — not just a dev container
+- **vs. Notion/Linear**: live system environment, not a document layer
+- **vs. ChatGPT/Copilot**: full system access + persistent memory architecture, not stateless API calls
+- **vs. 1Password/Bitwarden**: identity managed at OS level, not a browser extension
 
-### Key Differentiators vs. Competitors
-- **vs. GitHub Codespaces / Gitpod**: 3tched workspaces include identity, network, and AI agents — not just a dev container.
-- **vs. Notion / Linear**: The workspace is a live system environment, not a document layer on top of other tools.
-- **vs. ChatGPT / Copilot**: Agents run with full system access and persistent memory architecture — not stateless API calls.
-- **vs. 1Password / Bitwarden**: Identity and secrets are managed at the OS level, not a browser extension.
-
-### Tagline Candidates
+#### Taglines
 - "Your tools. Your memory. Your network. One workspace."
 - "The workspace that knows you — and only you."
+- "70 specialized agents. One place. No setup."
 - "Work that moves with you, not against you."
-- "A personal OS layer. Finally."
 
-### Marketing Angles
-1. **Productivity**: "Stop context-switching. Your agents keep your context."
-2. **Privacy**: "A workspace only you can see — enforced by the kernel, not a checkbox."
-3. **Power**: "70 specialized agents. One place. No setup."
-4. **Ownership**: "Your workspace doesn't live on someone else's server. It lives on yours."
-
-### Use Case Scenarios
-- A freelance developer switches clients daily — each client gets a separate workspace with isolated network, credentials, and tools. No cross-contamination.
-- A researcher runs a memory agent that indexes all their notes, papers, and code. Next session it surfaces exactly what's relevant to the current task.
-- A privacy-conscious team wants control over their AI data residency — 3tched's agent runtime supports configurable LLM providers, including local models, so operators choose what leaves the machine.
+#### Use Case Scenarios
+- Freelance developer: each client gets a separate workspace — isolated network, credentials, tools. No cross-contamination.
+- Researcher: memory agent indexes notes, papers, code. Next session surfaces exactly what's relevant.
+- Privacy-conscious team: configurable LLM providers including local models — operators choose what leaves the machine.
 
 ---
 
@@ -205,34 +468,68 @@ isolated from other users and governed by their own policy.
 
 | Dimension | Ghostbridge | 3tched Compliance | Personal Workspace |
 |---|---|---|---|
-| **Primary buyer** | Security architect | CISO / compliance officer | Individual / dev team |
+| **Primary buyer** | Security architect | CISO / compliance officer | Developer / power user |
 | **Primary pain** | Network exposure | Audit burden | Tool fragmentation |
-| **Core promise** | Isolation | Evidence | Intelligence |
-| **Key proof point** | Kernel-level namespacing | Chronicle — distributed blockchain (Qdrant recall: roadmap) | 70 agents + persistent memory architecture |
-| **Competitive moat** | No userspace VPN compromise surface | Distributed blockchain proof, prevention not detection | Configurable LLM providers + OS-level context |
+| **Core promise** | Kernel isolation | Continuous proof | Persistent intelligence |
+| **Key proof point** | Per-user WireGuard namespaces | Chronicle distributed blockchain | 70 agents + D-Bus tool surface |
+| **Moat** | OS-level, no userspace attack surface | Prevention + blockchain proof | 16,000 tools, local-first AI |
+
+## The Replacement Stack Pitch
+
+For enterprise and infrastructure buyers who respond to "replace" messaging:
+
+| You're running | 3tched replaces it with | Why it's better |
+|---|---|---|
+| systemd (20-40MB) | dinit + op-services (2-5MB, SQL-driven) | Lighter, auditable, no unit file sprawl |
+| NetworkManager | op-network (native netlink + OpenFlow) | No daemon, native performance, built-in WireGuard |
+| Active Directory / LDAP | op-identity (WireGuard pubkey) | Zero-password, no central server to breach |
+| Docker / Podman | op-container (Incus/LXC) | 5-10% overhead vs 20-30%; privacy networking built in |
+| LVM / mdadm | op-storage (BTRFS subvolumes) | Snapshots, incremental replication, retention policy |
+| 5 separate audit logs | Chronicle | One blockchain, one query, every component |
 
 ## Brand Voice Notes
 
 - **Tone**: Precise. Confident. No hype. Engineers respect specificity — use it.
 - **Avoid**: "revolutionary", "game-changing", "seamless", "next-gen"
-- **Use**: product names (Chronicle, Ghostbridge), concrete numbers (16,000+ tools, 70+ agents), mechanism descriptions ("distributed blockchain", "kernel namespace, not app layer"), outcome framing ("prove isolation, don't claim it")
-- **Blockchain note**: Chronicle IS a distributed blockchain — events from D-Bus nodes across the system tree, synchronized via gRPC into a hash-linked chain. Not a log file. A distributed, multi-node, cryptographically chained event system.
-- **Qdrant recall note**: The AI plain-language query layer is architected and in active development — do not claim it as a shipped feature in generated copy.
-- **LLM provider note**: The agent runtime supports multiple configurable providers (local, Gemini, Anthropic). Do not claim "no external calls" as a universal property — say "configurable data residency" instead.
-- **3tched name**: lean into the double meaning — etched as in permanent/immutable (blockchain), etched as in deeply integrated (OS-level, not bolted on)
-- **Ghostbridge name**: the bridge no one can see — private paths between endpoints that leave no visible trace
-- **Chronicle name**: the complete, ordered, factual record spanning the D-Bus node network — the blockchain is the proof, Qdrant recall is the roadmap
+- **Use**: Product names (Chronicle, Ghostbridge), concrete numbers (16,000+ tools, 70+ agents,
+  40+ plugins), mechanism descriptions ("kernel namespace", "distributed blockchain",
+  "native netlink"), outcome framing ("prove isolation, don't claim it")
+- **Chronicle**: It IS a blockchain — hash-linked, append-only, distributed across D-Bus nodes
+  via gRPC. Own the term. Crate name: `op-chronicle`.
+- **Ghostbridge**: The bridge no one can see — private paths that leave no visible trace.
+- **3tched name**: Etched as in permanent (Chronicle), etched as in integrated (OS-level).
+- **Replacement framing**: "replaces" is a strong word — use it deliberately for the stack
+  replacement pitch. Only use it when you mean the full component, not just a feature.
 
 ## LLM Prompting Notes
 
 When using this document to generate marketing copy:
-- Ground all claims in the concrete features listed above — no invented capabilities
-- Use **Chronicle** as the product name and **distributed blockchain** as its technical mechanism
-- The distribution is real: D-Bus nodes across the system tree, synchronized via gRPC
-- **Do not claim Qdrant plain-language recall as a current feature** — it is in development; use "designed to" or "roadmap" framing
-- **Do not claim the agent runtime makes no external calls** — LLM providers are configurable; use "configurable data residency" framing
-- Maintain the three angles as distinct products with distinct buyers, even though they share infrastructure
-- Ghostbridge copy should feel like a security product, not a consumer privacy app
-- 3tched compliance copy should speak to auditors and regulators, not just engineers
-- Workspace copy can be warmer and more personal — it's the human-facing layer
-- All three can share the theme: **OS-level guarantees, not application-layer promises**
+
+**Grounding rules**:
+- All claims must come from this document — no invented capabilities
+- Concrete numbers: 16,000+ tools (D-Bus auto-discovery), 70+ agents (op-agents), 40+ plugins (op-plugins)
+- Chronicle IS a blockchain — use the term. Crate: `op-chronicle`.
+- **Do not claim Qdrant plain-language recall as shipped** — it is in active development; use
+  "designed to", "in development", or "roadmap" framing
+- **Do not claim "no external calls" for LLM** — providers are configurable (Gemini, Anthropic,
+  local); use "configurable data residency" framing
+
+**Angle guidance**:
+- Ghostbridge: security product voice — kernel-level, precise, no consumer privacy app tone
+- 3tched compliance: speak to auditors and regulators, not just engineers — "proof", "evidence", "blockchain"
+- Workspace: warmer and more personal — it's the human-facing layer
+- Replacement stack: enterprise infrastructure voice — "replaces", "native", "zero dependencies"
+- All angles share one theme: **OS-level guarantees, not application-layer promises**
+
+**Component reference**:
+- D-Bus engine → op-introspection / op-inspector
+- Blockchain → Chronicle / op-chronicle
+- Privacy network → Ghostbridge / op-network
+- Identity → op-identity
+- Agents → op-agents (70+)
+- Workflows → op-workflows + workstacks
+- Compliance → op-compliance + CozoDB + Chronicle
+- Plugins → op-plugins (40+)
+- Web dashboard → op-web (axon-trace-ui frontend)
+- MCP layer → op-mcp (port 3000) + op-cognitive-mcp (port 3001)
+- Performance → op-cache (NUMA-aware BTRFS)
