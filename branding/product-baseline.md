@@ -22,23 +22,31 @@ no external tool registries, no framework lock-in.
 
 ---
 
-## Chronicle (Crate: op-blockchain)
+## Chronicle (Crates: op-blockchain + op-state-store)
 
-**Chronicle** is 3tched's distributed blockchain. Every event on the system — every tool
-execution, every state change, every policy decision, every login — is appended to Chronicle
-as a time-stamped, cryptographically linked block stored on BTRFS.
+**Chronicle** is 3tched's audit system. It has two components with distinct roles:
 
-**Current crate name**: `op-blockchain` — the product-facing name is Chronicle.
+**op-blockchain** — the event recording layer:
+Every event on the system — tool execution, state change, policy decision, login — is
+appended to an on-disk log as a time-stamped, self-hashing block stored on BTRFS.
+Each `BlockEvent` carries a SHA256 hash of its own content (`timestamp:category:action:data`).
+Events are written sequentially as `block-N.json` files. This is the append-only, durable
+record — the raw material of the audit trail.
 
-### What makes it a blockchain
-Each block contains the cryptographic hash of the previous block. The chain spans every D-Bus
-node across the system tree, with events distributed and synchronized via the gRPC network.
-You cannot insert, modify, or delete any block without breaking every subsequent hash.
-Tamper-proof by construction — not by policy, not by access control, by math.
+**op-state-store::ChainEvent** — the hash-linked compliance chain:
+The compliance and reproducibility layer. Each `ChainEvent` carries a `prev_hash` field and
+computes `event_hash = H(prev_hash || canonical_payload)`. You cannot alter any event without
+breaking every hash that follows. Additional fields: `actor_id`, `capability_id`,
+`plugin_id`, `decision` (Allow/Deny), `deny_reason`, `input_patch_hash`,
+`result_effective_hash`. Merkle tree batching for scale; tag-scoped proofs for compliance.
+This is the tamper-proof chain auditors rely on.
+
+**Current crate names**: `op-blockchain` (event log), `op-state-store` (chain + compliance).
+The product-facing name for the combined system is Chronicle.
 
 ### The two layers
-- **Layer 1 — the chain**: Hash-linked, append-only blocks on BTRFS. Immutable, time-stamped,
-  distributed across D-Bus nodes via gRPC. This is the proof.
+- **Layer 1 — the chain**: `op-state-store::ChainEvent` — hash-linked (`prev_hash`),
+  append-only, with decision tracking and actor attribution. Tamper-proof by math.
 - **Layer 2 — the recall**: An AI layer (Qdrant) designed to vectorize all Chronicle events
   for plain-language query — "what changed on this host between 2am and 4am?" The embedding
   pipeline is in active development.
@@ -380,8 +388,8 @@ agent status; service health indicators.
 **Core promise**: Chronicle — your distributed blockchain, your continuous proof
 
 #### How Chronicle Works (compliance context)
-- D-Bus nodes generate events; gRPC bridge synchronizes them into Chronicle's chain
-- Each block hashes the previous — chain cannot be altered without breaking subsequent hashes
+- D-Bus nodes generate events; op-blockchain records them as append-only BTRFS blocks
+- op-state-store::ChainEvent links each event to the previous via prev_hash — chain cannot be altered without breaking subsequent hashes
 - OSCAL compliance mappings connect Chronicle events to regulatory controls automatically
 - Schema validation engine (op-compliance) gates plugin registration: OSCAL, GDPR, EU AI Act, OPA validators run in sequence; registration blocked on any failure
 - AI recall layer (Qdrant) in active development — embedding pipeline shipping
@@ -389,7 +397,7 @@ agent status; service health indicators.
 #### Core Features
 | Feature | What It Means |
 |---|---|
-| Chronicle — distributed blockchain | Hash-linked blocks across D-Bus nodes; tamper-proof by construction |
+| Chronicle — distributed audit system | op-blockchain: append-only BTRFS event log; op-state-store: hash-linked compliance chain (prev_hash) |
 | Schema validation engine (op-compliance) | OSCAL, GDPR, EU AI Act, OPA validators gate plugin registration |
 | OSCAL-native compliance mapping | FedRAMP, NIST 800-53 controls tracked automatically |
 | Change tracking across 40+ state domains | Network, identity, storage, containers, services |
@@ -417,7 +425,7 @@ agent status; service health indicators.
 
 #### Use Case Scenarios
 - FedRAMP contractor: 3tched streams OSCAL-mapped Chronicle events to assessor portal automatically
-- Healthcare breach: Chronicle's blockchain provides hash-verified proof of every state transition, exact order
+- Healthcare breach: Chronicle's hash-linked compliance chain (op-state-store::ChainEvent) provides cryptographic proof of every state transition, exact order
 - Financial firm: op-compliance validators gate every plugin registration against OSCAL/GDPR/OPA rules; every violation is on the blockchain
 
 ---
@@ -509,7 +517,7 @@ When using this document to generate marketing copy:
 **Grounding rules**:
 - All claims must come from this document — no invented capabilities
 - Concrete numbers: 16,000+ tools (D-Bus auto-discovery), 70+ agents (op-agents), 40+ plugins (op-plugins)
-- Chronicle IS a blockchain — use the term. Current crate: `op-blockchain`.
+- Chronicle IS a blockchain — use the term. Two crates: `op-blockchain` (append-only event log, per-event SHA256) and `op-state-store` (hash-linked chain via `ChainEvent`, `prev_hash` field). The hash-linked tamper-proof property comes from `op-state-store::ChainEvent`, not `op-blockchain`.
 - **Do not claim Qdrant plain-language recall as shipped** — it is in active development; use
   "designed to", "in development", or "roadmap" framing
 - **Do not claim "no external calls" for LLM** — providers are configurable (Gemini, Anthropic,
