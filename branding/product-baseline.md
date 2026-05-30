@@ -235,7 +235,7 @@ Authentication is a WireGuard public key — no passwords, no LDAP queries, no A
 | Replaced | 3tched Component | How |
 |---|---|---|
 | **systemd** | op-services + dinit-dbus | Service definitions in SQLite; dinit (2-5MB) as PID 1 vs systemd (20-40MB); lifecycle managed via D-Bus |
-| **NetworkManager** | op-network | Native netlink ops (rtnetlink); OVSDB JSON-RPC; OpenFlow (all versions, pure Rust); no NetworkManager daemon |
+| **NetworkManager** | op-network | Native netlink ops (rtnetlink); OVSDB JSON-RPC; OpenFlow v1.0 and v1.3 (OVS-backed, requires ovs-ofctl + openvswitch-switch); no NetworkManager daemon |
 | **Active Directory / LDAP** | op-identity | WireGuard pubkey identity; in-memory session store (DashMap); magic link provisioning |
 | **Docker / Podman** | op-plugins (incus/lxc state plugins) + op-network (container networking) | 5-10% overhead vs Docker's 20-30%; per-user WireGuard tunnels built in |
 | **LVM / mdadm** | op-cache (BTRFS subvolumes) | Subvolume management, snapshots, incremental replication, retention policy with auto-pruning |
@@ -299,7 +299,7 @@ Every plugin change goes through Chronicle.
 
 ### 10. MCP / Cognitive Layer (op-mcp + op-cognitive-mcp)
 
-**op-mcp (HTTP+SSE port 3001, WebSocket port 3002, gRPC port 50051)** — Standard Model Context Protocol server:
+**op-mcp (HTTP+SSE port 3001, WebSocket port 3002, gRPC port 50051¹)** — Standard Model Context Protocol server:
 - Compact mode: 4 meta-tools expose 148+ underlying tools (token-efficient for LLMs)
 - Full mode: all tools directly, no filtering
 - Transports: stdio (Claude Desktop), HTTP+SSE, WebSocket, gRPC
@@ -316,6 +316,10 @@ Every plugin change goes through Chronicle.
 - Local: MCP proxy, in-process models
 - External APIs: Gemini, Anthropic, Gemini CLI
 - Operators choose their data residency model
+
+¹ **Port conflict**: `op-mcp-server --all` defaults gRPC to `0.0.0.0:50051`, which conflicts
+with `op-grpc-bridge` (also binds `0.0.0.0:50051`). Run MCP gRPC on a different port with
+`--grpc 0.0.0.0:50053` (or similar) when both services run on the same host.
 
 ---
 
