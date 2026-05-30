@@ -23,7 +23,8 @@ agents and workflows operate against.
 Chronicle. Events originate from D-Bus nodes across the system tree and are synchronized via
 the gRPC network into a single cryptographically chained record on BTRFS. Each block hashes
 the one before it — the chain spans the entire D-Bus node network and cannot be silently
-altered. An AI layer (Qdrant) ingests the blockchain and makes it queryable in plain language.
+altered. An AI recall layer (Qdrant) is architected to ingest the blockchain and make it
+queryable in plain language — embedding pipeline in active development.
 
 ---
 
@@ -84,16 +85,16 @@ action — mapped to regulatory frameworks like GDPR, FedRAMP, SOC 2, and NIST O
 
 At the center is **Chronicle — 3tched's distributed blockchain**: events from D-Bus nodes
 across the system tree are synchronized via gRPC into a single cryptographically chained
-record. Every event, every state change, every approval — on the blockchain, queryable
-through Chronicle.
+record. Every event, every state change, every approval — on the blockchain, with AI-powered
+recall (Qdrant) in active development.
 
 ### How Chronicle Works
 - D-Bus nodes across the system tree generate events. The gRPC bridge collects and
   synchronizes them into Chronicle's chain — distributed by topology, unified by the chain.
 - Each event block contains the cryptographic hash of the previous block. The chain spans
   the entire D-Bus node network and cannot be altered without breaking every subsequent hash.
-- An AI layer vectorizes all blockchain events into Qdrant. Ask Chronicle anything in plain
-  language: "What changed on this host between 2am and 4am?" — precise, sourced answer.
+- An AI recall layer (Qdrant) is designed to vectorize all blockchain events for plain-language
+  query — embedding pipeline in active development.
 - Compliance mappings are built in: OSCAL schemas connect Chronicle events to regulatory
   controls automatically.
 - Role-based access control with approval workflows means no action happens outside policy.
@@ -102,7 +103,7 @@ through Chronicle.
 | Feature | What It Means for Compliance Teams |
 |---|---|
 | Chronicle — distributed blockchain | Events from D-Bus nodes across the system, chained via gRPC — tamper-proof by construction |
-| AI-powered Chronicle recall (Qdrant) | Query blockchain history in plain language; get sourced, precise answers |
+| Chronicle recall via Qdrant *(roadmap)* | Designed to query blockchain history in plain language once embedding pipeline ships |
 | OSCAL-native compliance mapping | FedRAMP, NIST 800-53 controls tracked automatically |
 | Pre-execution policy engine | Block non-compliant actions before they happen |
 | Role-based access + approval workflows | Segregation of duties enforced at the OS level |
@@ -119,18 +120,17 @@ through Chronicle.
 - **vs. Splunk/SIEM tools**: Chronicle generates structured, blockchain-backed events at the source across D-Bus nodes — not scraped log noise. Less false positives, less tuning.
 - **vs. HashiCorp Vault + Terraform**: 3tched replaces the whole stack (identity, network, state, Chronicle) — not a collection of tools requiring integration.
 - **vs. Chef InSpec / OpenSCAP**: Passive scanners check what happened. 3tched's policy engine prevents non-compliant states from occurring.
-- **vs. Manual audit processes**: Chronicle is a distributed blockchain, AI-queryable — ready for automated assessor review and natural-language forensics.
+- **vs. Manual audit processes**: Chronicle is a distributed blockchain ready for automated assessor review; plain-language query via Qdrant is on the roadmap.
 
 ### Tagline Candidates
 - "Compliance isn't a report. It's a system property."
 - "Every action. Every change. Every approval. In Chronicle."
 - "Built for auditors. Run by engineers."
 - "The first infrastructure that proves itself."
-- "Ask Chronicle anything."
 - "3tched's blockchain. Distributed. Proven. Yours."
 
 ### Marketing Angles
-1. **Pain relief**: "Stop reconstructing what happened from logs. Ask Chronicle."
+1. **Pain relief**: "Stop reconstructing what happened from logs. Chronicle has the proof."
 2. **Proof over promises**: "Your auditors want evidence. Chronicle's distributed blockchain generates it continuously."
 3. **Prevention over detection**: "Don't detect policy violations. Prevent them."
 4. **Cost**: "Reduce audit prep from months to a query."
@@ -156,16 +156,16 @@ isolated from other users and governed by their own policy.
   running in sandboxed execution environments with no cross-user bleed.
 - Workflows are DAG-based: the user defines a goal and the platform routes it through
   the right agents in parallel.
-- A semantic memory layer (CozoDB knowledge graph + Qdrant vector DB) means the workspace
-  learns — it remembers past context and surfaces relevant knowledge automatically.
+- A semantic memory layer (CozoDB knowledge graph + Qdrant vector DB) is architected to
+  give the workspace persistent context across sessions.
 
 ### Core Features
 | Feature | What It Means for Users |
 |---|---|
 | Isolated network container (Ghostbridge) | Your browsing, tools, and communications in a private namespace |
 | 70+ specialized AI agents | Domain experts (Rust, Python, Kubernetes, network, memory) on demand |
-| Semantic memory (CozoDB + Qdrant) | The workspace remembers your context across sessions |
-| Chronicle blockchain trail | Every workspace action recorded on the distributed blockchain and queryable |
+| Semantic memory (CozoDB + Qdrant) | Workspace context architecture for persistent cross-session recall |
+| Chronicle blockchain trail | Every workspace action recorded on the distributed blockchain |
 | BTRFS subvolume per user | Your files are isolated, snapshotted, and rollback-ready |
 | DAG workflow orchestration | Multi-step tasks run in parallel automatically |
 | Multi-protocol access | Use via browser, gRPC client, MCP tool, or CLI |
@@ -179,7 +179,7 @@ isolated from other users and governed by their own policy.
 ### Key Differentiators vs. Competitors
 - **vs. GitHub Codespaces / Gitpod**: 3tched workspaces include identity, network, and AI agents — not just a dev container.
 - **vs. Notion / Linear**: The workspace is a live system environment, not a document layer on top of other tools.
-- **vs. ChatGPT / Copilot**: Agents run locally with full system access and persistent memory — not stateless API calls.
+- **vs. ChatGPT / Copilot**: Agents run with full system access and persistent memory architecture — not stateless API calls.
 - **vs. 1Password / Bitwarden**: Identity and secrets are managed at the OS level, not a browser extension.
 
 ### Tagline Candidates
@@ -189,7 +189,7 @@ isolated from other users and governed by their own policy.
 - "A personal OS layer. Finally."
 
 ### Marketing Angles
-1. **Productivity**: "Stop context-switching. Your agents remember where you left off."
+1. **Productivity**: "Stop context-switching. Your agents keep your context."
 2. **Privacy**: "A workspace only you can see — enforced by the kernel, not a checkbox."
 3. **Power**: "70 specialized agents. One place. No setup."
 4. **Ownership**: "Your workspace doesn't live on someone else's server. It lives on yours."
@@ -197,7 +197,7 @@ isolated from other users and governed by their own policy.
 ### Use Case Scenarios
 - A freelance developer switches clients daily — each client gets a separate workspace with isolated network, credentials, and tools. No cross-contamination.
 - A researcher runs a memory agent that indexes all their notes, papers, and code. Next session it surfaces exactly what's relevant to the current task.
-- A privacy advocate wants to run AI tools locally without sending data to OpenAI — 3tched's agent runtime runs models in-process with no external calls.
+- A privacy-conscious team wants control over their AI data residency — 3tched's agent runtime supports configurable LLM providers, including local models, so operators choose what leaves the machine.
 
 ---
 
@@ -208,8 +208,8 @@ isolated from other users and governed by their own policy.
 | **Primary buyer** | Security architect | CISO / compliance officer | Individual / dev team |
 | **Primary pain** | Network exposure | Audit burden | Tool fragmentation |
 | **Core promise** | Isolation | Evidence | Intelligence |
-| **Key proof point** | Kernel-level namespacing | Chronicle — distributed blockchain + AI recall | 70 agents + semantic memory |
-| **Competitive moat** | No userspace VPN compromise surface | Distributed blockchain proof, prevention not detection | Local-first AI with real context |
+| **Key proof point** | Kernel-level namespacing | Chronicle — distributed blockchain (Qdrant recall: roadmap) | 70 agents + persistent memory architecture |
+| **Competitive moat** | No userspace VPN compromise surface | Distributed blockchain proof, prevention not detection | Configurable LLM providers + OS-level context |
 
 ## Brand Voice Notes
 
@@ -217,9 +217,11 @@ isolated from other users and governed by their own policy.
 - **Avoid**: "revolutionary", "game-changing", "seamless", "next-gen"
 - **Use**: product names (Chronicle, Ghostbridge), concrete numbers (16,000+ tools, 70+ agents), mechanism descriptions ("distributed blockchain", "kernel namespace, not app layer"), outcome framing ("prove isolation, don't claim it")
 - **Blockchain note**: Chronicle IS a distributed blockchain — events from D-Bus nodes across the system tree, synchronized via gRPC into a hash-linked chain. Not a log file. A distributed, multi-node, cryptographically chained event system.
+- **Qdrant recall note**: The AI plain-language query layer is architected and in active development — do not claim it as a shipped feature in generated copy.
+- **LLM provider note**: The agent runtime supports multiple configurable providers (local, Gemini, Anthropic). Do not claim "no external calls" as a universal property — say "configurable data residency" instead.
 - **3tched name**: lean into the double meaning — etched as in permanent/immutable (blockchain), etched as in deeply integrated (OS-level, not bolted on)
 - **Ghostbridge name**: the bridge no one can see — private paths between endpoints that leave no visible trace
-- **Chronicle name**: the complete, ordered, factual record spanning the D-Bus node network — the blockchain is the proof, Qdrant is the recall
+- **Chronicle name**: the complete, ordered, factual record spanning the D-Bus node network — the blockchain is the proof, Qdrant recall is the roadmap
 
 ## LLM Prompting Notes
 
@@ -227,9 +229,10 @@ When using this document to generate marketing copy:
 - Ground all claims in the concrete features listed above — no invented capabilities
 - Use **Chronicle** as the product name and **distributed blockchain** as its technical mechanism
 - The distribution is real: D-Bus nodes across the system tree, synchronized via gRPC
+- **Do not claim Qdrant plain-language recall as a current feature** — it is in development; use "designed to" or "roadmap" framing
+- **Do not claim the agent runtime makes no external calls** — LLM providers are configurable; use "configurable data residency" framing
 - Maintain the three angles as distinct products with distinct buyers, even though they share infrastructure
 - Ghostbridge copy should feel like a security product, not a consumer privacy app
 - 3tched compliance copy should speak to auditors and regulators, not just engineers
 - Workspace copy can be warmer and more personal — it's the human-facing layer
 - All three can share the theme: **OS-level guarantees, not application-layer promises**
-- Chronicle's two-layer story is a differentiator: the distributed blockchain is the proof, Qdrant is the recall
