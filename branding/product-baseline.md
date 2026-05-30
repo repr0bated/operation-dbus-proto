@@ -502,8 +502,10 @@ For enterprise and infrastructure buyers who respond to "replace" messaging:
 - **Use**: Product names (Chronicle, Ghostbridge), concrete numbers (16,000+ tools, 70+ agents,
   40+ plugins), mechanism descriptions ("kernel namespace", "distributed blockchain",
   "native netlink"), outcome framing ("prove isolation, don't claim it")
-- **Chronicle**: It IS a blockchain — hash-linked, append-only, distributed across D-Bus nodes
-  via gRPC. Own the term. Current crate name: `op-blockchain`.
+- **Chronicle**: It IS a blockchain — hash-linked, append-only. Replication between nodes
+  uses BTRFS snapshot streaming (`btrfs send | ssh ... btrfs receive`); gRPC provides local
+  event subscription (EventChainService), not chain replication. Own the term. Crates:
+  `op-blockchain` (event log) + `op-state-store` (hash-linked chain).
 - **Ghostbridge**: The bridge no one can see — private paths that leave no visible trace.
 - **3tched name**: Etched as in permanent (Chronicle), etched as in integrated (OS-level).
 - **Replacement framing**: "replaces" is a strong word — use it deliberately for the stack
