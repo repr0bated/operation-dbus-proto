@@ -18,7 +18,7 @@ services, and compliance — each independently swappable.
 
 **Underlying tech in one line**: D-Bus introspection + WireGuard networking + gRPC control
 plane + SQLite/BTRFS state store + 70+ AI agents + distributed blockchain — pure Rust,
-zero shell dependencies, single binary.
+no external tool registries, no framework lock-in.
 
 ---
 
