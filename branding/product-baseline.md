@@ -150,8 +150,9 @@ Optional ONNX vector embeddings for semantic similarity.
 **Workstacks**: Immutable execution containers with causality tracking.
 - **Vector clocks**: Distributed causality guarantees (happens-before ordering)
 - **Content-addressable**: SHA256 hash of the execution sequence; identical patterns hit cache
-- **Promotion threshold**: After 25 executions, promoted to BTRFS cache — cache hit returns
-  pre-computed result in ~10ms instead of multi-second execution
+- **Promotion candidates**: After 3 executions of a pattern, the orchestrator flags it as a
+  promotion candidate (suggestion only — callers explicitly promote). Promoted workstacks
+  cache to BTRFS; cache hits return pre-computed results in ~10ms vs multi-second execution
 - **Immutable records**: Workstacks can be extended, never modified
 - **Topological sort**: Execution order respects declared dependencies
 
@@ -240,17 +241,19 @@ with five different log formats and five different permission models.
 
 ### 8. Compliance Engine (op-compliance + CozoDB)
 
-**Policy Engine**: Pre-execution rule evaluation.
-- Rule types: ToolWhitelist, ToolBlacklist, ParameterConstraint, NetworkZone, Custom
-- Approval workflows: route to human approvers before tool execution proceeds
-- Compliance profiles: CIS-L1, PCI-DSS, HIPAA, GDPR mapped to platform controls
-- Every decision written to Chronicle: Allowed, Denied, RequiresApproval + deny reason
+**Schema Validation Engine** (`LawFirm::review_schema`): Every plugin schema is reviewed
+before registration against four compliance frameworks in sequence:
+- **Olivia Scal** (OSCAL): flags root-capable plugins for security control assessment
+- **E.U.gene Risk** (EU AI Act): requires training data source declaration on AI/ML plugins
+- **Penny Privacy** (GDPR): detects PII fields (email, user_id, phone) without retention policy
+- **Reggie O.P.A.** (OPA): enforces versioning and structural policy requirements
+
+Each validator returns structured errors — schema registration is blocked until all pass.
+Every failed validation is an event on Chronicle.
 
 **OSCAL integration**:
 - NIST 800-53, FedRAMP, EU AI Act, GDPR controls mapped to platform events
 - CozoDB subid_registry: canonical OSCAL subid taxonomy as queryable graph
-- Compliance validators named after their frameworks: Olivia Scal (OSCAL), E.U.gene
-  Risk (EU AI Act), Penny Privacy (GDPR), Reggie O.P.A. (OPA Rego policy)
 
 **CozoDB knowledge graph**:
 - Datalog-based graph database, embedded in Sled (pure Rust, no native lib)
@@ -289,13 +292,13 @@ Every plugin change goes through Chronicle.
 
 ### 10. MCP / Cognitive Layer (op-mcp + op-cognitive-mcp)
 
-**op-mcp (port 3000)** — Standard Model Context Protocol server:
+**op-mcp (HTTP+SSE port 3001, WebSocket port 3002, gRPC port 50051)** — Standard Model Context Protocol server:
 - Compact mode: 4 meta-tools expose 148+ underlying tools (token-efficient for LLMs)
 - Full mode: all tools directly, no filtering
-- Transports: stdio (Claude Desktop), HTTP, SSE, WebSocket, gRPC
+- Transports: stdio (Claude Desktop), HTTP+SSE, WebSocket, gRPC
 - Real-time streaming: long-running tool results streamed as SSE
 
-**op-cognitive-mcp (port 3001)** — Knowledge and reasoning:
+**op-cognitive-mcp (HTTP/SSE port 3003, gRPC port 50052)** — Knowledge and reasoning:
 - CozoDB knowledge graph (see Compliance Engine above)
 - Qdrant vector database for semantic search over code corpus and events
 - RAG pipeline: ingest codebase via repomix → chunk → embed → store → query
@@ -335,7 +338,7 @@ agent status; service health indicators.
 - Bind execution threads to the node's CPUs for cache locality
 - BTRFS subvolume layout: `timing/` (Chronicle), `vectors/` (ML embeddings),
   `state/` (DR snapshots), `snapshots/` (incremental replication)
-- Workstack promotion: 25 executions → promoted to BTRFS; cache hit ~10ms vs multi-second
+- Workstack promotion: 3 executions → flagged as candidate; callers explicitly promote to BTRFS; cache hit ~10ms vs multi-second
 
 ---
 
@@ -381,17 +384,15 @@ agent status; service health indicators.
 - D-Bus nodes generate events; gRPC bridge synchronizes them into Chronicle's chain
 - Each block hashes the previous — chain cannot be altered without breaking subsequent hashes
 - OSCAL compliance mappings connect Chronicle events to regulatory controls automatically
-- Pre-execution policy engine blocks non-compliant actions before they happen
-- Role-based access + approval workflows enforced at the OS level
+- Schema validation engine (op-compliance) gates plugin registration: OSCAL, GDPR, EU AI Act, OPA validators run in sequence; registration blocked on any failure
 - AI recall layer (Qdrant) in active development — embedding pipeline shipping
 
 #### Core Features
 | Feature | What It Means |
 |---|---|
 | Chronicle — distributed blockchain | Hash-linked blocks across D-Bus nodes; tamper-proof by construction |
-| Pre-execution policy engine | Block non-compliant actions before they execute |
+| Schema validation engine (op-compliance) | OSCAL, GDPR, EU AI Act, OPA validators gate plugin registration |
 | OSCAL-native compliance mapping | FedRAMP, NIST 800-53 controls tracked automatically |
-| Role-based access + approval workflows | Segregation of duties enforced at OS level |
 | Change tracking across 40+ state domains | Network, identity, storage, containers, services |
 | gRPC event streaming | Real-time Chronicle events to SIEM or assessor portal |
 | Chronicle recall via Qdrant *(roadmap)* | Plain-language query of blockchain history |
@@ -410,7 +411,7 @@ agent status; service health indicators.
 
 #### Taglines
 - "Compliance isn't a report. It's a system property."
-- "Every action. Every change. Every approval. In Chronicle."
+- "Every action. Every change. Every violation. In Chronicle."
 - "Built for auditors. Run by engineers."
 - "3tched's blockchain. Distributed. Proven. Yours."
 - "Don't detect policy violations. Prevent them."
@@ -418,7 +419,7 @@ agent status; service health indicators.
 #### Use Case Scenarios
 - FedRAMP contractor: 3tched streams OSCAL-mapped Chronicle events to assessor portal automatically
 - Healthcare breach: Chronicle's blockchain provides hash-verified proof of every state transition, exact order
-- Financial firm: approval workflows enforce segregation of duties; every approval is on the blockchain
+- Financial firm: op-compliance validators gate every plugin registration against OSCAL/GDPR/OPA rules; every violation is on the blockchain
 
 ---
 
