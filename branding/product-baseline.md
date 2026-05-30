@@ -17,7 +17,7 @@ Every component is replaceable: 40+ state plugins cover network, identity, stora
 services, and compliance — each independently swappable.
 
 **Underlying tech in one line**: D-Bus introspection + WireGuard networking + gRPC control
-plane + SQLite/BTRFS state store + 70+ AI agents + distributed blockchain — pure Rust,
+plane + Sled/BTRFS state store + 70+ AI agents + distributed blockchain — pure Rust,
 no external tool registries, no framework lock-in.
 
 ---
@@ -207,7 +207,6 @@ Authentication is a WireGuard public key — no passwords, no LDAP queries, no A
 - WireGuard pubkey IS the identity — possession of the private key proves who you are
 - Magic link registration: email token → WireGuard keypair provisioned automatically
 - OAuth token cache via `org.freedesktop.secrets` (native secrets service)
-- SQLite identity database with Argon2 hashing for any legacy password path
 - Session management with expiry, built into the platform
 
 **Who benefits**:
@@ -229,7 +228,7 @@ Authentication is a WireGuard public key — no passwords, no LDAP queries, no A
 |---|---|---|
 | **systemd** | op-services + dinit-dbus | Service definitions in SQLite; dinit (2-5MB) as PID 1 vs systemd (20-40MB); lifecycle managed via D-Bus |
 | **NetworkManager** | op-network | Native netlink ops (rtnetlink); OVSDB JSON-RPC; OpenFlow (all versions, pure Rust); no NetworkManager daemon |
-| **Active Directory / LDAP** | op-identity | WireGuard pubkey identity; SQLite backend; magic link provisioning |
+| **Active Directory / LDAP** | op-identity | WireGuard pubkey identity; in-memory session store (DashMap); magic link provisioning |
 | **Docker / Podman** | op-plugins (incus/lxc state plugins) + op-network (container networking) | 5-10% overhead vs Docker's 20-30%; per-user WireGuard tunnels built in |
 | **LVM / mdadm** | op-cache (BTRFS subvolumes) | Subvolume management, snapshots, incremental replication, retention policy with auto-pruning |
 | **5 separate audit logs** | op-blockchain (Chronicle) | One blockchain, one query, every component |
