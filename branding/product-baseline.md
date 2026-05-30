@@ -328,11 +328,10 @@ Every plugin change goes through Chronicle.
 - MCP endpoint for Claude Desktop
 - React/TypeScript/WASM frontend (axon-trace-ui)
 
-**Frontend routes** (30+):
+**Frontend routes** (20+):
 Overview, Chat, Tools, Agents, Models, LLM, Services, Security, Config, Inspector,
 State, Logs, Workflows, Orchestration, Skills, Containers, Privacy Network, OVS,
-OpenFlow, Knowledge, gRPC Diagnostics, Accountability (Chronicle), BTRFS, Data Stores,
-Embedding
+OpenFlow, Knowledge, gRPC Diagnostics, Accountability (Chronicle)
 
 **Real-time**: Live metrics via gRPC Server-Streaming; event log (1000-entry ring buffer);
 agent status; service health indicators.
@@ -490,7 +489,7 @@ For enterprise and infrastructure buyers who respond to "replace" messaging:
 | You're running | 3tched replaces it with | Why it's better |
 |---|---|---|
 | systemd (20-40MB) | dinit + op-services (2-5MB, SQL-driven) | Lighter, auditable, no unit file sprawl |
-| NetworkManager | op-network (native netlink + OpenFlow) | No daemon, native performance, built-in WireGuard |
+| NetworkManager | op-network (native netlink + OpenFlow) | No NetworkManager daemon; OVS path requires openvswitch-switch; native netlink performance, built-in WireGuard |
 | Active Directory / LDAP | op-identity (WireGuard pubkey) | Zero-password, no central server to breach |
 | Docker / Podman | op-plugins (incus/lxc) + op-network | 5-10% overhead vs 20-30%; privacy networking built in |
 | LVM / mdadm | op-cache (BTRFS subvolumes) | Snapshots, incremental replication, retention policy |
