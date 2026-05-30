@@ -22,13 +22,13 @@ zero shell dependencies, single binary.
 
 ---
 
-## Chronicle (Crate: op-chronicle)
+## Chronicle (Crate: op-blockchain)
 
 **Chronicle** is 3tched's distributed blockchain. Every event on the system — every tool
 execution, every state change, every policy decision, every login — is appended to Chronicle
 as a time-stamped, cryptographically linked block stored on BTRFS.
 
-**Package name**: `op-chronicle` (Rust crate, renamed from `op-blockchain`)
+**Current crate name**: `op-blockchain` — the product-facing name is Chronicle.
 
 ### What makes it a blockchain
 Each block contains the cryptographic hash of the previous block. The chain spans every D-Bus
@@ -229,8 +229,9 @@ Authentication is a WireGuard public key — no passwords, no LDAP queries, no A
 | **systemd** | op-services + dinit-dbus | Service definitions in SQLite; dinit (2-5MB) as PID 1 vs systemd (20-40MB); lifecycle managed via D-Bus |
 | **NetworkManager** | op-network | Native netlink ops (rtnetlink); OVSDB JSON-RPC; OpenFlow (all versions, pure Rust); no NetworkManager daemon |
 | **Active Directory / LDAP** | op-identity | WireGuard pubkey identity; SQLite backend; magic link provisioning |
-| **Docker / Podman** | op-container (Incus/LXC) | 5-10% overhead vs Docker's 20-30%; per-user WireGuard tunnels built in |
-| **LVM / mdadm** | op-storage (BTRFS) | Subvolume management, snapshots, incremental replication, retention policy with auto-pruning |
+| **Docker / Podman** | op-plugins (incus/lxc state plugins) + op-network (container networking) | 5-10% overhead vs Docker's 20-30%; per-user WireGuard tunnels built in |
+| **LVM / mdadm** | op-cache (BTRFS subvolumes) | Subvolume management, snapshots, incremental replication, retention policy with auto-pruning |
+| **5 separate audit logs** | op-blockchain (Chronicle) | One blockchain, one query, every component |
 
 **The pitch**: One platform, one binary, one audit trail — instead of five different tools
 with five different log formats and five different permission models.
@@ -441,7 +442,7 @@ agent status; service health indicators.
 | 70+ specialized AI agents | Domain experts on demand, sandboxed, full system access |
 | Semantic memory architecture | CozoDB + Qdrant designed for cross-session context |
 | Chronicle blockchain trail | Every workspace action on the distributed blockchain |
-| BTRFS subvolume per workspace | Isolated, snapshotted, rollback-ready |
+| BTRFS subvolume per workspace | Isolated, snapshotted, rollback-ready (via op-cache) |
 | DAG workflow orchestration | Multi-step tasks in parallel, automatically |
 | Multi-protocol access | Browser, gRPC, MCP, CLI |
 
@@ -483,9 +484,9 @@ For enterprise and infrastructure buyers who respond to "replace" messaging:
 | systemd (20-40MB) | dinit + op-services (2-5MB, SQL-driven) | Lighter, auditable, no unit file sprawl |
 | NetworkManager | op-network (native netlink + OpenFlow) | No daemon, native performance, built-in WireGuard |
 | Active Directory / LDAP | op-identity (WireGuard pubkey) | Zero-password, no central server to breach |
-| Docker / Podman | op-container (Incus/LXC) | 5-10% overhead vs 20-30%; privacy networking built in |
-| LVM / mdadm | op-storage (BTRFS subvolumes) | Snapshots, incremental replication, retention policy |
-| 5 separate audit logs | Chronicle | One blockchain, one query, every component |
+| Docker / Podman | op-plugins (incus/lxc) + op-network | 5-10% overhead vs 20-30%; privacy networking built in |
+| LVM / mdadm | op-cache (BTRFS subvolumes) | Snapshots, incremental replication, retention policy |
+| 5 separate audit logs | op-blockchain (Chronicle) | One blockchain, one query, every component |
 
 ## Brand Voice Notes
 
@@ -495,7 +496,7 @@ For enterprise and infrastructure buyers who respond to "replace" messaging:
   40+ plugins), mechanism descriptions ("kernel namespace", "distributed blockchain",
   "native netlink"), outcome framing ("prove isolation, don't claim it")
 - **Chronicle**: It IS a blockchain — hash-linked, append-only, distributed across D-Bus nodes
-  via gRPC. Own the term. Crate name: `op-chronicle`.
+  via gRPC. Own the term. Current crate name: `op-blockchain`.
 - **Ghostbridge**: The bridge no one can see — private paths that leave no visible trace.
 - **3tched name**: Etched as in permanent (Chronicle), etched as in integrated (OS-level).
 - **Replacement framing**: "replaces" is a strong word — use it deliberately for the stack
@@ -508,7 +509,7 @@ When using this document to generate marketing copy:
 **Grounding rules**:
 - All claims must come from this document — no invented capabilities
 - Concrete numbers: 16,000+ tools (D-Bus auto-discovery), 70+ agents (op-agents), 40+ plugins (op-plugins)
-- Chronicle IS a blockchain — use the term. Crate: `op-chronicle`.
+- Chronicle IS a blockchain — use the term. Current crate: `op-blockchain`.
 - **Do not claim Qdrant plain-language recall as shipped** — it is in active development; use
   "designed to", "in development", or "roadmap" framing
 - **Do not claim "no external calls" for LLM** — providers are configurable (Gemini, Anthropic,
@@ -521,15 +522,17 @@ When using this document to generate marketing copy:
 - Replacement stack: enterprise infrastructure voice — "replaces", "native", "zero dependencies"
 - All angles share one theme: **OS-level guarantees, not application-layer promises**
 
-**Component reference**:
+**Component reference** (actual crate names):
 - D-Bus engine → op-introspection / op-inspector
-- Blockchain → Chronicle / op-chronicle
-- Privacy network → Ghostbridge / op-network
+- Blockchain / Chronicle → op-blockchain
+- Privacy network / Ghostbridge → op-network
 - Identity → op-identity
 - Agents → op-agents (70+)
 - Workflows → op-workflows + workstacks
-- Compliance → op-compliance + CozoDB + Chronicle
+- Compliance → op-compliance + CozoDB + op-blockchain
 - Plugins → op-plugins (40+)
+- Container support → op-plugins (incus/lxc plugins) + op-network
+- Storage/BTRFS → op-cache
 - Web dashboard → op-web (axon-trace-ui frontend)
 - MCP layer → op-mcp (port 3000) + op-cognitive-mcp (port 3001)
-- Performance → op-cache (NUMA-aware BTRFS)
+- Performance caching → op-cache (NUMA-aware BTRFS)
