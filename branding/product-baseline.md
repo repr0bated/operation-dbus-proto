@@ -299,10 +299,11 @@ Every plugin change goes through Chronicle.
 
 ### 10. MCP / Cognitive Layer (op-mcp + op-cognitive-mcp)
 
-**op-mcp (HTTP+SSE port 3001, WebSocket port 3002, gRPC port 50051¹)** — Standard Model Context Protocol server:
+**op-mcp (HTTP+SSE port 3001, WebSocket port 3002)** — Standard Model Context Protocol server:
 - Compact mode: 4 meta-tools expose 148+ underlying tools (token-efficient for LLMs)
 - Full mode: all tools directly, no filtering
-- Transports: stdio (Claude Desktop), HTTP+SSE, WebSocket, gRPC
+- Transports: stdio (Claude Desktop), HTTP+SSE, WebSocket; gRPC via `--mode grpc` (requires
+  `grpc` feature flag, runs on port 50051 — separate from `--all`)
 - Real-time streaming: long-running tool results streamed as SSE
 
 **op-cognitive-mcp (HTTP/SSE port 3003, gRPC port 50052)** — Knowledge and reasoning:
@@ -316,10 +317,6 @@ Every plugin change goes through Chronicle.
 - Local: MCP proxy, in-process models
 - External APIs: Gemini, Anthropic, Gemini CLI
 - Operators choose their data residency model
-
-¹ **Port conflict**: `op-mcp-server --all` defaults gRPC to `0.0.0.0:50051`, which conflicts
-with `op-grpc-bridge` (also binds `0.0.0.0:50051`). Run MCP gRPC on a different port with
-`--grpc 0.0.0.0:50053` (or similar) when both services run on the same host.
 
 ---
 
