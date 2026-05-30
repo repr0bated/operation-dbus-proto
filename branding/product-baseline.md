@@ -15,6 +15,10 @@ permanence: every action is etched into an immutable audit trail.
 **Underlying tech in one line**: D-Bus introspection + WireGuard networking + gRPC control plane
 + SQLite/BTRFS state store + LLM-powered agents — all in a single, zero-dependency Rust binary.
 
+**Scale**: Native D-Bus introspection indexes 16,000+ system tools directly from the kernel and
+session buses — no shell wrappers, no external tool registries. This is the tool surface that
+agents and workflows operate against.
+
 ---
 
 ## Angle 1 — Ghostbridge: Privacy Network
@@ -74,7 +78,7 @@ action — mapped to regulatory frameworks like GDPR, FedRAMP, SOC 2, and NIST O
 
 ### How It Works (non-technical summary)
 - Every state change (user created, service started, permission granted) is written to a
-  blockchain-backed audit log stored on BTRFS — append-only, cryptographically chained.
+  cryptographically chained audit log stored on BTRFS — append-only, tamper-evident.
 - A policy engine enforces rules before actions execute — not after the fact.
 - Compliance mappings are built in: OSCAL schemas connect system events to regulatory controls automatically.
 - Role-based access control with approval workflows means no action happens outside policy.
@@ -82,7 +86,7 @@ action — mapped to regulatory frameworks like GDPR, FedRAMP, SOC 2, and NIST O
 ### Core Features
 | Feature | What It Means for Compliance Teams |
 |---|---|
-| Immutable blockchain audit trail | Tamper-evident log acceptable for regulatory review |
+| Immutable cryptographically chained audit trail | Tamper-evident log acceptable for regulatory review |
 | OSCAL-native compliance mapping | FedRAMP, NIST 800-53 controls tracked automatically |
 | Pre-execution policy engine | Block non-compliant actions before they happen |
 | Role-based access + approval workflows | Segregation of duties enforced at the OS level |
@@ -115,7 +119,7 @@ action — mapped to regulatory frameworks like GDPR, FedRAMP, SOC 2, and NIST O
 
 ### Use Case Scenarios
 - A FedRAMP contractor needs to show continuous monitoring — 3tched streams OSCAL-mapped events to their assessor portal automatically.
-- A healthcare org gets breached; forensics needs an exact timeline — the blockchain log provides cryptographic proof of every state transition.
+- A healthcare org gets breached; forensics needs an exact timeline — the tamper-evident log provides cryptographic proof of every state transition.
 - A financial services firm needs segregation of duties for privileged access — 3tched's approval workflows enforce it at the kernel level, not the application layer.
 
 ---
