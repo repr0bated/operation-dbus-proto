@@ -19,12 +19,11 @@ permanence: every action is etched into an immutable audit trail.
 session buses — no shell wrappers, no external tool registries. This is the tool surface that
 agents and workflows operate against.
 
-**Chronicle**: Every event on the system is recorded in Chronicle — a two-layer audit system.
-Layer 1 is a cryptographically chained, append-only event log on BTRFS: each event hashes the
-previous one, so the chain cannot be altered without detection. Layer 2 is AI-powered recall:
-events are vectorized into Qdrant so you can query system history in plain language. What
-happened to this service? Who changed this config? When did this user authenticate? Chronicle
-answers all of it.
+**Chronicle — 3tched's blockchain**: Every event on the system is recorded in Chronicle.
+Underneath it is a blockchain: an append-only chain of time-stamped, cryptographically linked
+event blocks stored on BTRFS. Each block hashes the one before it — the chain cannot be
+silently altered. An AI layer (Qdrant) ingests the blockchain and makes it queryable in plain
+language. What happened to this service? Who changed this config? Chronicle answers it.
 
 ---
 
@@ -83,17 +82,17 @@ communications through cryptographically derived paths.
 regulated industries, and security teams a verifiable, immutable record of every system
 action — mapped to regulatory frameworks like GDPR, FedRAMP, SOC 2, and NIST OSCAL.
 
-At the center of the compliance platform is **Chronicle**: a cryptographically chained
-event record plus AI-powered recall. Every event, every state change, every approval
-— recorded, chained, and queryable.
+At the center is **Chronicle — 3tched's blockchain**: a cryptographically linked chain of
+event blocks plus AI-powered recall. Every event, every state change, every approval —
+recorded on the blockchain, queryable through Chronicle.
 
 ### How Chronicle Works
-- Every state change (user created, service started, permission granted) is written as an
-  event and appended to Chronicle's chain on BTRFS — each event hashes the previous one.
-- The chain is append-only. No event can be altered or deleted without breaking every
-  subsequent hash — tamper-proof by construction, not by policy.
-- An AI layer vectorizes all events into Qdrant. Ask Chronicle anything in plain language:
-  "What changed on this host between 2am and 4am?" — and get a precise, sourced answer.
+- Every state change (user created, service started, permission granted) is written as a
+  time-stamped event block and appended to Chronicle's blockchain on BTRFS.
+- Each block contains the cryptographic hash of the previous block — the chain cannot be
+  altered without breaking every subsequent hash. Tamper-proof by construction.
+- An AI layer vectorizes all blockchain events into Qdrant. Ask Chronicle anything in plain
+  language: "What changed on this host between 2am and 4am?" — and get a precise, sourced answer.
 - Compliance mappings are built in: OSCAL schemas connect Chronicle events to regulatory
   controls automatically.
 - Role-based access control with approval workflows means no action happens outside policy.
@@ -101,8 +100,8 @@ event record plus AI-powered recall. Every event, every state change, every appr
 ### Core Features
 | Feature | What It Means for Compliance Teams |
 |---|---|
-| Chronicle — cryptographically chained event record | Every event hashes the previous one; the chain cannot be silently altered |
-| AI-powered Chronicle recall (Qdrant) | Query system history in plain language; get sourced, precise answers |
+| Chronicle — 3tched's blockchain | Hash-linked, time-stamped event blocks; the chain cannot be silently altered |
+| AI-powered Chronicle recall (Qdrant) | Query blockchain history in plain language; get sourced, precise answers |
 | OSCAL-native compliance mapping | FedRAMP, NIST 800-53 controls tracked automatically |
 | Pre-execution policy engine | Block non-compliant actions before they happen |
 | Role-based access + approval workflows | Segregation of duties enforced at the OS level |
@@ -116,10 +115,10 @@ event record plus AI-powered recall. Every event, every state change, every appr
 - **DevSecOps engineers**: want compliance guardrails baked into infrastructure, not bolted on
 
 ### Key Differentiators vs. Competitors
-- **vs. Splunk/SIEM tools**: Chronicle generates structured, cryptographically chained events at the source — not scraped log noise. Less false positives, less tuning.
+- **vs. Splunk/SIEM tools**: Chronicle generates structured, blockchain-backed events at the source — not scraped log noise. Less false positives, less tuning.
 - **vs. HashiCorp Vault + Terraform**: 3tched replaces the whole stack (identity, network, state, Chronicle) — not a collection of tools requiring integration.
 - **vs. Chef InSpec / OpenSCAP**: Passive scanners check what happened. 3tched's policy engine prevents non-compliant states from occurring.
-- **vs. Manual audit processes**: Chronicle is machine-readable and AI-queryable — ready for automated assessor review and natural-language forensics.
+- **vs. Manual audit processes**: Chronicle is blockchain-backed and AI-queryable — ready for automated assessor review and natural-language forensics.
 
 ### Tagline Candidates
 - "Compliance isn't a report. It's a system property."
@@ -127,17 +126,18 @@ event record plus AI-powered recall. Every event, every state change, every appr
 - "Built for auditors. Run by engineers."
 - "The first infrastructure that proves itself."
 - "Ask Chronicle anything."
+- "3tched's blockchain. Your proof."
 
 ### Marketing Angles
 1. **Pain relief**: "Stop reconstructing what happened from logs. Ask Chronicle."
-2. **Proof over promises**: "Your auditors want evidence. Chronicle generates it continuously."
+2. **Proof over promises**: "Your auditors want evidence. Chronicle's blockchain generates it continuously."
 3. **Prevention over detection**: "Don't detect policy violations. Prevent them."
 4. **Cost**: "Reduce audit prep from months to a query."
 
 ### Use Case Scenarios
 - A FedRAMP contractor needs to show continuous monitoring — 3tched streams OSCAL-mapped Chronicle events to their assessor portal automatically.
-- A healthcare org gets breached; forensics needs an exact timeline — Chronicle's cryptographic chain provides irrefutable proof of every state transition, in the exact order it happened.
-- A financial services firm needs segregation of duties for privileged access — 3tched's approval workflows enforce it at the kernel level, and Chronicle records every approval.
+- A healthcare org gets breached; forensics needs an exact timeline — Chronicle's blockchain provides irrefutable, hash-verified proof of every state transition in the exact order it happened.
+- A financial services firm needs segregation of duties for privileged access — 3tched's approval workflows enforce it at the kernel level, and every approval is on the blockchain.
 
 ---
 
@@ -164,7 +164,7 @@ isolated from other users and governed by their own policy.
 | Isolated network container (Ghostbridge) | Your browsing, tools, and communications in a private namespace |
 | 70+ specialized AI agents | Domain experts (Rust, Python, Kubernetes, network, memory) on demand |
 | Semantic memory (CozoDB + Qdrant) | The workspace remembers your context across sessions |
-| Chronicle audit trail | Every workspace action is recorded and queryable |
+| Chronicle blockchain trail | Every workspace action is recorded on the blockchain and queryable |
 | BTRFS subvolume per user | Your files are isolated, snapshotted, and rollback-ready |
 | DAG workflow orchestration | Multi-step tasks run in parallel automatically |
 | Multi-protocol access | Use via browser, gRPC client, MCP tool, or CLI |
@@ -207,26 +207,27 @@ isolated from other users and governed by their own policy.
 | **Primary buyer** | Security architect | CISO / compliance officer | Individual / dev team |
 | **Primary pain** | Network exposure | Audit burden | Tool fragmentation |
 | **Core promise** | Isolation | Evidence | Intelligence |
-| **Key proof point** | Kernel-level namespacing | Chronicle — cryptographic chain + AI recall | 70 agents + semantic memory |
-| **Competitive moat** | No userspace VPN compromise surface | Prevention vs. detection + queryable proof | Local-first AI with real context |
+| **Key proof point** | Kernel-level namespacing | Chronicle — blockchain + AI recall | 70 agents + semantic memory |
+| **Competitive moat** | No userspace VPN compromise surface | Prevention vs. detection + blockchain proof | Local-first AI with real context |
 
 ## Brand Voice Notes
 
 - **Tone**: Precise. Confident. No hype. Engineers respect specificity — use it.
-- **Avoid**: "revolutionary", "game-changing", "seamless", "next-gen", "blockchain"
-- **Use**: product names (Chronicle, Ghostbridge), concrete numbers (16,000+ tools, 70+ agents), mechanism descriptions ("kernel namespace, not app layer"), outcome framing ("prove isolation, don't claim it")
-- **3tched name**: lean into the double meaning — etched as in permanent/immutable (Chronicle), etched as in deeply integrated (OS-level, not bolted on)
+- **Avoid**: "revolutionary", "game-changing", "seamless", "next-gen"
+- **Use**: product names (Chronicle, Ghostbridge), concrete numbers (16,000+ tools, 70+ agents), mechanism descriptions ("blockchain-backed", "kernel namespace, not app layer"), outcome framing ("prove isolation, don't claim it")
+- **Blockchain note**: Chronicle IS a blockchain — hash-linked, append-only, time-stamped event blocks. Own the term. It differentiates from passive log tools that make no cryptographic guarantee.
+- **3tched name**: lean into the double meaning — etched as in permanent/immutable (blockchain), etched as in deeply integrated (OS-level, not bolted on)
 - **Ghostbridge name**: the bridge no one can see — private paths between endpoints that leave no visible trace
-- **Chronicle name**: the complete, ordered, factual record — used in law, journalism, and history. Both the chain (proof) and the recall (query).
+- **Chronicle name**: the complete, ordered, factual record — both the blockchain (proof) and the AI recall (query)
 
 ## LLM Prompting Notes
 
 When using this document to generate marketing copy:
 - Ground all claims in the concrete features listed above — no invented capabilities
-- Use **Chronicle** as the product name for the audit/event system — never "blockchain"
+- Use **Chronicle** as the product name and **blockchain** as its technical mechanism — use both
 - Maintain the three angles as distinct products with distinct buyers, even though they share infrastructure
 - Ghostbridge copy should feel like a security product, not a consumer privacy app
 - 3tched compliance copy should speak to auditors and regulators, not just engineers
 - Workspace copy can be warmer and more personal — it's the human-facing layer
 - All three can share the theme: **OS-level guarantees, not application-layer promises**
-- Chronicle's two-layer story is a differentiator: the chain is the proof, Qdrant is the recall
+- Chronicle's two-layer story is a differentiator: the blockchain is the proof, Qdrant is the recall
