@@ -1,0 +1,59 @@
+name: Repomix crates XML
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'crates/**'
+      - '.github/workflows/repomix-crates.yml'
+
+jobs:
+  repomix-crates:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Generate one Repomix XML per crates folder
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          OUTDIR="repomix-crates-xml"
+          rm -rf "$OUTDIR"
+          mkdir -p "$OUTDIR"
+
+          if [ ! -d crates ]; then
+            echo "No crates directory found"
+            exit 1
+          fi
+
+          find crates -mindepth 1 -maxdepth 1 -type d | sort | while read -r crate_dir; do
+            crate_name="$(basename "$crate_dir")"
+            out_file="$OUTDIR/${crate_name}.xml"
+
+            echo "Generating Repomix XML for ${crate_dir} -> ${out_file}"
+
+            npx --yes repomix@latest "$crate_dir" \
+              --style xml \
+              --compress \
+              --output "$out_file" \
+              --ignore "target,node_modules,.git,*.lock,*.zip,dist,build"
+          done
+
+          echo "Generated files:"
+          ls -lh "$OUTDIR"
+
+      - name: Upload Repomix crate XML artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: operation-dbus-proto-repomix-crates-xml
+          path: repomix-crates-xml/*.xml
+          if-no-files-found: error
+          compression-level: 9
