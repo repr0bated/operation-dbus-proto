@@ -59,7 +59,7 @@ impl GCloudADCProvider {
             .build()
             .unwrap_or_default();
 
-        let model = std::env::var("LLM_MODEL").unwrap_or_else(|_| "gemini-2.0-flash".to_string());
+        let model = std::env::var("LLM_MODEL").unwrap_or_else(|_| "gemini-2.5-flash".to_string());
 
         Self { client, model }
     }
@@ -163,9 +163,9 @@ impl LlmProvider for GCloudADCProvider {
     async fn list_models(&self) -> Result<Vec<ModelInfo>> {
         Ok(vec![
             ModelInfo {
-                id: "gemini-2.0-flash".to_string(),
-                name: "Gemini 2.0 Flash".to_string(),
-                description: Some("Fast and efficient".to_string()),
+                id: "gemini-2.5-pro".to_string(),
+                name: "Gemini 2.5 Pro".to_string(),
+                description: Some("Latest stable Gemini Pro model".to_string()),
                 parameters: None,
                 available: true,
                 tags: vec!["google".to_string()],
@@ -173,9 +173,49 @@ impl LlmProvider for GCloudADCProvider {
                 updated_at: None,
             },
             ModelInfo {
-                id: "gemini-1.5-pro".to_string(),
-                name: "Gemini 1.5 Pro".to_string(),
-                description: Some("Complex reasoning".to_string()),
+                id: "gemini-2.5-flash".to_string(),
+                name: "Gemini 2.5 Flash".to_string(),
+                description: Some("Latest stable Gemini Flash model".to_string()),
+                parameters: None,
+                available: true,
+                tags: vec!["google".to_string()],
+                downloads: None,
+                updated_at: None,
+            },
+            ModelInfo {
+                id: "gemini-2.5-flash-lite".to_string(),
+                name: "Gemini 2.5 Flash-Lite".to_string(),
+                description: Some("Latest stable cost-efficient Gemini model".to_string()),
+                parameters: None,
+                available: true,
+                tags: vec!["google".to_string()],
+                downloads: None,
+                updated_at: None,
+            },
+            ModelInfo {
+                id: "gemini-2.5-flash-image".to_string(),
+                name: "Gemini 2.5 Flash Image".to_string(),
+                description: Some("Gemini image generation and editing model".to_string()),
+                parameters: None,
+                available: true,
+                tags: vec!["google".to_string(), "image".to_string()],
+                downloads: None,
+                updated_at: None,
+            },
+            ModelInfo {
+                id: "gemini-2.0-flash".to_string(),
+                name: "Gemini 2.0 Flash".to_string(),
+                description: Some("Gemini 2.0 Flash alias".to_string()),
+                parameters: None,
+                available: true,
+                tags: vec!["google".to_string()],
+                downloads: None,
+                updated_at: None,
+            },
+            ModelInfo {
+                id: "gemini-2.0-flash-lite".to_string(),
+                name: "Gemini 2.0 Flash-Lite".to_string(),
+                description: Some("Gemini 2.0 Flash-Lite alias".to_string()),
                 parameters: None,
                 available: true,
                 tags: vec!["google".to_string()],
@@ -201,7 +241,11 @@ impl LlmProvider for GCloudADCProvider {
     }
 
     async fn is_model_available(&self, model_id: &str) -> Result<bool> {
-        Ok(matches!(model_id, "gemini-2.0-flash" | "gemini-1.5-pro"))
+        Ok(self
+            .list_models()
+            .await?
+            .iter()
+            .any(|model| model.id == model_id))
     }
 
     async fn chat(&self, model: &str, messages: Vec<ChatMessage>) -> Result<ChatResponse> {

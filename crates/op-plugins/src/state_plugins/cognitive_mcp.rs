@@ -2,47 +2,46 @@
 //!
 //! Tracks and manages the op-cognitive-mcp server: bind addresses, WireGuard
 //! identity, tool registrations, and gRPC/HTTP health.  Publishes live state
-//! to D-Bus under `/org/opdbus/v1/plugins/cognitive_mcp` so that
+//! to D-Bus under `/opdbus/v1/plugins/cognitive_mcp` so that
 //! `register_plugin_projection_tools` can expose it as MCP tools.
+//!
+//! The canonical schema (every gRPC method, every MCP tool, every
+//! request/response field) lives in `plugin_schema_defs::cognitive_mcp_plugin_schema`.
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use op_state::{
     ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
 };
-use op_state_store::{FieldSchema, FieldType, PluginSchema};
+use op_state_store::PluginSchema;
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
-use simd_json::{json, OwnedValue as Value};
+use simd_json::OwnedValue as Value;
 
 const S6_SV_PATH: &str = "/run/service/op-cognitive-mcp";
 const ENV_DIR: &str = "/etc/s6/sv/op-cognitive-mcp/env";
-const DEFAULT_HTTP: &str = "0.0.0.0:3003";
-const DEFAULT_GRPC: &str = "0.0.0.0:50052";
+const RUNTIME_ENV_DIR: &str = "/run/service/op-cognitive-mcp/env";
+const DEFAULT_HTTP: &str = "100.90.37.254:3003";
+const DEFAULT_GRPC: &str = "100.90.37.254:50052";
 const DEFAULT_DB: &str = "/var/lib/op-dbus/cognitive.db";
 const DEFAULT_WG: &str = "netmaker";
 
+// ── Deployment config (tunable via env-dir / apply_state) ──────────────────
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CognitiveMcpConfig {
-    /// HTTP/SSE bind address (MCP protocol)
     #[serde(default = "default_http")]
     pub http: String,
-    /// gRPC bind address (CognitiveToolService)
     #[serde(default = "default_grpc")]
     pub grpc: String,
-    /// CozoDB database path
     #[serde(default = "default_db")]
     pub db_path: String,
-    /// WireGuard interface for identity
     #[serde(default = "default_wg")]
     pub wg_interface: String,
-    /// Whether the HTTP server is enabled
     #[serde(default = "default_true")]
     pub http_enabled: bool,
-    /// Whether the gRPC server is enabled
     #[serde(default = "default_true")]
     pub grpc_enabled: bool,
-    /// Whether D-Bus registration is enabled
     #[serde(default = "default_true")]
     pub dbus_enabled: bool,
 }
@@ -77,6 +76,8 @@ impl Default for CognitiveMcpConfig {
     }
 }
 
+// ── Plugin struct + service helpers ─────────────────────────────────────────
+
 pub struct CognitiveMcpPlugin;
 
 impl CognitiveMcpPlugin {
@@ -84,18 +85,11 @@ impl CognitiveMcpPlugin {
         Self
     }
 
-    /// True if the s6 service is currently up.
     fn service_running() -> bool {
-        // s6 creates /run/service/<name> when the service is supervised.
-        // The `down` file means the service is intentionally stopped.
         let sv = std::path::Path::new(S6_SV_PATH);
-        if !sv.exists() {
-            return false;
-        }
-        !sv.join("down").exists()
+        sv.exists() && !sv.join("down").exists()
     }
 
-    /// Read a single env-dir variable.
     fn read_env(key: &str) -> Option<String> {
         std::fs::read_to_string(format!("{ENV_DIR}/{key}"))
             .ok()
@@ -103,7 +97,6 @@ impl CognitiveMcpPlugin {
             .filter(|s| !s.is_empty())
     }
 
-    /// Build current config from env-dir overrides + defaults.
     fn current_config() -> CognitiveMcpConfig {
         CognitiveMcpConfig {
             http: Self::read_env("COGNITIVE_MCP_BIND").unwrap_or_else(default_http),
@@ -116,17 +109,19 @@ impl CognitiveMcpPlugin {
         }
     }
 
-    /// Write a variable to the env-dir (creating the directory if needed).
     async fn write_env(key: &str, value: &str) -> Result<()> {
         tokio::fs::create_dir_all(ENV_DIR)
             .await
             .context("create env dir")?;
         tokio::fs::write(format!("{ENV_DIR}/{key}"), value)
             .await
-            .with_context(|| format!("write env {key}"))
+            .with_context(|| format!("write env {key}"))?;
+        if let Ok(()) = tokio::fs::create_dir_all(RUNTIME_ENV_DIR).await {
+            let _ = tokio::fs::write(format!("{RUNTIME_ENV_DIR}/{key}"), value).await;
+        }
+        Ok(())
     }
 
-    /// Signal s6 to reload the service after config change.
     async fn reload_service() -> Result<()> {
         let out = tokio::process::Command::new("s6-svc")
             .args(["-r", S6_SV_PATH])
@@ -134,8 +129,7 @@ impl CognitiveMcpPlugin {
             .await
             .context("s6-svc -r op-cognitive-mcp")?;
         if !out.status.success() {
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            tracing::warn!("s6-svc -r failed: {stderr}");
+            tracing::warn!("s6-svc -r failed: {}", String::from_utf8_lossy(&out.stderr));
         }
         Ok(())
     }
@@ -147,116 +141,7 @@ impl Default for CognitiveMcpPlugin {
     }
 }
 
-pub(crate) fn cognitive_mcp_plugin_schema() -> PluginSchema {
-    PluginSchema::builder("cognitive_mcp")
-        .version("1.0.0")
-        .description("Cognitive MCP server — memory, NotebookLM bridge, gRPC CognitiveToolService")
-        .field(
-            "http",
-            FieldSchema {
-                field_type: FieldType::String,
-                required: false,
-                description: "HTTP/SSE bind address for the MCP protocol endpoint".into(),
-                default: Some(json!(DEFAULT_HTTP)),
-                example: Some(json!("100.90.37.254:3003")),
-                constraints: vec![],
-                read_only: false,
-                read_only_when: None,
-            },
-        )
-        .field(
-            "grpc",
-            FieldSchema {
-                field_type: FieldType::String,
-                required: false,
-                description: "gRPC bind address for the CognitiveToolService endpoint".into(),
-                default: Some(json!(DEFAULT_GRPC)),
-                example: Some(json!("100.90.37.254:50052")),
-                constraints: vec![],
-                read_only: false,
-                read_only_when: None,
-            },
-        )
-        .field(
-            "db_path",
-            FieldSchema {
-                field_type: FieldType::String,
-                required: false,
-                description: "CozoDB database path for persistent memory storage".into(),
-                default: Some(json!(DEFAULT_DB)),
-                example: Some(json!("/var/lib/op-dbus/cognitive.db")),
-                constraints: vec![],
-                read_only: false,
-                read_only_when: None,
-            },
-        )
-        .field(
-            "wg_interface",
-            FieldSchema {
-                field_type: FieldType::String,
-                required: false,
-                description: "WireGuard interface to read identity from".into(),
-                default: Some(json!(DEFAULT_WG)),
-                example: Some(json!("netmaker")),
-                constraints: vec![],
-                read_only: false,
-                read_only_when: None,
-            },
-        )
-        .field(
-            "http_enabled",
-            FieldSchema {
-                field_type: FieldType::Boolean,
-                required: false,
-                description: "Enable the HTTP/SSE MCP transport".into(),
-                default: Some(json!(true)),
-                example: None,
-                constraints: vec![],
-                read_only: false,
-                read_only_when: None,
-            },
-        )
-        .field(
-            "grpc_enabled",
-            FieldSchema {
-                field_type: FieldType::Boolean,
-                required: false,
-                description: "Enable the gRPC CognitiveToolService transport".into(),
-                default: Some(json!(true)),
-                example: None,
-                constraints: vec![],
-                read_only: false,
-                read_only_when: None,
-            },
-        )
-        .field(
-            "dbus_enabled",
-            FieldSchema {
-                field_type: FieldType::Boolean,
-                required: false,
-                description: "Register on D-Bus as org.opdbus.CognitiveMcp".into(),
-                default: Some(json!(true)),
-                example: None,
-                constraints: vec![],
-                read_only: false,
-                read_only_when: None,
-            },
-        )
-        .field(
-            "running",
-            FieldSchema {
-                field_type: FieldType::Boolean,
-                required: false,
-                description: "Whether the s6 service is currently running".into(),
-                default: Some(json!(false)),
-                example: None,
-                constraints: vec![],
-                read_only: true,
-                read_only_when: None,
-            },
-        )
-        .build()
-}
+// ── StatePlugin impl ─────────────────────────────────────────────────────────
 
 #[async_trait]
 impl StatePlugin for CognitiveMcpPlugin {
@@ -264,15 +149,14 @@ impl StatePlugin for CognitiveMcpPlugin {
         "cognitive_mcp"
     }
     fn version(&self) -> &str {
-        "1.0.0"
+        "2.0.0"
     }
 
     fn schema(&self) -> Option<PluginSchema> {
-        Some(cognitive_mcp_plugin_schema())
+        Some(super::plugin_schema_defs::cognitive_mcp_plugin_schema())
     }
 
     fn is_available(&self) -> bool {
-        // Available if the s6 service definition exists.
         std::path::Path::new("/etc/s6/sv/op-cognitive-mcp").exists()
     }
 
@@ -282,7 +166,6 @@ impl StatePlugin for CognitiveMcpPlugin {
 
     async fn query_current_state(&self) -> Result<Value> {
         let mut cfg = simd_json::serde::to_owned_value(Self::current_config())?;
-        // Inject live running status.
         if let Some(obj) = cfg.as_object_mut() {
             obj.insert(
                 "running".into(),
@@ -412,7 +295,6 @@ impl StatePlugin for CognitiveMcpPlugin {
                     }
                     other => Err(anyhow::anyhow!("unknown cognitive_mcp field: {other}")),
                 };
-
                 match result {
                     Ok(()) => changes.push(format!("cognitive_mcp.{resource} updated")),
                     Err(e) => errors.push(format!("cognitive_mcp.{resource}: {e}")),

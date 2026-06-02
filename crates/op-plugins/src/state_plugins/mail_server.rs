@@ -5,9 +5,7 @@
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use op_state::{
-    ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin,
-};
+use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
@@ -153,10 +151,7 @@ impl MailServerPlugin {
         if postfix_ok && dovecot_ok {
             (true, None)
         } else {
-            let err = format!(
-                "postfix_ok={}, dovecot_ok={}",
-                postfix_ok, dovecot_ok
-            );
+            let err = format!("postfix_ok={}, dovecot_ok={}", postfix_ok, dovecot_ok);
             (false, Some(err))
         }
     }
@@ -174,7 +169,8 @@ impl StatePlugin for MailServerPlugin {
         op_state::PluginMetadata {
             name: self.name().to_string(),
             version: self.version().to_string(),
-            description: "Mail server container state and D-Bus registration for 3tched.com".to_string(),
+            description: "Mail server container state and D-Bus registration for 3tched.com"
+                .to_string(),
             author: None,
             license: None,
             dependencies: vec!["incus".to_string(), "unix_socket".to_string()],

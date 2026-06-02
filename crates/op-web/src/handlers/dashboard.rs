@@ -37,51 +37,69 @@ pub async fn dashboard_metrics_handler(
     let active_connections = get_vpn_peer_count();
 
     // Try to read system stats from the D-Bus projection cache first.
-    // These are live procfs projections from org.opdbus.v1 /org/opdbus/v1/plugins/procfs/*.
-    let mem_proj = projection_client::get_projection(&state.projection_cache, "system.memory").await;
+    // These are live procfs projections from org.opdbus.v1 /opdbus/v1/plugins/procfs/*.
+    let mem_proj =
+        projection_client::get_projection(&state.projection_cache, "system.memory").await;
     let load_proj = projection_client::get_projection(&state.projection_cache, "system.load").await;
 
-    let (cpu, memory, source, schema_version) =
-        if mem_proj.is_some() || load_proj.is_some() {
-            let mut cpu = 0.0f32;
-            let mut memory = 0.0f32;
+    let (cpu, memory, source, schema_version) = if mem_proj.is_some() || load_proj.is_some() {
+        let mut cpu = 0.0f32;
+        let mut memory = 0.0f32;
 
-            // memory projection from /proc/meminfo: keys are lowercase, values are strings like "24019080 kB"
-            if let Some(mem_proj) = mem_proj {
-                if let simd_json::OwnedValue::Object(ref obj) = mem_proj {
-                    let total_kb = obj.get("memtotal")
-                        .and_then(|v| v.as_str().map(|s| s.split_whitespace().next().unwrap_or("0").parse::<u64>().unwrap_or(0)))
-                        .unwrap_or(0);
-                    let free_kb = obj.get("memfree")
-                        .and_then(|v| v.as_str().map(|s| s.split_whitespace().next().unwrap_or("0").parse::<u64>().unwrap_or(0)))
-                        .unwrap_or(0);
-                    if total_kb > 0 {
-                        memory = ((total_kb - free_kb) as f32 / total_kb as f32) * 100.0;
-                    }
-                }
-            }
-
-            // CPU load from /proc/loadavg projection: keys are "load1", "load5", "load15"
-            // Values may be floats or strings depending on parser.
-            if let Some(load_proj) = load_proj {
-                if let simd_json::OwnedValue::Object(ref obj) = load_proj {
-                    let load_1min = obj.get("load1")
-                        .and_then(|v| {
-                            as_f64(v)
-                                .or_else(|| v.as_str().map(|s| s.parse::<f64>().unwrap_or(0.0)))
+        // memory projection from /proc/meminfo: keys are lowercase, values are strings like "24019080 kB"
+        if let Some(mem_proj) = mem_proj {
+            if let simd_json::OwnedValue::Object(ref obj) = mem_proj {
+                let total_kb = obj
+                    .get("memtotal")
+                    .and_then(|v| {
+                        v.as_str().map(|s| {
+                            s.split_whitespace()
+                                .next()
+                                .unwrap_or("0")
+                                .parse::<u64>()
+                                .unwrap_or(0)
                         })
-                        .unwrap_or(0.0) as f32;
-                    // Approximate CPU % from load (assuming 8 cores)
-                    cpu = (load_1min * 100.0 / 8.0).min(100.0);
+                    })
+                    .unwrap_or(0);
+                let free_kb = obj
+                    .get("memfree")
+                    .and_then(|v| {
+                        v.as_str().map(|s| {
+                            s.split_whitespace()
+                                .next()
+                                .unwrap_or("0")
+                                .parse::<u64>()
+                                .unwrap_or(0)
+                        })
+                    })
+                    .unwrap_or(0);
+                if total_kb > 0 {
+                    memory = ((total_kb - free_kb) as f32 / total_kb as f32) * 100.0;
                 }
             }
+        }
 
-            (cpu, memory, "projection".to_string(), "live".to_string())
-        } else {
-            // Fallback: read raw /proc directly
-            let (cpu, memory) = get_system_stats();
-            (cpu, memory, "fallback".to_string(), "none".to_string())
-        };
+        // CPU load from /proc/loadavg projection: keys are "load1", "load5", "load15"
+        // Values may be floats or strings depending on parser.
+        if let Some(load_proj) = load_proj {
+            if let simd_json::OwnedValue::Object(ref obj) = load_proj {
+                let load_1min = obj
+                    .get("load1")
+                    .and_then(|v| {
+                        as_f64(v).or_else(|| v.as_str().map(|s| s.parse::<f64>().unwrap_or(0.0)))
+                    })
+                    .unwrap_or(0.0) as f32;
+                // Approximate CPU % from load (assuming 8 cores)
+                cpu = (load_1min * 100.0 / 8.0).min(100.0);
+            }
+        }
+
+        (cpu, memory, "projection".to_string(), "live".to_string())
+    } else {
+        // Fallback: read raw /proc directly
+        let (cpu, memory) = get_system_stats();
+        (cpu, memory, "fallback".to_string(), "none".to_string())
+    };
 
     Json(DashboardMetrics {
         active_connections,

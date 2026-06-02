@@ -136,7 +136,11 @@ async fn list_models(State(state): State<Arc<AppState>>) -> Json<ModelList> {
             // Avoid listing McpProxy provider within the proxy itself
             continue;
         }
-        if let Ok(provider_models) = state.chat_manager.list_models_for_provider(&provider_type).await {
+        if let Ok(provider_models) = state
+            .chat_manager
+            .list_models_for_provider(&provider_type)
+            .await
+        {
             for m in provider_models {
                 let owned_by = match provider_type {
                     op_llm::provider::ProviderType::Anthropic => "anthropic",
@@ -242,7 +246,11 @@ async fn chat_completions(
 
         if req.stream {
             use tokio_stream::StreamExt as _;
-            match state.chat_manager.chat_stream_with(&provider_type, &req.model, op_llm_messages).await {
+            match state
+                .chat_manager
+                .chat_stream_with(&provider_type, &req.model, op_llm_messages)
+                .await
+            {
                 Ok(rx) => {
                     let model_str = req.model.clone();
                     let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
@@ -264,7 +272,8 @@ async fn chat_completions(
                                         }]
                                     });
                                     Ok::<axum::response::sse::Event, std::convert::Infallible>(
-                                        axum::response::sse::Event::default().data(chunk.to_string())
+                                        axum::response::sse::Event::default()
+                                            .data(chunk.to_string()),
                                     )
                                 }
                                 Err(e) => {
@@ -273,13 +282,17 @@ async fn chat_completions(
                                         "error": { "message": e.to_string() }
                                     });
                                     Ok::<axum::response::sse::Event, std::convert::Infallible>(
-                                        axum::response::sse::Event::default().data(chunk.to_string())
+                                        axum::response::sse::Event::default()
+                                            .data(chunk.to_string()),
                                     )
                                 }
                             }
                         })
-                        .chain(tokio_stream::once(Ok::<axum::response::sse::Event, std::convert::Infallible>(
-                            axum::response::sse::Event::default().data("[DONE]")
+                        .chain(tokio_stream::once(Ok::<
+                            axum::response::sse::Event,
+                            std::convert::Infallible,
+                        >(
+                            axum::response::sse::Event::default().data("[DONE]"),
                         )));
 
                     return Sse::new(sse_stream)
@@ -293,7 +306,11 @@ async fn chat_completions(
                 }
             }
         } else {
-            match state.chat_manager.chat_with(&provider_type, &req.model, op_llm_messages).await {
+            match state
+                .chat_manager
+                .chat_with(&provider_type, &req.model, op_llm_messages)
+                .await
+            {
                 Ok(chat_resp) => {
                     return ok_response(chat_resp.message.content, req.model, id, created);
                 }

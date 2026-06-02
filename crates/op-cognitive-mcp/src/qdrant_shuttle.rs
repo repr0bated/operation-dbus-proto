@@ -398,22 +398,6 @@ struct VoyageEmbeddingRequest<'a> {
 }
 
 fn read_identity_sled(path: &Path) -> Result<IdentitySled> {
-    let (sled, _) = read_shared_mapping(path)?;
-    Ok(sled)
-}
-
-fn read_plugin_schema(path: &Path) -> Result<PluginSchema> {
-    let (_, schema_bytes) = read_shared_mapping(path)?;
-    parse_plugin_schema(schema_bytes, path)
-}
-
-fn read_identity_sled_and_schema(path: &Path) -> Result<(IdentitySled, PluginSchema)> {
-    let (sled, schema_bytes) = read_shared_mapping(path)?;
-    let schema = parse_plugin_schema(schema_bytes, path)?;
-    Ok((sled, schema))
-}
-
-fn read_shared_mapping(path: &Path) -> Result<(IdentitySled, Vec<u8>)> {
     let file = File::open(path)
         .with_context(|| format!("failed to open SchemaEngine sled at {}", path.display()))?;
     let mmap = unsafe { MmapOptions::new().map(&file) }
@@ -428,28 +412,33 @@ fn read_shared_mapping(path: &Path) -> Result<(IdentitySled, Vec<u8>)> {
 
     let sled_ptr = mmap.as_ptr().cast::<IdentitySled>();
     let sled = unsafe { std::ptr::read_unaligned(sled_ptr) };
-    let schema_bytes = mmap[size_of::<IdentitySled>()..]
-        .iter()
-        .copied()
-        .take_while(|byte| *byte != 0)
-        .collect::<Vec<_>>();
 
-    Ok((sled, schema_bytes))
+    Ok(sled)
+}
+
+fn read_plugin_schema(_path: &Path) -> Result<PluginSchema> {
+    let schema_path = Path::new("/dev/shm/live-schema.json");
+    let schema_bytes = std::fs::read(schema_path)
+        .with_context(|| format!("failed to read live schema from {}", schema_path.display()))?;
+
+    parse_plugin_schema(schema_bytes, schema_path)
+}
+
+fn read_identity_sled_and_schema(path: &Path) -> Result<(IdentitySled, PluginSchema)> {
+    let sled = read_identity_sled(path)?;
+    let schema = read_plugin_schema(path)?;
+    Ok((sled, schema))
 }
 
 fn parse_plugin_schema(schema_bytes: Vec<u8>, path: &Path) -> Result<PluginSchema> {
     ensure!(
         !schema_bytes.is_empty(),
-        "SchemaEngine sled at {} did not contain appended PluginSchema bytes",
+        "Schema file at {} is empty",
         path.display()
     );
 
-    serde_json::from_slice(&schema_bytes).with_context(|| {
-        format!(
-            "failed to parse appended PluginSchema from shared memory at {}",
-            path.display()
-        )
-    })
+    serde_json::from_slice(&schema_bytes)
+        .with_context(|| format!("failed to parse PluginSchema from {}", path.display()))
 }
 
 fn format_trace_id(hashed_footprint: [u8; 32]) -> String {

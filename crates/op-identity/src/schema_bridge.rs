@@ -180,8 +180,11 @@ pub struct IdentitySled {
     pub trace_id: [u8; 16],
     /// Schema version for compatibility.
     pub schema_version: u32,
+    /// Qdrant vector ID for the last reasoning episode (UUID v4, 16 raw bytes).
+    /// Bound to identity: every vectorized episode is traceable to this sled.
+    pub vector_id: [u8; 16],
     /// Reserved for future use (zero-initialized).
-    pub reserved: [u8; 60],
+    pub reserved: [u8; 44],
 }
 
 impl IdentitySled {
@@ -190,6 +193,20 @@ impl IdentitySled {
     /// Hex-encode the trace_id field for header injection.
     pub fn trace_id_hex(&self) -> String {
         hex::encode(self.trace_id)
+    }
+
+    /// Hex-encode the vector_id for Qdrant upsert / lookup.
+    pub fn vector_id_hex(&self) -> String {
+        hex::encode(self.vector_id)
+    }
+
+    /// UUID string representation of vector_id.
+    pub fn vector_id_uuid(&self) -> String {
+        let b = self.vector_id;
+        format!(
+            "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+            b[0],b[1],b[2],b[3],b[4],b[5],b[6],b[7],b[8],b[9],b[10],b[11],b[12],b[13],b[14],b[15]
+        )
     }
 
     /// Absolute Base validity check per the spec:
@@ -547,7 +564,7 @@ pub fn write_sled_from_wg(peer_pubkey: &str) -> std::io::Result<()> {
 
     // Blake3 Strike/Etch: bind pubkey to the canonical schema catalog in shm.
     // The footprint is a direct function of the single source of truth.
-    let schema_catalog_hash = std::fs::read("/dev/shm/plugin_schemas.json")
+    let schema_catalog_hash = std::fs::read("/dev/shm/live-schema.json")
         .map(|bytes| blake3::hash(&bytes))
         .unwrap_or_else(|_| blake3::Hash::from([0u8; 32]));
 
@@ -572,8 +589,9 @@ pub fn write_sled_from_wg(peer_pubkey: &str) -> std::io::Result<()> {
         mutation_index,
         hashed_footprint,
         trace_id,
+        vector_id: [0u8; 16],
         schema_version: 1,
-        reserved: [0u8; 60],
+        reserved: [0u8; 44],
     };
     write_sled(&sled)
 }
@@ -590,7 +608,7 @@ pub fn write_sled_full(
 
     // Blake3 Strike/Etch: bind pubkey to the canonical schema catalog in shm.
     // The footprint is a direct function of the single source of truth.
-    let schema_catalog_hash = std::fs::read("/dev/shm/plugin_schemas.json")
+    let schema_catalog_hash = std::fs::read("/dev/shm/live-schema.json")
         .map(|bytes| blake3::hash(&bytes))
         .unwrap_or_else(|_| blake3::Hash::from([0u8; 32]));
 
@@ -614,8 +632,9 @@ pub fn write_sled_full(
         mutation_index,
         hashed_footprint,
         trace_id,
+        vector_id: [0u8; 16],
         schema_version: 1,
-        reserved: [0u8; 60],
+        reserved: [0u8; 44],
     };
     write_sled(&sled)
 }
@@ -688,14 +707,22 @@ pub fn watch_wireguard_handshakes(iface: &str) {
                 let sled = unsafe { &*ptr };
                 let footprint_hex = hex::encode(sled.hashed_footprint);
                 let trace_id = sled.trace_id_hex();
-                let profile = env::var("NEXTDNS_PROFILE_ID")
-                    .unwrap_or_else(|_| "689ec7".to_string());
-                let uuid = env::var("XRAY_UUID")
-                    .unwrap_or_else(|_| "40813c05-4a7c-4d5b-b027-33912551287f".to_string());
-                let privkey = env::var("XRAY_PRIVATE_KEY")
-                    .unwrap_or_else(|_| "-MULA7gIbk_58CKa4TNHovpYNt192NUkPlQF7f3caWo".to_string());
-                let short =
-                    env::var("XRAY_SHORT_ID").unwrap_or_else(|_| "2a32c53278372687".to_string());
+                let Ok(profile) = env::var("NEXTDNS_PROFILE_ID") else {
+                    tracing::error!("NEXTDNS_PROFILE_ID not set");
+                    continue;
+                };
+                let Ok(uuid) = env::var("XRAY_UUID") else {
+                    tracing::error!("XRAY_UUID not set");
+                    continue;
+                };
+                let Ok(privkey) = env::var("XRAY_PRIVATE_KEY") else {
+                    tracing::error!("XRAY_PRIVATE_KEY not set");
+                    continue;
+                };
+                let Ok(short) = env::var("XRAY_SHORT_ID") else {
+                    tracing::error!("XRAY_SHORT_ID not set");
+                    continue;
+                };
                 if let Err(e) =
                     write_xray_config(&footprint_hex, &trace_id, &profile, &uuid, &privkey, &short)
                 {
@@ -728,14 +755,11 @@ pub fn run_schema_shuttle() -> Result<(), Box<dyn std::error::Error>> {
     env::set_var("GB_WIREGUARD_PUBKEY", &wg_pubkey_hex);
 
     // 4. Write stateless Xray config — NextDNS profile from env, not sled.
-    let nextdns_profile = env::var("NEXTDNS_PROFILE_ID")
-        .unwrap_or_else(|_| "689ec7".to_string());
-    let xray_uuid = env::var("XRAY_UUID")
-        .unwrap_or_else(|_| "40813c05-4a7c-4d5b-b027-33912551287f".to_string());
-    let xray_privkey = env::var("XRAY_PRIVATE_KEY")
-        .unwrap_or_else(|_| "-MULA7gIbk_58CKa4TNHovpYNt192NUkPlQF7f3caWo".to_string());
-    let xray_short_id =
-        env::var("XRAY_SHORT_ID").unwrap_or_else(|_| "2a32c53278372687".to_string());
+    let nextdns_profile =
+        env::var("NEXTDNS_PROFILE_ID").map_err(|_| "NEXTDNS_PROFILE_ID not set")?;
+    let xray_uuid = env::var("XRAY_UUID").map_err(|_| "XRAY_UUID not set")?;
+    let xray_privkey = env::var("XRAY_PRIVATE_KEY").map_err(|_| "XRAY_PRIVATE_KEY not set")?;
+    let xray_short_id = env::var("XRAY_SHORT_ID").map_err(|_| "XRAY_SHORT_ID not set")?;
     write_xray_config(
         &footprint_hex,
         &trace_id,

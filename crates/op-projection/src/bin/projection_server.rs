@@ -207,7 +207,10 @@ async fn main() -> Result<()> {
         register_schema_if_missing(&mut schema_engine, schema)?;
     }
 
-    info!("Registered initial schemas ({} total)", schema_engine.list_schemas().len());
+    info!(
+        "Registered initial schemas ({} total)",
+        schema_engine.list_schemas().len()
+    );
 
     // 2. Initialize Projection Store and Engine
     let store = ProjectionStore::new();

@@ -396,24 +396,25 @@ fn get_gemini_models() -> Vec<GeminiModel> {
     vec![
         // Auto-routing models
         GeminiModel::new("gemini-auto", TextOut, 2_000, 4_000_000, 0),
-        // Latest Flash & Pro models
+        // Current stable Gemini aliases
+        GeminiModel::new("gemini-2.5-pro", TextOut, 360, 4_000_000, 0),
+        GeminiModel::new("gemini-2.5-flash", TextOut, 2_000, 4_000_000, 0),
+        GeminiModel::new("gemini-2.5-flash-lite", TextOut, 4_000, 4_000_000, 0),
         GeminiModel::new("gemini-2.0-flash", TextOut, 2_000, 4_000_000, 0),
         GeminiModel::new("gemini-2.0-flash-lite", TextOut, 4_000, 4_000_000, 0),
-        GeminiModel::new(
-            "gemini-2.0-flash-thinking-exp-1219",
-            TextOut,
-            2_000,
-            16_000_000,
-            0,
-        ),
-        GeminiModel::new("gemini-1.5-pro", TextOut, 360, 4_000_000, 0),
-        GeminiModel::new("gemini-1.5-flash", TextOut, 2_000, 4_000_000, 0),
         // Multi-modal & Images
+        GeminiModel::new("gemini-2.5-flash-image", MultiModalGenerative, 100, 0, 0),
         GeminiModel::new("imagen-3.0-generate-001", MultiModalGenerative, 10, 0, 70),
         // Live API
-        GeminiModel::new("gemini-2.0-flash-live", LiveApi, 0, 4_000_000, 0),
-        // Gemma
-        GeminiModel::new("gemma-2-27b-it", Other, 30, 15_000, 14_400),
+        GeminiModel::new(
+            "gemini-live-2.5-flash-native-audio",
+            LiveApi,
+            0,
+            4_000_000,
+            0,
+        ),
+        // Embeddings
+        GeminiModel::new("gemini-embedding-001", Other, 0, 0, 0),
     ]
 }
 
@@ -581,8 +582,8 @@ impl GeminiClient {
         if self.use_vertex_ai {
             "gemini-auto".to_string()
         } else {
-            // For API key mode, default to gemini-2.0-flash
-            "gemini-2.0-flash".to_string()
+            // For API key mode, default to the current Flash stable alias.
+            "gemini-2.5-flash".to_string()
         }
     }
 

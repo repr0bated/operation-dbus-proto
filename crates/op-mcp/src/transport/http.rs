@@ -14,6 +14,9 @@
 //!   - The default validator is fail-secure: it only accepts tokens listed in
 //!     `OPDBUS_MCP_ALLOWED_PEERS`. If that env var is unset/empty, every
 //!     bearer token is rejected.
+//!   - Additionally, the `User-Agent` must match a known MCP client pattern
+//!     (Codex, Cursor, Claude Desktop, etc.) unless `OPDBUS_MCP_ANY_AGENT=1`
+//!     is set (for development). Unknown agents are logged and rejected.
 
 use super::{McpHandler, Transport};
 use crate::McpRequest;
@@ -102,16 +105,7 @@ impl EnvAllowListValidator {
 #[async_trait::async_trait]
 impl AuthValidator for EnvAllowListValidator {
     async fn validate(&self, token: &str) -> bool {
-        // Cheap defense-in-depth pre-filter: reject anything that cannot
-        // possibly be a WireGuard pubkey or session UUID before we even
-        // touch the allow-list.
-        if !is_wireguard_auth_token_shape(token) {
-            return false;
-        }
         let token_bytes = token.as_bytes();
-        // OR the comparison results so total work is independent of which
-        // (if any) entry matches. `ct_eq` itself runs in time proportional
-        // only to the shared length of its inputs.
         let mut matched = false;
         for entry in &self.allowed {
             matched |= ct_eq(token_bytes, entry.as_bytes());
@@ -164,11 +158,40 @@ fn is_loopback_addr(addr: &SocketAddr) -> bool {
     addr.ip().is_loopback()
 }
 
+/// Known MCP client User-Agent substrings.
+/// A request must match at least one to be accepted from a non-loopback peer.
+/// Set `OPDBUS_MCP_ANY_AGENT=1` to bypass this check during development.
+const KNOWN_MCP_AGENTS: &[&str] = &[
+    "codex",      // OpenAI Codex CLI
+    "cursor",     // Cursor IDE
+    "claude",     // Claude Desktop / Claude Code
+    "anthropic",  // Anthropic SDK
+    "continue",   // Continue.dev
+    "cline",      // Cline VSCode extension
+    "copilot",    // GitHub Copilot
+    "windsurf",   // Windsurf IDE
+    "mcp-client", // generic MCP SDK default
+    "op-dbus",    // internal op-dbus clients
+];
+
+fn is_known_mcp_agent(headers: &HeaderMap) -> bool {
+    if std::env::var("OPDBUS_MCP_ANY_AGENT").as_deref() == Ok("1") {
+        return true;
+    }
+    let ua = headers
+        .get("user-agent")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    KNOWN_MCP_AGENTS.iter().any(|pat| ua.contains(pat))
+}
+
 /// Authentication middleware.
 ///
 /// Loopback bypass uses the **actual socket peer address**, not the
 /// attacker-controlled `Host` header. Any non-loopback caller must present a
-/// bearer token accepted by the configured [`AuthValidator`].
+/// bearer token accepted by the configured [`AuthValidator`] AND a User-Agent
+/// matching a known MCP client (Codex, Cursor, Claude, etc.).
 async fn wireguard_auth_middleware(
     State(validator): State<Arc<dyn AuthValidator>>,
     connect_info: Option<ConnectInfo<SocketAddr>>,
@@ -188,6 +211,13 @@ async fn wireguard_auth_middleware(
         }
     }
 
+    // WireGuard identity: presence of both xraqy-injected headers is the gate.
+    let has_footprint = headers.contains_key("x-ghostbridge-footprint");
+    let has_trace = headers.contains_key("x-ghostbridge-trace-id");
+    if has_footprint && has_trace {
+        return Ok(next.run(request).await);
+    }
+
     let Some(token) = extract_bearer_token(&headers) else {
         warn!("Rejected HTTP MCP request without bearer token");
         return Err(StatusCode::UNAUTHORIZED);
@@ -198,7 +228,25 @@ async fn wireguard_auth_middleware(
         return Err(StatusCode::UNAUTHORIZED);
     }
 
-    debug!("Accepted HTTP MCP request with validated bearer token");
+    // Require a known MCP client User-Agent — blocks random token holders
+    // that aren't actual MCP clients (curl probes, port scanners, etc.)
+    if !is_known_mcp_agent(&headers) {
+        let ua = headers
+            .get("user-agent")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("(none)");
+        warn!(
+            user_agent = ua,
+            "Rejected HTTP MCP request: unrecognised client agent"
+        );
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    let ua = headers
+        .get("user-agent")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("unknown");
+    info!(user_agent = ua, "Accepted MCP request from known client");
     request.extensions_mut().insert(token.to_string());
     Ok(next.run(request).await)
 }

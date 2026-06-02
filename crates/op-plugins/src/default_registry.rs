@@ -3,19 +3,20 @@
 //! This module defines which plugins are loaded by default when the system starts.
 //! Plugins can be enabled/disabled via configuration.
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use op_state_store::StateStore;
 use simd_json::prelude::*;
 use std::sync::Arc;
 
 use crate::state_plugins::{
     AdcPlugin, AgentConfigPlugin, CognitiveMcpPlugin, CompactMcpPlugin, ConfigPlugin,
-    EndpointPlugin, GcloudAdcPlugin, HardwarePlugin, IncusPlugin, KeypairPlugin, MailServerPlugin,
-    McpStatePlugin, NetStatePlugin, OpenFlowPlugin, OvsBridgePlugin, PrivacyRouterPlugin,
-    PrivacyRoutesPlugin, ProcfsPlugin, ProxmoxPlugin, ProxyServerPlugin, RtnetlinkPlugin,
-    S6StatePlugin, ServicePlugin, SessDeclPlugin, SoftwarePlugin, UsersPlugin, WebUiPlugin,
-    WireGuardPlugin,
+    CtlPlaneChatbotPlugin, EndpointPlugin, GcloudAdcPlugin, HardwarePlugin, IncusPlugin,
+    KeypairPlugin, MailServerPlugin, McpStatePlugin, NetStatePlugin, OpenFlowPlugin,
+    OvsBridgePlugin, PrivacyRouterPlugin, PrivacyRoutesPlugin, ProcfsPlugin, ProxmoxPlugin,
+    ProxyServerPlugin, RtnetlinkPlugin, S6StatePlugin, ServicePlugin, SessDeclPlugin,
+    SoftwarePlugin, UnixSocketPlugin, UsersPlugin, WebUiPlugin, WireGuardPlugin, ZeroclawPlugin,
 };
+use crate::AutoPlugin;
 
 /// Default plugin loader configuration
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -40,6 +41,7 @@ fn default_auto_load() -> Vec<String> {
 
     if wg_only {
         return vec![
+            "zeroclaw".to_string(),
             "config".to_string(),
             "service".to_string(),
             "s6".to_string(),
@@ -53,12 +55,14 @@ fn default_auto_load() -> Vec<String> {
 
     vec![
         "mcp".to_string(),
+        "zeroclaw".to_string(),
         "cognitive_mcp".to_string(),
         "compact_mcp".to_string(),
         "config".to_string(),
         "s6".to_string(),
         "incus".to_string(),
         "mail_server".to_string(),
+        "unix_socket".to_string(),
         "net".to_string(),
         "openflow".to_string(),
         "ovsdb_bridge".to_string(),
@@ -106,6 +110,51 @@ impl DefaultPluginRegistry {
         }
     }
 
+    /// Resolve user/request-facing plugin references into canonical loader names.
+    ///
+    /// Supports direct names, aliases, and projection paths like
+    /// `/opdbus/v1/plugins/<plugin>/...`.
+    pub fn resolve_requested_plugin_name(requested: &str) -> Result<String> {
+        let trimmed = requested.trim();
+        if trimmed.is_empty() {
+            return Err(anyhow!("Plugin identifier cannot be empty"));
+        }
+
+        let from_path = Self::extract_plugin_name_from_projection_path(trimmed).unwrap_or(trimmed);
+        let normalized = from_path
+            .trim()
+            .trim_matches('/')
+            .replace('-', "_")
+            .to_lowercase();
+
+        let canonical = match normalized.as_str() {
+            "network" => "net",
+            "systemd" | "dinit" | "service_s6" => "s6",
+            "web_ui" | "webui" => "web_ui",
+            "mail" | "mailserver" => "mail_server",
+            "privacyroutes" => "privacy_routes",
+            "privacyrouter" => "privacy_router",
+            "ovsbridge" => "ovsdb_bridge",
+            "rtnet" => "rtnetlink",
+            "sessdecl" => "sess_decl",
+            other => other,
+        };
+
+        Ok(canonical.to_string())
+    }
+
+    fn extract_plugin_name_from_projection_path(requested: &str) -> Option<&str> {
+        const PREFIXES: [&str; 2] = ["/opdbus/v1/plugins/", "/org/opdbus/v1/plugins/"];
+
+        for prefix in PREFIXES {
+            if let Some(rest) = requested.strip_prefix(prefix) {
+                return rest.split('/').find(|segment| !segment.is_empty());
+            }
+        }
+
+        None
+    }
+
     /// Load all auto-load plugins
     pub async fn load_default_plugins(&self) -> Result<Vec<Arc<dyn op_state::StatePlugin>>> {
         let mut plugins: Vec<Arc<dyn op_state::StatePlugin>> = Vec::new();
@@ -135,13 +184,15 @@ impl DefaultPluginRegistry {
     }
 
     /// Load a specific plugin by name
-    async fn load_plugin(&self, name: &str) -> Result<Arc<dyn op_state::StatePlugin>> {
-        let plugin: Arc<dyn op_state::StatePlugin> = match name {
+    pub async fn load_plugin(&self, name: &str) -> Result<Arc<dyn op_state::StatePlugin>> {
+        let resolved_name = Self::resolve_requested_plugin_name(name)?;
+        let plugin: Arc<dyn op_state::StatePlugin> = match resolved_name.as_str() {
             "mcp" => {
                 let config_path =
                     self.get_plugin_config_path("mcp", "/etc/op-dbus/mcp-config.json");
                 Arc::new(McpStatePlugin::new(self.state_store.clone(), config_path))
             }
+            "zeroclaw" => Arc::new(ZeroclawPlugin::new()),
             "config" => {
                 let config_path =
                     self.get_plugin_config_path("config", "/etc/op-dbus/config-store.json");
@@ -149,10 +200,11 @@ impl DefaultPluginRegistry {
             }
             "cognitive_mcp" => Arc::new(CognitiveMcpPlugin::new()),
             "compact_mcp" => Arc::new(CompactMcpPlugin::new()),
-            "s6" | "service_s6" => Arc::new(S6StatePlugin::new()),
-            "systemd" | "dinit" => Arc::new(S6StatePlugin::new()), // compatibility aliases
+            "ctl_plane_chatbot" => Arc::new(CtlPlaneChatbotPlugin::new()),
+            "s6" => Arc::new(S6StatePlugin::new()),
             "incus" => Arc::new(IncusPlugin::new()),
             "mail_server" => Arc::new(MailServerPlugin::new()),
+            "unix_socket" => Arc::new(UnixSocketPlugin::new()),
             "net" => Arc::new(NetStatePlugin::new()),
             "openflow" => Arc::new(OpenFlowPlugin::new()),
             "privacy_router" => {
@@ -180,7 +232,14 @@ impl DefaultPluginRegistry {
             "proxy_server" => Arc::new(ProxyServerPlugin::new()),
             "web_ui" => Arc::new(WebUiPlugin::new()),
             _ => {
-                return Err(anyhow::anyhow!("Unknown plugin: {}", name));
+                let requested_info = format!("requested='{}' resolved='{}'", name, resolved_name);
+                tracing::warn!(
+                    "Unknown plugin '{}'; auto-creating review-required draft from requested info",
+                    name
+                );
+                Arc::new(
+                    AutoPlugin::create_from_requested_info(&resolved_name, &requested_info).await,
+                )
             }
         };
 
@@ -202,6 +261,10 @@ impl DefaultPluginRegistry {
     pub fn available_plugins() -> Vec<&'static str> {
         vec![
             "mcp",
+            "zeroclaw",
+            "cognitive_mcp",
+            "compact_mcp",
+            "ctl_plane_chatbot",
             "config",
             "s6",
             "incus",
@@ -327,5 +390,51 @@ mod tests {
         assert!(registry.is_auto_load("s6"));
         assert!(!registry.is_auto_load("mcp"));
         assert!(!registry.is_auto_load("config"));
+    }
+
+    #[test]
+    fn test_resolve_requested_plugin_name() {
+        assert_eq!(
+            DefaultPluginRegistry::resolve_requested_plugin_name(
+                "/opdbus/v1/plugins/procfs/memory"
+            )
+            .unwrap(),
+            "procfs"
+        );
+        assert_eq!(
+            DefaultPluginRegistry::resolve_requested_plugin_name("systemd").unwrap(),
+            "s6"
+        );
+        assert_eq!(
+            DefaultPluginRegistry::resolve_requested_plugin_name("web-ui").unwrap(),
+            "web_ui"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_load_plugin_from_projection_path() {
+        let store = Arc::new(SqliteStore::new(":memory:").await.unwrap());
+        let registry = DefaultPluginRegistry::new(store);
+
+        let procfs = registry
+            .load_plugin("/opdbus/v1/plugins/procfs/memory")
+            .await
+            .unwrap();
+        assert_eq!(procfs.name(), "procfs");
+    }
+
+    #[tokio::test]
+    async fn test_unknown_plugin_auto_creates_review_draft() {
+        let store = Arc::new(SqliteStore::new(":memory:").await.unwrap());
+        let registry = DefaultPluginRegistry::new(store);
+
+        let plugin = registry.load_plugin("new_future_plugin").await.unwrap();
+        let state = plugin.query_current_state().await.unwrap();
+        assert_eq!(plugin.name(), "new_future_plugin");
+        assert_eq!(
+            state["pending_human_review"].as_bool(),
+            Some(true),
+            "unknown plugin drafts must require human review"
+        );
     }
 }

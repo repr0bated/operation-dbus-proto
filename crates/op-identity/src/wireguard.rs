@@ -12,7 +12,8 @@ pub struct WireGuardIdentity {
 
 impl WireGuardIdentity {
     pub fn new() -> Self {
-        Self::with_interface("wg0")
+        let iface = std::env::var("WG_INTERFACE").unwrap_or_else(|_| "netmaker".to_string());
+        Self::with_interface(&iface)
     }
 
     pub fn with_interface(interface: &str) -> Self {
@@ -29,35 +30,7 @@ impl WireGuardIdentity {
             return Ok(pubkey);
         }
 
-        // Try to read from wg interface
-        let output = Command::new("wg")
-            .args(["show", &self.interface, "public-key"])
-            .output();
-
-        match output {
-            Ok(out) if out.status.success() => {
-                let pubkey = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                if !pubkey.is_empty() {
-                    debug!("Got pubkey from wg interface {}", self.interface);
-                    return Ok(pubkey);
-                }
-            }
-            Ok(out) => {
-                let stderr = String::from_utf8_lossy(&out.stderr);
-                debug!("wg show failed: {}", stderr);
-            }
-            Err(e) => {
-                debug!("Failed to run wg command: {}", e);
-            }
-        }
-
-        // Fallback: generate a deterministic ID from hostname
-        let hostname = hostname::get()
-            .map(|h| h.to_string_lossy().to_string())
-            .unwrap_or_else(|_| "unknown".to_string());
-
-        warn!("Could not get WireGuard pubkey, using hostname-based ID");
-        Ok(format!("local:{}", hostname))
+        anyhow::bail!("WG_PUBKEY not set in environment. Identity decoupling requires explicit pre-assignment.");
     }
 
     /// Get peer's pubkey from their IP address

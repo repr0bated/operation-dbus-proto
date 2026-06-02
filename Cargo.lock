@@ -4004,6 +4004,7 @@ dependencies = [
  "op-core",
  "op-http",
  "regex",
+ "reqwest 0.11.27",
  "serde",
  "serde_yaml",
  "shell-words",
@@ -4110,6 +4111,7 @@ dependencies = [
  "op-core",
  "op-execution-tracker",
  "op-grpc-bridge",
+ "op-identity",
  "op-introspection",
  "op-llm",
  "op-mcp",
@@ -4422,6 +4424,8 @@ dependencies = [
  "op-identity",
  "op-jsonrpc",
  "op-network",
+ "op-plugins",
+ "op-state",
  "op-state-store",
  "prost 0.13.5",
  "prost-types 0.13.5",
@@ -4640,36 +4644,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "op-mcp-proxy"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "axum",
- "chrono",
- "dirs 5.0.1",
- "futures",
- "hex",
- "hostname",
- "memmap2",
- "op-cache",
- "op-identity",
- "op-llm",
- "prost 0.13.5",
- "reqwest 0.12.28",
- "rusqlite",
- "serde",
- "serde_json",
- "simd-json",
- "tokio",
- "tokio-stream",
- "tonic",
- "tonic-build 0.12.3",
- "tracing",
- "tracing-subscriber",
- "uuid",
-]
-
-[[package]]
 name = "op-ml"
 version = "1.0.0"
 dependencies = [
@@ -4730,6 +4704,7 @@ dependencies = [
  "dirs 5.0.1",
  "log",
  "md5",
+ "op-agents",
  "op-blockchain",
  "op-core",
  "op-dbus-model",
@@ -4920,6 +4895,7 @@ dependencies = [
  "axum",
  "axum-embed",
  "base64 0.22.1",
+ "blake3",
  "chrono",
  "futures",
  "gethostname",

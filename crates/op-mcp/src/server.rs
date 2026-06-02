@@ -728,9 +728,7 @@ impl McpServer {
     /// Check if client should use compact mode
     fn should_use_compact_mode(client_name: &str) -> bool {
         let name_lower = client_name.to_lowercase();
-        name_lower.contains("gemini")
-            || name_lower.contains("claude")
-            || name_lower.contains("cursor")
+        name_lower.contains("gemini") || name_lower.contains("cursor")
     }
 
     /// Get tool executor reference

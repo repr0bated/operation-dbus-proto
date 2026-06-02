@@ -1,21 +1,35 @@
 import { useState, useEffect } from "react";
 
+type ThemeMode = "dark" | "light" | "system";
+type ResolvedTheme = "dark" | "light";
+
+function getSystemTheme(): ResolvedTheme {
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+function resolveTheme(mode: ThemeMode): ResolvedTheme {
+  return mode === "system" ? getSystemTheme() : mode;
+}
+
 export function useTheme() {
-  const [theme, setTheme] = useState<"light" | "dark">(() => {
-    if (typeof window !== "undefined") {
-      return (localStorage.getItem("theme") as "light" | "dark") || "dark";
-    }
-    return "dark";
+  const [mode, setMode] = useState<ThemeMode>(() => {
+    const stored = localStorage.getItem("dbus-theme") as ThemeMode | null;
+    return stored || "dark";
   });
+
+  const resolved = resolveTheme(mode);
 
   useEffect(() => {
     const root = document.documentElement;
-    root.classList.remove("light", "dark");
-    root.classList.add(theme);
-    localStorage.setItem("theme", theme);
-  }, [theme]);
+    root.classList.remove("dark", "light");
+    root.classList.add(resolved);
+    localStorage.setItem("dbus-theme", mode);
+  }, [mode, resolved]);
 
-  const toggleTheme = () => setTheme((t) => (t === "dark" ? "light" : "dark"));
+  const setTheme = (next: ThemeMode) => setMode(next);
+  const toggleTheme = () => {
+    setMode((m) => (m === "dark" ? "light" : m === "light" ? "system" : "dark"));
+  };
 
-  return { theme, setTheme, toggleTheme };
+  return { theme: mode, resolved, setTheme, toggleTheme };
 }

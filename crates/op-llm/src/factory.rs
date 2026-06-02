@@ -1,15 +1,14 @@
 //! Factory LLM Provider
 //!
-//! Connects to the Factory AI local proxy via OpenAI-compatible
-//! `/v1/chat/completions` endpoint. Reads from `~/.factory/settings.local.json`
-//! or environment variables.
+//! Connects to Factory AI via an explicitly configured OpenAI-compatible
+//! `/v1/chat/completions` endpoint.
 //!
 //! ## Configuration
 //!
 //! ```bash
-//! FACTORY_BASE_URL=http://127.0.0.1:11435/v1    # default
-//! FACTORY_API_KEY=local-codex-proxy              # default
-//! FACTORY_DEFAULT_MODEL=local-oauth-proxy        # default
+//! FACTORY_BASE_URL=http://127.0.0.1:<factory-port>/v1
+//! FACTORY_API_KEY=<token>
+//! FACTORY_DEFAULT_MODEL=<model>
 //! ```
 
 use anyhow::{Context, Result};
@@ -25,9 +24,8 @@ use crate::provider::{
     ToolCallInfo,
 };
 
-const DEFAULT_BASE_URL: &str = "http://127.0.0.1:11435/v1";
-const DEFAULT_API_KEY: &str = "local-codex-proxy";
-const DEFAULT_MODEL: &str = "local-oauth-proxy";
+const DEFAULT_API_KEY: &str = "";
+const DEFAULT_MODEL: &str = "factory-default";
 
 pub struct FactoryProvider {
     client: Client,
@@ -37,7 +35,11 @@ pub struct FactoryProvider {
 }
 
 impl FactoryProvider {
-    pub fn new(base_url: Option<String>, api_key: Option<String>, default_model: Option<String>) -> Self {
+    pub fn new(
+        base_url: Option<String>,
+        api_key: Option<String>,
+        default_model: Option<String>,
+    ) -> Self {
         let client = Client::builder()
             .timeout(Duration::from_secs(180))
             .build()
@@ -46,7 +48,7 @@ impl FactoryProvider {
         Self {
             client,
             base_url: base_url
-                .unwrap_or_else(|| DEFAULT_BASE_URL.to_string())
+                .unwrap_or_default()
                 .trim_end_matches('/')
                 .to_string(),
             api_key: api_key.unwrap_or_else(|| DEFAULT_API_KEY.to_string()),
@@ -55,10 +57,13 @@ impl FactoryProvider {
     }
 
     pub fn from_env() -> Result<Self> {
-        let base_url = std::env::var("FACTORY_BASE_URL").ok();
+        let base_url = std::env::var("FACTORY_BASE_URL")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| anyhow::anyhow!("FACTORY_BASE_URL is not configured"))?;
         let api_key = std::env::var("FACTORY_API_KEY").ok();
         let default_model = std::env::var("FACTORY_DEFAULT_MODEL").ok();
-        Ok(Self::new(base_url, api_key, default_model))
+        Ok(Self::new(Some(base_url), api_key, default_model))
     }
 
     fn models_url(&self) -> String {
@@ -87,7 +92,7 @@ impl FactoryProvider {
         ModelInfo {
             id: self.default_model.clone(),
             name: self.default_model.clone(),
-            description: Some("Factory AI via local proxy".to_string()),
+            description: Some("Factory AI via configured endpoint".to_string()),
             parameters: None,
             available: true,
             tags: vec!["factory".to_string(), "default".to_string()],
@@ -202,11 +207,7 @@ impl LlmProvider for FactoryProvider {
         self.chat_with_request(model, request).await
     }
 
-    async fn chat_with_request(
-        &self,
-        model: &str,
-        request: ChatRequest,
-    ) -> Result<ChatResponse> {
+    async fn chat_with_request(&self, model: &str, request: ChatRequest) -> Result<ChatResponse> {
         let model = self.resolve_model(model);
         let url = self.chat_url();
 
@@ -301,8 +302,14 @@ impl LlmProvider for FactoryProvider {
         }
 
         let mut response_text_mut = response_text;
-        let response_json: Value = unsafe { simd_json::from_str(&mut response_text_mut) }
-            .map_err(|e| anyhow::anyhow!("Failed to parse Factory response: {}. Body: {}", e, response_text_mut))?;
+        let response_json: Value =
+            unsafe { simd_json::from_str(&mut response_text_mut) }.map_err(|e| {
+                anyhow::anyhow!(
+                    "Failed to parse Factory response: {}. Body: {}",
+                    e,
+                    response_text_mut
+                )
+            })?;
 
         let choice = response_json
             .get("choices")
@@ -338,7 +345,8 @@ impl LlmProvider for FactoryProvider {
                         let name = function.get("name")?.as_str()?.to_string();
                         let args_str = function.get("arguments")?.as_str()?;
                         let mut args_mut = args_str.to_string();
-                        let arguments: Value = unsafe { simd_json::from_str(&mut args_mut) }.ok()?;
+                        let arguments: Value =
+                            unsafe { simd_json::from_str(&mut args_mut) }.ok()?;
 
                         Some(ToolCallInfo {
                             id,
@@ -401,12 +409,12 @@ mod tests {
     #[test]
     fn parses_model_listing_response() {
         let models = FactoryProvider::parse_models_response(
-            r#"{"data":[{"id":"local-oauth-proxy","owned_by":"factory","created":1710000000}]}"#,
+            r#"{"data":[{"id":"factory-default","owned_by":"factory","created":1710000000}]}"#,
         )
         .expect("model response should parse");
 
         assert_eq!(models.len(), 1);
-        assert_eq!(models[0].id, "local-oauth-proxy");
+        assert_eq!(models[0].id, "factory-default");
         assert!(models[0].tags.iter().any(|tag| tag == "factory"));
     }
 

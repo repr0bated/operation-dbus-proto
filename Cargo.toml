@@ -24,7 +24,6 @@ members = [
     "crates/op-deployment",
     "crates/op-mcp",
     "crates/op-mcp-aggregator",
-    "crates/op-mcp-proxy",
     "crates/op-identity",
     "crates/op-execution-tracker",
     "crates/op-dynamic-loader",

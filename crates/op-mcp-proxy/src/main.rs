@@ -107,7 +107,13 @@ async fn main() -> anyhow::Result<()> {
     // HTTP-only mode: spawn the HTTP server (Vertex AI or CloudAI) and wait for signal.
     if std::env::var("HTTP_ONLY").is_ok() {
         if let Ok(http_addr) = std::env::var("HTTP_SERVER_ADDR") {
-            if let Err(e) = http_server::run(direct_llm.map(|l| Arc::clone(&l)), Arc::clone(&chat_manager), &http_addr).await {
+            if let Err(e) = http_server::run(
+                direct_llm.map(|l| Arc::clone(&l)),
+                Arc::clone(&chat_manager),
+                &http_addr,
+            )
+            .await
+            {
                 tracing::error!("HTTP server error: {}", e);
             }
         } else {

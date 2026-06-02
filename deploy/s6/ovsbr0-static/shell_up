@@ -10,9 +10,12 @@ ip addr replace "${MGMT_ADDR}/${MGMT_PREFIX}" dev "$BR" 2>/dev/null \
     || ip addr add "${MGMT_ADDR}/${MGMT_PREFIX}" dev "$BR" 2>/dev/null \
     || true
 
-# Set static IP for the gRPC bridge
-ip addr add 10.200.0.2/30 dev grpc-bridge || true
-ip link set grpc-bridge up
+# Set static IP for the gRPC veth uplink
+ip addr add 10.200.0.2/30 dev grpc-uplink || true
+ip link set grpc-uplink up
+
+# Disable GRO/TSO/GSO on grpc-uplink — OVS netdev datapath can't handle jumbo segments
+ethtool -K grpc-uplink gro off tso off gso off 2>/dev/null || true
 
 # Set default gateway via the bridge if needed
 ip route replace "$GW" dev "$BR" scope link 2>/dev/null || true

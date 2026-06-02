@@ -164,10 +164,7 @@ impl PluginRegistry {
     }
 
     fn plugin_dbus_path(name: &str) -> String {
-        format!(
-            "/org/opdbus/v1/plugins/{}",
-            Self::sanitize_path_segment(name)
-        )
+        format!("/opdbus/v1/plugins/{}", Self::sanitize_path_segment(name))
     }
 
     fn sanitize_path_segment(segment: &str) -> String {

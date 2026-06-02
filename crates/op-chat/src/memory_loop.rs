@@ -44,10 +44,10 @@ impl MemoryCategory {
 /// Four-layer memory injection result
 #[derive(Debug, Clone)]
 pub struct SessionMemory {
-    pub system_block: String,   // system-wide global memory
-    pub soul_block: String,     // chatbot soul (chatbot is a user entity)
-    pub domain_block: String,   // user container categorized memories
-    pub index_block: String,    // MEMORY_INDEX orientation
+    pub system_block: String, // system-wide global memory
+    pub soul_block: String,   // chatbot soul (chatbot is a user entity)
+    pub domain_block: String, // user container categorized memories
+    pub index_block: String,  // MEMORY_INDEX orientation
 }
 
 impl SessionMemory {
@@ -109,8 +109,8 @@ impl MemoryLoop {
     /// 3. User container memory — assigned at registration, soul + domain namespace
     pub async fn inject_session_memory(
         &self,
-        chatbot_soul_id: &str,       // e.g. "chatbot" or session-scoped id
-        user_container_id: &str,    // user's assigned container (work/home/...)
+        chatbot_soul_id: &str,   // e.g. "chatbot" or session-scoped id
+        user_container_id: &str, // user's assigned container (work/home/...)
         opening_message: &str,
     ) -> Result<SessionMemory> {
         let user_ns = Self::namespace_for(user_container_id);
@@ -215,11 +215,7 @@ impl MemoryLoop {
     fn format_entries(entries: &[MemoryEntry]) -> String {
         let mut lines = Vec::new();
         for e in entries.iter().filter(|e| e.key != "MEMORY_INDEX") {
-            let cat = e
-                .tags
-                .first()
-                .map(|t| t.as_str())
-                .unwrap_or("memory");
+            let cat = e.tags.first().map(|t| t.as_str()).unwrap_or("memory");
             let preview = match &e.value {
                 Value::String(s) => s.clone(),
                 other => other.to_string(),
@@ -306,7 +302,13 @@ impl MemoryLoop {
         // Write to CozoDB (durable)
         for (key, cat, value) in &new_memories {
             if let Err(e) = cozo
-                .store_entry(&ns, key, value.clone(), vec![cat.as_str().to_string()], None)
+                .store_entry(
+                    &ns,
+                    key,
+                    value.clone(),
+                    vec![cat.as_str().to_string()],
+                    None,
+                )
                 .await
             {
                 warn!("Failed to store memory entry {}: {}", key, e);
@@ -341,11 +343,9 @@ impl MemoryLoop {
         let lower = text.to_lowercase();
         if lower.contains("project") || lower.contains("goal") || lower.contains("decided") {
             MemoryCategory::Project
-        } else if lower.contains("prefer") || lower.contains("always") || lower.contains("never")
-        {
+        } else if lower.contains("prefer") || lower.contains("always") || lower.contains("never") {
             MemoryCategory::User
-        } else if lower.contains("correct") || lower.contains("wrong") || lower.contains("should")
-        {
+        } else if lower.contains("correct") || lower.contains("wrong") || lower.contains("should") {
             MemoryCategory::Feedback
         } else {
             MemoryCategory::Reference
@@ -356,9 +356,7 @@ impl MemoryLoop {
         // Generate a stable key from first few words
         let words: Vec<&str> = text.split_whitespace().take(4).collect();
         let slug = words.join("-").to_lowercase();
-        let slug = Regex::new(r"[^a-z0-9-]")
-            .unwrap()
-            .replace_all(&slug, "");
+        let slug = Regex::new(r"[^a-z0-9-]").unwrap().replace_all(&slug, "");
         format!("{}-{}", slug, Utc::now().timestamp())
     }
 
@@ -405,10 +403,15 @@ impl MemoryLoop {
         }
 
         let index_value = json!(lines.join("\n"));
-        cozo
-            .store_entry(namespace, "MEMORY_INDEX", index_value, vec!["index".to_string()], None)
-            .await
-            .context("update MEMORY_INDEX")?;
+        cozo.store_entry(
+            namespace,
+            "MEMORY_INDEX",
+            index_value,
+            vec!["index".to_string()],
+            None,
+        )
+        .await
+        .context("update MEMORY_INDEX")?;
 
         Ok(())
     }
@@ -423,7 +426,10 @@ pub fn inject_memory_into_messages(messages: &mut Vec<ChatMessage>, memory: &Ses
         // Insert as first system message (after any existing system messages)
         let sys_msg = ChatMessage::system(prompt);
         // Find position after existing system messages
-        let pos = messages.iter().position(|m| m.role != "system").unwrap_or(0);
+        let pos = messages
+            .iter()
+            .position(|m| m.role != "system")
+            .unwrap_or(0);
         messages.insert(pos, sys_msg);
     }
 }

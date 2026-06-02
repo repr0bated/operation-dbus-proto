@@ -18,10 +18,13 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, info, warn};
 
 use crate::forced_tool_pipeline::ForcedToolPipeline;
-use crate::memory_loop::{MemoryLoop, SessionMemory, CHATBOT_CONTAINER_ID};
+use crate::memory_loop::{MemoryLoop, CHATBOT_CONTAINER_ID};
 use crate::session::SessionManager;
 use crate::system_prompt::generate_system_prompt;
 use crate::tool_executor::TrackedToolExecutor;
+
+const DEFAULT_MAX_PROMPT_TOKENS: usize = 200_000;
+const DEFAULT_MAX_MESSAGE_CHARS: usize = 80_000;
 
 /// Configuration for ChatActor
 #[derive(Debug, Clone)]
@@ -150,6 +153,103 @@ impl RpcResponse {
         self.execution_id = Some(id.to_string());
         self
     }
+}
+
+fn prompt_token_budget() -> usize {
+    std::env::var("OP_CHAT_MAX_PROMPT_TOKENS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 1_000)
+        .unwrap_or(DEFAULT_MAX_PROMPT_TOKENS)
+}
+
+fn max_message_chars() -> usize {
+    std::env::var("OP_CHAT_MAX_MESSAGE_CHARS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 1_000)
+        .unwrap_or(DEFAULT_MAX_MESSAGE_CHARS)
+}
+
+fn estimate_message_tokens(message: &LlmChatMessage) -> usize {
+    (message.role.len() + message.content.len() + 3) / 4 + 8
+}
+
+fn truncate_content(content: &str, max_chars: usize) -> String {
+    let char_count = content.chars().count();
+    if char_count <= max_chars {
+        return content.to_string();
+    }
+
+    let keep_each_side = max_chars.saturating_sub(80) / 2;
+    let head: String = content.chars().take(keep_each_side).collect();
+    let tail: String = content
+        .chars()
+        .rev()
+        .take(keep_each_side)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+
+    format!(
+        "{}\n\n[truncated {} chars from this message]\n\n{}",
+        head,
+        char_count.saturating_sub(keep_each_side * 2),
+        tail
+    )
+}
+
+fn core_message_to_llm(message: &op_core::ChatMessage, max_chars: usize) -> LlmChatMessage {
+    let role = match message.role {
+        op_core::ChatRole::User => "user",
+        op_core::ChatRole::Assistant => "assistant",
+        op_core::ChatRole::System => "system",
+        op_core::ChatRole::Tool => "tool",
+    };
+
+    LlmChatMessage {
+        role: role.to_string(),
+        content: truncate_content(&message.content, max_chars),
+        tool_calls: None,
+        tool_call_id: None,
+    }
+}
+
+fn push_recent_history_with_budget(
+    messages: &mut Vec<LlmChatMessage>,
+    history: &[op_core::ChatMessage],
+    current_user_message: &str,
+    token_budget: usize,
+    max_chars: usize,
+) -> usize {
+    let current_message = LlmChatMessage::user(truncate_content(current_user_message, max_chars));
+    let current_tokens = estimate_message_tokens(&current_message);
+    let mut used_tokens: usize = messages.iter().map(estimate_message_tokens).sum();
+    let mut selected = Vec::new();
+
+    for hist_msg in history.iter().rev() {
+        let llm_msg = core_message_to_llm(hist_msg, max_chars);
+        let msg_tokens = estimate_message_tokens(&llm_msg);
+        if used_tokens + current_tokens + msg_tokens > token_budget {
+            break;
+        }
+        used_tokens += msg_tokens;
+        selected.push(llm_msg);
+    }
+
+    let omitted = history.len().saturating_sub(selected.len());
+    if omitted > 0 {
+        messages.push(LlmChatMessage::system(format!(
+            "{} older chat messages omitted to keep the proxy prompt under {} estimated tokens.",
+            omitted, token_budget
+        )));
+    }
+
+    selected.reverse();
+    messages.extend(selected);
+    messages.push(current_message);
+    omitted
 }
 
 /// Message sent to the actor
@@ -327,6 +427,11 @@ impl ChatActor {
         Ok((actor, handle))
     }
 
+    /// Attach a memory loop — enables 4-layer session memory injection + post-turn persistence
+    pub fn set_memory_loop(&mut self, loop_: Arc<MemoryLoop>) {
+        self.memory_loop = Some(loop_);
+    }
+
     /// Get tool registry for external registration
     pub fn tool_registry(&self) -> &Arc<ToolRegistry> {
         &self.tool_registry
@@ -374,7 +479,10 @@ impl ChatActor {
                 session_id,
                 model,
                 container_id,
-            } => self.handle_chat(&message, &session_id, model, container_id).await,
+            } => {
+                self.handle_chat(&message, &session_id, model, container_id)
+                    .await
+            }
 
             RpcRequest::GetHistory { limit } => self.handle_get_history(limit.unwrap_or(50)).await,
 
@@ -478,27 +586,28 @@ impl ChatActor {
         let session = self.session_manager.get_or_create(session_id).await;
 
         // Inject session memory if container_id present and memory_loop configured
-        let session_memory = if let (Some(c_id), Some(mem_loop)) = (&container_id, &self.memory_loop) {
-            match mem_loop
-                .inject_session_memory(CHATBOT_CONTAINER_ID, c_id, message)
-                .await
-            {
-                Ok(mem) => {
-                    info!(session_id = %session_id, container_id = %c_id, "Memory injected");
-                    Some(mem)
+        let session_memory =
+            if let (Some(c_id), Some(mem_loop)) = (&container_id, &self.memory_loop) {
+                match mem_loop
+                    .inject_session_memory(CHATBOT_CONTAINER_ID, c_id, message)
+                    .await
+                {
+                    Ok(mem) => {
+                        info!(session_id = %session_id, container_id = %c_id, "Memory injected");
+                        Some(mem)
+                    }
+                    Err(e) => {
+                        warn!(
+                            session_id = %session_id,
+                            error = %e,
+                            "Failed to inject session memory"
+                        );
+                        None
+                    }
                 }
-                Err(e) => {
-                    warn!(
-                        session_id = %session_id,
-                        error = %e,
-                        "Failed to inject session memory"
-                    );
-                    None
-                }
-            }
-        } else {
-            None
-        };
+            } else {
+                None
+            };
 
         // Build LLM message history
         let mut messages = Vec::new();
@@ -507,24 +616,27 @@ impl ChatActor {
         let system_msg = generate_system_prompt(session_memory.as_ref()).await;
         messages.push(system_msg);
 
-        // 3. Convert session history (op_core::ChatMessage -> op_llm::ChatMessage)
-        for hist_msg in &session.messages {
-            let role = match hist_msg.role {
-                op_core::ChatRole::User => "user",
-                op_core::ChatRole::Assistant => "assistant",
-                op_core::ChatRole::System => "system",
-                op_core::ChatRole::Tool => "tool",
-            };
-            messages.push(LlmChatMessage {
-                role: role.to_string(),
-                content: hist_msg.content.clone(),
-                tool_calls: None,
-                tool_call_id: None,
-            });
+        // 3. Add recent session history plus the new user message within a
+        // bounded prompt budget. The full session remains persisted, but the
+        // proxy request must not grow without limit.
+        let token_budget = prompt_token_budget();
+        let max_chars = max_message_chars();
+        let omitted_messages = push_recent_history_with_budget(
+            &mut messages,
+            &session.messages,
+            message,
+            token_budget,
+            max_chars,
+        );
+        if omitted_messages > 0 {
+            warn!(
+                session_id = %session_id,
+                omitted_messages,
+                token_budget,
+                max_message_chars = max_chars,
+                "Trimmed chat history before sending to LLM proxy"
+            );
         }
-
-        // 4. Add new user message
-        messages.push(LlmChatMessage::user(message));
 
         // Store user message in session
         self.session_manager
@@ -553,7 +665,9 @@ impl ChatActor {
                     .await;
 
                 // Spawn non-blocking post-turn memory task
-                if let (Some(c_id), Some(mem_loop)) = (container_id.clone(), self.memory_loop.clone()) {
+                if let (Some(c_id), Some(mem_loop)) =
+                    (container_id.clone(), self.memory_loop.clone())
+                {
                     mem_loop.spawn_post_turn_memory_task(
                         c_id,
                         message.to_string(),

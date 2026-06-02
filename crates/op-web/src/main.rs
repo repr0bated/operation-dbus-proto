@@ -27,13 +27,20 @@ async fn main() -> anyhow::Result<()> {
     info!("Version: {}", env!("CARGO_PKG_VERSION"));
 
     // Absolute Base: without a valid schema catalog in shared memory, the entity does not exist.
-    const SHM_SCHEMA_PATH: &str = "/dev/shm/plugin_schemas.json";
+    const SHM_SCHEMA_PATH: &str = "/dev/shm/live-schema.json";
     match std::fs::metadata(SHM_SCHEMA_PATH) {
         Ok(meta) if meta.len() > 2 => {
-            info!(path = SHM_SCHEMA_PATH, bytes = meta.len(), "Schema catalog present in shared memory");
+            info!(
+                path = SHM_SCHEMA_PATH,
+                bytes = meta.len(),
+                "Schema catalog present in shared memory"
+            );
         }
         _ => {
-            tracing::error!(path = SHM_SCHEMA_PATH, "FATAL: Schema catalog missing from shared memory. Start projection_server first.");
+            tracing::error!(
+                path = SHM_SCHEMA_PATH,
+                "FATAL: Schema catalog missing from shared memory. Start projection_server first."
+            );
             std::process::exit(1);
         }
     }

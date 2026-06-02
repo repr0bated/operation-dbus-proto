@@ -2,7 +2,7 @@
 //!
 //! Tracks and manages the op-mcp-server: mode, transport bind addresses,
 //! WireGuard identity, and tool registry.  Publishes live state to D-Bus
-//! under `/org/opdbus/v1/plugins/compact_mcp` so that
+//! under `/opdbus/v1/plugins/compact_mcp` so that
 //! `register_plugin_projection_tools` can expose it as MCP tools.
 
 use anyhow::{Context, Result};
@@ -10,15 +10,16 @@ use async_trait::async_trait;
 use op_state::{
     ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
 };
-use op_state_store::{FieldSchema, FieldType, PluginSchema};
+use op_state_store::PluginSchema;
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
-use simd_json::{json, OwnedValue as Value};
+use simd_json::OwnedValue as Value;
 
-const S6_SV_PATH: &str = "/run/service/op-mcp";
-const ENV_DIR: &str = "/etc/s6/sv/op-mcp/env";
+const S6_SV_PATH: &str = "/run/service/op-mcp-compact";
+const ENV_DIR: &str = "/etc/s6/sv/op-mcp-compact/env";
+const RUNTIME_ENV_DIR: &str = "/run/service/op-mcp-compact/env";
 const DEFAULT_MODE: &str = "compact";
-const DEFAULT_HTTP: &str = "0.0.0.0:3001";
+const DEFAULT_HTTP: &str = "127.0.0.1:11436";
 const DEFAULT_WG: &str = "netmaker";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -35,8 +36,8 @@ pub struct CompactMcpConfig {
     /// WireGuard interface for identity
     #[serde(default = "default_wg")]
     pub wg_interface: String,
-    /// Run stdio transport
-    #[serde(default = "default_true")]
+    /// Run stdio transport (not used for s6 daemon deployment)
+    #[serde(default = "default_false")]
     pub stdio: bool,
     /// Log level
     #[serde(default = "default_log_level")]
@@ -52,8 +53,8 @@ fn default_http() -> Option<String> {
 fn default_wg() -> String {
     DEFAULT_WG.into()
 }
-fn default_true() -> bool {
-    true
+fn default_false() -> bool {
+    false
 }
 fn default_log_level() -> String {
     "info".into()
@@ -66,7 +67,7 @@ impl Default for CompactMcpConfig {
             http: default_http(),
             ws: None,
             wg_interface: default_wg(),
-            stdio: true,
+            stdio: false,
             log_level: default_log_level(),
         }
     }
@@ -99,7 +100,7 @@ impl CompactMcpPlugin {
             wg_interface: Self::read_env("WG_INTERFACE").unwrap_or_else(default_wg),
             stdio: Self::read_env("OP_MCP_STDIO")
                 .map(|v| v != "0")
-                .unwrap_or(true),
+                .unwrap_or(false),
             log_level: Self::read_env("OP_MCP_LOG_LEVEL").unwrap_or_else(default_log_level),
         }
     }
@@ -110,7 +111,13 @@ impl CompactMcpPlugin {
             .context("create compact_mcp env dir")?;
         tokio::fs::write(format!("{ENV_DIR}/{key}"), value)
             .await
-            .with_context(|| format!("write env {key}"))
+            .with_context(|| format!("write env {key}"))?;
+        // Also write to runtime dir so the value takes effect after s6-svc -r
+        // without requiring a DB recompile.
+        if let Ok(()) = tokio::fs::create_dir_all(RUNTIME_ENV_DIR).await {
+            let _ = tokio::fs::write(format!("{RUNTIME_ENV_DIR}/{key}"), value).await;
+        }
+        Ok(())
     }
 
     async fn reload_service() -> Result<()> {
@@ -118,9 +125,12 @@ impl CompactMcpPlugin {
             .args(["-r", S6_SV_PATH])
             .output()
             .await
-            .context("s6-svc -r op-mcp")?;
+            .context("s6-svc -r op-mcp-compact")?;
         if !out.status.success() {
-            tracing::warn!("s6-svc -r op-mcp: {}", String::from_utf8_lossy(&out.stderr));
+            tracing::warn!(
+                "s6-svc -r op-mcp-compact: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
         }
         Ok(())
     }
@@ -130,87 +140,6 @@ impl Default for CompactMcpPlugin {
     fn default() -> Self {
         Self::new()
     }
-}
-
-pub(crate) fn compact_mcp_plugin_schema() -> PluginSchema {
-    PluginSchema::builder("compact_mcp")
-        .version("1.0.0")
-        .description("op-mcp-server — multi-mode MCP server (compact/full/agents) with stdio, HTTP, and WebSocket transports")
-        .field("mode", FieldSchema {
-            field_type: FieldType::Enum(vec![
-                "compact".into(), "full".into(), "agents".into(),
-            ]),
-            required: false,
-            description: "Server mode: compact (5 meta-tools), full (all tools), agents (D-Bus agents)".into(),
-            default: Some(json!("compact")),
-            example: Some(json!("compact")),
-            constraints: vec![],
-            read_only: false,
-            read_only_when: None,
-        })
-        .field("http", FieldSchema {
-            field_type: FieldType::String,
-            required: false,
-            description: "HTTP/SSE bind address (empty = not started)".into(),
-            default: Some(json!(DEFAULT_HTTP)),
-            example: Some(json!("100.90.37.254:3001")),
-            constraints: vec![],
-            read_only: false,
-            read_only_when: None,
-        })
-        .field("ws", FieldSchema {
-            field_type: FieldType::String,
-            required: false,
-            description: "WebSocket bind address (empty = not started)".into(),
-            default: Some(json!(null)),
-            example: Some(json!("100.90.37.254:3002")),
-            constraints: vec![],
-            read_only: false,
-            read_only_when: None,
-        })
-        .field("wg_interface", FieldSchema {
-            field_type: FieldType::String,
-            required: false,
-            description: "WireGuard interface for identity sled".into(),
-            default: Some(json!(DEFAULT_WG)),
-            example: Some(json!("netmaker")),
-            constraints: vec![],
-            read_only: false,
-            read_only_when: None,
-        })
-        .field("stdio", FieldSchema {
-            field_type: FieldType::Boolean,
-            required: false,
-            description: "Run stdio transport (default for Claude Desktop)".into(),
-            default: Some(json!(true)),
-            example: None,
-            constraints: vec![],
-            read_only: false,
-            read_only_when: None,
-        })
-        .field("log_level", FieldSchema {
-            field_type: FieldType::Enum(vec![
-                "trace".into(), "debug".into(), "info".into(), "warn".into(), "error".into(),
-            ]),
-            required: false,
-            description: "Log verbosity".into(),
-            default: Some(json!("info")),
-            example: None,
-            constraints: vec![],
-            read_only: false,
-            read_only_when: None,
-        })
-        .field("running", FieldSchema {
-            field_type: FieldType::Boolean,
-            required: false,
-            description: "Whether the s6 service is currently running".into(),
-            default: Some(json!(false)),
-            example: None,
-            constraints: vec![],
-            read_only: true,
-            read_only_when: None,
-        })
-        .build()
 }
 
 #[async_trait]
@@ -223,15 +152,15 @@ impl StatePlugin for CompactMcpPlugin {
     }
 
     fn schema(&self) -> Option<PluginSchema> {
-        Some(compact_mcp_plugin_schema())
+        Some(super::plugin_schema_defs::compact_mcp_plugin_schema())
     }
 
     fn is_available(&self) -> bool {
-        std::path::Path::new("/etc/s6/sv/op-mcp").exists()
+        std::path::Path::new("/etc/s6/sv/op-mcp-compact").exists()
     }
 
     fn unavailable_reason(&self) -> String {
-        "op-mcp s6 service definition not found at /etc/s6/sv/op-mcp".into()
+        "op-mcp-compact s6 service definition not found at /etc/s6/sv/op-mcp-compact".into()
     }
 
     async fn query_current_state(&self) -> Result<Value> {

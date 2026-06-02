@@ -17,7 +17,7 @@ use tracing::{debug, error, info, warn};
 
 /// Shared-memory path for the canonical PluginSchema catalog.
 /// This is the single source of truth for UI, blockchain, and all components.
-const SHM_SCHEMA_PATH: &str = "/dev/shm/plugin_schemas.json";
+const SHM_SCHEMA_PATH: &str = "/dev/shm/live-schema.json";
 
 /// Schema version identifier
 pub type SchemaVersion = u64;

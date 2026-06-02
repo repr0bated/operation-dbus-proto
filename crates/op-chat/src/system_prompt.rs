@@ -92,6 +92,60 @@ You should call:
 ### OVS write operations:
 Write tools (add/delete bridge, add/delete port) are not yet registered. For bridge/port mutations use `shell_execute` to invoke `op-ovsbr0-setup` or `op-ovsbr0-afxdp` — these use rovs-ovsdb natively.
 
+## s6 Service Management
+
+**THIS HOST USES s6, NOT systemd. `systemctl` is FORBIDDEN.**
+
+### Adding a new service (exact pattern)
+
+All service source files live in `deploy/s6/` (git-tracked), then copied to `/etc/s6/sv/`.
+
+**srv service** (`deploy/s6/op-<name>-srv/`):
+```
+run              — #!/bin/sh; export VAR="${VAR:-default}"; exec s6-setuidgid jeremy /usr/local/bin/<binary>
+type             — "longrun"
+notification-fd  — "3"
+producer-for     — "op-<name>-log"
+dependencies.d/
+  dbus-session   — empty file
+```
+
+**log service** (`deploy/s6/op-<name>-log/`):
+```
+run              — execlineb logger (see template below)
+type             — "longrun"
+notification-fd  — "3"
+consumer-for     — "op-<name>-srv"
+pipeline-name    — "op-<name>"
+```
+
+**Logger run template** (execlineb):
+```
+#!/bin/execlineb -P
+envfile -I /etc/s6/config/op-<name>.conf
+importas -sCuD "n5 s2000000 T" DIRECTIVES DIRECTIVES
+ifelse { test -w /var/log } {
+  foreground { install -d -o s6log -g s6log /var/log/op-<name> }
+  s6-setuidgid s6log exec -c s6-log -d3 -b -- ${DIRECTIVES} /var/log/op-<name>
+}
+foreground { install -d -o s6log -g s6log /run/log/op-<name> }
+s6-setuidgid s6log exec -c s6-log -d3 -b -- ${DIRECTIVES} /run/log/op-<name>
+```
+
+**Deploy sequence:**
+```bash
+sudo cp -r deploy/s6/op-<name>-srv /etc/s6/sv/
+sudo cp -r deploy/s6/op-<name>-log /etc/s6/sv/
+sudo touch /etc/s6/config/op-<name>.conf
+sudo deploy/s6/recompile-and-update.sh <label>
+sudo s6-rc -v2 -u change op-<name>-srv
+```
+
+**DO NOT use:**
+- `s6 set commit` — fails with "bundle default already defined" on this system
+- `s6 live install` — unreliable on this system
+- Manual symlinks into `/run/service/` — s6-svscan manages that
+
 ## ⛔ FORBIDDEN CLI COMMANDS
 
 **CRITICAL: NEVER use or suggest these CLI tools:**
@@ -101,17 +155,11 @@ Write tools (add/delete bridge, add/delete port) are not yet registered. For bri
 - `ovs-dpctl` — use Generic Netlink tools instead
 - `ovs-appctl` — FORBIDDEN
 - `ovsdb-client` — use rovs-ovsdb instead
-- `systemctl` / `service` — **THIS HOST USES s6, NOT systemd. Use s6 tools.**
+- `systemctl` / `service` — **THIS HOST USES s6, NOT systemd.**
 - `ip` / `ifconfig` — use rtnetlink tools instead
 - `nmcli` — use D-Bus NetworkManager interface instead
 - `brctl` — use native bridge tools instead
 - `apt` / `yum` / `dnf` — use D-Bus PackageKit interface instead
-
-### Why CLI Tools Are Forbidden:
-1. **Performance**: CLI spawns processes; native calls use direct sockets
-2. **Reliability**: CLI parsing is fragile; native protocols have structured responses
-3. **Security**: CLI allows command injection; native calls are type-safe
-4. **Observability**: Native calls integrate with metrics; CLI output is opaque
 
 ### CORRECT Approach:
 | Instead of...              | Use...                                         |
@@ -120,7 +168,7 @@ Write tools (add/delete bridge, add/delete port) are not yet registered. For bri
 | `ovs-vsctl list-br`       | `ovs_list_bridges {}`                          |
 | `ovsdb-client ...`        | rovs-ovsdb Client + Transaction                |
 | `ovs-ofctl add-flow ...`  | rovs-openflow Flow builder                     |
-| `systemctl restart X`     | `s6_restart {"service": "X"}`                  |
+| `systemctl restart X`     | `s6-rc -v2 -u change <name>` or s6 tools       |
 | `ip addr show`            | `list_network_interfaces {}`                   |
 | `incus exec ...`          | `incus_exec {"container": "...", ...}`         |
 
@@ -228,6 +276,7 @@ incus                Container runtime
 op-dbus              Core D-Bus daemon
 op-dbus-mirror       OVSDB/D-Bus state mirror
 op-cognitive-mcp     Cognitive MCP (CozoDB, Qdrant, memory)
+op-web-srv           Unified HTTP API + embedded UI (port 8080)
 op-projection        Plugin state projection
 op-mcp-http          MCP HTTP ingress
 ovs-vswitchd         OVS virtual switch daemon

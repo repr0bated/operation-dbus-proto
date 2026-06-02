@@ -156,7 +156,11 @@ impl AppState {
         }
 
         if let Some(model) = read_persisted_model().await {
-            if let Err(e) = chat_manager.switch_model(model.clone()).await {
+            let non_sandboxed = read_persisted_model_non_sandboxed().await;
+            if let Err(e) = chat_manager
+                .switch_model_with_options(model.clone(), non_sandboxed)
+                .await
+            {
                 warn!("Failed to load model '{}': {}", model, e);
             } else {
                 info!("Loaded model: {}", model);
@@ -190,7 +194,10 @@ impl AppState {
         let user_store = match UserStore::new("/var/lib/op-dbus/users-cozo").await {
             Ok(store) => Arc::new(store),
             Err(e) => {
-                warn!("Failed to open CozoDB user store: {}, falling back to in-memory", e);
+                warn!(
+                    "Failed to open CozoDB user store: {}, falling back to in-memory",
+                    e
+                );
                 Arc::new(
                     UserStore::new("")
                         .await
@@ -412,6 +419,7 @@ impl AppState {
 }
 
 const PERSISTED_MODEL_PATH: &str = "/etc/op-dbus/llm-model";
+const PERSISTED_MODEL_NON_SANDBOXED_PATH: &str = "/etc/op-dbus/llm-model-non-sandboxed";
 const PERSISTED_PROVIDER_PATH: &str = "/etc/op-dbus/llm-provider";
 
 async fn read_persisted_model() -> Option<String> {
@@ -420,6 +428,16 @@ async fn read_persisted_model() -> Option<String> {
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
+}
+
+async fn read_persisted_model_non_sandboxed() -> Option<bool> {
+    tokio::fs::read_to_string(PERSISTED_MODEL_NON_SANDBOXED_PATH)
+        .await
+        .ok()
+        .map(|s| {
+            let value = s.trim();
+            value == "1" || value.eq_ignore_ascii_case("true")
+        })
 }
 
 async fn read_persisted_provider() -> Option<String> {

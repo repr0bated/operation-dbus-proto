@@ -523,22 +523,39 @@ impl CozoGraphShuttle {
         let mut p: Params = BTreeMap::new();
         p.insert("id".into(), DataValue::Str(id.into()));
         p.insert("email".into(), DataValue::Str(email.into()));
-        p.insert("ev".into(), DataValue::Str(email_verified.to_string().into()));
+        p.insert(
+            "ev".into(),
+            DataValue::Str(email_verified.to_string().into()),
+        );
         p.insert("wg".into(), DataValue::Str(wg_public_key.into()));
-        p.insert("wg_priv".into(), DataValue::Str(wg_private_key_encrypted.into()));
+        p.insert(
+            "wg_priv".into(),
+            DataValue::Str(wg_private_key_encrypted.into()),
+        );
         p.insert("ip".into(), DataValue::Str(assigned_ip.into()));
         p.insert("quota".into(), dv_int(privacy_quota_bytes));
         p.insert("used".into(), dv_int(privacy_quota_used_bytes));
-        p.insert("container".into(), DataValue::Str(privacy_container_name.into()));
+        p.insert(
+            "container".into(),
+            DataValue::Str(privacy_container_name.into()),
+        );
         p.insert("route".into(), DataValue::Str(privacy_route_id.into()));
-        p.insert("pnc".into(), DataValue::Str(privacy_network_connected.to_string().into()));
-        p.insert("pnc_at".into(), DataValue::Str(privacy_network_connected_at.into()));
+        p.insert(
+            "pnc".into(),
+            DataValue::Str(privacy_network_connected.to_string().into()),
+        );
+        p.insert(
+            "pnc_at".into(),
+            DataValue::Str(privacy_network_connected_at.into()),
+        );
         p.insert("gid".into(), DataValue::Str(google_id.into()));
         p.insert("gmail".into(), DataValue::Str(google_email.into()));
-        p.insert("api_json".into(), DataValue::Str(api_credentials_json.into()));
+        p.insert(
+            "api_json".into(),
+            DataValue::Str(api_credentials_json.into()),
+        );
         p.insert("ts".into(), DataValue::Str(created_at.into()));
-        cozo_run(&self.db, query, p)
-            .map_err(|e| anyhow::anyhow!("upsert privacy user: {e}"))?;
+        cozo_run(&self.db, query, p).map_err(|e| anyhow::anyhow!("upsert privacy user: {e}"))?;
         Ok(())
     }
 
@@ -584,10 +601,7 @@ impl CozoGraphShuttle {
         Ok(r.rows.into_iter().next())
     }
 
-    pub fn get_privacy_user_by_google_id(
-        &self,
-        google_id: &str,
-    ) -> Result<Option<Vec<DataValue>>> {
+    pub fn get_privacy_user_by_google_id(&self, google_id: &str) -> Result<Option<Vec<DataValue>>> {
         let mut p: Params = BTreeMap::new();
         p.insert("gid".into(), DataValue::Str(google_id.into()));
         let r = cozo_run(
@@ -630,12 +644,8 @@ impl CozoGraphShuttle {
     pub fn delete_privacy_user(&self, id: &str) -> Result<()> {
         let mut p: Params = BTreeMap::new();
         p.insert("id".into(), DataValue::Str(id.into()));
-        cozo_run(
-            &self.db,
-            "?[id] <- [[$id]] :rm privacy_users { id }",
-            p,
-        )
-        .map_err(|e| anyhow::anyhow!("delete privacy user: {e}"))?;
+        cozo_run(&self.db, "?[id] <- [[$id]] :rm privacy_users { id }", p)
+            .map_err(|e| anyhow::anyhow!("delete privacy user: {e}"))?;
         Ok(())
     }
 

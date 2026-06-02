@@ -8,7 +8,7 @@ use axum::{
 use std::sync::Arc;
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::{Any, CorsLayer};
-use tower_http::services::ServeDir;
+use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 
 use crate::groups_admin;
@@ -42,6 +42,11 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/status", get(handlers::status::status_handler))
         // Schema — single source of truth from shared memory
         .route("/schema", get(handlers::schema::schema_handler))
+        // Identity sled — live WireGuard identity from shared memory
+        .route(
+            "/identity/sled",
+            get(handlers::identity::identity_sled_handler),
+        )
         // Dashboard
         .route(
             "/dashboard/metrics",
@@ -71,6 +76,9 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         // Chat endpoints
         .route("/chat", post(handlers::chat::chat_handler))
         .route("/chat/stream", post(handlers::chat::chat_stream_handler))
+        .route("/zeroclaw/chat", post(handlers::zeroclaw::zeroclaw_chat_handler))
+        .route("/zeroclaw/chat/stream", post(handlers::zeroclaw::zeroclaw_chat_stream_handler))
+        .route("/zeroclaw/schema", get(handlers::zeroclaw::zeroclaw_schema_handler))
         .route("/chat/sessions", get(handlers::chat::list_sessions_handler))
         .route(
             "/chat/sessions",
@@ -125,7 +133,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         // LLM endpoints
         .route("/llm/status", get(handlers::llm::llm_status_handler))
         .route("/llm/providers", get(handlers::llm::list_providers_handler))
-        .route("/llm/models", get(handlers::llm::list_models_handler))
+        .route("/llm/models", get(llm::get_models))
         .route(
             "/llm/models/:provider",
             get(handlers::llm::list_models_for_provider_handler),
@@ -135,6 +143,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             post(handlers::llm::switch_provider_handler),
         )
         .route("/llm/model", post(handlers::llm::switch_model_handler))
+        .route("/llm/chat", post(handlers::chat::send_message_handler))
         // OpenClaw endpoints (internal/base layer)
         .route(
             "/openclaw/status",
@@ -234,7 +243,6 @@ pub fn create_router(state: Arc<AppState>) -> Router {
     let ws_route = Router::new().route("/ws", get(websocket::websocket_handler));
 
     // Main router - agents_mcp_route FIRST so it takes precedence
-    let static_dir = std::env::var("OP_WEB_STATIC_DIR").ok();
     let mut router = Router::new()
         .nest("/api", api_routes)
         // Human-facing privacy verification flow (magic-link target)
@@ -258,8 +266,13 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .nest("/admin", admin::admin_routes());
 
     // Use filesystem static files if available, otherwise fallback to embedded UI
-    let static_dir = std::env::var("OP_WEB_STATIC_DIR").unwrap_or_else(|_| "lovable/dist".to_string());
-    if std::path::Path::new(&static_dir).exists() {
+    let static_dir =
+        std::env::var("OP_WEB_STATIC_DIR").unwrap_or_else(|_| "lovable/dist".to_string());
+    let static_index = std::path::Path::new(&static_dir).join("index.html");
+    if static_index.exists() {
+        router = router
+            .fallback_service(ServeDir::new(static_dir).fallback(ServeFile::new(static_index)));
+    } else if std::path::Path::new(&static_dir).exists() {
         router = router.fallback_service(
             ServeDir::new(static_dir).fallback(get(crate::embedded_ui::serve_embedded_ui)),
         );

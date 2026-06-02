@@ -46,7 +46,6 @@ pub mod gemini;
 pub mod gemini_cli;
 pub mod headless_oauth;
 pub mod huggingface;
-pub mod mcp_proxy;
 pub mod openclaw;
 pub mod perplexity;
 pub mod provider;
