@@ -14,7 +14,7 @@ import {
 import { structToObject } from "@/grpc/google/protobuf/struct";
 import type {
   HealthSnapshot, StatusSummary, DbusService, Tool, Agent, Session,
-  ChatMessage, LogEntry, ConfigSnapshot, LlmProvider, LlmModel,
+  ChatMessage, LogEntry, ConfigSnapshot, LlmProvider, LlmModelsResponse, LlmProvidersResponse,
 } from "@/types/api";
 
 const BASE = import.meta.env.VITE_API_BASE_URL || "/api";
@@ -115,10 +115,16 @@ export const api = {
   },
 
   llm: {
-    status: () => request<LlmProvider[]>("/llm/status"),
-    models: () => request<LlmModel[]>("/llm/models"),
-    setModel: (modelId: string) => request<void>("/llm/model", {
-      method: "POST", body: JSON.stringify({ modelId }),
+    status: () => request<LlmProvider>("/llm/status"),
+    providers: () => request<LlmProvidersResponse>("/llm/providers"),
+    models: (provider?: string) => request<LlmModelsResponse>(
+      provider ? `/llm/models?provider=${encodeURIComponent(provider)}` : "/llm/models",
+    ),
+    setProvider: (provider: string) => request<void>("/llm/provider", {
+      method: "POST", body: JSON.stringify({ provider }),
+    }),
+    setModel: (model: string, nonSandboxed = false) => request<void>("/llm/model", {
+      method: "POST", body: JSON.stringify({ model, non_sandboxed: nonSandboxed }),
     }),
   },
 

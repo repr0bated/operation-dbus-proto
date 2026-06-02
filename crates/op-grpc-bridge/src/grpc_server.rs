@@ -9,7 +9,10 @@ use async_stream::stream;
 use chrono::{DateTime, Utc};
 use futures::StreamExt as _;
 use op_cognitive_mcp::QdrantSemanticShuttle;
+use op_plugins::prelude::ZeroclawPlugin;
+use op_state::StatePlugin;
 use prost_types::{Struct as ProstStruct, Timestamp as ProstTimestamp, Value as ProstValue};
+use serde_json::Value as JsonValue;
 use simd_json::prelude::{ValueAsContainer, ValueAsScalar};
 use tokio::sync::{broadcast, RwLock};
 use tokio_stream::Stream;
@@ -63,17 +66,126 @@ pub trait PluginSchemaProvider: Send + Sync {
     async fn get_schema(&self, plugin_id: &str) -> Option<(String, String, String)>;
 }
 
-struct EmptyPluginProvider;
+const LIVE_SCHEMA_PATH: &str = "/dev/shm/live-schema.json";
 
 #[tonic::async_trait]
-impl PluginSchemaProvider for EmptyPluginProvider {
+impl PluginSchemaProvider for SchemaCatalogPluginProvider {
     async fn list_plugins(&self) -> Vec<PluginInfo> {
-        Vec::new()
+        let mut plugins = read_live_schema_plugins();
+        if !plugins.iter().any(|plugin| plugin.id == "zeroclaw") {
+            plugins.push(zeroclaw_plugin_info());
+        }
+        plugins
     }
 
-    async fn get_schema(&self, _plugin_id: &str) -> Option<(String, String, String)> {
-        None
+    async fn get_schema(&self, plugin_id: &str) -> Option<(String, String, String)> {
+        if plugin_id == "zeroclaw" {
+            return zeroclaw_schema_json();
+        }
+
+        read_live_schema(plugin_id).or_else(|| {
+            if plugin_id == "zeroclaw" {
+                zeroclaw_schema_json()
+            } else {
+                None
+            }
+        })
     }
+}
+
+struct SchemaCatalogPluginProvider;
+
+fn read_live_schema_plugins() -> Vec<PluginInfo> {
+    let Ok(bytes) = std::fs::read(LIVE_SCHEMA_PATH) else {
+        return Vec::new();
+    };
+    let Ok(root) = serde_json::from_slice::<JsonValue>(&bytes) else {
+        return Vec::new();
+    };
+    let Some(catalog) = root.as_object() else {
+        return Vec::new();
+    };
+
+    catalog
+        .iter()
+        .filter_map(|(id, entries)| {
+            let schema = entries.as_array().and_then(|items| items.first())?;
+            Some(plugin_info_from_schema(id, schema))
+        })
+        .collect()
+}
+
+fn read_live_schema(plugin_id: &str) -> Option<(String, String, String)> {
+    let bytes = std::fs::read(LIVE_SCHEMA_PATH).ok()?;
+    let root = serde_json::from_slice::<JsonValue>(&bytes).ok()?;
+    let schema = root
+        .as_object()?
+        .get(plugin_id)?
+        .as_array()
+        .and_then(|items| items.first())?;
+    let version = schema
+        .get("version")
+        .and_then(JsonValue::as_str)
+        .unwrap_or("1.0.0")
+        .to_string();
+    Some((
+        serde_json::to_string(schema).ok()?,
+        "operation.pluginschema+json".to_string(),
+        version,
+    ))
+}
+
+fn plugin_info_from_schema(id: &str, schema: &JsonValue) -> PluginInfo {
+    let name = schema
+        .get("name")
+        .and_then(JsonValue::as_str)
+        .unwrap_or(id)
+        .to_string();
+    let version = schema
+        .get("version")
+        .and_then(JsonValue::as_str)
+        .unwrap_or("1.0.0")
+        .to_string();
+    let description = schema
+        .get("description")
+        .and_then(JsonValue::as_str)
+        .unwrap_or("")
+        .to_string();
+    let mut tags = Vec::new();
+    if let Some(category) = schema.get("category").and_then(JsonValue::as_str) {
+        tags.push(category.to_string());
+    }
+
+    PluginInfo {
+        id: id.to_string(),
+        name,
+        version,
+        description,
+        dbus_path: format!("/opdbus/v1/plugins/{}", id.replace('.', "/")),
+        interfaces: vec!["org.opdbus.v1.Plugin".to_string()],
+        tags,
+    }
+}
+
+fn zeroclaw_plugin_info() -> PluginInfo {
+    PluginInfo {
+        id: "zeroclaw".to_string(),
+        name: "zeroclaw".to_string(),
+        version: "1.0.0".to_string(),
+        description: "Zeroclaw schema/RPC-native model router for Antigravity UI".to_string(),
+        dbus_path: "/opdbus/v1/plugins/zeroclaw".to_string(),
+        interfaces: vec!["org.opdbus.v1.Plugin".to_string()],
+        tags: vec!["llm".to_string(), "antigravity".to_string()],
+    }
+}
+
+fn zeroclaw_schema_json() -> Option<(String, String, String)> {
+    let schema = ZeroclawPlugin::new().schema()?;
+    Some((
+        serde_json::to_string(&schema).ok()?,
+        "operation.pluginschema+json".to_string(),
+        schema.version,
+    ))
 }
 
 // =============================================================================
@@ -129,7 +241,7 @@ impl OperationGrpcServer {
         let (registry, _) = RegistryInner::new();
         Self {
             schema_engine,
-            plugin_provider: Arc::new(EmptyPluginProvider),
+            plugin_provider: Arc::new(SchemaCatalogPluginProvider),
             semantic_shuttle: None,
             chain_events: chain_tx,
             registry: Arc::new(RwLock::new(registry)),
@@ -281,10 +393,12 @@ pub async fn run_grpc_server(
             server.clone(),
             interceptor::ghostbridge_interceptor,
         )))
-        .add_service(tonic_web::enable(EventChainServiceServer::with_interceptor(
-            server.clone(),
-            interceptor::ghostbridge_interceptor,
-        )))
+        .add_service(tonic_web::enable(
+            EventChainServiceServer::with_interceptor(
+                server.clone(),
+                interceptor::ghostbridge_interceptor,
+            ),
+        ))
         .add_service(tonic_web::enable(OvsdbMirrorServer::with_interceptor(
             server.clone(),
             interceptor::ghostbridge_interceptor,
@@ -293,22 +407,28 @@ pub async fn run_grpc_server(
             server.clone(),
             interceptor::ghostbridge_interceptor,
         )))
-        .add_service(tonic_web::enable(ComponentRegistryServer::with_interceptor(
-            server.clone(),
-            interceptor::ghostbridge_interceptor,
-        )))
+        .add_service(tonic_web::enable(
+            ComponentRegistryServer::with_interceptor(
+                server.clone(),
+                interceptor::ghostbridge_interceptor,
+            ),
+        ))
         .add_service(tonic_web::enable(MailServiceServer::with_interceptor(
             server.clone(),
             interceptor::ghostbridge_interceptor,
         )))
-        .add_service(tonic_web::enable(PrivacyNetworkServiceServer::with_interceptor(
-            server.clone(),
-            interceptor::ghostbridge_interceptor,
-        )))
-        .add_service(tonic_web::enable(RegistrationServiceServer::with_interceptor(
-            server.clone(),
-            interceptor::ghostbridge_interceptor,
-        )))
+        .add_service(tonic_web::enable(
+            PrivacyNetworkServiceServer::with_interceptor(
+                server.clone(),
+                interceptor::ghostbridge_interceptor,
+            ),
+        ))
+        .add_service(tonic_web::enable(
+            RegistrationServiceServer::with_interceptor(
+                server.clone(),
+                interceptor::ghostbridge_interceptor,
+            ),
+        ))
         .add_service(tonic_web::enable(DbusPassthroughServer::with_interceptor(
             server.clone(),
             interceptor::ghostbridge_interceptor,

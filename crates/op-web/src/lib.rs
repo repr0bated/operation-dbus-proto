@@ -48,6 +48,7 @@ pub mod state_manager_client;
 pub mod users;
 pub mod websocket;
 pub mod wireguard;
+pub mod zeroclaw_routes;
 
 pub use embedded_ui::{serve_embedded_ui, ui_available, UiAssets};
 pub use orchestrator::UnifiedOrchestrator;

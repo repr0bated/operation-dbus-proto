@@ -65,8 +65,8 @@ impl AnnaScribe {
 
         // The Strike/Etch: Bind the WireGuard Key to the Blake3 hash of the
         // canonical schema catalog in shared memory. This makes the sled footprint
-        // a direct function of the single source of truth (/dev/shm/plugin_schemas.json).
-        let schema_catalog_hash = match std::fs::read("/dev/shm/plugin_schemas.json") {
+        // a direct function of the single source of truth (/dev/shm/live-schema.json).
+        let schema_catalog_hash = match std::fs::read("/dev/shm/live-schema.json") {
             Ok(bytes) => blake3::hash(&bytes),
             Err(_) => {
                 return Err("A.N.N.A. Scribe: Schema catalog missing from shared memory. Connection Rejected.".to_string());
@@ -88,10 +88,10 @@ impl AnnaScribe {
 
     /// THE STRIKE/ETCH: Generates the cryptographic hash (footprint) for the identity.
     /// Binds the WireGuard public key to the Blake3 hash of the canonical schema catalog
-    /// in shared memory (/dev/shm/plugin_schemas.json), plus the mutation index.
+    /// in shared memory (/dev/shm/live-schema.json), plus the mutation index.
     /// This makes the sled footprint a direct function of the single source of truth.
     pub fn etch_footprint(sled: &IdentitySled) -> [u8; 32] {
-        let schema_catalog_hash = std::fs::read("/dev/shm/plugin_schemas.json")
+        let schema_catalog_hash = std::fs::read("/dev/shm/live-schema.json")
             .map(|bytes| blake3::hash(&bytes))
             .unwrap_or_else(|_| blake3::Hash::from([0u8; 32]));
 
@@ -143,6 +143,7 @@ mod tests {
             mutation_index: 1,
             hashed_footprint: [0u8; 32],
             trace_id: [0u8; 16],
+            vector_id: [0u8; 16],
             schema_version: 0,
             reserved: [0u8; 60],
         };
@@ -156,6 +157,7 @@ mod tests {
             mutation_index: 5,
             hashed_footprint: [0xAA; 32],
             trace_id: [0xCC; 16],
+            vector_id: [0u8; 16],
             schema_version: 1,
             reserved: [0u8; 60],
         };
@@ -221,6 +223,7 @@ mod tests {
             mutation_index: 100,
             hashed_footprint: [0u8; 32],
             trace_id: [0u8; 16],
+            vector_id: [0u8; 16],
             schema_version: 1,
             reserved: [0u8; 60],
         };

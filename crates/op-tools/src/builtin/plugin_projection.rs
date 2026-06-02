@@ -1,6 +1,6 @@
 //! Tools backed by plugin-created D-Bus projection objects.
 //!
-//! Every object published below `/org/opdbus/v1/plugins` is exposed as a
+//! Every object published below `/opdbus/v1/plugins` is exposed as a
 //! read-only tool. Execution reads the live `org.opdbus.ProjectedObjectV1`
 //! object rather than scraping procfs or rebuilding state locally.
 

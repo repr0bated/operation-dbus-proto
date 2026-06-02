@@ -46,6 +46,7 @@ regex = { workspace = true }
 shell-words = "1.1"
 
 axum = { workspace = true }
+reqwest = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

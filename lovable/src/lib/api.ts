@@ -1,266 +1,344 @@
-const API_BASE = import.meta.env.VITE_API_BASE || "/api";
+/**
+ * Typed API client for the operation-dbus gateway.
+ * Unary RPCs use gRPC-Web; streaming is handled by use-event-stream.
+ * Falls back to REST for endpoints not yet ported to gRPC.
+ *
+ * @see docs/architecture-flow.md for the full service topology.
+ */
+import {
+  stateSync,
+  pluginService,
+  ovsdbMirror,
+  runtimeMirror,
+  eventChainService,
+  componentRegistry,
+  mailService,
+  privacyService,
+  registrationService,
+  serviceManager,
+  mcpService,
+} from "@/grpc/client";
+import { structToObject } from "@/grpc/google/protobuf/struct";
+import type {
+  HealthSnapshot,
+  StatusSummary,
+  DbusService,
+  Tool,
+  Agent,
+  Session,
+  ChatMessage,
+  LogEntry,
+  ConfigSnapshot,
+  LlmProvider,
+  LlmModel,
+} from "@/types/api";
 
-async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    headers: { "Content-Type": "application/json", ...options?.headers },
-    ...options,
+const BASE = import.meta.env.VITE_API_BASE_URL || "/api";
+
+/** REST fallback for endpoints not yet gRPC-ified */
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    headers: { "Content-Type": "application/json", ...init?.headers },
+    ...init,
   });
-  if (!res.ok) throw new Error(`API error: ${res.status} ${res.statusText}`);
-  return res.json();
+  const contentType = res.headers.get("content-type") ?? "";
+  const body = await res.text();
+  const isJson = contentType.includes("application/json");
+  const payload = body && isJson ? JSON.parse(body) : body;
+
+  if (!res.ok) {
+    const detail =
+      payload && typeof payload === "object" && "error" in payload
+        ? String((payload as { error?: unknown }).error)
+        : body.slice(0, 240);
+    throw new Error(`API ${res.status}${detail ? `: ${detail}` : ""}`);
+  }
+
+  if (!isJson) {
+    throw new Error(
+      `API ${res.status} returned ${contentType || "non-JSON"} from ${path}: ${body.slice(0, 120)}`,
+    );
+  }
+
+  return payload as T;
 }
 
-// Dashboard
-export const getPrivacyStatus = () => fetchApi<any>("/privacy/status");
-export const getHealth = () => fetchApi<any>("/health");
-export const getMailStats = () => fetchApi<any>("/mail/stats");
-export const getMcpStatus = () => fetchApi<any>("/mcp/status");
-export const getConnectionHistory = () =>
-  fetchApi<any>("/analytics/connections");
-export const getHealthMetrics = () => fetchApi<any>("/health/metrics");
-export const getDashboardMetrics = () => fetchApi<any>("/dashboard/metrics");
-export const getDashboardProjections = () =>
-  fetchApi<any>("/dashboard/projections");
-export const getRecentActivity = () => fetchApi<any>("/activity/recent");
+export const api = {
+  // ── gRPC-powered endpoints (bridge services) ───────────────────────────
 
-// Schema — single source of truth from shared memory
-export const getSchemaCatalog = () => fetchApi<any>("/schema");
+  /** Get full state snapshot via gRPC StateSync.GetState */
+  state: async (pluginId = "", objectPath = "") => {
+    const resp = await stateSync.getState({ pluginId, objectPath });
+    return structToObject(resp.state);
+  },
 
-// Chat
-export const getChatSessions = () => fetchApi<any>("/chat/sessions");
-export const getChatMessages = (sessionId: string) =>
-  fetchApi<any>(`/chat/${sessionId}/messages`);
-export const sendChatMessage = (data: {
-  session_id?: string;
-  message: string;
-}) =>
-  fetchApi<any>("/chat/message", {
-    method: "POST",
-    body: JSON.stringify(data),
-  });
-export const getSystemPrompt = () => fetchApi<any>("/chat/system-prompt");
-export const updateSystemPrompt = (prompt: string) =>
-  fetchApi<any>("/chat/system-prompt", {
-    method: "PUT",
-    body: JSON.stringify({ prompt }),
-  });
-export const getSystemPromptTemplates = () =>
-  fetchApi<any>("/chat/system-prompt-templates");
+  /** Mutate state via gRPC StateSync.Mutate */
+  mutate: stateSync.mutate,
+  batchMutate: stateSync.batchMutate,
 
-// Users
-export const getUsers = () => fetchApi<any>("/users/list");
-export const createUser = (data: any) =>
-  fetchApi<any>("/users", { method: "POST", body: JSON.stringify(data) });
-export const deleteUser = (id: string | number) =>
-  fetchApi<any>(`/users/${id}`, { method: "DELETE" });
-export const revokeUser = (id: string | number) =>
-  fetchApi<any>(`/users/${id}/revoke`, { method: "POST" });
-export const getUserActivity = (id: string | number) =>
-  fetchApi<any>(`/users/${id}/activity`);
-export const getUserDetail = (id: string | number) =>
-  fetchApi<any>(`/users/${id}`);
+  /** Plugin operations via gRPC PluginService */
+  plugins: {
+    list: async () => {
+      const resp = await pluginService.listPlugins();
+      return resp.plugins;
+    },
+    getSchema: pluginService.getSchema,
+    callMethod: pluginService.callMethod,
+    getProperty: pluginService.getProperty,
+    setProperty: pluginService.setProperty,
+  },
 
-// VPN
-export const getVpnConnections = () => fetchApi<any>("/vpn/connections");
-export const getVpnConfig = () => fetchApi<any>("/vpn/config");
-export const disconnectVpnUser = (id: string) =>
-  fetchApi<any>(`/vpn/connections/${id}/disconnect`, { method: "POST" });
+  /** Event chain / audit via gRPC EventChainService */
+  eventChain: {
+    getEvents: eventChainService.getEvents,
+    verifyChain: eventChainService.verifyChain,
+    getProof: eventChainService.getProof,
+    proveTagImmutability: eventChainService.proveTagImmutability,
+    getSnapshot: eventChainService.getSnapshot,
+    createSnapshot: eventChainService.createSnapshot,
+  },
 
-// Mail
-export const getMailQueue = () => fetchApi<any>("/mail/queue");
-export const getMailDnsStatus = () => fetchApi<any>("/mail/dns-status");
-export const getRecentEmails = () => fetchApi<any>("/mail/recent");
-export const getMailServerStatus = () => fetchApi<any>("/mail/server-status");
-export const resendEmail = (id: string) =>
-  fetchApi<any>(`/mail/${id}/resend`, { method: "POST" });
-export const getEmailDetail = (id: string) => fetchApi<any>(`/mail/${id}`);
+  /** OVSDB via gRPC OvsdbMirror */
+  ovs: {
+    listDbs: ovsdbMirror.listDbs,
+    getSchema: ovsdbMirror.getSchema,
+    transact: ovsdbMirror.transact,
+    getBridgeState: ovsdbMirror.getBridgeState,
+    echo: ovsdbMirror.echo,
+    dumpDb: ovsdbMirror.dumpDb,
+  },
 
-// MCP
-export const getMcpServers = () => fetchApi<any>("/mcp/servers");
-export const getMcpServerDetail = (id: string) =>
-  fetchApi<any>(`/mcp/servers/${id}`);
-export const getMcpServerTools = (id: string) =>
-  fetchApi<any>(`/mcp/servers/${id}/tools`);
-export const getMcpServerConfig = (id: string) =>
-  fetchApi<any>(`/mcp/servers/${id}/config`);
-export const updateMcpServerConfig = (id: string, config: any) =>
-  fetchApi<any>(`/mcp/servers/${id}/config`, {
-    method: "PUT",
-    body: JSON.stringify(config),
-  });
-export const getMcpServerLogs = (id: string) =>
-  fetchApi<any>(`/mcp/servers/${id}/logs`);
-export const restartMcpServer = (id: string) =>
-  fetchApi<any>(`/mcp/servers/${id}/restart`, { method: "POST" });
+  /** Runtime via gRPC RuntimeMirror */
+  runtime: {
+    getSystemInfo: runtimeMirror.getSystemInfo,
+    listServices: runtimeMirror.listServices,
+    getService: runtimeMirror.getService,
+    listInterfaces: runtimeMirror.listInterfaces,
+    getNumaTopology: runtimeMirror.getNumaTopology,
+  },
 
-// Analytics
-export const getAnalytics = (type: string, range?: string) =>
-  fetchApi<any>(`/analytics/${type}${range ? `?range=${range}` : ""}`);
-export const searchSemanticTraces = (query: string, limit?: number) =>
-  fetchApi<any>(
-    `/analytics/semantic-search?query=${encodeURIComponent(query)}&limit=${limit || 10}`,
-  );
-export const getAnalyticsVpnTraffic = (range: string) =>
-  fetchApi<any>(`/analytics/vpn/traffic?period=${range}`);
-export const getAnalyticsVpnUsers = () =>
-  fetchApi<any>("/analytics/vpn/users-by-status");
-export const getAnalyticsVpnPeakHours = () =>
-  fetchApi<any>("/analytics/vpn/peak-hours");
-export const getAnalyticsChatMessages = (range: string) =>
-  fetchApi<any>(`/analytics/chat/messages?period=${range}`);
-export const getAnalyticsChatLengths = () =>
-  fetchApi<any>("/analytics/chat/conversation-lengths");
-export const getAnalyticsChatIntents = () =>
-  fetchApi<any>("/analytics/chat/intents");
-export const getAnalyticsMailVolume = (range: string) =>
-  fetchApi<any>(`/analytics/mail/volume?period=${range}`);
-export const getAnalyticsMailDelivery = (range: string) =>
-  fetchApi<any>(`/analytics/mail/delivery-rate?period=${range}`);
-export const getAnalyticsMailDomains = () =>
-  fetchApi<any>("/analytics/mail/top-domains");
+  /** Component registry via gRPC */
+  registry: {
+    discover: componentRegistry.discover,
+    getComponent: componentRegistry.getComponent,
+  },
 
-// Settings
-export const getSettings = (tab: string) => fetchApi<any>(`/settings/${tab}`);
-export const updateSettings = (tab: string, data: any) =>
-  fetchApi<any>(`/settings/${tab}`, {
-    method: "PUT",
-    body: JSON.stringify(data),
-  });
-export const getApiKeys = () => fetchApi<any>("/settings/api-keys");
-export const createApiKey = (name: string) =>
-  fetchApi<any>("/settings/api-keys", {
-    method: "POST",
-    body: JSON.stringify({ name }),
-  });
-export const revokeApiKey = (id: string) =>
-  fetchApi<any>(`/settings/api-keys/${id}/revoke`, { method: "POST" });
-export const sendTestEmail = () =>
-  fetchApi<any>("/settings/smtp/test", { method: "POST" });
-export const exportConfig = () => fetchApi<any>("/settings/backup/export");
-export const backupDatabase = () =>
-  fetchApi<any>("/settings/backup/database", { method: "POST" });
+  // ── gRPC domain services ───────────────────────────────────────────────
 
-// Logs
-export const getLogsStream = () => `${API_BASE}/logs/stream`;
+  /** Mail service (operation.mail.v1) */
+  mail: {
+    sendEmail: mailService.sendEmail,
+    getInbox: mailService.getInbox,
+    getMessage: mailService.getMessage,
+    getMailStatus: mailService.getMailStatus,
+    listAccounts: mailService.listMailAccounts,
+    adminAction: mailService.adminMailAction,
+    checkServer: mailService.checkMailServer,
+  },
 
-// Tools
-export const getBuiltinTools = () => fetchApi<any>("/tools/builtin");
-export const getMcpTools = () => fetchApi<any>("/tools/mcp");
-export const getCustomTools = () => fetchApi<any>("/tools/custom");
-export const getToolHistory = (id: string) =>
-  fetchApi<any>(`/tools/${id}/history`);
-export const executeTool = (id: string, input: any) =>
-  fetchApi<any>(`/tools/${id}/execute`, {
-    method: "POST",
-    body: JSON.stringify(input),
-  });
-export const toggleTool = (id: string, enabled: boolean) =>
-  fetchApi<any>(`/tools/${id}/toggle`, {
-    method: "PUT",
-    body: JSON.stringify({ enabled }),
-  });
+  /** Privacy network (operation.privacy.v1) */
+  privacy: {
+    ensureNetwork: privacyService.ensurePrivacyNetwork,
+    getStatus: privacyService.getNetworkStatus,
+    provisionUser: privacyService.provisionUser,
+    getWireGuardConfig: privacyService.getPrivacyWireGuardConfig,
+    manageComponent: privacyService.manageComponent,
+    getTopology: privacyService.getNetworkTopology,
+    healthCheck: privacyService.healthCheck,
+    configureRouting: privacyService.configurePacketRouting,
+    generateKeyPair: privacyService.generateWireGuardKeyPair,
+  },
 
-// Agents
-export const getAgents = () => fetchApi<any>("/agents/list");
-export const getAgentDetail = (id: string) => fetchApi<any>(`/agents/${id}`);
-export const getAgentHistory = (id: string) =>
-  fetchApi<any>(`/agents/${id}/history`);
-export const getAgentMetrics = (id: string) =>
-  fetchApi<any>(`/agents/${id}/metrics`);
-export const updateAgentConfig = (id: string, config: any) =>
-  fetchApi<any>(`/agents/${id}/config`, {
-    method: "PUT",
-    body: JSON.stringify(config),
-  });
-export const restartAgent = (id: string) =>
-  fetchApi<any>(`/agents/${id}/restart`, { method: "POST" });
-export const getAgentActivityStream = (id: string) =>
-  `${API_BASE}/agents/${id}/activity`;
+  /** Registration (operation.registration.v1) */
+  registration: {
+    sendMagicLink: registrationService.sendMagicLink,
+    verifyMagicLink: registrationService.verifyMagicLink,
+    registerUser: registrationService.registerUser,
+    getUserStatus: registrationService.getUserStatus,
+    listUsers: registrationService.listUsers,
+    getWireGuardConfig: registrationService.getWireGuardConfig,
+    adminAction: registrationService.adminUserAction,
+  },
 
-// Workflows
-export const getWorkflows = () => fetchApi<any>("/workflows/list");
-export const getWorkflowDetail = (id: string) =>
-  fetchApi<any>(`/workflows/${id}`);
-export const createWorkflow = (data: any) =>
-  fetchApi<any>("/workflows/create", {
-    method: "POST",
-    body: JSON.stringify(data),
-  });
-export const updateWorkflow = (id: string, data: any) =>
-  fetchApi<any>(`/workflows/${id}`, {
-    method: "PUT",
-    body: JSON.stringify(data),
-  });
-export const runWorkflow = (id: string) =>
-  fetchApi<any>(`/workflows/${id}/run`, { method: "POST" });
-export const deleteWorkflow = (id: string) =>
-  fetchApi<any>(`/workflows/${id}`, { method: "DELETE" });
-export const getWorkflowTemplates = () => fetchApi<any>("/workflows/templates");
+  /** Dinit service manager (opdbus.services.v1) */
+  serviceManager: {
+    start: serviceManager.start,
+    stop: serviceManager.stop,
+    restart: serviceManager.restart,
+    reload: serviceManager.reload,
+    create: serviceManager.create,
+    delete: serviceManager.delete,
+    get: serviceManager.get,
+    list: serviceManager.list,
+    enable: serviceManager.enable,
+    disable: serviceManager.disable,
+  },
 
-// Work Stacks
-export const getWorkStacks = () => fetchApi<any>("/workstacks/active");
-export const getWorkStackDetail = (id: string) =>
-  fetchApi<any>(`/workstacks/${id}`);
-export const getWorkStackHistory = (id: string) =>
-  fetchApi<any>(`/workstacks/${id}/history`);
-export const createWorkStack = (data: any) =>
-  fetchApi<any>("/workstacks/create", {
-    method: "POST",
-    body: JSON.stringify(data),
-  });
-export const controlWorkStack = (id: string, action: string) =>
-  fetchApi<any>(`/workstacks/${id}/control`, {
-    method: "POST",
-    body: JSON.stringify({ action }),
-  });
-export const updateWorkStackContext = (id: string, context: any) =>
-  fetchApi<any>(`/workstacks/${id}/context`, {
-    method: "PUT",
-    body: JSON.stringify(context),
-  });
+  /** MCP service (op.mcp.v1) */
+  mcp: {
+    health: mcpService.health,
+    initialize: mcpService.initialize,
+    listTools: mcpService.listTools,
+    callTool: mcpService.callTool,
+  },
 
-// Orchestration
-export const getOrchestrationQueue = () =>
-  fetchApi<any>("/orchestration/queue");
-export const getAntiHallucination = () =>
-  fetchApi<any>("/orchestration/anti-hallucination");
-export const getOrchestrationResources = () =>
-  fetchApi<any>("/orchestration/resources");
-export const getOrchestrationExecutions = () =>
-  fetchApi<any>("/orchestration/executions");
-export const getOrchestrationPolicies = () =>
-  fetchApi<any>("/orchestration/policies");
-export const updateOrchestrationPolicies = (data: any) =>
-  fetchApi<any>("/orchestration/policies", {
-    method: "PUT",
-    body: JSON.stringify(data),
-  });
-export const getProcessMining = () =>
-  fetchApi<any>("/orchestration/process-mining");
+  // ── REST fallbacks (not yet ported to gRPC) ─────────────────────────────
 
-// Execution Logs
-export const getExecutionLogs = (filters?: Record<string, string>) => {
-  const params = filters ? "?" + new URLSearchParams(filters).toString() : "";
-  return fetchApi<any>(`/execution/logs${params}`);
+  health: () => request<HealthSnapshot>("/health"),
+  status: () => request<StatusSummary>("/status"),
+
+  services: {
+    list: () => request<DbusService[]>("/services"),
+    get: (name: string) =>
+      request<DbusService>(`/services/${encodeURIComponent(name)}`),
+    introspect: (name: string, path: string) =>
+      request<unknown>(
+        `/services/${encodeURIComponent(name)}/introspect?path=${encodeURIComponent(path)}`,
+      ),
+    call: (
+      name: string,
+      path: string,
+      iface: string,
+      method: string,
+      args: unknown[] = [],
+    ) =>
+      request<unknown>(`/services/${encodeURIComponent(name)}/call`, {
+        method: "POST",
+        body: JSON.stringify({ path, interface: iface, method, args }),
+      }),
+  },
+
+  tools: {
+    list: () => request<Tool[]>("/tools"),
+    get: (id: string) => request<Tool>(`/tools/${encodeURIComponent(id)}`),
+    execute: (id: string, input: Record<string, unknown>) =>
+      request<unknown>(`/tools/${encodeURIComponent(id)}/execute`, {
+        method: "POST",
+        body: JSON.stringify(input),
+      }),
+  },
+
+  agents: {
+    list: () => request<Agent[]>("/agents"),
+    get: (id: string) => request<Agent>(`/agents/${id}`),
+    start: (id: string) =>
+      request<void>(`/agents/${id}/start`, { method: "POST" }),
+    stop: (id: string) =>
+      request<void>(`/agents/${id}/stop`, { method: "POST" }),
+  },
+
+  zeroclaw: {
+    schema: () => request<unknown>("/zeroclaw/schema"),
+    status: () => request<unknown>("/llm/status"),
+    providers: () => request<unknown>("/llm/providers"),
+    models: (provider?: string) =>
+      request<unknown>(
+        provider
+          ? `/llm/models/${encodeURIComponent(provider)}`
+          : "/llm/models",
+      ),
+    setProvider: (provider: string) =>
+      request<unknown>("/llm/provider", {
+        method: "POST",
+        body: JSON.stringify({ provider }),
+      }),
+    setModel: (model: string) =>
+      request<unknown>("/llm/model", {
+        method: "POST",
+        body: JSON.stringify({ model }),
+      }),
+  },
+
+  llm: {
+    status: () => request<unknown>("/llm/status"),
+    providers: () => request<unknown>("/llm/providers"),
+    models: (provider?: string) =>
+      request<unknown>(
+        provider
+          ? `/llm/models/${encodeURIComponent(provider)}`
+          : "/llm/models",
+      ),
+    setProvider: (provider: string) =>
+      request<unknown>("/llm/provider", {
+        method: "POST",
+        body: JSON.stringify({ provider }),
+      }),
+    setModel: (model: string) =>
+      request<unknown>("/llm/model", {
+        method: "POST",
+        body: JSON.stringify({ model }),
+      }),
+  },
+
+  sessions: {
+    list: () => request<unknown>("/chat/sessions"),
+    get: (key: string) =>
+      request<Session>(`/sessions/${encodeURIComponent(key)}`),
+    delete: (key: string) =>
+      request<void>(`/sessions/${encodeURIComponent(key)}`, {
+        method: "DELETE",
+      }),
+    patch: (key: string, patch: Record<string, unknown>) =>
+      request<void>(`/sessions/${encodeURIComponent(key)}`, {
+        method: "PATCH",
+        body: JSON.stringify(patch),
+      }),
+  },
+
+  chat: {
+    history: (sessionKey: string) =>
+      request<unknown>(`/chat/history/${encodeURIComponent(sessionKey)}`),
+    send: (
+      sessionKey: string,
+      message: string,
+      provider?: string,
+      model?: string,
+    ) =>
+      request<unknown>(`/zeroclaw/chat`, {
+        method: "POST",
+        body: JSON.stringify({
+          session_id: sessionKey,
+          message,
+          provider,
+          model,
+        }),
+      }),
+  },
+
+  logs: {
+    list: (opts?: { limit?: number; level?: string }) => {
+      const p = new URLSearchParams();
+      if (opts?.limit) p.set("limit", String(opts.limit));
+      if (opts?.level) p.set("level", opts.level);
+      return request<LogEntry[]>(`/logs?${p}`);
+    },
+  },
+
+  config: {
+    get: () => request<ConfigSnapshot>("/config"),
+    save: (config: Record<string, unknown>) =>
+      request<void>("/config", { method: "PUT", body: JSON.stringify(config) }),
+    apply: () => request<void>("/config/apply", { method: "POST" }),
+  },
+
+  debug: {
+    call: (method: string, params: unknown) =>
+      request<unknown>("/debug/call", {
+        method: "POST",
+        body: JSON.stringify({ method, params }),
+      }),
+  },
 };
-export const replayExecution = (id: string) =>
-  fetchApi<any>(`/execution/${id}/replay`, { method: "POST" });
 
-// Debugger
-export const getDebugExecutions = () =>
-  fetchApi<any>("/orchestration/debug/active");
-export const getDebugTrace = (executionId: string) =>
-  fetchApi<any>(`/orchestration/debug/${executionId}/trace`);
-export const debugControl = (executionId: string, action: string) =>
-  fetchApi<any>(`/orchestration/debug/${executionId}/control`, {
-    method: "POST",
-    body: JSON.stringify({ action }),
-  });
-export const getDebugVariables = (executionId: string) =>
-  fetchApi<any>(`/orchestration/debug/${executionId}/variables`);
-export const getDebugBreakpoints = () =>
-  fetchApi<any>("/orchestration/breakpoints");
-export const addBreakpoint = (data: any) =>
-  fetchApi<any>("/orchestration/breakpoints", {
-    method: "POST",
-    body: JSON.stringify(data),
-  });
+/**
+ * @deprecated Use `useEventStream()` hook instead — SSE has been replaced by gRPC-Web streams.
+ */
+export function connectEventStream(
+  onEvent: (event: { type: string; data: unknown }) => void,
+  onError: (err: Error) => void,
+): () => void {
+  console.warn(
+    "[DEPRECATED] connectEventStream: SSE has been replaced by gRPC-Web. Use useEventStream() hook.",
+  );
+  return () => {};
+}

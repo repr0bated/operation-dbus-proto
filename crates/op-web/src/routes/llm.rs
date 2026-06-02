@@ -19,6 +19,7 @@ use op_llm::ProviderType;
 pub struct LlmStatusResponse {
     pub provider: String,
     pub model: String,
+    pub model_non_sandboxed: bool,
     pub available_providers: Vec<String>,
 }
 
@@ -35,6 +36,14 @@ pub struct ModelInfo {
     pub name: String,
     pub description: Option<String>,
     pub available: bool,
+    pub provider: Option<String>,
+    pub upstream_provider: Option<String>,
+    pub transport: Option<String>,
+    pub status: Option<String>,
+    pub route_hint: Option<String>,
+    pub route_kind: Option<String>,
+    pub status_reason: Option<String>,
+    pub source: Option<String>,
 }
 
 /// Provider switch request
@@ -47,6 +56,8 @@ pub struct SwitchProviderRequest {
 #[derive(Debug, Deserialize)]
 pub struct SwitchModelRequest {
     pub model: String,
+    #[serde(default)]
+    pub non_sandboxed: bool,
 }
 
 /// Query params for models endpoint
@@ -62,6 +73,7 @@ pub async fn get_llm_status(Extension(state): Extension<Arc<AppState>>) -> impl 
     Json(LlmStatusResponse {
         provider: status["provider"].as_str().unwrap_or("unknown").to_string(),
         model: status["model"].as_str().unwrap_or("").to_string(),
+        model_non_sandboxed: state.chat_manager.current_model_non_sandboxed().await,
         available_providers: status["available_providers"]
             .as_array()
             .map(|arr| {
@@ -73,23 +85,94 @@ pub async fn get_llm_status(Extension(state): Extension<Arc<AppState>>) -> impl 
     })
 }
 
+/// Build the model list from the zeroclaw plugin projection (`model_routes`).
+///
+/// The zeroclaw plugin is the single source of truth: its `query_current_state`
+/// is projected verbatim at `/opdbus/v1/plugins/zeroclaw`. We read it from
+/// the projection cache and surface each route as a selectable model.
+async fn models_from_zeroclaw(state: &AppState) -> Option<Vec<ModelInfo>> {
+    let routes = crate::zeroclaw_routes::routes(&state.projection_cache).await?;
+
+    let models: Vec<ModelInfo> = routes
+        .iter()
+        .map(|route| {
+            let description = match route.hint.as_deref() {
+                Some(h) => format!("{} · {} · {}", route.provider, h, route.status),
+                None => format!("{} · {}", route.provider, route.status),
+            };
+            let name = match route.hint.as_deref() {
+                Some(h) => format!("{} ({})", route.model, h),
+                None => route.model.clone(),
+            };
+            ModelInfo {
+                id: route.model.clone(),
+                name,
+                description: Some(description),
+                available: route.available,
+                provider: Some(route.upstream_provider.clone()),
+                upstream_provider: Some(route.upstream_provider.clone()),
+                transport: route.transport.clone(),
+                status: Some(route.status.clone()),
+                route_hint: route.hint.clone(),
+                route_kind: route.kind.clone(),
+                status_reason: route.status_reason.clone(),
+                source: route.source.clone(),
+            }
+        })
+        .collect();
+
+    if models.is_empty() {
+        None
+    } else {
+        Some(models)
+    }
+}
+
 /// GET /api/llm/models - Get models for current or specified provider
 pub async fn get_models(
     Extension(state): Extension<Arc<AppState>>,
     Query(query): Query<ModelsQuery>,
 ) -> impl IntoResponse {
-    let provider_type = if let Some(ref provider_str) = query.provider {
-        match provider_str.parse::<ProviderType>() {
-            Ok(pt) => pt,
-            Err(_) => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(simd_json::json!({ "error": format!("Unknown provider: {}", provider_str) }))
-                ).into_response();
-            }
+    let Some(ref provider_str) = query.provider else {
+        // The zeroclaw plugin projection is the default source of truth for the combined model list.
+        if let Some(models) = models_from_zeroclaw(&state).await {
+            return Json(ModelsResponse {
+                provider: "zeroclaw".to_string(),
+                models,
+            })
+            .into_response();
         }
-    } else {
-        state.chat_manager.current_provider().await
+
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(simd_json::json!({
+                "error": "Zeroclaw model route projection is unavailable",
+                "provider": "zeroclaw",
+                "models": []
+            })),
+        )
+            .into_response();
+    };
+
+    if provider_str == "zeroclaw" {
+        if let Some(models) = models_from_zeroclaw(&state).await {
+            return Json(ModelsResponse {
+                provider: "zeroclaw".to_string(),
+                models,
+            })
+            .into_response();
+        }
+    }
+
+    let provider_type = match provider_str.parse::<ProviderType>() {
+        Ok(pt) => pt,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(simd_json::json!({ "error": format!("Unknown provider: {}", provider_str) })),
+            )
+                .into_response();
+        }
     };
 
     // Check if provider is available
@@ -118,6 +201,21 @@ pub async fn get_models(
                     name: m.name,
                     description: m.description,
                     available: m.available,
+                    provider: Some(provider_type.to_string()),
+                    upstream_provider: Some(provider_type.to_string()),
+                    transport: None,
+                    status: Some(
+                        if m.available {
+                            "available"
+                        } else {
+                            "unavailable"
+                        }
+                        .to_string(),
+                    ),
+                    route_hint: None,
+                    route_kind: None,
+                    status_reason: None,
+                    source: None,
                 })
                 .collect();
 
@@ -187,14 +285,31 @@ pub async fn switch_model(
     Extension(state): Extension<Arc<AppState>>,
     Json(req): Json<SwitchModelRequest>,
 ) -> impl IntoResponse {
-    match state.chat_manager.switch_model(&req.model).await {
+    if let Err(e) =
+        crate::zeroclaw_routes::ensure_model_available(&state.projection_cache, &req.model).await
+    {
+        return (
+            StatusCode::CONFLICT,
+            Json(simd_json::json!({ "error": e.to_string(), "model": req.model })),
+        );
+    }
+
+    match state
+        .chat_manager
+        .switch_model_with_options(&req.model, Some(req.non_sandboxed))
+        .await
+    {
         Ok(_) => {
-            info!("Switched to model: {}", req.model);
+            info!(
+                "Switched to model: {} (non_sandboxed={})",
+                req.model, req.non_sandboxed
+            );
             (
                 StatusCode::OK,
                 Json(simd_json::json!({
                     "success": true,
-                    "model": req.model
+                    "model": req.model,
+                    "non_sandboxed": req.non_sandboxed
                 })),
             )
         }

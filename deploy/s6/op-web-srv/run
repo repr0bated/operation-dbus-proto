@@ -1,0 +1,9 @@
+#!/bin/sh
+# op-web-server — unified HTTP API + embedded UI for op-dbus
+export PORT="${PORT:-8080}"
+export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/op-dbus/session-bus.sock}"
+export OP_DBUS_ADDR="${OP_DBUS_ADDR:-http://10.200.0.2:50051}"
+export OP_MEMORY_DB="${OP_MEMORY_DB:-/var/lib/op-dbus/chat-memory.db}"
+export OP_WEB_STATIC_DIR="${OP_WEB_STATIC_DIR:-/home/jeremy/git/operation-dbus-proto/lovable/dist}"
+export RUST_LOG="${RUST_LOG:-op_web=info,info}"
+exec s6-setuidgid jeremy /usr/local/bin/op-web-server

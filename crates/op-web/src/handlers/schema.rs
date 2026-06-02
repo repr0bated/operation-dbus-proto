@@ -1,6 +1,6 @@
 //! Schema Handler — Single Source of Truth from Shared Memory
 //!
-//! Serves the canonical PluginSchema catalog from `/dev/shm/plugin_schemas.json`.
+//! Serves the canonical PluginSchema catalog from `/dev/shm/live-schema.json`.
 //! All UI, blockchain, and downstream consumers read from this endpoint.
 
 use axum::{
@@ -14,7 +14,7 @@ use tracing::{info, warn};
 
 use crate::state::AppState;
 
-const SHM_SCHEMA_PATH: &str = "/dev/shm/plugin_schemas.json";
+const SHM_SCHEMA_PATH: &str = "/dev/shm/live-schema.json";
 
 /// GET /api/schema — Return the canonical schema catalog from shared memory.
 ///
@@ -25,7 +25,10 @@ const SHM_SCHEMA_PATH: &str = "/dev/shm/plugin_schemas.json";
 pub async fn schema_handler(Extension(_state): Extension<Arc<AppState>>) -> Response {
     match std::fs::read(SHM_SCHEMA_PATH) {
         Ok(bytes) => {
-            info!(bytes = bytes.len(), "Served schema catalog from shared memory");
+            info!(
+                bytes = bytes.len(),
+                "Served schema catalog from shared memory"
+            );
             Response::builder()
                 .status(StatusCode::OK)
                 .header(header::CONTENT_TYPE, "application/json")

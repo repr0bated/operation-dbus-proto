@@ -108,11 +108,7 @@ impl LlmProvider for AssistantProvider {
         self.chat_with_request(model, request).await
     }
 
-    async fn chat_with_request(
-        &self,
-        model: &str,
-        request: ChatRequest,
-    ) -> Result<ChatResponse> {
+    async fn chat_with_request(&self, model: &str, request: ChatRequest) -> Result<ChatResponse> {
         let response = self.inner.chat_with_request(model, request).await?;
         Ok(Self::rewrite_response(response))
     }
@@ -176,7 +172,10 @@ mod tests {
         }];
 
         let rewritten = AssistantProvider::rewrite_models(models);
-        assert_eq!(rewritten[0].tags, vec!["test".to_string(), "assistant".to_string()]);
+        assert_eq!(
+            rewritten[0].tags,
+            vec!["test".to_string(), "assistant".to_string()]
+        );
         assert_eq!(
             rewritten[0].description,
             Some("Assistant model owned by test".to_string())

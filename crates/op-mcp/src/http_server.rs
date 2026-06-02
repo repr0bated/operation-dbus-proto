@@ -152,12 +152,24 @@ fn is_wireguard_auth_token(token: &str) -> bool {
     is_wireguard_pubkey(token) || is_wireguard_session_id(token)
 }
 
+fn is_dev_mode() -> bool {
+    matches!(
+        std::env::var("OPENCLAW_DEV_MODE").as_deref(),
+        Ok("1") | Ok("true") | Ok("yes")
+    )
+}
+
 // Authentication middleware
 async fn auth_middleware(
     headers: HeaderMap,
     request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Result<axum::response::Response, StatusCode> {
+    if is_dev_mode() {
+        debug!("OPENCLAW_DEV_MODE: skipping origin and token checks");
+        return Ok(next.run(request).await);
+    }
+
     let client_ip = extract_client_ip(&headers);
 
     let Some(token) = extract_bearer_token(&headers) else {

@@ -16,6 +16,7 @@ use op_llm::provider::ProviderType;
 pub struct LlmStatusResponse {
     pub provider: String,
     pub model: String,
+    pub model_non_sandboxed: bool,
     pub available: bool,
 }
 
@@ -32,9 +33,11 @@ pub async fn llm_status_handler(
     let provider = state.chat_manager.current_provider().await.to_string();
     let model = state.chat_manager.current_model().await;
     let available = !state.chat_manager.available_providers().is_empty();
+    let model_non_sandboxed = state.chat_manager.current_model_non_sandboxed().await;
     Json(LlmStatusResponse {
         provider,
         model,
+        model_non_sandboxed,
         available,
     })
 }
@@ -106,6 +109,8 @@ pub async fn list_models_for_provider_handler(
 #[derive(Debug, Deserialize)]
 pub struct SwitchModelRequest {
     pub model: String,
+    #[serde(default)]
+    pub non_sandboxed: bool,
 }
 
 /// POST /api/llm/model - Switch model
@@ -113,12 +118,18 @@ pub async fn switch_model_handler(
     Extension(state): Extension<Arc<AppState>>,
     Json(request): Json<SwitchModelRequest>,
 ) -> Json<Value> {
-    match state.chat_manager.switch_model(request.model.clone()).await {
+    match state
+        .chat_manager
+        .switch_model_with_options(request.model.clone(), Some(request.non_sandboxed))
+        .await
+    {
         Ok(_) => {
             let _ = persist_model(&request.model).await;
+            let _ = persist_model_non_sandboxed(request.non_sandboxed).await;
             Json(json!({
                 "success": true,
-                "model": request.model
+                "model": request.model,
+                "non_sandboxed": request.non_sandboxed
             }))
         }
         Err(e) => Json(json!({
@@ -164,6 +175,7 @@ pub async fn switch_provider_handler(
 }
 
 const PERSISTED_MODEL_PATH: &str = "/etc/op-dbus/llm-model";
+const PERSISTED_MODEL_NON_SANDBOXED_PATH: &str = "/etc/op-dbus/llm-model-non-sandboxed";
 const PERSISTED_PROVIDER_PATH: &str = "/etc/op-dbus/llm-provider";
 
 async fn persist_model(model: &str) -> Result<(), String> {
@@ -175,6 +187,21 @@ async fn persist_model(model: &str) -> Result<(), String> {
     tokio::fs::write(PERSISTED_MODEL_PATH, format!("{model}\n"))
         .await
         .map_err(|e| format!("write model: {}", e))?;
+    Ok(())
+}
+
+async fn persist_model_non_sandboxed(non_sandboxed: bool) -> Result<(), String> {
+    if let Some(parent) = std::path::Path::new(PERSISTED_MODEL_NON_SANDBOXED_PATH).parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| format!("create dir: {}", e))?;
+    }
+    tokio::fs::write(
+        PERSISTED_MODEL_NON_SANDBOXED_PATH,
+        if non_sandboxed { "true\n" } else { "false\n" },
+    )
+    .await
+    .map_err(|e| format!("write model non-sandboxed flag: {}", e))?;
     Ok(())
 }
 

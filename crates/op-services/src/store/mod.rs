@@ -43,18 +43,16 @@ impl Store {
     async fn with_paths(services_path: PathBuf, audit_path: PathBuf) -> Result<Self> {
         let catalog = if services_path.exists() {
             match tokio::fs::read_to_string(&services_path).await {
-                Ok(contents) => {
-                    match serde_json::from_str::<ServicesCatalog>(&contents) {
-                        Ok(c) => {
-                            info!(services = c.services.len(), "Loaded services from JSON");
-                            c
-                        }
-                        Err(e) => {
-                            warn!(error = %e, "Corrupt services JSON, starting fresh");
-                            ServicesCatalog::default()
-                        }
+                Ok(contents) => match serde_json::from_str::<ServicesCatalog>(&contents) {
+                    Ok(c) => {
+                        info!(services = c.services.len(), "Loaded services from JSON");
+                        c
                     }
-                }
+                    Err(e) => {
+                        warn!(error = %e, "Corrupt services JSON, starting fresh");
+                        ServicesCatalog::default()
+                    }
+                },
                 Err(e) => {
                     warn!(error = %e, "Failed to read services JSON, starting fresh");
                     ServicesCatalog::default()

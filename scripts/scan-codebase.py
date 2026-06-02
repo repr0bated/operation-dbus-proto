@@ -33,7 +33,7 @@ LAYER_MAP = [
     ("State",        ["op-state", "op-plugins", "op-dbus-mirror"]),
     ("Tools",        ["op-tools", "op-dynamic-loader", "op-introspection", "op-inspector"]),
     ("Agents",       ["op-agents", "op-chat", "op-llm"]),
-    ("MCP",          ["op-mcp", "op-mcp-aggregator", "op-mcp-proxy", "op-cognitive-mcp"]),
+    ("MCP",          ["op-mcp", "op-mcp-aggregator", "op-cognitive-mcp"]),
     ("Networking",   ["op-network", "op-grpc-bridge", "op-http", "op-jsonrpc"]),
     ("Security",     ["op-gateway", "op-identity"]),
     ("Deployment",   ["op-deployment", "op-services"]),

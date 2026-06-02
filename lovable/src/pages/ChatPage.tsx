@@ -1,362 +1,432 @@
-import { useState, useEffect, useRef, useCallback } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { MessageSquare, Send, Plus, FileText, Terminal, Download, Search, Lock, Pencil } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { getChatSessions, getChatMessages, sendChatMessage, getSystemPrompt, updateSystemPrompt, getLogsStream } from "@/lib/api";
+import { useState, useRef, useEffect, useCallback } from "react";
+import { Callout } from "@/components/shell/Primitives";
+import { JsonRenderer } from "@/components/json/JsonRenderer";
+import { SchemaForm } from "@/components/json/SchemaForm";
+import {
+  MessageBubble,
+  type LocalMessage,
+} from "@/components/chat/MessageBubble";
+import { SystemPromptEditor } from "@/components/chat/SystemPromptEditor";
+import { useEventStore } from "@/stores/event-store";
+import { api } from "@/lib/api";
+import { cn } from "@/lib/utils";
+import { X, Maximize2, MessageSquare, FileText } from "lucide-react";
 
-function ChatView() {
-  const [selectedSession, setSelectedSession] = useState<string | null>(null);
-  const [input, setInput] = useState("");
-  const queryClient = useQueryClient();
+type ChatTab = "chat" | "system-prompt";
 
-  const sessions = useQuery({ queryKey: ["chatSessions"], queryFn: getChatSessions });
-  const messages = useQuery({
-    queryKey: ["chatMessages", selectedSession],
-    queryFn: () => getChatMessages(selectedSession!),
-    enabled: !!selectedSession,
-  });
-
-  const sendMsg = useMutation({
-    mutationFn: (message: string) => sendChatMessage({ session_id: selectedSession ?? undefined, message }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["chatMessages", selectedSession] });
-      queryClient.invalidateQueries({ queryKey: ["chatSessions"] });
-      setInput("");
-    },
-  });
-
-  const handleSend = () => {
-    if (!input.trim()) return;
-    sendMsg.mutate(input);
-  };
-
-  return (
-    <div className="flex h-[calc(100vh-8rem)] gap-4">
-      {/* Sessions sidebar */}
-      <Card className="w-64 shrink-0 border-border/50 hidden lg:flex flex-col">
-        <CardHeader className="pb-2 px-3 pt-3">
-          <div className="flex items-center justify-between">
-            <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Sessions</CardTitle>
-            <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-muted-foreground hover:text-foreground">
-              <Plus className="h-3.5 w-3.5" />
-            </Button>
-          </div>
-        </CardHeader>
-        <ScrollArea className="flex-1 px-2 pb-2">
-          {sessions.data && Array.isArray(sessions.data) ? (
-            sessions.data.map((s: any) => (
-              <button
-                key={s.id}
-                onClick={() => setSelectedSession(s.id)}
-                className={`w-full text-left p-2.5 rounded-md text-sm mb-1 transition-colors ${
-                  selectedSession === s.id ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-accent hover:text-foreground"
-                }`}
-              >
-                <p className="font-medium truncate text-xs">{s.title}</p>
-                <p className="text-xs text-muted-foreground mt-0.5">{s.date} • {s.messages} msgs</p>
-              </button>
-            ))
-          ) : (
-            <p className="text-xs text-muted-foreground p-2">
-              {sessions.isLoading ? "Loading..." : "No sessions"}
-            </p>
-          )}
-        </ScrollArea>
-      </Card>
-
-      {/* Chat area */}
-      <Card className="flex-1 border-border/50 flex flex-col">
-        <ScrollArea className="flex-1 p-4">
-          {messages.data && Array.isArray(messages.data) ? (
-            messages.data.map((msg: any, i: number) => (
-              <div key={msg.id ?? i} className={`mb-4 flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
-                <div className={`max-w-[75%] rounded-lg px-4 py-2.5 text-sm ${
-                  msg.role === "user"
-                    ? "bg-primary text-primary-foreground"
-                    : "bg-secondary text-secondary-foreground"
-                }`}>
-                  <pre className="whitespace-pre-wrap font-sans text-sm">{msg.content}</pre>
-                </div>
-              </div>
-            ))
-          ) : (
-            <div className="h-full flex items-center justify-center text-muted-foreground text-sm">
-              {selectedSession ? (messages.isLoading ? "Loading..." : "No messages") : "Select a session or start a new chat"}
-            </div>
-          )}
-        </ScrollArea>
-        <div className="p-3 border-t border-border/50">
-          <div className="flex gap-2">
-            <Textarea
-              placeholder="Type a message..."
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
-              className="min-h-[40px] max-h-32 bg-secondary border-none resize-none text-sm"
-              rows={1}
-            />
-            <Button onClick={handleSend} disabled={sendMsg.isPending || !input.trim()} size="icon" className="shrink-0">
-              <Send className="h-4 w-4" />
-            </Button>
-          </div>
-        </div>
-      </Card>
-    </div>
-  );
+interface ChatFormData {
+  provider?: string;
+  model?: string;
+  message?: string;
 }
 
-function LogsView() {
-  const [logs, setLogs] = useState<{ level: string; service: string; message: string; timestamp: string }[]>([]);
-  const [paused, setPaused] = useState(false);
-  const [filter, setFilter] = useState("all");
-  const [serviceFilter, setServiceFilter] = useState("all");
-  const [search, setSearch] = useState("");
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const pausedRef = useRef(paused);
-  const eventSourceRef = useRef<EventSource | null>(null);
-
-  pausedRef.current = paused;
-
-  useEffect(() => {
-    const url = getLogsStream();
-    const es = new EventSource(url);
-    eventSourceRef.current = es;
-
-    es.onmessage = (event) => {
-      if (pausedRef.current) return;
-      try {
-        const data = JSON.parse(event.data);
-        setLogs((prev) => [...prev.slice(-500), data]);
-      } catch {
-        // plain text fallback
-        setLogs((prev) => [
-          ...prev.slice(-500),
-          { level: "INFO", service: "system", message: event.data, timestamp: new Date().toISOString() },
-        ]);
-      }
+interface ZeroclawSchema {
+  zeroclaw?: {
+    chat_form_schema?: {
+      type?: string;
+      properties?: Record<string, {
+        type?: string;
+        enum?: string[];
+        oneOf?: Array<{ const?: string; title?: string }>;
+        description?: string;
+        minLength?: number;
+      }>;
+      required?: string[];
+      title?: string;
     };
-
-    es.onerror = () => {
-      // will auto-reconnect
-    };
-
-    return () => es.close();
-  }, []);
-
-  useEffect(() => {
-    if (!paused && scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
-  }, [logs, paused]);
-
-  const levelColor: Record<string, string> = {
-    ERROR: "text-destructive",
-    WARN: "text-warning",
-    INFO: "text-info",
-    DEBUG: "text-muted-foreground",
   };
-
-  const filtered = logs.filter((l) => {
-    if (filter !== "all" && l.level?.toUpperCase() !== filter) return false;
-    if (serviceFilter !== "all" && l.service !== serviceFilter) return false;
-    if (search && !l.message?.toLowerCase().includes(search.toLowerCase())) return false;
-    return true;
-  });
-
-  const services = Array.from(new Set(logs.map((l) => l.service).filter(Boolean)));
-
-  const downloadLogs = () => {
-    const text = filtered.map((l) => `[${l.timestamp}] [${l.level}] [${l.service}] ${l.message}`).join("\n");
-    const blob = new Blob([text], { type: "text/plain" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `logs-${new Date().toISOString().slice(0, 10)}.txt`;
-    a.click();
-  };
-
-  return (
-    <Card className="border-border/50 h-[calc(100vh-8rem)] flex flex-col">
-      <CardHeader className="pb-2 shrink-0">
-        <div className="flex items-center justify-between flex-wrap gap-2">
-          <div className="flex items-center gap-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">System Logs</CardTitle>
-            <Badge variant="outline" className={`text-xs ${!paused ? "text-success border-success/30" : "text-warning border-warning/30"}`}>
-              {paused ? "Paused" : "Live"}
-            </Badge>
-            <span className="text-xs text-muted-foreground">{filtered.length} entries</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="relative">
-              <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground" />
-              <Input
-                placeholder="Search logs..."
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className="h-7 w-40 pl-7 bg-secondary border-none text-xs"
-              />
-            </div>
-            <Select value={filter} onValueChange={setFilter}>
-              <SelectTrigger className="h-7 w-24 bg-secondary border-none text-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All levels</SelectItem>
-                <SelectItem value="ERROR">Error</SelectItem>
-                <SelectItem value="WARN">Warn</SelectItem>
-                <SelectItem value="INFO">Info</SelectItem>
-                <SelectItem value="DEBUG">Debug</SelectItem>
-              </SelectContent>
-            </Select>
-            <Select value={serviceFilter} onValueChange={setServiceFilter}>
-              <SelectTrigger className="h-7 w-28 bg-secondary border-none text-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All services</SelectItem>
-                {services.map((s) => (
-                  <SelectItem key={s} value={s}>{s}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Button size="sm" variant="outline" onClick={() => setPaused(!paused)} className="text-xs h-7">
-              {paused ? "Resume" : "Pause"}
-            </Button>
-            <Button size="sm" variant="outline" onClick={downloadLogs} className="text-xs h-7">
-              <Download className="h-3 w-3" />
-            </Button>
-          </div>
-        </div>
-      </CardHeader>
-      <CardContent className="flex-1 overflow-hidden p-0">
-        <div ref={scrollRef} className="h-full overflow-auto scrollbar-thin px-4 pb-4">
-          <div className="font-mono text-xs space-y-0">
-            {filtered.length > 0 ? filtered.map((line, i) => (
-              <div key={i} className="py-0.5 flex gap-2 hover:bg-accent/30 px-1 rounded">
-                <span className="text-muted-foreground/60 shrink-0">{line.timestamp?.slice(11, 19) ?? ""}</span>
-                <span className={`shrink-0 w-12 font-semibold ${levelColor[line.level?.toUpperCase()] ?? "text-muted-foreground"}`}>
-                  {line.level?.toUpperCase() ?? "LOG"}
-                </span>
-                <span className="text-primary/70 shrink-0">[{line.service ?? "sys"}]</span>
-                <span className="text-foreground/80">{line.message}</span>
-              </div>
-            )) : (
-              <p className="text-muted-foreground py-8 text-center text-sm font-sans">
-                {logs.length === 0 ? "Connecting to log stream..." : "No logs match filters"}
-              </p>
-            )}
-          </div>
-        </div>
-      </CardContent>
-    </Card>
-  );
 }
 
-function SystemPromptView() {
-  const [tunablePrompt, setTunablePrompt] = useState("");
-  const [loaded, setLoaded] = useState(false);
+function historyMessages(payload: unknown): LocalMessage[] {
+  const value = payload as { messages?: unknown[] } | unknown[];
+  const messages = Array.isArray(value)
+    ? value
+    : Array.isArray(value?.messages)
+      ? value.messages
+      : [];
 
-  const promptQuery = useQuery({
-    queryKey: ["systemPrompt"],
-    queryFn: getSystemPrompt,
+  return messages.map((item, index) => {
+    const msg = item as {
+      id?: unknown;
+      role?: unknown;
+      content?: unknown;
+      timestamp?: unknown;
+    };
+    return {
+      id: String(msg.id ?? `history-${index}`),
+      role: String(msg.role ?? "assistant") as LocalMessage["role"],
+      content: String(msg.content ?? ""),
+      timestamp: msg.timestamp
+        ? Date.parse(String(msg.timestamp)) || Date.now()
+        : Date.now(),
+    };
   });
+}
 
-  const saveMutation = useMutation({
-    mutationFn: (p: string) => updateSystemPrompt(p),
-  });
-
-  // Load tunable section from API
-  useEffect(() => {
-    if (promptQuery.data && !loaded) {
-      setTunablePrompt(promptQuery.data?.tunable ?? promptQuery.data?.custom ?? "");
-      setLoaded(true);
-    }
-  }, [promptQuery.data, loaded]);
-
-  const immutablePrompt = promptQuery.data?.immutable ?? promptQuery.data?.system ?? promptQuery.data?.prompt ?? "";
-  const charCount = tunablePrompt.length;
-
-  return (
-    <Card className="border-border/50 h-[calc(100vh-8rem)] flex flex-col">
-      <CardHeader className="pb-2 shrink-0">
-        <div className="flex items-center justify-between">
-          <CardTitle className="text-sm font-medium text-muted-foreground">System Prompt</CardTitle>
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-muted-foreground">{charCount} chars</span>
-            <Button
-              size="sm"
-              variant="outline"
-              className="text-xs h-7"
-              onClick={() => { setTunablePrompt(""); }}
-            >
-              Reset
-            </Button>
-            <Button
-              size="sm"
-              className="text-xs h-7"
-              onClick={() => saveMutation.mutate(tunablePrompt)}
-              disabled={saveMutation.isPending}
-            >
-              {saveMutation.isPending ? "Saving..." : "Save"}
-            </Button>
-          </div>
-        </div>
-      </CardHeader>
-      <CardContent className="flex-1 overflow-auto scrollbar-thin space-y-4">
-        {/* Immutable Section */}
-        <div>
-          <div className="flex items-center gap-2 mb-2">
-            <Lock className="h-3.5 w-3.5 text-muted-foreground" />
-            <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Immutable (read-only)</span>
-          </div>
-          <div className="p-4 rounded-lg bg-secondary/50 border border-border/30">
-            <pre className="whitespace-pre-wrap font-mono text-xs text-muted-foreground leading-relaxed">
-              {promptQuery.isLoading ? "Loading..." : (immutablePrompt || "No immutable prompt defined")}
-            </pre>
-          </div>
-        </div>
-
-        {/* Tunable Section */}
-        <div className="flex-1">
-          <div className="flex items-center gap-2 mb-2">
-            <Pencil className="h-3.5 w-3.5 text-primary" />
-            <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Tunable (editable)</span>
-          </div>
-          <Textarea
-            value={tunablePrompt}
-            onChange={(e) => setTunablePrompt(e.target.value)}
-            className="min-h-[200px] bg-secondary border-none resize-none font-mono text-sm"
-            placeholder="Add custom instructions, persona adjustments, or context here..."
-          />
-        </div>
-      </CardContent>
-    </Card>
-  );
+function assistantMessage(payload: unknown): LocalMessage {
+  const value = payload as {
+    id?: unknown;
+    role?: unknown;
+    content?: unknown;
+    message?: unknown;
+    error?: unknown;
+  };
+  const body =
+    value?.content ?? value?.message ?? value?.error ?? "(no response)";
+  return {
+    id: String(value?.id ?? `msg-${Date.now()}-resp`),
+    role: String(value?.role ?? "assistant") as LocalMessage["role"],
+    content: typeof body === "string" ? body : JSON.stringify(body, null, 2),
+    timestamp: Date.now(),
+  };
 }
 
 export default function ChatPage() {
+  const { connected } = useEventStore();
+  const [activeTab, setActiveTab] = useState<ChatTab>("chat");
+  const [messages, setMessages] = useState<LocalMessage[]>([
+    {
+      id: "sys-1",
+      role: "system",
+      content: "Connected to Operation-DBUS control plane. Schema-driven chat interface ready.",
+      timestamp: Date.now(),
+    },
+  ]);
+  const [formData, setFormData] = useState<ChatFormData>({});
+  const [schema, setSchema] = useState<ZeroclawSchema | null>(null);
+  const [gatewayError, setGatewayError] = useState("");
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarContent, setSidebarContent] = useState<unknown>(null);
+  const [focusMode, setFocusMode] = useState(false);
+  const [sending, setSending] = useState(false);
+  const threadRef = useRef<HTMLDivElement>(null);
+
+  const scrollToBottom = useCallback(() => {
+    threadRef.current?.scrollTo({
+      top: threadRef.current.scrollHeight,
+      behavior: "smooth",
+    });
+  }, []);
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages, scrollToBottom]);
+
+  // Fetch schema once on mount — this drives the entire UI via JSON Schema
+  useEffect(() => {
+    let cancelled = false;
+    api.zeroclaw
+      .schema()
+      .then((payload) => {
+        if (cancelled) return;
+        setSchema(payload as ZeroclawSchema);
+        
+        // Initialize form with defaults from schema
+        const chatSchema = (payload as ZeroclawSchema)?.zeroclaw?.chat_form_schema;
+        const defaults: ChatFormData = {};
+        if (chatSchema?.properties) {
+          // Set first enum value as default for provider
+          const providerProp = chatSchema.properties.provider;
+          if (providerProp?.enum && providerProp.enum.length > 0) {
+            defaults.provider = providerProp.enum[0];
+          }
+          // Model will be set based on provider selection
+        }
+        setFormData(defaults);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setGatewayError(err instanceof Error ? err.message : String(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Update model options when provider changes (filter oneOf by provider hint)
+  useEffect(() => {
+    if (!formData.provider || !schema?.zeroclaw?.chat_form_schema?.properties) return;
+    
+    const modelProp = schema.zeroclaw.chat_form_schema.properties.model;
+    if (modelProp?.oneOf) {
+      // Filter models that match the selected provider
+      const providerPrefix = formData.provider.toLowerCase();
+      const filtered = modelProp.oneOf.filter(opt => {
+        const title = opt.title?.toLowerCase() || '';
+        const constVal = opt.const?.toLowerCase() || '';
+        return title.includes(providerPrefix) || 
+               constVal.includes(providerPrefix) ||
+               (formData.provider === 'factory' && title.includes('factory'));
+      });
+      
+      // If we have filtered models and current model doesn't match, pick first
+      if (filtered.length > 0) {
+        const currentValid = filtered.find(m => m.const === formData.model);
+        if (!currentValid) {
+          setFormData(prev => ({ ...prev, model: filtered[0].const }));
+        }
+      }
+    }
+  }, [formData.provider, schema]);
+
+  useEffect(() => {
+    api.chat
+      .history("default")
+      .then((payload) => {
+        const loaded = historyMessages(payload);
+        if (loaded.length > 0) setMessages(loaded);
+      })
+      .catch(() => {
+        // History is best-effort.
+      });
+  }, []);
+
+  const handleSend = async () => {
+    const message = formData.message?.trim();
+    if (!message || sending) return;
+    
+    const userMsg: LocalMessage = {
+      id: `msg-${Date.now()}`,
+      role: "user",
+      content: message,
+      timestamp: Date.now(),
+    };
+    setMessages((prev) => [...prev, userMsg]);
+    setFormData((prev) => ({ ...prev, message: "" }));
+    setSending(true);
+
+    try {
+      const response = await api.chat.send(
+        "default",
+        userMsg.content,
+        formData.provider,
+        formData.model,
+      );
+      setMessages((prev) => [...prev, assistantMessage(response)]);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      setGatewayError(msg);
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `msg-${Date.now()}-error`,
+          role: "assistant",
+          content: `Error: ${msg}`,
+          timestamp: Date.now(),
+        },
+      ]);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const openInSidebar = (data: unknown) => {
+    setSidebarContent(data);
+    setSidebarOpen(true);
+  };
+
+  const chatSchema = schema?.zeroclaw?.chat_form_schema;
+
+  const tabs: { id: ChatTab; label: string; icon: React.ReactNode }[] = [
+    {
+      id: "chat",
+      label: "Chat",
+      icon: <MessageSquare className="h-3.5 w-3.5" />,
+    },
+    {
+      id: "system-prompt",
+      label: "System Prompt",
+      icon: <FileText className="h-3.5 w-3.5" />,
+    },
+  ];
+
   return (
-    <div className="animate-slide-in">
-      <div className="mb-4">
-        <h1 className="text-2xl font-bold text-foreground">Chat</h1>
-        <p className="text-sm text-muted-foreground mt-1">AI assistant & system tools</p>
-      </div>
-      <Tabs defaultValue="chat">
-        <TabsList className="bg-secondary mb-4">
-          <TabsTrigger value="chat" className="text-xs gap-1.5"><MessageSquare className="h-3.5 w-3.5" /> Chat</TabsTrigger>
-          <TabsTrigger value="logs" className="text-xs gap-1.5"><Terminal className="h-3.5 w-3.5" /> Logs</TabsTrigger>
-          <TabsTrigger value="prompt" className="text-xs gap-1.5"><FileText className="h-3.5 w-3.5" /> System Prompt</TabsTrigger>
-        </TabsList>
-        <TabsContent value="chat"><ChatView /></TabsContent>
-        <TabsContent value="logs"><LogsView /></TabsContent>
-        <TabsContent value="prompt"><SystemPromptView /></TabsContent>
-      </Tabs>
+    <div className="flex flex-col h-full">
+      {/* Header with tabs */}
+      {!focusMode && (
+        <div className="border-b border-border shrink-0">
+          <div className="flex items-end justify-between gap-4 px-4 py-3">
+            <div>
+              <h1 className="text-[26px] font-bold tracking-tight leading-tight text-foreground">
+                Antigravity Chat
+              </h1>
+              <p className="text-sm text-muted-foreground mt-0.5">
+                Schema-driven interface · Zeroclaw model router
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setFocusMode(!focusMode)}
+                className="p-2 rounded-md hover:bg-muted/30 text-muted-foreground hover:text-foreground transition-colors"
+                title="Toggle focus mode"
+              >
+                <Maximize2 className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+          {/* Tab bar */}
+          <div className="flex gap-0 px-4">
+            {tabs.map((tab) => (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={cn(
+                  "inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium border-b-2 transition-colors -mb-px",
+                  activeTab === tab.id
+                    ? "border-primary text-foreground"
+                    : "border-transparent text-muted-foreground hover:text-foreground hover:border-muted-foreground/30",
+                )}
+              >
+                {tab.icon}
+                {tab.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {focusMode && (
+        <button
+          onClick={() => setFocusMode(false)}
+          className="absolute top-2 right-2 z-10 p-2 rounded-full bg-card border border-border hover:bg-muted/30 text-muted-foreground"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      )}
+
+      {/* Tab content */}
+      {activeTab === "system-prompt" ? (
+        <SystemPromptEditor />
+      ) : (
+        <div className={cn("flex flex-1 min-h-0", sidebarOpen && "gap-0")}>
+          {/* Thread */}
+          <div
+            className={cn(
+              "flex flex-col flex-1 min-w-0",
+              sidebarOpen && "flex-[0_0_60%]",
+            )}
+          >
+            <div
+              ref={threadRef}
+              className="flex-1 overflow-y-auto px-4 py-4 space-y-4"
+              role="log"
+            >
+              {messages.map((msg) => (
+                <MessageBubble
+                  key={msg.id}
+                  message={msg}
+                  onInspect={openInSidebar}
+                  onAction={(action, payload) => {
+                    const actionMsg: LocalMessage = {
+                      id: `msg-${Date.now()}-action`,
+                      role: "user",
+                      content: `[Action: ${action}] ${JSON.stringify(payload)}`,
+                      timestamp: Date.now(),
+                    };
+                    setMessages((prev) => [...prev, actionMsg]);
+                  }}
+                />
+              ))}
+              {sending && (
+                <div className="flex gap-3">
+                  <div className="h-8 w-8 rounded-full bg-primary/20 flex items-center justify-center text-xs font-bold text-primary shrink-0">
+                    AI
+                  </div>
+                  <div className="rounded-lg bg-card border border-border px-4 py-3 animate-[pulse-dot_1.5s_ease-in-out_infinite]">
+                    <span className="text-sm text-muted-foreground">
+                      Thinking…
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Composer - Schema Driven */}
+            <div className="border-t border-border px-4 py-3 shrink-0 bg-background space-y-3">
+              {!connected && (
+                <Callout variant="default" className="mb-3">
+                  Event stream offline; REST chat can still send through the gateway.
+                </Callout>
+              )}
+              {gatewayError && (
+                <Callout variant="danger" className="mb-3">
+                  {gatewayError}
+                </Callout>
+              )}
+              
+              {/* Schema-driven form - ALL fields rendered from JSON Schema */}
+              {chatSchema ? (
+                <SchemaForm
+                  schema={chatSchema}
+                  value={formData}
+                  onChange={setFormData}
+                  onSubmit={handleSend}
+                  disabled={sending}
+                />
+              ) : (
+                <div className="text-sm text-muted-foreground">
+                  Loading schema...
+                </div>
+              )}
+              
+              {/* Actions - positioned below schema form */}
+              <div className="flex gap-2 pt-2">
+                <button
+                  onClick={() =>
+                    setMessages([
+                      {
+                        id: "sys-new",
+                        role: "system",
+                        content: "New session started.",
+                        timestamp: Date.now(),
+                      },
+                    ])
+                  }
+                  className="px-3 py-2 rounded-md border border-border bg-[hsl(var(--bg-elevated))] text-xs font-medium hover:bg-muted/30 transition-colors"
+                >
+                  New session
+                </button>
+                <button
+                  onClick={handleSend}
+                  disabled={sending || !formData.message?.trim()}
+                  className="px-3 py-2 rounded-md bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 flex items-center gap-1.5"
+                >
+                  {sending ? "Sending..." : "Send"}
+                  <kbd className="text-[10px] bg-primary-foreground/20 px-1 rounded">
+                    ↵
+                  </kbd>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Sidebar — tool output inspector */}
+          {sidebarOpen && (
+            <div className="flex-[0_0_40%] border-l border-border bg-card flex flex-col min-w-0">
+              <div className="flex items-center justify-between px-4 py-2 border-b border-border">
+                <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                  Inspector
+                </span>
+                <button
+                  onClick={() => setSidebarOpen(false)}
+                  className="p-1 rounded hover:bg-muted/30 text-muted-foreground"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+              <div className="flex-1 overflow-auto p-3">
+                {sidebarContent !== null ? (
+                  <JsonRenderer data={sidebarContent} />
+                ) : (
+                  <div className="text-sm text-muted-foreground">
+                    Click a tool result to inspect.
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

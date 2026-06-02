@@ -2,7 +2,7 @@
 //!
 //! ## Authentication Priority
 //!
-//! 1. **Factory** (local proxy — the AI you are talking to right now)
+//! 1. **Factory** (explicit FACTORY_BASE_URL)
 //! 2. **GCloud ADC** (direct OAuth via gcloud)
 //! 3. **Gemini** (API key fallback)
 //! 4. **Anthropic** (API key)
@@ -10,11 +10,11 @@
 //! ## Environment Variables
 //!
 //! ```bash
-//! # Preferred: Factory local proxy (default)
+//! # Optional: Factory endpoint
 //! LLM_PROVIDER=factory
-//! FACTORY_BASE_URL=http://127.0.0.1:11435/v1
-//! FACTORY_API_KEY=local-codex-proxy
-//! FACTORY_DEFAULT_MODEL=local-oauth-proxy
+//! FACTORY_BASE_URL=http://127.0.0.1:<factory-port>/v1
+//! FACTORY_API_KEY=<token>
+//! FACTORY_DEFAULT_MODEL=<model>
 //!
 //! # Provider selection override
 //! LLM_PROVIDER=factory  # or openclaw, gemini, gemini-cli, anthropic
@@ -48,6 +48,7 @@ pub struct ChatManager {
     providers: HashMap<ProviderType, BoxedProvider>,
     current_provider: Arc<RwLock<ProviderType>>,
     current_model: Arc<RwLock<String>>,
+    current_model_non_sandboxed: Arc<RwLock<bool>>,
     model_cache: Arc<RwLock<HashMap<ProviderType, Vec<ModelInfo>>>>,
 }
 
@@ -65,7 +66,7 @@ impl ChatManager {
         let mut default_provider = None;
         let mut default_model = std::env::var("FACTORY_DEFAULT_MODEL")
             .or_else(|_| std::env::var("OPENCLAW_DEFAULT_MODEL"))
-            .unwrap_or_else(|_| "local-oauth-proxy".to_string());
+            .unwrap_or_else(|_| "gemini-2.5-flash".to_string());
 
         // Check environment variables
         let env_provider = std::env::var("LLM_PROVIDER").ok();
@@ -80,11 +81,11 @@ impl ChatManager {
         }
 
         // =====================================================
-        // Factory — Local proxy (default, the AI you are talking to)
+        // Factory — explicit endpoint only.
         // =====================================================
         match FactoryProvider::from_env() {
             Ok(factory) => {
-                info!("✅ Factory provider initialized (local proxy)");
+                info!("✅ Factory provider initialized");
                 providers.insert(ProviderType::Factory, Box::new(factory));
                 if default_provider.is_none() {
                     default_provider = Some(ProviderType::Factory);
@@ -237,7 +238,7 @@ impl ChatManager {
         if providers.is_empty() {
             warn!("⚠️  No LLM providers available!");
             warn!("   Configure authentication:");
-            warn!("   1. Factory proxy should auto-start (FACTORY_BASE_URL)");
+            warn!("   1. Set FACTORY_BASE_URL for Factory");
             warn!("   2. Authenticate: gcloud auth login");
             warn!("   3. Or set OPENCLAW_BASE_URL and LLM_PROVIDER=openclaw");
             warn!("   4. Or set GEMINI_API_KEY environment variable");
@@ -251,6 +252,12 @@ impl ChatManager {
             providers,
             current_provider: Arc::new(RwLock::new(final_provider)),
             current_model: Arc::new(RwLock::new(default_model)),
+            current_model_non_sandboxed: Arc::new(RwLock::new(
+                std::env::var("LLM_MODEL_NON_SANDBOXED")
+                    .ok()
+                    .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                    .unwrap_or(false),
+            )),
             model_cache: Arc::new(RwLock::new(HashMap::new())),
         }
     }
@@ -269,6 +276,10 @@ impl ChatManager {
     /// Get current model
     pub async fn current_model(&self) -> String {
         self.current_model.read().unwrap().clone()
+    }
+
+    pub async fn current_model_non_sandboxed(&self) -> bool {
+        *self.current_model_non_sandboxed.read().unwrap()
     }
 
     /// Switch provider
@@ -296,9 +307,24 @@ impl ChatManager {
 
     /// Switch model
     pub async fn switch_model(&self, model_id: impl Into<String>) -> Result<()> {
+        self.switch_model_with_options(model_id, None).await
+    }
+
+    pub async fn switch_model_with_options(
+        &self,
+        model_id: impl Into<String>,
+        non_sandboxed: Option<bool>,
+    ) -> Result<()> {
         let model_id = model_id.into();
         *self.current_model.write().unwrap() = model_id.clone();
-        info!("Switched to model: {}", model_id);
+        if let Some(non_sandboxed) = non_sandboxed {
+            *self.current_model_non_sandboxed.write().unwrap() = non_sandboxed;
+        }
+        info!(
+            "Switched to model: {} (non_sandboxed={})",
+            model_id,
+            self.current_model_non_sandboxed().await
+        );
         Ok(())
     }
 
@@ -330,7 +356,7 @@ impl ChatManager {
         Err(anyhow!(
             "No LLM providers configured.\n\n\
             To authenticate:\n\
-            1. Factory proxy should auto-start (FACTORY_BASE_URL)\n\
+            1. Set FACTORY_BASE_URL for Factory\n\
             2. Run: gcloud auth login\n\
             3. Or set OPENCLAW_BASE_URL and LLM_PROVIDER=openclaw\n\n\
             Or set GEMINI_API_KEY environment variable."
@@ -478,7 +504,10 @@ impl ChatManager {
 
         // 2. Prefix / substring match
         let model_lower = model.to_lowercase();
-        if model_lower.contains("factory") || model_lower.contains("droid") || model_lower.contains("kimi") {
+        if model_lower.contains("factory")
+            || model_lower.contains("droid")
+            || model_lower.contains("kimi")
+        {
             if providers.contains(&ProviderType::Factory) {
                 return Some(ProviderType::Factory);
             }
@@ -516,7 +545,6 @@ impl ChatManager {
         providers.first().cloned()
     }
 
-
     /// Get status
     pub async fn get_status(&self) -> simd_json::OwnedValue {
         let provider = self.current_provider.read().unwrap().clone();
@@ -545,19 +573,11 @@ impl ChatManager {
             let models = self.list_models_for_provider(ptype).await.ok();
             let (auth_type, features) = match ptype {
                 ProviderType::Factory => (
-                    "Factory AI local proxy (FACTORY_BASE_URL)",
+                    "Factory AI endpoint (FACTORY_BASE_URL)",
                     vec![
                         "OpenAI-compatible API",
-                        "Local proxy at 127.0.0.1:11435",
+                        "Configured Factory endpoint",
                         "Default for op-web chat",
-                    ],
-                ),
-                ProviderType::McpProxy => (
-                    "OAuth via op-mcp-proxy (VS Code extension emulation)",
-                    vec![
-                        "Cloud Code-compatible headers",
-                        "Gemini models",
-                        "Headless-friendly",
                     ],
                 ),
                 ProviderType::Antigravity => (

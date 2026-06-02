@@ -21,7 +21,6 @@ use op_jsonrpc::nonnet::NonNetDb;
 use op_network::ovsdb::OvsdbClient;
 use op_state_store::{Decision, EventChain, OperationType};
 
-
 /// A state change projected from the authoritative system bus
 #[derive(Debug, Clone)]
 pub struct StateChange {
@@ -419,24 +418,20 @@ impl SchemaEngine {
 
         // Write the Identity Sled with the updated mutation index.
         {
-            let (existing_pubkey_b64, existing_trace_hex) =
-                if let Ok((ptr, _mmap)) = read_sled() {
-                    unsafe {
-                        let sled = &*ptr;
-                        (
-                            base64::engine::general_purpose::STANDARD
-                                .encode(sled.wireguard_pubkey),
-                            sled.trace_id_hex(),
-                        )
-                    }
-                } else {
-                    (String::new(), String::new())
-                };
-            if let Err(e) = write_sled_full(
-                &existing_pubkey_b64,
-                change.event_id,
-                &existing_trace_hex,
-            ) {
+            let (existing_pubkey_b64, existing_trace_hex) = if let Ok((ptr, _mmap)) = read_sled() {
+                unsafe {
+                    let sled = &*ptr;
+                    (
+                        base64::engine::general_purpose::STANDARD.encode(sled.wireguard_pubkey),
+                        sled.trace_id_hex(),
+                    )
+                }
+            } else {
+                (String::new(), String::new())
+            };
+            if let Err(e) =
+                write_sled_full(&existing_pubkey_b64, change.event_id, &existing_trace_hex)
+            {
                 tracing::warn!("sled write after mutation failed: {}", e);
             }
         }

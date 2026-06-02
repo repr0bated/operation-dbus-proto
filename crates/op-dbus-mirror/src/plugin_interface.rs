@@ -1,4 +1,4 @@
-//! Fixed D-Bus object at /org/opdbus/v1/plugins
+//! Fixed D-Bus object at /opdbus/v1/plugins
 //!
 //! Exposes all registered plugins (active or inactive) through methods.
 //! Sits alongside the org.freedesktop.DBus.ObjectManager interface on the

@@ -158,7 +158,7 @@ fn is_sled_valid(sled: &IdentitySled) -> bool {
 
 impl SledView {
     fn from_full(path: String, sled: &IdentitySled) -> Self {
-        let schema_catalog_hash = std::fs::read("/dev/shm/plugin_schemas.json")
+        let schema_catalog_hash = std::fs::read("/dev/shm/live-schema.json")
             .map(|bytes| hex::encode(blake3::hash(&bytes).as_bytes()))
             .unwrap_or_else(|_| "(missing)".to_string());
 
@@ -187,7 +187,7 @@ impl SledView {
         );
         let is_valid = bytes[COMPACT_VALID_OFFSET] != 0;
         let footprint = &bytes[COMPACT_FOOTPRINT_OFFSET..COMPACT_FOOTPRINT_OFFSET + 32];
-        let schema_catalog_hash = std::fs::read("/dev/shm/plugin_schemas.json")
+        let schema_catalog_hash = std::fs::read("/dev/shm/live-schema.json")
             .map(|bytes| hex::encode(blake3::hash(&bytes).as_bytes()))
             .unwrap_or_else(|_| "(missing)".to_string());
 

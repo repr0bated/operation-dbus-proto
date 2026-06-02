@@ -15,11 +15,12 @@ use std::convert::Infallible;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use tracing::{error, info};
+use tracing::info;
 
 use crate::orchestrator::OrchestratorEvent;
 use crate::state::AppState;
-use op_llm::provider::ChatMessage;
+use op_llm::provider::{ChatMessage, ProviderType};
+use std::str::FromStr;
 
 #[derive(Debug, Deserialize)]
 pub struct ChatRequest {
@@ -28,6 +29,8 @@ pub struct ChatRequest {
     pub session_id: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
+    #[serde(default)]
+    pub provider: Option<String>,
     #[serde(default)]
     pub user_id: Option<String>, // For user-specific API credentials
     #[serde(default)]
@@ -74,62 +77,163 @@ pub async fn chat_handler(
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
     // Ensure session exists
-    let _ = state.conversations.create_session(session_id.clone(), None).await;
+    let _ = state
+        .conversations
+        .create_session(session_id.clone(), None)
+        .await;
 
     // Resolve container_id: session-persisted first, then request, then user store
     let container_id = if let Some(cid) = state.conversations.get_container_id(&session_id).await {
         Some(cid)
     } else if let Some(cid) = request.container_id.clone() {
         // Persist in session for subsequent messages
-        let _ = state.conversations.set_container_id(&session_id, cid.clone()).await;
+        let _ = state
+            .conversations
+            .set_container_id(&session_id, cid.clone())
+            .await;
         Some(cid)
     } else if let Some(user_id) = request.user_id.clone() {
-        let cid = state.user_store.get_user(&user_id).await
+        let cid = state
+            .user_store
+            .get_user(&user_id)
+            .await
             .and_then(|u| u.privacy_container_name);
         if let Some(ref c) = cid {
-            let _ = state.conversations.set_container_id(&session_id, c.clone()).await;
+            let _ = state
+                .conversations
+                .set_container_id(&session_id, c.clone())
+                .await;
         }
         cid
     } else {
         None
     };
-    let _ = state.conversations.append_message(&session_id, ChatMessage::user(request.message.clone())).await;
+    let _ = state
+        .conversations
+        .append_message(&session_id, ChatMessage::user(request.message.clone()))
+        .await;
 
-    match state
-        .orchestrator
-        .process(&session_id, &request.message, None)
-        .await
+    let fixed_prompt = op_chat::system_prompt::get_fixed_prompt();
+    let (custom_prompt, _) = op_chat::system_prompt::load_custom_prompt().await;
+    let system_prompt = if custom_prompt.trim().is_empty() {
+        fixed_prompt.to_string()
+    } else {
+        format!("{fixed_prompt}\n\n{custom_prompt}")
+    };
+    let messages = vec![
+        ChatMessage::system(system_prompt),
+        ChatMessage::user(request.message.clone()),
+    ];
+
+    let requested_provider = request
+        .provider
+        .as_deref()
+        .filter(|value| !value.is_empty());
+    let requested_model = request.model.as_deref().filter(|value| !value.is_empty());
+    let selected_model = match requested_model {
+        Some(model) => model.to_string(),
+        None => state.chat_manager.current_model().await,
+    };
+
+    if let Err(e) =
+        crate::zeroclaw_routes::ensure_model_available(&state.projection_cache, &selected_model)
+            .await
     {
-        Ok(result) => {
-            let provider = state.chat_manager.current_provider().await.to_string();
-            let model = state.chat_manager.current_model().await;
-            let response_message = result.message.clone();
+        return Json(ChatResponse {
+            success: false,
+            message: String::new(),
+            content: e.to_string(),
+            role: "assistant".to_string(),
+            id: format!("msg-{}", uuid::Uuid::new_v4()),
+            tool_name: None,
+            error: Some(e.to_string()),
+            tools_executed: vec![],
+            session_id,
+            model: selected_model,
+            provider: requested_provider.unwrap_or("zeroclaw").to_string(),
+            container_id,
+        });
+    }
 
-            if result.success {
-                let _ = state.conversations.append_message(&session_id, ChatMessage::assistant(response_message.clone())).await;
+    let result = match (requested_provider, requested_model) {
+        (Some(provider), Some(model)) => match ProviderType::from_str(provider) {
+            Ok(provider_type) if state.chat_manager.has_provider(&provider_type) => {
+                state
+                    .chat_manager
+                    .chat_with(&provider_type, model, messages)
+                    .await
             }
+            Ok(provider_type) => Err(anyhow::anyhow!(
+                "Provider {} is not available",
+                provider_type
+            )),
+            Err(_) => Err(anyhow::anyhow!("Unknown provider: {}", provider)),
+        },
+        (Some(provider), None) => match ProviderType::from_str(provider) {
+            Ok(provider_type) if state.chat_manager.has_provider(&provider_type) => {
+                state
+                    .chat_manager
+                    .chat_with(&provider_type, &selected_model, messages)
+                    .await
+            }
+            Ok(provider_type) => Err(anyhow::anyhow!(
+                "Provider {} is not available",
+                provider_type
+            )),
+            Err(_) => Err(anyhow::anyhow!("Unknown provider: {}", provider)),
+        },
+        (None, Some(model)) => {
+            match crate::zeroclaw_routes::route_for_model(&state.projection_cache, model).await {
+                Some(route) => match ProviderType::from_str(&route.upstream_provider) {
+                    Ok(provider_type) if state.chat_manager.has_provider(&provider_type) => {
+                        state
+                            .chat_manager
+                            .chat_with(&provider_type, model, messages)
+                            .await
+                    }
+                    Ok(provider_type) => Err(anyhow::anyhow!(
+                        "Provider {} is not available",
+                        provider_type
+                    )),
+                    Err(_) => Err(anyhow::anyhow!(
+                        "Route upstream provider is unknown: {}",
+                        route.upstream_provider
+                    )),
+                },
+                None => Err(anyhow::anyhow!("Model is not routed by Zeroclaw")),
+            }
+        }
+        _ => state.chat_manager.chat(messages).await,
+    };
+
+    match result {
+        Ok(result) => {
+            let provider = result.provider.clone();
+            let model = result.model.clone();
+            let response_message = result.message.content.clone();
+
+            let _ = state
+                .conversations
+                .append_message(
+                    &session_id,
+                    ChatMessage::assistant(response_message.clone()),
+                )
+                .await;
 
             Json(ChatResponse {
-                success: result.success,
-                message: if result.success {
-                    response_message.clone()
-                } else {
-                    String::new()
-                },
-                content: if result.success {
-                    response_message.clone()
-                } else {
-                    String::new()
-                },
+                success: true,
+                message: response_message.clone(),
+                content: response_message.clone(),
                 role: "assistant".to_string(),
                 id: format!("msg-{}", uuid::Uuid::new_v4()),
                 tool_name: None,
-                error: if result.success {
-                    None
-                } else {
-                    Some(response_message)
-                },
-                tools_executed: result.tools_executed,
+                error: None,
+                tools_executed: result
+                    .tool_calls
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|tool| tool.name)
+                    .collect(),
                 session_id,
                 model,
                 provider,
@@ -171,8 +275,14 @@ pub async fn chat_stream_handler(
     let message = request.message.clone();
     let session_clone = session_id.clone();
 
-    let _ = state.conversations.create_session(session_id.clone(), None).await;
-    let _ = state.conversations.append_message(&session_id, ChatMessage::user(request.message.clone())).await;
+    let _ = state
+        .conversations
+        .create_session(session_id.clone(), None)
+        .await;
+    let _ = state
+        .conversations
+        .append_message(&session_id, ChatMessage::user(request.message.clone()))
+        .await;
 
     tokio::spawn(async move {
         let result = state_clone
@@ -237,7 +347,10 @@ pub async fn get_history_handler(
 
 /// GET /api/chat/sessions - List all chat sessions
 pub async fn list_sessions_handler(Extension(state): Extension<Arc<AppState>>) -> Json<Value> {
-    let sessions: Vec<Value> = state.conversations.list_sessions().await
+    let sessions: Vec<Value> = state
+        .conversations
+        .list_sessions()
+        .await
         .into_iter()
         .map(|(id, msg_count, title)| {
             json!({
@@ -260,7 +373,10 @@ pub async fn create_session_handler(
     let session_id = uuid::Uuid::new_v4().to_string();
     let title = payload.title.unwrap_or_else(|| "New Chat".to_string());
 
-    let _ = state.conversations.create_session(session_id.clone(), Some(title.clone())).await;
+    let _ = state
+        .conversations
+        .create_session(session_id.clone(), Some(title.clone()))
+        .await;
 
     Json(json!({
         "id": session_id,

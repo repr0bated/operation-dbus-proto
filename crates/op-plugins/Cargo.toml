@@ -15,6 +15,7 @@ op-blockchain = { path = "../op-blockchain" }
 op-network = { path = "../op-network" }
 op-dynamic-loader = { path = "../op-dynamic-loader" }
 op-execution-tracker = { path = "../op-execution-tracker" }
+op-agents = { path = "../op-agents" }
 
 tokio = { workspace = true }
 serde = { workspace = true }

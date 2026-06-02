@@ -70,20 +70,43 @@ export interface Agent {
 
 // ── LLM ─────────────────────────────────────────────────
 export interface LlmProvider {
-  id: string;
-  name: string;
+  id?: string;
+  name?: string;
+  provider?: string;
   model: string;
-  endpoint: string;
-  status: "connected" | "disconnected" | "error";
-  tokenUsage: { prompt: number; completion: number; total: number };
+  model_non_sandboxed?: boolean;
+  endpoint?: string;
+  status?: "connected" | "disconnected" | "error";
+  available?: boolean;
+  available_providers?: string[];
+  tokenUsage?: { prompt: number; completion: number; total: number };
+}
+
+export interface LlmProvidersResponse {
+  providers: string[];
+  current: string;
 }
 
 export interface LlmModel {
   id: string;
   name: string;
+  description?: string;
+  available: boolean;
+  provider?: string;
+  upstream_provider?: string;
+  transport?: string;
+  status?: string;
+  route_hint?: string;
+  route_kind?: string;
+  status_reason?: string;
+  source?: string;
+  contextWindow?: number;
+  active?: boolean;
+}
+
+export interface LlmModelsResponse {
   provider: string;
-  contextWindow: number;
-  active: boolean;
+  models: LlmModel[];
 }
 
 // ── Sessions & Chat ─────────────────────────────────────

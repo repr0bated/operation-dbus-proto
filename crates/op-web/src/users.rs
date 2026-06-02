@@ -79,7 +79,11 @@ fn default_privacy_quota_bytes() -> u64 {
 
 /// Extract &str from DataValue
 fn dv_str(dv: &DataValue) -> Option<&str> {
-    if let DataValue::Str(s) = dv { Some(s.as_str()) } else { None }
+    if let DataValue::Str(s) = dv {
+        Some(s.as_str())
+    } else {
+        None
+    }
 }
 
 fn dv_bool(dv: &DataValue) -> bool {
@@ -87,7 +91,11 @@ fn dv_bool(dv: &DataValue) -> bool {
 }
 
 fn dv_int(dv: &DataValue) -> Option<i64> {
-    if let DataValue::Num(Num::Int(i)) = dv { Some(*i) } else { None }
+    if let DataValue::Num(Num::Int(i)) = dv {
+        Some(*i)
+    } else {
+        None
+    }
 }
 
 /// Parse a PrivacyUser from a CozoDB row vector.
@@ -114,32 +122,76 @@ fn parse_user_row(id: &str, row: &[DataValue]) -> Option<PrivacyUser> {
         privacy_quota_used_bytes: dv_int(&row[6]).unwrap_or(0) as u64,
         privacy_container_name: {
             let s = dv_str(&row[7])?;
-            if s.is_empty() { None } else { Some(s.to_string()) }
+            if s.is_empty() {
+                None
+            } else {
+                Some(s.to_string())
+            }
         },
         privacy_route_id: {
             let s = dv_str(&row[8])?;
-            if s.is_empty() { None } else { Some(s.to_string()) }
+            if s.is_empty() {
+                None
+            } else {
+                Some(s.to_string())
+            }
         },
         privacy_network_connected: dv_bool(&row[9]),
         privacy_network_connected_at: {
             let s = dv_str(&row[10])?;
-            if s.is_empty() { None } else { DateTime::parse_from_rfc3339(s).ok().map(|d| d.with_timezone(&Utc)) }
+            if s.is_empty() {
+                None
+            } else {
+                DateTime::parse_from_rfc3339(s)
+                    .ok()
+                    .map(|d| d.with_timezone(&Utc))
+            }
         },
         google_id: {
             let s = dv_str(&row[11])?;
-            if s.is_empty() { None } else { Some(s.to_string()) }
+            if s.is_empty() {
+                None
+            } else {
+                Some(s.to_string())
+            }
         },
         google_email: {
             let s = dv_str(&row[12])?;
-            if s.is_empty() { None } else { Some(s.to_string()) }
+            if s.is_empty() {
+                None
+            } else {
+                Some(s.to_string())
+            }
         },
         api_credentials,
-        created_at: DateTime::parse_from_rfc3339(dv_str(&row[14])?).ok()?.with_timezone(&Utc),
+        created_at: DateTime::parse_from_rfc3339(dv_str(&row[14])?)
+            .ok()?
+            .with_timezone(&Utc),
     })
 }
 
-fn user_to_cozo_fields(user: &PrivacyUser) -> (String, String, String, String, String, i64, i64, String, String, String, String, String, String, String, String) {
-    let api_json = user.api_credentials.as_ref()
+fn user_to_cozo_fields(
+    user: &PrivacyUser,
+) -> (
+    String,
+    String,
+    String,
+    String,
+    String,
+    i64,
+    i64,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+) {
+    let api_json = user
+        .api_credentials
+        .as_ref()
         .map(|c| serde_json::to_string(c).unwrap_or_else(|_| "null".to_string()))
         .unwrap_or_else(|| "null".to_string());
     (
@@ -153,7 +205,9 @@ fn user_to_cozo_fields(user: &PrivacyUser) -> (String, String, String, String, S
         user.privacy_container_name.clone().unwrap_or_default(),
         user.privacy_route_id.clone().unwrap_or_default(),
         user.privacy_network_connected.to_string(),
-        user.privacy_network_connected_at.map(|d| d.to_rfc3339()).unwrap_or_default(),
+        user.privacy_network_connected_at
+            .map(|d| d.to_rfc3339())
+            .unwrap_or_default(),
         user.google_id.clone().unwrap_or_default(),
         user.google_email.clone().unwrap_or_default(),
         api_json,
@@ -184,7 +238,9 @@ impl UserStore {
         let users = self.list_users().await;
         let mut max_octet = 2u8;
         for user in users {
-            if let Some(octet) = user.assigned_ip.strip_prefix("10.100.0.")
+            if let Some(octet) = user
+                .assigned_ip
+                .strip_prefix("10.100.0.")
                 .and_then(|s| s.strip_suffix("/32"))
                 .and_then(|s| s.parse::<u8>().ok())
             {
@@ -228,14 +284,42 @@ impl UserStore {
 
     async fn upsert_in_cozo(&self, user: &PrivacyUser) -> Result<()> {
         let c = self.cozo_clone();
-        let (email, ev, wg, wg_priv, ip, quota, used, container, route, pnc, pnc_at, gid, gmail, api_json, ts)
-            = user_to_cozo_fields(user);
+        let (
+            email,
+            ev,
+            wg,
+            wg_priv,
+            ip,
+            quota,
+            used,
+            container,
+            route,
+            pnc,
+            pnc_at,
+            gid,
+            gmail,
+            api_json,
+            ts,
+        ) = user_to_cozo_fields(user);
         let id = user.id.clone();
         tokio::task::spawn_blocking(move || {
             c.upsert_privacy_user(
-                &id, &email, ev == "true", &wg, &wg_priv, &ip,
-                quota, used, &container, &route, pnc == "true", &pnc_at,
-                &gid, &gmail, &api_json, &ts,
+                &id,
+                &email,
+                ev == "true",
+                &wg,
+                &wg_priv,
+                &ip,
+                quota,
+                used,
+                &container,
+                &route,
+                pnc == "true",
+                &pnc_at,
+                &gid,
+                &gmail,
+                &api_json,
+                &ts,
             )
         })
         .await
@@ -301,7 +385,10 @@ impl UserStore {
         if link.expires_at < Utc::now() {
             anyhow::bail!("Link has expired");
         }
-        let mut user = self.get_user(&link.user_id).await.context("User not found")?;
+        let mut user = self
+            .get_user(&link.user_id)
+            .await
+            .context("User not found")?;
         user.email_verified = true;
         self.upsert_in_cozo(&user).await?;
         info!("User {} verified via magic link", user.id);
@@ -327,7 +414,9 @@ impl UserStore {
             .await
             .ok()?;
         let (id, row) = row.ok()?.and_then(|mut r| {
-            if r.is_empty() { return None; }
+            if r.is_empty() {
+                return None;
+            }
             let id = dv_str(&r.remove(0))?.to_string();
             Some((id, r))
         })?;
@@ -342,7 +431,9 @@ impl UserStore {
             .await
             .ok()?;
         let (id, row) = row.ok()?.and_then(|mut r| {
-            if r.is_empty() { return None; }
+            if r.is_empty() {
+                return None;
+            }
             let id = dv_str(&r.remove(0))?.to_string();
             Some((id, r))
         })?;
@@ -458,7 +549,9 @@ impl UserStore {
         };
         let mut users = Vec::new();
         for mut row in rows {
-            if row.is_empty() { continue; }
+            if row.is_empty() {
+                continue;
+            }
             let id = match dv_str(&row.remove(0)) {
                 Some(s) => s.to_string(),
                 None => continue,
@@ -480,4 +573,3 @@ impl UserStore {
         Ok(())
     }
 }
-

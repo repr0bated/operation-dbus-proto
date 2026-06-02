@@ -66,10 +66,90 @@ pub async fn chat_message(
         ChatMessage::user(&req.message),
     ];
 
+    let selected_model = match req.model.clone() {
+        Some(model) => model,
+        None => state.chat_manager.current_model().await,
+    };
+    if let Err(e) =
+        crate::zeroclaw_routes::ensure_model_available(&state.projection_cache, &selected_model)
+            .await
+    {
+        return (
+            StatusCode::CONFLICT,
+            Json(ChatResponse {
+                content: String::new(),
+                provider: req.provider.unwrap_or_else(|| "zeroclaw".to_string()),
+                model: selected_model,
+                tools_used: None,
+                error: Some(e.to_string()),
+            }),
+        );
+    }
+
     // Send to LLM
-    let result = if let (Some(pt), Some(ref model)) = (provider_type.as_ref(), req.model.as_ref()) {
-        // Use specified provider and model
-        state.chat_manager.chat_with(pt, model, messages).await
+    let result = if let Some(pt) = provider_type.as_ref() {
+        if !state.chat_manager.has_provider(pt) {
+            return (
+                StatusCode::CONFLICT,
+                Json(ChatResponse {
+                    content: String::new(),
+                    provider: pt.to_string(),
+                    model: selected_model,
+                    tools_used: None,
+                    error: Some(format!("Provider {} is not available", pt)),
+                }),
+            );
+        }
+        state
+            .chat_manager
+            .chat_with(pt, &selected_model, messages)
+            .await
+    } else if req.model.is_some() {
+        let Some(route) =
+            crate::zeroclaw_routes::route_for_model(&state.projection_cache, &selected_model).await
+        else {
+            return (
+                StatusCode::CONFLICT,
+                Json(ChatResponse {
+                    content: String::new(),
+                    provider: "zeroclaw".to_string(),
+                    model: selected_model,
+                    tools_used: None,
+                    error: Some("Model is not routed by Zeroclaw".to_string()),
+                }),
+            );
+        };
+        let provider_type = match route.upstream_provider.parse::<ProviderType>() {
+            Ok(provider_type) if state.chat_manager.has_provider(&provider_type) => provider_type,
+            Ok(provider_type) => {
+                return (
+                    StatusCode::CONFLICT,
+                    Json(ChatResponse {
+                        content: String::new(),
+                        provider: provider_type.to_string(),
+                        model: selected_model,
+                        tools_used: None,
+                        error: Some(format!("Provider {} is not available", provider_type)),
+                    }),
+                );
+            }
+            Err(_) => {
+                return (
+                    StatusCode::CONFLICT,
+                    Json(ChatResponse {
+                        content: String::new(),
+                        provider: route.upstream_provider,
+                        model: selected_model,
+                        tools_used: None,
+                        error: Some("Route upstream provider is unknown".to_string()),
+                    }),
+                );
+            }
+        };
+        state
+            .chat_manager
+            .chat_with(&provider_type, &selected_model, messages)
+            .await
     } else {
         // Use current provider and model
         state.chat_manager.chat(messages).await

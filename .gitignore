@@ -61,3 +61,13 @@ filesystem.out
 conversation.jsonl
 code-dbus.jsonl
 codex-projection.jsonl
+.claude/
+axon-trace-ui-79812482/
+archive/ui/axon-trace-ui/
+.claude/worktrees/agent-a30c7efd250a92894/
+.claude/worktrees/agent-a778a615e1548c419/
+rego-cns/
+security-policy-templates/
+techops/
+**/node_modules/
+**/target/

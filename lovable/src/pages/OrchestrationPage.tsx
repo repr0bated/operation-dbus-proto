@@ -1,135 +1,303 @@
-import { useQuery } from "@tanstack/react-query";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+/**
+ * Orchestration View — monitors live multi-agent execution, coordination strategies,
+ * and task results with a React Flow execution graph.
+ */
+import { useState, useCallback, useMemo, useEffect } from "react";
+import {
+  ReactFlow, Background, Controls,
+  useNodesState, useEdgesState,
+  type Node, type Edge, ReactFlowProvider,
+  Handle, Position, type NodeProps,
+} from "@xyflow/react";
+import "@xyflow/react/dist/style.css";
+import { PageHeader, Card, StatusDot } from "@/components/shell/Primitives";
 import { Badge } from "@/components/ui/badge";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Progress } from "@/components/ui/progress";
 import { Button } from "@/components/ui/button";
-import { Radio, Shield, Cpu, Clock, AlertTriangle, Pause, Eye } from "lucide-react";
-import { getOrchestrationQueue, getAntiHallucination, getOrchestrationResources, getOrchestrationExecutions } from "@/lib/api";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { SchemaRenderer } from "@/components/json/SchemaRenderer";
+import { useEventStore } from "@/stores/event-store";
+import { cn } from "@/lib/utils";
+import {
+  Bot, Activity, ChevronRight, CheckCircle, XCircle, Clock, Play,
+  RotateCcw, Zap, Network,
+} from "lucide-react";
 
-export default function OrchestrationPage() {
-  const queue = useQuery({ queryKey: ["orchQueue"], queryFn: getOrchestrationQueue, refetchInterval: 2000 });
-  const antiHall = useQuery({ queryKey: ["antiHall"], queryFn: getAntiHallucination, refetchInterval: 10000 });
-  const resources = useQuery({ queryKey: ["orchResources"], queryFn: getOrchestrationResources, refetchInterval: 5000 });
-  const executions = useQuery({ queryKey: ["orchExec"], queryFn: getOrchestrationExecutions, refetchInterval: 3000 });
+// ── Types ───────────────────────────────────────────────
+type AgentStatus = "idle" | "busy" | "error" | "offline";
+type Strategy = "pipeline" | "parallel" | "race_first_success" | "sequential";
 
-  const queueData = Array.isArray(queue.data) ? queue.data : queue.data?.queue ?? [];
-  const execData = Array.isArray(executions.data) ? executions.data : executions.data?.executions ?? [];
-  const ah = antiHall.data ?? {};
-  const res = resources.data ?? {};
-  const catches = Array.isArray(ah.catches) ? ah.catches : [];
+interface AgentInfo {
+  id: string;
+  name: string;
+  status: AgentStatus;
+  activeTask: string | null;
+  model: string;
+  emoji?: string;
+}
+
+interface TaskResult {
+  id: string;
+  taskId: string;
+  agent: string;
+  success: boolean;
+  durationMs: number;
+  result: unknown;
+  timestamp: number;
+}
+
+// ── Agent Status Colors ──────────────────────────────────
+const statusVariant: Record<AgentStatus, "ok" | "warn" | "error" | "offline"> = {
+  idle: "ok", busy: "warn", error: "error", offline: "offline",
+};
+
+const statusBadge: Record<AgentStatus, string> = {
+  idle: "border-ok/20 bg-ok/10 text-ok",
+  busy: "border-warn/20 bg-warn/10 text-warn",
+  error: "border-danger/20 bg-danger/10 text-danger",
+  offline: "border-border text-muted-foreground",
+};
+
+// ── Custom Node ──────────────────────────────────────────
+interface AgentNodeData { agent: AgentInfo; [key: string]: unknown; }
+
+function AgentNode({ data }: NodeProps) {
+  const d = data as unknown as AgentNodeData;
+  const agent = d.agent;
+  const isBusy = agent.status === "busy";
 
   return (
-    <div className="space-y-6 animate-slide-in">
-      <div><h1 className="text-2xl font-bold text-foreground">Orchestration</h1><p className="text-sm text-muted-foreground mt-1">Execution queue & resource control</p></div>
-
-      {/* 4-Quadrant Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {/* Top-Left: Execution Queue */}
-        <Card className="border-border/50">
-          <CardHeader className="pb-2"><CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2"><Radio className="h-3.5 w-3.5 text-primary" />Live Queue</CardTitle></CardHeader>
-          <CardContent className="p-0">
-            <Table>
-              <TableHeader><TableRow className="border-border/50"><TableHead className="text-xs">#</TableHead><TableHead className="text-xs">Type</TableHead><TableHead className="text-xs">Name</TableHead><TableHead className="text-xs">Priority</TableHead><TableHead className="text-xs">Status</TableHead></TableRow></TableHeader>
-              <TableBody>
-                {queueData.length > 0 ? queueData.slice(0, 10).map((q: any, i: number) => (
-                  <TableRow key={q.id ?? i} className="border-border/30">
-                    <TableCell className="text-xs font-mono">{i + 1}</TableCell>
-                    <TableCell><Badge variant="outline" className="text-[10px]">{q.type}</Badge></TableCell>
-                    <TableCell className="text-sm">{q.name}</TableCell>
-                    <TableCell><Badge variant="outline" className={`text-[10px] ${q.priority === "high" ? "text-destructive" : q.priority === "medium" ? "text-warning" : "text-info"}`}>{q.priority}</Badge></TableCell>
-                    <TableCell><Badge variant="outline" className={`text-[10px] ${q.status === "running" ? "text-success" : ""}`}>{q.status}</Badge></TableCell>
-                  </TableRow>
-                )) : <TableRow><TableCell colSpan={5} className="text-center text-sm text-muted-foreground py-6">{queue.isLoading ? "Loading..." : "Queue empty"}</TableCell></TableRow>}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
-
-        {/* Top-Right: Anti-Hallucination */}
-        <Card className="border-border/50">
-          <CardHeader className="pb-2"><CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2"><Shield className="h-3.5 w-3.5 text-warning" />Anti-Hallucination Monitor</CardTitle></CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid grid-cols-3 gap-3">
-              <div className="p-3 rounded-lg bg-secondary text-center"><p className="text-xs text-muted-foreground">Validations</p><p className="text-lg font-bold text-foreground">{ah.validations ?? "—"}</p></div>
-              <div className="p-3 rounded-lg bg-secondary text-center"><p className="text-xs text-muted-foreground">Caught</p><p className="text-lg font-bold text-destructive">{ah.caught ?? "—"}</p></div>
-              <div className="p-3 rounded-lg bg-secondary text-center"><p className="text-xs text-muted-foreground">Confidence</p><p className="text-lg font-bold text-success">{ah.confidence ?? "—"}%</p></div>
-            </div>
-            {catches.length > 0 && (
-              <div className="space-y-1">
-                <p className="text-xs text-muted-foreground font-medium">Recent Catches</p>
-                {catches.slice(0, 3).map((c: any, i: number) => (
-                  <div key={i} className="flex items-center gap-2 p-2 rounded bg-destructive/5 text-xs">
-                    <AlertTriangle className="h-3 w-3 text-destructive shrink-0" />
-                    <span className="text-foreground/80 truncate flex-1">{c.issue}</span>
-                    <Badge variant="outline" className="text-[10px]">{c.action}</Badge>
-                  </div>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Bottom-Left: Resources */}
-        <Card className="border-border/50">
-          <CardHeader className="pb-2"><CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2"><Cpu className="h-3.5 w-3.5 text-info" />Resource Allocation</CardTitle></CardHeader>
-          <CardContent className="space-y-4">
-            {res.agents && Array.isArray(res.agents) ? (
-              <div className="space-y-2">
-                <p className="text-xs text-muted-foreground font-medium">Agent Utilization</p>
-                {res.agents.map((a: any, i: number) => (
-                  <div key={i} className="flex items-center gap-3">
-                    <span className="text-xs text-foreground w-24 truncate">{a.name}</span>
-                    <Progress value={a.utilization ?? 0} className="h-1.5 flex-1" />
-                    <span className="text-xs text-muted-foreground w-10 text-right">{a.utilization ?? 0}%</span>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="grid grid-cols-2 gap-3">
-                <div className="p-3 rounded-lg bg-secondary"><p className="text-xs text-muted-foreground">Concurrency</p><p className="text-sm font-medium">{res.current_concurrency ?? "—"} / {res.max_concurrency ?? "—"}</p></div>
-                <div className="p-3 rounded-lg bg-secondary"><p className="text-xs text-muted-foreground">Rate</p><p className="text-sm font-medium">{res.requests_per_min ?? "—"} req/min</p></div>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Bottom-Right: Quick Stats */}
-        <Card className="border-border/50">
-          <CardHeader className="pb-2"><CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2"><Clock className="h-3.5 w-3.5 text-success" />Quick Stats</CardTitle></CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="p-3 rounded-lg bg-secondary text-center"><p className="text-xs text-muted-foreground">Executions Today</p><p className="text-lg font-bold text-foreground">{res.total_executions ?? execData.length ?? "—"}</p></div>
-              <div className="p-3 rounded-lg bg-secondary text-center"><p className="text-xs text-muted-foreground">Avg Wait</p><p className="text-lg font-bold text-foreground">{res.avg_wait ?? "—"}s</p></div>
-              <div className="p-3 rounded-lg bg-secondary text-center"><p className="text-xs text-muted-foreground">Error Rate</p><p className="text-lg font-bold text-destructive">{res.error_rate ?? "—"}%</p></div>
-              <div className="p-3 rounded-lg bg-secondary text-center"><p className="text-xs text-muted-foreground">Token Budget</p><div className="mt-1"><Progress value={res.token_budget_used ?? 0} className="h-1.5" /><p className="text-xs mt-1">{res.token_budget_used ?? 0}%</p></div></div>
-            </div>
-          </CardContent>
-        </Card>
+    <div className={cn(
+      "rounded-lg border bg-card shadow-lg min-w-[180px] overflow-hidden transition-all",
+      isBusy ? "border-warn/40 shadow-[0_0_12px_hsl(var(--warn)/0.15)]" : "border-border",
+      agent.status === "error" && "border-danger/40 shadow-[0_0_12px_hsl(var(--danger)/0.15)]",
+    )}>
+      <Handle type="target" position={Position.Left} className="!bg-primary !border-primary/50 !w-2.5 !h-2.5" />
+      <div className="px-3 py-2 flex items-center gap-2 border-b border-border/50">
+        <span className="text-base">{agent.emoji}</span>
+        <div className="flex-1 min-w-0">
+          <div className="text-xs font-semibold text-foreground truncate">{agent.name}</div>
+          <div className="text-[10px] text-muted-foreground font-mono">{agent.model}</div>
+        </div>
+        <StatusDot status={statusVariant[agent.status]} />
       </div>
+      <div className="px-3 py-2">
+        <Badge variant="outline" className={cn("text-[9px]", statusBadge[agent.status])}>{agent.status}</Badge>
+        {agent.activeTask && (
+          <div className="mt-1.5 text-[10px] text-muted-foreground font-mono truncate max-w-[160px]">{agent.activeTask}</div>
+        )}
+      </div>
+      {isBusy && (
+        <div className="h-0.5 bg-warn/20 overflow-hidden">
+          <div className="h-full w-1/3 bg-warn rounded-full animate-[shimmer_1.5s_ease-in-out_infinite]" />
+        </div>
+      )}
+      <Handle type="source" position={Position.Right} className="!bg-ok !border-ok/50 !w-2.5 !h-2.5" />
+    </div>
+  );
+}
 
-      {/* Execution Tracker */}
-      <Card className="border-border/50">
-        <CardHeader className="pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Execution Tracker</CardTitle></CardHeader>
-        <CardContent className="p-0">
+const nodeTypes = { agentNode: AgentNode };
+
+// ── Build Graph from Strategy ────────────────────────────
+function buildGraph(agents: AgentInfo[], strategy: Strategy): { nodes: Node[]; edges: Edge[] } {
+  const busyAgents = agents.filter((a) => a.status !== "offline");
+  const nodes: Node[] = [];
+  const edges: Edge[] = [];
+
+  nodes.push({
+    id: "coordinator", type: "agentNode", position: { x: 50, y: 150 },
+    data: {
+      agent: { id: "coordinator", name: "Coordinator", status: "busy" as AgentStatus, activeTask: `Strategy: ${strategy}`, model: "orchestrator", emoji: "🎯" },
+    } satisfies AgentNodeData as any,
+  });
+
+  if (strategy === "pipeline" || strategy === "sequential") {
+    busyAgents.forEach((agent, i) => {
+      nodes.push({ id: agent.id, type: "agentNode", position: { x: 320 + i * 260, y: 150 }, data: { agent } satisfies AgentNodeData as any });
+      const source = i === 0 ? "coordinator" : busyAgents[i - 1].id;
+      edges.push({ id: `e-${source}-${agent.id}`, source, target: agent.id, animated: agent.status === "busy", style: { stroke: agent.status === "busy" ? "hsl(var(--warn))" : "hsl(var(--border))", strokeWidth: 2 } });
+    });
+  } else {
+    const spacing = 80;
+    const totalHeight = (busyAgents.length - 1) * spacing;
+    const startY = 150 - totalHeight / 2;
+    busyAgents.forEach((agent, i) => {
+      nodes.push({ id: agent.id, type: "agentNode", position: { x: 350, y: startY + i * spacing }, data: { agent } satisfies AgentNodeData as any });
+      edges.push({ id: `e-coord-${agent.id}`, source: "coordinator", target: agent.id, animated: agent.status === "busy", style: { stroke: agent.status === "busy" ? "hsl(var(--warn))" : "hsl(var(--border))", strokeWidth: 2 } });
+    });
+  }
+  return { nodes, edges };
+}
+
+// ── Main Page ────────────────────────────────────────────
+function OrchestrationInner() {
+  const { latestState } = useEventStore();
+
+  const agents = useMemo(() => {
+    const raw = latestState["orchestration.agents"] ?? latestState["orchestration:agents"] ?? latestState["agents.pool"];
+    if (Array.isArray(raw)) return raw as AgentInfo[];
+    return [] as AgentInfo[];
+  }, [latestState]);
+
+  const taskResults = useMemo(() => {
+    const raw = latestState["orchestration.tasks"] ?? latestState["orchestration:task_results"] ?? latestState["task_results"];
+    if (Array.isArray(raw)) return raw as TaskResult[];
+    return [] as TaskResult[];
+  }, [latestState]);
+
+  const liveStrategy = latestState["orchestration.strategy"] ?? latestState["orchestration:strategy"];
+  const [strategy, setStrategy] = useState<Strategy>((liveStrategy as Strategy) ?? "pipeline");
+
+  useEffect(() => {
+    if (liveStrategy && typeof liveStrategy === "string") setStrategy(liveStrategy as Strategy);
+  }, [liveStrategy]);
+
+  const graph = useMemo(() => buildGraph(agents, strategy), [agents, strategy]);
+  const [nodes, setNodes, onNodesChange] = useNodesState(graph.nodes);
+  const [edges, setEdges, onEdgesChange] = useEdgesState(graph.edges);
+  const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    const g = buildGraph(agents, strategy);
+    setNodes(g.nodes);
+    setEdges(g.edges);
+  }, [agents, strategy, setNodes, setEdges]);
+
+  const toggleRow = (id: string) => {
+    setExpandedRows((prev) => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next; });
+  };
+
+  const strategies: Strategy[] = ["pipeline", "parallel", "race_first_success", "sequential"];
+
+  return (
+    <div className="space-y-6">
+      <PageHeader title="Orchestration" subtitle="Multi-agent execution monitoring and coordination control."
+        actions={
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1 rounded-md border border-border bg-secondary p-0.5">
+              {strategies.map((s) => (
+                <button key={s} onClick={() => setStrategy(s)}
+                  className={cn("px-2 py-1 text-[10px] font-mono rounded transition-colors", strategy === s ? "bg-primary/15 text-primary font-medium" : "text-muted-foreground hover:text-foreground")}>
+                  {s.replace("_", " ")}
+                </button>
+              ))}
+            </div>
+            <Button size="sm" className="h-7 text-xs gap-1.5"><Play className="h-3 w-3" />Execute</Button>
+          </div>
+        }
+      />
+
+      {/* Agent Pool */}
+      {agents.length === 0 ? (
+        <div className="text-sm text-muted-foreground text-center py-8">No agents detected. Waiting for live data…</div>
+      ) : (
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+          {agents.map((agent) => (
+            <Card key={agent.id} className="!p-3">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-lg">{agent.emoji}</span>
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs font-semibold text-foreground truncate">{agent.name}</div>
+                  <div className="text-[10px] text-muted-foreground font-mono">{agent.model}</div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <StatusDot status={statusVariant[agent.status]} />
+                <Badge variant="outline" className={cn("text-[9px]", statusBadge[agent.status])}>{agent.status}</Badge>
+              </div>
+              {agent.activeTask && <div className="mt-2 text-[10px] text-muted-foreground font-mono line-clamp-2">{agent.activeTask}</div>}
+            </Card>
+          ))}
+        </div>
+      )}
+
+      {/* Execution Graph */}
+      <Card title="Execution Graph" subtitle={`Active strategy: ${strategy.replace("_", " ")}`}
+        actions={
+          <div className="flex items-center gap-2">
+            <Badge variant="outline" className="text-[10px]"><Network className="h-3 w-3 mr-1" />{nodes.length} nodes</Badge>
+            <Button size="sm" variant="ghost" className="h-6 text-xs gap-1"><RotateCcw className="h-3 w-3" />Reset</Button>
+          </div>
+        }
+      >
+        <div className="h-[320px] rounded-lg border border-border overflow-hidden mt-2 bg-background">
+          <ReactFlow nodes={nodes} edges={edges} onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} nodeTypes={nodeTypes} fitView className="[&_.react-flow__background]:!bg-background" proOptions={{ hideAttribution: true }}>
+            <Background gap={20} size={1} color="hsl(var(--border))" />
+            <Controls className="[&_button]:!bg-card [&_button]:!border-border [&_button]:!text-foreground [&_button:hover]:!bg-muted" />
+          </ReactFlow>
+        </div>
+      </Card>
+
+      {/* Task Ledger */}
+      <Card title="Task Ledger" subtitle="Live feed of TaskResult events from the orchestrator."
+        actions={<Badge variant="outline" className="text-[10px]">{taskResults.length} results</Badge>}>
+        <div className="mt-2 rounded-lg border border-border overflow-hidden">
           <Table>
-            <TableHeader><TableRow className="border-border/50"><TableHead className="text-xs">ID</TableHead><TableHead className="text-xs">Type</TableHead><TableHead className="text-xs">Name</TableHead><TableHead className="text-xs">Status</TableHead><TableHead className="text-xs">Duration</TableHead><TableHead className="text-xs">Agent</TableHead><TableHead className="text-xs text-right">Actions</TableHead></TableRow></TableHeader>
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead className="text-[11px] w-8" />
+                <TableHead className="text-[11px]">Task ID</TableHead>
+                <TableHead className="text-[11px]">Agent</TableHead>
+                <TableHead className="text-[11px]">Status</TableHead>
+                <TableHead className="text-[11px] text-right">Duration</TableHead>
+                <TableHead className="text-[11px] text-right">Time</TableHead>
+              </TableRow>
+            </TableHeader>
             <TableBody>
-              {execData.length > 0 ? execData.slice(0, 20).map((e: any, i: number) => (
-                <TableRow key={e.id ?? i} className="border-border/30">
-                  <TableCell className="text-xs font-mono">{e.id?.slice(0, 8) ?? i}</TableCell>
-                  <TableCell><Badge variant="outline" className="text-[10px]">{e.type}</Badge></TableCell>
-                  <TableCell className="text-sm">{e.name}</TableCell>
-                  <TableCell><Badge variant="outline" className={`text-[10px] ${e.status === "running" ? "text-success" : e.status === "failed" ? "text-destructive" : ""}`}>{e.status}</Badge></TableCell>
-                  <TableCell className="text-xs text-muted-foreground">{e.duration ?? "—"}</TableCell>
-                  <TableCell className="text-xs text-muted-foreground">{e.agent ?? "—"}</TableCell>
-                  <TableCell className="text-right"><div className="flex items-center justify-end gap-1"><Button size="sm" variant="ghost" className="h-6 w-6 p-0"><Eye className="h-3 w-3" /></Button><Button size="sm" variant="ghost" className="h-6 w-6 p-0"><Pause className="h-3 w-3" /></Button></div></TableCell>
-                </TableRow>
-              )) : <TableRow><TableCell colSpan={7} className="text-center text-sm text-muted-foreground py-8">{executions.isLoading ? "Loading..." : "No executions"}</TableCell></TableRow>}
+              {taskResults.length === 0 && (
+                <TableRow><TableCell colSpan={6} className="text-center text-sm text-muted-foreground py-6">No task results yet.</TableCell></TableRow>
+              )}
+              {taskResults.map((tr) => {
+                const isExpanded = expandedRows.has(tr.id);
+                return (
+                  <Collapsible key={tr.id} asChild open={isExpanded} onOpenChange={() => toggleRow(tr.id)}>
+                    <>
+                      <CollapsibleTrigger asChild>
+                        <TableRow className="cursor-pointer group">
+                          <TableCell className="py-2 w-8"><ChevronRight className={cn("h-3 w-3 text-muted-foreground transition-transform", isExpanded && "rotate-90")} /></TableCell>
+                          <TableCell className="py-2 font-mono text-xs text-foreground">{tr.taskId}</TableCell>
+                          <TableCell className="py-2 text-xs text-muted-foreground">{tr.agent}</TableCell>
+                          <TableCell className="py-2">
+                            {tr.success ? <span className="flex items-center gap-1 text-ok text-xs"><CheckCircle className="h-3 w-3" />Success</span> : <span className="flex items-center gap-1 text-danger text-xs"><XCircle className="h-3 w-3" />Failed</span>}
+                          </TableCell>
+                          <TableCell className="py-2 text-right font-mono text-xs text-muted-foreground">{tr.durationMs}ms</TableCell>
+                          <TableCell className="py-2 text-right font-mono text-[11px] text-muted-foreground">{new Date(tr.timestamp).toLocaleTimeString()}</TableCell>
+                        </TableRow>
+                      </CollapsibleTrigger>
+                      <CollapsibleContent asChild>
+                        <tr><td colSpan={6} className="p-0">
+                          <div className="px-4 py-3 bg-muted/10 border-t border-border/30">
+                            <SchemaRenderer schema={inferResultSchema(tr.result)} data={tr.result} readOnly />
+                          </div>
+                        </td></tr>
+                      </CollapsibleContent>
+                    </>
+                  </Collapsible>
+                );
+              })}
             </TableBody>
           </Table>
-        </CardContent>
+        </div>
       </Card>
     </div>
   );
+}
+
+function inferResultSchema(data: unknown): any {
+  if (data === null || data === undefined) return { type: "string" };
+  if (typeof data === "boolean") return { type: "boolean" };
+  if (typeof data === "number") return { type: "number" };
+  if (typeof data === "string") return { type: "string" };
+  if (Array.isArray(data)) return { type: "array", items: data.length > 0 ? inferResultSchema(data[0]) : { type: "string" } };
+  if (typeof data === "object") {
+    const props: Record<string, any> = {};
+    for (const [k, v] of Object.entries(data as Record<string, unknown>)) props[k] = inferResultSchema(v);
+    return { type: "object", properties: props };
+  }
+  return { type: "string" };
+}
+
+export default function OrchestrationPage() {
+  return <ReactFlowProvider><OrchestrationInner /></ReactFlowProvider>;
 }

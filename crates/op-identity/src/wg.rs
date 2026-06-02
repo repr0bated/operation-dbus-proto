@@ -22,9 +22,10 @@ pub async fn get_peer_pubkey(peer_ip: &str) -> Result<Option<String>> {
     // Output format: <public-key>\t<allowed-ips>
     // e.g. "AbC...123\t10.100.0.2/32"
     
+    let iface = std::env::var("WG_INTERFACE").unwrap_or_else(|_| "netmaker".to_string());
     let output = Command::new("wg")
         .arg("show")
-        .arg("wg0") // TODO: Make interface configurable
+        .arg(&iface)
         .arg("allowed-ips")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -71,16 +72,9 @@ pub async fn get_peer_pubkey(peer_ip: &str) -> Result<Option<String>> {
 
 /// Get the local device's public key
 pub async fn get_local_pubkey() -> Result<String> {
-    let output = Command::new("wg")
-        .arg("show")
-        .arg("wg0")
-        .arg("public-key")
-        .output()
-        .await?;
-        
-    if !output.status.success() {
-        anyhow::bail!("Failed to get local pubkey");
+    if let Ok(pubkey) = std::env::var("WG_PUBKEY") {
+        return Ok(pubkey);
     }
     
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    anyhow::bail!("WG_PUBKEY not set in environment. Identity decoupling requires explicit pre-assignment.");
 }

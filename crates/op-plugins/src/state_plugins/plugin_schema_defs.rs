@@ -2,6 +2,78 @@ use op_state_store::{Constraint, FieldSchema, FieldType, PluginSchema, ReadOnlyC
 use simd_json::{json, OwnedValue as Value};
 use std::collections::HashMap;
 
+/// Format a plugin's live state into a `PluginSchema`.
+///
+/// This is a *formatter*, not a schema authority — nothing here is indexed. The
+/// plugin's `query_current_state()` (its `*State` struct) is the single source
+/// of truth; field types are inferred from that state, so the schema can never
+/// drift from what the plugin actually reports. To add a field, add it to the
+/// plugin state — never hand-write a field definition.
+pub(crate) fn schema_from_state(
+    name: &str,
+    category: &str,
+    version: &str,
+    description: &str,
+    state: &Value,
+) -> PluginSchema {
+    use simd_json::prelude::*;
+
+    let mut builder = PluginSchema::builder(name)
+        .version(version)
+        .category(category)
+        .description(description);
+
+    if let Some(obj) = state.as_object() {
+        for (key, value) in obj.iter() {
+            builder = builder.field(&key.to_string(), field_from_value(value));
+        }
+    }
+
+    builder.example(state.clone()).build()
+}
+
+/// Infer a `FieldSchema` (type + example) from a live state value.
+fn field_from_value(value: &Value) -> FieldSchema {
+    FieldSchema {
+        field_type: infer_field_type(value),
+        required: false,
+        description: String::new(),
+        default: None,
+        example: Some(value.clone()),
+        constraints: Vec::new(),
+        read_only: false,
+        read_only_when: None,
+    }
+}
+
+/// Infer a `FieldType` from a live state value, recursing into arrays/objects.
+fn infer_field_type(value: &Value) -> FieldType {
+    use simd_json::prelude::*;
+
+    if value.is_null() {
+        FieldType::Any
+    } else if value.as_bool().is_some() {
+        FieldType::Boolean
+    } else if value.as_i64().is_some() || value.as_u64().is_some() {
+        FieldType::Integer
+    } else if value.as_f64().is_some() {
+        FieldType::Float
+    } else if value.as_str().is_some() {
+        FieldType::String
+    } else if let Some(arr) = value.as_array() {
+        let inner = arr.first().map(infer_field_type).unwrap_or(FieldType::Any);
+        FieldType::Array(Box::new(inner))
+    } else if let Some(obj) = value.as_object() {
+        let fields = obj
+            .iter()
+            .map(|(k, v)| (k.to_string(), field_from_value(v)))
+            .collect();
+        FieldType::Object(fields)
+    } else {
+        FieldType::Any
+    }
+}
+
 fn any_field(required: bool, description: &str, default: Option<Value>) -> FieldSchema {
     FieldSchema {
         field_type: FieldType::Any,
@@ -1817,5 +1889,1242 @@ pub(crate) fn mail_server_plugin_schema() -> PluginSchema {
             "healthy": true,
             "last_error": null
         }))
+        .build()
+}
+
+pub(crate) fn cognitive_mcp_plugin_schema() -> PluginSchema {
+    let citation_fields = {
+        let mut fields = HashMap::new();
+        fields.insert(
+            "text".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Cited text passage".to_string(),
+                default: None,
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "source".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Source document identifier".to_string(),
+                default: None,
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "page".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Page or location within source".to_string(),
+                default: None,
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields
+    };
+
+    let source_info_fields = {
+        let mut fields = HashMap::new();
+        fields.insert(
+            "id".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "Unique source identifier".to_string(),
+                default: None,
+                example: None,
+                constraints: Vec::new(),
+                read_only: true,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "title".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Source title".to_string(),
+                default: None,
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "source_type".to_string(),
+            FieldSchema {
+                field_type: FieldType::Enum(vec![
+                    "url".to_string(),
+                    "text".to_string(),
+                    "file".to_string(),
+                ]),
+                required: true,
+                description: "Source transport type".to_string(),
+                default: None,
+                example: Some(json!("url")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "tags".to_string(),
+            FieldSchema {
+                field_type: FieldType::Array(Box::new(FieldType::String)),
+                required: false,
+                description: "Tags attached to this source".to_string(),
+                default: Some(json!([])),
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "created_at".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "ISO-8601 creation timestamp".to_string(),
+                default: None,
+                example: None,
+                constraints: Vec::new(),
+                read_only: true,
+                read_only_when: None,
+            },
+        );
+        fields
+    };
+
+    let gemini_query_request_fields = {
+        let mut fields = HashMap::new();
+        fields.insert(
+            "query".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "Natural-language query".to_string(),
+                default: None,
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "context".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Optional grounding context".to_string(),
+                default: None,
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "mode".to_string(),
+            FieldSchema {
+                field_type: FieldType::Enum(vec!["query".to_string(), "deep_research".to_string()]),
+                required: false,
+                description: "Query mode".to_string(),
+                default: Some(json!("query")),
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "depth".to_string(),
+            FieldSchema {
+                field_type: FieldType::Integer,
+                required: false,
+                description: "Deep-research depth (1-5, default 3)".to_string(),
+                default: Some(json!(3)),
+                example: None,
+                constraints: vec![
+                    Constraint::Min { value: 1.0 },
+                    Constraint::Max { value: 5.0 },
+                ],
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields
+    };
+
+    let memory_tool_input_fields = {
+        let mut fields = HashMap::new();
+        fields.insert(
+            "operation".to_string(),
+            FieldSchema {
+                field_type: FieldType::Enum(vec![
+                    "store".to_string(),
+                    "retrieve".to_string(),
+                    "query".to_string(),
+                    "delete".to_string(),
+                    "list_namespaces".to_string(),
+                    "stats".to_string(),
+                ]),
+                required: true,
+                description: "Memory operation to perform".to_string(),
+                default: None,
+                example: Some(json!("store")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "namespace".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Namespace name (e.g. project:op-dbus, session:abc)".to_string(),
+                default: None,
+                example: Some(json!("project:op-dbus")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "namespace_kind".to_string(),
+            FieldSchema {
+                field_type: FieldType::Enum(vec![
+                    "project".to_string(),
+                    "session".to_string(),
+                    "database".to_string(),
+                    "workflow".to_string(),
+                    "agent".to_string(),
+                    "cron".to_string(),
+                    "custom".to_string(),
+                ]),
+                required: false,
+                description: "Kind of namespace (used when creating)".to_string(),
+                default: None,
+                example: Some(json!("project")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "key".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Entry key within namespace".to_string(),
+                default: None,
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "value".to_string(),
+            FieldSchema {
+                field_type: FieldType::Any,
+                required: false,
+                description: "Value to store (any JSON)".to_string(),
+                default: None,
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "tags".to_string(),
+            FieldSchema {
+                field_type: FieldType::Array(Box::new(FieldType::String)),
+                required: false,
+                description: "Tags for the entry".to_string(),
+                default: Some(json!([])),
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "key_pattern".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Substring pattern for key search (used in query)".to_string(),
+                default: None,
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "limit".to_string(),
+            FieldSchema {
+                field_type: FieldType::Integer,
+                required: false,
+                description: "Max results (default 50)".to_string(),
+                default: Some(json!(50)),
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields
+    };
+
+    PluginSchema::builder("cognitive_mcp")
+        .version("2.0.0")
+        .description("Cognitive MCP server — memory, gRPC CognitiveToolService. THE PLUGIN IS THE SCHEMA: every method, tool, property, and field is declared here. Downstream inherits.")
+        .field("http", FieldSchema {
+            field_type: FieldType::String, required: false,
+            description: "HTTP/SSE bind address for the MCP protocol endpoint".to_string(),
+            default: Some(json!("0.0.0.0:3003")), example: Some(json!("100.90.37.254:3003")),
+            constraints: Vec::new(), read_only: false, read_only_when: None,
+        })
+        .field("grpc", FieldSchema {
+            field_type: FieldType::String, required: false,
+            description: "gRPC bind address for the CognitiveToolService endpoint".to_string(),
+            default: Some(json!("0.0.0.0:50052")), example: Some(json!("100.90.37.254:50052")),
+            constraints: Vec::new(), read_only: false, read_only_when: None,
+        })
+        .field("db_path", FieldSchema {
+            field_type: FieldType::String, required: false,
+            description: "CozoDB database path for persistent memory storage".to_string(),
+            default: Some(json!("/var/lib/op-dbus/cognitive.db")), example: Some(json!("/var/lib/op-dbus/cognitive.db")),
+            constraints: Vec::new(), read_only: false, read_only_when: None,
+        })
+        .field("wg_interface", FieldSchema {
+            field_type: FieldType::String, required: false,
+            description: "WireGuard interface to read identity from".to_string(),
+            default: Some(json!("netmaker")), example: Some(json!("netmaker")),
+            constraints: Vec::new(), read_only: false, read_only_when: None,
+        })
+        .field("http_enabled", FieldSchema {
+            field_type: FieldType::Boolean, required: false,
+            description: "Enable the HTTP/SSE MCP transport".to_string(),
+            default: Some(json!(true)), example: None, constraints: Vec::new(),
+            read_only: false, read_only_when: None,
+        })
+        .field("grpc_enabled", FieldSchema {
+            field_type: FieldType::Boolean, required: false,
+            description: "Enable the gRPC CognitiveToolService transport".to_string(),
+            default: Some(json!(true)), example: None, constraints: Vec::new(),
+            read_only: false, read_only_when: None,
+        })
+        .field("dbus_enabled", FieldSchema {
+            field_type: FieldType::Boolean, required: false,
+            description: "Register on D-Bus as org.opdbus.CognitiveMcp".to_string(),
+            default: Some(json!(true)), example: None, constraints: Vec::new(),
+            read_only: false, read_only_when: None,
+        })
+        .field("running", FieldSchema {
+            field_type: FieldType::Boolean, required: false,
+            description: "Whether the s6 service is currently running".to_string(),
+            default: Some(json!(false)), example: None, constraints: Vec::new(),
+            read_only: true, read_only_when: None,
+        })
+        .field("healthy", FieldSchema {
+            field_type: FieldType::Boolean, required: false,
+            description: "Last known health status from GetHealth".to_string(),
+            default: Some(json!(false)), example: None, constraints: Vec::new(),
+            read_only: true, read_only_when: None,
+        })
+        .field("auth_status", FieldSchema {
+            field_type: FieldType::Enum(vec![
+                "none".to_string(), "chrome_profile".to_string(),
+                "cookie".to_string(), "api_key".to_string(),
+            ]),
+            required: false,
+            description: "Current authentication method".to_string(),
+            default: Some(json!("none")), example: Some(json!("chrome_profile")),
+            constraints: Vec::new(), read_only: true, read_only_when: None,
+        })
+        .field("queries_remaining", FieldSchema {
+            field_type: FieldType::Integer, required: false,
+            description: "Queries remaining in current quota period".to_string(),
+            default: Some(json!(0)), example: None, constraints: Vec::new(),
+            read_only: true, read_only_when: None,
+        })
+        .field("queries_limit", FieldSchema {
+            field_type: FieldType::Integer, required: false,
+            description: "Total queries allowed per quota period".to_string(),
+            default: Some(json!(50)), example: None, constraints: Vec::new(),
+            read_only: true, read_only_when: None,
+        })
+        .field("notebook_count", FieldSchema {
+            field_type: FieldType::Integer, required: false,
+            description: "Number of notebooks in the library".to_string(),
+            default: Some(json!(0)), example: None, constraints: Vec::new(),
+            read_only: true, read_only_when: None,
+        })
+        .field("gemini_query_request", FieldSchema {
+            field_type: FieldType::Object(gemini_query_request_fields), required: false,
+            description: "R12: Gemini fallback query (requires GEMINI_API_KEY)".to_string(),
+            default: None, example: None, constraints: Vec::new(),
+            read_only: true, read_only_when: None,
+        })
+        .field("memory_tool", FieldSchema {
+            field_type: FieldType::Object(memory_tool_input_fields), required: false,
+            description: "MCP MemoryTool: key-value memory store with operations store/retrieve/query/delete/list_namespaces/stats".to_string(),
+            default: None, example: None, constraints: Vec::new(),
+            read_only: true, read_only_when: None,
+        })
+        .field("citation", FieldSchema {
+            field_type: FieldType::Object(citation_fields), required: false,
+            description: "Citation sub-object: text, source, page. Inherited by grounded query responses.".to_string(),
+            default: None, example: None, constraints: Vec::new(),
+            read_only: true, read_only_when: None,
+        })
+        .field("source_info", FieldSchema {
+            field_type: FieldType::Object(source_info_fields), required: false,
+            description: "SourceInfo sub-object: id, title, source_type, tags, created_at. Inherited by source CRUD responses.".to_string(),
+            default: None, example: None, constraints: Vec::new(),
+            read_only: true, read_only_when: None,
+        })
+        .build()
+}
+pub(crate) fn compact_mcp_plugin_schema() -> PluginSchema {
+    PluginSchema::builder("compact_mcp")
+        .version("1.0.0")
+        .description("op-mcp-server — multi-mode MCP server (compact/full/agents) with stdio, HTTP, and WebSocket transports")
+        .field("mode", FieldSchema {
+            field_type: FieldType::Enum(vec![
+                "compact".into(), "full".into(), "agents".into(),
+            ]),
+            required: false,
+            description: "Server mode: compact (5 meta-tools), full (all tools), agents (D-Bus agents)".into(),
+            default: Some(json!("compact")),
+            example: Some(json!("compact")),
+            constraints: vec![],
+            read_only: false,
+            read_only_when: None,
+        })
+        .field("http", FieldSchema {
+            field_type: FieldType::String,
+            required: false,
+            description: "HTTP/SSE bind address (empty = not started)".into(),
+            default: Some(json!("127.0.0.1:11436")),
+            example: Some(json!("100.90.37.254:3001")),
+            constraints: vec![],
+            read_only: false,
+            read_only_when: None,
+        })
+        .field("ws", FieldSchema {
+            field_type: FieldType::String,
+            required: false,
+            description: "WebSocket bind address (empty = not started)".into(),
+            default: Some(json!(null)),
+            example: Some(json!("100.90.37.254:3002")),
+            constraints: vec![],
+            read_only: false,
+            read_only_when: None,
+        })
+        .field("wg_interface", FieldSchema {
+            field_type: FieldType::String,
+            required: false,
+            description: "WireGuard interface for identity sled".into(),
+            default: Some(json!("netmaker")),
+            example: Some(json!("netmaker")),
+            constraints: vec![],
+            read_only: false,
+            read_only_when: None,
+        })
+        .field("stdio", FieldSchema {
+            field_type: FieldType::Boolean,
+            required: false,
+            description: "Run stdio transport (default for Claude Desktop)".into(),
+            default: Some(json!(true)),
+            example: None,
+            constraints: vec![],
+            read_only: false,
+            read_only_when: None,
+        })
+        .field("log_level", FieldSchema {
+            field_type: FieldType::Enum(vec![
+                "trace".into(), "debug".into(), "info".into(), "warn".into(), "error".into(),
+            ]),
+            required: false,
+            description: "Log verbosity".into(),
+            default: Some(json!("info")),
+            example: None,
+            constraints: vec![],
+            read_only: false,
+            read_only_when: None,
+        })
+        .field("running", FieldSchema {
+            field_type: FieldType::Boolean,
+            required: false,
+            description: "Whether the s6 service is currently running".into(),
+            default: Some(json!(false)),
+            example: None,
+            constraints: vec![],
+            read_only: true,
+            read_only_when: None,
+        })
+        .build()
+}
+
+pub(crate) fn zeroclaw_plugin_schema() -> PluginSchema {
+    // The plugin IS the schema: derive directly from ZeroclawPlugin's live
+    // state. Nothing is indexed here — adding a field to ZeroclawState is the
+    // only way to change this schema.
+    let state = simd_json::serde::to_owned_value(super::zeroclaw::ZeroclawPlugin::current_state())
+        .unwrap_or_else(|_| json!({}));
+    schema_from_state(
+        "zeroclaw",
+        "llm",
+        "1.0.0",
+        "Zeroclaw schema/RPC-native model router for Antigravity UI, CLI providers, and structured JSON output",
+        &state,
+    )
+}
+
+pub(crate) fn ctl_plane_chatbot_plugin_schema() -> PluginSchema {
+    // ── REQ-2: Reasoning Episode Record sub-object ──────────────────────────
+    let reasoning_episode_fields = {
+        let mut fields = HashMap::new();
+        // Core identity
+        fields.insert(
+            "episode_id".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "Unique ID (UUID v7 for time-ordering)".to_string(),
+                default: None,
+                example: Some(json!("01912abc-def0-7abc-8def-0123456789ab")),
+                constraints: Vec::new(),
+                read_only: true,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "started_at".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "ISO-8601 timestamp of reasoning entry".to_string(),
+                default: None,
+                example: Some(json!("2025-05-29T14:30:00Z")),
+                constraints: Vec::new(),
+                read_only: true,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "ended_at".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "ISO-8601 timestamp of reasoning exit".to_string(),
+                default: None,
+                example: Some(json!("2025-05-29T14:30:05Z")),
+                constraints: Vec::new(),
+                read_only: true,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "duration_ms".to_string(),
+            FieldSchema {
+                field_type: FieldType::Integer,
+                required: true,
+                description: "Wall-clock duration in milliseconds".to_string(),
+                default: None,
+                example: Some(json!(5000)),
+                constraints: Vec::new(),
+                read_only: true,
+                read_only_when: None,
+            },
+        );
+        // Lifecycle
+        fields.insert(
+            "trigger".to_string(),
+            FieldSchema {
+                field_type: FieldType::Enum(vec![
+                    "goal".to_string(),
+                    "tool_result".to_string(),
+                    "interrupt".to_string(),
+                    "replan".to_string(),
+                    "system_event".to_string(),
+                ]),
+                required: true,
+                description: "What caused reasoning to start".to_string(),
+                default: None,
+                example: Some(json!("goal")),
+                constraints: Vec::new(),
+                read_only: true,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "exit_reason".to_string(),
+            FieldSchema {
+                field_type: FieldType::Enum(vec![
+                    "tool_call".to_string(),
+                    "response_emitted".to_string(),
+                    "direction_change".to_string(),
+                    "goal_achieved".to_string(),
+                    "config_set".to_string(),
+                    "task_scheduled".to_string(),
+                    "interrupt".to_string(),
+                ]),
+                required: true,
+                description: "What ended reasoning".to_string(),
+                default: None,
+                example: Some(json!("tool_call")),
+                constraints: Vec::new(),
+                read_only: true,
+                read_only_when: None,
+            },
+        );
+        // Content — PII-tagged per REQ-8
+        fields.insert(
+            "goal_text".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "High-level goal or prompt active at episode start [PII]".to_string(),
+                default: None,
+                example: Some(json!("Configure VLAN isolation for tenant-3")),
+                constraints: Vec::new(),
+                read_only: true,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "reasoning_summary".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description:
+                    "Compact natural-language summary of reasoning — primary embedding input [PII]"
+                        .to_string(),
+                default: None,
+                example: Some(json!(
+                    "Evaluated 3 bridge configs, chose br-tenant3 for isolation"
+                )),
+                constraints: Vec::new(),
+                read_only: true,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "tools_consulted".to_string(),
+            FieldSchema {
+                field_type: FieldType::Array(Box::new(FieldType::String)),
+                required: false,
+                description: "Ordered list of tools/plugins/MCP calls made during the episode"
+                    .to_string(),
+                default: Some(json!([])),
+                example: Some(json!(["ovs_list_bridges", "ovs_create_bridge"])),
+                constraints: Vec::new(),
+                read_only: true,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "decision_output".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "The decision, plan, or action the episode produced [PII]".to_string(),
+                default: None,
+                example: Some(json!("Create br-tenant3 with VLAN 103 tagged ports")),
+                constraints: Vec::new(),
+                read_only: true,
+                read_only_when: None,
+            },
+        );
+        // Outcome
+        fields.insert("outcome_class".to_string(), FieldSchema {
+            field_type: FieldType::Enum(vec![
+                "goal_achieved".to_string(), "config_set".to_string(),
+                "task_scheduled".to_string(), "delegated".to_string(),
+                "interrupted".to_string(), "direction_changed".to_string(),
+                "inconclusive".to_string(),
+            ]),
+            required: true,
+            description: "Classification of episode outcome. goal_achieved/config_set/task_scheduled => Signal significance".to_string(),
+            default: None, example: Some(json!("config_set")),
+            constraints: Vec::new(), read_only: true, read_only_when: None,
+        });
+        fields.insert(
+            "confidence".to_string(),
+            FieldSchema {
+                field_type: FieldType::Float,
+                required: false,
+                description: "Optional confidence 0.0-1.0 if the model emits one".to_string(),
+                default: None,
+                example: Some(json!(0.87)),
+                constraints: vec![
+                    Constraint::Min { value: 0.0 },
+                    Constraint::Max { value: 1.0 },
+                ],
+                read_only: true,
+                read_only_when: None,
+            },
+        );
+        // Grouping
+        fields.insert(
+            "plugin_id".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Plugin that owns the context being reasoned about".to_string(),
+                default: None,
+                example: Some(json!("ovsdb_bridge")),
+                constraints: Vec::new(),
+                read_only: true,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "conversation_id".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Groups episodes belonging to the same high-level task chain"
+                    .to_string(),
+                default: None,
+                example: Some(json!("vlan-isolation-task-3")),
+                constraints: Vec::new(),
+                read_only: true,
+                read_only_when: None,
+            },
+        );
+        // Integrity + Privacy
+        fields.insert(
+            "content_hash".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description:
+                    "SHA-256 of canonical serialized record — for exact dedup before upsert (REQ-7)"
+                        .to_string(),
+                default: None,
+                example: None,
+                constraints: Vec::new(),
+                read_only: true,
+                read_only_when: None,
+            },
+        );
+        fields.insert("pii_flagged".to_string(), FieldSchema {
+            field_type: FieldType::Boolean, required: false,
+            description: "If true, reasoning_summary and decision_output are redacted before vectorization (REQ-8)".to_string(),
+            default: Some(json!(false)), example: None,
+            constraints: Vec::new(), read_only: true, read_only_when: None,
+        });
+        fields
+    };
+
+    // ── Significance classification sub-object (REQ-3) ───────────────────────
+    let significance_fields = {
+        let mut fields = HashMap::new();
+        fields.insert("level".to_string(), FieldSchema {
+            field_type: FieldType::Enum(vec!["Contextual".to_string(), "Signal".to_string()]),
+            required: true,
+            description: "Reasoning episodes are always at least Contextual. goal_achieved/config_set/task_scheduled => Signal".to_string(),
+            default: Some(json!("Contextual")), example: Some(json!("Signal")),
+            constraints: Vec::new(), read_only: true, read_only_when: None,
+        });
+        fields.insert(
+            "rule".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Significance rule that was evaluated".to_string(),
+                default: None,
+                example: Some(json!(
+                    "outcome_class in [goal_achieved, config_set, task_scheduled]"
+                )),
+                constraints: Vec::new(),
+                read_only: true,
+                read_only_when: None,
+            },
+        );
+        fields
+    };
+
+    PluginSchema::builder("ctl_plane_chatbot")
+        .version("1.0.0")
+        .description("Control-plane chatbot reasoning episodes — THE PLUGIN IS THE SCHEMA. Declares every episode field (REQ-2), PII tagging (REQ-8), significance classification (REQ-3), and vectorization pipeline config (REQ-4/5/6/7). Downstream (Qdrant, CozoDB, Accountability UI, EventChainService) inherits.")
+        // ── Pipeline config (tunable) ──────────────────────────────────────
+        .field("voyage_model", FieldSchema {
+            field_type: FieldType::Enum(vec![
+                "voyage-4-lite".to_string(), "voyage-4".to_string(),
+            ]),
+            required: false,
+            description: "Voyage embedding model for reasoning episodes (REQ-4). POC target: voyage-4-lite".to_string(),
+            default: Some(json!("voyage-4-lite")), example: Some(json!("voyage-4")),
+            constraints: Vec::new(), read_only: false, read_only_when: None,
+        })
+        .field("qdrant_collection", FieldSchema {
+            field_type: FieldType::String, required: false,
+            description: "Qdrant collection name (REQ-5). Separate from mutation/schema footprints".to_string(),
+            default: Some(json!("ctl_plane_reasoning_episodes")), example: None,
+            constraints: Vec::new(), read_only: false, read_only_when: None,
+        })
+        .field("vector_dims", FieldSchema {
+            field_type: FieldType::Integer, required: false,
+            description: "Vector dimensions (1024 for voyage-4-lite, flexible post-POC)".to_string(),
+            default: Some(json!(1024)), example: None,
+            constraints: Vec::new(), read_only: false, read_only_when: None,
+        })
+        .field("dedup_window_hrs", FieldSchema {
+            field_type: FieldType::Integer, required: false,
+            description: "Content-hash dedup collision window in hours (REQ-7, default 24)".to_string(),
+            default: Some(json!(24)), example: None,
+            constraints: Vec::new(), read_only: false, read_only_when: None,
+        })
+        .field("queue_alert_threshold", FieldSchema {
+            field_type: FieldType::Integer, required: false,
+            description: "Alert if embedding queue depth exceeds this (REQ-10, default 50)".to_string(),
+            default: Some(json!(50)), example: None,
+            constraints: Vec::new(), read_only: false, read_only_when: None,
+        })
+        .field("nesting_policy", FieldSchema {
+            field_type: FieldType::Enum(vec!["flat".to_string(), "nested".to_string()]),
+            required: false,
+            description: "REQ-1: flat = new trigger extends current episode; nested = opens new episode".to_string(),
+            default: Some(json!("flat")), example: None,
+            constraints: Vec::new(), read_only: false, read_only_when: None,
+        })
+        .field("vectorization_enabled", FieldSchema {
+            field_type: FieldType::Boolean, required: false,
+            description: "Enable Voyage embedding pipeline for reasoning episodes".to_string(),
+            default: Some(json!(true)), example: None,
+            constraints: Vec::new(), read_only: false, read_only_when: None,
+        })
+        // ── Observed state (read-only from pipeline) ───────────────────────
+        .field("running", FieldSchema {
+            field_type: FieldType::Boolean, required: false,
+            description: "Whether the chatbot is currently active".to_string(),
+            default: Some(json!(true)), example: None,
+            constraints: Vec::new(), read_only: true, read_only_when: None,
+        })
+        .field("reasoning_active", FieldSchema {
+            field_type: FieldType::Boolean, required: false,
+            description: "Whether the chatbot is currently in reasoning state (REQ-1)".to_string(),
+            default: Some(json!(false)), example: None,
+            constraints: Vec::new(), read_only: true, read_only_when: None,
+        })
+        .field("embedding_queue_depth", FieldSchema {
+            field_type: FieldType::Integer, required: false,
+            description: "Current Voyage embedding queue depth (alert at queue_alert_threshold)".to_string(),
+            default: Some(json!(0)), example: None,
+            constraints: Vec::new(), read_only: true, read_only_when: None,
+        })
+        .field("last_vectorized_at", FieldSchema {
+            field_type: FieldType::String, required: false,
+            description: "ISO-8601 timestamp of last successful Qdrant upsert".to_string(),
+            default: None, example: None,
+            constraints: Vec::new(), read_only: true, read_only_when: None,
+        })
+        // ── Vector ID on sled (identity-bound) ───────────────────────────
+        .field("vector_id", FieldSchema {
+            field_type: FieldType::String, required: false,
+            description: "Qdrant vector UUID on the identity sled — binds every vectorized episode to this identity".to_string(),
+            default: None, example: Some(json!("a1b2c3d4-e5f6-7890-abcd-ef0123456789")),
+            constraints: Vec::new(), read_only: true, read_only_when: None,
+        })
+        // ── REQ-2: Reasoning Episode Record ────────────────────────────────
+        .field("reasoning_episode", FieldSchema {
+            field_type: FieldType::Object(reasoning_episode_fields), required: false,
+            description: "REQ-2: Structured record produced at reasoning exit. Primary unit of vectorization.".to_string(),
+            default: None, example: None,
+            constraints: Vec::new(), read_only: true, read_only_when: None,
+        })
+        // ── REQ-3: Significance classification ─────────────────────────────
+        .field("significance", FieldSchema {
+            field_type: FieldType::Object(significance_fields), required: false,
+            description: "REQ-3: Always at least Contextual. goal_achieved/config_set/task_scheduled => Signal".to_string(),
+            default: None, example: None,
+            constraints: Vec::new(), read_only: true, read_only_when: None,
+        })
+        .build()
+}
+
+// ── OSCAL Subid Registry ─────────────────────────────────────────────────────
+//
+// Every D-Bus object, plugin, schema, mutation, event, and tool carries two
+// identifiers: a `uuid` (machine identity) and a `subid` (human-readable
+// operational taxonomy key).  This schema defines the canonical shape of one
+// registry entry.  Compliance refs live in metadata arrays — never inside
+// the subid string itself.
+
+pub(crate) fn oscal_subid_registry_plugin_schema() -> PluginSchema {
+    PluginSchema::builder("oscal_subid_registry")
+        .version("1.0.0")
+        .description("OSCAL subid registry — dual-identifier model for every system artifact. uuid = machine identity, subid = operational taxonomy key.")
+        .category("compliance")
+
+        // ── Core identity ─────────────────────────────────────────────────
+        .field("uuid", FieldSchema {
+            field_type: FieldType::String,
+            required: true,
+            description: "Machine identity UUID (RFC 4122). Never replaced by subid.".to_string(),
+            default: None,
+            example: Some(json!("a1b2c3d4-e5f6-7890-abcd-ef0123456789")),
+            constraints: Vec::new(),
+            read_only: true,
+            read_only_when: None,
+        })
+        .field("subid", FieldSchema {
+            field_type: FieldType::String,
+            required: true,
+            description: "Human-readable operational taxonomy key. Format: <category>.<component-type>.<subject>.<verb>[.<facet>][@vN]. Immutable per subject.".to_string(),
+            default: None,
+            example: Some(json!("mut.service.state-sync.apply-patch@v1")),
+            constraints: vec![
+                Constraint::Pattern {
+                    regex: "^(src|prj|sch|mut|obs|evt|exp)\\.(this-system|system|interconnection|software|hardware|service|policy|physical|process-procedure|plan|guidance|standard|validation|network)\\.[a-z0-9]+(?:-[a-z0-9]+)*\\.[a-z0-9]+(?:-[a-z0-9]+)*(?:\\.[a-z0-9]+(?:-[a-z0-9]+)*){0,2}(?:@v[1-9][0-9]*)?$".to_string()
+                },
+            ],
+            read_only: false,
+            read_only_when: None,
+        })
+
+        // ── Taxonomy axes ─────────────────────────────────────────────────
+        .field("category", FieldSchema {
+            field_type: FieldType::Enum(vec![
+                "src".to_string(),  // authoritative source / ingress
+                "prj".to_string(),  // D-Bus projection / mirror publication
+                "sch".to_string(),  // schema, contract, vocabulary
+                "mut".to_string(),  // write-path state mutation
+                "obs".to_string(),  // read / query / discovery
+                "evt".to_string(),  // signal, audit event, proof, tag provenance
+                "exp".to_string(),  // consumer-facing render (MCP tool, UI, gRPC view)
+            ]),
+            required: true,
+            description: "Operational category. Determines which additional fields are required.".to_string(),
+            default: None,
+            example: Some(json!("mut")),
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        })
+        .field("component_type", FieldSchema {
+            field_type: FieldType::Enum(vec![
+                "software".to_string(),
+                "service".to_string(),
+                "network".to_string(),
+                "hardware".to_string(),
+                "process-procedure".to_string(),
+                "standard".to_string(),
+                "validation".to_string(),
+                "policy".to_string(),
+                "plan".to_string(),
+                "guidance".to_string(),
+                "physical".to_string(),
+                "this-system".to_string(),
+                "system".to_string(),
+                "interconnection".to_string(),
+            ]),
+            required: true,
+            description: "OSCAL component-type vocabulary. Reuse OSCAL nouns — do not invent new types.".to_string(),
+            default: None,
+            example: Some(json!("service")),
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        })
+        .field("subject", FieldSchema {
+            field_type: FieldType::String,
+            required: true,
+            description: "Stable noun identifying the artifact (e.g. state-sync, plugin-schema, event-chain). Lowercase hyphenated.".to_string(),
+            default: None,
+            example: Some(json!("state-sync")),
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        })
+        .field("verb", FieldSchema {
+            field_type: FieldType::String,
+            required: true,
+            description: "Action performed on the subject (e.g. apply-patch, resolve, monitor). Lowercase hyphenated.".to_string(),
+            default: None,
+            example: Some(json!("apply-patch")),
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        })
+        .field("facet", FieldSchema {
+            field_type: FieldType::String,
+            required: false,
+            description: "Optional additional qualifier (up to two segments). Lowercase hyphenated.".to_string(),
+            default: None,
+            example: Some(json!("rollback")),
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        })
+        .field("version", FieldSchema {
+            field_type: FieldType::Integer,
+            required: false,
+            description: "Schema version of this subid (the @vN suffix). Increment only when subject meaning changes materially.".to_string(),
+            default: Some(json!(1)),
+            example: Some(json!(1)),
+            constraints: vec![Constraint::Min { value: 1.0 }],
+            read_only: false,
+            read_only_when: None,
+        })
+
+        // ── Compliance refs (metadata — never in the subid string) ────────
+        .field("control_source", FieldSchema {
+            field_type: FieldType::String,
+            required: false,
+            description: "URI of the OSCAL catalog or profile that provides the control baseline (e.g. NIST SP 800-53 Rev 5).".to_string(),
+            default: None,
+            example: Some(json!("https://csrc.nist.gov/projects/oscal")),
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        })
+        .field("control_refs", FieldSchema {
+            field_type: FieldType::Array(Box::new(FieldType::String)),
+            required: false,
+            description: "OSCAL control IDs satisfied by this artifact (e.g. [\"AC-1\", \"CM-3\"]). Compliance detail belongs here, not in the subid string.".to_string(),
+            default: Some(json!([])),
+            example: Some(json!(["AC-1", "CM-3"])),
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        })
+        .field("statement_refs", FieldSchema {
+            field_type: FieldType::Array(Box::new(FieldType::String)),
+            required: false,
+            description: "Optional fine-grained OSCAL statement-level references within the controls (e.g. [\"AC-1_smt.a\"]]).".to_string(),
+            default: Some(json!([])),
+            example: Some(json!(["AC-1_smt.a"])),
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        })
+
+        // ── Category-specific required fields ─────────────────────────────
+        // mut.* — write-path fields
+        .field("actor_id", FieldSchema {
+            field_type: FieldType::String,
+            required: false,
+            description: "Required for mut.* entries. Identity of the actor that performed the mutation.".to_string(),
+            default: None,
+            example: Some(json!("user:jeremy")),
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        })
+        .field("capability_id", FieldSchema {
+            field_type: FieldType::String,
+            required: false,
+            description: "Required for mut.* entries. Capability that authorized the mutation.".to_string(),
+            default: None,
+            example: Some(json!("cap:state-write")),
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        })
+        .field("idempotency_key", FieldSchema {
+            field_type: FieldType::String,
+            required: false,
+            description: "Required for mut.* entries. Deduplication key for the mutation operation.".to_string(),
+            default: None,
+            example: None,
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        })
+
+        // evt.* — event / audit fields
+        .field("event_id", FieldSchema {
+            field_type: FieldType::String,
+            required: false,
+            description: "Required for evt.* entries. Unique identifier for this event in the audit chain.".to_string(),
+            default: None,
+            example: None,
+            constraints: Vec::new(),
+            read_only: true,
+            read_only_when: None,
+        })
+        .field("event_hash", FieldSchema {
+            field_type: FieldType::String,
+            required: false,
+            description: "Required for evt.* entries. Content hash of the event for chain verification.".to_string(),
+            default: None,
+            example: None,
+            constraints: Vec::new(),
+            read_only: true,
+            read_only_when: None,
+        })
+        .field("tags_touched", FieldSchema {
+            field_type: FieldType::Array(Box::new(FieldType::String)),
+            required: false,
+            description: "Required for evt.* entries. Tags whose immutability is affected by this event.".to_string(),
+            default: Some(json!([])),
+            example: None,
+            constraints: Vec::new(),
+            read_only: true,
+            read_only_when: None,
+        })
+        .field("proof_root", FieldSchema {
+            field_type: FieldType::String,
+            required: false,
+            description: "Optional for evt.* entries. Merkle proof root for chain verification.".to_string(),
+            default: None,
+            example: None,
+            constraints: Vec::new(),
+            read_only: true,
+            read_only_when: None,
+        })
+
+        // src.* — source authority fields
+        .field("source_system", FieldSchema {
+            field_type: FieldType::String,
+            required: false,
+            description: "Required for src.* entries. Name of the authoritative source system (e.g. ovsdb, netmaker).".to_string(),
+            default: None,
+            example: Some(json!("ovsdb")),
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        })
+        .field("source_locator", FieldSchema {
+            field_type: FieldType::String,
+            required: false,
+            description: "Required for src.* entries. Socket path, URL, or address of the source.".to_string(),
+            default: None,
+            example: Some(json!("unix:/var/run/openvswitch/db.sock")),
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        })
+        .field("authority_rank", FieldSchema {
+            field_type: FieldType::Integer,
+            required: false,
+            description: "Optional for src.* entries. Precedence when multiple sources provide the same subject (lower = higher authority).".to_string(),
+            default: Some(json!(100)),
+            example: Some(json!(1)),
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        })
+
+        // prj.* — projection fields
+        .field("dbus_path", FieldSchema {
+            field_type: FieldType::String,
+            required: false,
+            description: "Required for prj.* entries. D-Bus object path of the projected artifact.".to_string(),
+            default: None,
+            example: Some(json!("/opdbus/v1/plugins/wireguard")),
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        })
+        .field("service_name", FieldSchema {
+            field_type: FieldType::String,
+            required: false,
+            description: "Required for prj.* entries. D-Bus service name hosting the object.".to_string(),
+            default: None,
+            example: Some(json!("org.opdbus.v1")),
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        })
+        .field("source_subid", FieldSchema {
+            field_type: FieldType::String,
+            required: false,
+            description: "Optional for prj.* entries. Subid of the src.* record this projection was derived from.".to_string(),
+            default: None,
+            example: Some(json!("src.network.ovsdb.monitor@v1")),
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        })
+
+        // sch.* — schema / contract fields
+        .field("schema_id", FieldSchema {
+            field_type: FieldType::String,
+            required: false,
+            description: "Required for sch.* entries. Canonical name of the schema (matches plugin_schema_defs.rs entry).".to_string(),
+            default: None,
+            example: Some(json!("wireguard")),
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        })
+        .field("schema_hash", FieldSchema {
+            field_type: FieldType::String,
+            required: false,
+            description: "Required for sch.* entries. Content hash of the schema at this version.".to_string(),
+            default: None,
+            example: None,
+            constraints: Vec::new(),
+            read_only: true,
+            read_only_when: None,
+        })
+
+        // exp.* — exposure / render fields
+        .field("consumer_surface", FieldSchema {
+            field_type: FieldType::Enum(vec![
+                "mcp-tool".to_string(),
+                "dbus-method".to_string(),
+                "grpc-method".to_string(),
+                "ui-field".to_string(),
+                "ui-page".to_string(),
+                "api-endpoint".to_string(),
+            ]),
+            required: false,
+            description: "Required for exp.* entries. The consumer-facing surface this artifact is rendered on.".to_string(),
+            default: None,
+            example: Some(json!("mcp-tool")),
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        })
+        .field("tool_name", FieldSchema {
+            field_type: FieldType::String,
+            required: false,
+            description: "Required for exp.mcp-tool entries. The MCP tool name as registered.".to_string(),
+            default: None,
+            example: Some(json!("cognitive_memory")),
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        })
+
+        // obs.* — observation / query fields
+        .field("query_scope", FieldSchema {
+            field_type: FieldType::String,
+            required: false,
+            description: "Required for obs.* entries. D-Bus path pattern or scope expression for this observation.".to_string(),
+            default: None,
+            example: Some(json!("/opdbus/v1/plugins/*")),
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        })
+
         .build()
 }

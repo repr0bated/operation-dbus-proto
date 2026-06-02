@@ -97,10 +97,6 @@ install_system_files() {
         log "Installed s6 service: ${svc}"
     done
 
-    # op-mcp-proxy-select3
-    install -m 0755 "${DEPLOY_DIR}/op-mcp-proxy-select3" "${INSTALL_BIN}/op-mcp-proxy-select3"
-    log "Installed op-mcp-proxy-select3"
-
     # systemd-networkd units
     if [[ -d "${DEPLOY_DIR}/systemd/networkd" ]]; then
         install -d /etc/systemd/network

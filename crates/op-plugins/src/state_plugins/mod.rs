@@ -36,16 +36,17 @@ pub mod agent_config;
 pub mod cognitive_mcp;
 pub mod compact_mcp;
 pub mod hardware;
+pub mod mail_server;
 pub mod ovsdb_bridge;
 pub mod proxmox;
 pub mod rtnetlink;
 pub mod schema_contract;
 pub mod software;
-pub mod mail_server;
 pub mod unix_socket;
 pub mod users;
 pub mod web_ui;
 pub mod wireguard;
+pub mod zeroclaw;
 
 // Re-export plugin types
 // pub use dnsresolver::DnsResolverPlugin;
@@ -88,4 +89,8 @@ pub use unix_socket::UnixSocketPlugin;
 pub use users::UsersPlugin;
 pub use web_ui::WebUiPlugin;
 pub use wireguard::WireGuardPlugin;
+pub use zeroclaw::ZeroclawPlugin;
 // pub use systemd_networkd::SystemdNetworkdPlugin; // TODO: Plugin not yet implemented
+
+pub mod ctl_plane_chatbot;
+pub use ctl_plane_chatbot::CtlPlaneChatbotPlugin;

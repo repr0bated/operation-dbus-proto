@@ -11,7 +11,7 @@ use op_plugins::DefaultPluginRegistry;
 use op_state::StatePlugin;
 use op_state_store::{
     builtin_plugin_schema, Constraint as RuntimeConstraint, FieldSchema as RuntimeFieldSchema,
-    FieldType as RuntimeFieldType, PluginSchema as RuntimePluginSchema, MemoryStore, StateStore,
+    FieldType as RuntimeFieldType, MemoryStore, PluginSchema as RuntimePluginSchema, StateStore,
 };
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
@@ -169,13 +169,39 @@ impl SystemPluginReader {
 
     /// Reads all projection entities for a single plugin asynchronously.
     pub async fn read_plugin_objects_async(&self, plugin_id: &str) -> Result<Vec<RawEntity>> {
-        let plugin = self
+        let requested_id = DefaultPluginRegistry::resolve_requested_plugin_name(plugin_id)
+            .with_context(|| format!("invalid plugin request '{}'", plugin_id))?;
+        let requested_plugin;
+        let plugin = match self
             .plugins
             .iter()
-            .find(|plugin| plugin.name == plugin_id)
-            .with_context(|| format!("unknown plugin '{}'", plugin_id))?;
+            .find(|plugin| plugin.name == requested_id)
+        {
+            Some(plugin) => plugin,
+            None => {
+                requested_plugin = Self::load_requested_plugin(&requested_id).await?;
+                &requested_plugin
+            }
+        };
 
         self.read_loaded_plugin(plugin).await
+    }
+
+    async fn load_requested_plugin(plugin_id: &str) -> Result<LoadedPlugin> {
+        let state_store: Arc<dyn StateStore> = Arc::new(MemoryStore::new());
+        let registry = DefaultPluginRegistry::new(state_store);
+        let plugin = registry
+            .load_plugin(plugin_id)
+            .await
+            .with_context(|| format!("failed to auto-load requested plugin '{}'", plugin_id))?;
+        let name = plugin.name().to_string();
+        let schema = plugin.schema().or_else(|| builtin_plugin_schema(&name));
+
+        Ok(LoadedPlugin {
+            name,
+            schema,
+            plugin,
+        })
     }
 
     /// Reads nested object projections for a single plugin asynchronously.
