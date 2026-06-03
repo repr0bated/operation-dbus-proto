@@ -135,24 +135,26 @@ pub async fn chat_handler(
         None => state.chat_manager.current_model().await,
     };
 
-    if let Err(e) =
-        crate::zeroclaw_routes::ensure_model_available(&state.projection_cache, &selected_model)
-            .await
-    {
-        return Json(ChatResponse {
-            success: false,
-            message: String::new(),
-            content: e.to_string(),
-            role: "assistant".to_string(),
-            id: format!("msg-{}", uuid::Uuid::new_v4()),
-            tool_name: None,
-            error: Some(e.to_string()),
-            tools_executed: vec![],
-            session_id,
-            model: selected_model,
-            provider: requested_provider.unwrap_or("zeroclaw").to_string(),
-            container_id,
-        });
+    if requested_provider.is_none() {
+        if let Err(e) =
+            crate::zeroclaw_routes::ensure_model_available(&state.projection_cache, &selected_model)
+                .await
+        {
+            return Json(ChatResponse {
+                success: false,
+                message: String::new(),
+                content: e.to_string(),
+                role: "assistant".to_string(),
+                id: format!("msg-{}", uuid::Uuid::new_v4()),
+                tool_name: None,
+                error: Some(e.to_string()),
+                tools_executed: vec![],
+                session_id,
+                model: selected_model,
+                provider: "zeroclaw".to_string(),
+                container_id,
+            });
+        }
     }
 
     let result = match (requested_provider, requested_model) {

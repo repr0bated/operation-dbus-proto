@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { Callout } from "@/components/shell/Primitives";
 import { JsonRenderer } from "@/components/json/JsonRenderer";
 import { SchemaForm } from "@/components/json/SchemaForm";
@@ -81,6 +81,35 @@ function assistantMessage(payload: unknown): LocalMessage {
   };
 }
 
+function modelOptionMatchesProvider(
+  option: { const?: string; title?: string },
+  provider?: string,
+): boolean {
+  if (!provider) return true;
+  const title = (option.title || "").toLowerCase();
+  const value = (option.const || "").toLowerCase();
+  const normalizedProvider = provider.toLowerCase();
+
+  if (title.startsWith(`${normalizedProvider}/`)) return true;
+  if (value.startsWith(`${normalizedProvider}/`)) return true;
+
+  const aliases: Record<string, string[]> = {
+    google: ["gemini/"],
+    "gemini-cli": ["gemini/"],
+    anthropic: ["anthropic/"],
+    openai: ["openai/"],
+    openrouter: ["openrouter/"],
+    factory: ["factory/"],
+    ollama: ["ollama/"],
+    oscal: ["oscal/"],
+    antigravity: ["gemini/", "google/"],
+  };
+
+  return (aliases[normalizedProvider] || []).some((prefix) =>
+    title.startsWith(prefix) || value.startsWith(prefix),
+  );
+}
+
 export default function ChatPage() {
   const { connected } = useEventStore();
   const [activeTab, setActiveTab] = useState<ChatTab>("chat");
@@ -117,20 +146,46 @@ export default function ChatPage() {
     let cancelled = false;
     api.zeroclaw
       .schema()
-      .then((payload) => {
+      .then(async (payload) => {
         if (cancelled) return;
-        setSchema(payload as ZeroclawSchema);
-        
-        // Initialize form with defaults from schema
-        const chatSchema = (payload as ZeroclawSchema)?.zeroclaw?.chat_form_schema;
-        const defaults: ChatFormData = {};
-        if (chatSchema?.properties) {
-          // Set first enum value as default for provider
-          const providerProp = chatSchema.properties.provider;
-          if (providerProp?.enum && providerProp.enum.length > 0) {
-            defaults.provider = providerProp.enum[0];
+
+        const raw = payload as ZeroclawSchema;
+
+        // Merge live provider + model lists so dropdowns reflect what the backend serves.
+        const [liveProviders, liveModels] = await Promise.all([
+          api.llm.providers().catch(() => null) as Promise<{ providers?: string[]; current?: string } | null>,
+          api.llm.models().catch(() => null) as Promise<{ models?: string[] } | null>,
+        ]);
+
+        const props = raw?.zeroclaw?.chat_form_schema?.properties;
+        if (props) {
+          if (liveProviders?.providers?.length && props.provider) {
+            props.provider = { ...props.provider, enum: liveProviders.providers };
           }
-          // Model will be set based on provider selection
+          if (liveModels?.models?.length && props.model) {
+            props.model = {
+              ...props.model,
+              oneOf: liveModels.models.map((m) => ({ const: m, title: m })),
+            };
+          }
+        }
+
+        setSchema(raw);
+
+        // Initialize form defaults from live status.
+        const chatSchema = raw?.zeroclaw?.chat_form_schema;
+        const defaults: ChatFormData = {};
+        const status = await api.llm.status().catch(() => null) as
+          | { provider?: unknown; model?: unknown }
+          | null;
+        if (cancelled) return;
+        if (typeof status?.provider === "string") defaults.provider = status.provider;
+        if (typeof status?.model === "string") defaults.model = status.model;
+        if (!defaults.provider) {
+          defaults.provider =
+            liveProviders?.current ??
+            liveProviders?.providers?.[0] ??
+            chatSchema?.properties?.provider?.enum?.[0];
         }
         setFormData(defaults);
       })
@@ -145,26 +200,17 @@ export default function ChatPage() {
 
   // Update model options when provider changes (filter oneOf by provider hint)
   useEffect(() => {
-    if (!formData.provider || !schema?.zeroclaw?.chat_form_schema?.properties) return;
-    
+    if (!schema?.zeroclaw?.chat_form_schema?.properties) return;
+
     const modelProp = schema.zeroclaw.chat_form_schema.properties.model;
     if (modelProp?.oneOf) {
-      // Filter models that match the selected provider
-      const providerPrefix = formData.provider.toLowerCase();
-      const filtered = modelProp.oneOf.filter(opt => {
-        const title = opt.title?.toLowerCase() || '';
-        const constVal = opt.const?.toLowerCase() || '';
-        return title.includes(providerPrefix) || 
-               constVal.includes(providerPrefix) ||
-               (formData.provider === 'factory' && title.includes('factory'));
-      });
-      
-      // If we have filtered models and current model doesn't match, pick first
-      if (filtered.length > 0) {
-        const currentValid = filtered.find(m => m.const === formData.model);
-        if (!currentValid) {
-          setFormData(prev => ({ ...prev, model: filtered[0].const }));
-        }
+      const filtered = modelProp.oneOf.filter((opt) =>
+        modelOptionMatchesProvider(opt, formData.provider),
+      );
+
+      const currentValid = filtered.find((m) => m.const === formData.model);
+      if (!currentValid) {
+        setFormData((prev) => ({ ...prev, model: filtered[0]?.const || "" }));
       }
     }
   }, [formData.provider, schema]);
@@ -225,7 +271,26 @@ export default function ChatPage() {
     setSidebarOpen(true);
   };
 
-  const chatSchema = schema?.zeroclaw?.chat_form_schema;
+  const chatSchema = useMemo(() => {
+    const base = schema?.zeroclaw?.chat_form_schema;
+    const modelProp = base?.properties?.model;
+    if (!base?.properties || !modelProp?.oneOf) return base;
+
+    const filtered = modelProp.oneOf.filter((opt) =>
+      modelOptionMatchesProvider(opt, formData.provider),
+    );
+
+    return {
+      ...base,
+      properties: {
+        ...base.properties,
+        model: {
+          ...modelProp,
+          oneOf: filtered,
+        },
+      },
+    };
+  }, [schema, formData.provider]);
 
   const tabs: { id: ChatTab; label: string; icon: React.ReactNode }[] = [
     {
@@ -248,7 +313,7 @@ export default function ChatPage() {
           <div className="flex items-end justify-between gap-4 px-4 py-3">
             <div>
               <h1 className="text-[26px] font-bold tracking-tight leading-tight text-foreground">
-                Antigravity Chat
+                Zeroclaw Chat
               </h1>
               <p className="text-sm text-muted-foreground mt-0.5">
                 Schema-driven interface · Zeroclaw model router
@@ -345,7 +410,7 @@ export default function ChatPage() {
             <div className="border-t border-border px-4 py-3 shrink-0 bg-background space-y-3">
               {!connected && (
                 <Callout variant="default" className="mb-3">
-                  Event stream offline; REST chat can still send through the gateway.
+                  Tonic event stream offline; reconnecting through the gRPC-Web gateway.
                 </Callout>
               )}
               {gatewayError && (

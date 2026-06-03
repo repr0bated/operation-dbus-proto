@@ -1,50 +1,56 @@
-//! Schema Handler — Single Source of Truth from Shared Memory
-//!
-//! Serves the canonical PluginSchema catalog from `/dev/shm/live-schema.json`.
-//! All UI, blockchain, and downstream consumers read from this endpoint.
-
-use axum::{
-    body::Body,
-    extract::Extension,
-    http::{header, StatusCode},
-    response::{IntoResponse, Response},
-};
+use axum::{extract::Extension, response::Json};
+use serde::Serialize;
+use simd_json::json;
+use simd_json::prelude::*;
+use simd_json::OwnedValue as Value;
 use std::sync::Arc;
-use tracing::{info, warn};
-
 use crate::state::AppState;
 
 const SHM_SCHEMA_PATH: &str = "/dev/shm/live-schema.json";
 
-/// GET /api/schema — Return the canonical schema catalog from shared memory.
-///
-/// The file is already valid JSON; we return it as raw bytes to avoid any
-/// serialization round-trip. If the schema catalog is missing or unreadable,
-/// returns 503 Service Unavailable to enforce the Absolute Base rule:
-/// without a valid schema, the entity does not exist.
-pub async fn schema_handler(Extension(_state): Extension<Arc<AppState>>) -> Response {
-    match std::fs::read(SHM_SCHEMA_PATH) {
-        Ok(bytes) => {
-            info!(
-                bytes = bytes.len(),
-                "Served schema catalog from shared memory"
-            );
-            Response::builder()
-                .status(StatusCode::OK)
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(bytes))
-                .unwrap()
+pub async fn schema_catalog_handler(
+    Extension(_state): Extension<Arc<AppState>>,
+) -> Json<Value> {
+    match std::fs::read_to_string(SHM_SCHEMA_PATH) {
+        Ok(content) => {
+            let mut bytes = content.into_bytes();
+            match simd_json::to_owned_value(&mut bytes) {
+                Ok(value) => {
+                    let count = if let Some(obj) = value.as_object() {
+                        obj.len()
+                    } else {
+                        0
+                    };
+                    Json(json!({
+                        "success": true,
+                        "catalog": value,
+                        "total": count
+                    }))
+                }
+                Err(e) => Json(json!({
+                    "success": false,
+                    "error": format!("Failed to parse schema: {}", e)
+                })),
+            }
         }
-        Err(e) => {
-            warn!(error = %e, "Schema SHM not available");
-            Response::builder()
-                .status(StatusCode::SERVICE_UNAVAILABLE)
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(format!(
-                    r#"{{"error":"Schema catalog not available","detail":"{}"}}"#,
-                    e
-                )))
-                .unwrap()
+        Err(e) => Json(json!({
+            "success": false,
+            "error": format!("Schema catalog not available: {}", e)
+        })),
+    }
+}
+
+pub async fn schema_handler(
+    Extension(_state): Extension<Arc<AppState>>,
+) -> Json<Value> {
+    match std::fs::read_to_string(SHM_SCHEMA_PATH) {
+        Ok(content) => {
+            let mut bytes = content.into_bytes();
+            match simd_json::to_owned_value(&mut bytes) {
+                Ok(value) => Json(value),
+                Err(_) => Json(json!({})),
+            }
         }
+        Err(_) => Json(json!({})),
     }
 }

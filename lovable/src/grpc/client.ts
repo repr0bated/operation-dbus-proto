@@ -15,7 +15,7 @@
  *   - ServiceManager (opdbus.services.v1)
  *   - McpService (op.mcp.v1)
  *
- * Uses binary gRPC-Web framing over tonic-web + Nginx.
+ * Uses binary gRPC-Web framing over tonic-web.
  * @see docs/architecture-flow.md
  */
 
@@ -24,11 +24,57 @@ import { GrpcWebFetchTransport } from "@protobuf-ts/grpcweb-transport";
 // ── Transport Configuration ─────────────────────────────────────────────────
 
 const GRPC_BASE_URL =
-  import.meta.env.VITE_GRPC_BASE_URL || "https://dashboard.3tched.com";
+  import.meta.env.VITE_GRPC_BASE_URL ||
+  `${window.location.protocol}//${window.location.hostname}:50051`;
 
 export const grpcBaseUrl = GRPC_BASE_URL;
 
 let _transport: GrpcWebFetchTransport | null = null;
+let ghostbridgeHeadersPromise: Promise<Record<string, string>> | null = null;
+
+async function getGhostbridgeHeaders(): Promise<Record<string, string>> {
+  if (!ghostbridgeHeadersPromise) {
+    ghostbridgeHeadersPromise = fetch("/api/identity/sled")
+      .then(async (res) => {
+        if (!res.ok) {
+          throw new Error(`Identity Sled unavailable: ${res.status}`);
+        }
+        const sled = await res.json() as {
+          hashed_footprint?: string;
+          trace_id?: string;
+          wireguard_pubkey_hex?: string;
+          backend?: boolean;
+        };
+        const headers: Record<string, string> = {};
+        if (sled.hashed_footprint) {
+          headers["x-ghostbridge-footprint"] = sled.hashed_footprint;
+          sessionStorage.setItem("X-Ghostbridge-Footprint", sled.hashed_footprint);
+        }
+        if (sled.trace_id) {
+          headers["x-ghostbridge-trace-id"] = sled.trace_id;
+          sessionStorage.setItem("X-Ghostbridge-Trace-ID", sled.trace_id);
+        }
+        if (sled.wireguard_pubkey_hex) {
+          headers["x-wireguard-pubkey"] = sled.wireguard_pubkey_hex;
+        }
+        return headers;
+      })
+      .catch((err) => {
+        ghostbridgeHeadersPromise = null;
+        throw err;
+      });
+  }
+  return ghostbridgeHeadersPromise;
+}
+
+async function grpcHeaders(): Promise<Record<string, string>> {
+  return {
+    "Content-Type": "application/grpc-web",
+    "Accept": "application/grpc-web",
+    "x-grpc-web": "1",
+    ...(await getGhostbridgeHeaders()),
+  };
+}
 
 export function getTransport(): GrpcWebFetchTransport {
   if (!_transport) {
@@ -66,11 +112,7 @@ async function grpcUnary<TReq, TResp>(
 
   const res = await fetch(url, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/grpc-web",
-      "Accept": "application/grpc-web",
-      "x-grpc-web": "1",
-    },
+    headers: await grpcHeaders(),
     body: frame,
   });
 
@@ -124,16 +166,12 @@ function grpcServerStream<TReq, TResp>(
   frameDv.setUint32(1, payloadBytes.length, false);
   frame.set(payloadBytes, 5);
 
-  const responsePromise = fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/grpc-web",
-      "Accept": "application/grpc-web",
-      "x-grpc-web": "1",
-    },
-    body: frame,
-    signal: controller.signal,
-  });
+  const responsePromise = (async () => fetch(url, {
+      method: "POST",
+      headers: await grpcHeaders(),
+      body: frame,
+      signal: controller.signal,
+    }))();
 
   const stream = new ReadableStream<TResp>({
     async start(ctrl) {

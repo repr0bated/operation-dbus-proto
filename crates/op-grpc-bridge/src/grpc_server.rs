@@ -17,6 +17,7 @@ use simd_json::prelude::{ValueAsContainer, ValueAsScalar};
 use tokio::sync::{broadcast, RwLock};
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status};
+use tower_http::cors::{Any, CorsLayer};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
@@ -383,8 +384,14 @@ pub async fn run_grpc_server(
     // Wrap services with gRPC-Web support and allow JSON encoding.
     // The GhostbridgeInterceptor enforces the Absolute Base rule on every
     // inbound request before it reaches a service handler.
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Any)
+        .allow_headers(Any);
+
     let server = tonic::transport::Server::builder()
         .accept_http1(true)
+        .layer(cors)
         .add_service(tonic_web::enable(StateSyncServer::with_interceptor(
             server.clone(),
             interceptor::ghostbridge_interceptor,

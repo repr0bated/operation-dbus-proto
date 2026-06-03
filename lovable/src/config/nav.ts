@@ -9,6 +9,7 @@ import {
   MessageSquare, BarChart3, Link2, FileText, Radio,
   Folder, Zap, Monitor, Settings, Bug, ScrollText, Shield,
   GitBranch, Orbit, Box, Globe, Network, Workflow, Brain,
+  Sparkles, Layers, TrendingUp, Hash, LayoutDashboard, Palette,
 } from "lucide-react";
 
 export interface NavItem {
@@ -71,6 +72,20 @@ export const NAV_GROUPS: NavGroup[] = [
       { title: "State", path: "/state", icon: Monitor },
       { title: "Logs", path: "/logs", icon: ScrollText },
       { title: "gRPC Diagnostics", path: "/grpc", icon: Radio },
+    ],
+  },
+  {
+    label: "Schema",
+    items: [
+      { title: "Schema Gallery", path: "/schema-gallery", icon: Box },
+      { title: "Gemma UI", path: "/gemma-ui", icon: Sparkles },
+      { title: "Gemma Presentation", path: "/gemma-presentation", icon: Layers },
+      { title: "Gemma Free UI", path: "/gemma-free-ui", icon: Sparkles },
+      { title: "Gemma Free Presentation", path: "/gemma-free-presentation", icon: TrendingUp },
+      { title: "Gemma · Data", path: "/gemma-data", icon: Hash },
+      { title: "Gemma · Spatial", path: "/gemma-spatial", icon: LayoutDashboard },
+      { title: "Gemma · Flow", path: "/gemma-flow", icon: GitBranch },
+      { title: "Gemma · Aesthetic", path: "/gemma-aesthetic", icon: Palette },
     ],
   },
 ];

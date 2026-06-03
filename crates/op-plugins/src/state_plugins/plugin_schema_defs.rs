@@ -3128,3 +3128,52 @@ pub(crate) fn oscal_subid_registry_plugin_schema() -> PluginSchema {
 
         .build()
 }
+
+pub(crate) fn factory_plugin_schema() -> PluginSchema {
+    let state = simd_json::serde::to_owned_value(super::factory::FactoryPlugin::current_state())
+        .unwrap_or_else(|_| json!({}));
+    schema_from_state(
+        "factory",
+        "llm",
+        "1.0.0",
+        "Factory Droid agent platform — computers, sessions, models, autonomy controls",
+        &state,
+    )
+}
+
+pub(crate) fn fail2ban_plugin_schema() -> PluginSchema {
+    let state = simd_json::serde::to_owned_value(super::fail2ban::Fail2banPlugin::current_state()).unwrap_or_else(|_| json!({}));
+    schema_from_state("fail2ban", "security", "1.0.0", "Fail2ban intrusion prevention — jails, bans, filters, actions", &state)
+}
+pub(crate) fn cron_plugin_schema() -> PluginSchema {
+    let state = simd_json::serde::to_owned_value(super::cron::CronPlugin::current_state()).unwrap_or_else(|_| json!({}));
+    schema_from_state("cron", "infrastructure", "1.0.0", "Cron scheduler — jobs, schedules, execution history", &state)
+}
+pub(crate) fn memory_plugin_schema() -> PluginSchema {
+    let state = simd_json::serde::to_owned_value(super::memory_plugin::MemoryPlugin::current_state()).unwrap_or_else(|_| json!({}));
+    schema_from_state("memory", "data", "1.0.0", "Cognitive memory — namespaces, embeddings, search", &state)
+}
+pub(crate) fn workflows_plugin_schema() -> PluginSchema {
+    let state = simd_json::serde::to_owned_value(super::workflows_plugin::WorkflowsPlugin::current_state()).unwrap_or_else(|_| json!({}));
+    schema_from_state("workflows", "automation", "1.0.0", "Workflow automation — pipelines, triggers, execution", &state)
+}
+pub(crate) fn btrfs_plugin_schema() -> PluginSchema {
+    let state = simd_json::serde::to_owned_value(super::btrfs_plugin::BtrfsPlugin::current_state()).unwrap_or_else(|_| json!({}));
+    schema_from_state("btrfs", "infrastructure", "1.0.0", "Btrfs filesystem — subvolumes, snapshots, send/receive, DR", &state)
+}
+pub(crate) fn knowledge_plugin_schema() -> PluginSchema {
+    let state = simd_json::serde::to_owned_value(super::knowledge_plugin::KnowledgePlugin::current_state()).unwrap_or_else(|_| json!({}));
+    schema_from_state("knowledge", "data", "1.0.0", "Knowledge stores — Qdrant, CozoDB, Sled, embedding pipeline", &state)
+}
+pub(crate) fn antigravity_chat_plugin_schema() -> PluginSchema {
+    let state = simd_json::serde::to_owned_value(super::antigravity_chat::AntigravityChatPlugin::current_state()).unwrap_or_else(|_| json!({}));
+    schema_from_state("antigravity_chat", "llm", "1.0.0", "Antigravity Chat — OAuth bridge, Gemini models, headless IDE", &state)
+}
+pub(crate) fn schema_renderer_plugin_schema() -> PluginSchema {
+    let state = simd_json::serde::to_owned_value(super::schema_renderer::SchemaRendererPlugin::current_state()).unwrap_or_else(|_| json!({}));
+    schema_from_state("schema_renderer", "ui", "1.0.0", "Schema Renderer - dynamic JSON Schema to React form generation with auto-gallery", &state)
+}
+pub(crate) fn antigravity_plugin_schema() -> PluginSchema {
+    let state = simd_json::serde::to_owned_value(super::antigravity::AntigravityPlugin::current_state()).unwrap_or_else(|_| json!({"status":"error"}));
+    schema_from_state("antigravity", "llm", "1.0.0", "Google Antigravity SDK provider — Vertex AI Gemini models, OAuth auth, structured output, OSCAL compliance routing", &state)
+}

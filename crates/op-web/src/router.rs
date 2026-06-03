@@ -34,6 +34,8 @@ pub fn create_router(state: Arc<AppState>, static_dir: Option<String>) -> Router
         // Health check
         .route("/api/health", get(routes::health_check))
         // LLM routes
+        .route("/api/schema/catalog", get(crate::handlers::schema::schema_catalog_raw_handler))
+        .route("/api/schema/catalog/detail", get(crate::handlers::schema::schema_catalog_handler))
         .route("/api/llm/status", get(routes::llm::get_llm_status))
         .route(
             "/api/llm/providers",

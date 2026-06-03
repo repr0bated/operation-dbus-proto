@@ -38,6 +38,7 @@ pub async fn identity_sled_handler(Extension(_state): Extension<Arc<AppState>>) 
                 "trace_id": sled.trace_id_hex(),
                 "schema_version": sled.schema_version,
                 "schema_catalog_hash": schema_catalog_hash,
+                "backend": false,
             });
 
             info!("Served identity sled from shared memory");

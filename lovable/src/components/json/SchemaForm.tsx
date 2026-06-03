@@ -160,7 +160,7 @@ function SchemaField({
         >
           {!required && <option value="">-- Select {label} --</option>}
           {property.oneOf.map((opt) => (
-            <option key={opt.const} value={opt.const}>
+            <option key={`${opt.const ?? ""}:${opt.title ?? ""}`} value={opt.const}>
               {opt.title || opt.const}
             </option>
           ))}

@@ -1,0 +1,3 @@
+#!/bin/execlineb -P
+foreground { sh /etc/s6/sv/wg-chatbot/shell_up }
+exit 0

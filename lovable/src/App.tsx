@@ -30,6 +30,13 @@ import AccountabilityPage from "./pages/AccountabilityPage";
 import BtrfsPage from "./pages/BtrfsPage";
 import DataStoresPage from "./pages/DataStoresPage";
 import EmbeddingPipelinePage from "./pages/EmbeddingPipelinePage";
+import PluginPage from "@/pages/PluginPage";
+import SchemaGalleryPage from "@/pages/SchemaGalleryPage";
+import GemmaUIPage from "@/pages/GemmaUIPage";
+import GemmaPresentationPage from "@/pages/GemmaPresentationPage";
+import GemmaFreeUIPage from "@/pages/GemmaFreeUIPage";
+import GemmaFreePresentationPage from "@/pages/GemmaFreePresentationPage";
+import { GemmaDataPage, GemmaSpatialPage, GemmaFlowPage, GemmaAestheticPage } from "@/pages/GemmaPerspectivePages";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient({
@@ -66,6 +73,16 @@ function AppInner() {
             <Route path="/btrfs" element={<BtrfsPage />} />
             <Route path="/data-stores" element={<DataStoresPage />} />
             <Route path="/embedding" element={<EmbeddingPipelinePage />} />
+            <Route path="/plugin/:pluginId" element={<PluginPage />} />
+            <Route path="/schema-gallery" element={<SchemaGalleryPage />} />
+            <Route path="/gemma-ui" element={<GemmaUIPage />} />
+            <Route path="/gemma-presentation" element={<GemmaPresentationPage />} />
+            <Route path="/gemma-free-ui" element={<GemmaFreeUIPage />} />
+            <Route path="/gemma-free-presentation" element={<GemmaFreePresentationPage />} />
+            <Route path="/gemma-data" element={<GemmaDataPage />} />
+            <Route path="/gemma-spatial" element={<GemmaSpatialPage />} />
+            <Route path="/gemma-flow" element={<GemmaFlowPage />} />
+            <Route path="/gemma-aesthetic" element={<GemmaAestheticPage />} />
             <Route path="*" element={<NotFound />} />
       </Routes>
     </AppShell>
