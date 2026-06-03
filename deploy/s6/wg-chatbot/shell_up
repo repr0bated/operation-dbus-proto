@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+
+iface="${OP_CHATBOT_WG_INTERFACE:-wg-chatbot}"
+conf="${OP_CHATBOT_WG_CONF:-/etc/wireguard/wg-chatbot.conf}"
+sled_bin="${OP_IDENTITY_SLED_BIN:-/usr/local/bin/op-identity-sled}"
+
+ip link show "$iface" >/dev/null 2>&1 && wg-quick down "$conf" 2>/dev/null || true
+wg-quick up "$conf"
+
+pubkey="$(wg show "$iface" public-key)"
+WG_INTERFACE="$iface" WG_PUBKEY="$pubkey" "$sled_bin" --refresh --iface "$iface" --pretty

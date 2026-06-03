@@ -106,6 +106,8 @@ impl AssistantGrpcServer {
     pub async fn serve(self) -> anyhow::Result<()> {
         let addr: SocketAddr = format!("{}:{}", self.cfg.host, self.cfg.port).parse()?;
         info!(%addr, transport = ?self.client.transport().primary_kind(), "starting op-assistant-grpc");
+        // Publish D-Bus interface so model calls work over the session bus.
+        let _dbus_conn = crate::dbus_service::serve(Arc::new(self.client.clone())).await?;
 
         let agent = AgentServiceServer::with_interceptor(
             AgentServiceImpl::new(self.client.clone()),

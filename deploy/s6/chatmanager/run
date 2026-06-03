@@ -5,6 +5,11 @@
 # Connects to the dbus-session bus at unix:path=/run/op-dbus/session-bus.sock.
 
 export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/op-dbus/session-bus.sock}"
+export WG_INTERFACE="${WG_INTERFACE:-wg-chatbot}"
+if [ -z "${WG_PUBKEY:-}" ] && command -v wg >/dev/null 2>&1; then
+    WG_PUBKEY="$(wg show "$WG_INTERFACE" public-key 2>/dev/null || true)"
+    export WG_PUBKEY
+fi
 export OP_CHAT_LISTEN="${OP_CHAT_LISTEN:-0.0.0.0:50053}"
 export RUST_LOG="${RUST_LOG:-info}"
 export OP_MEMORY_DB="${OP_MEMORY_DB:-/var/lib/op-dbus/cognitive.db}"

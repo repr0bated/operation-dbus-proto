@@ -294,7 +294,7 @@ export const api = {
       provider?: string,
       model?: string,
     ) =>
-      request<unknown>(`/zeroclaw/chat`, {
+      request<unknown>(`/chat`, {
         method: "POST",
         body: JSON.stringify({
           session_id: sessionKey,

@@ -14,7 +14,7 @@ use crate::state_plugins::{
     KeypairPlugin, MailServerPlugin, McpStatePlugin, NetStatePlugin, OpenFlowPlugin,
     OvsBridgePlugin, PrivacyRouterPlugin, PrivacyRoutesPlugin, ProcfsPlugin, ProxmoxPlugin,
     ProxyServerPlugin, RtnetlinkPlugin, S6StatePlugin, ServicePlugin, SessDeclPlugin,
-    SoftwarePlugin, UnixSocketPlugin, UsersPlugin, WebUiPlugin, WireGuardPlugin, ZeroclawPlugin,
+    SoftwarePlugin, UnixSocketPlugin, UsersPlugin, WebUiPlugin, WireGuardPlugin, ZeroclawPlugin, FactoryPlugin, Fail2banPlugin, CronPlugin, MemoryPlugin, WorkflowsPlugin, BtrfsPlugin, KnowledgePlugin, AntigravityChatPlugin, AntigravityPlugin, SchemaRendererPlugin, DnsResolverPlugin, FullSystemPlugin, KeyringPlugin, Login1Plugin,  PackageKitPlugin, PciDeclPlugin,
 };
 use crate::AutoPlugin;
 
@@ -193,6 +193,22 @@ impl DefaultPluginRegistry {
                 Arc::new(McpStatePlugin::new(self.state_store.clone(), config_path))
             }
             "zeroclaw" => Arc::new(ZeroclawPlugin::new()),
+            "factory" => Arc::new(FactoryPlugin::new()),
+            "fail2ban" => Arc::new(Fail2banPlugin::new()),
+            "cron" => Arc::new(CronPlugin::new()),
+            "memory" => Arc::new(MemoryPlugin::new()),
+            "workflows" => Arc::new(WorkflowsPlugin::new()),
+            "btrfs" => Arc::new(BtrfsPlugin::new()),
+            "knowledge" => Arc::new(KnowledgePlugin::new()),
+            "antigravity_chat" => Arc::new(AntigravityChatPlugin::new()),
+            "antigravity" => Arc::new(AntigravityPlugin::new()),
+            "schema_renderer" => Arc::new(SchemaRendererPlugin::new()),
+            "full_system" => Arc::new(FullSystemPlugin::new()),
+            "login1" => Arc::new(Login1Plugin::new()),
+            "dnsresolver" => Arc::new(DnsResolverPlugin::new()),
+            "keyring" => Arc::new(KeyringPlugin::new()),
+            "packagekit" => Arc::new(PackageKitPlugin::new()),
+            "pcidecl" => Arc::new(PciDeclPlugin::new()),
             "config" => {
                 let config_path =
                     self.get_plugin_config_path("config", "/etc/op-dbus/config-store.json");

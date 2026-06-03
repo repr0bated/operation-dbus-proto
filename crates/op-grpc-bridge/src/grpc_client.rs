@@ -9,7 +9,9 @@ use std::time::Duration;
 
 use prost_types::{value::Kind as ProstKind, Struct as ProstStruct, Value as ProstValue};
 use tokio::sync::RwLock;
+use tonic::metadata::MetadataValue;
 use tonic::transport::{Channel, Endpoint};
+use tonic::Request;
 use tracing::info;
 
 use crate::proto::{
@@ -181,10 +183,11 @@ impl RemoteOperationClient {
     ) -> Result<simd_json::OwnedValue, GrpcClientError> {
         let mut client = self.pool.state_sync_client(&self.default_address).await?;
 
-        let request = tonic::Request::new(GetStateRequest {
+        let mut request = Request::new(GetStateRequest {
             plugin_id: plugin_id.to_string(),
             object_path: object_path.to_string(),
         });
+        attach_ghostbridge_metadata(&mut request)?;
 
         let response = client
             .get_state(request)
@@ -207,7 +210,7 @@ impl RemoteOperationClient {
     ) -> Result<SetStateResult, GrpcClientError> {
         let mut client = self.pool.state_sync_client(&self.default_address).await?;
 
-        let request = tonic::Request::new(MutateRequest {
+        let mut request = Request::new(MutateRequest {
             plugin_id: plugin_id.to_string(),
             object_path: object_path.to_string(),
             operation: ProtoOperationType::ApplyPatch as i32,
@@ -217,6 +220,7 @@ impl RemoteOperationClient {
             capability_id: capability_id.to_string(),
             idempotency_key: uuid::Uuid::new_v4().to_string(),
         });
+        attach_ghostbridge_metadata(&mut request)?;
 
         let response = client
             .mutate(request)
@@ -265,7 +269,7 @@ impl RemoteOperationClient {
             .map(simd_to_prost_value)
             .collect::<Vec<_>>();
 
-        let request = tonic::Request::new(CallMethodRequest {
+        let mut request = Request::new(CallMethodRequest {
             plugin_id: plugin_id.to_string(),
             object_path: object_path.to_string(),
             interface_name: interface_name.to_string(),
@@ -274,6 +278,7 @@ impl RemoteOperationClient {
             actor_id: actor_id.to_string(),
             capability_id: capability_id.to_string(),
         });
+        attach_ghostbridge_metadata(&mut request)?;
 
         let response = client
             .call_method(request)
@@ -313,12 +318,13 @@ impl RemoteOperationClient {
     > {
         let mut client = self.pool.state_sync_client(&self.default_address).await?;
 
-        let request = tonic::Request::new(SubscribeRequest {
+        let mut request = Request::new(SubscribeRequest {
             plugin_ids: plugin_filters,
             path_patterns: path_filters,
             tags: tag_filters,
             include_initial_state: false,
         });
+        attach_ghostbridge_metadata(&mut request)?;
 
         let response = client
             .subscribe(request)
@@ -357,11 +363,12 @@ impl RemoteOperationClient {
     > {
         let mut client = self.pool.event_chain_client(&self.default_address).await?;
 
-        let request = tonic::Request::new(SubscribeEventsRequest {
+        let mut request = Request::new(SubscribeEventsRequest {
             from_event_id: from_event_id.unwrap_or_default(),
             plugin_id: plugin_filters.first().cloned().unwrap_or_default(),
             tags: tag_filters,
         });
+        attach_ghostbridge_metadata(&mut request)?;
 
         let response = client
             .subscribe_events(request)
@@ -443,6 +450,35 @@ impl std::fmt::Display for GrpcClientError {
 }
 
 impl std::error::Error for GrpcClientError {}
+
+fn attach_ghostbridge_metadata<T>(request: &mut Request<T>) -> Result<(), GrpcClientError> {
+    let (sled_ptr, _mmap) = op_identity::read_sled()
+        .map_err(|e| GrpcClientError::RequestFailed(format!("Identity Sled unreadable: {e}")))?;
+    let sled = unsafe { &*sled_ptr };
+
+    if !sled.is_sled_valid() {
+        return Err(GrpcClientError::RequestFailed(
+            "Identity Sled is invalid; refusing unauthenticated gRPC call".to_string(),
+        ));
+    }
+
+    let footprint = hex::encode(sled.hashed_footprint);
+    let trace_id = sled.trace_id_hex();
+    let metadata = request.metadata_mut();
+    metadata.insert(
+        "x-ghostbridge-footprint",
+        MetadataValue::try_from(footprint).map_err(|e| {
+            GrpcClientError::RequestFailed(format!("Invalid footprint metadata: {e}"))
+        })?,
+    );
+    metadata.insert(
+        "x-ghostbridge-trace-id",
+        MetadataValue::try_from(trace_id)
+            .map_err(|e| GrpcClientError::RequestFailed(format!("Invalid trace metadata: {e}")))?,
+    );
+
+    Ok(())
+}
 
 fn prost_value_to_simd(value: &ProstValue) -> simd_json::OwnedValue {
     let serde_value = prost_value_to_serde(value);

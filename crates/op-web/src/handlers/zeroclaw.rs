@@ -264,9 +264,9 @@ fn read_zeroclaw_from_shm() -> Option<Value> {
     
     Some(json!({
         "active": true,
-        "status": "declared",
-        "selected_provider": "ollama",
-        "selected_model": "gemma4",
+        "status": find_example(fields, "status").and_then(|v| v.as_str().map(String::from)).unwrap_or_else(|| "declared".to_string()),
+        "selected_provider": find_example(fields, "selected_provider").and_then(|v| v.as_str().map(String::from)).unwrap_or_else(|| "antigravity".to_string()),
+        "selected_model": find_example(fields, "selected_model").and_then(|v| v.as_str().map(String::from)).unwrap_or_else(|| "gemini-2.5-flash".to_string()),
         "providers": find_example(fields, "providers")?,
         "model_routes": find_example(fields, "model_routes")?,
         "router": find_example(fields, "router")?,

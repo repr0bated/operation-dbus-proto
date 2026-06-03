@@ -14,8 +14,8 @@
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
-    "@json-render/core": "^0.17.0",
-    "@json-render/react": "^0.17.0",
+    "@json-render/core": "^0.19.0",
+    "@json-render/react": "^0.19.0",
     "@protobuf-ts/grpcweb-transport": "^2.11.1",
     "@protobuf-ts/plugin": "^2.11.1",
     "@protobuf-ts/runtime": "^2.11.1",

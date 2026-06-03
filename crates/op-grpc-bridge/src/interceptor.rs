@@ -95,7 +95,9 @@ mod tests {
         assert!(result.is_err());
         let status = result.unwrap_err();
         assert_eq!(status.code(), tonic::Code::Unauthenticated);
-        assert!(status.message().contains("Missing Ghostbridge Identity Sled"));
+        assert!(status
+            .message()
+            .contains("Missing Ghostbridge Identity Sled"));
     }
 
     #[test]

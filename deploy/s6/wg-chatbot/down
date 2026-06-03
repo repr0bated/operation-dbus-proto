@@ -1,0 +1,3 @@
+#!/bin/execlineb -P
+foreground { sh -c "wg-quick down /etc/wireguard/wg-chatbot.conf || true" }
+exit 0
