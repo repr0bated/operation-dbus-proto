@@ -174,7 +174,7 @@ impl ContextManagerService for OrchestrationServer {
             .collect();
 
         // Sort by updated_at descending
-        filtered.sort_by(|a, b| b.updated_at_ms.cmp(&a.updated_at_ms));
+        filtered.sort_by_key(|b| std::cmp::Reverse(b.updated_at_ms));
 
         let total_count = filtered.len() as i32;
 
@@ -485,7 +485,7 @@ impl ContextManagerService for OrchestrationServer {
             MergeStrategy::Latest => {
                 // Take only the most recently updated source
                 let mut sorted = source_contents.clone();
-                sorted.sort_by(|a, b| b.2.cmp(&a.2));
+                sorted.sort_by_key(|b| std::cmp::Reverse(b.2));
                 sorted
                     .first()
                     .map(|(_, content, _)| content.clone())

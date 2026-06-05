@@ -51,15 +51,11 @@ fn build_cargo_command(subcommand: &str, req: &CargoRequest) -> Command {
 
     // Subcommand-specific flags
     match subcommand {
-        "test" => {
-            if !req.filter.is_empty() {
-                cmd.arg("--").arg(&req.filter);
-            }
+        "test" if !req.filter.is_empty() => {
+            cmd.arg("--").arg(&req.filter);
         }
-        "clippy" => {
-            if req.fix {
-                cmd.arg("--fix").arg("--allow-dirty").arg("--allow-staged");
-            }
+        "clippy" if req.fix => {
+            cmd.arg("--fix").arg("--allow-dirty").arg("--allow-staged");
         }
         "fmt" => {
             if req.fix {

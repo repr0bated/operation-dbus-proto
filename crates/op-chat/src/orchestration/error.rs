@@ -205,7 +205,6 @@ impl OrchestrationError {
     }
 
     /// Add stack trace
-    #[cfg(feature = "backtrace")]
     pub fn with_backtrace(mut self) -> Self {
         self.stack_trace = Some(std::backtrace::Backtrace::capture().to_string());
         self
@@ -380,7 +379,6 @@ impl From<anyhow::Error> for OrchestrationError {
 }
 
 // Conversion to tonic Status (for gRPC)
-#[cfg(feature = "grpc")]
 impl From<OrchestrationError> for tonic::Status {
     fn from(err: OrchestrationError) -> Self {
         use tonic::Code;
@@ -410,26 +408,24 @@ impl From<OrchestrationError> for tonic::Status {
         let mut status = tonic::Status::new(code, err.message.clone());
 
         // Add error details as metadata
-        if let Some(details) = err.details {
-            status
-                .metadata_mut()
-                .insert("x-error-details", details.parse().unwrap_or_default());
+        if let Some(ref details) = err.details {
+            if let Ok(val) = details.parse() {
+                let _ = status.metadata_mut().insert("x-error-details", val);
+            }
         }
 
-        status.metadata_mut().insert(
-            "x-error-code",
-            err.code.as_str().parse().unwrap_or_default(),
-        );
+        if let Ok(val) = err.code.as_str().parse() {
+            let _ = status.metadata_mut().insert("x-error-code", val);
+        }
 
         if err.is_retryable() {
-            status
-                .metadata_mut()
-                .insert("x-retryable", "true".parse().unwrap());
+            if let Ok(val) = "true".parse() {
+                let _ = status.metadata_mut().insert("x-retryable", val);
+            }
             if let Some(delay) = err.retry_delay() {
-                status.metadata_mut().insert(
-                    "x-retry-after-ms",
-                    delay.as_millis().to_string().parse().unwrap_or_default(),
-                );
+                if let Ok(val) = delay.as_millis().to_string().parse() {
+                    let _ = status.metadata_mut().insert("x-retry-after-ms", val);
+                }
             }
         }
 
@@ -442,7 +438,9 @@ pub type OrchestrationResult<T> = Result<T, OrchestrationError>;
 
 /// Extension trait for adding context to errors
 pub trait ResultExt<T> {
+    #[allow(clippy::result_large_err)]
     fn context(self, code: ErrorCode, message: impl Into<String>) -> OrchestrationResult<T>;
+    #[allow(clippy::result_large_err)]
     fn with_context<F>(self, code: ErrorCode, f: F) -> OrchestrationResult<T>
     where
         F: FnOnce() -> String;

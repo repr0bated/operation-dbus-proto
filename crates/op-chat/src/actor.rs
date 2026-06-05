@@ -172,7 +172,7 @@ fn max_message_chars() -> usize {
 }
 
 fn estimate_message_tokens(message: &LlmChatMessage) -> usize {
-    (message.role.len() + message.content.len() + 3) / 4 + 8
+    (message.role.len() + message.content.len()).div_ceil(4) + 8
 }
 
 fn truncate_content(content: &str, max_chars: usize) -> String {

@@ -13,7 +13,6 @@ use anyhow::{Context, Result};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
-use simd_json::OwnedValue;
 use simd_json::OwnedValue as Value;
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
@@ -500,12 +499,12 @@ impl NLAdminOrchestrator {
                         });
 
                         // Add tool result to messages for context
-                        messages.push(ChatMessage::assistant(&format!(
+                        messages.push(ChatMessage::assistant(format!(
                             "<tool_call>{}({})</tool_call>",
                             call.name,
                             simd_json::to_string(&call.arguments).unwrap_or_default()
                         )));
-                        messages.push(ChatMessage::user(&format!(
+                        messages.push(ChatMessage::user(format!(
                             "Tool result for {}: {}",
                             call.name,
                             simd_json::to_string_pretty(&result).unwrap_or_default()
@@ -521,12 +520,12 @@ impl NLAdminOrchestrator {
                         });
 
                         // Add error to messages
-                        messages.push(ChatMessage::assistant(&format!(
+                        messages.push(ChatMessage::assistant(format!(
                             "<tool_call>{}({})</tool_call>",
                             call.name,
                             simd_json::to_string(&call.arguments).unwrap_or_default()
                         )));
-                        messages.push(ChatMessage::user(&format!(
+                        messages.push(ChatMessage::user(format!(
                             "Tool {} failed: {}",
                             call.name, e
                         )));

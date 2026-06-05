@@ -19,7 +19,7 @@ use regex::Regex;
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::task::JoinHandle;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 /// Memory categories for detection and retrieval
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -288,7 +288,7 @@ impl SkillRegistry {
     /// List active skills (sorted by priority)
     pub fn active_skills(&self) -> Vec<&Skill> {
         let mut active: Vec<_> = self.skills.values().filter(|s| s.active).collect();
-        active.sort_by(|a, b| b.priority.cmp(&a.priority));
+        active.sort_by_key(|b| std::cmp::Reverse(b.priority));
         active
     }
 

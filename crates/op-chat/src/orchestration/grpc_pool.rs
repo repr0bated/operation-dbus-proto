@@ -14,12 +14,11 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use simd_json::prelude::*;
-use simd_json::OwnedValue;
+use simd_json::prelude::{ValueAsScalar, ValueObjectAccess};
 use simd_json::OwnedValue as Value;
-use tokio::sync::{mpsc, RwLock, Semaphore};
+use tokio::sync::{RwLock, Semaphore};
 use tokio::time::timeout;
-use tracing::{debug, error, info, instrument, warn, Span};
+use tracing::{debug, error, info, instrument, warn};
 
 use super::error::{ErrorCode, OrchestrationError, OrchestrationResult};
 
@@ -200,11 +199,14 @@ impl CircuitBreaker {
 #[derive(Debug)]
 struct AgentConnection {
     agent_id: String,
+    #[allow(dead_code)]
     address: String,
+    #[allow(dead_code)]
     port: u16,
     connected: bool,
     started_at: Option<Instant>,
     last_used: Option<Instant>,
+    #[allow(dead_code)]
     last_health_check: Option<Instant>,
     request_count: AtomicU64,
     error_count: AtomicU64,
@@ -236,6 +238,7 @@ impl AgentConnection {
         }
     }
 
+    #[allow(dead_code)]
     fn full_address(&self) -> String {
         format!("{}:{}", self.address, self.port)
     }
@@ -248,10 +251,13 @@ impl AgentConnection {
 /// Session state
 #[derive(Debug)]
 struct SessionState {
+    #[allow(dead_code)]
     session_id: String,
+    #[allow(dead_code)]
     started_agents: Vec<String>,
     started_at: Instant,
     request_count: AtomicU64,
+    #[allow(dead_code)]
     metadata: HashMap<String, String>,
 }
 
@@ -511,7 +517,7 @@ impl GrpcAgentPool {
     async fn do_connect(
         &self,
         agent_id: &str,
-        address: &str,
+        _address: &str,
         port: u16,
     ) -> OrchestrationResult<()> {
         // TODO: Replace with actual tonic connection
@@ -743,7 +749,7 @@ impl GrpcAgentPool {
         &self,
         agent_id: &str,
         operation: &str,
-        arguments: &Value,
+        _arguments: &Value,
     ) -> OrchestrationResult<Value> {
         debug!(agent = %agent_id, operation = %operation, "Executing operation");
 
@@ -850,7 +856,7 @@ impl GrpcAgentPool {
         &self,
         agent_id: &str,
         operation: &str,
-        arguments: &Value,
+        _arguments: &Value,
         mut on_chunk: F,
     ) -> OrchestrationResult<Value>
     where

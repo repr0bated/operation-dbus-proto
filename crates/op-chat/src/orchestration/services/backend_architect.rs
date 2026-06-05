@@ -102,8 +102,8 @@ fn parse_review_response(result: Value) -> ArchitectReviewResponse {
         .and_then(|v| v.as_array())
         .map(|arr| {
             arr.iter()
-                .filter_map(|f| {
-                    Some(ReviewIssue {
+                .map(|f| {
+                    ReviewIssue {
                         category: f
                             .get("category")
                             .and_then(|v| v.as_str())
@@ -124,7 +124,7 @@ fn parse_review_response(result: Value) -> ArchitectReviewResponse {
                             .and_then(|v| v.as_str())
                             .unwrap_or("")
                             .to_string(),
-                    })
+                    }
                 })
                 .collect()
         })
@@ -155,8 +155,8 @@ fn parse_suggest_response(result: Value) -> ArchitectSuggestResponse {
         .and_then(|v| v.as_array())
         .map(|arr| {
             arr.iter()
-                .filter_map(|f| {
-                    Some(Suggestion {
+                .map(|f| {
+                    Suggestion {
                         title: f
                             .get("title")
                             .and_then(|v| v.as_str())
@@ -174,7 +174,7 @@ fn parse_suggest_response(result: Value) -> ArchitectSuggestResponse {
                             .to_string(),
                         effort: f.get("effort").and_then(|v| v.as_i64()).unwrap_or(3) as i32,
                         impact: f.get("impact").and_then(|v| v.as_i64()).unwrap_or(3) as i32,
-                    })
+                    }
                 })
                 .collect()
         })
