@@ -14,14 +14,13 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
-use simd_json::prelude::*;
-use simd_json::OwnedValue;
+use simd_json::prelude::ValueAsScalar;
 use simd_json::OwnedValue as Value;
 use tokio::sync::{mpsc, RwLock};
-use tracing::{debug, error, info, instrument, warn, Span};
+use tracing::{debug, error, info, instrument, warn};
 
 use super::error::{ErrorCode, OrchestrationError, OrchestrationResult};
-use super::grpc_pool::{GrpcAgentPool, StreamChunk, StreamType};
+use super::grpc_pool::{GrpcAgentPool, StreamChunk};
 
 // ============================================================================
 // WORKSTACK TYPES
@@ -321,6 +320,7 @@ impl ExecutionContext {
     }
 
     /// Get a variable
+    #[allow(dead_code)]
     fn get_variable(&self, key: &str) -> Option<&Value> {
         self.variables.get(key)
     }
@@ -436,10 +436,14 @@ pub struct WorkstackExecutor {
 /// State of an execution
 #[derive(Debug)]
 struct ExecutionState {
+    #[allow(dead_code)]
     execution_id: String,
+    #[allow(dead_code)]
     workstack_id: String,
     status: ExecutionStatus,
+    #[allow(dead_code)]
     current_phase: Option<String>,
+    #[allow(dead_code)]
     started_at: Instant,
     completed_at: Option<Instant>,
 }
@@ -947,6 +951,7 @@ impl WorkstackExecutor {
     }
 
     /// Validate workstack dependencies (detect cycles)
+    #[allow(clippy::result_large_err)]
     fn validate_dependencies(&self, workstack: &Workstack) -> OrchestrationResult<()> {
         let phase_ids: HashSet<String> = workstack.phases.iter().map(|p| p.id.clone()).collect();
 

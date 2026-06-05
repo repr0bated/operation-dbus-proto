@@ -301,11 +301,6 @@ impl WorkstackService for OrchestrationServer {
         // Spawn executor in a Send-safe way: the WorkstackExecutor's internal
         // iterator is not Send across await points, so we use a helper task.
         {
-            let proto_tx = proto_tx;
-            let executor = executor;
-            let session_id = session_id;
-            let workstack_id = workstack_id;
-            let variables = variables;
             tokio::task::spawn_local(async move {
                 let result = executor
                     .execute(&session_id, &workstack_id, variables, Some(event_tx))
