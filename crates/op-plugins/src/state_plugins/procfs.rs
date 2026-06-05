@@ -11,7 +11,6 @@ use op_state::{
 };
 use op_state_store::{FieldSchema, FieldType, PluginSchema};
 use simd_json::OwnedValue as Value;
-use std::collections::HashMap;
 use std::path::Path;
 use tokio::fs;
 

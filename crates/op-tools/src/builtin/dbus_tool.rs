@@ -42,8 +42,8 @@ impl DbusMethodTool {
 
     /// Generate a unique tool name from D-Bus identifiers
     fn generate_tool_name(service: &str, interface: &str, method: &str) -> String {
-        let service_short = service.split('.').last().unwrap_or(service);
-        let interface_short = interface.split('.').last().unwrap_or(interface);
+        let service_short = service.split('.').next_back().unwrap_or(service);
+        let interface_short = interface.split('.').next_back().unwrap_or(interface);
         format!(
             "dbus_{}_{}_{}",
             service_short.replace('-', "_"),

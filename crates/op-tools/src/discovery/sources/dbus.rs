@@ -236,8 +236,8 @@ impl DbusDiscoverySource {
     ) -> anyhow::Result<RegistryToolDefinition> {
         let tool_name = format!(
             "dbus_{}_{}_{}",
-            service.split('.').last().unwrap_or(service),
-            interface.name.split('.').last().unwrap_or(&interface.name),
+            service.split('.').next_back().unwrap_or(service),
+            interface.name.split('.').next_back().unwrap_or(&interface.name),
             method.name
         );
 

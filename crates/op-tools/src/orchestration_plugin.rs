@@ -273,6 +273,7 @@ pub fn get_orchestration_registry() -> Arc<OrchestrationPluginRegistry> {
 // ============================================================================
 
 /// Create a ToolExecutedEvent from execution data
+#[allow(clippy::too_many_arguments)]
 pub fn create_tool_event(
     session_id: &str,
     tool_name: &str,
@@ -368,6 +369,12 @@ pub struct MetricsActivityPlugin {
 impl MetricsActivityPlugin {
     pub fn new() -> Self {
         Self {}
+    }
+}
+
+impl Default for MetricsActivityPlugin {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

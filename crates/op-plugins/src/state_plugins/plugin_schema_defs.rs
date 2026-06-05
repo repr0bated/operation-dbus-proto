@@ -2775,6 +2775,7 @@ pub(crate) fn ctl_plane_chatbot_plugin_schema() -> PluginSchema {
 // registry entry.  Compliance refs live in metadata arrays — never inside
 // the subid string itself.
 
+#[allow(dead_code)]
 pub(crate) fn oscal_subid_registry_plugin_schema() -> PluginSchema {
     PluginSchema::builder("oscal_subid_registry")
         .version("1.0.0")

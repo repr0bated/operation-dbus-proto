@@ -103,7 +103,7 @@ impl HardwarePlugin {
         let mut disks = Vec::new();
         // Use lsblk -J for json output
         let output = Command::new("lsblk")
-            .args(&["-J", "-o", "NAME,SIZE,MOUNTPOINT,BYTES"])
+            .args(["-J", "-o", "NAME,SIZE,MOUNTPOINT,BYTES"])
             .output()
             .await;
 

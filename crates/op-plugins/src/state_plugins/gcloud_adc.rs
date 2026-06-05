@@ -39,7 +39,7 @@ impl GcloudAdcPlugin {
 
         // Try to get active account and project from gcloud config
         let output = Command::new("gcloud")
-            .args(&["config", "list", "--format=json"])
+            .args(["config", "list", "--format=json"])
             .output()
             .await;
 

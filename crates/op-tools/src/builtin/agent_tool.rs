@@ -25,16 +25,11 @@ use crate::tool::{BoxedTool, Tool};
 // BUS TYPE
 // =============================================================================
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BusType {
+    #[default]
     System,
     Session,
-}
-
-impl Default for BusType {
-    fn default() -> Self {
-        Self::System
-    }
 }
 
 // =============================================================================

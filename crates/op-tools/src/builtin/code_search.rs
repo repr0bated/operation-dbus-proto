@@ -4,7 +4,9 @@
 //! into tool execution context for smart suggestions and debugging.
 
 use anyhow::Result;
-use serde_json::Value;
+use serde_json;
+use simd_json::prelude::ValueAsContainer;
+use simd_json::OwnedValue as Value;
 use tracing::debug;
 
 /// Code context extracted from indexed repos
@@ -23,17 +25,62 @@ impl CodeContext {
     }
 
     pub fn to_json(&self) -> Value {
-        serde_json::json!({
-            "relevant_code": self.relevant_code.iter().map(|s| serde_json::json!({
-                "file": s.file,
-                "function": s.function.clone().unwrap_or_default(),
-                "language": s.language,
-                "code": s.code,
-                "similarity": s.similarity,
-            })).collect::<Vec<_>>(),
-            "suggestions": self.suggestions,
-            "debugging_hints": self.debugging_hints,
-        })
+        use simd_json::ObjectHasher;
+
+        // Build relevant_code array
+        let relevant_code = Value::Array(
+            self.relevant_code
+                .iter()
+                .map(|s| {
+                    let mut obj = simd_json::owned::Object::with_hasher(ObjectHasher::default());
+                    obj.insert(
+                        "file".into(),
+                        Value::String(s.file.clone()),
+                    );
+                    obj.insert(
+                        "function".into(),
+                        Value::String(s.function.clone().unwrap_or_default()),
+                    );
+                    obj.insert(
+                        "language".into(),
+                        Value::String(s.language.clone()),
+                    );
+                    obj.insert(
+                        "code".into(),
+                        Value::String(s.code.clone()),
+                    );
+                    obj.insert(
+                        "similarity".into(),
+                        Value::Static(simd_json::prelude::StaticNode::F64(s.similarity)),
+                    );
+                    Value::Object(Box::new(obj))
+                })
+                .collect(),
+        );
+
+        // Build the main object
+        let mut result = simd_json::owned::Object::with_hasher(ObjectHasher::default());
+        result.insert("relevant_code".into(), relevant_code);
+        result.insert(
+            "suggestions".into(),
+            Value::Array(
+                self.suggestions
+                    .iter()
+                    .map(|s| Value::String(s.clone()))
+                    .collect(),
+            ),
+        );
+        result.insert(
+            "debugging_hints".into(),
+            Value::Array(
+                self.debugging_hints
+                    .iter()
+                    .map(|h| Value::String(h.clone()))
+                    .collect(),
+            ),
+        );
+
+        Value::Object(Box::new(result))
     }
 }
 

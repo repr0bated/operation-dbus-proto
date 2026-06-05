@@ -250,7 +250,7 @@ impl Plugin for DynamicLoadingPlugin {
     async fn validate(&self, config: &Value) -> Result<ValidationResult> {
         if let Some(cache_size) = config.get("cache_size") {
             if let Some(size) = cache_size.as_u64() {
-                if size < 10 || size > 10000 {
+                if !(10..=10000).contains(&size) {
                     return Ok(ValidationResult::failure(
                         "Cache size must be between 10 and 10000",
                     ));

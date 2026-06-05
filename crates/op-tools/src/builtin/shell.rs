@@ -536,7 +536,7 @@ mod tests {
     #[tokio::test]
     async fn test_native_alternative_warning() {
         let tool = ShellExecuteTool;
-        let result = tool
+        let _result = tool
             .execute(json!({
                 "command": "ovs-vsctl show",
                 "session_id": "test4"

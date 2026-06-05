@@ -10,6 +10,7 @@ pub enum ChangeType {
 }
 
 #[async_trait]
+#[allow(clippy::too_many_arguments)]
 pub trait StatePublisher: Send + Sync {
     async fn publish_change(
         &self,

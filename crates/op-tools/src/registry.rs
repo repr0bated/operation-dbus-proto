@@ -3,7 +3,6 @@
 //! Provides a simple registry for tools and their definitions.
 
 use anyhow::Result;
-use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use simd_json::OwnedValue as Value;
 use std::collections::HashMap;
@@ -55,6 +54,12 @@ pub struct ToolRegistry {
     tools: RwLock<HashMap<Arc<str>, BoxedTool>>,
     /// Tool definitions
     definitions: RwLock<HashMap<Arc<str>, ToolDefinition>>,
+}
+
+impl Default for ToolRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ToolRegistry {
@@ -143,6 +148,12 @@ impl ToolRegistry {
         tools.len()
     }
 
+    /// Check if the registry is empty
+    pub async fn is_empty(&self) -> bool {
+        let tools = self.tools.read().await;
+        tools.is_empty()
+    }
+
     /// List all definitions (alias for list)
     pub async fn list_definitions(&self) -> Vec<ToolDefinition> {
         self.list().await
@@ -152,6 +163,7 @@ impl ToolRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
     use crate::tool::Tool;
 
     struct TestTool {

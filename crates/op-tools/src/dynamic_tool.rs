@@ -38,8 +38,8 @@ impl DynamicDbusTool {
     }
 
     fn compute_name(service: &str, interface: &str, method: &str) -> String {
-        let svc_short = service.split('.').last().unwrap_or(service);
-        let iface_short = interface.split('.').last().unwrap_or(interface);
+        let svc_short = service.split('.').next_back().unwrap_or(service);
+        let iface_short = interface.split('.').next_back().unwrap_or(interface);
 
         let method_snake = method
             .chars()
