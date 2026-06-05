@@ -147,6 +147,12 @@ pub struct GeminiFallback {
     config: Arc<RwLock<Option<GeminiConfig>>>,
 }
 
+impl Default for GeminiFallback {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GeminiFallback {
     pub fn new() -> Self {
         let config = GeminiConfig::from_env();
@@ -169,7 +175,7 @@ impl GeminiFallback {
             .read()
             .await
             .as_ref()
-            .map_or(false, |c| c.enabled)
+            .is_some_and(|c| c.enabled)
     }
 
     /// Standard grounded query via Gemini.
@@ -247,7 +253,7 @@ impl GeminiFallback {
             anyhow::bail!("Gemini fallback is disabled");
         }
 
-        let depth = depth.min(5).max(1); // Clamp to 1-5 steps
+        let depth = depth.clamp(1, 5); // Clamp to 1-5 steps
         let mut sections = Vec::new();
         let mut accumulated_knowledge = context.unwrap_or("").to_string();
 

@@ -57,9 +57,8 @@
 //! - `session_milestone` - Nth query in session, suggest review/summary
 //! - `idle_recovery` - User returned after idle, refresh context
 
-use crate::memory_store::{CognitiveMemoryStore, EntryQuery, MemoryEntry};
+use crate::memory_store::{CognitiveMemoryStore, EntryQuery};
 use crate::rag_pipeline::RagPipeline;
-use crate::session::{ConversationSession, QueryTurn, SessionManager};
 use anyhow::{Context as AnyhowContext, Result};
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
@@ -68,7 +67,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, mpsc, RwLock};
 use tokio::time::{interval, timeout};
-use tracing::{debug, info, trace, warn};
+use tracing::{info, trace, warn};
 
 /// Maximum activity window to keep per session
 const ACTIVITY_WINDOW_SIZE: usize = 50;
@@ -900,7 +899,7 @@ mod tests {
         let mut state = SessionContextState::new("test".to_string());
 
         // Add similar queries
-        for i in 0..5 {
+        for _i in 0..5 {
             state.record_activity(
                 ActivityType::Query,
                 "how to fix error".to_string(),

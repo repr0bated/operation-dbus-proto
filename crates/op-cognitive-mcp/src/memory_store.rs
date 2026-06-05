@@ -178,7 +178,7 @@ impl CognitiveMemoryStore {
         let mut p: Params = BTreeMap::new();
         p.insert("name".into(), DataValue::Str(name.into()));
         let rows = self.run(q, p).context("get namespace by name")?;
-        Ok(rows.rows.first().map(row_to_namespace))
+        Ok(rows.rows.first().map(|r| row_to_namespace(r)))
     }
 
     pub async fn list_namespaces(
@@ -208,7 +208,7 @@ impl CognitiveMemoryStore {
             )
         };
         let rows = self.run(q, params).context("list namespaces")?;
-        Ok(rows.rows.iter().map(row_to_namespace).collect())
+        Ok(rows.rows.iter().map(|r| row_to_namespace(r)).collect())
     }
 
     pub async fn delete_namespace(&self, name: &str) -> Result<bool> {
@@ -398,7 +398,7 @@ impl CognitiveMemoryStore {
         };
         let rows = self.run(script, params).context("query entries")?;
 
-        let mut entries: Vec<MemoryEntry> = rows.rows.iter().map(row_to_entry).collect();
+        let mut entries: Vec<MemoryEntry> = rows.rows.iter().map(|r| row_to_entry(r)).collect();
 
         // Apply key_pattern (substring match) post-fetch.
         if let Some(pat) = &q.key_pattern {
@@ -527,7 +527,7 @@ impl CognitiveMemoryStore {
 
 // ── Row → typed struct conversion ─────────────────────────────────────────────
 
-fn row_to_namespace(row: &Vec<DataValue>) -> MemoryNamespace {
+fn row_to_namespace(row: &[DataValue]) -> MemoryNamespace {
     // Order matches the rule head:
     //   name, id, kind, description, linked_task_id, linked_cron, metadata, created_at, updated_at
     let name = dv_as_str(&row[0]).unwrap_or("").to_string();
@@ -553,7 +553,7 @@ fn row_to_namespace(row: &Vec<DataValue>) -> MemoryNamespace {
     }
 }
 
-fn row_to_entry(row: &Vec<DataValue>) -> MemoryEntry {
+fn row_to_entry(row: &[DataValue]) -> MemoryEntry {
     // Order matches the rule head:
     //   namespace, key, id, value, tags, created_at, updated_at, expires_at, access_count, last_accessed
     let namespace_id = dv_as_str(&row[0]).unwrap_or("").to_string();

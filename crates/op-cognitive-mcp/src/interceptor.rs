@@ -1,4 +1,3 @@
-use op_identity::{read_sled, IdentitySled};
 use tonic::{Request, Status};
 
 #[allow(clippy::result_large_err)]
