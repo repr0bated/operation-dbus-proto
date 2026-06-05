@@ -500,7 +500,7 @@ impl Tool for SearchToolsTool {
             .iter()
             .filter_map(|t| {
                 let name_lower = t.name.to_lowercase();
-                let desc_lower = Some(t.description.as_str()).unwrap_or("").to_lowercase();
+                let desc_lower = t.description.to_lowercase();
 
                 let mut score = 0;
 
@@ -530,7 +530,7 @@ impl Tool for SearchToolsTool {
             .collect();
 
         // Sort by score descending
-        scored.sort_by(|a, b| b.0.cmp(&a.0));
+        scored.sort_by_key(|b| std::cmp::Reverse(b.0));
 
         let results: Vec<Value> = scored
             .iter()

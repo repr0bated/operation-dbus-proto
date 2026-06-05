@@ -24,9 +24,7 @@ use simd_json::prelude::*;
 use std::sync::Arc;
 use tracing::{info, warn};
 
-use crate::provider::{
-    ChatMessage, ChatResponse, LlmProvider, ModelInfo, ProviderType,
-};
+use crate::provider::{ChatMessage, ChatResponse, LlmProvider, ModelInfo, ProviderType};
 use crate::pty_bridge::PtyAuthBridge;
 
 // =============================================================================

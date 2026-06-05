@@ -182,9 +182,7 @@ impl ExternalMcpClient {
             }
         };
 
-        if let Err(e) = init_result {
-            return Err(e);
-        }
+        init_result?;
 
         // List available tools with timeout
         let tools_start = std::time::Instant::now();
@@ -359,7 +357,6 @@ impl ExternalMcpClient {
             response_line
         );
 
-        let mut response_line = response_line;
         let response: Value = unsafe { simd_json::from_str(&mut response_line) }
             .context("Failed to parse MCP response")?;
 

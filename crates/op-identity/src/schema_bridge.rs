@@ -99,8 +99,8 @@ impl SubidTaxonomy {
 
         let mut parts = body.splitn(5, '.');
         let cat_str = parts.next().ok_or("missing category")?;
-        let category = SubidCategory::parse(cat_str)
-            .ok_or_else(|| format!("unknown category: {cat_str}"))?;
+        let category =
+            SubidCategory::parse(cat_str).ok_or_else(|| format!("unknown category: {cat_str}"))?;
         let component_type = parts.next().ok_or("missing component-type")?.to_string();
         let subject = parts.next().ok_or("missing subject")?.to_string();
         let verb = parts.next().ok_or("missing verb")?.to_string();

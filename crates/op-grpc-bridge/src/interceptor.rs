@@ -176,7 +176,8 @@ mod tests {
             hashed_footprint: [0u8; 32],
             trace_id: [0u8; 16],
             schema_version: 0,
-            reserved: [0u8; 60],
+            reserved: [0u8; 44],
+            vector_id: [0u8; 16],
         };
         assert!(!is_sled_valid(&sled));
     }
@@ -189,7 +190,8 @@ mod tests {
             hashed_footprint: [0xDD; 32],
             trace_id: [0xEE; 16],
             schema_version: 1,
-            reserved: [0u8; 60],
+            reserved: [0u8; 44],
+            vector_id: [0xDD; 16],
         };
         assert!(is_sled_valid(&sled));
     }

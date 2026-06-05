@@ -77,7 +77,7 @@ async fn main() -> Result<()> {
 
     // 6. List ports on the bridge
     println!("6. Listing ports on bridge '{}'...", bridge_name);
-    let ports = client.list_ports(bridge_name).await?;
+    let ports = client.list_bridge_ports(bridge_name).await?;
     println!("   Ports: {:?}\n", ports);
 
     // 7. Add a virtual port (veth pair example)
@@ -94,7 +94,7 @@ async fn main() -> Result<()> {
             println!("   ✓ Port '{}' added successfully\n", port_name);
 
             // List ports again to verify
-            let ports_after = client.list_ports(bridge_name).await?;
+            let ports_after = client.list_bridge_ports(bridge_name).await?;
             println!("   Updated ports: {:?}\n", ports_after);
         }
         Err(e) => {

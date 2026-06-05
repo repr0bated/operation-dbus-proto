@@ -344,7 +344,7 @@ impl McpServer {
             );
         }
 
-        let arguments = params
+        let arguments: Value = params
             .as_object()
             .and_then(|obj| obj.get("arguments"))
             .cloned()
@@ -352,22 +352,22 @@ impl McpServer {
 
         // Inject code context for smart suggestions (if op-tools has code_search)
         #[cfg(feature = "code_search")]
-        {
+        let arguments = {
+            let mut arguments = arguments;
             let current_file = arguments
                 .get("path")
                 .and_then(|p| p.as_str())
                 .or(arguments.get("file").and_then(|f| f.as_str()));
 
-            if let Ok(code_context) =
+            let code_context =
                 op_tools::code_search::inject_code_context(tool_name, &arguments, current_file)
-                    .await
-            {
-                if !code_context.is_empty() {
-                    arguments["_code_context"] = code_context.to_json();
-                    debug!(tool = %tool_name, "Injected code context");
-                }
+                    .await;
+            if !code_context.is_empty() {
+                arguments["_code_context"] = code_context.to_json();
+                debug!(tool = %tool_name, "Injected code context");
             }
-        }
+            arguments
+        };
 
         match self.tool_executor.execute_tool(tool_name, arguments).await {
             Ok(result) => McpResponse::success(

@@ -8,7 +8,7 @@
 //!
 //! The server reads JSON-RPC requests from stdin and writes responses to stdout.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
@@ -27,6 +27,7 @@ const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 // ============================================================================
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct JsonRpcRequest {
     jsonrpc: String,
     id: Option<Value>,
@@ -83,17 +84,20 @@ impl JsonRpcResponse {
 // ============================================================================
 
 #[derive(Debug, Serialize)]
+#[allow(dead_code)]
 struct ServerInfo {
     name: String,
     version: String,
 }
 
 #[derive(Debug, Serialize)]
+#[allow(dead_code)]
 struct ServerCapabilities {
     tools: ToolsCapability,
 }
 
 #[derive(Debug, Serialize)]
+#[allow(dead_code)]
 struct ToolsCapability {
     #[serde(rename = "listChanged")]
     list_changed: bool,

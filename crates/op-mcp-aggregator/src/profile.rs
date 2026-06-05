@@ -132,17 +132,17 @@ impl ProfileManager {
         }
 
         // Check tool name include filter
-        if !profile.include_tools.is_empty() {
-            if !profile.include_tools.iter().any(|t| {
+        if !profile.include_tools.is_empty()
+            && !profile.include_tools.iter().any(|t| {
                 // Support wildcards like "github_*"
                 if t.ends_with('*') {
                     tool.name.starts_with(&t[..t.len() - 1])
                 } else {
                     &tool.name == t
                 }
-            }) {
-                return false;
-            }
+            })
+        {
+            return false;
         }
 
         // Check tool name exclude filter
@@ -402,8 +402,10 @@ mod tests {
                 .await;
         }
 
-        let mut config = AggregatorConfig::default();
-        config.max_tools_per_profile = 20;
+        let config = AggregatorConfig {
+            max_tools_per_profile: 20,
+            ..Default::default()
+        };
         let manager = ProfileManager::new(&config, cache);
 
         let tools = manager.get_tools_for_profile("default").await;

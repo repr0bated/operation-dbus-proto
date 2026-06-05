@@ -122,7 +122,6 @@ impl ProtoGenerator {
         let message_name = to_pascal_case(&schema.name);
         writeln!(output, "message {} {{", message_name).unwrap();
 
-        let mut field_num = 1;
         let mut fields: Vec<(&str, &op_state_store::FieldSchema)> = schema
             .fields
             .iter()
@@ -130,7 +129,7 @@ impl ProtoGenerator {
             .collect();
         fields.sort_unstable_by(|left, right| left.0.cmp(right.0));
 
-        for (field_name, field_schema) in fields {
+        for (field_num, (field_name, field_schema)) in (1..).zip(fields) {
             let proto_type = self.field_type_to_proto(&field_schema.field_type);
             let optional_marker = if field_schema.required {
                 ""
@@ -143,7 +142,6 @@ impl ProtoGenerator {
                 optional_marker, proto_type, field_name, field_num
             )
             .unwrap();
-            field_num += 1;
         }
 
         writeln!(output, "}}").unwrap();

@@ -415,7 +415,9 @@ impl NumaStats {
     }
 
     pub fn avg_latency_ns(&self) -> u64 {
-        self.total_latency_ns.checked_div(self.operations).unwrap_or(0)
+        self.total_latency_ns
+            .checked_div(self.operations)
+            .unwrap_or(0)
     }
 
     pub fn local_hit_rate(&self) -> f64 {

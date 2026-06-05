@@ -5,9 +5,9 @@
 
 use crate::interfaces::{RawEntity, SourceReader};
 use anyhow::Result;
-use op_identity::{read_sled, IdentitySled};
+use op_identity::read_sled;
 use simd_json::json;
-use tracing::{debug, warn};
+use tracing::debug;
 
 /// Reader that extracts state from the Identity Sled in shared memory.
 #[derive(Debug, Clone)]
@@ -76,8 +76,7 @@ impl IdentitySledReader {
                 "mutation_index": sled.mutation_index,
                 "hashed_footprint": footprint,
                 "wireguard_pubkey": pubkey,
-            })
-            .into(),
+            }),
             source: self.source.clone(),
         })
     }

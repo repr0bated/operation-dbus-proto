@@ -283,8 +283,7 @@ fn parse_introspection_xml(xml: &str, path: &str) -> Result<ObjectInfo> {
                     "node" if node_depth == 1 => {
                         for attr in e.attributes().flatten() {
                             if attr.key.as_ref() == b"name" {
-                                let child_name =
-                                    String::from_utf8_lossy(&attr.value).to_string();
+                                let child_name = String::from_utf8_lossy(&attr.value).to_string();
                                 let child_path = if child_name.starts_with('/') {
                                     child_name
                                 } else if path == "/" {
@@ -296,7 +295,7 @@ fn parse_introspection_xml(xml: &str, path: &str) -> Result<ObjectInfo> {
                             }
                         }
                     }
-                    "node" => {},
+                    "node" => {}
                     "property" => {
                         if node_depth != 1 {
                             continue;

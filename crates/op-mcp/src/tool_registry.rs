@@ -110,7 +110,7 @@ impl ToolRegistry {
 
         let filtered: Vec<_> = defs
             .values()
-            .filter(|d| category.map_or(true, |c| d.category == c))
+            .filter(|d| category.is_none_or(|c| d.category == c))
             .cloned()
             .collect();
 
@@ -131,8 +131,8 @@ impl ToolRegistry {
                         .iter()
                         .any(|t| t.to_lowercase().contains(&query_lower))
             })
-            .cloned()
             .take(50) // Reasonable limit for search results
+            .cloned()
             .collect()
     }
 

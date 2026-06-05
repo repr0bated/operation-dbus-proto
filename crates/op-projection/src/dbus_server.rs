@@ -61,10 +61,7 @@ impl ProjectedObject {
 /// entity_type "ovsdb_bridge"     → /org/opdbus/ovsdb/bridge/<entity_id>
 pub fn projection_path(entity_type: &str, entity_id: &str) -> String {
     // Replace dots and underscores in type with slashes for the path prefix
-    let type_path = entity_type
-        .replace('.', "/")
-        .replace('_', "/")
-        .to_lowercase();
+    let type_path = entity_type.replace(['.', '_'], "/").to_lowercase();
 
     // For singleton objects (memory, cpu, filesystems, network) the entity_id
     // is typically the same as the type — omit it to avoid redundancy.
@@ -94,11 +91,14 @@ pub fn projection_path(entity_type: &str, entity_id: &str) -> String {
     }
 }
 
+/// Object state handles for updating in place
+type ObjectHandles = (Arc<RwLock<String>>, Arc<RwLock<String>>);
+
 /// Manages the set of D-Bus objects served for all projections.
 pub struct ProjectionDbusServer {
     conn: Connection,
     /// path → data/state handles so we can update in place
-    objects: HashMap<String, (Arc<RwLock<String>>, Arc<RwLock<String>>)>,
+    objects: HashMap<String, ObjectHandles>,
 }
 
 impl ProjectionDbusServer {

@@ -176,7 +176,7 @@ impl AgentsServer {
 
         // Create proxy to call introspection methods
         let proxy =
-            zbus::Proxy::new(conn, &*service_name, &*object_path, "org.dbusmcp.Agent").await?;
+            zbus::Proxy::new(conn, service_name, object_path.clone(), "org.dbusmcp.Agent").await?;
 
         // Get agent metadata
         let name: String = proxy

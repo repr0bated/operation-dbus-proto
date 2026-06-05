@@ -1,4 +1,5 @@
 //! MCP gRPC Service Implementation
+#![allow(clippy::result_large_err)]
 
 #[cfg(feature = "grpc")]
 use crate::grpc::proto::mcp_service_server::McpService;
@@ -39,6 +40,7 @@ struct Session {
 }
 
 /// Infrastructure integrations
+#[derive(Default)]
 pub struct GrpcInfrastructure {
     pub cache_path: Option<PathBuf>,
     pub state_db_path: Option<PathBuf>,
@@ -53,17 +55,6 @@ impl Clone for GrpcInfrastructure {
             state_db_path: self.state_db_path.clone(),
             blockchain_path: self.blockchain_path.clone(),
             tool_registry: self.tool_registry.clone(),
-        }
-    }
-}
-
-impl Default for GrpcInfrastructure {
-    fn default() -> Self {
-        Self {
-            cache_path: None,
-            state_db_path: None,
-            blockchain_path: None,
-            tool_registry: None,
         }
     }
 }

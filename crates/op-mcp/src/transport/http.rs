@@ -91,6 +91,7 @@ impl EnvAllowListValidator {
     }
 
     /// Construct an allow-list directly (primarily for tests and embedders).
+    #[allow(dead_code)]
     pub fn new<I, S>(entries: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -136,6 +137,7 @@ fn extract_bearer_token(headers: &HeaderMap) -> Option<&str> {
         .filter(|token| !token.is_empty())
 }
 
+#[allow(dead_code)]
 fn is_wireguard_pubkey_shape(token: &str) -> bool {
     token.len() == 44
         && token.ends_with('=')
@@ -144,12 +146,14 @@ fn is_wireguard_pubkey_shape(token: &str) -> bool {
             .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '+' | '/' | '='))
 }
 
+#[allow(dead_code)]
 fn is_wireguard_session_id_shape(token: &str) -> bool {
     Uuid::parse_str(token).is_ok()
 }
 
 /// **Shape check only.** Used as a cheap pre-filter inside the validator.
 /// MUST NOT be used as an authorization decision on its own.
+#[allow(dead_code)]
 fn is_wireguard_auth_token_shape(token: &str) -> bool {
     is_wireguard_pubkey_shape(token) || is_wireguard_session_id_shape(token)
 }
