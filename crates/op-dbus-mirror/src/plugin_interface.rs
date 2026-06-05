@@ -16,6 +16,12 @@ pub struct PluginInterface {
     plugins: PluginSnapshot,
 }
 
+impl Default for PluginInterface {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PluginInterface {
     pub fn new() -> Self {
         Self {

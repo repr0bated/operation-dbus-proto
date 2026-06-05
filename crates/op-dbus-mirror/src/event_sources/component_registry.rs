@@ -22,7 +22,7 @@ pub async fn spawn_component_registry_watcher(
             match rx.recv().await {
                 Ok(event) => {
                     let mirror_event = MirrorEvent::Registry {
-                        event,
+                        event: Box::new(event),
                         sequence: 0, // TODO: Implement proper sequence tracking
                     };
                     let _ = broadcast_tx.send(mirror_event);

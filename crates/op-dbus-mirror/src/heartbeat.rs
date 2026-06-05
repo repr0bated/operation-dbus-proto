@@ -1,7 +1,7 @@
 //! Heartbeat safety net module
 
 use anyhow::Result;
-use std::collections::HashMap;
+
 use std::sync::Arc;
 use tokio::sync::broadcast;
 use tokio::time;
@@ -38,7 +38,7 @@ pub async fn spawn_heartbeat_task(
 }
 
 /// Resync objects whose sequence numbers have not advanced
-async fn resync_stale_objects(mirror: &DbusMirror, broadcast_tx: &broadcast::Sender<MirrorEvent>) {
+async fn resync_stale_objects(mirror: &DbusMirror, _broadcast_tx: &broadcast::Sender<MirrorEvent>) {
     // Get current time
     let now = std::time::SystemTime::now();
 

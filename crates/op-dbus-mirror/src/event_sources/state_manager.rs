@@ -25,8 +25,8 @@ pub enum PluginOperation {
 
 /// Spawn StateManager watcher and send events to broadcast channel
 pub async fn spawn_state_manager_watcher(
-    state_manager: Arc<StateManager>,
-    broadcast_tx: broadcast::Sender<MirrorEvent>,
+    _state_manager: Arc<StateManager>,
+    _broadcast_tx: broadcast::Sender<MirrorEvent>,
 ) -> Result<()> {
     info!("Spawning StateManager watcher for event feed");
 

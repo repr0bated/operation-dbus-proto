@@ -13,16 +13,6 @@ use serde_json::Value;
 use std::sync::Arc;
 use zbus::interface;
 
-fn to_simd(val: &Value) -> simd_json::OwnedValue {
-    serde_json::to_string(val)
-        .ok()
-        .and_then(|s| {
-            let mut bytes = s.into_bytes();
-            simd_json::to_owned_value(&mut bytes).ok()
-        })
-        .unwrap_or(simd_json::OwnedValue::Static(simd_json::StaticNode::Null))
-}
-
 fn str_to_simd(s: &str) -> Result<simd_json::OwnedValue, zbus::fdo::Error> {
     let mut bytes = s.as_bytes().to_vec();
     simd_json::to_owned_value(&mut bytes).map_err(|e| zbus::fdo::Error::InvalidArgs(e.to_string()))

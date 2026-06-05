@@ -26,7 +26,7 @@ pub enum MirrorEvent {
     },
     /// ComponentRegistry event
     Registry {
-        event: op_grpc_bridge::proto::registry::RegistryEvent,
+        event: Box<op_grpc_bridge::proto::registry::RegistryEvent>,
         sequence: u64,
     },
     /// Procfs memory info event

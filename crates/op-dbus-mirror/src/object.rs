@@ -43,6 +43,6 @@ impl MirrorObject {
     #[zbus(signal)]
     pub async fn data_updated(
         &self,
-        ctxt: &zbus::object_server::SignalContext<'_>,
+        _ctxt: &zbus::object_server::SignalEmitter<'_>,
     ) -> zbus::Result<()>;
 }
