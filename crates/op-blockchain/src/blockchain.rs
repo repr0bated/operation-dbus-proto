@@ -325,7 +325,7 @@ impl StreamingBlockchain {
 
         // `--` defeats any future leading-dash sneakiness in `remote_host`
         // (already rejected by the validator; belt-and-braces).
-        let mut recv_child = Command::new("ssh")
+        let recv_child = Command::new("ssh")
             .arg("--")
             .arg(remote_host)
             .arg("btrfs")
@@ -391,7 +391,7 @@ impl StreamingBlockchain {
         }
 
         // Sort by timestamp (newest first)
-        snapshots.sort_by(|a, b| b.1.cmp(&a.1));
+        snapshots.sort_by_key(|a| std::cmp::Reverse(a.1));
 
         let now = Utc::now();
 

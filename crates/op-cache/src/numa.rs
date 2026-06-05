@@ -415,19 +415,14 @@ impl NumaStats {
     }
 
     pub fn avg_latency_ns(&self) -> u64 {
-        if self.operations == 0 {
-            0
-        } else {
-            self.total_latency_ns / self.operations
-        }
+        self.total_latency_ns.checked_div(self.operations).unwrap_or(0)
     }
 
     pub fn local_hit_rate(&self) -> f64 {
-        if self.operations == 0 {
-            0.0
-        } else {
-            self.local_accesses as f64 / self.operations as f64
-        }
+        self.operations
+            .checked_div(1)
+            .map(|_| self.local_accesses as f64 / self.operations as f64)
+            .unwrap_or(0.0)
     }
 
     pub fn remote_penalty(&self) -> f64 {

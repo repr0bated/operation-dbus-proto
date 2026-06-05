@@ -1,0 +1,150 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://opdbus.org/schemas/plugin/proxmox.json",
+  "title": "Proxmox Plugin Schema",
+  "description": "Proxmox VE virtual machine and container management",
+  "type": "object",
+  "required": ["name", "version", "plugin_type"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "const": "proxmox",
+      "description": "Plugin identifier"
+    },
+    "version": {
+      "type": "string",
+      "default": "1.0.0",
+      "description": "Plugin version"
+    },
+    "plugin_type": {
+      "type": "string",
+      "const": "virtualization",
+      "description": "Plugin type"
+    },
+    "description": {
+      "type": "string",
+      "default": "Proxmox VE virtual machine and container management",
+      "description": "Plugin description"
+    },
+    "dbus_path": {
+      "type": "string",
+      "const": "/org/opdbus/v1/plugin/plugins/proxmox",
+      "description": "D-Bus object path"
+    },
+    "dependencies": {
+      "type": "array",
+      "default": [],
+      "description": "Plugin dependencies"
+    },
+    "api_url": {
+      "type": "string",
+      "description": "Proxmox API URL",
+      "example": "https://pve.example.com:8006"
+    },
+    "nodes": {
+      "type": "array",
+      "description": "Proxmox cluster nodes",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Node name",
+            "example": "pve-1"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["online", "offline", "maintenance"],
+            "description": "Node status"
+          }
+        }
+      }
+    },
+    "vms": {
+      "type": "array",
+      "description": "Virtual machines",
+      "items": {
+        "type": "object",
+        "properties": {
+          "vmid": {
+            "type": "integer",
+            "description": "VM ID",
+            "example": 100
+          },
+          "name": {
+            "type": "string",
+            "description": "VM name",
+            "example": "vm-example"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["running", "stopped", "paused"],
+            "description": "VM status"
+          },
+          "node": {
+            "type": "string",
+            "description": "Node hosting this VM"
+          }
+        }
+      }
+    },
+    "containers": {
+      "type": "array",
+      "description": "LXC containers",
+      "items": {
+        "type": "object",
+        "properties": {
+          "vmid": {
+            "type": "integer",
+            "description": "Container ID",
+            "example": 200
+          },
+          "name": {
+            "type": "string",
+            "description": "Container name",
+            "example": "ct-example"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["running", "stopped", "paused"],
+            "description": "Container status"
+          },
+          "node": {
+            "type": "string",
+            "description": "Node hosting this container"
+          }
+        }
+      }
+    }
+  },
+  "example": {
+    "name": "proxmox",
+    "version": "1.0.0",
+    "plugin_type": "virtualization",
+    "description": "Proxmox VE virtual machine and container management",
+    "dbus_path": "/org/opdbus/v1/plugin/plugins/proxmox",
+    "api_url": "https://pve.example.com:8006",
+    "nodes": [
+      {
+        "name": "pve-1",
+        "status": "online"
+      }
+    ],
+    "vms": [
+      {
+        "vmid": 100,
+        "name": "vm-example",
+        "status": "running",
+        "node": "pve-1"
+      }
+    ],
+    "containers": [
+      {
+        "vmid": 200,
+        "name": "ct-example",
+        "status": "running",
+        "node": "pve-1"
+      }
+    ]
+  }
+}

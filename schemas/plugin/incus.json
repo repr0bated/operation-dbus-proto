@@ -1,0 +1,141 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://opdbus.org/schemas/plugin/incus.json",
+  "title": "Incus Plugin Schema",
+  "description": "Incus instance management plugin - manages LXC containers and virtual machines",
+  "type": "object",
+  "required": ["name", "version", "plugin_type"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "const": "incus",
+      "description": "Plugin identifier"
+    },
+    "version": {
+      "type": "string",
+      "default": "1.0.0",
+      "description": "Plugin version"
+    },
+    "plugin_type": {
+      "type": "string",
+      "const": "system",
+      "description": "Plugin type"
+    },
+    "description": {
+      "type": "string",
+      "default": "Incus instance management",
+      "description": "Plugin description"
+    },
+    "dbus_path": {
+      "type": "string",
+      "const": "/org/opdbus/v1/plugin/plugins/incus",
+      "description": "D-Bus object path"
+    },
+    "dependencies": {
+      "type": "array",
+      "default": [],
+      "description": "Plugin dependencies"
+    },
+    "capabilities": {
+      "type": "object",
+      "properties": {
+        "can_read": { "type": "boolean", "default": true },
+        "can_write": { "type": "boolean", "default": true },
+        "can_delete": { "type": "boolean", "default": true },
+        "supports_rollback": { "type": "boolean", "default": false },
+        "requires_root": { "type": "boolean", "default": true }
+      }
+    },
+    "instances": {
+      "type": "array",
+      "description": "List of Incus instances",
+      "items": {
+        "type": "object",
+        "required": ["name", "status", "type"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Instance name",
+            "example": "privacy-user-123",
+            "readOnly": true
+          },
+          "status": {
+            "type": "string",
+            "enum": ["Running", "Stopped", "Frozen"],
+            "description": "Instance status",
+            "default": "Stopped",
+            "example": "Running"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["container", "virtual-machine"],
+            "description": "Instance type",
+            "default": "container",
+            "example": "container",
+            "readOnly": true
+          },
+          "image": {
+            "type": "string",
+            "description": "Source image reference",
+            "example": "images:debian/13"
+          },
+          "storage_pool": {
+            "type": "string",
+            "description": "Preferred Incus storage pool for initial creation",
+            "example": "registration"
+          },
+          "profiles": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Applied Incus profiles",
+            "default": ["default"],
+            "example": ["default"]
+          },
+          "config": {
+            "type": "object",
+            "description": "Instance configuration map",
+            "default": {},
+            "example": { "limits.cpu": "2" }
+          },
+          "devices": {
+            "type": "object",
+            "description": "Instance device definitions",
+            "default": {},
+            "example": {
+              "eth0": {
+                "type": "nic",
+                "nictype": "bridged",
+                "parent": "ovsbr0"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "example": {
+    "name": "incus",
+    "version": "1.0.0",
+    "plugin_type": "system",
+    "description": "Incus instance management",
+    "dbus_path": "/org/opdbus/v1/plugin/plugins/incus",
+    "instances": [
+      {
+        "name": "privacy-user-123",
+        "status": "Running",
+        "type": "container",
+        "image": "images:debian/13",
+        "storage_pool": "registration",
+        "profiles": ["default"],
+        "config": { "limits.cpu": "2" },
+        "devices": {
+          "eth0": {
+            "type": "nic",
+            "nictype": "bridged",
+            "parent": "ovsbr0"
+          }
+        }
+      }
+    ]
+  }
+}

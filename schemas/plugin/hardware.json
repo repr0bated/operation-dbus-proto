@@ -1,0 +1,146 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://opdbus.org/schemas/plugin/hardware.json",
+  "title": "Hardware Plugin Schema",
+  "description": "Hardware inventory snapshot",
+  "type": "object",
+  "required": ["name", "version", "plugin_type"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "const": "hardware",
+      "description": "Plugin identifier"
+    },
+    "version": {
+      "type": "string",
+      "default": "1.0.0",
+      "description": "Plugin version"
+    },
+    "plugin_type": {
+      "type": "string",
+      "const": "system",
+      "description": "Plugin type"
+    },
+    "description": {
+      "type": "string",
+      "default": "Hardware inventory snapshot",
+      "description": "Plugin description"
+    },
+    "dbus_path": {
+      "type": "string",
+      "const": "/org/opdbus/v1/plugin/plugins/hardware",
+      "description": "D-Bus object path"
+    },
+    "dependencies": {
+      "type": "array",
+      "default": [],
+      "description": "Plugin dependencies"
+    },
+    "cpu": {
+      "type": "object",
+      "description": "CPU information",
+      "properties": {
+        "model": {
+          "type": "string",
+          "description": "CPU model",
+          "example": "AMD Ryzen 9 5950X"
+        },
+        "cores": {
+          "type": "integer",
+          "description": "Number of cores",
+          "example": 16
+        },
+        "threads": {
+          "type": "integer",
+          "description": "Number of threads",
+          "example": 32
+        }
+      }
+    },
+    "memory": {
+      "type": "object",
+      "description": "Memory information",
+      "properties": {
+        "total_bytes": {
+          "type": "integer",
+          "description": "Total memory in bytes",
+          "example": 34359738368
+        },
+        "available_bytes": {
+          "type": "integer",
+          "description": "Available memory in bytes"
+        }
+      }
+    },
+    "storage": {
+      "type": "array",
+      "description": "Storage devices",
+      "items": {
+        "type": "object",
+        "properties": {
+          "device": {
+            "type": "string",
+            "description": "Device path",
+            "example": "/dev/nvme0n1"
+          },
+          "model": {
+            "type": "string",
+            "description": "Device model"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "description": "Device size in bytes"
+          }
+        }
+      }
+    },
+    "network": {
+      "type": "array",
+      "description": "Network interfaces",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Interface name",
+            "example": "eth0"
+          },
+          "mac": {
+            "type": "string",
+            "description": "MAC address",
+            "example": "aa:bb:cc:dd:ee:ff"
+          }
+        }
+      }
+    }
+  },
+  "example": {
+    "name": "hardware",
+    "version": "1.0.0",
+    "plugin_type": "system",
+    "description": "Hardware inventory snapshot",
+    "dbus_path": "/org/opdbus/v1/plugin/plugins/hardware",
+    "cpu": {
+      "model": "AMD Ryzen 9 5950X",
+      "cores": 16,
+      "threads": 32
+    },
+    "memory": {
+      "total_bytes": 34359738368,
+      "available_bytes": 17179869184
+    },
+    "storage": [
+      {
+        "device": "/dev/nvme0n1",
+        "model": "Samsung SSD 970 EVO Plus",
+        "size_bytes": 1000204886016
+      }
+    ],
+    "network": [
+      {
+        "name": "eth0",
+        "mac": "aa:bb:cc:dd:ee:ff"
+      }
+    ]
+  }
+}

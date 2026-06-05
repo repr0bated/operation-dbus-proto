@@ -6,8 +6,8 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use simd_json::OwnedValue as Value;
 use simd_json::prelude::*;
+use simd_json::OwnedValue as Value;
 use std::collections::HashMap;
 use std::process::Command;
 use zbus::proxy;
@@ -205,7 +205,8 @@ impl StatePlugin for PackageKitPlugin {
         let packages_obj = desired
             .get("packages")
             .ok_or_else(|| anyhow::anyhow!("missing packages field"))?;
-        let packages: HashMap<String, PackageState> = simd_json::serde::from_owned_value(packages_obj.clone())?;
+        let packages: HashMap<String, PackageState> =
+            simd_json::serde::from_owned_value(packages_obj.clone())?;
         let desired_state = PackageKitState {
             version: 1,
             packages,
@@ -303,7 +304,8 @@ impl StatePlugin for PackageKitPlugin {
         let packages_obj = desired
             .get("packages")
             .ok_or_else(|| anyhow::anyhow!("missing packages field"))?;
-        let packages: HashMap<String, PackageState> = simd_json::serde::from_owned_value(packages_obj.clone())?;
+        let packages: HashMap<String, PackageState> =
+            simd_json::serde::from_owned_value(packages_obj.clone())?;
 
         for (package_name, package_config) in &packages {
             let is_installed = self.package_installed(package_name).await?;

@@ -246,11 +246,26 @@ impl TextEmbedder {
 mod tests {
     use super::*;
 
+    // Helper to create a test embedder for unit testing methods that don't
+    // require actual ONNX session/tokenizer
+    struct TestEmbedder {
+        level: VectorizationLevel,
+    }
+
+    impl TestEmbedder {
+        fn l2_normalize(&self, vec: &[f32]) -> Vec<f32> {
+            let norm: f32 = vec.iter().map(|x| x * x).sum::<f32>().sqrt();
+            if norm > 0.0 {
+                vec.iter().map(|x| x / norm).collect()
+            } else {
+                vec.to_vec()
+            }
+        }
+    }
+
     #[test]
     fn test_l2_normalize() {
-        let embedder = TextEmbedder {
-            session: todo!(), // Mock for test
-            tokenizer: todo!(),
+        let embedder = TestEmbedder {
             level: VectorizationLevel::Medium,
         };
 

@@ -1,0 +1,133 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://opdbus.org/schemas/plugin/wireguard.json",
+  "title": "WireGuard Plugin Schema",
+  "description": "WireGuard interface state management plugin",
+  "type": "object",
+  "required": ["name", "version", "plugin_type"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "const": "wireguard",
+      "description": "Plugin identifier"
+    },
+    "version": {
+      "type": "string",
+      "default": "1.0.0",
+      "description": "Plugin version"
+    },
+    "plugin_type": {
+      "type": "string",
+      "const": "network",
+      "description": "Plugin type"
+    },
+    "description": {
+      "type": "string",
+      "default": "WireGuard interface state",
+      "description": "Plugin description"
+    },
+    "dbus_path": {
+      "type": "string",
+      "const": "/org/opdbus/v1/plugin/plugins/wireguard",
+      "description": "D-Bus object path"
+    },
+    "dependencies": {
+      "type": "array",
+      "default": ["net"],
+      "description": "Plugin dependencies",
+      "items": { "type": "string" }
+    },
+    "capabilities": {
+      "type": "object",
+      "properties": {
+        "can_read": { "type": "boolean", "default": true },
+        "can_write": { "type": "boolean", "default": true },
+        "can_delete": { "type": "boolean", "default": false },
+        "requires_root": { "type": "boolean", "default": true }
+      }
+    },
+    "interfaces": {
+      "type": "array",
+      "description": "WireGuard interfaces",
+      "default": [],
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Interface name",
+            "example": "wg0"
+          },
+          "public_key": {
+            "type": "string",
+            "description": "Public key",
+            "example": "abcdef1234567890..."
+          },
+          "private_key": {
+            "type": "string",
+            "description": "Private key (write-only)",
+            "writeOnly": true
+          },
+          "listen_port": {
+            "type": "integer",
+            "description": "Listen port",
+            "default": 51820,
+            "minimum": 1,
+            "maximum": 65535
+          },
+          "peers": {
+            "type": "array",
+            "description": "WireGuard peers",
+            "items": {
+              "type": "object",
+              "properties": {
+                "public_key": {
+                  "type": "string",
+                  "description": "Peer public key"
+                },
+                "preshared_key": {
+                  "type": "string",
+                  "description": "Preshared key (optional)",
+                  "writeOnly": true
+                },
+                "endpoint": {
+                  "type": "string",
+                  "description": "Endpoint address",
+                  "example": "192.168.1.100:51820"
+                },
+                "allowed_ips": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "description": "Allowed IPs",
+                  "example": ["10.0.0.2/32"]
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "example": {
+    "name": "wireguard",
+    "version": "1.0.0",
+    "plugin_type": "network",
+    "description": "WireGuard interface state",
+    "dbus_path": "/org/opdbus/v1/plugin/plugins/wireguard",
+    "dependencies": ["net"],
+    "interfaces": [
+      {
+        "name": "wg0",
+        "public_key": "xyz789...",
+        "listen_port": 51820,
+        "peers": [
+          {
+            "public_key": "abc123...",
+            "endpoint": "192.168.1.100:51820",
+            "allowed_ips": ["10.0.0.2/32"]
+          }
+        ]
+      }
+    ]
+  }
+}

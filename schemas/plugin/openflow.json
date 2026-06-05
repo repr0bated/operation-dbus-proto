@@ -1,0 +1,137 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://opdbus.org/schemas/plugin/openflow.json",
+  "title": "OpenFlow Plugin Schema",
+  "description": "OpenFlow switch and flow management plugin",
+  "type": "object",
+  "required": ["name", "version", "plugin_type"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "const": "openflow",
+      "description": "Plugin identifier"
+    },
+    "version": {
+      "type": "string",
+      "default": "1.0.0",
+      "description": "Plugin version"
+    },
+    "plugin_type": {
+      "type": "string",
+      "const": "network",
+      "description": "Plugin type"
+    },
+    "description": {
+      "type": "string",
+      "default": "OpenFlow switch and flow management",
+      "description": "Plugin description"
+    },
+    "dbus_path": {
+      "type": "string",
+      "const": "/org/opdbus/v1/plugin/plugins/openflow",
+      "description": "D-Bus object path"
+    },
+    "dependencies": {
+      "type": "array",
+      "default": [],
+      "description": "Plugin dependencies"
+    },
+    "capabilities": {
+      "type": "object",
+      "properties": {
+        "can_read": { "type": "boolean", "default": true },
+        "can_write": { "type": "boolean", "default": true },
+        "can_delete": { "type": "boolean", "default": true },
+        "requires_root": { "type": "boolean", "default": true }
+      }
+    },
+    "bridges": {
+      "type": "array",
+      "description": "OpenFlow bridges",
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Bridge name",
+            "example": "ovs-br0",
+            "readOnly": true
+          },
+          "datapath_id": {
+            "type": "string",
+            "description": "Datapath ID",
+            "example": "0000000000000001",
+            "readOnly": true
+          },
+          "protocols": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Supported OpenFlow protocols",
+            "default": ["OpenFlow13"],
+            "example": ["OpenFlow10", "OpenFlow13"]
+          },
+          "flows": {
+            "type": "array",
+            "description": "OpenFlow flows",
+            "items": {
+              "type": "object",
+              "required": ["table", "priority", "match_fields", "actions"],
+              "properties": {
+                "table": {
+                  "type": "integer",
+                  "description": "OpenFlow table number",
+                  "default": 0,
+                  "minimum": 0,
+                  "maximum": 254,
+                  "example": 0
+                },
+                "priority": {
+                  "type": "integer",
+                  "description": "Flow priority",
+                  "default": 100,
+                  "minimum": 0,
+                  "maximum": 65535,
+                  "example": 22000
+                },
+                "match_fields": {
+                  "type": "object",
+                  "description": "OpenFlow match fields",
+                  "example": { "in_port": "ovsbr0-sock", "nw_src": "10.100.0.2" }
+                },
+                "actions": {
+                  "type": "array",
+                  "description": "OpenFlow actions",
+                  "items": { "type": "object" },
+                  "example": [{ "type": "output", "port": "NORMAL" }]
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "example": {
+    "name": "openflow",
+    "version": "1.0.0",
+    "plugin_type": "network",
+    "description": "OpenFlow switch and flow management",
+    "dbus_path": "/org/opdbus/v1/plugin/plugins/openflow",
+    "bridges": [
+      {
+        "name": "ovs-br0",
+        "datapath_id": "0000000000000001",
+        "protocols": ["OpenFlow13"],
+        "flows": [
+          {
+            "table": 0,
+            "priority": 100,
+            "match_fields": { "in_port": "ovsbr0-sock" },
+            "actions": [{ "type": "output", "port": "NORMAL" }]
+          }
+        ]
+      }
+    ]
+  }
+}

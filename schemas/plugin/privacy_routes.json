@@ -1,0 +1,121 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://opdbus.org/schemas/plugin/privacy_routes.json",
+  "title": "Privacy Routes Plugin Schema",
+  "description": "Privacy routing configuration for WireGuard-based privacy network",
+  "type": "object",
+  "required": ["name", "version", "plugin_type"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "const": "privacy_routes",
+      "description": "Plugin identifier"
+    },
+    "version": {
+      "type": "string",
+      "default": "1.0.0",
+      "description": "Plugin version"
+    },
+    "plugin_type": {
+      "type": "string",
+      "const": "network",
+      "description": "Plugin type"
+    },
+    "description": {
+      "type": "string",
+      "default": "Privacy routing configuration for WireGuard-based privacy network",
+      "description": "Plugin description"
+    },
+    "dbus_path": {
+      "type": "string",
+      "const": "/org/opdbus/v1/plugin/plugins/privacy_routes",
+      "description": "D-Bus object path"
+    },
+    "dependencies": {
+      "type": "array",
+      "default": ["wireguard", "openflow"],
+      "description": "Plugin dependencies"
+    },
+    "routes": {
+      "type": "array",
+      "description": "Privacy routes",
+      "items": {
+        "type": "object",
+        "required": ["name", "route_id", "user_id", "email", "wireguard_public_key", "assigned_ip", "selector_ip"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Stable route object identifier",
+            "example": "4f5e7f1a2d3c4b5a6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5",
+            "readOnly": true
+          },
+          "route_id": {
+            "type": "string",
+            "description": "Derived route ID from WireGuard public key and shared secret",
+            "example": "4f5e7f1a2d3c4b5a6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5",
+            "readOnly": true
+          },
+          "user_id": {
+            "type": "string",
+            "description": "Internal privacy user identifier",
+            "example": "550e8400-e29b-41d4-a716-446655440000",
+            "readOnly": true
+          },
+          "email": {
+            "type": "string",
+            "description": "User email for audit and publication context",
+            "example": "user@example.com"
+          },
+          "wireguard_public_key": {
+            "type": "string",
+            "description": "WireGuard public key backing this route identity",
+            "example": "P8c9Kjnv4B3r6C4+J4Q6VQ2sY4bXn4XWz0P2r5s6t7U=",
+            "readOnly": true
+          },
+          "assigned_ip": {
+            "type": "string",
+            "description": "Assigned WireGuard tunnel address",
+            "example": "10.100.0.2/32"
+          },
+          "selector_ip": {
+            "type": "string",
+            "description": "Packet-visible selector used for OpenFlow matching",
+            "example": "10.100.0.2"
+          },
+          "container_name": {
+            "type": "string",
+            "description": "Incus container name for this route",
+            "example": "privacy-route-550e8400"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["active", "pending", "disabled"],
+            "default": "pending",
+            "description": "Route status"
+          }
+        }
+      }
+    }
+  },
+  "example": {
+    "name": "privacy_routes",
+    "version": "1.0.0",
+    "plugin_type": "network",
+    "description": "Privacy routing configuration for WireGuard-based privacy network",
+    "dbus_path": "/org/opdbus/v1/plugin/plugins/privacy_routes",
+    "dependencies": ["wireguard", "openflow"],
+    "routes": [
+      {
+        "name": "route-001",
+        "route_id": "4f5e7f1a2d3c4b5a6e7f8091a2b3c4d5",
+        "user_id": "550e8400-e29b-41d4-a716-446655440000",
+        "email": "user@example.com",
+        "wireguard_public_key": "P8c9Kjnv4B3r6C4+J4Q6VQ2sY4bXn4XWz0P2r5s6t7U=",
+        "assigned_ip": "10.100.0.2/32",
+        "selector_ip": "10.100.0.2",
+        "container_name": "privacy-route-001",
+        "status": "active"
+      }
+    ]
+  }
+}

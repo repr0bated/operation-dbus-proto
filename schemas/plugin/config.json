@@ -1,0 +1,85 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://opdbus.org/schemas/plugin/config.json",
+  "title": "Config Plugin Schema",
+  "description": "Configuration key-value store plugin",
+  "type": "object",
+  "required": ["name", "version", "plugin_type"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "const": "config",
+      "description": "Plugin identifier"
+    },
+    "version": {
+      "type": "string",
+      "default": "1.0.0",
+      "description": "Plugin version"
+    },
+    "plugin_type": {
+      "type": "string",
+      "const": "storage",
+      "description": "Plugin type"
+    },
+    "description": {
+      "type": "string",
+      "default": "Configuration key-value store",
+      "description": "Plugin description"
+    },
+    "dbus_path": {
+      "type": "string",
+      "const": "/org/opdbus/v1/plugin/plugins/config",
+      "description": "D-Bus object path"
+    },
+    "dependencies": {
+      "type": "array",
+      "default": [],
+      "description": "Plugin dependencies"
+    },
+    "values": {
+      "type": "object",
+      "description": "Configuration key-value pairs",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "description": "Configuration value"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["string", "integer", "boolean", "array", "object"],
+            "description": "Value type"
+          },
+          "encrypted": {
+            "type": "boolean",
+            "default": false,
+            "description": "Whether value is encrypted"
+          },
+          "description": {
+            "type": "string",
+            "description": "Configuration description"
+          }
+        }
+      }
+    }
+  },
+  "example": {
+    "name": "config",
+    "version": "1.0.0",
+    "plugin_type": "storage",
+    "description": "Configuration key-value store",
+    "dbus_path": "/org/opdbus/v1/plugin/plugins/config",
+    "values": {
+      "api.port": {
+        "value": 8080,
+        "type": "integer",
+        "description": "API server port"
+      },
+      "api.tls": {
+        "value": true,
+        "type": "boolean",
+        "description": "Enable TLS"
+      }
+    }
+  }
+}

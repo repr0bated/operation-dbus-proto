@@ -484,6 +484,7 @@ impl CozoGraphShuttle {
 
     // ── Privacy Users (full PII per explicit directive) ─────────────────────────
 
+    #[allow(clippy::too_many_arguments)]
     pub fn upsert_privacy_user(
         &self,
         id: &str,

@@ -1,0 +1,135 @@
+{
+  "interface": "org.op_dbus.CrateInterface",
+  "methods": [
+    {
+      "name": "New",
+      "args": [
+        {
+          "name": "stream",
+          "type": "s",
+          "direction": "in"
+        },
+        {
+          "name": "result",
+          "type": "s",
+          "direction": "out"
+        }
+      ]
+    },
+    {
+      "name": "Next_id",
+      "args": [
+        {
+          "name": "result",
+          "type": "s",
+          "direction": "out"
+        }
+      ]
+    },
+    {
+      "name": "Transact",
+      "args": [
+        {
+          "name": "method",
+          "type": "s",
+          "direction": "in"
+        },
+        {
+          "name": "params",
+          "type": "s",
+          "direction": "in"
+        },
+        {
+          "name": "result",
+          "type": "s",
+          "direction": "out"
+        }
+      ]
+    },
+    {
+      "name": "Notify",
+      "args": [
+        {
+          "name": "method",
+          "type": "s",
+          "direction": "in"
+        },
+        {
+          "name": "params",
+          "type": "s",
+          "direction": "in"
+        },
+        {
+          "name": "result",
+          "type": "s",
+          "direction": "out"
+        }
+      ]
+    },
+    {
+      "name": "Send_message",
+      "args": [
+        {
+          "name": "msg",
+          "type": "s",
+          "direction": "in"
+        },
+        {
+          "name": "result",
+          "type": "s",
+          "direction": "out"
+        }
+      ]
+    },
+    {
+      "name": "Recv_message",
+      "args": [
+        {
+          "name": "result",
+          "type": "s",
+          "direction": "out"
+        }
+      ]
+    },
+    {
+      "name": "Has_pending_notifications",
+      "args": [
+        {
+          "name": "result",
+          "type": "b",
+          "direction": "out"
+        }
+      ]
+    },
+    {
+      "name": "Pending_notification_count",
+      "args": [
+        {
+          "name": "result",
+          "type": "s",
+          "direction": "out"
+        }
+      ]
+    },
+    {
+      "name": "Pop_notification",
+      "args": [
+        {
+          "name": "result",
+          "type": "s",
+          "direction": "out"
+        }
+      ]
+    },
+    {
+      "name": "Drain_notifications",
+      "args": [
+        {
+          "name": "result",
+          "type": "s",
+          "direction": "out"
+        }
+      ]
+    }
+  ]
+}

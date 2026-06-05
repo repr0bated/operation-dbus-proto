@@ -25,7 +25,9 @@ export default function LlmPage() {
       setProviders(["zeroclaw", ...nextProviders.providers.filter((p) => p !== "zeroclaw")]);
       setSelectedProvider(provider);
       setNonSandboxed(Boolean(nextStatus.model_non_sandboxed));
-      setModels(nextModels.models);
+      // Ensure models is always an array of proper objects
+      const modelList = Array.isArray(nextModels?.models) ? nextModels.models : [];
+      setModels(modelList);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setModels([]);
@@ -51,7 +53,7 @@ export default function LlmPage() {
   }
 
   const activeModel = useMemo(
-    () => models.find((m) => m.id === status?.model || m.active),
+    () => models.find((m) => m.id === status?.model || m.active === true),
     [models, status?.model],
   );
 

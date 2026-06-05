@@ -517,7 +517,7 @@ impl IntrospectiveGadget {
             }
         }
 
-        patterns.sort_by(|a, b| b.count.cmp(&a.count));
+        patterns.sort_by_key(|a| std::cmp::Reverse(a.count));
         patterns.truncate(10); // Top 10 patterns
 
         patterns
@@ -689,11 +689,10 @@ impl ObjectSchema {
 
         for (prop_name, prop) in &self.properties {
             match prop.data_type.as_str() {
-                "string" => {
-                    if prop.pattern.is_some() {
-                        rules.push(format!("{}_format", prop_name));
-                    }
+                "string" if prop.pattern.is_some() => {
+                    rules.push(format!("{}_format", prop_name));
                 }
+                "string" => {}
                 "number" => {
                     if let Some(min) = prop.minimum {
                         rules.push(format!("{}_min_{}", prop_name, min));

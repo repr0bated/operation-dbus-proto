@@ -30,11 +30,15 @@ pub struct FactoryState {
 pub struct FactoryPlugin;
 
 impl Default for FactoryPlugin {
-    fn default() -> Self { Self }
+    fn default() -> Self {
+        Self
+    }
 }
 
 impl FactoryPlugin {
-    pub fn new() -> Self { Self }
+    pub fn new() -> Self {
+        Self
+    }
     fn env_or(key: &str, fallback: &str) -> String {
         std::env::var(key).unwrap_or_else(|_| fallback.to_string())
     }
@@ -150,22 +154,58 @@ impl FactoryPlugin {
 
 #[async_trait]
 impl StatePlugin for FactoryPlugin {
-    fn name(&self) -> &str { "factory" }
-    fn version(&self) -> &str { "1.0.0" }
-    fn schema(&self) -> Option<PluginSchema> { Some(super::plugin_schema_defs::factory_plugin_schema()) }
-    async fn query_current_state(&self) -> Result<Value> { Ok(simd_json::serde::to_owned_value(Self::current_state())?) }
+    fn name(&self) -> &str {
+        "factory"
+    }
+    fn version(&self) -> &str {
+        "1.0.0"
+    }
+    fn schema(&self) -> Option<PluginSchema> {
+        Some(super::plugin_schema_defs::factory_plugin_schema())
+    }
+    async fn query_current_state(&self) -> Result<Value> {
+        Ok(simd_json::serde::to_owned_value(Self::current_state())?)
+    }
     async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {
-        Ok(StateDiff { plugin: self.name().to_string(), actions: vec![], metadata: DiffMetadata { timestamp: chrono::Utc::now().timestamp(), current_hash: "schema-declared".to_string(), desired_hash: "schema-declared".to_string() } })
+        Ok(StateDiff {
+            plugin: self.name().to_string(),
+            actions: vec![],
+            metadata: DiffMetadata {
+                timestamp: chrono::Utc::now().timestamp(),
+                current_hash: "schema-declared".to_string(),
+                desired_hash: "schema-declared".to_string(),
+            },
+        })
     }
     async fn apply_state(&self, _diff: &StateDiff) -> Result<ApplyResult> {
-        Ok(ApplyResult { success: true, changes_applied: vec![], errors: vec![], checkpoint: None })
+        Ok(ApplyResult {
+            success: true,
+            changes_applied: vec![],
+            errors: vec![],
+            checkpoint: None,
+        })
     }
-    async fn verify_state(&self, _desired: &Value) -> Result<bool> { Ok(true) }
+    async fn verify_state(&self, _desired: &Value) -> Result<bool> {
+        Ok(true)
+    }
     async fn create_checkpoint(&self) -> Result<Checkpoint> {
-        Ok(Checkpoint { id: uuid::Uuid::new_v4().to_string(), plugin: self.name().to_string(), timestamp: chrono::Utc::now().timestamp(), state_snapshot: simd_json::serde::to_owned_value(Self::current_state())?, backend_checkpoint: None })
+        Ok(Checkpoint {
+            id: uuid::Uuid::new_v4().to_string(),
+            plugin: self.name().to_string(),
+            timestamp: chrono::Utc::now().timestamp(),
+            state_snapshot: simd_json::serde::to_owned_value(Self::current_state())?,
+            backend_checkpoint: None,
+        })
     }
-    async fn rollback(&self, _checkpoint: &Checkpoint) -> Result<()> { Ok(()) }
+    async fn rollback(&self, _checkpoint: &Checkpoint) -> Result<()> {
+        Ok(())
+    }
     fn capabilities(&self) -> PluginCapabilities {
-        PluginCapabilities { supports_rollback: false, supports_checkpoints: true, supports_verification: true, atomic_operations: false }
+        PluginCapabilities {
+            supports_rollback: false,
+            supports_checkpoints: true,
+            supports_verification: true,
+            atomic_operations: false,
+        }
     }
 }

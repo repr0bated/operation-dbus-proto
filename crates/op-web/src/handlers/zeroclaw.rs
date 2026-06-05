@@ -4,13 +4,7 @@
 //! 127.0.0.1:8081, and serves the combined schema (OpenAPI + zeroclaw
 //! projection) for schema-driven UI rendering.
 
-use axum::{
-    body::Body,
-    extract::Extension,
-    http::StatusCode,
-    response::Response,
-    Json,
-};
+use axum::{body::Body, extract::Extension, http::StatusCode, response::Response, Json};
 use serde::Deserialize;
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
@@ -22,29 +16,28 @@ use crate::state::AppState;
 /// Antigravity bridge base URL - defaults to standard Antigravity IDE bridge port
 /// Can be overridden with ANTIGRAVITY_BRIDGE_URL env var
 fn antigravity_base() -> String {
-    std::env::var("ANTIGRAVITY_BRIDGE_URL")
-        .unwrap_or_else(|_| "http://127.0.0.1:3333".to_string())
+    std::env::var("ANTIGRAVITY_BRIDGE_URL").unwrap_or_else(|_| "http://127.0.0.1:3333".to_string())
 }
 
 /// Get WireGuard identity for auth headers
 fn wireguard_identity_headers() -> Vec<(&'static str, String)> {
     let mut headers = Vec::new();
-    
+
     // X-WireGuard-Pubkey from environment (set by wg-xray container or host)
     if let Ok(pubkey) = std::env::var("WG_PUBKEY") {
         headers.push(("X-WireGuard-Pubkey", pubkey));
     }
-    
+
     // X-Ghostbridge-Trace-ID for accountability loop
     if let Ok(trace_id) = std::env::var("GHOSTBRIDGE_TRACE_ID") {
         headers.push(("X-Ghostbridge-Trace-ID", trace_id));
     }
-    
+
     // Container-scoped identity for wg-xray
     if let Ok(container_id) = std::env::var("CONTAINER_ID") {
         headers.push(("X-Container-ID", container_id));
     }
-    
+
     headers
 }
 
@@ -95,10 +88,8 @@ pub async fn zeroclaw_chat_handler(
         req.message.len()
     );
 
-    let mut request_builder = client
-        .post(&url)
-        .header("Content-Type", "application/json");
-    
+    let mut request_builder = client.post(&url).header("Content-Type", "application/json");
+
     // Add WireGuard identity headers for auth
     for (key, value) in wireguard_identity_headers() {
         request_builder = request_builder.header(key, value);
@@ -122,13 +113,18 @@ pub async fn zeroclaw_chat_handler(
                 }
             };
 
-            let axum_status = StatusCode::from_u16(status.as_u16())
-                .unwrap_or(StatusCode::BAD_GATEWAY);
+            let axum_status =
+                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
             Response::builder()
                 .status(axum_status)
                 .header("Content-Type", "application/json")
                 .body(Body::from(body_bytes))
-                .unwrap_or_else(|_| json_error_response(StatusCode::INTERNAL_SERVER_ERROR, "Failed to build response"))
+                .unwrap_or_else(|_| {
+                    json_error_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Failed to build response",
+                    )
+                })
         }
         Err(e) => {
             error!("Antigravity bot unreachable: {}", e);
@@ -178,7 +174,7 @@ pub async fn zeroclaw_chat_stream_handler(
         .post(&url)
         .header("Content-Type", "application/json")
         .header("Accept", "text/event-stream");
-    
+
     // Add WireGuard identity headers for auth
     for (key, value) in wireguard_identity_headers() {
         request_builder = request_builder.header(key, value);
@@ -202,14 +198,19 @@ pub async fn zeroclaw_chat_stream_handler(
                 }
             };
 
-            let axum_status = StatusCode::from_u16(status.as_u16())
-                .unwrap_or(StatusCode::BAD_GATEWAY);
+            let axum_status =
+                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
             Response::builder()
                 .status(axum_status)
                 .header("Content-Type", "text/event-stream")
                 .header("Cache-Control", "no-cache")
                 .body(Body::from(body_bytes))
-                .unwrap_or_else(|_| json_error_response(StatusCode::INTERNAL_SERVER_ERROR, "Failed to build stream response"))
+                .unwrap_or_else(|_| {
+                    json_error_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Failed to build stream response",
+                    )
+                })
         }
         Err(e) => {
             error!("Antigravity bot unreachable: {}", e);
@@ -240,17 +241,17 @@ fn json_error_response(status: StatusCode, message: &str) -> Response {
 /// Per AGENTS.md: "The Absolute Base: PluginSchema is the single source of truth"
 fn read_zeroclaw_from_shm() -> Option<Value> {
     use std::fs;
-    
+
     const SHM_SCHEMA_PATH: &str = "/dev/shm/live-schema.json";
-    
+
     let content = fs::read_to_string(SHM_SCHEMA_PATH).ok()?;
     let mut bytes = content.into_bytes();
     let schema: Value = simd_json::to_owned_value(&mut bytes).ok()?;
-    
+
     // Extract zeroclaw from the schema examples (the canonical source)
     let zeroclaw_schema = schema.get("zeroclaw")?.as_array()?.first()?;
     let fields = zeroclaw_schema.get("fields")?.as_array()?;
-    
+
     // Helper: find field example by name
     fn find_example(fields: &[Value], name: &str) -> Option<Value> {
         for f in fields {
@@ -261,7 +262,7 @@ fn read_zeroclaw_from_shm() -> Option<Value> {
         }
         None
     }
-    
+
     Some(json!({
         "active": true,
         "status": find_example(fields, "status").and_then(|v| v.as_str().map(String::from)).unwrap_or_else(|| "declared".to_string()),
@@ -283,9 +284,7 @@ fn read_zeroclaw_from_shm() -> Option<Value> {
 /// projection (providers, model_routes, tools, structured_output) so the
 /// frontend can render the entire chat interface from a single schema.
 /// GET /api/zeroclaw/schema
-pub async fn zeroclaw_schema_handler(
-    Extension(state): Extension<Arc<AppState>>,
-) -> Response {
+pub async fn zeroclaw_schema_handler(Extension(state): Extension<Arc<AppState>>) -> Response {
     // Fetch antigravity OpenAPI schema
     let client = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
@@ -326,12 +325,7 @@ pub async fn zeroclaw_schema_handler(
         shm_data
     } else {
         // Fallback to D-Bus projection
-        match crate::projection_client::get_projection(
-            &state.projection_cache,
-            "zeroclaw",
-        )
-        .await
-        {
+        match crate::projection_client::get_projection(&state.projection_cache, "zeroclaw").await {
             Some(v) => v,
             None => {
                 error!("Zeroclaw not available from shared memory or D-Bus");
@@ -362,9 +356,15 @@ pub async fn zeroclaw_schema_handler(
                 .filter_map(|r| {
                     let model = r.get("model").and_then(|v| v.as_str())?;
                     let hint = r.get("hint").and_then(|v| v.as_str());
-                    let provider = r.get("provider").and_then(|v| v.as_str()).unwrap_or("unknown");
-                    let available = r.get("available").and_then(|v| v.as_bool()).unwrap_or(false);
-                    
+                    let provider = r
+                        .get("provider")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown");
+                    let available = r
+                        .get("available")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+
                     // Build label: "provider/model (hint) [status]"
                     let mut label = format!("{}/{}", provider, model);
                     if let Some(h) = hint {
@@ -373,7 +373,7 @@ pub async fn zeroclaw_schema_handler(
                     if !available {
                         label.push_str(" [declared]");
                     }
-                    
+
                     Some(json!({"const": model, "title": label}))
                 })
                 .collect::<Vec<_>>()
@@ -419,5 +419,10 @@ pub async fn zeroclaw_schema_handler(
         .status(StatusCode::OK)
         .header("Content-Type", "application/json")
         .body(Body::from(body))
-        .unwrap_or_else(|_| json_error_response(StatusCode::INTERNAL_SERVER_ERROR, "Failed to build schema response"))
+        .unwrap_or_else(|_| {
+            json_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to build schema response",
+            )
+        })
 }

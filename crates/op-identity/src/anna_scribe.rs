@@ -145,7 +145,7 @@ mod tests {
             trace_id: [0u8; 16],
             vector_id: [0u8; 16],
             schema_version: 0,
-            reserved: [0u8; 60],
+            reserved: [0u8; 44],
         };
         assert!(!is_sled_valid(&sled));
     }
@@ -159,7 +159,7 @@ mod tests {
             trace_id: [0xCC; 16],
             vector_id: [0u8; 16],
             schema_version: 1,
-            reserved: [0u8; 60],
+            reserved: [0u8; 44],
         };
         assert!(is_sled_valid(&sled));
     }
@@ -225,7 +225,7 @@ mod tests {
             trace_id: [0u8; 16],
             vector_id: [0u8; 16],
             schema_version: 1,
-            reserved: [0u8; 60],
+            reserved: [0u8; 44],
         };
 
         let fp1 = AnnaScribe::etch_footprint(&sled);

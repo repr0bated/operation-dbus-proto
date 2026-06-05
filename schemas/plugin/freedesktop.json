@@ -1,0 +1,382 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://opdbus.org/schemas/plugin/freedesktop.json",
+  "title": "FreeDesktop Plugin Schema",
+  "description": "Schema for FreeDesktop D-Bus interfaces and standards support",
+  "type": "object",
+  "required": ["name", "version", "plugin_type", "dbus_interfaces"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "const": "freedesktop",
+      "description": "Plugin identifier - fixed as 'freedesktop'"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "default": "1.0.0",
+      "description": "Plugin version following semantic versioning"
+    },
+    "plugin_type": {
+      "type": "string",
+      "const": "system",
+      "description": "Plugin type - freedesktop is a system plugin"
+    },
+    "description": {
+      "type": "string",
+      "default": "FreeDesktop D-Bus standards implementation including ObjectManager, Properties, and Introspection interfaces",
+      "description": "Human-readable plugin description"
+    },
+    "dbus_path": {
+      "type": "string",
+      "const": "/org/opdbus/v1/plugin/plugins/freedesktop",
+      "description": "Canonical D-Bus object path for this plugin"
+    },
+    "dbus_interfaces": {
+      "type": "array",
+      "description": "List of FreeDesktop D-Bus interfaces implemented",
+      "items": {
+        "type": "object",
+        "required": ["name", "methods", "signals", "properties"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "D-Bus interface name (e.g., org.freedesktop.DBus.ObjectManager)"
+          },
+          "description": {
+            "type": "string",
+            "description": "Interface description"
+          },
+          "methods": {
+            "type": "array",
+            "description": "Interface methods",
+            "items": {
+              "type": "object",
+              "required": ["name", "signature", "description"],
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "Method name"
+                },
+                "signature": {
+                  "type": "string",
+                  "description": "D-Bus method signature (e.g., 'a{oa{sa{sv}}}' for GetManagedObjects return)"
+                },
+                "description": {
+                  "type": "string",
+                  "description": "Method description"
+                },
+                "arguments": {
+                  "type": "array",
+                  "description": "Method arguments",
+                  "items": {
+                    "type": "object",
+                    "required": ["name", "type", "direction"],
+                    "properties": {
+                      "name": { "type": "string" },
+                      "type": { "type": "string" },
+                      "direction": { "enum": ["in", "out"] },
+                      "description": { "type": "string" }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "signals": {
+            "type": "array",
+            "description": "Interface signals",
+            "items": {
+              "type": "object",
+              "required": ["name", "signature", "description"],
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "Signal name"
+                },
+                "signature": {
+                  "type": "string",
+                  "description": "D-Bus signal signature"
+                },
+                "description": {
+                  "type": "string",
+                  "description": "Signal description"
+                }
+              }
+            }
+          },
+          "properties": {
+            "type": "array",
+            "description": "Interface properties",
+            "items": {
+              "type": "object",
+              "required": ["name", "type", "access"],
+              "properties": {
+                "name": { "type": "string" },
+                "type": { "type": "string" },
+                "access": { "enum": ["read", "write", "readwrite"] },
+                "description": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "freedesktop_standards": {
+      "type": "object",
+      "description": "FreeDesktop standards compliance configuration",
+      "properties": {
+        "object_manager": {
+          "type": "boolean",
+          "default": true,
+          "description": "Implement org.freedesktop.DBus.ObjectManager"
+        },
+        "properties_interface": {
+          "type": "boolean",
+          "default": true,
+          "description": "Implement org.freedesktop.DBus.Properties"
+        },
+        "introspection_interface": {
+          "type": "boolean",
+          "default": true,
+          "description": "Implement org.freedesktop.DBus.Introspectable"
+        },
+        "peer_interface": {
+          "type": "boolean",
+          "default": true,
+          "description": "Implement org.freedesktop.DBus.Peer"
+        },
+        "systemd_integration": {
+          "type": "boolean",
+          "default": false,
+          "description": "Implement org.freedesktop.systemd1 interfaces"
+        },
+        "network_manager_integration": {
+          "type": "boolean",
+          "default": false,
+          "description": "Implement org.freedesktop.NetworkManager interfaces"
+        }
+      }
+    },
+    "capabilities": {
+      "type": "object",
+      "properties": {
+        "can_read": {
+          "type": "boolean",
+          "default": true
+        },
+        "can_write": {
+          "type": "boolean",
+          "default": false
+        },
+        "requires_root": {
+          "type": "boolean",
+          "default": false
+        },
+        "supports_introspection": {
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "compliance": {
+      "type": "object",
+      "description": "OSCAL compliance mappings",
+      "properties": {
+        "control_refs": {
+          "type": "array",
+          "description": "NIST SP 800-53 control references",
+          "items": { "type": "string" },
+          "default": ["AC-3", "IA-2"]
+        },
+        "standards": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["D-Bus Specification 1.0", "FreeDesktop Standards"]
+        }
+      }
+    }
+  },
+  "default": {
+    "name": "freedesktop",
+    "version": "1.0.0",
+    "plugin_type": "system",
+    "dbus_path": "/org/opdbus/v1/plugin/plugins/freedesktop",
+    "dbus_interfaces": [
+      {
+        "name": "org.freedesktop.DBus.ObjectManager",
+        "description": "ObjectManager interface for enumerating managed objects",
+        "methods": [
+          {
+            "name": "GetManagedObjects",
+            "signature": "a{oa{sa{sv}}}",
+            "description": "Get all managed objects with their interfaces and properties",
+            "arguments": []
+          }
+        ],
+        "signals": [
+          {
+            "name": "InterfacesAdded",
+            "signature": "oa{sa{sv}}",
+            "description": "Emitted when new interfaces are added to an object"
+          },
+          {
+            "name": "InterfacesRemoved",
+            "signature": "oas",
+            "description": "Emitted when interfaces are removed from an object"
+          }
+        ],
+        "properties": []
+      },
+      {
+        "name": "org.freedesktop.DBus.Properties",
+        "description": "Standard D-Bus properties interface",
+        "methods": [
+          {
+            "name": "Get",
+            "signature": "v",
+            "description": "Get a property value",
+            "arguments": [
+              {
+                "name": "interface_name",
+                "type": "s",
+                "direction": "in",
+                "description": "Interface name"
+              },
+              {
+                "name": "property_name",
+                "type": "s",
+                "direction": "in",
+                "description": "Property name"
+              },
+              {
+                "name": "value",
+                "type": "v",
+                "direction": "out",
+                "description": "Property value"
+              }
+            ]
+          },
+          {
+            "name": "GetAll",
+            "signature": "a{sv}",
+            "description": "Get all properties of an interface",
+            "arguments": [
+              {
+                "name": "interface_name",
+                "type": "s",
+                "direction": "in",
+                "description": "Interface name"
+              },
+              {
+                "name": "properties",
+                "type": "a{sv}",
+                "direction": "out",
+                "description": "All properties as dictionary"
+              }
+            ]
+          },
+          {
+            "name": "Set",
+            "signature": "v",
+            "description": "Set a property value",
+            "arguments": [
+              {
+                "name": "interface_name",
+                "type": "s",
+                "direction": "in",
+                "description": "Interface name"
+              },
+              {
+                "name": "property_name",
+                "type": "s",
+                "direction": "in",
+                "description": "Property name"
+              },
+              {
+                "name": "value",
+                "type": "v",
+                "direction": "in",
+                "description": "Property value"
+              }
+            ]
+          }
+        ],
+        "signals": [
+          {
+            "name": "PropertiesChanged",
+            "signature": "sa{sv}as",
+            "description": "Emitted when properties change"
+          }
+        ],
+        "properties": []
+      },
+      {
+        "name": "org.freedesktop.DBus.Introspectable",
+        "description": "Standard D-Bus introspection interface",
+        "methods": [
+          {
+            "name": "Introspect",
+            "signature": "s",
+            "description": "Return XML introspection data",
+            "arguments": [
+              {
+                "name": "xml_data",
+                "type": "s",
+                "direction": "out",
+                "description": "XML introspection document"
+              }
+            ]
+          }
+        ],
+        "signals": [],
+        "properties": []
+      },
+      {
+        "name": "org.freedesktop.DBus.Peer",
+        "description": "Standard D-Bus peer interface",
+        "methods": [
+          {
+            "name": "Ping",
+            "signature": "",
+            "description": "Ping the peer",
+            "arguments": []
+          },
+          {
+            "name": "GetMachineId",
+            "signature": "s",
+            "description": "Get the machine ID",
+            "arguments": [
+              {
+                "name": "machine_uuid",
+                "type": "s",
+                "direction": "out",
+                "description": "Machine UUID"
+              }
+            ]
+          }
+        ],
+        "signals": [],
+        "properties": []
+      }
+    ],
+    "freedesktop_standards": {
+      "object_manager": true,
+      "properties_interface": true,
+      "introspection_interface": true,
+      "peer_interface": true,
+      "systemd_integration": false,
+      "network_manager_integration": false
+    },
+    "capabilities": {
+      "can_read": true,
+      "can_write": false,
+      "requires_root": false,
+      "supports_introspection": true
+    },
+    "compliance": {
+      "control_refs": ["AC-3", "IA-2"],
+      "standards": ["D-Bus Specification 1.0", "FreeDesktop Standards"]
+    }
+  }
+}

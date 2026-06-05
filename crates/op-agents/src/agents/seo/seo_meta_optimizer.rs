@@ -20,12 +20,12 @@ impl SEOMetaOptimizerAgent {
 
     fn analyze(&self, args: Option<&str>) -> Result<String, String> {
         let input = args.unwrap_or("");
-        let mut recommendations = Vec::new();
-
-        recommendations.push("Title: 50-60 characters, keyword near front");
-        recommendations.push("Meta description: 150-160 characters, include CTA");
-        recommendations.push("Use unique titles and descriptions per page");
-        recommendations.push("Include primary keyword naturally");
+        let recommendations = vec![
+            "Title: 50-60 characters, keyword near front",
+            "Meta description: 150-160 characters, include CTA",
+            "Use unique titles and descriptions per page",
+            "Include primary keyword naturally",
+        ];
 
         let result = json!({
             "analysis": { "input": input, "recommendations": recommendations },

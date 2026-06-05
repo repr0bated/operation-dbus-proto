@@ -21,7 +21,6 @@ pub async fn get_peer_pubkey(peer_ip: &str) -> Result<Option<String>> {
     // Run `wg show wg0 allowed-ips` (assuming wg0, could make configurable)
     // Output format: <public-key>\t<allowed-ips>
     // e.g. "AbC...123\t10.100.0.2/32"
-    
     let iface = std::env::var("WG_INTERFACE").unwrap_or_else(|_| "netmaker".to_string());
     let output = Command::new("wg")
         .arg("show")

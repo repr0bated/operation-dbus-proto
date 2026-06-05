@@ -1,33 +1,43 @@
+#!/bin/bash
+# Xray config with env var substitution
+# Source: .bash_secrets (XRAY_PUBLIC_KEY)
+# Usage: eval "$(cat config.json)" > /tmp/xray.json && xray run -c /tmp/xray.json
+
+cat << 'XRAYCONFIG'
 {
   "log": { "loglevel": "warning" },
   "inbounds": [
     {
-      "tag": "reality-in",
-      "port": 443,
+      "tag": "grpc-transparent-in",
+      "port": 50051,
       "listen": "0.0.0.0",
-      "protocol": "vless",
+      "protocol": "dokodemo-door",
       "settings": {
-        "clients": [{ "id": "40813c05-4a7c-4d5b-b027-33912551287f", "flow": "xtls-rprx-vision" }],
-        "decryption": "none"
-      },
-      "streamSettings": {
         "network": "tcp",
-        "security": "reality",
-        "realitySettings": {
-          "show": false,
-          "dest": "www.microsoft.com:443",
-          "serverNames": ["www.microsoft.com"],
-          "privateKey": "-MULA7gIbk_58CKa4TNHovpYNt192NUkPlQF7f3caWo",
-          "shortIds": ["2a32c53278372687"]
-        }
+        "address": "10.200.0.1",
+        "port": 50051
       }
     }
   ],
   "outbounds": [
     {
-      "tag": "to-grpc-bridge",
-      "protocol": "freedom",
-      "settings": { "redirect": "10.200.0.2:50051" },
+      "tag": "to-vps",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "xray.3tched.com",
+            "port": 8443,
+            "users": [
+              {
+                "id": "f997ea91-94bb-4078-b172-649cd21a7647",
+                "encryption": "none",
+                "flow": ""
+              }
+            ]
+          }
+        ]
+      },
       "streamSettings": {
         "network": "grpc",
         "sockopt": { "tcpNoDelay": true },
@@ -38,6 +48,15 @@
             "X-Ghostbridge-Footprint": "d51501c285e50f44b63d2431494e5b6ae2c8b9057f00d91cc441b550680ab058",
             "X-Ghostbridge-Trace-ID": "fb877c6e-0"
           }
+        },
+        "security": "reality",
+        "realitySettings": {
+          "show": false,
+          "fingerprint": "chrome",
+          "serverName": "www.microsoft.com",
+          "publicKey": "${XRAY_PUBLIC_KEY}",
+          "shortId": "821c52c7ba699c33",
+          "spiderX": ""
         }
       }
     },
@@ -48,7 +67,8 @@
     "domainStrategy": "IPIfNonMatch",
     "rules": [
       { "type": "field", "port": 53, "outboundTag": "dns-out" },
-      { "type": "field", "network": "tcp,udp", "outboundTag": "to-grpc-bridge" }
+      { "type": "field", "inboundTag": ["grpc-transparent-in"], "outboundTag": "to-vps" }
     ]
   }
 }
+XRAYCONFIG

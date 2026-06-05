@@ -407,10 +407,12 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
+    type MockServer = (String, Arc<Mutex<Vec<u8>>>, tokio::task::JoinHandle<()>);
+
     fn spawn_test_server(
         response_status: &str,
         response_body: &str,
-    ) -> Result<(String, Arc<Mutex<Vec<u8>>>, tokio::task::JoinHandle<()>)> {
+    ) -> Result<MockServer> {
         let listener = TcpListener::bind("127.0.0.1:0")?;
         let addr = listener.local_addr()?;
         let request_bytes = Arc::new(Mutex::new(Vec::new()));
