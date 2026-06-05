@@ -9,15 +9,15 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
 use std::collections::HashMap;
 
 /// State of a workflow node
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum NodeState {
     /// Node is idle, waiting to be executed
+    #[default]
     Idle,
     /// Node is waiting for input data
     WaitingForInput,
@@ -29,12 +29,6 @@ pub enum NodeState {
     Failed,
     /// Node was skipped (condition not met)
     Skipped,
-}
-
-impl Default for NodeState {
-    fn default() -> Self {
-        Self::Idle
-    }
 }
 
 /// Result of node execution
@@ -167,14 +161,12 @@ pub trait WorkflowNode: Send + Sync {
     /// Validate inputs before execution
     fn validate_inputs(&self, inputs: &HashMap<String, Value>) -> Result<()> {
         for port in self.inputs() {
-            if port.required && !inputs.contains_key(&port.id) {
-                if port.default_value.is_none() {
-                    return Err(anyhow::anyhow!(
-                        "Required input '{}' not provided for node '{}'",
-                        port.id,
-                        self.id()
-                    ));
-                }
+            if port.required && !inputs.contains_key(&port.id) && port.default_value.is_none() {
+                return Err(anyhow::anyhow!(
+                    "Required input '{}' not provided for node '{}'",
+                    port.id,
+                    self.id()
+                ));
             }
         }
         Ok(())

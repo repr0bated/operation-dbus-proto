@@ -25,6 +25,12 @@ pub struct SseEvent {
     pub data: String,
 }
 
+impl Default for SseEventBroadcaster {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SseEventBroadcaster {
     pub fn new() -> Self {
         let (tx, _) = broadcast::channel(100);

@@ -5,15 +5,13 @@ use anyhow::Result;
 use async_trait::async_trait;
 use pocketflow_rs::{Context, Flow, Node, ProcessResult, ProcessState};
 use serde_json;
-use simd_json::prelude::*;
-use simd_json::OwnedValue as Value;
 use std::sync::Arc;
-use tracing::{error, info, warn};
 
 /// Workflow states for MCP operations
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum McpWorkflowState {
     /// Initial state
+    #[default]
     Start,
     /// Code analysis completed
     CodeAnalyzed,
@@ -29,12 +27,6 @@ pub enum McpWorkflowState {
     Failure,
     /// Awaiting user input
     AwaitingInput,
-}
-
-impl Default for McpWorkflowState {
-    fn default() -> Self {
-        McpWorkflowState::Start
-    }
 }
 
 impl ProcessState for McpWorkflowState {
@@ -274,7 +266,7 @@ impl Node for DeploymentNode {
         Ok(())
     }
 
-    async fn execute(&self, context: &Context) -> Result<serde_json::Value> {
+    async fn execute(&self, _context: &Context) -> Result<serde_json::Value> {
         log::info!("⚡ Deploying system changes");
 
         // Simulate deployment
@@ -315,6 +307,12 @@ impl Node for DeploymentNode {
 /// MCP Development Workflow Manager
 pub struct McpWorkflowManager {
     flows: std::collections::HashMap<String, Flow<McpWorkflowState>>,
+}
+
+impl Default for McpWorkflowManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl McpWorkflowManager {
@@ -399,7 +397,7 @@ mod tests {
         let mut context = Context::new();
         context.set(
             "code",
-            Value::String("fn main() { println!(\"Hello\"); }".to_string()),
+            serde_json::Value::String("fn main() { println!(\"Hello\"); }".to_string()),
         );
 
         // This would run the full workflow in a real test

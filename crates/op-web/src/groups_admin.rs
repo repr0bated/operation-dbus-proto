@@ -8,9 +8,9 @@
 //! - Real-time tool count tracking
 
 use axum::{
-    extract::{ConnectInfo, State},
+    extract::{ConnectInfo},
     response::{Html, Json},
-    routing::{get, post},
+    routing::{get},
     Router,
 };
 use serde::{Deserialize, Serialize};

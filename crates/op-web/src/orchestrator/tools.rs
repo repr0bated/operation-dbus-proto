@@ -184,6 +184,7 @@ Example:
     /// Build system prompt with tool context
     ///
     /// Combines the base prompt with the injected tool list.
+    #[allow(dead_code)]
     pub(crate) fn build_system_prompt(&self, tool_list: &str) -> String {
         let base_prompt = self.config.system_prompt.clone().unwrap_or_else(|| {
             "You are a helpful system administration assistant with access to various tools."

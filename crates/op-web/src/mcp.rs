@@ -30,6 +30,12 @@ pub struct SseBroadcaster {
     tx: broadcast::Sender<String>,
 }
 
+impl Default for SseBroadcaster {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SseBroadcaster {
     pub fn new() -> Self {
         let (tx, _) = broadcast::channel(100);
@@ -45,7 +51,7 @@ impl SseBroadcaster {
     }
 }
 
-/// Global SSE broadcaster
+// Global SSE broadcaster
 lazy_static::lazy_static! {
     static ref GLOBAL_BROADCASTER: SseBroadcaster = SseBroadcaster::new();
 }

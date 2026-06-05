@@ -67,7 +67,7 @@ fn sanitize_header_for_log(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len().min(MAX) + 8);
     for (i, b) in raw.bytes().enumerate() {
         if i >= MAX {
-            out.push_str("\u{2026}"); // ellipsis
+            out.push('\u{2026}'); // ellipsis
             break;
         }
         if (0x20..0x7f).contains(&b) && b != b'\\' {

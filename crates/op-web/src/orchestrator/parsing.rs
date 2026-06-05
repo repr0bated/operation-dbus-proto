@@ -11,6 +11,7 @@ impl UnifiedOrchestrator {
     /// - XML tags: `<tool_call>name({args})</tool_call>`
     /// - Code blocks: ` ```tool ... ``` `
     /// - Direct calls: `tool_name({args})`
+    #[allow(dead_code)]
     pub(crate) fn extract_tool_calls_from_text(
         &self,
         text: &str,
@@ -67,6 +68,7 @@ impl UnifiedOrchestrator {
     }
 
     /// Parse function call patterns from text
+    #[allow(dead_code)]
     pub(crate) fn parse_function_calls(
         &self,
         text: &str,
