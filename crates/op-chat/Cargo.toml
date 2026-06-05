@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 description = "Chat functionality and LLM integration for op-dbus-v2"
 
+[features]
+default = []
+backtrace = []
+
 [dependencies]
 # Workspace dependencies
 tokio = { workspace = true, features = ["full"] }

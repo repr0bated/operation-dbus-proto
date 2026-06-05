@@ -35,7 +35,7 @@ reqwest.workspace = true
 zbus = { workspace = true }
 
 # CLI
-clap = { version = "4.0", features = ["derive"] }
+clap = { version = "4.0", features = ["derive", "env"] }
 
 # gRPC (optional)
 tonic = { workspace = true, optional = true }
