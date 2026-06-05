@@ -6,9 +6,8 @@
 use crate::interfaces::{DbusReader, RawEntity, SourceReader};
 use anyhow::Result;
 use simd_json::json;
-use std::collections::HashMap;
-use tracing::{debug, warn};
-use zbus::fdo::{DBusProxy, IntrospectableProxy};
+use tracing::debug;
+use zbus::fdo::IntrospectableProxy;
 use zbus::Connection;
 
 /// Reader that extracts state from the D-Bus system bus.
@@ -27,6 +26,7 @@ impl SystemDbusReader {
     }
 
     /// Helper to introspect a D-Bus path
+    #[allow(dead_code)]
     async fn introspect(
         &self,
         conn: &Connection,
@@ -72,8 +72,7 @@ impl SystemDbusReader {
                 data: json!({
                     "service": service,
                     "path": child_path,
-                })
-                .into(),
+                }),
                 source: self.source.clone(),
             });
         }
@@ -99,7 +98,7 @@ impl SourceReader for SystemDbusReader {
         Ok(RawEntity {
             entity_type: "dbus.object".to_string(),
             entity_id: entity_id.to_string(),
-            data: json!({ "properties": {} }).into(),
+            data: json!({ "properties": {} }),
             source: self.source.clone(),
         })
     }
@@ -122,7 +121,7 @@ impl DbusReader for SystemDbusReader {
         Ok(RawEntity {
             entity_type: "dbus.object".to_string(),
             entity_id: path.to_string(),
-            data: json!({ "properties": {} }).into(),
+            data: json!({ "properties": {} }),
             source: self.source.clone(),
         })
     }

@@ -40,7 +40,7 @@ impl SourceReader for SystemGrpcReader {
         Ok(RawEntity {
             entity_type: "grpc.service".to_string(),
             entity_id: entity_id.to_string(),
-            data: json!({ "methods": [] }).into(),
+            data: json!({ "methods": [] }),
             source: self.source.clone(),
         })
     }

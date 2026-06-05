@@ -291,8 +291,7 @@ impl SystemPluginReader {
                             "parent_id": parent_id,
                             "object_path": path,
                             "value": value.clone(),
-                        })
-                        .into(),
+                        }),
                         source: source.to_string(),
                     });
                 }
@@ -327,8 +326,7 @@ impl SystemPluginReader {
                             "parent_id": parent_id,
                             "object_path": path,
                             "value": value.clone(),
-                        })
-                        .into(),
+                        }),
                         source: source.to_string(),
                     });
                 }

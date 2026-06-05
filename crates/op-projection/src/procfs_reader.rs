@@ -7,7 +7,7 @@ use crate::interfaces::{ProcfsReader, RawEntity, SourceReader};
 use anyhow::Result;
 use simd_json::json;
 use std::fs;
-use tracing::{debug, warn};
+use tracing::debug;
 
 /// Reader that extracts state from the /proc filesystem.
 #[derive(Debug, Clone)]
@@ -98,7 +98,7 @@ impl ProcfsReader for SystemProcfsReader {
                         processes.push(RawEntity {
                             entity_type: "system.process".to_string(),
                             entity_id: pid,
-                            data: json!({ "name": comm }).into(),
+                            data: json!({ "name": comm }),
                             source: self.source.clone(),
                         });
                     }
@@ -141,7 +141,7 @@ impl ProcfsReader for SystemProcfsReader {
         Ok(RawEntity {
             entity_type: "system.memory".to_string(),
             entity_id: "current".to_string(),
-            data: json!({ "total_kb": total_kb, "free_kb": free_kb }).into(),
+            data: json!({ "total_kb": total_kb, "free_kb": free_kb }),
             source: self.source.clone(),
         })
     }
@@ -170,7 +170,7 @@ impl ProcfsReader for SystemProcfsReader {
         Ok(RawEntity {
             entity_type: "system.cpu".to_string(),
             entity_id: "current".to_string(),
-            data: json!({ "cores": cores, "model": model }).into(),
+            data: json!({ "cores": cores, "model": model }),
             source: self.source.clone(),
         })
     }
@@ -188,7 +188,7 @@ impl ProcfsReader for SystemProcfsReader {
         Ok(RawEntity {
             entity_type: "system.filesystems".to_string(),
             entity_id: "current".to_string(),
-            data: json!({ "types": fs_types }).into(),
+            data: json!({ "types": fs_types }),
             source: self.source.clone(),
         })
     }
@@ -208,7 +208,7 @@ impl ProcfsReader for SystemProcfsReader {
         Ok(RawEntity {
             entity_type: "system.network".to_string(),
             entity_id: "current".to_string(),
-            data: json!({ "interfaces": interfaces }).into(),
+            data: json!({ "interfaces": interfaces }),
             source: self.source.clone(),
         })
     }

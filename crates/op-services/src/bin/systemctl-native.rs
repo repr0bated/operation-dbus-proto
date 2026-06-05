@@ -26,7 +26,7 @@ async fn main() -> anyhow::Result<()> {
             let name = args
                 .get(2)
                 .ok_or_else(|| anyhow::anyhow!("missing service name"))?;
-            let result: String = proxy.call("Start", &(name.as_str(),)).await?;
+            let _result: String = proxy.call("Start", &(name.as_str(),)).await?;
             println!("Started {}", name);
         }
         "stop" => {

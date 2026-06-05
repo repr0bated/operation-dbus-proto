@@ -9,9 +9,10 @@ use parking_lot::Mutex;
 use std::sync::Arc;
 use tracing::{info, warn, Level};
 
-// Builtin schemas from op-state-store — the absolute base for all projections.
-use op_state_store;
 use tracing_subscriber::FmtSubscriber;
+
+// builtin_plugin_schemas is used from op_state_store
+use op_state_store::builtin_plugin_schemas;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -202,7 +203,7 @@ async fn main() -> Result<()> {
     // Register all builtin schemas from op-state-store so the shm catalog
     // is the single source of truth for UI, blockchain, everything.
     // These include web_ui, mcp, wireguard, incus, openflow, etc.
-    for runtime_schema in op_state_store::builtin_plugin_schemas() {
+    for runtime_schema in builtin_plugin_schemas() {
         let schema = convert_schema(&runtime_schema);
         register_schema_if_missing(&mut schema_engine, schema)?;
     }

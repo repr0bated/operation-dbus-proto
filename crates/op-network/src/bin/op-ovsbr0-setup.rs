@@ -269,10 +269,7 @@ async fn delete_bridge(client: &mut Client, bridge: &str) -> Result<()> {
         return Ok(());
     };
 
-    let port_uuids: Vec<Uuid> = ports_val
-        .as_ref()
-        .map(extract_uuids)
-        .unwrap_or_default();
+    let port_uuids: Vec<Uuid> = ports_val.as_ref().map(extract_uuids).unwrap_or_default();
     let mut iface_uuids: Vec<Uuid> = Vec::new();
     for p_uuid in &port_uuids {
         if let Some(row) = client.idl().row("Port", p_uuid) {

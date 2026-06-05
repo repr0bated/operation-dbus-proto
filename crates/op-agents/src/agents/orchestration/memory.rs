@@ -31,10 +31,10 @@ pub struct MemoryEntry {
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub enum MemoryType {
-    Ephemeral,  // Session-based, may expire
+    Ephemeral, // Session-based, may expire
     #[default]
     Persistent, // Permanent storage
-    Shared,     // Cross-session shared
+    Shared,    // Cross-session shared
 }
 
 fn now_ts() -> u64 {

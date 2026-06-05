@@ -272,7 +272,7 @@ fn proto_to_schema_def(proto: &ServiceDef) -> anyhow::Result<schema::ServiceDef>
     let depends_on: Vec<ServiceName> = proto
         .depends_on
         .iter()
-        .map(|n| ServiceName::new(n))
+        .map(ServiceName::new)
         .collect::<Result<Vec<_>, _>>()?;
 
     Ok(schema::ServiceDef {

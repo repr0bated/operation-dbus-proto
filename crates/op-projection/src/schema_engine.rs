@@ -205,7 +205,7 @@ impl SchemaRegistry for SchemaEngine {
         // Add schema to registry
         self.schemas
             .entry(schema_name.clone())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(schema.clone());
 
         // Record audit entry
@@ -468,33 +468,25 @@ impl SchemaValidator {
     pub fn validate_constraints(&self, constraints: &[Constraint], value: &Value) -> Result<()> {
         for constraint in constraints {
             match (constraint, value) {
-                (Constraint::MinLength(min), Value::String(s)) => {
-                    if s.len() < *min {
-                        return Err(anyhow::anyhow!(
-                            "String length {} is less than minimum {}",
-                            s.len(),
-                            min
-                        ));
-                    }
+                (Constraint::MinLength(min), Value::String(s)) if s.len() < *min => {
+                    return Err(anyhow::anyhow!(
+                        "String length {} is less than minimum {}",
+                        s.len(),
+                        min
+                    ));
                 }
-                (Constraint::MaxLength(max), Value::String(s)) => {
-                    if s.len() > *max {
-                        return Err(anyhow::anyhow!(
-                            "String length {} exceeds maximum {}",
-                            s.len(),
-                            max
-                        ));
-                    }
+                (Constraint::MaxLength(max), Value::String(s)) if s.len() > *max => {
+                    return Err(anyhow::anyhow!(
+                        "String length {} exceeds maximum {}",
+                        s.len(),
+                        max
+                    ));
                 }
-                (Constraint::MinValue(min), Value::Static(StaticNode::I64(v))) => {
-                    if *v < *min {
-                        return Err(anyhow::anyhow!("Value {} is less than minimum {}", *v, min));
-                    }
+                (Constraint::MinValue(min), Value::Static(StaticNode::I64(v))) if *v < *min => {
+                    return Err(anyhow::anyhow!("Value {} is less than minimum {}", *v, min));
                 }
-                (Constraint::MaxValue(max), Value::Static(StaticNode::I64(v))) => {
-                    if *v > *max {
-                        return Err(anyhow::anyhow!("Value {} exceeds maximum {}", *v, max));
-                    }
+                (Constraint::MaxValue(max), Value::Static(StaticNode::I64(v))) if *v > *max => {
+                    return Err(anyhow::anyhow!("Value {} exceeds maximum {}", *v, max));
                 }
                 (Constraint::Pattern(pattern), Value::String(s)) => {
                     let regex = Regex::new(pattern)
@@ -507,14 +499,12 @@ impl SchemaValidator {
                         ));
                     }
                 }
-                (Constraint::Enum(values), Value::String(s)) => {
-                    if !values.contains(s) {
-                        return Err(anyhow::anyhow!(
-                            "Value '{}' is not in allowed values: {:?}",
-                            s,
-                            values
-                        ));
-                    }
+                (Constraint::Enum(values), Value::String(s)) if !values.contains(s) => {
+                    return Err(anyhow::anyhow!(
+                        "Value '{}' is not in allowed values: {:?}",
+                        s,
+                        values
+                    ));
                 }
                 _ => {
                     // Constraint doesn't apply to this value type
@@ -762,7 +752,7 @@ mod tests {
         };
 
         let result = validator
-            .validate_field(&field, &Value::String("test".to_string().into()))
+            .validate_field(&field, &Value::String("test".to_string()))
             .unwrap();
         assert!(result.valid);
     }
@@ -799,7 +789,7 @@ mod tests {
 
         let constraints = vec![Constraint::MinLength(5)];
         let result =
-            validator.validate_constraints(&constraints, &Value::String("test".to_string().into()));
+            validator.validate_constraints(&constraints, &Value::String("test".to_string()));
 
         assert!(result.is_err());
     }
@@ -811,7 +801,7 @@ mod tests {
 
         let constraints = vec![Constraint::MaxLength(3)];
         let result =
-            validator.validate_constraints(&constraints, &Value::String("test".to_string().into()));
+            validator.validate_constraints(&constraints, &Value::String("test".to_string()));
 
         assert!(result.is_err());
     }
@@ -823,7 +813,7 @@ mod tests {
 
         let constraints = vec![Constraint::Pattern("^test".to_string())];
         let result = validator
-            .validate_constraints(&constraints, &Value::String("other".to_string().into()));
+            .validate_constraints(&constraints, &Value::String("other".to_string()));
 
         assert!(result.is_err());
     }
@@ -835,7 +825,7 @@ mod tests {
 
         let constraints = vec![Constraint::Enum(vec!["a".to_string(), "b".to_string()])];
         let result =
-            validator.validate_constraints(&constraints, &Value::String("c".to_string().into()));
+            validator.validate_constraints(&constraints, &Value::String("c".to_string()));
 
         assert!(result.is_err());
     }

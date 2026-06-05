@@ -87,17 +87,7 @@ impl ResourceRegistry {
     }
 
     async fn generate_system_prompt(&self) -> String {
-        // Try to get from op_chat if available
-        #[cfg(feature = "op-chat")]
-        {
-            let msg = op_chat::generate_system_prompt(None).await;
-            return msg.content;
-        }
-
-        #[cfg(not(feature = "op-chat"))]
-        {
-            "You are a helpful assistant with access to system tools.".to_string()
-        }
+        "You are a helpful assistant with access to system tools.".to_string()
     }
 }
 

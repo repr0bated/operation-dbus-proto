@@ -1,7 +1,6 @@
 //! systemctl compatibility wrapper
 
 use std::env;
-use tonic::transport::Channel;
 
 use op_services::grpc::proto::service_manager_client::ServiceManagerClient;
 use op_services::grpc::proto::*;
@@ -35,7 +34,7 @@ async fn main() -> anyhow::Result<()> {
             let name = args
                 .get(2)
                 .ok_or_else(|| anyhow::anyhow!("missing service name"))?;
-            let resp = client.stop(StopRequest { name: name.clone() }).await?;
+            let _resp = client.stop(StopRequest { name: name.clone() }).await?;
             println!("Stopped {}", name);
         }
         "restart" => {
