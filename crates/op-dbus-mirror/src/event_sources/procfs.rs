@@ -6,7 +6,7 @@ use procfs::{Current, LoadAverage};
 use std::time::Duration;
 use tokio::sync::broadcast;
 use tokio::time;
-use tracing::{info, warn};
+use tracing::info;
 
 use crate::event::MirrorEvent;
 

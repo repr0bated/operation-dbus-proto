@@ -395,7 +395,7 @@ impl DbusMirror {
 
                 if let Some(rows) = table_data.get("rows").and_then(|r| r.as_array()) {
                     tracing::info!("DEBUG: OVSDB table {} has {} rows", table_name, rows.len());
-                    let rows_vec: Vec<_> = rows.iter().cloned().collect();
+                    let rows_vec: Vec<_> = rows.to_vec();
                     for (idx, row_data) in rows_vec.into_iter().enumerate() {
                         let row_id = Self::extract_uuid(&row_data);
                         let id = if row_id == "unknown" {
@@ -588,10 +588,7 @@ impl DbusMirror {
                 } else if cols.len() >= 8 && !current_iface.is_empty() {
                     // Peer line: iface pubkey preshared endpoint allowed_ips latest_handshake rx tx keepalive
                     let peer_key = cols[1];
-                    let safe_key = peer_key
-                        .replace('/', "_")
-                        .replace('+', "_")
-                        .replace('=', "");
+                    let safe_key = peer_key.replace(['/', '+'], "_").replace('=', "");
                     let path = format!(
                         "/org/opdbus/v1/network/wireguard/{}/peer/{}",
                         Self::sanitize_path_segment(&current_iface),
@@ -658,7 +655,7 @@ impl DbusMirror {
             let name_str = name.as_str();
             if name_str.starts_with(':')
                 || name_str.starts_with("org.opdbus")
-                || Self::SKIP_SERVICES.iter().any(|s| *s == name_str)
+                || Self::SKIP_SERVICES.contains(&name_str)
             {
                 continue;
             }
@@ -732,8 +729,7 @@ impl DbusMirror {
                 // Map the real object path into our namespace
                 let safe_obj = obj_path
                     .trim_start_matches('/')
-                    .replace('/', "_")
-                    .replace('-', "_");
+                    .replace(['/', '-'], "_");
                 let safe_svc = name_str.replace('.', "/").replace('-', "_");
                 let mirror_path = if safe_obj.is_empty() {
                     format!("/org/opdbus/v1/system/{}", safe_svc)
@@ -1051,8 +1047,8 @@ impl DbusMirror {
                 {
                     let _ = iface_ref.get_mut().await.update_data(data.clone());
                     // Emit PropertiesChanged with only changed fields
-                    let ctxt = iface_ref.signal_context();
-                    let _ = iface_ref.get().await.data_updated(ctxt).await;
+                    let emitter = iface_ref.signal_emitter();
+                    let _ = iface_ref.get().await.data_updated(emitter).await;
                     // Ensure the ObjectManager knows the properties changed as well
                     self.register_in_object_manager(path, &data).await;
                 }
@@ -1123,9 +1119,9 @@ impl DbusMirror {
             .await
         {
             Ok(iface_ref) => {
-                let ctxt = iface_ref.signal_context();
+                let emitter = iface_ref.signal_emitter();
                 if let Err(e) = ObjectManagerInterface::interfaces_added(
-                    ctxt,
+                    emitter,
                     op,
                     build_interface_map(&json_str),
                 )
@@ -1153,22 +1149,19 @@ impl DbusMirror {
             return; // was not a managed plugin object
         }
 
-        match self
+        if let Ok(iface_ref) = self
             .connection
             .object_server()
             .interface::<_, ObjectManagerInterface>(OBJECT_MANAGER_PATH)
             .await
         {
-            Ok(iface_ref) => {
-                let ctxt = iface_ref.signal_context();
-                let interfaces = vec![PROJECTED_IFACE.to_string()];
-                if let Err(e) =
-                    ObjectManagerInterface::interfaces_removed(ctxt, op, interfaces).await
-                {
-                    tracing::warn!("InterfacesRemoved signal failed for {path}: {e}");
-                }
+            let emitter = iface_ref.signal_emitter();
+            let interfaces = vec![PROJECTED_IFACE.to_string()];
+            if let Err(e) =
+                ObjectManagerInterface::interfaces_removed(emitter, op, interfaces).await
+            {
+                tracing::warn!("InterfacesRemoved signal failed for {path}: {e}");
             }
-            Err(_) => {}
         }
     }
 
