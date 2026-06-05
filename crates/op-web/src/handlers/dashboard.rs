@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use simd_json::prelude::ValueAsScalar;
 use std::process::Command;
 use std::sync::Arc;
-use tracing::error;
+
 
 use crate::projection_client;
 use crate::state::AppState;
@@ -47,51 +47,47 @@ pub async fn dashboard_metrics_handler(
         let mut memory = 0.0f32;
 
         // memory projection from /proc/meminfo: keys are lowercase, values are strings like "24019080 kB"
-        if let Some(mem_proj) = mem_proj {
-            if let simd_json::OwnedValue::Object(ref obj) = mem_proj {
-                let total_kb = obj
-                    .get("memtotal")
-                    .and_then(|v| {
-                        v.as_str().map(|s| {
-                            s.split_whitespace()
-                                .next()
-                                .unwrap_or("0")
-                                .parse::<u64>()
-                                .unwrap_or(0)
-                        })
+        if let Some(simd_json::OwnedValue::Object(ref obj)) = mem_proj {
+            let total_kb = obj
+                .get("memtotal")
+                .and_then(|v| {
+                    v.as_str().map(|s| {
+                        s.split_whitespace()
+                            .next()
+                            .unwrap_or("0")
+                            .parse::<u64>()
+                            .unwrap_or(0)
                     })
-                    .unwrap_or(0);
-                let free_kb = obj
-                    .get("memfree")
-                    .and_then(|v| {
-                        v.as_str().map(|s| {
-                            s.split_whitespace()
-                                .next()
-                                .unwrap_or("0")
-                                .parse::<u64>()
-                                .unwrap_or(0)
-                        })
+                })
+                .unwrap_or(0);
+            let free_kb = obj
+                .get("memfree")
+                .and_then(|v| {
+                    v.as_str().map(|s| {
+                        s.split_whitespace()
+                            .next()
+                            .unwrap_or("0")
+                            .parse::<u64>()
+                            .unwrap_or(0)
                     })
-                    .unwrap_or(0);
-                if total_kb > 0 {
-                    memory = ((total_kb - free_kb) as f32 / total_kb as f32) * 100.0;
-                }
+                })
+                .unwrap_or(0);
+            if total_kb > 0 {
+                memory = ((total_kb - free_kb) as f32 / total_kb as f32) * 100.0;
             }
         }
 
         // CPU load from /proc/loadavg projection: keys are "load1", "load5", "load15"
         // Values may be floats or strings depending on parser.
-        if let Some(load_proj) = load_proj {
-            if let simd_json::OwnedValue::Object(ref obj) = load_proj {
-                let load_1min = obj
-                    .get("load1")
-                    .and_then(|v| {
-                        as_f64(v).or_else(|| v.as_str().map(|s| s.parse::<f64>().unwrap_or(0.0)))
-                    })
-                    .unwrap_or(0.0) as f32;
-                // Approximate CPU % from load (assuming 8 cores)
-                cpu = (load_1min * 100.0 / 8.0).min(100.0);
-            }
+        if let Some(simd_json::OwnedValue::Object(ref obj)) = load_proj {
+            let load_1min = obj
+                .get("load1")
+                .and_then(|v| {
+                    as_f64(v).or_else(|| v.as_str().map(|s| s.parse::<f64>().unwrap_or(0.0)))
+                })
+                .unwrap_or(0.0) as f32;
+            // Approximate CPU % from load (assuming 8 cores)
+            cpu = (load_1min * 100.0 / 8.0).min(100.0);
         }
 
         (cpu, memory, "projection".to_string(), "live".to_string())
@@ -124,7 +120,7 @@ pub async fn dashboard_projections_handler(
 
 fn get_vpn_peer_count() -> usize {
     Command::new("wg")
-        .args(&["show", "wg0", "peers"])
+        .args(["show", "wg0", "peers"])
         .output()
         .ok()
         .map(|output| {
@@ -171,15 +167,6 @@ fn get_system_stats() -> (f32, f32) {
         .unwrap_or(0.0);
 
     (cpu, memory)
-}
-
-/// Extract u64 from simd_json OwnedValue.
-fn as_u64(v: &simd_json::OwnedValue) -> Option<u64> {
-    match v {
-        simd_json::OwnedValue::Static(simd_json::StaticNode::U64(n)) => Some(*n),
-        simd_json::OwnedValue::Static(simd_json::StaticNode::I64(n)) if *n >= 0 => Some(*n as u64),
-        _ => None,
-    }
 }
 
 /// Extract f64 from simd_json OwnedValue.

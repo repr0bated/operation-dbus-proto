@@ -170,6 +170,7 @@ fn parse_user_row(id: &str, row: &[DataValue]) -> Option<PrivacyUser> {
     })
 }
 
+#[allow(clippy::type_complexity)]
 fn user_to_cozo_fields(
     user: &PrivacyUser,
 ) -> (

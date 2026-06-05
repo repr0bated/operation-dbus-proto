@@ -1,11 +1,11 @@
 use super::types::ToolResult;
 use super::UnifiedOrchestrator;
 use simd_json::prelude::*;
-use simd_json::OwnedValue;
 use simd_json::OwnedValue as Value;
 
 impl UnifiedOrchestrator {
     /// Format results for display in the LLM context
+    #[allow(dead_code)]
     pub(crate) fn format_results(
         &self,
         llm_text: &str,
@@ -61,6 +61,7 @@ impl UnifiedOrchestrator {
     }
 
     /// Format a tool result for display
+    #[allow(dead_code)]
     pub(crate) fn format_tool_result(&self, data: &Value) -> String {
         if let Some(obj) = data.as_object() {
             let mut result = String::new();
@@ -103,6 +104,7 @@ impl UnifiedOrchestrator {
     }
 
     /// Format an array for display
+    #[allow(dead_code)]
     fn format_array(&self, arr: &[Value], max_items: usize) -> String {
         if arr.is_empty() {
             return "    *(empty list)*\n".to_string();
@@ -130,6 +132,7 @@ impl UnifiedOrchestrator {
     }
 
     /// Summarize an object into a single line
+    #[allow(dead_code)]
     fn summarize_object(&self, obj: &simd_json::value::owned::Object) -> String {
         // Look for common identifying fields
         let name_fields = [
@@ -175,6 +178,7 @@ impl UnifiedOrchestrator {
     }
 
     /// Format a single value for display
+    #[allow(dead_code)]
     fn format_value(&self, value: &Value) -> String {
         if let Some(s) = value.as_str() {
             if s.len() > 100 {
@@ -217,6 +221,7 @@ impl UnifiedOrchestrator {
     }
 
     /// Clean tool call syntax from LLM text
+    #[allow(dead_code)]
     pub(crate) fn clean_llm_text(&self, text: &str) -> String {
         let mut cleaned = text.to_string();
 

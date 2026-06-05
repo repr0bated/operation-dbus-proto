@@ -1,8 +1,7 @@
 use crate::state::AppState;
 use axum::{extract::Extension, response::Json};
-use serde::Serialize;
 use simd_json::json;
-use simd_json::prelude::*;
+use simd_json::prelude::ValueAsContainer;
 use simd_json::OwnedValue as Value;
 use std::sync::Arc;
 

@@ -7,14 +7,11 @@
 //! - Collects results
 
 use anyhow::Result;
-use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
-
-use crate::context::WorkflowContext;
 use crate::flow::{Workflow, WorkflowDefinition, WorkflowState};
 use crate::node::{NodeResult, NodeState, WorkflowNode};
 

@@ -3,13 +3,13 @@
 //! Handles user signup, magic link verification, and config download.
 
 use axum::{
-    extract::{Extension, Path, Query},
+    extract::{Extension, Query},
     http::StatusCode,
     response::{Html, Json, Redirect},
 };
 use oauth2::{
-    AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, PkceCodeChallenge,
-    PkceCodeVerifier, RedirectUrl, Scope, TokenResponse, TokenUrl,
+    AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken,
+    RedirectUrl, Scope, TokenResponse, TokenUrl,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;

@@ -205,7 +205,7 @@ impl UnifiedOrchestrator {
         }
 
         match self.tool_registry.get(tool_name).await {
-            Some(tool) => {
+            Some(_tool) => {
                 let def = self.tool_registry.get_definition(tool_name).await.unwrap();
                 ToolResult {
                     name: "get_tool_schema".to_string(),

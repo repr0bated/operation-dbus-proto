@@ -25,7 +25,7 @@ impl DbusMethodNode {
             id: id.to_string(),
             name: format!(
                 "{}.{}",
-                interface.split('.').last().unwrap_or(interface),
+                interface.split('.').next_back().unwrap_or(interface),
                 method
             ),
             service: service.to_string(),

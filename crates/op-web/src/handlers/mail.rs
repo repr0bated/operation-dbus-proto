@@ -4,7 +4,6 @@ use axum::{extract::Extension, response::Json};
 use serde::{Deserialize, Serialize};
 use std::process::Command;
 use std::sync::Arc;
-use tracing::{error, warn};
 
 use crate::state::AppState;
 
@@ -31,7 +30,7 @@ pub struct MailQueueItem {
 pub async fn mail_status_handler(Extension(_state): Extension<Arc<AppState>>) -> Json<MailStatus> {
     // Check if maddy is running in container
     let running = Command::new("incus")
-        .args(&[
+        .args([
             "exec",
             "crd-astral",
             "--",

@@ -9,7 +9,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use simd_json::OwnedValue as Value;
 use std::sync::Arc;
-use tracing::{info, warn};
+use tracing::info;
 
 use crate::state::AppState;
 
