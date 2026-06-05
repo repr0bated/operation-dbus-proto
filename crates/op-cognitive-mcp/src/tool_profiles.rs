@@ -5,10 +5,11 @@
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolProfile {
     Minimal,
+    #[default]
     Standard,
     Full,
 }
@@ -32,12 +33,6 @@ impl std::str::FromStr for ToolProfile {
             "full" | "all" => Self::Full,
             _ => Self::Standard,
         })
-    }
-}
-
-impl Default for ToolProfile {
-    fn default() -> Self {
-        Self::Standard
     }
 }
 

@@ -9,7 +9,7 @@
 //! context-aware assistance to connected clients.
 
 use crate::context_awareness::{
-    ActivityEvent, ActivityType, ContextAwarenessConfig, ContextAwarenessEngine, KnowledgePush,
+    ActivityEvent, ActivityType, ContextAwarenessConfig, ContextAwarenessEngine,
 };
 use crate::memory_store::CognitiveMemoryStore;
 use crate::rag_pipeline::RagPipeline;
@@ -20,14 +20,11 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::convert::Infallible;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::broadcast;
-use tokio_stream::wrappers::BroadcastStream;
-use tokio_stream::StreamExt as _;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 /// Server state shared across request handlers
 #[derive(Clone)]
@@ -276,12 +273,10 @@ async fn context_health(State(state): State<ContextServerState>) -> Json<serde_j
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[tokio::test]
     async fn should_create_context_server() {
         // This would require setting up the full infrastructure
         // For now, just verify the module compiles
-        assert!(true);
+        let _ = ();
     }
 }

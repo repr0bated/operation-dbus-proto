@@ -186,7 +186,7 @@ async fn handle_sse_event(event_type: &str, data: &str) {
             info!("⚠️  SSE stream disconnected");
         }
         _ => {
-            debug!(event_type = event_type, data = data, "SSE event");
+            tracing::debug!(event_type = event_type, data = data, "SSE event");
         }
     }
 }
@@ -211,7 +211,7 @@ async fn simulate_activities(client: &Client, cli: &Cli) -> Result<(), Box<dyn s
     sleep(Duration::from_secs(2)).await;
 
     // Simulate queries with different topics (to trigger new_topic detection)
-    let topics = vec![
+    let topics = [
         "How does database connection pooling work?",
         "Configure PostgreSQL with connection limits",
         "What are the best practices for async database access?",

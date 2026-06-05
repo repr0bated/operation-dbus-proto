@@ -352,7 +352,7 @@ impl ActivityFilter {
         }
 
         // PII gate — chain yes, Qdrant no
-        let pii = schema.map_or(false, |s| is_pii(s, event.field.as_deref()));
+        let pii = schema.is_some_and(|s| is_pii(s, event.field.as_deref()));
         if pii {
             return Ok(FilterDecision::EmitChainOnly(sig));
         }
@@ -363,7 +363,7 @@ impl ActivityFilter {
     async fn evict_expired(&self, t: &FilterTunables) {
         let cutoff = Utc::now() - Duration::seconds(t.dedup_window_secs);
         let mut w = self.window.write().await;
-        while w.front().map_or(false, |e| e.timestamp < cutoff) {
+        while w.front().is_some_and(|e| e.timestamp < cutoff) {
             w.pop_front();
         }
     }

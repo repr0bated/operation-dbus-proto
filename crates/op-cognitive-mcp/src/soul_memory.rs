@@ -116,7 +116,7 @@ impl SoulMemoryStore {
         let mut p: Params = BTreeMap::new();
         p.insert("id".into(), DataValue::Str(agent_id.into()));
         let rows = self.run(q, p).context("get soul")?;
-        Ok(rows.rows.first().map(row_to_soul))
+        Ok(rows.rows.first().map(|r| row_to_soul(r)))
     }
 
     pub async fn delete_soul(&self, agent_id: &str) -> Result<bool> {
@@ -137,7 +137,7 @@ impl SoulMemoryStore {
             :order agent_id
         "#;
         let rows = self.run(q, BTreeMap::new()).context("list souls")?;
-        Ok(rows.rows.iter().map(row_to_soul).collect())
+        Ok(rows.rows.iter().map(|r| row_to_soul(r)).collect())
     }
 
     // ── Agent → Namespace binding ────────────────────────────────────────────
@@ -183,7 +183,7 @@ impl SoulMemoryStore {
         let mut p: Params = BTreeMap::new();
         p.insert("id".into(), DataValue::Str(agent_id.into()));
         let rows = self.run(q, p).context("get binding")?;
-        Ok(rows.rows.first().map(row_to_binding))
+        Ok(rows.rows.first().map(|r| row_to_binding(r)))
     }
 
     pub async fn clear_binding(&self, agent_id: &str) -> Result<bool> {
@@ -207,13 +207,13 @@ impl SoulMemoryStore {
             :order agent_id
         "#;
         let rows = self.run(q, BTreeMap::new()).context("list bindings")?;
-        Ok(rows.rows.iter().map(row_to_binding).collect())
+        Ok(rows.rows.iter().map(|r| row_to_binding(r)).collect())
     }
 }
 
 // ── Row → struct ────────────────────────────────────────────────────────────
 
-fn row_to_soul(row: &Vec<DataValue>) -> SoulMemory {
+fn row_to_soul(row: &[DataValue]) -> SoulMemory {
     SoulMemory {
         agent_id: dv_str(&row[0]),
         identity: dv_str(&row[1]),
@@ -225,7 +225,7 @@ fn row_to_soul(row: &Vec<DataValue>) -> SoulMemory {
     }
 }
 
-fn row_to_binding(row: &Vec<DataValue>) -> AgentNamespaceBinding {
+fn row_to_binding(row: &[DataValue]) -> AgentNamespaceBinding {
     AgentNamespaceBinding {
         agent_id: dv_str(&row[0]),
         namespace: dv_str(&row[1]),

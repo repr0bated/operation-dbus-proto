@@ -317,7 +317,7 @@ impl RagPipeline {
             .qdrant
             .upsert_points(UpsertPointsBuilder::new(
                 collection,
-                batch.drain(..).collect::<Vec<_>>(),
+                std::mem::take(batch),
             ))
             .await
         {
@@ -675,7 +675,7 @@ fn extract_go(lines: &[String]) -> (Vec<String>, Vec<String>, Vec<String>) {
         }
         if let Some(caps) = re_imp.captures(trimmed) {
             let pkg = caps.get(1).map(|m| m.as_str()).unwrap_or("");
-            let top = pkg.split('/').last().unwrap_or(pkg).to_string();
+            let top = pkg.split('/').next_back().unwrap_or(pkg).to_string();
             if !imports.contains(&top) {
                 imports.push(top);
             }

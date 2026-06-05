@@ -231,22 +231,11 @@ async fn main() -> Result<()> {
 }
 
 fn list_repomix_entries(zip_path: &std::path::Path) -> Result<Vec<(String, String)>> {
-    let file = std::fs::File::open(zip_path)?;
-    let archive = zip::ZipArchive::new(file)?;
-
-    let mut entries: Vec<(String, String)> = (0..archive.len())
-        .filter_map(|i| {
-            // archive is consumed when calling by_index, but we just need names
-            // We can't call by_index here without &mut — collect names first
-            None::<(String, String)> // placeholder
-        })
-        .collect();
-
-    // Re-open to list names
+    // Open archive to list entries
     let file = std::fs::File::open(zip_path)?;
     let mut archive = zip::ZipArchive::new(file)?;
 
-    entries = (0..archive.len())
+    let mut entries: Vec<(String, String)> = (0..archive.len())
         .filter_map(|i| {
             let entry = archive.by_index(i).ok()?;
             let name = entry.name().to_string();

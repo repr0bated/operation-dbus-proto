@@ -22,7 +22,7 @@
 
 use clap::Parser;
 use op_cognitive_mcp::client_config::{
-    ClientConfig, ClientType, CognitiveMcpClient, CognitiveMcpClientFactory,
+    ClientConfig, CognitiveMcpClient, CognitiveMcpClientFactory,
 };
 use serde_json::json;
 use tracing::{error, info, warn};

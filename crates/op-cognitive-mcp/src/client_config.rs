@@ -43,7 +43,6 @@ use anyhow::{Context, Result};
 use reqwest::{Client as HttpClient, ClientBuilder};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
@@ -620,8 +619,6 @@ impl CognitiveMcpClient {
         &self,
         calls: Vec<(&str, Value)>,
     ) -> Result<Vec<(String, Result<Value>)>> {
-        use tokio::join;
-
         let futures: Vec<_> = calls
             .into_iter()
             .map(|(name, params)| async move {
