@@ -1,0 +1,102 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://opdbus.org/schemas/plugin/net.json",
+  "title": "Network Plugin Schema",
+  "description": "Network interface management plugin - manages network interfaces via rtnetlink",
+  "type": "object",
+  "required": ["name", "version", "plugin_type"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "const": "net",
+      "description": "Plugin identifier"
+    },
+    "version": {
+      "type": "string",
+      "default": "1.0.0",
+      "description": "Plugin version"
+    },
+    "plugin_type": {
+      "type": "string",
+      "const": "network",
+      "description": "Plugin type"
+    },
+    "description": {
+      "type": "string",
+      "default": "Network interface management via rtnetlink",
+      "description": "Plugin description"
+    },
+    "dbus_path": {
+      "type": "string",
+      "const": "/org/opdbus/v1/plugin/plugins/net",
+      "description": "D-Bus object path"
+    },
+    "dependencies": {
+      "type": "array",
+      "default": [],
+      "description": "Plugin dependencies"
+    },
+    "capabilities": {
+      "type": "object",
+      "properties": {
+        "can_read": { "type": "boolean", "default": true },
+        "can_write": { "type": "boolean", "default": true },
+        "can_delete": { "type": "boolean", "default": false },
+        "requires_root": { "type": "boolean", "default": true }
+      }
+    },
+    "interfaces": {
+      "type": "array",
+      "description": "List of network interfaces",
+      "items": {
+        "type": "object",
+        "required": ["name", "type"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Interface name",
+            "example": "eth0",
+            "readOnly": true
+          },
+          "type": {
+            "type": "string",
+            "enum": ["ethernet", "bridge", "veth", "vlan", "bond"],
+            "description": "Interface type",
+            "default": "ethernet",
+            "example": "ethernet",
+            "readOnly": true
+          },
+          "state": {
+            "type": "string",
+            "enum": ["up", "down"],
+            "description": "Interface state",
+            "default": "up",
+            "example": "up"
+          },
+          "addresses": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "IP addresses in CIDR notation",
+            "default": [],
+            "example": ["192.168.1.100/24"]
+          }
+        }
+      }
+    }
+  },
+  "example": {
+    "name": "net",
+    "version": "1.0.0",
+    "plugin_type": "network",
+    "description": "Network interface management via rtnetlink",
+    "dbus_path": "/org/opdbus/v1/plugin/plugins/net",
+    "interfaces": [
+      {
+        "name": "eth0",
+        "type": "ethernet",
+        "state": "up",
+        "addresses": ["192.168.1.100/24"]
+      }
+    ]
+  }
+}

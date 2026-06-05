@@ -13,8 +13,11 @@ import type { RpcOptions, ServerStreamingCall, UnaryCall } from "@protobuf-ts/ru
 
 // ── Transport Configuration ─────────────────────────────────────────────────
 
+// In development, use relative URL so Vite proxy forwards to backend.
+// In production, use the deployed gateway URL.
+const isDev = typeof window !== "undefined" && window.location.hostname === "localhost";
 const GRPC_BASE_URL =
-  import.meta.env.VITE_GRPC_BASE_URL || "https://dashboard.3tched.com";
+  import.meta.env.VITE_GRPC_BASE_URL || (isDev ? "" : "https://dashboard.3tched.com");
 
 let _transport: GrpcWebFetchTransport | null = null;
 

@@ -1,0 +1,92 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://opdbus.org/schemas/plugin/s6.json",
+  "title": "s6 Plugin Schema",
+  "description": "s6 service management plugin - manages s6 supervision services",
+  "type": "object",
+  "required": ["name", "version", "plugin_type"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "const": "s6",
+      "description": "Plugin identifier"
+    },
+    "version": {
+      "type": "string",
+      "default": "1.0.0",
+      "description": "Plugin version"
+    },
+    "plugin_type": {
+      "type": "string",
+      "const": "service",
+      "description": "Plugin type"
+    },
+    "description": {
+      "type": "string",
+      "default": "s6 service management",
+      "description": "Plugin description"
+    },
+    "dbus_path": {
+      "type": "string",
+      "const": "/org/opdbus/v1/plugin/plugins/s6",
+      "description": "D-Bus object path"
+    },
+    "dependencies": {
+      "type": "array",
+      "default": [],
+      "description": "Plugin dependencies"
+    },
+    "capabilities": {
+      "type": "object",
+      "properties": {
+        "can_read": { "type": "boolean", "default": true },
+        "can_write": { "type": "boolean", "default": true },
+        "can_delete": { "type": "boolean", "default": false },
+        "requires_root": { "type": "boolean", "default": true }
+      }
+    },
+    "units": {
+      "type": "array",
+      "description": "s6 services",
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Unit name",
+            "example": "nginx.service",
+            "readOnly": true
+          },
+          "state": {
+            "type": "string",
+            "enum": ["active", "inactive", "failed"],
+            "description": "Desired unit state",
+            "default": "active",
+            "example": "active"
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether unit is enabled at boot",
+            "default": true,
+            "example": true
+          }
+        }
+      }
+    }
+  },
+  "example": {
+    "name": "s6",
+    "version": "1.0.0",
+    "plugin_type": "service",
+    "description": "s6 service management",
+    "dbus_path": "/org/opdbus/v1/plugin/plugins/s6",
+    "units": [
+      {
+        "name": "nginx",
+        "state": "active",
+        "enabled": true
+      }
+    ]
+  }
+}

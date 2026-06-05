@@ -13,8 +13,8 @@ use op_state::{
     ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
 };
 use serde::{Deserialize, Serialize};
-use simd_json::{json, OwnedValue as Value};
 use simd_json::prelude::*;
+use simd_json::{json, OwnedValue as Value};
 use std::collections::HashMap;
 
 /// OpenFlow obfuscation configuration
@@ -462,14 +462,29 @@ impl StatePlugin for OpenFlowObfuscationPlugin {
         for flow in &flows {
             let cmd = self.flow_to_command(flow);
             log::debug!("Flow: {} ({})", cmd, flow.description);
-            changes_applied.push(format!("  [T{}:P{}] {}", flow.table, flow.priority, flow.description));
+            changes_applied.push(format!(
+                "  [T{}:P{}] {}",
+                flow.table, flow.priority, flow.description
+            ));
         }
 
         changes_applied.push(format!(
             "Obfuscation breakdown: {} security, {} pattern-hiding, {} advanced, {} forwarding",
-            if self.config.obfuscation_level >= 1 { 11 } else { 0 },
-            if self.config.obfuscation_level >= 2 { 3 } else { 0 },
-            if self.config.obfuscation_level >= 3 { 4 } else { 0 },
+            if self.config.obfuscation_level >= 1 {
+                11
+            } else {
+                0
+            },
+            if self.config.obfuscation_level >= 2 {
+                3
+            } else {
+                0
+            },
+            if self.config.obfuscation_level >= 3 {
+                4
+            } else {
+                0
+            },
             self.config.privacy_ports.len() * 2 + 1,
         ));
 

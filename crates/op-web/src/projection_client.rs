@@ -29,7 +29,8 @@ fn plugin_ids_from_schema() -> Vec<String> {
     };
     let mut bytes = bytes;
     match simd_json::to_owned_value(&mut bytes) {
-        Ok(Value::Object(map)) => map.keys()
+        Ok(Value::Object(map)) => map
+            .keys()
             .filter(|k| *k != "schema_renderer")
             .map(|k| k.to_string())
             .collect(),
@@ -49,7 +50,10 @@ pub async fn start_projection_monitor(cache: ProjectionCache) {
         }
     };
 
-    info!("Connected to system D-Bus; starting projection monitor for {}", PLUGIN_ROOT);
+    info!(
+        "Connected to system D-Bus; starting projection monitor for {}",
+        PLUGIN_ROOT
+    );
 
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
     loop {

@@ -1,0 +1,190 @@
+{
+  "interface": "org.op_dbus.CrateInterface",
+  "methods": [
+    {
+      "name": "Connect",
+      "args": [
+        {
+          "name": "addr",
+          "type": "s",
+          "direction": "in"
+        },
+        {
+          "name": "result",
+          "type": "s",
+          "direction": "out"
+        }
+      ]
+    },
+    {
+      "name": "Version",
+      "args": [
+        {
+          "name": "result",
+          "type": "s",
+          "direction": "out"
+        }
+      ]
+    },
+    {
+      "name": "Send_message",
+      "args": [
+        {
+          "name": "msg",
+          "type": "s",
+          "direction": "in"
+        },
+        {
+          "name": "result",
+          "type": "s",
+          "direction": "out"
+        }
+      ]
+    },
+    {
+      "name": "Recv_message",
+      "args": [
+        {
+          "name": "result",
+          "type": "s",
+          "direction": "out"
+        }
+      ]
+    },
+    {
+      "name": "Send_flow",
+      "args": [
+        {
+          "name": "flow",
+          "type": "s",
+          "direction": "in"
+        },
+        {
+          "name": "result",
+          "type": "s",
+          "direction": "out"
+        }
+      ]
+    },
+    {
+      "name": "Send_flow_sync",
+      "args": [
+        {
+          "name": "flow",
+          "type": "s",
+          "direction": "in"
+        },
+        {
+          "name": "result",
+          "type": "s",
+          "direction": "out"
+        }
+      ]
+    },
+    {
+      "name": "Echo",
+      "args": [
+        {
+          "name": "result",
+          "type": "s",
+          "direction": "out"
+        }
+      ]
+    },
+    {
+      "name": "Barrier",
+      "args": [
+        {
+          "name": "result",
+          "type": "s",
+          "direction": "out"
+        }
+      ]
+    },
+    {
+      "name": "Dump_flows",
+      "args": [
+        {
+          "name": "result",
+          "type": "a",
+          "direction": "out"
+        }
+      ]
+    },
+    {
+      "name": "Dump_flows_filtered",
+      "args": [
+        {
+          "name": "request",
+          "type": "s",
+          "direction": "in"
+        },
+        {
+          "name": "result",
+          "type": "a",
+          "direction": "out"
+        }
+      ]
+    },
+    {
+      "name": "Recv_packet_in",
+      "args": [
+        {
+          "name": "result",
+          "type": "s",
+          "direction": "out"
+        }
+      ]
+    },
+    {
+      "name": "Try_recv_packet_in",
+      "args": [
+        {
+          "name": "result",
+          "type": "s",
+          "direction": "out"
+        }
+      ]
+    },
+    {
+      "name": "Monitor_flows",
+      "args": [
+        {
+          "name": "request",
+          "type": "s",
+          "direction": "in"
+        },
+        {
+          "name": "result",
+          "type": "a",
+          "direction": "out"
+        }
+      ]
+    },
+    {
+      "name": "Recv_flow_updates",
+      "args": [
+        {
+          "name": "result",
+          "type": "a",
+          "direction": "out"
+        }
+      ]
+    },
+    {
+      "name": "Send_packet_out",
+      "args": [
+        {
+          "name": "packet_out",
+          "type": "s",
+          "direction": "in"
+        },
+        {
+          "name": "result",
+          "type": "s",
+          "direction": "out"
+        }
+      ]
+    }
+  ]
+}

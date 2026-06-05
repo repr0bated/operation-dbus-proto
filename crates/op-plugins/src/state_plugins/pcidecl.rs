@@ -3,8 +3,8 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use simd_json::OwnedValue as Value;
 use simd_json::prelude::*;
+use simd_json::OwnedValue as Value;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -150,8 +150,8 @@ impl StatePlugin for PciDeclPlugin {
     }
 
     async fn calculate_diff(&self, _current: &Value, desired: &Value) -> Result<StateDiff> {
-        let want: PciDecl =
-            simd_json::serde::from_owned_value(desired.clone()).context("desired must be PciDecl")?;
+        let want: PciDecl = simd_json::serde::from_owned_value(desired.clone())
+            .context("desired must be PciDecl")?;
         let mut actions = Vec::new();
         for item in &want.items {
             let live = Self::live_for(&item.address);
@@ -203,8 +203,8 @@ impl StatePlugin for PciDeclPlugin {
                     resource,
                     config: changes,
                 } => {
-                    let item: PciItem =
-                        simd_json::serde::from_owned_value(changes.clone()).context("invalid PciItem")?;
+                    let item: PciItem = simd_json::serde::from_owned_value(changes.clone())
+                        .context("invalid PciItem")?;
                     if let Some(val) = &item.driver_override {
                         match Self::set_driver_override(&item.address, val) {
                             Ok(_) => changes_applied
@@ -232,10 +232,11 @@ impl StatePlugin for PciDeclPlugin {
     }
 
     async fn verify_state(&self, desired: &Value) -> Result<bool> {
-        let want: PciDecl = simd_json::serde::from_owned_value(desired.clone()).unwrap_or(PciDecl {
-            version: 1,
-            items: vec![],
-        });
+        let want: PciDecl =
+            simd_json::serde::from_owned_value(desired.clone()).unwrap_or(PciDecl {
+                version: 1,
+                items: vec![],
+            });
         for item in &want.items {
             let live = Self::live_for(&item.address);
             if !Self::compliant(&live, item) {

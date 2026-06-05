@@ -48,6 +48,17 @@ regex = { workspace = true }
 dashmap = { workspace = true }
 parking_lot = { workspace = true }
 
+# Random for jitter
+rand = "0.8"
+
+# SSE streaming
+async-stream = "0.3"
+tokio-stream = "0.1"
+reqwest-eventsource = "0.5"
+
+# Examples
+futures = "0.3"
+
 # D-Bus
 zbus = { workspace = true }
 

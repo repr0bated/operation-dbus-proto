@@ -311,7 +311,7 @@ impl CapabilityResolver {
     fn sort_agents(&self, agents: &mut [AgentDefinition]) {
         // Simple sort by priority
         // TODO: topological sort based on requires/provides
-        agents.sort_by(|a, b| a.priority.cmp(&b.priority));
+        agents.sort_by_key(|a| a.priority);
     }
 
     /// Build parallel execution groups
@@ -362,7 +362,7 @@ pub struct ResolverStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent_registry::AgentExecutor;
+    use crate::agent_registry::{AgentExecutor, AgentPriority};
 
     fn make_test_executor() -> AgentExecutor {
         Arc::new(|input: &[u8]| {

@@ -1,7 +1,7 @@
 //! WireGuard identity detection and peer management.
 
 use std::process::Command;
-use tracing::{debug, warn};
+use tracing::debug;
 
 /// WireGuard identity provider
 #[derive(Debug, Clone)]

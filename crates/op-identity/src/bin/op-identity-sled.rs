@@ -216,6 +216,7 @@ fn encode_b64(bytes: &[u8; 32]) -> String {
     base64::engine::general_purpose::STANDARD.encode(bytes)
 }
 
+#[allow(dead_code)]
 fn format_uuid(bytes: &[u8; 16]) -> String {
     if bytes.iter().all(|b| *b == 0) {
         return String::new();
@@ -230,6 +231,7 @@ fn format_uuid(bytes: &[u8; 16]) -> String {
     )
 }
 
+#[allow(dead_code)]
 fn split_words(s: &str) -> Vec<String> {
     s.split_whitespace().map(str::to_string).collect()
 }

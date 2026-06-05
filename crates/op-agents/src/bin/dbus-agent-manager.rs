@@ -18,7 +18,7 @@ use op_agents::{
 use op_core::BusType;
 use std::collections::HashMap;
 use tokio::signal;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 use zbus::Connection;
 
 /// Agent configuration
@@ -178,7 +178,7 @@ impl AgentManager {
 
         // Sort by priority (highest first)
         let mut agents: Vec<_> = AGENTS.iter().filter(|a| a.auto_start).collect();
-        agents.sort_by(|a, b| b.priority.cmp(&a.priority));
+        agents.sort_by_key(|a| std::cmp::Reverse(a.priority));
 
         for config in agents {
             match self.start_agent(config.agent_type).await {

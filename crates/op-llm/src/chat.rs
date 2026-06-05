@@ -504,18 +504,15 @@ impl ChatManager {
 
         // 2. Prefix / substring match
         let model_lower = model.to_lowercase();
-        if model_lower.contains("factory")
+        if (model_lower.contains("factory")
             || model_lower.contains("droid")
-            || model_lower.contains("kimi")
+            || model_lower.contains("kimi"))
+            && providers.contains(&ProviderType::Factory)
         {
-            if providers.contains(&ProviderType::Factory) {
-                return Some(ProviderType::Factory);
-            }
+            return Some(ProviderType::Factory);
         }
-        if model_lower.contains("claude") {
-            if providers.contains(&ProviderType::Anthropic) {
-                return Some(ProviderType::Anthropic);
-            }
+        if model_lower.contains("claude") && providers.contains(&ProviderType::Anthropic) {
+            return Some(ProviderType::Anthropic);
         }
         if model_lower.contains("gemini") {
             // Check in order of preference

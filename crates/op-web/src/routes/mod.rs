@@ -76,9 +76,18 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         // Chat endpoints
         .route("/chat", post(handlers::chat::chat_handler))
         .route("/chat/stream", post(handlers::chat::chat_stream_handler))
-        .route("/zeroclaw/chat", post(handlers::zeroclaw::zeroclaw_chat_handler))
-        .route("/zeroclaw/chat/stream", post(handlers::zeroclaw::zeroclaw_chat_stream_handler))
-        .route("/zeroclaw/schema", get(handlers::zeroclaw::zeroclaw_schema_handler))
+        .route(
+            "/zeroclaw/chat",
+            post(handlers::zeroclaw::zeroclaw_chat_handler),
+        )
+        .route(
+            "/zeroclaw/chat/stream",
+            post(handlers::zeroclaw::zeroclaw_chat_stream_handler),
+        )
+        .route(
+            "/zeroclaw/schema",
+            get(handlers::zeroclaw::zeroclaw_schema_handler),
+        )
         .route("/chat/sessions", get(handlers::chat::list_sessions_handler))
         .route(
             "/chat/sessions",

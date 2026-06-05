@@ -2,19 +2,38 @@
 //!
 //! This module defines which plugins are loaded by default when the system starts.
 //! Plugins can be enabled/disabled via configuration.
+//!
+//! ## Schema Validation
+//!
+//! Plugins are validated against JSON schema files at runtime.
+//! If a schema file is missing in strict mode, the plugin will be rejected.
+//! Schema files are loaded from `schemas/plugin/{name}.json`.
+//!
+//! ## Canonical Path Enforcement
+//!
+//! All plugins must use canonical D-Bus paths:
+//! - Path: `/org/opdbus/v1/plugin/plugins/{name}`
+//! - Interface: `org.opdbus.v1.Plugin.Plugins.{Name}`
+//!
+//! Legacy paths are deprecated and will be rejected.
 
 use anyhow::{anyhow, Result};
 use op_state_store::StateStore;
 use simd_json::prelude::*;
 use std::sync::Arc;
 
+use crate::schema_loader::SchemaLoader;
+
 use crate::state_plugins::{
-    AdcPlugin, AgentConfigPlugin, CognitiveMcpPlugin, CompactMcpPlugin, ConfigPlugin,
-    CtlPlaneChatbotPlugin, EndpointPlugin, GcloudAdcPlugin, HardwarePlugin, IncusPlugin,
-    KeypairPlugin, MailServerPlugin, McpStatePlugin, NetStatePlugin, OpenFlowPlugin,
-    OvsBridgePlugin, PrivacyRouterPlugin, PrivacyRoutesPlugin, ProcfsPlugin, ProxmoxPlugin,
-    ProxyServerPlugin, RtnetlinkPlugin, S6StatePlugin, ServicePlugin, SessDeclPlugin,
-    SoftwarePlugin, UnixSocketPlugin, UsersPlugin, WebUiPlugin, WireGuardPlugin, ZeroclawPlugin, FactoryPlugin, Fail2banPlugin, CronPlugin, MemoryPlugin, WorkflowsPlugin, BtrfsPlugin, KnowledgePlugin, AntigravityChatPlugin, AntigravityPlugin, SchemaRendererPlugin, DnsResolverPlugin, FullSystemPlugin, KeyringPlugin, Login1Plugin,  PackageKitPlugin, PciDeclPlugin,
+    AdcPlugin, AgentConfigPlugin, AntigravityChatPlugin, AntigravityPlugin, BtrfsPlugin,
+    CognitiveMcpPlugin, CompactMcpPlugin, ConfigPlugin, CronPlugin, CtlPlaneChatbotPlugin,
+    DnsResolverPlugin, EndpointPlugin, FactoryPlugin, Fail2banPlugin, FreeDesktopPlugin,
+    FullSystemPlugin, GcloudAdcPlugin, HardwarePlugin, IncusPlugin, KeypairPlugin, KeyringPlugin,
+    KnowledgePlugin, Login1Plugin, MailServerPlugin, McpStatePlugin, MemoryPlugin, NetStatePlugin,
+    OpenFlowPlugin, OvsBridgePlugin, PackageKitPlugin, PciDeclPlugin, PrivacyRouterPlugin,
+    PrivacyRoutesPlugin, ProcfsPlugin, ProxmoxPlugin, ProxyServerPlugin, RtnetlinkPlugin,
+    S6StatePlugin, SchemaRendererPlugin, ServicePlugin, SessDeclPlugin, SoftwarePlugin,
+    UnixSocketPlugin, UsersPlugin, WebUiPlugin, WireGuardPlugin, WorkflowsPlugin, ZeroclawPlugin,
 };
 use crate::AutoPlugin;
 
@@ -91,6 +110,7 @@ impl Default for PluginRegistryConfig {
 pub struct DefaultPluginRegistry {
     config: PluginRegistryConfig,
     state_store: Arc<dyn StateStore>,
+    schema_loader: SchemaLoader,
 }
 
 impl DefaultPluginRegistry {
@@ -99,7 +119,40 @@ impl DefaultPluginRegistry {
         Self {
             config: PluginRegistryConfig::default(),
             state_store,
+            schema_loader: SchemaLoader::new("schemas/plugin"),
         }
+    }
+
+    /// Create with custom schema directory
+    pub fn with_schema_dir(
+        state_store: Arc<dyn StateStore>,
+        schema_dir: impl Into<std::path::PathBuf>,
+    ) -> Self {
+        Self {
+            config: PluginRegistryConfig::default(),
+            state_store,
+            schema_loader: SchemaLoader::new(schema_dir),
+        }
+    }
+
+    /// Validate a plugin has a valid schema file
+    ///
+    /// Returns Ok(()) if schema exists and is valid
+    /// Returns Err if schema is missing or invalid (in strict mode)
+    pub async fn validate_plugin_schema(&self, plugin_name: &str) -> Result<()> {
+        match self.schema_loader.load_schema(plugin_name).await? {
+            Some(_) => Ok(()),
+            None => Err(anyhow!(
+                "Plugin '{}' has no valid schema file. Expected: schemas/plugin/{}.json",
+                plugin_name,
+                plugin_name
+            )),
+        }
+    }
+
+    /// Check if a schema file exists for a plugin
+    pub async fn schema_exists(&self, plugin_name: &str) -> bool {
+        self.schema_loader.schema_exists(plugin_name).await
     }
 
     /// Create with custom configuration
@@ -107,13 +160,30 @@ impl DefaultPluginRegistry {
         Self {
             config,
             state_store,
+            schema_loader: SchemaLoader::new("schemas/plugin"),
+        }
+    }
+
+    /// Create with custom configuration and schema directory
+    pub fn with_config_and_schema_dir(
+        state_store: Arc<dyn StateStore>,
+        config: PluginRegistryConfig,
+        schema_dir: impl Into<std::path::PathBuf>,
+    ) -> Self {
+        Self {
+            config,
+            state_store,
+            schema_loader: SchemaLoader::new(schema_dir),
         }
     }
 
     /// Resolve user/request-facing plugin references into canonical loader names.
     ///
-    /// Supports direct names, aliases, and projection paths like
-    /// `/opdbus/v1/plugins/<plugin>/...`.
+    /// Supports direct names, aliases, and CANONICAL projection paths like
+    /// `/org/opdbus/v1/plugin/plugins/<plugin>/...`.
+    ///
+    /// Legacy paths like `/opdbus/v1/plugins/...` are NO LONGER SUPPORTED.
+    /// Use canonical paths as defined in `crate::canonical`.
     pub fn resolve_requested_plugin_name(requested: &str) -> Result<String> {
         let trimmed = requested.trim();
         if trimmed.is_empty() {
@@ -144,12 +214,24 @@ impl DefaultPluginRegistry {
     }
 
     fn extract_plugin_name_from_projection_path(requested: &str) -> Option<&str> {
-        const PREFIXES: [&str; 2] = ["/opdbus/v1/plugins/", "/org/opdbus/v1/plugins/"];
+        // CANONICAL PATH ONLY: /org/opdbus/v1/plugin/plugins/{name}
+        // Legacy paths are deprecated and will be rejected
+        use crate::canonical::PLUGIN_BASE_PATH;
 
-        for prefix in PREFIXES {
-            if let Some(rest) = requested.strip_prefix(prefix) {
-                return rest.split('/').find(|segment| !segment.is_empty());
-            }
+        // Check canonical path prefix
+        if let Some(rest) = requested.strip_prefix(PLUGIN_BASE_PATH) {
+            return rest
+                .trim_start_matches('/')
+                .split('/')
+                .find(|segment| !segment.is_empty());
+        }
+
+        // Also accept the /org/opdbus/v1/plugin/plugins/ prefix without leading slash
+        if let Some(rest) = requested.strip_prefix(&PLUGIN_BASE_PATH[1..]) {
+            return rest
+                .trim_start_matches('/')
+                .split('/')
+                .find(|segment| !segment.is_empty());
         }
 
         None
@@ -214,6 +296,7 @@ impl DefaultPluginRegistry {
                     self.get_plugin_config_path("config", "/etc/op-dbus/config-store.json");
                 Arc::new(ConfigPlugin::new(config_path))
             }
+            "freedesktop" => Arc::new(FreeDesktopPlugin::new()),
             "cognitive_mcp" => Arc::new(CognitiveMcpPlugin::new()),
             "compact_mcp" => Arc::new(CompactMcpPlugin::new()),
             "ctl_plane_chatbot" => Arc::new(CtlPlaneChatbotPlugin::new()),
@@ -273,11 +356,12 @@ impl DefaultPluginRegistry {
             .to_string()
     }
 
-    /// Get list of available plugins
+    /// Get list of available plugins (built-in list)
     pub fn available_plugins() -> Vec<&'static str> {
         vec![
             "mcp",
             "zeroclaw",
+            "freedesktop",
             "cognitive_mcp",
             "compact_mcp",
             "ctl_plane_chatbot",
@@ -285,13 +369,28 @@ impl DefaultPluginRegistry {
             "s6",
             "incus",
             "net",
-            "privacy_routes",
+            "wireguard",
+            "web_ui",
             "openflow",
             "privacy_router",
+            "privacy_routes",
             // "netmaker",
             // "lxc",
             // "packagekit",
         ]
+    }
+
+    /// Get list of plugins with valid schema files
+    pub async fn available_schemas(&self) -> Result<Vec<String>> {
+        self.schema_loader.list_available_schemas().await
+    }
+
+    /// Load schema for a plugin
+    pub async fn load_plugin_schema(
+        &self,
+        plugin_name: &str,
+    ) -> Result<Option<op_state::PluginSchema>> {
+        self.schema_loader.load_schema(plugin_name).await
     }
 
     /// Check if a plugin is enabled for auto-load
@@ -410,13 +509,19 @@ mod tests {
 
     #[test]
     fn test_resolve_requested_plugin_name() {
+        use crate::canonical;
+
+        // Canonical path format (REQUIRED)
         assert_eq!(
-            DefaultPluginRegistry::resolve_requested_plugin_name(
-                "/opdbus/v1/plugins/procfs/memory"
-            )
+            DefaultPluginRegistry::resolve_requested_plugin_name(&format!(
+                "{}/procfs/memory",
+                canonical::PLUGIN_BASE_PATH
+            ))
             .unwrap(),
             "procfs"
         );
+
+        // Direct plugin name
         assert_eq!(
             DefaultPluginRegistry::resolve_requested_plugin_name("systemd").unwrap(),
             "s6"
@@ -428,15 +533,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_load_plugin_from_projection_path() {
+    async fn test_load_plugin_from_canonical_projection_path() {
+        use crate::canonical;
         let store = Arc::new(SqliteStore::new(":memory:").await.unwrap());
         let registry = DefaultPluginRegistry::new(store);
 
-        let procfs = registry
-            .load_plugin("/opdbus/v1/plugins/procfs/memory")
-            .await
-            .unwrap();
+        // Use canonical path format
+        let path = format!("{}/procfs/memory", canonical::PLUGIN_BASE_PATH);
+        let procfs = registry.load_plugin(&path).await.unwrap();
         assert_eq!(procfs.name(), "procfs");
+    }
+
+    #[test]
+    fn test_legacy_paths_are_rejected() {
+        // Legacy paths should NOT be resolved
+        assert!(
+            DefaultPluginRegistry::resolve_requested_plugin_name("/opdbus/v1/plugins/procfs")
+                .is_err()
+        );
+        assert!(DefaultPluginRegistry::resolve_requested_plugin_name(
+            "/org/opdbus/v1/plugins/procfs"
+        )
+        .is_err());
     }
 
     #[tokio::test]

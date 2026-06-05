@@ -20,13 +20,12 @@
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use std::sync::Arc;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 use crate::provider::{
-    ChatMessage, ChatRequest, ChatResponse, LlmProvider, ModelInfo, ProviderType,
+    ChatMessage, ChatResponse, LlmProvider, ModelInfo, ProviderType,
 };
 use crate::pty_bridge::PtyAuthBridge;
 

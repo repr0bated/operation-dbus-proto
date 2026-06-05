@@ -31,7 +31,7 @@ use op_core::BusType;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info};
-use zbus::{connection::Builder, interface, object_server::SignalContext, Connection};
+use zbus::{connection::Builder, interface, object_server::SignalEmitter, Connection};
 
 /// Error type for D-Bus agent service operations
 #[derive(Debug, thiserror::Error)]
@@ -251,7 +251,7 @@ impl DbusAgentService {
     /// Signal emitted when a task completes
     #[zbus(signal)]
     async fn task_completed(
-        signal_ctxt: &SignalContext<'_>,
+        signal_ctxt: &SignalEmitter<'_>,
         task_id: &str,
         success: bool,
         result_json: &str,
@@ -259,7 +259,7 @@ impl DbusAgentService {
 
     /// Signal emitted when agent status changes
     #[zbus(signal)]
-    async fn status_changed(signal_ctxt: &SignalContext<'_>, new_status: &str) -> zbus::Result<()>;
+    async fn status_changed(signal_ctxt: &SignalEmitter<'_>, new_status: &str) -> zbus::Result<()>;
 }
 
 //

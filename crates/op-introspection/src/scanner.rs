@@ -280,24 +280,23 @@ fn parse_introspection_xml(xml: &str, path: &str) -> Result<ObjectInfo> {
                 let name = std::str::from_utf8(name_bytes.as_ref()).unwrap_or("");
 
                 match name {
-                    "node" => {
-                        if node_depth == 1 {
-                            for attr in e.attributes().flatten() {
-                                if attr.key.as_ref() == b"name" {
-                                    let child_name =
-                                        String::from_utf8_lossy(&attr.value).to_string();
-                                    let child_path = if child_name.starts_with('/') {
-                                        child_name
-                                    } else if path == "/" {
-                                        format!("/{}", child_name)
-                                    } else {
-                                        format!("{}/{}", path, child_name)
-                                    };
-                                    children.push(child_path);
-                                }
+                    "node" if node_depth == 1 => {
+                        for attr in e.attributes().flatten() {
+                            if attr.key.as_ref() == b"name" {
+                                let child_name =
+                                    String::from_utf8_lossy(&attr.value).to_string();
+                                let child_path = if child_name.starts_with('/') {
+                                    child_name
+                                } else if path == "/" {
+                                    format!("/{}", child_name)
+                                } else {
+                                    format!("{}/{}", path, child_name)
+                                };
+                                children.push(child_path);
                             }
                         }
                     }
+                    "node" => {},
                     "property" => {
                         if node_depth != 1 {
                             continue;

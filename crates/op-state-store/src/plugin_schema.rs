@@ -1106,7 +1106,7 @@ fn builtin_plugin_schema_from_canonical_name(name: &str) -> Option<PluginSchema>
         "net" => create_net_schema(),
         "rtnetlink" => create_rtnetlink_schema(),
         "openflow" => create_openflow_schema(),
-        "s6" | "service" => create_s6_schema(),
+        "s6" => create_s6_schema(),
         "privacy_router" => create_privacy_router_schema(),
         "privacy_routes" => create_privacy_routes_schema(),
         "netmaker" => create_netmaker_schema(),
@@ -4684,10 +4684,8 @@ fn validate_field(name: &str, value: &Value, schema: &FieldSchema) -> Result<(),
                     }
                 }
             }
-            Constraint::OneOf { values } => {
-                if !values.contains(value) {
-                    return Err(format!("Field '{}' must be one of: {:?}", name, values));
-                }
+            Constraint::OneOf { values } if !values.contains(value) => {
+                return Err(format!("Field '{}' must be one of: {:?}", name, values));
             }
             _ => {}
         }

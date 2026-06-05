@@ -3,6 +3,7 @@
 //! Provides a simple registry for tools and their definitions.
 
 use anyhow::Result;
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use simd_json::OwnedValue as Value;
 use std::collections::HashMap;
@@ -26,6 +27,20 @@ pub struct ToolDefinition {
     pub tags: Vec<String>,
     #[serde(default)]
     pub namespace: String,
+}
+
+impl Default for ToolDefinition {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            description: String::new(),
+            input_schema: simd_json::json!({}),
+            schema_version: String::new(),
+            category: String::new(),
+            tags: Vec::new(),
+            namespace: String::new(),
+        }
+    }
 }
 
 /// Statistics about the registry

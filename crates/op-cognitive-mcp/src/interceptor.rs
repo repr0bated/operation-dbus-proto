@@ -14,5 +14,7 @@ pub fn ghostbridge_interceptor(mut req: Request<()>) -> Result<Request<()>, Stat
         return Ok(req);
     }
 
-    Err(Status::unauthenticated("Missing Ghostbridge Identity Sled."))
+    Err(Status::unauthenticated(
+        "Missing Ghostbridge Identity Sled.",
+    ))
 }

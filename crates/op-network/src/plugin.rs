@@ -460,7 +460,7 @@ mod tests {
 
     #[test]
     fn test_parse_network_config() {
-        let mut json = r#"
+        let json = r#"
         {
             "bridges": [
                 {

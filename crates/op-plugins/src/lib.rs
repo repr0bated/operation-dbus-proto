@@ -13,10 +13,12 @@
 
 pub mod auto_create;
 pub mod builtin;
+pub mod canonical;
 pub mod chat;
 pub mod dynamic_loading;
 pub mod plugin;
 pub mod registry;
+pub mod schema_loader;
 pub mod service_def;
 pub mod state;
 
@@ -25,10 +27,12 @@ pub mod default_registry;
 pub mod state_plugins;
 
 pub use auto_create::AutoPlugin;
+pub use canonical as plugin_paths;
 pub use default_registry::{DefaultPluginRegistry, PluginRegistryConfig};
 pub use plugin::{Plugin, PluginCapabilities, PluginContext, PluginMetadata};
 pub use registry::PluginRegistry as PluginCatalog;
 pub use registry::{PluginRecord, PluginRegistry};
+pub use schema_loader::SchemaLoader;
 pub use state::{ChangeOperation, DesiredState, StateChange, ValidationResult};
 
 // Re-export chat types

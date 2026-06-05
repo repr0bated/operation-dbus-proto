@@ -11,12 +11,17 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use op_state::{ApplyResult, Checkpoint, PluginCapabilities, StateDiff, StatePlugin, StateAction, DiffMetadata};
+use op_state::{
+    ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
+};
 use serde::{Deserialize, Serialize};
-use simd_json::{json, OwnedValue as Value};
 use simd_json::prelude::*;
+use simd_json::{json, OwnedValue as Value};
 use std::collections::HashMap;
-use zbus::{Connection, Proxy, zvariant::{ObjectPath, OwnedObjectPath}};
+use zbus::{
+    zvariant::{ObjectPath, OwnedObjectPath},
+    Connection, Proxy,
+};
 
 /// Keyring state representation
 #[derive(Debug, Clone, Serialize, Deserialize)]

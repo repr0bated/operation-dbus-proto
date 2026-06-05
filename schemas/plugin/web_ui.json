@@ -1,0 +1,158 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://opdbus.org/schemas/plugin/web_ui.json",
+  "title": "Web UI Plugin Schema",
+  "description": "Web UI configuration and state plugin",
+  "type": "object",
+  "required": ["name", "version", "plugin_type"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "const": "web_ui",
+      "description": "Plugin identifier"
+    },
+    "version": {
+      "type": "string",
+      "default": "1.0.0",
+      "description": "Plugin version"
+    },
+    "plugin_type": {
+      "type": "string",
+      "const": "ui",
+      "description": "Plugin type"
+    },
+    "description": {
+      "type": "string",
+      "default": "Web UI configuration and state",
+      "description": "Plugin description"
+    },
+    "dbus_path": {
+      "type": "string",
+      "const": "/org/opdbus/v1/plugin/plugins/web_ui",
+      "description": "D-Bus object path"
+    },
+    "dependencies": {
+      "type": "array",
+      "default": [],
+      "description": "Plugin dependencies"
+    },
+    "capabilities": {
+      "type": "object",
+      "properties": {
+        "can_read": { "type": "boolean", "default": true },
+        "can_write": { "type": "boolean", "default": true },
+        "can_delete": { "type": "boolean", "default": false },
+        "requires_root": { "type": "boolean", "default": false }
+      }
+    },
+    "enabled": {
+      "type": "boolean",
+      "description": "Whether web UI is enabled",
+      "default": true,
+      "example": true
+    },
+    "listen_address": {
+      "type": "string",
+      "description": "HTTP server listen address",
+      "default": "0.0.0.0",
+      "example": "0.0.0.0"
+    },
+    "port": {
+      "type": "integer",
+      "description": "HTTP server port",
+      "default": 8080,
+      "minimum": 1,
+      "maximum": 65535,
+      "example": 8080
+    },
+    "tls_enabled": {
+      "type": "boolean",
+      "description": "Whether TLS is enabled",
+      "default": false,
+      "example": false
+    },
+    "tls_cert_path": {
+      "type": "string",
+      "description": "Path to TLS certificate file",
+      "example": "/etc/opdbus/web.crt"
+    },
+    "tls_key_path": {
+      "type": "string",
+      "description": "Path to TLS key file",
+      "example": "/etc/opdbus/web.key"
+    },
+    "authentication": {
+      "type": "object",
+      "description": "Authentication configuration",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether authentication is required"
+        },
+        "methods": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["session", "token", "oauth"]
+          },
+          "default": ["session"],
+          "description": "Allowed authentication methods"
+        },
+        "session_timeout": {
+          "type": "integer",
+          "default": 3600,
+          "description": "Session timeout in seconds"
+        }
+      }
+    },
+    "features": {
+      "type": "object",
+      "description": "Enabled UI features",
+      "properties": {
+        "plugins": {
+          "type": "boolean",
+          "default": true,
+          "description": "Plugin management UI"
+        },
+        "terminal": {
+          "type": "boolean",
+          "default": false,
+          "description": "Web terminal access"
+        },
+        "logs": {
+          "type": "boolean",
+          "default": true,
+          "description": "Log viewer"
+        },
+        "metrics": {
+          "type": "boolean",
+          "default": true,
+          "description": "Metrics dashboard"
+        }
+      }
+    }
+  },
+  "example": {
+    "name": "web_ui",
+    "version": "1.0.0",
+    "plugin_type": "ui",
+    "description": "Web UI configuration and state",
+    "dbus_path": "/org/opdbus/v1/plugin/plugins/web_ui",
+    "enabled": true,
+    "listen_address": "0.0.0.0",
+    "port": 8080,
+    "tls_enabled": false,
+    "authentication": {
+      "enabled": true,
+      "methods": ["session"],
+      "session_timeout": 3600
+    },
+    "features": {
+      "plugins": true,
+      "terminal": false,
+      "logs": true,
+      "metrics": true
+    }
+  }
+}

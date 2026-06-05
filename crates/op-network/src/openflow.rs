@@ -18,7 +18,7 @@ pub use rovs_openflow::Match as FlowMatch;
 ///
 /// Callers that previously constructed `FlowMatch { in_port: Some(n), .. }` should
 /// now use the builder API: `FlowMatch::new().in_port(n)`.
-
+///
 /// Flow action — a simplified action enum that covers what callers need.
 #[derive(Debug, Clone)]
 pub enum FlowAction {

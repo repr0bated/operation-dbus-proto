@@ -135,7 +135,7 @@ mod tests {
         // ASSISTANT_BASE_URL set → used
         std::env::set_var("ASSISTANT_BASE_URL", "http://assistant:9999");
         std::env::remove_var("OPENCLAW_BASE_URL");
-        let p = AssistantProvider::new(None, None);
+        let _p = AssistantProvider::new(None, None);
         // We can't inspect private fields, but we can verify from_env succeeds
         let _ = AssistantProvider::from_env().unwrap();
 

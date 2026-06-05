@@ -13,7 +13,10 @@
 
 pub mod activity_filter;
 pub mod agent_tools;
+pub mod client_config;
 pub mod cognitive_tools;
+pub mod context_awareness;
+pub mod context_server;
 pub mod cozo_shuttle;
 pub mod dbus_interface;
 pub mod doctor;
@@ -35,7 +38,17 @@ pub use activity_filter::{
     derive_significance, is_pii, ActivityEvent, ActivityFilter, FilterDecision, FilterTunables,
     OpKind, Significance, SuppressReason,
 };
+pub use client_config::{
+    CacheConfig, CircuitBreakerConfig, ClientConfig, ClientStats, ClientType, CognitiveMcpClient,
+    CognitiveMcpClientFactory, PoolConfig, RetryConfig, COGNITIVE_MCP_DEFAULT_ENDPOINT,
+    COMPACT_MCP_DEFAULT_ENDPOINT,
+};
 pub use cognitive_tools::CognitiveToolRegistry;
+pub use context_awareness::{
+    ActivityEvent as ContextActivityEvent, ActivityType, ContextAwarenessConfig,
+    ContextAwarenessEngine, KnowledgeContent, KnowledgePush, PushTrigger,
+};
+pub use context_server::ContextServerState;
 pub use cozo_shuttle::{CozoGraphShuttle, PolicyVerdict};
 pub use grpc_service::CognitiveGrpcService;
 pub use memory_store::CognitiveMemoryStore;
