@@ -27,12 +27,12 @@
 //! ```
 
 use anyhow::{Context, Result};
-use op_state_store::{Constraint, FieldSchema, FieldType, PluginSchema, ReadOnlyCondition};
-use simd_json::{json, OwnedValue as Value};
+use op_state_store::{Constraint, FieldSchema, FieldType, PluginSchema};
+use simd_json::OwnedValue as Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tokio::fs;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 /// Schema loader for runtime JSON schema loading
 pub struct SchemaLoader {
@@ -436,7 +436,7 @@ fn parse_constraints(value: &Value) -> Result<Vec<Constraint>> {
 
     // OneOf constraint from enum values
     if let Some(enum_values) = value.get("enum").and_then(|v| v.as_array()) {
-        let values: Vec<Value> = enum_values.iter().cloned().collect();
+        let values: Vec<Value> = enum_values.to_vec();
         if !values.is_empty() {
             constraints.push(Constraint::OneOf { values });
         }

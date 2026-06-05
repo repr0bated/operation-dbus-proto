@@ -124,7 +124,7 @@ mod tests {
             "echo",
             "Echo input back",
             simd_json::json!({"type": "object"}),
-            |input| Ok(input),
+            Ok,
         );
 
         assert_eq!(tool.name(), "echo");

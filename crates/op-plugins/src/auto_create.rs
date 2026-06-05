@@ -98,7 +98,7 @@ impl AutoPlugin {
         let recommended_fields = research
             .get("recommended_fields")
             .and_then(|v| v.as_array())
-            .map(|a| a.clone())
+            .cloned()
             .unwrap_or_default();
         let web_results_count = research
             .get("web_results")
@@ -280,7 +280,7 @@ impl StatePlugin for AutoPlugin {
 
     async fn verify_state(&self, desired: &Value) -> Result<bool> {
         let current = self.current_state.read().await;
-        Ok(&*current == desired)
+        Ok(*current == desired)
     }
 
     async fn create_checkpoint(&self) -> Result<op_state::Checkpoint> {

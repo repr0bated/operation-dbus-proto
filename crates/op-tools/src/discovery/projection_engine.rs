@@ -101,7 +101,7 @@ impl ProjectionEngine {
             for path in &paths {
                 if let Ok(info) = self
                     .introspection
-                    .introspect(bus_type, &service, &path)
+                    .introspect(bus_type, &service, path)
                     .await
                 {
                     for iface in info.interfaces {
@@ -145,9 +145,10 @@ impl ProjectionEngine {
                                 ],
                             };
 
-                            if let Ok(_) = registry
+                            if registry
                                 .register(tool.name.clone().into(), Arc::new(tool), definition)
                                 .await
+                                .is_ok()
                             {
                                 service_tools += 1;
                             }
@@ -179,13 +180,14 @@ impl ProjectionEngine {
                                 ],
                             };
 
-                            if let Ok(_) = registry
+                            if registry
                                 .register(
                                     tool.name().to_string().into(),
                                     Arc::new(tool),
                                     definition,
                                 )
                                 .await
+                                .is_ok()
                             {
                                 service_tools += 1;
                             }

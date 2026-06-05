@@ -7,6 +7,8 @@
 //!
 //! Works with OVS bridges to apply privacy-enhancing flow rules.
 
+#![allow(clippy::vec_init_then_push)]
+
 use anyhow::Result;
 use async_trait::async_trait;
 use op_state::{
@@ -15,7 +17,6 @@ use op_state::{
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
-use std::collections::HashMap;
 
 /// OpenFlow obfuscation configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -436,7 +437,7 @@ impl StatePlugin for OpenFlowObfuscationPlugin {
 
     async fn apply_state(&self, _diff: &StateDiff) -> Result<ApplyResult> {
         let mut changes_applied = Vec::new();
-        let mut errors = Vec::new();
+        let errors = Vec::new();
 
         log::info!(
             "Applying OpenFlow obfuscation level {} to bridge {}",

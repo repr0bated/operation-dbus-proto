@@ -380,6 +380,7 @@ mod tests {
             name: "builtin_tool".to_string(),
             description: "Built-in tool".to_string(),
             input_schema: simd_json::json!({}),
+            schema_version: "https://json-schema.org/draft/next/schema".to_string(),
             category: "builtin".to_string(),
             tags: vec![],
             namespace: "builtin".to_string(),

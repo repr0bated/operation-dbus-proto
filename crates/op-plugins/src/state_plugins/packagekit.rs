@@ -311,15 +311,11 @@ impl StatePlugin for PackageKitPlugin {
             let is_installed = self.package_installed(package_name).await?;
 
             match package_config.ensure.as_str() {
-                "installed" => {
-                    if !is_installed {
-                        return Ok(false);
-                    }
+                "installed" if !is_installed => {
+                    return Ok(false);
                 }
-                "removed" => {
-                    if is_installed {
-                        return Ok(false);
-                    }
+                "removed" if is_installed => {
+                    return Ok(false);
                 }
                 _ => {}
             }

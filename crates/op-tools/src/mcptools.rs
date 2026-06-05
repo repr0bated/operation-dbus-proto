@@ -5,15 +5,17 @@
 //! - OP_MCPTOOLS_BIN: Path to mcptools binary (default: "mcp")
 //! - OP_MCPTOOLS_SERVERS: JSON array of server configs
 //!   Example:
-//!   [
-//!     {
-//!       "name": "github",
-//!       "args": ["https://api.example.com/mcp"],
-//!       "transport": "http",
-//!       "auth_header": "Bearer TOKEN",
-//!       "tool_prefix": "mcp_github_"
-//!     }
-//!   ]
+//! ```
+//! [
+//! {
+//! "name": "github",
+//! "args": ["https://api.example.com/mcp"],
+//! "transport": "http",
+//! "auth_header": "Bearer TOKEN",
+//! "tool_prefix": "mcp_github_"
+//! }
+//! ]
+//! ```
 //! - OP_MCPTOOLS_SERVER: Single server command (space-separated) as a fallback
 //! - OP_MCPTOOLS_SERVER_NAME: Optional name for OP_MCPTOOLS_SERVER (default: "default")
 //! - OP_MCPTOOLS_ALLOW_UNPREFIXED: "true" to allow raw tool names (fallback to prefixed on conflict)

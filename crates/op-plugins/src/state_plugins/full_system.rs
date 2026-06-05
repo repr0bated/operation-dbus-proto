@@ -19,7 +19,7 @@
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use op_state::{ApplyResult, Checkpoint, PluginCapabilities, StateAction, StateDiff, StatePlugin};
+use op_state::{ApplyResult, Checkpoint, StateAction, StateDiff, StatePlugin};
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
@@ -181,6 +181,7 @@ pub struct FullSystemPlugin {
     state_cache: Arc<RwLock<Option<FullSystemState>>>,
 
     /// Sender for blockchain footprints
+    #[allow(dead_code)]
     blockchain_sender: Option<tokio::sync::mpsc::UnboundedSender<op_blockchain::PluginFootprint>>,
 }
 
@@ -415,7 +416,7 @@ impl FullSystemPlugin {
 
                 // Check if enabled
                 let enabled_output = Command::new("systemctl")
-                    .args(["is-enabled", &parts[0]])
+                    .args(["is-enabled", parts[0]])
                     .output()
                     .await;
 
@@ -565,7 +566,7 @@ impl FullSystemPlugin {
             .await
         {
             if output.status.success() {
-                if let Ok(mut json) = simd_json::from_slice::<Value>(&mut output.stdout.clone()) {
+                if let Ok(json) = simd_json::from_slice::<Value>(&mut output.stdout.clone()) {
                     if let Some(devices) = json.get("blockdevices").and_then(|v| v.as_array()) {
                         for dev in devices {
                             state.block_devices.push(BlockDeviceInfo {

@@ -32,6 +32,12 @@ enum ServiceBackend {
     Systemd,
 }
 
+impl Default for ServicePlugin {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ServicePlugin {
     pub fn new() -> Self {
         // Prefer s6 when the live directory exists; fall back to systemd.
@@ -87,7 +93,7 @@ impl ServicePlugin {
             if let Some((k, v)) = line.split_once('=') {
                 match k.trim() {
                     "ExecStart" => {
-                        let parts: Vec<&str> = v.trim().split_whitespace().collect();
+                        let parts: Vec<&str> = v.split_whitespace().collect();
                         if !parts.is_empty() {
                             if let Ok(cmd) = ExecCommand::new(
                                 PathBuf::from(parts[0]),
@@ -98,7 +104,7 @@ impl ServicePlugin {
                         }
                     }
                     "ExecStop" => {
-                        let parts: Vec<&str> = v.trim().split_whitespace().collect();
+                        let parts: Vec<&str> = v.split_whitespace().collect();
                         if !parts.is_empty() {
                             if let Ok(cmd) = ExecCommand::new(
                                 PathBuf::from(parts[0]),
@@ -242,7 +248,7 @@ impl ServicePlugin {
         };
 
         let days_since_active = last_active.map(|t| (now - t) / 86400);
-        let is_orphaned = days_since_active.map_or(true, |d| d > 30);
+        let is_orphaned = days_since_active.is_none_or(|d| d > 30);
 
         let orphan_reason = if is_orphaned {
             Some(if last_active.is_none() {

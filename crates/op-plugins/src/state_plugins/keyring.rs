@@ -17,7 +17,6 @@ use op_state::{
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
-use std::collections::HashMap;
 use zbus::{
     zvariant::{ObjectPath, OwnedObjectPath},
     Connection, Proxy,

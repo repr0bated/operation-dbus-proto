@@ -38,6 +38,10 @@ pub use orchestration_plugin::{
     create_tool_event, get_orchestration_registry, LlmDecisionEvent, OrchestrationActivityPlugin,
     OrchestrationPluginRegistry, SessionEvent, ToolExecutedEvent,
 };
+
+// Re-export code_search module (feature-gated in consuming crates)
+pub use builtin::code_search;
+
 pub use registry::ToolRegistry;
 pub use router::{create_router, ToolsServiceRouter, ToolsState};
 pub use security::{

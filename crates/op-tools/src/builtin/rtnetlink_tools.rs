@@ -80,7 +80,7 @@ impl Tool for RtnetlinkListInterfacesTool {
                 );
 
                 let output = Command::new("ip")
-                    .args(&["-j", "addr", "show"])
+                    .args(["-j", "addr", "show"])
                     .output()
                     .await;
 

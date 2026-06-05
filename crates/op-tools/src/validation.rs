@@ -132,6 +132,12 @@ pub struct InputValidator {
     schema_cache: Arc<tokio::sync::RwLock<std::collections::HashMap<String, Arc<JSONSchema>>>>,
 }
 
+impl Default for InputValidator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl InputValidator {
     /// Create a new validator with default config
     pub fn new() -> Self {
@@ -535,7 +541,7 @@ mod tests {
         let schema = json!({"type": "object"});
 
         // Test null byte removal
-        let mut input = json!({"text": "hello\x00world"});
+        let input = json!({"text": "hello\x00world"});
         let result = validator
             .validate_input("test_tool", &input, &schema, Some("anonymous"))
             .await

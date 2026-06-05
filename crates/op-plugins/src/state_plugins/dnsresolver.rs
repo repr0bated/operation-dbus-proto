@@ -2,7 +2,6 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
 use std::fs;
 use std::process::Command;

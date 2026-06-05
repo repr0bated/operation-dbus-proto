@@ -26,17 +26,14 @@
 //! Legacy paths like `/opdbus/v1/plugins/` are NOT supported.
 
 use crate::canonical;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use async_trait::async_trait;
 use op_state::{
-    ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, PluginSchema, StateAction,
-    StateDiff, StatePlugin,
+    ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, PluginSchema, StateDiff, StatePlugin,
 };
-use op_state_store::SchemaValidator;
 use simd_json::prelude::{ValueAsScalar, ValueObjectAccess};
 use simd_json::OwnedValue as Value;
 use std::collections::HashMap;
-use std::sync::Arc;
 
 /// FreeDesktop plugin implementation
 pub struct FreeDesktopPlugin {
@@ -405,6 +402,7 @@ impl Default for FreeDesktopConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use simd_json::prelude::TypedContainerValue;
 
     #[test]
     fn test_freedesktop_plugin_creation() {
@@ -487,6 +485,6 @@ mod tests {
 
         assert_eq!(state.get("name").unwrap().as_str().unwrap(), "freedesktop");
         assert_eq!(state.get("version").unwrap().as_str().unwrap(), "1.0.0");
-        assert!(state.get("interfaces").unwrap().as_array().is_some());
+        assert!(state.get("interfaces").unwrap().is_array());
     }
 }

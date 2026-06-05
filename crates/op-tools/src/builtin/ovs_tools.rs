@@ -13,6 +13,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
+/// Type alias for systemd EnableUnitFiles result to avoid complex type in fn body
+type SystemdEnableResult = Result<(bool, Vec<(String, String, String)>), zbus::Error>;
+
 /// Tool to test tool execution (no network ops)
 pub struct TestTool;
 
@@ -930,10 +933,10 @@ async fn start_service_via_systemd(
         .await?;
 
     // Enable the service first
-    let _enable_result: std::result::Result<(bool, Vec<(String, String, String)>), _> =
-        systemd_proxy
-            .call("EnableUnitFiles", &(vec![service_name], false, true))
-            .await;
+    // The result type is complex, but we don't use it - just checking for success
+    let _enable_result: SystemdEnableResult = systemd_proxy
+        .call("EnableUnitFiles", &(vec![service_name], false, true))
+        .await;
 
     // Start the service
     let start_result: std::result::Result<zbus::zvariant::OwnedObjectPath, _> = systemd_proxy

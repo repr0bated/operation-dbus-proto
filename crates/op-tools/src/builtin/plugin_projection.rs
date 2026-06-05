@@ -38,8 +38,8 @@ impl PluginProjectionTool {
     pub fn new_generic(service: &str, object_path: String) -> Self {
         let name = format!(
             "projection_{}_{}",
-            sanitize_segment(service.split('.').last().unwrap_or(service)).to_ascii_lowercase(),
-            sanitize_segment(object_path.split('/').last().unwrap_or(&object_path))
+            sanitize_segment(service.split('.').next_back().unwrap_or(service)).to_ascii_lowercase(),
+            sanitize_segment(object_path.split('/').next_back().unwrap_or(&object_path))
                 .to_ascii_lowercase()
         );
         Self {
