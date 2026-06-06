@@ -27,6 +27,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::process::Command;
 use tokio::sync::RwLock;
+use zbus::{Connection, Proxy};
 use tracing::{debug, info, warn};
 
 /// Full system state for disaster recovery
@@ -250,16 +251,17 @@ impl FullSystemPlugin {
     }
 
     async fn get_hostname(&self) -> Result<String> {
-        let output = Command::new("hostname")
-            .output()
+        tokio::fs::read_to_string("/proc/sys/kernel/hostname")
             .await
-            .context("Failed to get hostname")?;
-        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+            .map(|s| s.trim().to_string())
+            .context("Failed to read hostname from /proc/sys/kernel/hostname")
     }
 
     async fn capture_system_info(&self) -> Result<SystemInfo> {
-        let kernel = Command::new("uname").arg("-r").output().await?;
-        let kernel_version = String::from_utf8_lossy(&kernel.stdout).trim().to_string();
+        let kernel_version = tokio::fs::read_to_string("/proc/sys/kernel/osrelease")
+            .await
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
 
         let os_release = tokio::fs::read_to_string("/etc/os-release")
             .await
@@ -356,37 +358,20 @@ impl FullSystemPlugin {
             }
         }
 
-        // Check for OVS bridges
-        if let Ok(output) = Command::new("ovs-vsctl").arg("list-br").output().await {
-            if output.status.success() {
-                for bridge in String::from_utf8_lossy(&output.stdout).lines() {
-                    let bridge = bridge.trim();
-                    if bridge.is_empty() {
-                        continue;
-                    }
+        // Check for OVS bridges via D-Bus daemon (AGENTS.md §4)
+        let ovs_client = op_network::rovs_proxy::OvsdbDbusClient::new();
+        if let Ok(bridges) = ovs_client.list_bridges().await {
+            for bridge in bridges {
+                let ports = ovs_client
+                    .list_bridge_ports(&bridge)
+                    .await
+                    .unwrap_or_default();
 
-                    let ports_output = Command::new("ovs-vsctl")
-                        .args(["list-ports", bridge])
-                        .output()
-                        .await;
-
-                    let ports = ports_output
-                        .ok()
-                        .map(|o| {
-                            String::from_utf8_lossy(&o.stdout)
-                                .lines()
-                                .map(|s| s.trim().to_string())
-                                .filter(|s| !s.is_empty())
-                                .collect()
-                        })
-                        .unwrap_or_default();
-
-                    state.bridges.push(BridgeInfo {
-                        name: bridge.to_string(),
-                        ports,
-                        bridge_type: "ovs".to_string(),
-                    });
-                }
+                state.bridges.push(BridgeInfo {
+                    name: bridge,
+                    ports,
+                    bridge_type: "ovs".to_string(),
+                });
             }
         }
 
@@ -396,42 +381,47 @@ impl FullSystemPlugin {
     async fn capture_services(&self) -> Result<Vec<ServiceState>> {
         let mut services = Vec::new();
 
-        // Use systemctl to list services
-        let output = Command::new("systemctl")
-            .args([
-                "list-units",
-                "--type=service",
-                "--all",
-                "--plain",
-                "--no-legend",
-            ])
-            .output()
-            .await?;
+        let conn = Connection::system()
+            .await
+            .context("Failed to connect to system D-Bus")?;
+        let proxy = Proxy::new(
+            &conn,
+            "org.freedesktop.systemd1",
+            "/org/freedesktop/systemd1",
+            "org.freedesktop.systemd1.Manager",
+        )
+        .await
+        .context("Failed to create systemd D-Bus proxy")?;
 
-        for line in String::from_utf8_lossy(&output.stdout).lines() {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 4 {
-                let name = parts[0].trim_end_matches(".service").to_string();
-                let running = parts[2] == "running" || parts[2] == "active";
+        #[allow(clippy::type_complexity)]
+        let units: Vec<(String, String, String, String, String, String, zbus::zvariant::OwnedObjectPath, u32, String, zbus::zvariant::OwnedObjectPath)> = proxy
+            .call("ListUnits", &())
+            .await
+            .context("Failed to list systemd units")?;
 
-                // Check if enabled
-                let enabled_output = Command::new("systemctl")
-                    .args(["is-enabled", parts[0]])
-                    .output()
-                    .await;
+        let unit_files: Vec<(String, String)> = proxy
+            .call("ListUnitFiles", &())
+            .await
+            .context("Failed to list systemd unit files")?;
 
-                let enabled = enabled_output
-                    .ok()
-                    .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "enabled")
-                    .unwrap_or(false);
+        let enabled_map: std::collections::HashMap<String, bool> = unit_files
+            .into_iter()
+            .filter(|(name, _)| name.ends_with(".service"))
+            .map(|(name, state)| (name, state == "enabled"))
+            .collect();
 
-                services.push(ServiceState {
-                    name,
-                    enabled,
-                    running,
-                    unit_type: "service".to_string(),
-                });
+        for (name, _desc, _load_state, active_state, _sub_state, _followed, _path, _job_id, _job_type, _job_path) in units {
+            if !name.ends_with(".service") {
+                continue;
             }
+            let running = active_state == "active" || active_state == "running";
+            let enabled = enabled_map.get(&name).copied().unwrap_or(false);
+            services.push(ServiceState {
+                name: name.trim_end_matches(".service").to_string(),
+                enabled,
+                running,
+                unit_type: "service".to_string(),
+            });
         }
 
         Ok(services)
@@ -440,45 +430,41 @@ impl FullSystemPlugin {
     async fn capture_packages(&self) -> Result<Vec<PackageInfo>> {
         let mut packages = Vec::new();
 
-        // Try dpkg first (Debian/Ubuntu)
-        if let Ok(output) = Command::new("dpkg-query")
-            .args(["-W", "-f", "${Package}\t${Version}\t${Architecture}\n"])
-            .output()
+        // Read dpkg status directly (AGENTS.md §4: no subprocess bypasses)
+        let content = tokio::fs::read_to_string("/var/lib/dpkg/status")
             .await
-        {
-            if output.status.success() {
-                for line in String::from_utf8_lossy(&output.stdout).lines() {
-                    let parts: Vec<&str> = line.split('\t').collect();
-                    if parts.len() >= 3 {
-                        packages.push(PackageInfo {
-                            name: parts[0].to_string(),
-                            version: parts[1].to_string(),
-                            arch: parts[2].to_string(),
-                        });
-                    }
+            .unwrap_or_default();
+
+        let mut current_name = None;
+        let mut current_version = None;
+        let mut current_arch = None;
+
+        for line in content.lines() {
+            if let Some(stripped) = line.strip_prefix("Package: ") {
+                current_name = Some(stripped.trim().to_string());
+            } else if let Some(stripped) = line.strip_prefix("Version: ") {
+                current_version = Some(stripped.trim().to_string());
+            } else if let Some(stripped) = line.strip_prefix("Architecture: ") {
+                current_arch = Some(stripped.trim().to_string());
+            } else if line.is_empty() {
+                if let (Some(name), Some(version)) = (current_name.take(), current_version.take()) {
+                    let arch = current_arch.take().unwrap_or_else(|| "unknown".to_string());
+                    packages.push(PackageInfo {
+                        name,
+                        version,
+                        arch,
+                    });
                 }
-                return Ok(packages);
             }
         }
-
-        // Try rpm (RHEL/Fedora)
-        if let Ok(output) = Command::new("rpm")
-            .args(["-qa", "--queryformat", "%{NAME}\t%{VERSION}\t%{ARCH}\n"])
-            .output()
-            .await
-        {
-            if output.status.success() {
-                for line in String::from_utf8_lossy(&output.stdout).lines() {
-                    let parts: Vec<&str> = line.split('\t').collect();
-                    if parts.len() >= 3 {
-                        packages.push(PackageInfo {
-                            name: parts[0].to_string(),
-                            version: parts[1].to_string(),
-                            arch: parts[2].to_string(),
-                        });
-                    }
-                }
-            }
+        // Handle last stanza if file doesn't end with blank line
+        if let (Some(name), Some(version)) = (current_name.take(), current_version.take()) {
+            let arch = current_arch.take().unwrap_or_else(|| "unknown".to_string());
+            packages.push(PackageInfo {
+                name,
+                version,
+                arch,
+            });
         }
 
         Ok(packages)
@@ -486,6 +472,26 @@ impl FullSystemPlugin {
 
     async fn capture_users(&self) -> Result<Vec<UserInfo>> {
         let mut users = Vec::new();
+
+        // Read group memberships directly (AGENTS.md §4: no subprocess bypasses)
+        let groups_content = tokio::fs::read_to_string("/etc/group")
+            .await
+            .unwrap_or_default();
+        let mut group_map: HashMap<String, Vec<String>> = HashMap::new();
+        for line in groups_content.lines() {
+            let parts: Vec<&str> = line.split(':').collect();
+            if parts.len() >= 4 {
+                let group_name = parts[0].to_string();
+                let members: Vec<String> = parts[3]
+                    .split(',')
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string())
+                    .collect();
+                for member in &members {
+                    group_map.entry(member.clone()).or_default().push(group_name.clone());
+                }
+            }
+        }
 
         if let Ok(passwd) = tokio::fs::read_to_string("/etc/passwd").await {
             for line in passwd.lines() {
@@ -499,19 +505,7 @@ impl FullSystemPlugin {
                     }
 
                     let name = parts[0].to_string();
-
-                    // Get groups
-                    let groups_output = Command::new("id").args(["-Gn", &name]).output().await;
-
-                    let groups = groups_output
-                        .ok()
-                        .map(|o| {
-                            String::from_utf8_lossy(&o.stdout)
-                                .split_whitespace()
-                                .map(|s| s.to_string())
-                                .collect()
-                        })
-                        .unwrap_or_default();
+                    let groups = group_map.get(&name).cloned().unwrap_or_default();
 
                     users.push(UserInfo {
                         name,
@@ -559,61 +553,87 @@ impl FullSystemPlugin {
             }
         }
 
-        // Get block devices from lsblk
-        if let Ok(output) = Command::new("lsblk")
-            .args(["-J", "-o", "NAME,SIZE,FSTYPE,MOUNTPOINT"])
-            .output()
-            .await
-        {
-            if output.status.success() {
-                if let Ok(json) = simd_json::from_slice::<Value>(&mut output.stdout.clone()) {
-                    if let Some(devices) = json.get("blockdevices").and_then(|v| v.as_array()) {
-                        for dev in devices {
-                            state.block_devices.push(BlockDeviceInfo {
-                                name: dev
-                                    .get("name")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("")
-                                    .to_string(),
-                                size_bytes: 0, // Would need to parse SIZE
-                                fstype: dev
-                                    .get("fstype")
-                                    .and_then(|v| v.as_str())
-                                    .map(|s| s.to_string()),
-                                mountpoint: dev
-                                    .get("mountpoint")
-                                    .and_then(|v| v.as_str())
-                                    .map(|s| s.to_string()),
-                            });
-                        }
-                    }
+        // Get block devices from /sys/block (AGENTS.md §4: no subprocess bypasses)
+        let sysfs = std::path::Path::new("/sys/block");
+        if sysfs.exists() {
+            let mut entries = match tokio::fs::read_dir(sysfs).await {
+                Ok(e) => e,
+                Err(_) => return Ok(state),
+            };
+
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                let name = entry.file_name().to_string_lossy().to_string();
+                // Skip loop devices and ramdisks
+                if name.starts_with("loop") || name.starts_with("ram") {
+                    continue;
                 }
+
+                let size_path = entry.path().join("size");
+                let size_sectors = tokio::fs::read_to_string(&size_path)
+                    .await
+                    .ok()
+                    .and_then(|s| s.trim().parse::<u64>().ok())
+                    .unwrap_or(0);
+                let size_bytes = size_sectors * 512;
+
+                let mountpoint = Self::read_mountpoint(&name).await;
+
+                state.block_devices.push(BlockDeviceInfo {
+                    name,
+                    size_bytes,
+                    fstype: None,
+                    mountpoint,
+                });
             }
         }
 
         Ok(state)
     }
 
-    async fn capture_containers(&self) -> Result<ContainerState> {
-        let mut state = ContainerState::default();
-
-        // LXC containers
-        if let Ok(output) = Command::new("lxc-ls").args(["-f"]).output().await {
-            if output.status.success() {
-                for line in String::from_utf8_lossy(&output.stdout).lines().skip(1) {
-                    let parts: Vec<&str> = line.split_whitespace().collect();
-                    if parts.len() >= 2 {
-                        state.lxc.push(LxcContainerInfo {
-                            name: parts[0].to_string(),
-                            status: parts[1].to_string(),
-                            config: json!({}),
-                        });
-                    }
+    async fn read_mountpoint(device: &str) -> Option<String> {
+        let mounts = tokio::fs::read_to_string("/proc/mounts").await.ok()?;
+        for line in mounts.lines() {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 2 {
+                let dev = parts[0];
+                if dev.contains(device) {
+                    return Some(parts[1].to_string());
                 }
             }
         }
+        None
+    }
 
-        // Docker containers
+    async fn capture_containers(&self) -> Result<ContainerState> {
+        let mut state = ContainerState::default();
+
+        // LXC containers - read /var/lib/lxc/ directly (AGENTS.md §4: no subprocess bypasses)
+        let lxc_dir = std::path::Path::new("/var/lib/lxc");
+        if lxc_dir.exists() {
+            let mut entries = match tokio::fs::read_dir(lxc_dir).await {
+                Ok(e) => e,
+                Err(_) => {
+                    // fall through to docker check
+                    return Ok(state);
+                }
+            };
+
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                let name = entry.file_name().to_string_lossy().to_string();
+                // Skip files, only directories are containers
+                if !entry.file_type().await.ok().map(|t| t.is_dir()).unwrap_or(false) {
+                    continue;
+                }
+                state.lxc.push(LxcContainerInfo {
+                    name,
+                    status: "unknown".to_string(),
+                    config: json!({}),
+                });
+            }
+        }
+
+        // TODO: Docker containers should be queried via D-Bus or API, not CLI.
+        // Keeping as a fallback until Docker D-Bus interface is implemented.
         if let Ok(output) = Command::new("docker")
             .args([
                 "ps",

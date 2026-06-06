@@ -4,7 +4,6 @@ use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateD
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
-use tokio::process::Command;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GcloudAdcState {
@@ -37,29 +36,42 @@ impl GcloudAdcPlugin {
             false
         };
 
-        // Try to get active account and project from gcloud config
-        let output = Command::new("gcloud")
-            .args(["config", "list", "--format=json"])
-            .output()
-            .await;
-
+        // Read gcloud config directly from file (AGENTS.md §4: no subprocess bypasses)
         let mut account = None;
         let mut project_id = None;
 
-        if let Ok(output) = output {
-            if output.status.success() {
-                if let Ok(json) = std::str::from_utf8(&output.stdout) {
-                    if let Ok(val) = simd_json::to_owned_value(&mut json.as_bytes().to_vec()) {
-                        account = val
-                            .get("core")
-                            .and_then(|c| c.get("account"))
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string());
-                        project_id = val
-                            .get("core")
-                            .and_then(|c| c.get("project"))
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string());
+        if let Some(home) = dirs::home_dir() {
+            let active_config_path = home.join(".config/gcloud/active_config");
+            let active_config = tokio::fs::read_to_string(&active_config_path)
+                .await
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+
+            let config_name = if active_config.is_empty() {
+                "config_default"
+            } else {
+                &format!("config_{}", active_config)
+            };
+
+            let config_path = home.join(".config/gcloud/configurations").join(config_name);
+
+            if let Ok(content) = tokio::fs::read_to_string(&config_path).await {
+                let mut current_section = String::new();
+                for line in content.lines() {
+                    let trimmed = line.trim();
+                    if trimmed.starts_with('[') && trimmed.ends_with(']') {
+                        current_section = trimmed[1..trimmed.len()-1].to_string();
+                    } else if let Some((key, value)) = trimmed.split_once('=') {
+                        let key = key.trim();
+                        let value = value.trim().trim_matches('"').to_string();
+                        if current_section == "core" {
+                            match key {
+                                "account" => account = Some(value),
+                                "project" => project_id = Some(value),
+                                _ => {}
+                            }
+                        }
                     }
                 }
             }

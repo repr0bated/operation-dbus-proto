@@ -559,7 +559,7 @@ impl {struct_name} {{
     async fn execute(&self, mut task_json: String) -> zbus::fdo::Result<String> {{
         println!("[{{}}] Received task: {{}}", self.agent_id, task_json);
 
-        let task: {struct_name}Task = match unsafe {{ simd_json::from_str(&mut task_json) }} {{
+        let task: {struct_name}Task = match serde_json::from_str(&task_json) {{
             Ok(t) => t,
             Err(e) => {{
                 return Err(zbus::fdo::Error::InvalidArgs(format!(

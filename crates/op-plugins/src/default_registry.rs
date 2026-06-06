@@ -29,11 +29,12 @@ use crate::state_plugins::{
     CognitiveMcpPlugin, CompactMcpPlugin, ConfigPlugin, CronPlugin, CtlPlaneChatbotPlugin,
     DnsResolverPlugin, EndpointPlugin, FactoryPlugin, Fail2banPlugin, FreeDesktopPlugin,
     FullSystemPlugin, GcloudAdcPlugin, HardwarePlugin, IncusPlugin, KeypairPlugin, KeyringPlugin,
-    KnowledgePlugin, Login1Plugin, MailServerPlugin, McpStatePlugin, MemoryPlugin, NetStatePlugin,
-    OpenFlowPlugin, OvsBridgePlugin, PackageKitPlugin, PciDeclPlugin, PrivacyRouterPlugin,
-    PrivacyRoutesPlugin, ProcfsPlugin, ProxmoxPlugin, ProxyServerPlugin, RtnetlinkPlugin,
-    S6StatePlugin, SchemaRendererPlugin, ServicePlugin, SessDeclPlugin, SoftwarePlugin,
-    UnixSocketPlugin, UsersPlugin, WebUiPlugin, WireGuardPlugin, WorkflowsPlugin, ZeroclawPlugin,
+    KnowledgePlugin, Login1Plugin, LxcPlugin, MailServerPlugin, McpStatePlugin, MemoryPlugin,
+    NetStatePlugin, NetmakerConfig, NetmakerPlugin, OpenFlowPlugin, OvsBridgePlugin, OvsdbDaemonPlugin,
+    PackageKitPlugin, PciDeclPlugin, PrivacyRouterPlugin, PrivacyRoutesPlugin, ProcfsPlugin,
+    ProxmoxPlugin, ProxyServerPlugin, RovsCommandsPlugin, RtnetlinkPlugin, S6StatePlugin,
+    SchemaRendererPlugin, ServicePlugin, SessDeclPlugin, SoftwarePlugin, UnixSocketPlugin,
+    UsersPlugin, WebUiPlugin, WireGuardPlugin, WorkflowsPlugin, ZeroclawPlugin,
 };
 use crate::AutoPlugin;
 
@@ -85,11 +86,18 @@ fn default_auto_load() -> Vec<String> {
         "net".to_string(),
         "openflow".to_string(),
         "ovsdb_bridge".to_string(),
+        "ovsdb_daemon".to_string(),
         "privacy_router".to_string(),
+        "rovs_commands".to_string(),
         "privacy_routes".to_string(),
         "procfs".to_string(),
         "rtnetlink".to_string(),
         "agent_config".to_string(),
+        // Always-loaded knowledge / compliance / schema plugins
+        "memory".to_string(),
+        "knowledge".to_string(),
+        "schema_renderer".to_string(),
+        "workflows".to_string(),
     ]
 }
 
@@ -322,10 +330,14 @@ impl DefaultPluginRegistry {
             "wireguard" => Arc::new(WireGuardPlugin::new()),
             "agent_config" => Arc::new(AgentConfigPlugin::new()),
             "ovsdb_bridge" => Arc::new(OvsBridgePlugin::new()),
+            "ovsdb_daemon" => Arc::new(OvsdbDaemonPlugin::new()),
             "privacy_routes" => Arc::new(PrivacyRoutesPlugin::default()),
             "procfs" => Arc::new(ProcfsPlugin::new()),
+            "rovs_commands" => Arc::new(RovsCommandsPlugin::new()),
             "rtnetlink" => Arc::new(RtnetlinkPlugin::new()),
             "sess_decl" => Arc::new(SessDeclPlugin::new()),
+            "lxc" => Arc::new(LxcPlugin::new()),
+            "netmaker" => Arc::new(NetmakerPlugin::new(NetmakerConfig::default())),
             "adc" => Arc::new(AdcPlugin::new()),
             "endpoint" => Arc::new(EndpointPlugin::new()),
             "proxy_server" => Arc::new(ProxyServerPlugin::new()),

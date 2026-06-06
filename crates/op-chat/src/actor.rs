@@ -266,6 +266,7 @@ pub struct ChatActorHandle {
 
 impl ChatActorHandle {
     /// Send a request and wait for response
+    #[tracing::instrument(skip(self))]
     pub async fn call(&self, request: RpcRequest) -> Result<RpcResponse> {
         let (tx, rx) = oneshot::channel();
         self.sender
@@ -280,6 +281,7 @@ impl ChatActorHandle {
     }
 
     /// Fire and forget (for notifications)
+    #[tracing::instrument(skip(self))]
     pub async fn notify(&self, request: RpcRequest) -> Result<()> {
         let (tx, _rx) = oneshot::channel();
         self.sender
@@ -293,12 +295,14 @@ impl ChatActorHandle {
 
     // === Convenience methods ===
 
+    #[tracing::instrument(skip(self))]
     pub async fn health(&self) -> RpcResponse {
         self.call(RpcRequest::Health)
             .await
             .unwrap_or_else(|e| RpcResponse::error(e.to_string()))
     }
 
+    #[tracing::instrument(skip(self))]
     pub async fn list_tools(&self) -> RpcResponse {
         self.call(RpcRequest::ListTools {
             offset: None,
@@ -308,6 +312,7 @@ impl ChatActorHandle {
         .unwrap_or_else(|e| RpcResponse::error(e.to_string()))
     }
 
+    #[tracing::instrument(skip(self))]
     pub async fn execute_tool(&self, request: op_core::ToolRequest) -> RpcResponse {
         self.call(RpcRequest::ExecuteTool {
             name: request.tool_name.clone(),
@@ -318,6 +323,7 @@ impl ChatActorHandle {
         .unwrap_or_else(|e| RpcResponse::error(e.to_string()))
     }
 
+    #[tracing::instrument(skip(self, message))]
     pub async fn chat(&self, session_id: Option<String>, message: &str) -> RpcResponse {
         let session_id = session_id.unwrap_or_else(|| "default".to_string());
         self.call(RpcRequest::Chat {
@@ -330,10 +336,12 @@ impl ChatActorHandle {
         .unwrap_or_else(|e| RpcResponse::error(e.to_string()))
     }
 
+    #[tracing::instrument(skip(self))]
     pub async fn list_services(&self, _bus_type: op_core::BusType) -> RpcResponse {
         RpcResponse::error("List services not supported via RPC yet")
     }
 
+    #[tracing::instrument(skip(self))]
     pub async fn introspect(
         &self,
         bus_type: op_core::BusType,

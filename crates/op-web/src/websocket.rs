@@ -71,7 +71,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
         ),
     };
     if let Err(e) = ws_sender
-        .send(Message::Text(simd_json::to_string(&welcome).unwrap()))
+        .send(Message::Text(simd_json::to_string(&welcome).expect("websocket message serialization should not fail")))
         .await
     {
         error!("Failed to send welcome: {}", e);
@@ -100,15 +100,14 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                     debug!("WS received: {}", text);
 
                     // Try to parse as WsMessage
-                    let mut raw = text.clone();
-                    let ws_msg: Result<WsMessage, _> = unsafe { simd_json::from_str(&mut raw) };
+                    let ws_msg: Result<WsMessage, _> = serde_json::from_str(&text);
 
                     let message_text = match ws_msg {
                         Ok(WsMessage::Chat { message, .. }) => message,
                         Ok(WsMessage::Ping) => {
                             let pong = WsMessage::Pong;
                             let _ = session_tx_clone
-                                .send(simd_json::to_string(&pong).unwrap())
+                                .send(simd_json::to_string(&pong).expect("websocket message serialization should not fail"))
                                 .await;
                             continue;
                         }
@@ -170,7 +169,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                                 tools_executed: result.tools_executed,
                             };
                             let _ = session_tx_clone
-                                .send(simd_json::to_string(&response).unwrap())
+                                .send(simd_json::to_string(&response).expect("websocket message serialization should not fail"))
                                 .await;
                         }
                         Err(e) => {
@@ -178,7 +177,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                                 message: e.to_string(),
                             };
                             let _ = session_tx_clone
-                                .send(simd_json::to_string(&error).unwrap())
+                                .send(simd_json::to_string(&error).expect("websocket message serialization should not fail"))
                                 .await;
                         }
                     }

@@ -123,15 +123,36 @@ impl CognitiveMcpPlugin {
     }
 
     async fn reload_service() -> Result<()> {
-        let out = tokio::process::Command::new("s6-svc")
-            .args(["-r", S6_SV_PATH])
-            .output()
+        // D-Bus only per AGENTS.md §4 - no subprocess fallbacks
+        Self::reload_service_dbus().await
+    }
+
+    async fn reload_service_dbus() -> Result<()> {
+        let conn = zbus::Connection::system()
             .await
-            .context("s6-svc -r op-cognitive-mcp")?;
-        if !out.status.success() {
-            tracing::warn!("s6-svc -r failed: {}", String::from_utf8_lossy(&out.stderr));
+            .context("Failed to connect to system D-Bus")?;
+
+        let reply = conn
+            .call_method(
+                Some("opdbus.v1"),
+                "/opdbus/v1/s6/systemctl",
+                Some("opdbus.v1.S6.Systemctl"),
+                "reload",
+                &("op-cognitive-mcp",),
+            )
+            .await
+            .context("Failed to call reload on s6-systemctl D-Bus service")?;
+
+        let (success, message): (bool, String) = reply.body().deserialize().map_err(|e| {
+            anyhow::anyhow!("Failed to deserialize s6-systemctl reload response: {}", e)
+        })?;
+
+        if success {
+            tracing::info!("Reloaded op-cognitive-mcp via D-Bus: {}", message);
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("s6-systemctl reload failed: {}", message))
         }
-        Ok(())
     }
 }
 

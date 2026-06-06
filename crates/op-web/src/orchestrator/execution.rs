@@ -59,8 +59,7 @@ impl UnifiedOrchestrator {
         let parts: Vec<&str> = input.splitn(2, ' ').collect();
         let tool_name = parts[0].trim();
         let args: Value = if parts.len() > 1 {
-            let mut raw = parts[1].trim().to_string();
-            unsafe { simd_json::from_str(&mut raw) }.unwrap_or(json!({}))
+            serde_json::from_str(parts[1].trim()).unwrap_or(json!({}))
         } else {
             json!({})
         };
@@ -204,9 +203,8 @@ impl UnifiedOrchestrator {
             };
         }
 
-        match self.tool_registry.get(tool_name).await {
-            Some(_tool) => {
-                let def = self.tool_registry.get_definition(tool_name).await.unwrap();
+        match self.tool_registry.get_definition(tool_name).await {
+            Some(def) => {
                 ToolResult {
                     name: "get_tool_schema".to_string(),
                     success: true,

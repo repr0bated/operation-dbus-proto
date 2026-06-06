@@ -321,8 +321,8 @@ impl EventBatch {
 
         Some(Self {
             batch_root,
-            first_event_id: events.first().unwrap().event_id,
-            last_event_id: events.last().unwrap().event_id,
+            first_event_id: events.first()?.event_id,
+            last_event_id: events.last()?.event_id,
             prev_batch_root,
             timestamp: Utc::now(),
             event_count: events.len(),
@@ -518,7 +518,7 @@ impl EventChain {
             self.create_batch();
         }
 
-        self.events.last().unwrap()
+        self.events.last().expect("event just pushed")
     }
 
     /// Create a new event and append it
@@ -589,7 +589,7 @@ impl EventChain {
         let snapshot = StateSnapshot::new(event_id, plugin_id, schema_version, state);
         let id = snapshot.snapshot_id.clone();
         self.snapshots.insert(id.clone(), snapshot);
-        self.snapshots.get(&id).unwrap()
+        self.snapshots.get(&id).expect("snapshot just inserted")
     }
 
     /// Verify the entire chain

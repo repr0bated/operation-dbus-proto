@@ -37,9 +37,9 @@ impl ConfigPlugin {
 
     async fn load_store(&self) -> Result<ConfigStoreState> {
         match tokio::fs::read_to_string(&self.store_path).await {
-            Ok(mut content) => {
+            Ok(content) => {
                 let parsed: ConfigStoreState =
-                    unsafe { simd_json::from_str(&mut content) }.context("invalid config store")?;
+                    serde_json::from_str(&content).context("invalid config store")?;
                 Ok(parsed)
             }
             Err(_) => Ok(ConfigStoreState {

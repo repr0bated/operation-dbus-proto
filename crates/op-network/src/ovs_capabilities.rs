@@ -96,6 +96,9 @@ impl OvsCapabilities {
 
     /// Detect OVS capabilities without using cache
     pub async fn detect_fresh() -> Self {
+        // SAFETY: `libc::geteuid()` is a POSIX syscall that reads the effective user ID from
+        // the process credential table. It does not dereference any pointers, modify global
+        // state, or have any preconditions. It is always safe to call.
         let is_root = unsafe { libc::geteuid() == 0 };
         let ovsdb_socket_exists = Path::new("/var/run/openvswitch/db.sock").exists();
         let ovs_running = ovsdb_socket_exists && Self::check_ovsdb_responds().await;

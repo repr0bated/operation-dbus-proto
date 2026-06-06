@@ -53,8 +53,8 @@ impl PrivacyRoutesPlugin {
 
     async fn load_store(&self) -> Result<PrivacyRoutesState> {
         match tokio::fs::read_to_string(&self.store_path).await {
-            Ok(mut content) => {
-                let mut state: PrivacyRoutesState = unsafe { simd_json::from_str(&mut content) }
+            Ok(content) => {
+                let mut state: PrivacyRoutesState = serde_json::from_str(&content)
                     .context("invalid privacy route store")?;
                 state.routes.sort_by(|a, b| a.route_id.cmp(&b.route_id));
                 Ok(state)

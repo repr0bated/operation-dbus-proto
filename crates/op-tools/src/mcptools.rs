@@ -203,8 +203,7 @@ fn load_mcp_config() -> Result<McpToolsConfig> {
             });
         }
 
-        let mut raw_mut = raw;
-        if let Ok(list) = unsafe { simd_json::from_str::<Vec<McpToolsServerConfig>>(&mut raw_mut) }
+        if let Ok(list) = serde_json::from_str::<Vec<McpToolsServerConfig>>(&raw)
         {
             return Ok(McpToolsConfig {
                 allow_unprefixed_names,
@@ -212,8 +211,7 @@ fn load_mcp_config() -> Result<McpToolsConfig> {
             });
         }
 
-        let mut raw_mut2 = raw_mut;
-        let single = unsafe { simd_json::from_str::<McpToolsServerConfig>(&mut raw_mut2) }
+        let single = serde_json::from_str::<McpToolsServerConfig>(&raw)
             .context("OP_MCPTOOLS_SERVERS must be JSON (array or object)")?;
         return Ok(McpToolsConfig {
             allow_unprefixed_names,
@@ -222,9 +220,9 @@ fn load_mcp_config() -> Result<McpToolsConfig> {
     }
 
     if let Some(config_path) = resolve_config_path() {
-        let mut raw = std::fs::read_to_string(&config_path)
+        let raw = std::fs::read_to_string(&config_path)
             .with_context(|| format!("Failed to read {}", config_path))?;
-        let mut config: McpToolsConfig = unsafe { simd_json::from_str(&mut raw) }
+        let mut config: McpToolsConfig = serde_json::from_str(&raw)
             .with_context(|| format!("Failed to parse {}", config_path))?;
         if allow_unprefixed_names {
             config.allow_unprefixed_names = true;
@@ -275,9 +273,8 @@ async fn list_mcp_tools(mcp_bin: &str, server: &McpToolsServerConfig) -> Result<
         anyhow::bail!("mcptools tools failed: {}", stderr.trim());
     }
 
-    let mut stdout_mut = stdout;
-    let payload: Value = unsafe { simd_json::from_str(&mut stdout_mut) }
-        .with_context(|| format!("Failed to parse mcptools output: {}", stdout_mut))?;
+    let payload: Value = serde_json::from_str(&stdout)
+        .with_context(|| format!("Failed to parse mcptools output: {}", stdout))?;
     let tools = payload
         .get("tools")
         .and_then(|value| value.as_array())
@@ -339,9 +336,8 @@ async fn run_mcp_call(
         anyhow::bail!("mcptools call failed: {}", stderr.trim());
     }
 
-    let mut stdout_mut = stdout;
-    let payload: Value = unsafe { simd_json::from_str(&mut stdout_mut) }
-        .with_context(|| format!("Failed to parse mcptools output: {}", stdout_mut))?;
+    let payload: Value = serde_json::from_str(&stdout)
+        .with_context(|| format!("Failed to parse mcptools output: {}", stdout))?;
     Ok(payload)
 }
 

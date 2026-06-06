@@ -241,9 +241,9 @@ impl PatternTracker {
             .query_map(
                 rusqlite::params![self.config.promotion_threshold, cutoff],
                 |row| {
-                    let mut agent_sequence_json: String = row.get(1)?;
+                    let agent_sequence_json: String = row.get(1)?;
                     let agent_sequence: Vec<String> =
-                        unsafe { simd_json::from_str(&mut agent_sequence_json) }
+                        serde_json::from_str(&agent_sequence_json)
                             .unwrap_or_default();
                     let call_count: u32 = row.get(2)?;
                     let total_latency: i64 = row.get(5)?;

@@ -90,7 +90,15 @@ impl Default for EncryptedStorageConfig {
 }
 
 impl EncryptedKeyStorage {
+    /// Helper to get storage path as string with proper error handling
+    fn storage_path_str(&self) -> anyhow::Result<&str> {
+        self.storage_path
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("Storage path contains invalid UTF-8"))
+    }
+
     /// Create new encrypted key storage
+    #[tracing::instrument]
     pub async fn new(config: EncryptedStorageConfig) -> Result<Self> {
         info!(
             "Initializing encrypted key storage at {:?}",
@@ -151,12 +159,13 @@ impl EncryptedKeyStorage {
 
         // Create encrypted subvolume using btrfs command
         // Note: This requires kernel support for Btrfs encryption
+        let path_str = self.storage_path_str()?;
         let output = Command::new("btrfs")
             .args([
                 "subvolume",
                 "create",
                 "-e", // Enable encryption (experimental)
-                self.storage_path.to_str().unwrap(),
+                path_str,
             ])
             .output()
             .map_err(|e| anyhow::anyhow!("Failed to execute btrfs command: {}", e))?;
@@ -246,8 +255,9 @@ impl EncryptedKeyStorage {
     async fn create_regular_subvolume(&self) -> Result<()> {
         info!("Creating regular Btrfs subvolume: {:?}", self.storage_path);
 
+        let path_str = self.storage_path_str()?;
         let output = Command::new("btrfs")
-            .args(["subvolume", "create", self.storage_path.to_str().unwrap()])
+            .args(["subvolume", "create", path_str])
             .output()
             .map_err(|e| anyhow::anyhow!("Failed to execute btrfs command: {}", e))?;
 
@@ -265,8 +275,9 @@ impl EncryptedKeyStorage {
     async fn mount_luks_device(&self, device_path: &str) -> Result<()> {
         async_fs::create_dir_all(&self.storage_path).await?;
 
+        let path_str = self.storage_path_str()?;
         let output = Command::new("mount")
-            .args([device_path, self.storage_path.to_str().unwrap()])
+            .args([device_path, path_str])
             .output()
             .map_err(|e| anyhow::anyhow!("Failed to mount LUKS device: {}", e))?;
 
@@ -371,6 +382,7 @@ impl EncryptedKeyStorage {
     }
 
     /// Store encrypted key
+    #[tracing::instrument(skip(self))]
     pub async fn store_key(
         &mut self,
         key_id: &str,
@@ -407,7 +419,7 @@ impl EncryptedKeyStorage {
             nonce,
             created_at: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
+                .unwrap_or_default()
                 .as_secs(),
             key_type,
             metadata: std::collections::HashMap::new(),
@@ -429,6 +441,7 @@ impl EncryptedKeyStorage {
     }
 
     /// Retrieve and decrypt key
+    #[tracing::instrument(skip(self))]
     pub async fn retrieve_key(&self, key_id: &str) -> anyhow::Result<Vec<u8>> {
         if !self.is_initialized {
             return Err(anyhow::anyhow!("Storage not initialized"));
@@ -446,8 +459,9 @@ impl EncryptedKeyStorage {
         }
 
         let entry_json = async_fs::read_to_string(&key_file_path).await?;
-        let mut entry_str = entry_json.clone();
-        let entry: EncryptedKeyEntry = unsafe { simd_json::from_str(&mut entry_str) }?;
+        let mut entry_bytes = entry_json.into_bytes();
+        let entry: EncryptedKeyEntry = simd_json::from_slice(&mut entry_bytes)
+            .map_err(|e| anyhow::anyhow!("Failed to deserialize key entry: {}", e))?;
 
         // Decrypt the key data
         let cipher = ChaCha20Poly1305::new(Key::from_slice(&master_key.key));
@@ -462,6 +476,7 @@ impl EncryptedKeyStorage {
     }
 
     /// List all stored keys
+    #[tracing::instrument(skip(self))]
     pub async fn list_keys(&self) -> anyhow::Result<Vec<String>> {
         if !self.is_initialized {
             return Err(anyhow::anyhow!("Storage not initialized"));
@@ -487,6 +502,7 @@ impl EncryptedKeyStorage {
     }
 
     /// Delete a key
+    #[tracing::instrument(skip(self))]
     pub async fn delete_key(&self, key_id: &str) -> anyhow::Result<()> {
         if !self.is_initialized {
             return Err(anyhow::anyhow!("Storage not initialized"));
@@ -503,6 +519,7 @@ impl EncryptedKeyStorage {
     }
 
     /// Get storage statistics
+    #[tracing::instrument(skip(self))]
     pub async fn get_stats(&self) -> anyhow::Result<StorageStats> {
         if !self.is_initialized {
             return Err(anyhow::anyhow!("Storage not initialized"));
@@ -533,8 +550,9 @@ impl EncryptedKeyStorage {
 
     /// Get filesystem information
     async fn get_filesystem_info(&self) -> anyhow::Result<FilesystemInfo> {
+        let path_str = self.storage_path_str()?;
         let output = Command::new("df")
-            .args(["-T", self.storage_path.to_str().unwrap()])
+            .args(["-T", path_str])
             .output()
             .map_err(|e| anyhow::anyhow!("Failed to get filesystem info: {}", e))?;
 

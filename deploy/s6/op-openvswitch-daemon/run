@@ -1,0 +1,3 @@
+#!/bin/sh
+export OVSDB_SOCKET="${OVSDB_SOCKET:-/run/openvswitch/db.sock}"
+exec /usr/local/bin/op-openvswitch-daemon --grpc 127.0.0.1:50051

@@ -102,29 +102,27 @@ fn parse_review_response(result: Value) -> ArchitectReviewResponse {
         .and_then(|v| v.as_array())
         .map(|arr| {
             arr.iter()
-                .map(|f| {
-                    ReviewIssue {
-                        category: f
-                            .get("category")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string(),
-                        severity: f
-                            .get("severity")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("info")
-                            .to_string(),
-                        description: f
-                            .get("description")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string(),
-                        recommendation: f
-                            .get("recommendation")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string(),
-                    }
+                .map(|f| ReviewIssue {
+                    category: f
+                        .get("category")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    severity: f
+                        .get("severity")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("info")
+                        .to_string(),
+                    description: f
+                        .get("description")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    recommendation: f
+                        .get("recommendation")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
                 })
                 .collect()
         })
@@ -155,26 +153,24 @@ fn parse_suggest_response(result: Value) -> ArchitectSuggestResponse {
         .and_then(|v| v.as_array())
         .map(|arr| {
             arr.iter()
-                .map(|f| {
-                    Suggestion {
-                        title: f
-                            .get("title")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string(),
-                        description: f
-                            .get("description")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string(),
-                        rationale: f
-                            .get("rationale")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string(),
-                        effort: f.get("effort").and_then(|v| v.as_i64()).unwrap_or(3) as i32,
-                        impact: f.get("impact").and_then(|v| v.as_i64()).unwrap_or(3) as i32,
-                    }
+                .map(|f| Suggestion {
+                    title: f
+                        .get("title")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    description: f
+                        .get("description")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    rationale: f
+                        .get("rationale")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    effort: f.get("effort").and_then(|v| v.as_i64()).unwrap_or(3) as i32,
+                    impact: f.get("impact").and_then(|v| v.as_i64()).unwrap_or(3) as i32,
                 })
                 .collect()
         })
@@ -200,6 +196,7 @@ impl BackendArchitectService for OrchestrationServer {
     type DocumentStream =
         Pin<Box<dyn tokio_stream::Stream<Item = Result<DocumentChunk, Status>> + Send + 'static>>;
 
+    #[tracing::instrument(skip(self))]
     async fn analyze(
         &self,
         request: Request<ArchitectAnalyzeRequest>,
@@ -231,6 +228,7 @@ impl BackendArchitectService for OrchestrationServer {
         }
     }
 
+    #[tracing::instrument(skip(self))]
     async fn design(
         &self,
         request: Request<ArchitectDesignRequest>,
@@ -265,6 +263,7 @@ impl BackendArchitectService for OrchestrationServer {
         }
     }
 
+    #[tracing::instrument(skip(self))]
     async fn review(
         &self,
         request: Request<ArchitectReviewRequest>,
@@ -297,6 +296,7 @@ impl BackendArchitectService for OrchestrationServer {
         }
     }
 
+    #[tracing::instrument(skip(self))]
     async fn suggest(
         &self,
         request: Request<ArchitectSuggestRequest>,
@@ -327,6 +327,7 @@ impl BackendArchitectService for OrchestrationServer {
         }
     }
 
+    #[tracing::instrument(skip(self))]
     async fn document(
         &self,
         request: Request<ArchitectDocumentRequest>,

@@ -10,7 +10,6 @@ use sha2::{Digest, Sha256};
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
 use std::path::PathBuf;
-use std::process::Command;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -125,51 +124,77 @@ impl DynamicLoadingPlugin {
     pub async fn get_config(&self) -> Result<DynamicLoadingConfig> {
         Ok(self.config.read().await.clone())
     }
-    /// Ensure BTRFS subvolume exists for plugin storage
+    /// Ensure plugin storage directory exists
     async fn ensure_btrfs_subvolume(&self) -> Result<()> {
-        use std::process::Command;
+        // Check if the path is on a btrfs filesystem by reading mountinfo
+        let path_str = self.storage_path.to_string_lossy();
+        let mounts = tokio::fs::read_to_string("/proc/self/mountinfo").await.unwrap_or_default();
 
-        // Check if BTRFS subvolume exists
-        let output = Command::new("btrfs")
-            .arg("subvolume")
-            .arg("list")
-            .arg(&self.storage_path)
-            .output()?;
+        let is_btrfs = mounts.lines().any(|line| {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() > 8 {
+                let fstype = parts.get(8).unwrap_or(&"");
+                let mountpoint = parts.get(4).unwrap_or(&"");
+                *fstype == "btrfs" && path_str.starts_with(mountpoint)
+            } else {
+                false
+            }
+        });
 
-        if !output.status.success() {
-            // Create BTRFS subvolume if it doesn't exist
-            Command::new("btrfs")
-                .arg("subvolume")
-                .arg("create")
-                .arg(&self.storage_path)
-                .status()?;
-
-            tracing::info!("Created BTRFS subvolume: {}", self.storage_path.display());
+        if is_btrfs {
+            tracing::info!("Storage path is on BTRFS: {}", self.storage_path.display());
         }
+
+        // Ensure directory exists (regular directory ops regardless of filesystem)
+        tokio::fs::create_dir_all(&self.storage_path).await?;
 
         Ok(())
     }
 
-    /// Get BTRFS subvolume information
+    /// Get BTRFS filesystem information via sysfs
     pub async fn get_btrfs_info(&self) -> Result<Value> {
-        let output = Command::new("btrfs")
-            .arg("subvolume")
-            .arg("show")
-            .arg(&self.storage_path)
-            .output()?;
+        let path_str = self.storage_path.to_string_lossy();
+        let mounts = tokio::fs::read_to_string("/proc/self/mountinfo").await.unwrap_or_default();
 
-        if output.status.success() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            Ok(json!({
-                "subvolume": self.storage_path.display().to_string(),
-                "info": stdout.to_string()
-            }))
-        } else {
-            Ok(json!({
-                "subvolume": self.storage_path.display().to_string(),
-                "error": "Subvolume not found or not BTRFS"
-            }))
+        let mut info = json!({
+            "subvolume": self.storage_path.display().to_string(),
+            "info": "Not on a BTRFS filesystem"
+        });
+
+        for line in mounts.lines() {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() > 8 && parts[8] == "btrfs" {
+                let mountpoint = parts.get(4).unwrap_or(&"").to_string();
+                if path_str.starts_with(&mountpoint) {
+                    // Read btrfs sysfs info if available
+                    let mut btrfs_sysfs = json!({
+                        "mountpoint": mountpoint,
+                        "device": parts.get(3).unwrap_or(&"").to_string(),
+                        "filesystem": "btrfs"
+                    });
+
+                    // Try to read btrfs UUID from sysfs
+                    if let Ok(entries) = tokio::fs::read_dir("/sys/fs/btrfs").await {
+                        let mut uuids = Vec::new();
+                        let mut dir = entries;
+                        while let Ok(Some(entry)) = dir.next_entry().await {
+                            let name = entry.file_name().to_string_lossy().to_string();
+                            if !name.starts_with('.') {
+                                uuids.push(name);
+                            }
+                        }
+                        if !uuids.is_empty() {
+                            btrfs_sysfs["uuids"] = json!(uuids);
+                        }
+                    }
+
+                    info = btrfs_sysfs;
+                    break;
+                }
+            }
         }
+
+        Ok(info)
     }
 }
 

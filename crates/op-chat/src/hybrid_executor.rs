@@ -116,7 +116,7 @@ impl HybridExecutor {
 
         let tool_name = parts[0].to_string();
         if parts.len() > 1 && parts[1].trim().starts_with('{') {
-            unsafe { simd_json::from_str(&mut parts[1].to_string()) }.unwrap_or(json!({}))
+            serde_json::from_str(parts[1]).unwrap_or(json!({}))
         } else {
             json!({})
         };

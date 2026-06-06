@@ -18,8 +18,6 @@ pub enum GatewayError {
     Internal(String),
 }
 
-pub type Result<T> = std::result::Result<T, GatewayError>;
-
 impl GatewayError {
     pub fn internal(msg: impl Into<String>) -> Self {
         Self::Internal(msg.into())

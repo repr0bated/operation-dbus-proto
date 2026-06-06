@@ -194,11 +194,8 @@ pub fn validate_json_input(json: &str) -> Result<simd_json::OwnedValue, Validati
     }
 
     // Parse JSON to ensure it's valid
-    let mut json_mut = json.to_string();
-    unsafe {
-        simd_json::from_str(&mut json_mut)
-            .map_err(|_| ValidationError::InvalidPath("Invalid JSON".to_string()))
-    }
+    serde_json::from_str(json)
+        .map_err(|_| ValidationError::InvalidPath("Invalid JSON".to_string()))
 }
 
 /// Sanitize output by truncating if necessary

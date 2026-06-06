@@ -40,26 +40,26 @@ impl Default for MemoryStore {
 #[async_trait]
 impl StateStore for MemoryStore {
     async fn save_job(&self, job: &ExecutionJob) -> Result<()> {
-        let mut jobs = self.jobs.lock().unwrap();
+        let mut jobs = self.jobs.lock().expect("mutex should not be poisoned");
         jobs.insert(job.id, job.clone());
         debug!("Saved job {} ({}) to memory", job.id, job.tool_name);
         Ok(())
     }
 
     async fn get_job(&self, id: Uuid) -> Result<Option<ExecutionJob>> {
-        let jobs = self.jobs.lock().unwrap();
+        let jobs = self.jobs.lock().expect("mutex should not be poisoned");
         Ok(jobs.get(&id).cloned())
     }
 
     async fn update_job(&self, job: &ExecutionJob) -> Result<()> {
-        let mut jobs = self.jobs.lock().unwrap();
+        let mut jobs = self.jobs.lock().expect("mutex should not be poisoned");
         jobs.insert(job.id, job.clone());
         debug!("Updated job {} in memory", job.id);
         Ok(())
     }
 
     async fn get_object(&self, id: &str) -> Result<Option<StoredObject>> {
-        let objects = self.objects.lock().unwrap();
+        let objects = self.objects.lock().expect("mutex should not be poisoned");
         Ok(objects.get(id).cloned())
     }
 
@@ -70,7 +70,7 @@ impl StateStore for MemoryStore {
         namespace: &str,
         data: &simd_json::OwnedValue,
     ) -> Result<()> {
-        let mut objects = self.objects.lock().unwrap();
+        let mut objects = self.objects.lock().expect("mutex should not be poisoned");
         objects.insert(
             id.to_string(),
             StoredObject {
@@ -85,8 +85,8 @@ impl StateStore for MemoryStore {
     }
 
     async fn export_canonical(&self) -> Result<CanonicalDbExport> {
-        let objects = self.objects.lock().unwrap();
-        let jobs = self.jobs.lock().unwrap();
+        let objects = self.objects.lock().expect("mutex should not be poisoned");
+        let jobs = self.jobs.lock().expect("mutex should not be poisoned");
 
         let mut executions = Vec::new();
         for job in jobs.values() {
@@ -103,24 +103,24 @@ impl StateStore for MemoryStore {
     }
 
     async fn save_tools(&self, tools: Vec<ToolRecord>) -> Result<()> {
-        let mut stored = self.tools.lock().unwrap();
+        let mut stored = self.tools.lock().expect("mutex should not be poisoned");
         *stored = tools;
         debug!("Saved {} tools to memory", stored.len());
         Ok(())
     }
 
     async fn load_tools(&self) -> Result<Vec<ToolRecord>> {
-        let tools = self.tools.lock().unwrap();
+        let tools = self.tools.lock().expect("mutex should not be poisoned");
         Ok(tools.clone())
     }
 
     async fn is_tools_empty(&self) -> Result<bool> {
-        let tools = self.tools.lock().unwrap();
+        let tools = self.tools.lock().expect("mutex should not be poisoned");
         Ok(tools.is_empty())
     }
 
     async fn clear_tools(&self) -> Result<()> {
-        let mut tools = self.tools.lock().unwrap();
+        let mut tools = self.tools.lock().expect("mutex should not be poisoned");
         tools.clear();
         debug!("Cleared tools from memory");
         Ok(())

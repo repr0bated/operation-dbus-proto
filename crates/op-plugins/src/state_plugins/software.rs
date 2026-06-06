@@ -4,7 +4,6 @@ use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateD
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
-use tokio::process::Command;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SoftwareState {
@@ -33,24 +32,36 @@ impl SoftwarePlugin {
 
     async fn scan_dpkg() -> Vec<PackageInfo> {
         let mut packages = Vec::new();
-        let output = Command::new("dpkg-query")
-            .args(["-W", "-f=${Package} ${Version}\n"])
-            .output()
-            .await;
+        let content = tokio::fs::read_to_string("/var/lib/dpkg/status")
+            .await
+            .unwrap_or_default();
 
-        if let Ok(output) = output {
-            if let Ok(stdout) = std::str::from_utf8(&output.stdout) {
-                for line in stdout.lines() {
-                    let parts: Vec<&str> = line.split_whitespace().collect();
-                    if parts.len() >= 2 {
-                        packages.push(PackageInfo {
-                            name: parts[0].to_string(),
-                            version: parts[1].to_string(),
-                            manager: "dpkg".to_string(),
-                        });
-                    }
+        let mut current_name = None;
+        let mut current_version = None;
+
+        for line in content.lines() {
+            if let Some(stripped) = line.strip_prefix("Package: ") {
+                current_name = Some(stripped.trim().to_string());
+            } else if let Some(stripped) = line.strip_prefix("Version: ") {
+                current_version = Some(stripped.trim().to_string());
+            } else if line.is_empty() {
+                if let (Some(name), Some(version)) = (current_name.take(), current_version.take())
+                {
+                    packages.push(PackageInfo {
+                        name,
+                        version,
+                        manager: "dpkg".to_string(),
+                    });
                 }
             }
+        }
+        // Handle last stanza if file doesn't end with blank line
+        if let (Some(name), Some(version)) = (current_name.take(), current_version.take()) {
+            packages.push(PackageInfo {
+                name,
+                version,
+                manager: "dpkg".to_string(),
+            });
         }
         packages
     }

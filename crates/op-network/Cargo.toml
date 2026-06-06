@@ -47,6 +47,9 @@ rovs-transport = "0.2"
 # Bytes for wire-protocol encoding in controller.rs
 bytes = "1"
 
+# D-Bus proxies for op-openvswitch-daemon passthrough
+zbus = { workspace = true }
+
 # simd-json — for the transact_simd compatibility shim in ovsdb.rs
 simd-json = { workspace = true }
 

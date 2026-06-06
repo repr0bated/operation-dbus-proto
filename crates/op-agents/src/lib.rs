@@ -13,8 +13,7 @@ pub mod security;
 // Re-export key types
 pub use agent_catalog::{builtin_agent_descriptors, AgentDescriptor};
 pub use agent_registry::{AgentRegistry, AgentStatus};
-pub use agents::base::{AgentTask, AgentTrait, TaskResult};
-pub use agents::*;
+pub use agents::base::{AgentContext, AgentTask, AgentTrait, TaskResult};
 pub use router::{create_router, AgentsServiceRouter, AgentsState};
 
 /// Create an agent by type name
@@ -32,6 +31,10 @@ pub fn create_agent(
     agent_id: String,
 ) -> Result<Box<dyn AgentTrait + Send + Sync>, String> {
     use agents::{
+        compliance::{
+            ComplianceTrestleAgent, FedRampAgent, GdprCounselAgent, OpenControlAgent,
+            OscalAuditorAgent, PolicyEnforcerAgent, SchemaAsCodeAgent, StigAuditorAgent,
+        },
         aiml::{
             AIEngineerAgent, DataEngineerAgent, DataScientistAgent, MLEngineerAgent,
             MLOpsEngineerAgent, PromptEngineerAgent,
@@ -214,6 +217,18 @@ pub fn create_agent(
         "quant-analyst" | "quant_analyst" => Box::new(QuantAnalystAgent::new(agent_id)),
         "ui-ux-designer" | "ui_ux_designer" => Box::new(UIUXDesignerAgent::new(agent_id)),
         "unity-developer" | "unity_developer" => Box::new(UnityDeveloperAgent::new(agent_id)),
+
+        // Compliance agents
+        "oscal-auditor" | "oscal_auditor" => Box::new(OscalAuditorAgent::new(agent_id)),
+        "compliance-trestle" | "compliance_trestle" => {
+            Box::new(ComplianceTrestleAgent::new(agent_id))
+        }
+        "fedramp" => Box::new(FedRampAgent::new(agent_id)),
+        "stig-auditor" | "stig_auditor" => Box::new(StigAuditorAgent::new(agent_id)),
+        "policy-enforcer" | "policy_enforcer" => Box::new(PolicyEnforcerAgent::new(agent_id)),
+        "schema-as-code" | "schema_as_code" => Box::new(SchemaAsCodeAgent::new(agent_id)),
+        "gdpr-counsel" | "gdpr_counsel" => Box::new(GdprCounselAgent::new(agent_id)),
+        "opencontrol" => Box::new(OpenControlAgent::new(agent_id)),
 
         // Web framework agents
         "django-pro" | "django_pro" => Box::new(DjangoProAgent::new(agent_id)),

@@ -8,9 +8,9 @@
 //! - Real-time tool count tracking
 
 use axum::{
-    extract::{ConnectInfo},
+    extract::ConnectInfo,
     response::{Html, Json},
-    routing::{get},
+    routing::get,
     Router,
 };
 use serde::{Deserialize, Serialize};
@@ -44,9 +44,8 @@ impl GroupsConfig {
 
         // Try to load from disk
         if let Ok(content) = std::fs::read_to_string(GROUPS_CONFIG_PATH) {
-            let mut raw = content.clone();
             if let Ok(saved) =
-                unsafe { simd_json::from_str::<HashMap<String, EnabledGroups>>(&mut raw) }
+                serde_json::from_str::<HashMap<String, EnabledGroups>>(&content)
             {
                 info!(
                     "Loaded {} tool group profiles from {}",

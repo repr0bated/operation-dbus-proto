@@ -237,7 +237,11 @@ impl DbusDiscoverySource {
         let tool_name = format!(
             "dbus_{}_{}_{}",
             service.split('.').next_back().unwrap_or(service),
-            interface.name.split('.').next_back().unwrap_or(&interface.name),
+            interface
+                .name
+                .split('.')
+                .next_back()
+                .unwrap_or(&interface.name),
             method.name
         );
 

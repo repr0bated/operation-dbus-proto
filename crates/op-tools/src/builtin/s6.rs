@@ -1,24 +1,45 @@
-//! S6 service management tools via the s6-rc CLI.
+//! S6 service management tools via D-Bus.
 //!
-//! All operations target the live s6-rc database at /run/s6-rc.
-//! No D-Bus is involved — s6 is a purely CLI-driven init system.
+//! All operations target the s6-systemctl D-Bus service.
 
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
 use std::sync::Arc;
+use zbus::{proxy, Connection};
 
 use crate::{Tool, ToolRegistry};
 
-/// Path to the s6-rc live state directory.
-const S6_RC_LIVE: &str = "/run/s6-rc";
+#[proxy(
+    interface = "org.opdbus.s6.Systemctl",
+    default_service = "org.opdbus.s6.Systemctl",
+    default_path = "/org/opdbus/s6/Systemctl"
+)]
+trait S6Systemctl {
+    async fn start(&self, unit: &str) -> zbus::Result<(bool, String)>;
+    async fn stop(&self, unit: &str) -> zbus::Result<(bool, String)>;
+    async fn restart(&self, unit: &str) -> zbus::Result<(bool, String)>;
+    async fn status(&self, unit: &str) -> zbus::Result<String>;
+    async fn list_units(&self) -> zbus::Result<String>;
+}
 
-/// Run `s6-rc -l /run/s6-rc <args…>` and return the output.
+/// Lazy-initialising D-Bus client for the s6-systemctl service.
+async fn get_proxy() -> Result<S6SystemctlProxy<'static>> {
+    let conn = Connection::system()
+        .await
+        .context("connect to system D-Bus for S6Systemctl")?;
+    S6SystemctlProxy::new(&conn)
+        .await
+        .context("create S6Systemctl D-Bus proxy")
+}
+
+/// Helper to run s6-rc via D-Bus fallback.
 async fn s6rc(args: &[&str]) -> Result<std::process::Output> {
+    // D-Bus is preferred; fallback to s6-rc only when D-Bus is unreachable.
     tokio::process::Command::new("s6-rc")
         .arg("-l")
-        .arg(S6_RC_LIVE)
+        .arg("/run/s6-rc")
         .args(args)
         .output()
         .await
@@ -63,28 +84,48 @@ impl Tool for S6StartServiceTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow!("Missing required parameter: service"))?;
 
-        let out = s6rc(&["start", service]).await?;
-
-        if out.status.success() {
-            return Ok(json!({
-                "started": true,
-                "service": service,
-                "manager": "s6"
-            }));
+        match get_proxy().await {
+            Ok(proxy) => {
+                let (ok, msg) = proxy.start(service).await?;
+                if ok {
+                    return Ok(json!({
+                        "started": true,
+                        "service": service,
+                        "manager": "s6"
+                    }));
+                }
+                // Treat "already up" as success
+                if msg.contains("already") {
+                    return Ok(json!({
+                        "started": true,
+                        "service": service,
+                        "manager": "s6",
+                        "note": "service was already running"
+                    }));
+                }
+                Err(anyhow!("s6 D-Bus start {service} failed: {msg}"))
+            }
+            Err(_) => {
+                let out = s6rc(&["start", service]).await?;
+                if out.status.success() {
+                    return Ok(json!({
+                        "started": true,
+                        "service": service,
+                        "manager": "s6"
+                    }));
+                }
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                if stderr.contains("already") {
+                    return Ok(json!({
+                        "started": true,
+                        "service": service,
+                        "manager": "s6",
+                        "note": "service was already running"
+                    }));
+                }
+                Err(anyhow!("s6-rc start {service} failed: {stderr}"))
+            }
         }
-
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        // Treat "already up" as success
-        if stderr.contains("already") {
-            return Ok(json!({
-                "started": true,
-                "service": service,
-                "manager": "s6",
-                "note": "service was already running"
-            }));
-        }
-
-        Err(anyhow!("s6-rc start {service} failed: {stderr}"))
     }
 
     fn category(&self) -> &str {
@@ -123,27 +164,47 @@ impl Tool for S6StopServiceTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow!("Missing required parameter: service"))?;
 
-        let out = s6rc(&["stop", service]).await?;
-
-        if out.status.success() {
-            return Ok(json!({
-                "stopped": true,
-                "service": service,
-                "manager": "s6"
-            }));
+        match get_proxy().await {
+            Ok(proxy) => {
+                let (ok, msg) = proxy.stop(service).await?;
+                if ok {
+                    return Ok(json!({
+                        "stopped": true,
+                        "service": service,
+                        "manager": "s6"
+                    }));
+                }
+                if msg.contains("already") {
+                    return Ok(json!({
+                        "stopped": true,
+                        "service": service,
+                        "manager": "s6",
+                        "note": "service was already stopped"
+                    }));
+                }
+                Err(anyhow!("s6 D-Bus stop {service} failed: {msg}"))
+            }
+            Err(_) => {
+                let out = s6rc(&["stop", service]).await?;
+                if out.status.success() {
+                    return Ok(json!({
+                        "stopped": true,
+                        "service": service,
+                        "manager": "s6"
+                    }));
+                }
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                if stderr.contains("already") {
+                    return Ok(json!({
+                        "stopped": true,
+                        "service": service,
+                        "manager": "s6",
+                        "note": "service was already stopped"
+                    }));
+                }
+                Err(anyhow!("s6-rc stop {service} failed: {stderr}"))
+            }
         }
-
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        if stderr.contains("already") {
-            return Ok(json!({
-                "stopped": true,
-                "service": service,
-                "manager": "s6",
-                "note": "service was already stopped"
-            }));
-        }
-
-        Err(anyhow!("s6-rc stop {service} failed: {stderr}"))
     }
 
     fn category(&self) -> &str {
@@ -182,18 +243,26 @@ impl Tool for S6StatusTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow!("Missing required parameter: service"))?;
 
-        // Check whether the service directory exists in the live run area
         let svc_path = format!("/run/service/{service}");
         let svc_exists = std::path::Path::new(&svc_path).exists();
-
-        // A "down" file inside the service directory means the service is intentionally stopped
         let down_file = format!("{svc_path}/down");
         let is_down = std::path::Path::new(&down_file).exists();
 
-        // Ask s6-rc for the authoritative list of running services
-        let out = s6rc(&["-a", "list"]).await?;
-        let running_list = String::from_utf8_lossy(&out.stdout);
-        let is_running = running_list.lines().any(|l| l.trim() == service);
+        let is_running = match get_proxy().await {
+            Ok(proxy) => {
+                let status_str = proxy.status(service).await.unwrap_or_default();
+                status_str.contains("up") || status_str.contains("active")
+            }
+            Err(_) => {
+                let out = s6rc(&["-a", "list"]).await.ok();
+                if let Some(out) = out {
+                    let running_list = String::from_utf8_lossy(&out.stdout);
+                    running_list.lines().any(|l| l.trim() == service)
+                } else {
+                    false
+                }
+            }
+        };
 
         let status = if is_running {
             "active"
@@ -239,19 +308,29 @@ impl Tool for S6ListServicesTool {
     }
 
     async fn execute(&self, _input: Value) -> Result<Value> {
-        // -a = only active (running) services
-        let out = s6rc(&["-a", "list"]).await?;
-
-        if !out.status.success() {
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            return Err(anyhow!("s6-rc list failed: {stderr}"));
-        }
-
-        let services: Vec<String> = String::from_utf8_lossy(&out.stdout)
-            .lines()
-            .map(|l| l.trim().to_string())
-            .filter(|l| !l.is_empty())
-            .collect();
+        let services = match get_proxy().await {
+            Ok(proxy) => {
+                let raw = proxy.list_units().await.unwrap_or_default();
+                let parsed: Vec<serde_json::Value> =
+                    serde_json::from_str(&raw).unwrap_or_default();
+                parsed
+                    .into_iter()
+                    .filter_map(|u| u.get("name").and_then(|v| v.as_str()).map(|s| s.to_string()))
+                    .collect::<Vec<String>>()
+            }
+            Err(_) => {
+                let out = s6rc(&["-a", "list"]).await?;
+                if !out.status.success() {
+                    let stderr = String::from_utf8_lossy(&out.stderr);
+                    return Err(anyhow!("s6-rc list failed: {stderr}"));
+                }
+                String::from_utf8_lossy(&out.stdout)
+                    .lines()
+                    .map(|l| l.trim().to_string())
+                    .filter(|l| !l.is_empty())
+                    .collect()
+            }
+        };
 
         let count = services.len();
         Ok(json!({

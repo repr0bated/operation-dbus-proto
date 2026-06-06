@@ -7,7 +7,6 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use image::Luma;
 use op_identity::{generate_wireguard_keypair, WireGuardKeyPair};
 use qrcode::QrCode;
-use std::process::Command;
 
 /// WireGuard keypair
 pub type WgKeyPair = WireGuardKeyPair;
@@ -70,15 +69,8 @@ impl WgServerConfig {
 }
 
 fn detect_interface_public_key(interface: &str) -> Option<String> {
-    let output = Command::new("wg")
-        .args(["show", interface, "public-key"])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-
-    let key = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let path = format!("/sys/class/net/{}/wireguard/public_key", interface);
+    let key = std::fs::read_to_string(&path).ok()?.trim().to_string();
     if key.is_empty() {
         None
     } else {

@@ -4,7 +4,6 @@ use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateD
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
-use tokio::process::Command;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HardwareState {
@@ -101,43 +100,54 @@ impl HardwarePlugin {
 
     async fn get_disk_info() -> Vec<DiskInfo> {
         let mut disks = Vec::new();
-        // Use lsblk -J for json output
-        let output = Command::new("lsblk")
-            .args(["-J", "-o", "NAME,SIZE,MOUNTPOINT,BYTES"])
-            .output()
-            .await;
+        let sysfs = std::path::Path::new("/sys/block");
+        if !sysfs.exists() {
+            return disks;
+        }
 
-        if let Ok(output) = output {
-            if let Ok(json_str) = std::str::from_utf8(&output.stdout) {
-                if let Ok(val) = simd_json::to_owned_value(&mut json_str.as_bytes().to_vec()) {
-                    if let Some(blockdevices) = val.get("blockdevices").and_then(|v| v.as_array()) {
-                        for dev in blockdevices {
-                            let name = dev
-                                .get("name")
-                                .and_then(|s| s.as_str())
-                                .unwrap_or("unknown")
-                                .to_string();
-                            let size = dev
-                                .get("bytes")
-                                .and_then(|s| s.as_str().or(Some("0")))
-                                .and_then(|s| s.parse::<u64>().ok())
-                                .unwrap_or(0);
-                            let mountpoint = dev
-                                .get("mountpoint")
-                                .and_then(|s| s.as_str())
-                                .map(|s| s.to_string());
+        let mut entries = match tokio::fs::read_dir(sysfs).await {
+            Ok(e) => e,
+            Err(_) => return disks,
+        };
 
-                            disks.push(DiskInfo {
-                                name,
-                                size_bytes: size,
-                                mountpoint,
-                            });
-                        }
-                    }
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let name = entry.file_name().to_string_lossy().to_string();
+            // Skip loop devices and ramdisks
+            if name.starts_with("loop") || name.starts_with("ram") {
+                continue;
+            }
+
+            let size_path = entry.path().join("size");
+            let size_sectors = tokio::fs::read_to_string(&size_path)
+                .await
+                .ok()
+                .and_then(|s| s.trim().parse::<u64>().ok())
+                .unwrap_or(0);
+            let size_bytes = size_sectors * 512;
+
+            let mountpoint = Self::read_mountpoint(&name).await;
+
+            disks.push(DiskInfo {
+                name,
+                size_bytes,
+                mountpoint,
+            });
+        }
+        disks
+    }
+
+    async fn read_mountpoint(device: &str) -> Option<String> {
+        let mounts = tokio::fs::read_to_string("/proc/mounts").await.ok()?;
+        for line in mounts.lines() {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 2 {
+                let dev = parts[0];
+                if dev.contains(device) {
+                    return Some(parts[1].to_string());
                 }
             }
         }
-        disks
+        None
     }
 }
 

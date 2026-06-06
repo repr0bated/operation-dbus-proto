@@ -5,6 +5,28 @@
 
 use anyhow::Result;
 use dashmap::DashMap;
+
+/// Strongly-typed error for D-Bus mirror operations.
+///
+/// Keeps `anyhow` out of the public API surface while preserving
+/// ergonomic `?` propagation inside the crate.
+#[derive(Debug, thiserror::Error)]
+pub enum MirrorError {
+    #[error("D-Bus error: {0}")]
+    Zbus(#[from] zbus::Error),
+
+    #[error("serialization error: {0}")]
+    Serialization(#[from] serde_json::Error),
+
+    #[error("{0}")]
+    Other(String),
+}
+
+impl From<anyhow::Error> for MirrorError {
+    fn from(e: anyhow::Error) -> Self {
+        Self::Other(e.to_string())
+    }
+}
 use managed_objects::{
     build_interface_map, ManagedObjectRegistry, ObjectManagerInterface, OBJECT_MANAGER_PATH,
     PROJECTED_IFACE,
@@ -65,7 +87,7 @@ impl DbusMirror {
         ovsdb: Arc<OvsdbClient>,
         nonnet: Arc<NonNetDb>,
         schema_engine: Option<Arc<SchemaEngine>>,
-    ) -> Result<Self> {
+    ) -> std::result::Result<Self, MirrorError> {
         let connection = match bus_type {
             BusType::System => Builder::system()?.name("org.opdbus.v1")?.build().await?,
             BusType::Session => Builder::session()?.name("org.opdbus.v1")?.build().await?,
@@ -102,7 +124,7 @@ impl DbusMirror {
     ///
     /// Performs an initial full-tree publication and then enters an event-driven
     /// loop to publish deltas from all data sources.
-    pub async fn start(self: Arc<Self>) -> Result<()> {
+    pub async fn start(self: Arc<Self>) -> std::result::Result<(), MirrorError> {
         tracing::info!("Starting D-Bus mirror publication service...");
 
         // Initial full sync
@@ -208,7 +230,7 @@ impl DbusMirror {
     }
 
     /// Compatibility method for dbus_interface
-    pub async fn publish_snapshot(&self) -> Result<()> {
+    pub async fn publish_snapshot(&self) -> std::result::Result<(), MirrorError> {
         self.refresh_full_tree().await
     }
 
@@ -222,7 +244,7 @@ impl DbusMirror {
 
     /// Perform a full scan of all authoritative databases and ensure
     /// the D-Bus tree exactly matches the database state.
-    pub async fn refresh_full_tree(&self) -> Result<()> {
+    pub async fn refresh_full_tree(&self) -> std::result::Result<(), MirrorError> {
         let mut active_paths = HashSet::new();
         tracing::info!("DEBUG: Starting full tree refresh");
 
@@ -362,8 +384,9 @@ impl DbusMirror {
         // Convert serde_json::Value → serde_json::Value for compatibility
         let dump: Value = {
             let s = serde_json::to_string(&dump_serde)
-                .map_err(|e| anyhow::anyhow!("dump_db serialize error: {}", e))?;
-            serde_json::from_str(&s).map_err(|e| anyhow::anyhow!("dump_db parse error: {}", e))?
+                .map_err(|e| MirrorError::Other(format!("dump_db serialize error: {}", e)))?;
+            serde_json::from_str(&s)
+                .map_err(|e| MirrorError::Other(format!("dump_db parse error: {}", e)))?
         };
 
         if let Value::Object(tables) = dump {
@@ -727,9 +750,7 @@ impl DbusMirror {
                 }
 
                 // Map the real object path into our namespace
-                let safe_obj = obj_path
-                    .trim_start_matches('/')
-                    .replace(['/', '-'], "_");
+                let safe_obj = obj_path.trim_start_matches('/').replace(['/', '-'], "_");
                 let safe_svc = name_str.replace('.', "/").replace('-', "_");
                 let mirror_path = if safe_obj.is_empty() {
                     format!("/org/opdbus/v1/system/{}", safe_svc)

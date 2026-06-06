@@ -85,7 +85,7 @@ impl MemoryLoop {
             qdrant: None,
             memorable_regex: Regex::new(
                 r"(?i)\b(always|never|prefer|my\s+(?:name|email|project)|our\s+project|decided\s+to|goal\s+is|important|remember\s+that|don't\s+forget)\b"
-            ).unwrap(),
+            ).expect("hardcoded regex pattern is valid"),
         }
     }
 
@@ -356,7 +356,9 @@ impl MemoryLoop {
         // Generate a stable key from first few words
         let words: Vec<&str> = text.split_whitespace().take(4).collect();
         let slug = words.join("-").to_lowercase();
-        let slug = Regex::new(r"[^a-z0-9-]").unwrap().replace_all(&slug, "");
+        let slug = Regex::new(r"[^a-z0-9-]")
+            .expect("hardcoded regex pattern is valid")
+            .replace_all(&slug, "");
         format!("{}-{}", slug, Utc::now().timestamp())
     }
 

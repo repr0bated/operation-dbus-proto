@@ -10,7 +10,6 @@ use axum::{
 use futures::stream::Stream;
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
-use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio_stream::wrappers::BroadcastStream;
@@ -40,11 +39,11 @@ pub async fn logs_handler(Extension(_state): Extension<Arc<AppState>>) -> Json<V
     ];
 
     for (log_path, component) in log_files {
-        if let Ok(output) = Command::new("tail").args(["-n", "50", log_path]).output() {
-            if output.status.success() {
-                let data = String::from_utf8_lossy(&output.stdout);
-                logs.extend(parse_logs(&data, component));
-            }
+        if let Ok(data) = tokio::fs::read_to_string(log_path).await {
+            let lines: Vec<&str> = data.lines().collect();
+            let start = lines.len().saturating_sub(50);
+            let tail = lines[start..].join("\n");
+            logs.extend(parse_logs(&tail, component));
         }
     }
 

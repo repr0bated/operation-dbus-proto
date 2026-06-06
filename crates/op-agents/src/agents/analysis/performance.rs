@@ -1,7 +1,7 @@
 //! Performance Engineer Agent
 
 use async_trait::async_trait;
-use std::process::Command;
+use std::fs;
 
 use crate::agents::base::{AgentTask, AgentTrait, TaskResult};
 use crate::security::SecurityProfile;
@@ -23,46 +23,31 @@ impl PerformanceEngineerAgent {
     }
 
     fn system_stats(&self) -> Result<String, String> {
-        let mut cmd = Command::new("vmstat");
-        cmd.arg("1").arg("5");
+        let content = fs::read_to_string("/proc/vmstat")
+            .map_err(|e| format!("Failed to read /proc/vmstat: {}", e))?;
 
-        let output = cmd.output().map_err(|e| format!("Failed: {}", e))?;
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-
-        Ok(format!("System stats:\n{}\n{}", stdout, stderr))
+        Ok(format!("System stats (/proc/vmstat):\n{}", content))
     }
 
     fn io_stats(&self) -> Result<String, String> {
-        let mut cmd = Command::new("iostat");
-        cmd.arg("-x").arg("1").arg("3");
+        let content = fs::read_to_string("/proc/diskstats")
+            .map_err(|e| format!("Failed to read /proc/diskstats: {}", e))?;
 
-        let output = cmd.output().map_err(|e| format!("Failed: {}", e))?;
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-
-        Ok(format!("I/O stats:\n{}\n{}", stdout, stderr))
+        Ok(format!("I/O stats (/proc/diskstats):\n{}", content))
     }
 
     fn memory_info(&self) -> Result<String, String> {
-        let mut cmd = Command::new("free");
-        cmd.arg("-h");
+        let content = fs::read_to_string("/proc/meminfo")
+            .map_err(|e| format!("Failed to read /proc/meminfo: {}", e))?;
 
-        let output = cmd.output().map_err(|e| format!("Failed: {}", e))?;
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-
-        Ok(format!("Memory info:\n{}\n{}", stdout, stderr))
+        Ok(format!("Memory info (/proc/meminfo):\n{}", content))
     }
 
     fn cpu_info(&self) -> Result<String, String> {
-        let mut cmd = Command::new("lscpu");
+        let content = fs::read_to_string("/proc/cpuinfo")
+            .map_err(|e| format!("Failed to read /proc/cpuinfo: {}", e))?;
 
-        let output = cmd.output().map_err(|e| format!("Failed: {}", e))?;
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-
-        Ok(format!("CPU info:\n{}\n{}", stdout, stderr))
+        Ok(format!("CPU info (/proc/cpuinfo):\n{}", content))
     }
 }
 

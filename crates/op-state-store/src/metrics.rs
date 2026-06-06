@@ -22,26 +22,26 @@ lazy_static! {
     pub static ref JOBS_CREATED_TOTAL: Counter = Counter::new(
         "op_state_jobs_created_total",
         "Total number of jobs created"
-    ).unwrap();
+    ).expect("hardcoded metric definition is valid");
 
     /// Jobs by status
     pub static ref JOBS_BY_STATUS: GaugeVec = GaugeVec::new(
         Opts::new("op_state_jobs_by_status", "Number of jobs by status"),
         &["status"]
-    ).unwrap();
+    ).expect("hardcoded metric definition is valid");
 
     /// Job status transitions
     pub static ref JOB_STATUS_TRANSITIONS: CounterVec = CounterVec::new(
         Opts::new("op_state_job_transitions_total", "Job status transitions"),
         &["from_status", "to_status"]
-    ).unwrap();
+    ).expect("hardcoded metric definition is valid");
 
     /// Job execution duration
     pub static ref JOB_DURATION_SECONDS: HistogramVec = HistogramVec::new(
         HistogramOpts::new("op_state_job_duration_seconds", "Job execution duration")
             .buckets(vec![0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0]),
         &["tool_name"]
-    ).unwrap();
+    ).expect("hardcoded metric definition is valid");
 
     // Store operation metrics
     /// Store operation latency
@@ -49,71 +49,71 @@ lazy_static! {
         HistogramOpts::new("op_state_store_operation_seconds", "Store operation duration")
             .buckets(vec![0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0]),
         &["operation", "store_type"]
-    ).unwrap();
+    ).expect("hardcoded metric definition is valid");
 
     /// Store operation errors
     pub static ref STORE_OP_ERRORS: CounterVec = CounterVec::new(
         Opts::new("op_state_store_errors_total", "Store operation errors"),
         &["operation", "store_type", "error_type"]
-    ).unwrap();
+    ).expect("hardcoded metric definition is valid");
 
     // Plugin metrics
     /// Plugin state queries
     pub static ref PLUGIN_QUERIES_TOTAL: CounterVec = CounterVec::new(
         Opts::new("op_state_plugin_queries_total", "Plugin state queries"),
         &["plugin_name"]
-    ).unwrap();
+    ).expect("hardcoded metric definition is valid");
 
     /// Plugin state applies
     pub static ref PLUGIN_APPLIES_TOTAL: CounterVec = CounterVec::new(
         Opts::new("op_state_plugin_applies_total", "Plugin state applies"),
         &["plugin_name", "success"]
-    ).unwrap();
+    ).expect("hardcoded metric definition is valid");
 
     /// Plugin checkpoints created
     pub static ref CHECKPOINTS_CREATED: CounterVec = CounterVec::new(
         Opts::new("op_state_checkpoints_created_total", "Checkpoints created"),
         &["plugin_name"]
-    ).unwrap();
+    ).expect("hardcoded metric definition is valid");
 
     // Audit metrics
     /// Audit log entries
     pub static ref AUDIT_ENTRIES_TOTAL: Counter = Counter::new(
         "op_state_audit_entries_total",
         "Total audit log entries"
-    ).unwrap();
+    ).expect("hardcoded metric definition is valid");
 
     // Redis metrics
     /// Redis connection status
     pub static ref REDIS_CONNECTED: Gauge = Gauge::new(
         "op_state_redis_connected",
         "Redis connection status (1=connected, 0=disconnected)"
-    ).unwrap();
+    ).expect("hardcoded metric definition is valid");
 
     /// Redis stream lengths
     pub static ref REDIS_STREAM_LENGTH: GaugeVec = GaugeVec::new(
         Opts::new("op_state_redis_stream_length", "Redis stream length"),
         &["stream"]
-    ).unwrap();
+    ).expect("hardcoded metric definition is valid");
 
     /// Redis operations
     pub static ref REDIS_OPS_TOTAL: CounterVec = CounterVec::new(
         Opts::new("op_state_redis_operations_total", "Redis operations"),
         &["operation"]
-    ).unwrap();
+    ).expect("hardcoded metric definition is valid");
 
     // SQLite metrics
     /// SQLite connection pool size
     pub static ref SQLITE_POOL_SIZE: Gauge = Gauge::new(
         "op_state_sqlite_pool_size",
         "SQLite connection pool size"
-    ).unwrap();
+    ).expect("hardcoded metric definition is valid");
 
     /// SQLite database size
     pub static ref SQLITE_DB_SIZE_BYTES: Gauge = Gauge::new(
         "op_state_sqlite_db_size_bytes",
         "SQLite database file size in bytes"
-    ).unwrap();
+    ).expect("hardcoded metric definition is valid");
 }
 
 static INIT: Once = Once::new();
@@ -279,7 +279,7 @@ pub fn gather_metrics() -> String {
     let encoder = prometheus::TextEncoder::new();
     let metric_families = REGISTRY.gather();
     let mut buffer = Vec::new();
-    encoder.encode(&metric_families, &mut buffer).unwrap();
+    encoder.encode(&metric_families, &mut buffer).expect("hardcoded metric definition is valid");
     String::from_utf8(buffer).unwrap_or_default()
 }
 

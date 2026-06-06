@@ -371,29 +371,102 @@ pub async fn add_default_route(ifname: &str, gateway: &str) -> Result<()> {
     Ok(())
 }
 
-/// Add default route with `onlink` flag via `ip route replace`.
+/// Add default route with `onlink` flag via native netlink.
 ///
 /// Required when the output interface is an OVS internal port: the kernel
 /// cannot verify gateway reachability until OVS is forwarding, so we must
-/// bypass nexthop validation. The netlink route-flag namespace does not cleanly
-/// expose RTNH_F_ONLINK for single-hop routes, so we delegate to iproute2
-/// which handles the encoding correctly.
+/// bypass nexthop validation.  We build the `RTM_NEWROUTE` message manually
+/// using `netlink-packet-route` so that the `RTNH_F_ONLINK` (0x04) flag is
+/// set in the nexthop attribute — the high-level `rtnetlink` crate does not
+/// expose this flag through its typed builder.
 pub async fn add_default_route_onlink(ifname: &str, gateway: &str) -> Result<()> {
-    use std::process::Command;
-    let status = Command::new("ip")
-        .args([
-            "route", "replace", "default", "via", gateway, "dev", ifname, "onlink",
-        ])
-        .status()
-        .context("failed to execute ip")?;
-    if !status.success() {
-        anyhow::bail!(
-            "ip route replace default via {} dev {} onlink failed: {}",
-            gateway,
-            ifname,
-            status
-        );
+    use netlink_packet_core::{
+        NetlinkHeader, NetlinkMessage, NetlinkPayload, NLM_F_ACK, NLM_F_CREATE, NLM_F_REPLACE,
+        NLM_F_REQUEST,
+    };
+    use netlink_packet_route::route::{
+        RouteAddress, RouteAttribute, RouteHeader, RouteMessage, RouteNextHop, RouteNextHopFlag,
+        RouteProtocol, RouteScope, RouteType,
+    };
+    use netlink_packet_route::RouteNetlinkMessage;
+    use netlink_sys::{protocols::NETLINK_ROUTE, Socket};
+
+    // Resolve interface index
+    let (connection, handle, _) = new_connection()?;
+    tokio::spawn(connection);
+    let mut links = handle.link().get().match_name(ifname.to_string()).execute();
+    let link = links
+        .try_next()
+        .await?
+        .context(format!("Interface '{}' not found", ifname))?;
+    let ifindex = link.header.index;
+
+    let gw: Ipv4Addr = gateway.parse().context("Invalid gateway address")?;
+
+    // Build the route message manually.
+    let mut route_msg = RouteMessage::default();
+    route_msg.header.address_family = netlink_packet_route::AddressFamily::Inet;
+    route_msg.header.destination_prefix_length = 0;
+    route_msg.header.source_prefix_length = 0;
+    route_msg.header.tos = 0;
+    route_msg.header.table = RouteHeader::RT_TABLE_MAIN;
+    route_msg.header.protocol = RouteProtocol::Static;
+    route_msg.header.scope = RouteScope::Link; // RT_SCOPE_LINK — onlink semantics
+    route_msg.header.kind = RouteType::Unicast;
+    route_msg.header.flags = Vec::new();
+
+    // Destination prefix (0.0.0.0/0)
+    route_msg
+        .attributes
+        .push(RouteAttribute::Destination(RouteAddress::Inet(
+            Ipv4Addr::new(0, 0, 0, 0),
+        )));
+
+    // Encode the single nexthop with RTNH_F_ONLINK via RTA_MULTIPATH.
+    // iproute2 uses RTA_NEXTHOP (type 3) for single-path routes with flags,
+    // but netlink-packet-route 0.19 does not expose a typed RTA_NEXTHOP
+    // variant.  The kernel accepts RTA_MULTIPATH with one element and
+    // treats it identically for non-ECMP routes.
+    let mut nh = RouteNextHop::default();
+    nh.flags = vec![RouteNextHopFlag::Onlink];
+    nh.hops = 0;
+    nh.interface_index = ifindex;
+    nh.attributes = vec![RouteAttribute::Gateway(RouteAddress::Inet(gw))];
+    route_msg.attributes.push(RouteAttribute::MultiPath(vec![nh]));
+
+    // Build netlink envelope
+    let mut header = NetlinkHeader::default();
+    header.sequence_number = 1;
+    header.flags = NLM_F_REQUEST | NLM_F_ACK | NLM_F_CREATE | NLM_F_REPLACE;
+    let mut nl_msg = NetlinkMessage::new(
+        header,
+        NetlinkPayload::from(RouteNetlinkMessage::NewRoute(route_msg)),
+    );
+    nl_msg.finalize();
+
+    let socket = Socket::new(NETLINK_ROUTE).context("open NETLINK_ROUTE socket")?;
+    let mut buf = vec![0u8; nl_msg.buffer_len()];
+    nl_msg.serialize(&mut buf);
+    socket.send(&buf, 0).context("send RTM_NEWROUTE")?;
+
+    // Wait for ACK (or error)
+    let mut recv_buf = vec![0u8; 4096];
+    let len = socket.recv(&mut recv_buf, 0).context("recv netlink ACK")?;
+    recv_buf.truncate(len);
+
+    let ack_msg: NetlinkMessage<RouteNetlinkMessage> =
+        NetlinkMessage::deserialize(&recv_buf).context("deserialize netlink ACK")?;
+    if let NetlinkPayload::Error(e) = ack_msg.payload {
+        if e.code.is_some() {
+            anyhow::bail!(
+                "netlink RTM_NEWROUTE failed for default via {} dev {} onlink: {:?}",
+                gateway,
+                ifname,
+                e,
+            );
+        }
     }
+
     Ok(())
 }
 

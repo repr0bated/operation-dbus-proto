@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
 use std::collections::HashMap;
+use std::time::Duration;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// Top-level state for the mail server plugin.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -84,75 +86,134 @@ impl MailServerPlugin {
         }
     }
 
-    /// Query incus for container status
-    async fn query_container_status(&self, name: &str) -> Result<(String, Option<String>)> {
-        let output = tokio::process::Command::new("/usr/bin/incus")
-            .args(["list", name, "--format=json"])
-            .output()
+    /// Minimal HTTP-over-UnixSocket helper for Incus REST API
+    async fn incus_api_get(path: &str) -> Result<simd_json::OwnedValue> {
+        let socket_path = "/var/lib/incus/unix.socket";
+        if !std::path::Path::new(socket_path).exists() {
+            return Err(anyhow::anyhow!("Incus Unix socket not found at {}", socket_path));
+        }
+
+        let mut stream = tokio::net::UnixStream::connect(socket_path)
             .await
-            .context("Failed to query incus container status")?;
+            .context("Failed to connect to Incus Unix socket")?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("incus list failed: {}", stderr.trim());
+        let request = format!(
+            "GET {} HTTP/1.1\r\nHost: localhost\r\nAccept: application/json\r\n\r\n",
+            path
+        );
+        stream.write_all(request.as_bytes()).await?;
+
+        let mut response = Vec::new();
+        let mut buf = [0u8; 4096];
+        loop {
+            match tokio::time::timeout(Duration::from_millis(500), stream.read(&mut buf)).await {
+                Ok(Ok(0)) => break,
+                Ok(Ok(n)) => response.extend_from_slice(&buf[..n]),
+                Ok(Err(e)) => return Err(e.into()),
+                Err(_) => break,
+            }
         }
 
-        let mut raw = output.stdout;
-        let instances: Vec<simd_json::OwnedValue> =
-            simd_json::from_slice(&mut raw).unwrap_or_default();
-
-        if let Some(inst) = instances.first() {
-            let status = inst
-                .get("status")
-                .and_then(|v| v.as_str())
-                .unwrap_or("Unknown")
-                .to_string();
-
-            let ip = inst
-                .get("state")
-                .and_then(|s| s.get("network"))
-                .and_then(|n| n.get("eth0"))
-                .and_then(|e| e.get("addresses"))
-                .and_then(|a| a.as_array())
-                .and_then(|addrs| {
-                    addrs.iter().find_map(|addr| {
-                        if addr.get("family")?.as_str()? == "inet" {
-                            addr.get("address")?.as_str().map(String::from)
-                        } else {
-                            None
-                        }
-                    })
-                });
-
-            Ok((status, ip))
+        let body_start = if let Some(idx) = response.windows(4).position(|w| w == b"\r\n\r\n") {
+            idx + 4
+        } else if let Some(idx) = response.windows(2).position(|w| w == b"\n\n") {
+            idx + 2
         } else {
-            Ok(("NotFound".to_string(), None))
+            return Ok(simd_json::json!({}));
+        };
+
+        let mut body = response[body_start..].to_vec();
+        let headers = std::str::from_utf8(&response[..body_start]).unwrap_or("");
+        if headers.to_lowercase().contains("transfer-encoding: chunked") {
+            let mut decoded = Vec::new();
+            let mut pos = 0;
+            while pos < body.len() {
+                let mut line_end = pos;
+                while line_end < body.len() && body[line_end] != b'\n' {
+                    line_end += 1;
+                }
+                if line_end >= body.len() {
+                    break;
+                }
+                let line = std::str::from_utf8(&body[pos..line_end]).unwrap_or("").trim();
+                let size =
+                    usize::from_str_radix(line.split(';').next().unwrap_or("0").trim(), 16)
+                        .unwrap_or(0);
+                if size == 0 {
+                    break;
+                }
+                pos = line_end + 1;
+                if pos < body.len() && body[pos] == b'\r' {
+                    pos += 1;
+                }
+                decoded.extend_from_slice(&body[pos..pos + size]);
+                pos += size;
+                if pos < body.len() && body[pos] == b'\r' {
+                    pos += 1;
+                }
+                if pos < body.len() && body[pos] == b'\n' {
+                    pos += 1;
+                }
+            }
+            body = decoded;
         }
+
+        let mut raw = body;
+        let val: simd_json::OwnedValue =
+            simd_json::from_slice(&mut raw).context("Failed to parse Incus API response")?;
+        let metadata = val.get("metadata").cloned().unwrap_or(simd_json::json!({}));
+        Ok(metadata)
     }
 
-    /// Check if Postfix and Dovecot are responding inside the container
+    /// Query incus for container status via REST API (AGENTS.md §4: no subprocess bypasses)
+    async fn query_container_status(&self, name: &str) -> Result<(String, Option<String>)> {
+        let inst = Self::incus_api_get(&format!("/1.0/instances/{}?recursion=1", name)).await?;
+
+        let status = inst
+            .get("status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Unknown")
+            .to_string();
+
+        let ip = inst
+            .get("state")
+            .and_then(|s| s.get("network"))
+            .and_then(|n| n.get("eth0"))
+            .and_then(|e| e.get("addresses"))
+            .and_then(|a| a.as_array())
+            .and_then(|addrs| {
+                addrs.iter().find_map(|addr| {
+                    if addr.get("family")?.as_str()? == "inet" {
+                        addr.get("address")?.as_str().map(String::from)
+                    } else {
+                        None
+                    }
+                })
+            });
+
+        Ok((status, ip))
+    }
+
+    /// Check if container is Running as a proxy for mail health
+    /// (AGENTS.md §4: incus exec is a subprocess bypass; we use container state instead)
     async fn check_mail_health(&self, container: &str) -> (bool, Option<String>) {
-        // Check postfix is running inside container
-        let postfix = tokio::process::Command::new("/usr/bin/incus")
-            .args(["exec", container, "--", "postfix", "status"])
-            .output()
-            .await;
-
-        let postfix_ok = postfix.map(|o| o.status.success()).unwrap_or(false);
-
-        // Check dovecot is running inside container
-        let dovecot = tokio::process::Command::new("/usr/bin/incus")
-            .args(["exec", container, "--", "doveadm", "service", "status"])
-            .output()
-            .await;
-
-        let dovecot_ok = dovecot.map(|o| o.status.success()).unwrap_or(false);
-
-        if postfix_ok && dovecot_ok {
-            (true, None)
-        } else {
-            let err = format!("postfix_ok={}, dovecot_ok={}", postfix_ok, dovecot_ok);
-            (false, Some(err))
+        match Self::incus_api_get(&format!("/1.0/instances/{}?recursion=1", container)).await {
+            Ok(inst) => {
+                let status = inst
+                    .get("status")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Unknown");
+                if status == "Running" {
+                    (true, None)
+                } else {
+                    let err = format!("container_status={}", status);
+                    (false, Some(err))
+                }
+            }
+            Err(e) => {
+                let err = format!("failed to query container: {}", e);
+                (false, Some(err))
+            }
         }
     }
 }
@@ -212,24 +273,14 @@ impl StatePlugin for MailServerPlugin {
             state.last_error = err;
         }
 
-        // Query container devices from incus config
-        let config_output = tokio::process::Command::new("/usr/bin/incus")
-            .args(["config", "show", &state.container_name, "--format=json"])
-            .output()
-            .await;
-
-        if let Ok(out) = config_output {
-            if out.status.success() {
-                let mut raw = out.stdout;
-                if let Ok(config) = simd_json::from_slice::<simd_json::OwnedValue>(&mut raw) {
-                    if let Some(devices) = config.get("devices") {
-                        if let Ok(dev_map) = simd_json::serde::from_owned_value::<
-                            HashMap<String, HashMap<String, String>>,
-                        >(devices.clone())
-                        {
-                            state.devices = Some(dev_map);
-                        }
-                    }
+        // Query container devices from Incus REST API (AGENTS.md §4: no subprocess bypasses)
+        if let Ok(config) = Self::incus_api_get(&format!("/1.0/instances/{}?recursion=1", state.container_name)).await {
+            if let Some(devices) = config.get("devices") {
+                if let Ok(dev_map) = simd_json::serde::from_owned_value::<
+                    HashMap<String, HashMap<String, String>>,
+                >(devices.clone())
+                {
+                    state.devices = Some(dev_map);
                 }
             }
         }

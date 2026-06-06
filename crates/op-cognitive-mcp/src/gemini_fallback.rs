@@ -16,6 +16,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tracing::{info, warn};
 
 const DEFAULT_GEMINI_API_URL: &str = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_GEMINI_MODEL: &str = "gemini-2.5-flash";
@@ -157,9 +158,9 @@ impl GeminiFallback {
     pub fn new() -> Self {
         let config = GeminiConfig::from_env();
         if config.is_some() {
-            tracing::info!("Gemini fallback client initialized");
+            info!("Gemini fallback client initialized");
         } else {
-            tracing::info!(
+            info!(
                 "Gemini fallback unavailable (set GEMINI_API_KEY or COGNITIVE_MCP_GEMINI_API_KEY)"
             );
         }
@@ -170,15 +171,13 @@ impl GeminiFallback {
     }
 
     /// Whether the Gemini fallback is available.
+    #[tracing::instrument(level = "debug", skip(self))]
     pub async fn is_available(&self) -> bool {
-        self.config
-            .read()
-            .await
-            .as_ref()
-            .is_some_and(|c| c.enabled)
+        self.config.read().await.as_ref().is_some_and(|c| c.enabled)
     }
 
     /// Standard grounded query via Gemini.
+    #[tracing::instrument(skip(self, context), fields(query))]
     pub async fn gemini_query(
         &self,
         query: &str,
@@ -236,6 +235,7 @@ impl GeminiFallback {
     }
 
     /// Deep research — multi-step query that builds on itself.
+    #[tracing::instrument(skip(self, context), fields(topic, depth))]
     pub async fn deep_research(
         &self,
         topic: &str,
@@ -304,7 +304,7 @@ impl GeminiFallback {
                     });
                 }
                 Err(e) => {
-                    tracing::warn!(step, error = %e, "Deep research step failed, continuing");
+                    warn!(step, error = %e, "Deep research step failed, continuing");
                     break;
                 }
             }
@@ -340,7 +340,7 @@ impl GeminiFallback {
         for attempt in 0..=MAX_RETRIES {
             if attempt > 0 {
                 let delay = BASE_DELAY_MS * (1 << (attempt - 1));
-                tracing::warn!(
+                warn!(
                     attempt,
                     delay_ms = delay,
                     "Retrying Gemini API call after backoff"

@@ -40,8 +40,7 @@ use op_tools::ToolRegistry;
 
 use crate::agent_tools::register_context_agents;
 use crate::forced_execution::{
-    detect_raw_text_output, ForcedExecutionOrchestrator, HallucinationCheck,
-    ToolCall,
+    detect_raw_text_output, ForcedExecutionOrchestrator, HallucinationCheck, ToolCall,
 };
 use crate::tool_executor::TrackedToolExecutor;
 
@@ -112,6 +111,7 @@ impl ForcedToolPipeline {
     /// 5. Loops if LLM wants more tool calls
     /// 6. Verifies for hallucinations
     /// 7. Returns verified response
+    #[tracing::instrument(skip(self, provider, messages, session_id), fields(model, message_count = messages.len()))]
     pub async fn process_message(
         &self,
         provider: &dyn LlmProvider,

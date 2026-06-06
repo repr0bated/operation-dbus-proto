@@ -30,11 +30,11 @@ where
         .await
         .context("connect to system D-Bus for StateManager access")?;
     let proxy = proxy(&connection).await?;
-    let mut state_json: String = proxy
+    let state_json: String = proxy
         .call("QueryState", &())
         .await
         .context("query current state from StateManager")?;
-    let query_state: QueryStateResponse = unsafe { simd_json::from_str(&mut state_json) }
+    let query_state: QueryStateResponse = serde_json::from_str(&state_json)
         .context("parse StateManager query_state payload")?;
 
     if let Some(existing) = query_state.plugins.get(plugin_id) {

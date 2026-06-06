@@ -9,6 +9,7 @@ description = "Container and image deployment management"
 [dependencies]
 tokio = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 simd-json = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }

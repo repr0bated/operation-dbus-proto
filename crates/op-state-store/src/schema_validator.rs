@@ -280,7 +280,9 @@ impl SchemaValidator {
                 .map_err(|e| ValidatorError::CompilationError(e.to_string()))?;
             self.validators.insert(key.to_string(), validator);
         }
-        Ok(self.validators.get(key).unwrap())
+        self.validators
+            .get(key)
+            .ok_or_else(|| ValidatorError::CompilationError(format!("validator for {} not found after compilation", key)))
     }
 }
 

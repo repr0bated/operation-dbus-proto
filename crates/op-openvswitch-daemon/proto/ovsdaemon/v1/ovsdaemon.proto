@@ -1,0 +1,96 @@
+// OpenVSwitch Daemon gRPC Service Definition
+// Provides gRPC endpoints for OVSDB operations that mirror the D-Bus interface
+//
+// All operations flow through D-Bus as the canonical control plane per AGENTS.md
+
+syntax = "proto3";
+
+package ovsdaemon.v1;
+
+// OVSDB Service - Bridge and port management
+service OvsdbService {
+  // Create a new OVS bridge
+  rpc CreateBridge(BridgeRequest) returns (BridgeResponse);
+
+  // Delete an OVS bridge
+  rpc DeleteBridge(BridgeRequest) returns (BridgeResponse);
+
+  // List all bridges
+  rpc ListBridges(BridgesRequest) returns (BridgesResponse);
+
+  // Add a port to a bridge
+  rpc AddPort(PortRequest) returns (PortResponse);
+
+  // List ports on a bridge
+  rpc ListPorts(PortsRequest) returns (PortsResponse);
+
+  // List OVS databases
+  rpc ListDatabases(DatabaseRequest) returns (DatabaseResponse);
+
+  // Get daemon status
+  rpc GetStatus(StatusRequest) returns (StatusResponse);
+}
+
+// Bridge operations
+message BridgeRequest {
+  string name = 1;
+}
+
+message BridgeResponse {
+  string name = 1;
+  bool success = 2;
+  string message = 3;
+}
+
+message BridgesRequest {
+  // Empty - lists all bridges
+}
+
+message BridgesResponse {
+  repeated string bridges = 1;
+  int32 count = 2;
+}
+
+// Port operations
+message PortRequest {
+  string name = 1;
+  string bridge = 2;
+}
+
+message PortResponse {
+  string name = 1;
+  string bridge = 2;
+  bool success = 3;
+  string message = 4;
+}
+
+message PortsRequest {
+  string bridge = 1;
+}
+
+message PortsResponse {
+  string bridge = 1;
+  repeated string ports = 2;
+  int32 count = 3;
+}
+
+// Database operations
+message DatabaseRequest {
+  // Empty - lists all databases
+}
+
+message DatabaseResponse {
+  repeated string databases = 1;
+  int32 count = 2;
+}
+
+// Status operations
+message StatusRequest {
+  // Empty
+}
+
+message StatusResponse {
+  bool connected = 1;
+  string version = 2;
+  string message = 3;
+}

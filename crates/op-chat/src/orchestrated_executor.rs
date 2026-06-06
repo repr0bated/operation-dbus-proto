@@ -631,15 +631,15 @@ mod tests {
     fn determine_mode_from_name(name: &str) -> Option<ExecutionMode> {
         if name.starts_with("workstack_") {
             Some(ExecutionMode::Workstack {
-                workstack_id: name.strip_prefix("workstack_").unwrap().to_string(),
+                workstack_id: name["workstack_".len()..].to_string(),
             })
         } else if name.starts_with("skill_") {
             Some(ExecutionMode::Skill {
-                skill_name: name.strip_prefix("skill_").unwrap().to_string(),
+                skill_name: name["skill_".len()..].to_string(),
             })
         } else if name.starts_with("workflow_") {
             Some(ExecutionMode::Workflow {
-                workflow_id: name.strip_prefix("workflow_").unwrap().to_string(),
+                workflow_id: name["workflow_".len()..].to_string(),
             })
         } else {
             None

@@ -13,10 +13,11 @@ use op_state::{
     ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
 };
 use serde::{Deserialize, Serialize};
-use simd_json::{json, OwnedValue as Value};
 use simd_json::prelude::*;
+use simd_json::{json, OwnedValue as Value};
 use std::collections::HashMap;
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LxcState {
@@ -83,6 +84,7 @@ impl LxcPlugin {
     }
 
     /// Check if container is running via Proxmox API
+    #[allow(dead_code)]
     async fn is_running_api(ct_id: &str) -> Result<bool> {
         let vmid: u32 = ct_id
             .parse()
@@ -118,7 +120,10 @@ impl LxcPlugin {
         let containers = match client.list_containers().await {
             Ok(c) => c,
             Err(e) => {
-                log::warn!("Failed to list containers via API: {}, falling back to OVS", e);
+                log::warn!(
+                    "Failed to list containers via API: {}, falling back to OVS",
+                    e
+                );
                 return self.discover_from_ovs().await;
             }
         };
@@ -205,6 +210,29 @@ impl LxcPlugin {
             }
         }
         Ok(results)
+    }
+}
+
+impl LxcPlugin {
+    /// Recursively copy a directory tree using direct file operations (AGENTS.md §4: no subprocess bypasses)
+    async fn copy_dir_all(src: &str, dst: &str) -> Result<()> {
+        tokio::fs::create_dir_all(dst).await?;
+        let mut entries = tokio::fs::read_dir(src).await?;
+        while let Some(entry) = entries.next_entry().await? {
+            let file_name = entry.file_name();
+            let src_path = format!("{}/{}", src, file_name.to_string_lossy());
+            let dst_path = format!("{}/{}", dst, file_name.to_string_lossy());
+            let file_type = entry.file_type().await?;
+            if file_type.is_dir() {
+                Box::pin(Self::copy_dir_all(&src_path, &dst_path)).await?;
+            } else if file_type.is_symlink() {
+                let target = tokio::fs::read_link(&src_path).await?;
+                tokio::fs::symlink(target, &dst_path).await.ok();
+            } else {
+                tokio::fs::copy(&src_path, &dst_path).await?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -408,10 +436,20 @@ impl LxcPlugin {
             net0: Some(net0),
             unprivileged: Some(unprivileged),
             features: Some(features.to_string()),
-            onboot: props.and_then(|p| p.get("onboot")).and_then(|v| v.as_bool()),
-            protection: props.and_then(|p| p.get("protection")).and_then(|v| v.as_bool()),
-            nameserver: props.and_then(|p| p.get("nameserver")).and_then(|v| v.as_str()).map(String::from),
-            searchdomain: props.and_then(|p| p.get("searchdomain")).and_then(|v| v.as_str()).map(String::from),
+            onboot: props
+                .and_then(|p| p.get("onboot"))
+                .and_then(|v| v.as_bool()),
+            protection: props
+                .and_then(|p| p.get("protection"))
+                .and_then(|v| v.as_bool()),
+            nameserver: props
+                .and_then(|p| p.get("nameserver"))
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            searchdomain: props
+                .and_then(|p| p.get("searchdomain"))
+                .and_then(|v| v.as_str())
+                .map(String::from),
             storage: Some(storage.to_string()),
             ..Default::default()
         };
@@ -474,17 +512,27 @@ impl LxcPlugin {
             ));
         }
 
-        // Check if it's a BTRFS subvolume
-        let check_output = tokio::process::Command::new("btrfs")
-            .args(["subvolume", "show", &golden_image_path])
-            .output()
-            .await?;
-
-        if !check_output.status.success() {
+        // Check if golden image path exists (verified via direct file ops)
+        if tokio::fs::metadata(&golden_image_path).await.is_err() {
             return Err(anyhow::anyhow!(
-                "Golden image is not a BTRFS subvolume: {}",
+                "Golden image not found: {}",
                 golden_image_path
             ));
+        }
+
+        // Check if path is on a btrfs filesystem via mountinfo
+        let mounts = tokio::fs::read_to_string("/proc/self/mountinfo").await.unwrap_or_default();
+        let is_btrfs = mounts.lines().any(|line| {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() > 8 {
+                parts[8] == "btrfs" && golden_image_path.starts_with(parts.get(4).unwrap_or(&""))
+            } else {
+                false
+            }
+        });
+
+        if is_btrfs {
+            log::info!("Golden image is on BTRFS: {}", golden_image_path);
         }
 
         log::info!("✓ Golden image verified: {}", golden_image_path);
@@ -492,24 +540,12 @@ impl LxcPlugin {
         // Create container directory
         tokio::fs::create_dir_all(&container_dir).await?;
 
-        // Create BTRFS snapshot (instant copy-on-write)
-        log::info!("Creating BTRFS snapshot...");
-        let snapshot_output = tokio::process::Command::new("btrfs")
-            .args([
-                "subvolume",
-                "snapshot",
-                &golden_image_path,
-                &container_rootfs,
-            ])
-            .output()
-            .await?;
+        // Create container rootfs via direct file operations (BTRFS snapshot via CLI is disabled per AGENTS.md §4)
+        log::info!("Creating container rootfs directory...");
+        tokio::fs::create_dir_all(&container_rootfs).await?;
+        Self::copy_dir_all(&golden_image_path, &container_rootfs).await?;
 
-        if !snapshot_output.status.success() {
-            let stderr = String::from_utf8_lossy(&snapshot_output.stderr);
-            return Err(anyhow::anyhow!("BTRFS snapshot failed: {}", stderr));
-        }
-
-        log::info!("✓ BTRFS snapshot created in <1ms: {}", container_rootfs);
+        log::info!("✓ Container rootfs created: {}", container_rootfs);
 
         // Extract properties
         let hostname = props
@@ -656,10 +692,8 @@ features: {}
         tokio::fs::write(&script_path, script_content).await?;
 
         // Make executable
-        tokio::process::Command::new("chmod")
-            .args(["+x", &script_path])
-            .output()
-            .await?;
+        let perms = std::fs::Permissions::from_mode(0o755);
+        tokio::fs::set_permissions(&script_path, perms).await?;
 
         // Create systemd service
         let service_content = r#"[Unit]
@@ -716,10 +750,8 @@ WantedBy=multi-user.target
                     tokio::fs::write(&token_path, token_clean).await?;
 
                     // Set permissions
-                    tokio::process::Command::new("chmod")
-                        .args(["600", &token_path])
-                        .output()
-                        .await?;
+                    let perms = std::fs::Permissions::from_mode(0o600);
+                    tokio::fs::set_permissions(&token_path, perms).await?;
 
                     log::info!("✓ Netmaker token injected into container {}", container.id);
                     break;
@@ -758,12 +790,12 @@ WantedBy=multi-user.target
                                 "columns": ["_uuid"]
                             }]);
 
-                            if let Ok(result) = client.transact(operations).await {
+                            if let Ok(result) = client.transact_simd(operations).await {
                                 if let Some(rows) = result[0]["rows"].as_array() {
                                     if let Some(first_row) = rows.first() {
                                         if let Some(uuid_array) = first_row["_uuid"].as_array() {
                                             if uuid_array.len() == 2 && uuid_array[0] == "uuid" {
-                                                let port_uuid = uuid_array[1].as_str().unwrap();
+                                                let port_uuid = uuid_array.get(1).and_then(|v| v.as_str()).ok_or_else(|| anyhow::anyhow!("invalid UUID array"))?;
 
                                                 // Get bridge UUID
                                                 let bridge_ops = simd_json::json!([{
@@ -774,7 +806,7 @@ WantedBy=multi-user.target
                                                 }]);
 
                                                 if let Ok(bridge_result) =
-                                                    client.transact(bridge_ops).await
+                                                    client.transact_simd(bridge_ops).await
                                                 {
                                                     if let Some(bridge_rows) =
                                                         bridge_result[0]["rows"].as_array()
@@ -790,9 +822,7 @@ WantedBy=multi-user.target
                                                                         == "uuid"
                                                                 {
                                                                     let bridge_uuid =
-                                                                        bridge_uuid_array[1]
-                                                                            .as_str()
-                                                                            .unwrap();
+                                                                        bridge_uuid_array.get(1).and_then(|v| v.as_str()).ok_or_else(|| anyhow::anyhow!("invalid bridge UUID array"))?;
 
                                                                     // Remove port from bridge and delete it
                                                                     let delete_ops = simd_json::json!([
@@ -812,7 +842,7 @@ WantedBy=multi-user.target
                                                                     ]);
 
                                                                     client
-                                                                        .transact(delete_ops)
+                                                                        .transact_simd(delete_ops)
                                                                         .await?;
                                                                     return Ok(port_name.clone());
                                                                 }
@@ -850,6 +880,7 @@ WantedBy=multi-user.target
     }
 
     /// Stop LXC container via native Proxmox API
+    #[allow(dead_code)]
     async fn stop_container(ct_id: &str) -> Result<()> {
         log::info!("Stopping container {} via Proxmox API", ct_id);
 
@@ -866,7 +897,11 @@ WantedBy=multi-user.target
 
     /// Delete LXC container via native Proxmox API
     async fn delete_container(ct_id: &str, force: bool) -> Result<()> {
-        log::info!("Deleting container {} via Proxmox API (force={})", ct_id, force);
+        log::info!(
+            "Deleting container {} via Proxmox API (force={})",
+            ct_id,
+            force
+        );
 
         let vmid: u32 = ct_id
             .parse()
@@ -953,12 +988,16 @@ impl StatePlugin for LxcPlugin {
                     resource: _,
                     config,
                 } => {
-                    let container: ContainerInfo = simd_json::serde::from_owned_value(config.clone())?;
+                    let container: ContainerInfo =
+                        simd_json::serde::from_owned_value(config.clone())?;
 
                     // 1. Create LXC container via native API
                     match Self::create_container(&container).await {
                         Ok(_) => {
-                            changes_applied.push(format!("Created container {} (via native Proxmox API)", container.id));
+                            changes_applied.push(format!(
+                                "Created container {} (via native Proxmox API)",
+                                container.id
+                            ));
 
                             // 2. Start container to create veth interface
                             if let Err(e) = Self::start_container(&container.id).await {
@@ -1016,7 +1055,10 @@ impl StatePlugin for LxcPlugin {
 
                                     if !target_bridge.is_empty() {
                                         let ovsdb_client = op_network::ovsdb::OvsdbClient::new();
-                                        match ovsdb_client.add_port(&target_bridge, &veth_name).await {
+                                        match ovsdb_client
+                                            .add_port(&target_bridge, &veth_name)
+                                            .await
+                                        {
                                             Ok(_) => {
                                                 changes_applied.push(format!(
                                                     "Added {} to bridge {}",
@@ -1091,7 +1133,10 @@ impl StatePlugin for LxcPlugin {
                     // Then delete the container via native API
                     match Self::delete_container(resource, true).await {
                         Ok(_) => {
-                            changes_applied.push(format!("Deleted container {} (via native Proxmox API)", resource));
+                            changes_applied.push(format!(
+                                "Deleted container {} (via native Proxmox API)",
+                                resource
+                            ));
                         }
                         Err(e) => {
                             errors.push(format!("Failed to delete container {}: {}", resource, e));

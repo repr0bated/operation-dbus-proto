@@ -85,8 +85,7 @@ impl AggregatorConfig {
         } else {
             let mut content = content;
             let content_bytes = unsafe { content.as_bytes_mut() };
-            simd_json::from_slice(content_bytes)
-                .with_context(|| "Failed to parse JSON config")?
+            simd_json::from_slice(content_bytes).with_context(|| "Failed to parse JSON config")?
         };
 
         info!("Loaded aggregator config from {}", path.display());

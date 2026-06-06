@@ -23,6 +23,7 @@ pub mod analysis;
 pub mod architecture;
 pub mod base;
 pub mod business;
+pub mod compliance;
 pub mod content;
 pub mod database;
 pub mod infrastructure;
