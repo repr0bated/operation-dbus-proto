@@ -122,7 +122,7 @@ impl WebServer {
                 .per_second(rate_limit_per_sec)
                 .burst_size(self.config.rate_limit.burst_size as u32)
                 .finish()
-                .unwrap();
+                .expect("rate limit configuration should be valid");
 
             app.layer(GovernorLayer {
                 config: governor_conf.into(),

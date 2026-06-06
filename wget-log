@@ -1,0 +1,17 @@
+--2026-06-05 13:40:31--  https://l.meta.ai/?u=https%3A%2F%2Fembed.fbsbx.com%2Fplayables%2Fview%2F1315650103348954%2F%3Fext%3D1788457048%26hash%3DQ92gDAGsm6dTGJ7yCv8-VQNXhEjd
+Loaded CA certificate '/etc/ssl/certs/ca-certificates.crt'
+Resolving l.meta.ai (l.meta.ai)... 31.13.80.8, 2a03:2880:f00e:a:face:b00c:0:2
+Connecting to l.meta.ai (l.meta.ai)|31.13.80.8|:443... connected.
+HTTP request sent, awaiting response... 302 Found
+Location: https://www.facebook.com/unsupportedbrowser [following]
+--2026-06-05 13:40:31--  https://www.facebook.com/unsupportedbrowser
+Resolving www.facebook.com (www.facebook.com)... 31.13.80.36, 2a03:2880:f10e:83:face:b00c:0:25de
+Connecting to www.facebook.com (www.facebook.com)|31.13.80.36|:443... connected.
+HTTP request sent, awaiting response... 200 OK
+Length: unspecified [text/html]
+Saving to: ‘index.html?u=https:%2F%2Fembed.fbsbx.com%2Fplayables%2Fview%2F1315650103348954%2F?ext=1788457048&hash=Q92gDAGsm6dTGJ7yCv8-VQNXhEjd’
+
+                                  index.html?u=https:%2F%2Fembed.fb     [<=>                                                                                                                                                                 ]       0  --.-KB/s               index.html?u=https:%2F%2Fembed.fbsbx.com%2Fplayables%2Fview%2F13156     [ <=>                                                                                                                                                                ]  53.31K  --.-KB/s    in 0.02s   
+
+2026-06-05 13:40:31 (2.61 MB/s) - ‘index.html?u=https:%2F%2Fembed.fbsbx.com%2Fplayables%2Fview%2F1315650103348954%2F?ext=1788457048&hash=Q92gDAGsm6dTGJ7yCv8-VQNXhEjd’ saved [54586]
+

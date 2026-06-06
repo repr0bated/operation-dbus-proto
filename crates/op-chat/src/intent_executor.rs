@@ -191,36 +191,36 @@ impl IntentExecutor {
     fn register_default_patterns(&mut self) {
         // OVS Bridge patterns
         self.intent_patterns.push(IntentPattern {
-            regex: Regex::new(r"(?i)(?:create|make|add|setup)\s+(?:an?\s+)?(?:ovs\s+)?bridge\s+(?:called\s+|named\s+)?([\w-]+)").unwrap(),
+            regex: Regex::new(r"(?i)(?:create|make|add|setup)\s+(?:an?\s+)?(?:ovs\s+)?bridge\s+(?:called\s+|named\s+)?([\w-]+)").expect("hardcoded regex pattern is valid"),
             action: IntentAction::Create,
             resource: ResourceType::OvsBridge,
             param_extractors: vec![ParamExtractor {
                 name: "name".to_string(),
-                regex: Regex::new(r"(?i)bridge\s+(?:called\s+|named\s+)?([\w-]+)").unwrap(),
+                regex: Regex::new(r"(?i)bridge\s+(?:called\s+|named\s+)?([\w-]+)").expect("hardcoded regex pattern is valid"),
                 group: 1,
             }],
         });
 
         self.intent_patterns.push(IntentPattern {
-            regex: Regex::new(r"(?i)(?:delete|remove|destroy|drop)\s+(?:the\s+)?(?:ovs\s+)?bridge\s+([\w-]+)").unwrap(),
+            regex: Regex::new(r"(?i)(?:delete|remove|destroy|drop)\s+(?:the\s+)?(?:ovs\s+)?bridge\s+([\w-]+)").expect("hardcoded regex pattern is valid"),
             action: IntentAction::Delete,
             resource: ResourceType::OvsBridge,
             param_extractors: vec![ParamExtractor {
                 name: "name".to_string(),
-                regex: Regex::new(r"(?i)bridge\s+([\w-]+)").unwrap(),
+                regex: Regex::new(r"(?i)bridge\s+([\w-]+)").expect("hardcoded regex pattern is valid"),
                 group: 1,
             }],
         });
 
         self.intent_patterns.push(IntentPattern {
-            regex: Regex::new(r"(?i)(?:list|show|get|display)\s+(?:all\s+)?(?:ovs\s+)?bridges").unwrap(),
+            regex: Regex::new(r"(?i)(?:list|show|get|display)\s+(?:all\s+)?(?:ovs\s+)?bridges").expect("hardcoded regex pattern is valid"),
             action: IntentAction::List,
             resource: ResourceType::OvsBridge,
             param_extractors: vec![],
         });
 
         self.intent_patterns.push(IntentPattern {
-            regex: Regex::new(r"(?i)(?:what|which)\s+(?:ovs\s+)?bridges\s+(?:exist|are there)").unwrap(),
+            regex: Regex::new(r"(?i)(?:what|which)\s+(?:ovs\s+)?bridges\s+(?:exist|are there)").expect("hardcoded regex pattern is valid"),
             action: IntentAction::List,
             resource: ResourceType::OvsBridge,
             param_extractors: vec![],
@@ -228,82 +228,82 @@ impl IntentExecutor {
 
         // OVS Port patterns
         self.intent_patterns.push(IntentPattern {
-            regex: Regex::new(r"(?i)(?:add|create)\s+port\s+([\w-]+)\s+to\s+(?:bridge\s+)?([\w-]+)").unwrap(),
+            regex: Regex::new(r"(?i)(?:add|create)\s+port\s+([\w-]+)\s+to\s+(?:bridge\s+)?([\w-]+)").expect("hardcoded regex pattern is valid"),
             action: IntentAction::Add,
             resource: ResourceType::OvsPort,
             param_extractors: vec![
                 ParamExtractor {
                     name: "port".to_string(),
-                    regex: Regex::new(r"(?i)port\s+([\w-]+)").unwrap(),
+                    regex: Regex::new(r"(?i)port\s+([\w-]+)").expect("hardcoded regex pattern is valid"),
                     group: 1,
                 },
                 ParamExtractor {
                     name: "bridge".to_string(),
-                    regex: Regex::new(r"(?i)to\s+(?:bridge\s+)?([\w-]+)").unwrap(),
+                    regex: Regex::new(r"(?i)to\s+(?:bridge\s+)?([\w-]+)").expect("hardcoded regex pattern is valid"),
                     group: 1,
                 },
             ],
         });
 
         self.intent_patterns.push(IntentPattern {
-            regex: Regex::new(r"(?i)(?:list|show|get)\s+ports\s+(?:on|for|of)\s+(?:bridge\s+)?([\w-]+)").unwrap(),
+            regex: Regex::new(r"(?i)(?:list|show|get)\s+ports\s+(?:on|for|of)\s+(?:bridge\s+)?([\w-]+)").expect("hardcoded regex pattern is valid"),
             action: IntentAction::List,
             resource: ResourceType::OvsPort,
             param_extractors: vec![ParamExtractor {
                 name: "bridge".to_string(),
-                regex: Regex::new(r"(?i)(?:on|for|of)\s+(?:bridge\s+)?([\w-]+)").unwrap(),
+                regex: Regex::new(r"(?i)(?:on|for|of)\s+(?:bridge\s+)?([\w-]+)").expect("hardcoded regex pattern is valid"),
                 group: 1,
             }],
         });
 
         // Systemd patterns
         self.intent_patterns.push(IntentPattern {
-            regex: Regex::new(r"(?i)(?:start|begin|launch)\s+(?:the\s+)?(?:service\s+)?([\w-]+)(?:\.service)?").unwrap(),
+            regex: Regex::new(r"(?i)(?:start|begin|launch)\s+(?:the\s+)?(?:service\s+)?([\w-]+)(?:\.service)?").expect("hardcoded regex pattern is valid"),
             action: IntentAction::Start,
             resource: ResourceType::SystemdService,
             param_extractors: vec![ParamExtractor {
                 name: "unit".to_string(),
-                regex: Regex::new(r"(?i)(?:service\s+)?([\w-]+)(?:\.service)?").unwrap(),
+                regex: Regex::new(r"(?i)(?:service\s+)?([\w-]+)(?:\.service)?").expect("hardcoded regex pattern is valid"),
                 group: 1,
             }],
         });
 
         self.intent_patterns.push(IntentPattern {
-            regex: Regex::new(r"(?i)(?:stop|halt|kill)\s+(?:the\s+)?(?:service\s+)?([\w-]+)(?:\.service)?").unwrap(),
+            regex: Regex::new(r"(?i)(?:stop|halt|kill)\s+(?:the\s+)?(?:service\s+)?([\w-]+)(?:\.service)?").expect("hardcoded regex pattern is valid"),
             action: IntentAction::Stop,
             resource: ResourceType::SystemdService,
             param_extractors: vec![ParamExtractor {
                 name: "unit".to_string(),
-                regex: Regex::new(r"(?i)(?:service\s+)?([\w-]+)(?:\.service)?").unwrap(),
+                regex: Regex::new(r"(?i)(?:service\s+)?([\w-]+)(?:\.service)?").expect("hardcoded regex pattern is valid"),
                 group: 1,
             }],
         });
 
         self.intent_patterns.push(IntentPattern {
-            regex: Regex::new(r"(?i)(?:restart|reboot|reload)\s+(?:the\s+)?(?:service\s+)?([\w-]+)(?:\.service)?").unwrap(),
+            regex: Regex::new(r"(?i)(?:restart|reboot|reload)\s+(?:the\s+)?(?:service\s+)?([\w-]+)(?:\.service)?").expect("hardcoded regex pattern is valid"),
             action: IntentAction::Restart,
             resource: ResourceType::SystemdService,
             param_extractors: vec![ParamExtractor {
                 name: "unit".to_string(),
-                regex: Regex::new(r"(?i)(?:service\s+)?([\w-]+)(?:\.service)?").unwrap(),
+                regex: Regex::new(r"(?i)(?:service\s+)?([\w-]+)(?:\.service)?").expect("hardcoded regex pattern is valid"),
                 group: 1,
             }],
         });
 
         self.intent_patterns.push(IntentPattern {
-            regex: Regex::new(r"(?i)(?:status|state)\s+(?:of\s+)?(?:the\s+)?(?:service\s+)?([\w-]+)(?:\.service)?").unwrap(),
+            regex: Regex::new(r"(?i)(?:status|state)\s+(?:of\s+)?(?:the\s+)?(?:service\s+)?([\w-]+)(?:\.service)?").expect("hardcoded regex pattern is valid"),
             action: IntentAction::Get,
             resource: ResourceType::SystemdService,
             param_extractors: vec![ParamExtractor {
                 name: "unit".to_string(),
-                regex: Regex::new(r"(?i)(?:service\s+)?([\w-]+)(?:\.service)?").unwrap(),
+                regex: Regex::new(r"(?i)(?:service\s+)?([\w-]+)(?:\.service)?").expect("hardcoded regex pattern is valid"),
                 group: 1,
             }],
         });
 
         // Check OVS availability
         self.intent_patterns.push(IntentPattern {
-            regex: Regex::new(r"(?i)(?:check|is|verify)\s+(?:if\s+)?ovs\s+(?:is\s+)?(?:running|available|installed)").unwrap(),
+            regex: Regex::new(r"(?i)(?:check|is|verify)\s+(?:if\s+)?ovs\s+(?:is\s+)?(?:running|available|installed)").expect("hardcoded regex pattern is valid"),
             action: IntentAction::Check,
             resource: ResourceType::OvsBridge,
             param_extractors: vec![],

@@ -162,9 +162,9 @@ impl WireGuardDatabase {
         let mut sessions = Vec::new();
         for row in rows {
             let flags_json: String = row.get("flags");
-            let mut flags_str = flags_json.clone();
+            let mut flags_bytes = flags_json.into_bytes();
             let flags: std::collections::HashMap<String, String> =
-                unsafe { simd_json::from_str(&mut flags_str) }.unwrap_or_default();
+                simd_json::from_slice(&mut flags_bytes).unwrap_or_default();
 
             let session = WireGuardSession {
                 session_id: row.get("session_id"),
@@ -303,6 +303,7 @@ impl WireGuardAuthManager {
     }
 
     /// Create a new WireGuard session
+    #[tracing::instrument(skip(self))]
     pub async fn create_session(
         &self,
         peer_pubkey: &str,
@@ -385,6 +386,7 @@ impl WireGuardAuthManager {
     }
 
     /// Validate a WireGuard session
+    #[tracing::instrument(skip(self))]
     pub async fn validate_session(&self, session_id: &str) -> Result<bool> {
         debug!("Validating WireGuard session: {}", session_id);
 
@@ -413,12 +415,14 @@ impl WireGuardAuthManager {
     }
 
     /// Get session information
+    #[tracing::instrument(skip(self))]
     pub async fn get_session(&self, session_id: &str) -> Result<Option<WireGuardSession>> {
         let sessions = self.sessions.read().await;
         Ok(sessions.get(session_id).cloned())
     }
 
     /// List active sessions
+    #[tracing::instrument(skip(self))]
     pub async fn list_sessions(
         &self,
         filter: Option<SessionFilter>,
@@ -451,6 +455,7 @@ impl WireGuardAuthManager {
 
     /// Rotate session key for a peer (NOT the WireGuard PSK)
     /// WireGuard PSK remains stable to avoid desync issues
+    #[tracing::instrument(skip(self))]
     pub async fn rotate_session_key(&self, peer_pubkey: &str, force: bool) -> Result<String> {
         info!(
             "Rotating session key for peer: {} (force: {})",
@@ -508,6 +513,7 @@ impl WireGuardAuthManager {
     }
 
     /// Get authentication statistics
+    #[tracing::instrument(skip(self))]
     pub async fn get_stats(&self) -> Result<WireGuardStats> {
         let mut stats = self.stats.lock().await;
 
@@ -641,6 +647,7 @@ impl WireGuardAuthManager {
     }
 
     /// Store WireGuard private key in encrypted storage
+    #[tracing::instrument(skip(self))]
     pub async fn store_private_key(&self, key_id: &str, private_key: &[u8; 32]) -> Result<()> {
         let mut key_storage = self.key_storage.lock().await;
         key_storage
@@ -651,6 +658,7 @@ impl WireGuardAuthManager {
     }
 
     /// Retrieve WireGuard private key from encrypted storage
+    #[tracing::instrument(skip(self))]
     pub async fn retrieve_private_key(&self, key_id: &str) -> anyhow::Result<[u8; 32]> {
         let key_storage = self.key_storage.lock().await;
         let key_data = key_storage.retrieve_key(key_id).await?;
@@ -668,6 +676,7 @@ impl WireGuardAuthManager {
     }
 
     /// Get encrypted storage statistics
+    #[tracing::instrument(skip(self))]
     pub async fn get_storage_stats(
         &self,
     ) -> anyhow::Result<crate::encrypted_storage::StorageStats> {

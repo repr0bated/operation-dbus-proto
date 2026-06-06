@@ -33,22 +33,13 @@ impl CodeContext {
                 .iter()
                 .map(|s| {
                     let mut obj = simd_json::owned::Object::with_hasher(ObjectHasher::default());
-                    obj.insert(
-                        "file".into(),
-                        Value::String(s.file.clone()),
-                    );
+                    obj.insert("file".into(), Value::String(s.file.clone()));
                     obj.insert(
                         "function".into(),
                         Value::String(s.function.clone().unwrap_or_default()),
                     );
-                    obj.insert(
-                        "language".into(),
-                        Value::String(s.language.clone()),
-                    );
-                    obj.insert(
-                        "code".into(),
-                        Value::String(s.code.clone()),
-                    );
+                    obj.insert("language".into(), Value::String(s.language.clone()));
+                    obj.insert("code".into(), Value::String(s.code.clone()));
                     obj.insert(
                         "similarity".into(),
                         Value::Static(simd_json::prelude::StaticNode::F64(s.similarity)),

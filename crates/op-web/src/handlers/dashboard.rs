@@ -3,9 +3,7 @@
 use axum::{extract::Extension, response::Json};
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::ValueAsScalar;
-use std::process::Command;
 use std::sync::Arc;
-
 
 use crate::projection_client;
 use crate::state::AppState;
@@ -119,17 +117,10 @@ pub async fn dashboard_projections_handler(
 }
 
 fn get_vpn_peer_count() -> usize {
-    Command::new("wg")
-        .args(["show", "wg0", "peers"])
-        .output()
+    let peers_dir = "/sys/class/net/wg0/wireguard/peers";
+    std::fs::read_dir(peers_dir)
         .ok()
-        .map(|output| {
-            if output.status.success() {
-                String::from_utf8_lossy(&output.stdout).lines().count()
-            } else {
-                0
-            }
-        })
+        .map(|entries| entries.filter_map(|e| e.ok()).count())
         .unwrap_or(0)
 }
 

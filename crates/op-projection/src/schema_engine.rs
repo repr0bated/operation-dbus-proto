@@ -812,8 +812,8 @@ mod tests {
         let validator = SchemaValidator::new(engine);
 
         let constraints = vec![Constraint::Pattern("^test".to_string())];
-        let result = validator
-            .validate_constraints(&constraints, &Value::String("other".to_string()));
+        let result =
+            validator.validate_constraints(&constraints, &Value::String("other".to_string()));
 
         assert!(result.is_err());
     }
@@ -824,8 +824,7 @@ mod tests {
         let validator = SchemaValidator::new(engine);
 
         let constraints = vec![Constraint::Enum(vec!["a".to_string(), "b".to_string()])];
-        let result =
-            validator.validate_constraints(&constraints, &Value::String("c".to_string()));
+        let result = validator.validate_constraints(&constraints, &Value::String("c".to_string()));
 
         assert!(result.is_err());
     }

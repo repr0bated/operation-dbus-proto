@@ -13,6 +13,8 @@ use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
 use std::collections::HashMap;
+use std::time::Duration;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// Top-level state representing all Incus instances on the system.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,25 +71,305 @@ impl IncusPlugin {
         Self
     }
 
-    /// Run an incus CLI command and return its stdout as bytes.
-    async fn run_incus_command(args: &[&str]) -> Result<Vec<u8>> {
-        let output = tokio::process::Command::new("/usr/bin/incus")
-            .args(args)
-            .output()
-            .await
-            .context("Failed to execute incus command")?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!(
-                "incus {} failed (exit {}): {}",
-                args.join(" "),
-                output.status.code().unwrap_or(-1),
-                stderr.trim()
-            );
+    /// Minimal HTTP-over-UnixSocket client for Incus REST API (AGENTS.md §4: no subprocess bypasses)
+    async fn incus_api_request(method: &str, path: &str, body: Option<&str>) -> Result<Vec<u8>> {
+        let socket_path = "/var/lib/incus/unix.socket";
+        if !std::path::Path::new(socket_path).exists() {
+            return Err(anyhow::anyhow!("Incus Unix socket not found at {}", socket_path));
         }
 
-        Ok(output.stdout)
+        let mut stream = tokio::net::UnixStream::connect(socket_path)
+            .await
+            .context("Failed to connect to Incus Unix socket")?;
+
+        let body_len = body.map(|b| b.len()).unwrap_or(0);
+        let request = format!(
+            "{} {} HTTP/1.1\r\nHost: localhost\r\nAccept: application/json\r\n{}Content-Length: {}\r\n\r\n{}",
+            method,
+            path,
+            if body.is_some() {
+                "Content-Type: application/json\r\n"
+            } else {
+                ""
+            },
+            body_len,
+            body.unwrap_or("")
+        );
+
+        stream.write_all(request.as_bytes()).await?;
+
+        let mut response = Vec::new();
+        let mut buf = [0u8; 4096];
+        loop {
+            match tokio::time::timeout(Duration::from_millis(500), stream.read(&mut buf)).await {
+                Ok(Ok(0)) => break,
+                Ok(Ok(n)) => response.extend_from_slice(&buf[..n]),
+                Ok(Err(e)) => return Err(e.into()),
+                Err(_) => break, // timeout: assume response is complete
+            }
+        }
+
+        // Extract body from HTTP response
+        let body_start = if let Some(idx) = response.windows(4).position(|w| w == b"\r\n\r\n") {
+            idx + 4
+        } else if let Some(idx) = response.windows(2).position(|w| w == b"\n\n") {
+            idx + 2
+        } else {
+            return Ok(response);
+        };
+
+        let headers = std::str::from_utf8(&response[..body_start]).unwrap_or("");
+        let mut body = response[body_start..].to_vec();
+
+        // Handle chunked transfer encoding
+        if headers.to_lowercase().contains("transfer-encoding: chunked") {
+            let mut decoded = Vec::new();
+            let mut pos = 0;
+            while pos < body.len() {
+                let mut line_end = pos;
+                while line_end < body.len() && body[line_end] != b'\n' {
+                    line_end += 1;
+                }
+                if line_end >= body.len() {
+                    break;
+                }
+                let line = std::str::from_utf8(&body[pos..line_end]).unwrap_or("").trim();
+                let size =
+                    usize::from_str_radix(line.split(';').next().unwrap_or("0").trim(), 16)
+                        .unwrap_or(0);
+                if size == 0 {
+                    break;
+                }
+                pos = line_end + 1;
+                if pos < body.len() && body[pos] == b'\r' {
+                    pos += 1;
+                }
+                decoded.extend_from_slice(&body[pos..pos + size]);
+                pos += size;
+                if pos < body.len() && body[pos] == b'\r' {
+                    pos += 1;
+                }
+                if pos < body.len() && body[pos] == b'\n' {
+                    pos += 1;
+                }
+            }
+            body = decoded;
+        }
+
+        Ok(body)
+    }
+
+    /// Call Incus REST API and extract metadata from sync response
+    async fn incus_api_call(method: &str, path: &str, body: Option<&str>) -> Result<Vec<u8>> {
+        let response = Self::incus_api_request(method, path, body).await?;
+        let mut raw = response;
+        let val: simd_json::OwnedValue =
+            simd_json::from_slice(&mut raw).context("Failed to parse Incus API response")?;
+
+        let status = val
+            .get("status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_lowercase();
+        if status == "success" || status == "created" || status == "accepted" {
+            let metadata = val.get("metadata").cloned().unwrap_or(simd_json::json!({}));
+            Ok(simd_json::to_string(&metadata)?.into_bytes())
+        } else {
+            let err = val
+                .get("error")
+                .and_then(|v| v.as_str())
+                .or_else(|| val.get("status").and_then(|v| v.as_str()))
+                .unwrap_or("Unknown Incus API error");
+            Err(anyhow::anyhow!("Incus API error: {}", err))
+        }
+    }
+
+    /// Fetch current instance configuration via REST API
+    async fn incus_get_instance(name: &str) -> Result<simd_json::OwnedValue> {
+        let body = Self::incus_api_call("GET", &format!("/1.0/instances/{}?recursion=1", name), None)
+            .await?;
+        let mut raw = body;
+        simd_json::from_slice(&mut raw).context("Failed to parse Incus instance")
+    }
+
+    /// Update instance configuration via REST API (removes read-only fields first)
+    async fn incus_update_instance(name: &str, mut config: simd_json::OwnedValue) -> Result<()> {
+        if let Some(obj) = config.as_object_mut() {
+            obj.retain(|k, _| !k.starts_with("volatile.") && !k.starts_with("image."));
+        }
+        let body = simd_json::to_string(&config)?;
+        Self::incus_api_call("PUT", &format!("/1.0/instances/{}", name), Some(&body)).await?;
+        Ok(())
+    }
+
+    /// Run an incus operation via REST API (AGENTS.md §4: no subprocess bypasses)
+    async fn run_incus_command(args: &[&str]) -> Result<Vec<u8>> {
+        match args {
+            ["list", "--format=json"] => {
+                Self::incus_api_call("GET", "/1.0/instances?recursion=1", None).await
+            }
+            ["init", ..] => {
+                let mut image = "";
+                let mut name = "";
+                let mut storage_pool = None;
+                let mut profiles: Vec<String> = Vec::new();
+                let mut no_profiles = false;
+                let mut i = 1;
+                while i < args.len() {
+                    match args[i] {
+                        "--storage" => {
+                            i += 1;
+                            storage_pool = args.get(i).copied().map(String::from);
+                        }
+                        "--no-profiles" => {
+                            no_profiles = true;
+                        }
+                        "--profile" => {
+                            i += 1;
+                            if let Some(p) = args.get(i) {
+                                profiles.push(p.to_string());
+                            }
+                        }
+                        arg if arg.starts_with('-') => {}
+                        arg if image.is_empty() => image = arg,
+                        arg if name.is_empty() => name = arg,
+                        _ => {}
+                    }
+                    i += 1;
+                }
+
+                let mut body = simd_json::json!({
+                    "name": name,
+                    "source": { "type": "image", "alias": image },
+                    "type": "container",
+                });
+                if no_profiles {
+                    body["profiles"] = simd_json::json!([]);
+                } else if !profiles.is_empty() {
+                    body["profiles"] = simd_json::json!(profiles);
+                }
+                if let Some(pool) = storage_pool {
+                    body["devices"] = simd_json::json!({
+                        "root": {
+                            "type": "disk",
+                            "pool": pool,
+                            "path": "/"
+                        }
+                    });
+                }
+                let body_str = simd_json::to_string(&body)?;
+                Self::incus_api_call("POST", "/1.0/instances", Some(&body_str)).await
+            }
+            ["delete", name, "--force"] => {
+                Self::incus_api_call("DELETE", &format!("/1.0/instances/{}?force=1", name), None)
+                    .await
+            }
+            ["start", name] => {
+                let body = r#"{"action":"start"}"#;
+                Self::incus_api_call(
+                    "PUT",
+                    &format!("/1.0/instances/{}/state", name),
+                    Some(body),
+                )
+                .await
+            }
+            ["stop", name] => {
+                let body = r#"{"action":"stop"}"#;
+                Self::incus_api_call(
+                    "PUT",
+                    &format!("/1.0/instances/{}/state", name),
+                    Some(body),
+                )
+                .await
+            }
+            ["pause", name] => {
+                let body = r#"{"action":"freeze"}"#;
+                Self::incus_api_call(
+                    "PUT",
+                    &format!("/1.0/instances/{}/state", name),
+                    Some(body),
+                )
+                .await
+            }
+            ["profile", "remove", name, profile] => {
+                let mut data = Self::incus_get_instance(name).await?;
+                if let Some(profiles_arr) = data.get_mut("profiles").and_then(|p| p.as_array_mut()) {
+                    profiles_arr.retain(|p| p.as_str() != Some(profile));
+                }
+                Self::incus_update_instance(name, data).await?;
+                Ok(Vec::new())
+            }
+            ["profile", "add", name, profile] => {
+                let mut data = Self::incus_get_instance(name).await?;
+                if data.get("profiles").is_none() {
+                    if let Some(obj) = data.as_object_mut() {
+                        obj.insert("profiles".to_string(), simd_json::json!([]));
+                    }
+                }
+                let profiles = data
+                    .get_mut("profiles")
+                    .and_then(|p| p.as_array_mut())
+                    .ok_or_else(|| anyhow::anyhow!("profiles field is not an array"))?;
+                if !profiles.iter().any(|p| p.as_str() == Some(profile)) {
+                    profiles.push(simd_json::json!(profile));
+                }
+                Self::incus_update_instance(name, data).await?;
+                Ok(Vec::new())
+            }
+            ["config", "unset", name, key] => {
+                let mut data = Self::incus_get_instance(name).await?;
+                if let Some(config) = data.get_mut("config").and_then(|c| c.as_object_mut()) {
+                    config.remove(*key);
+                }
+                Self::incus_update_instance(name, data).await?;
+                Ok(Vec::new())
+            }
+            ["config", "set", name, kv] => {
+                let mut data = Self::incus_get_instance(name).await?;
+                if let Some((key, value)) = kv.split_once('=') {
+                    if let Some(config) = data.get_mut("config").and_then(|c| c.as_object_mut()) {
+                        config.insert(key.to_string(), simd_json::json!(value));
+                    } else if let Some(obj) = data.as_object_mut() {
+                        let mut config = HashMap::new();
+                        config.insert(key.to_string(), simd_json::json!(value));
+                        obj.insert("config".to_string(), simd_json::json!(config));
+                    }
+                }
+                Self::incus_update_instance(name, data).await?;
+                Ok(Vec::new())
+            }
+            ["config", "device", "remove", name, device] => {
+                let mut data = Self::incus_get_instance(name).await?;
+                if let Some(devices) = data.get_mut("devices").and_then(|d| d.as_object_mut()) {
+                    devices.remove(*device);
+                }
+                Self::incus_update_instance(name, data).await?;
+                Ok(Vec::new())
+            }
+            ["config", "device", "add", name, device, dev_type, rest @ ..] => {
+                let mut data = Self::incus_get_instance(name).await?;
+                let mut dev_config = HashMap::new();
+                dev_config.insert("type".to_string(), simd_json::json!(dev_type));
+                for arg in rest.iter() {
+                    if let Some((k, v)) = arg.split_once('=') {
+                        dev_config.insert(k.to_string(), simd_json::json!(v));
+                    }
+                }
+                if let Some(devices) = data.get_mut("devices").and_then(|d| d.as_object_mut()) {
+                    devices.insert(device.to_string(), simd_json::json!(dev_config));
+                } else if let Some(obj) = data.as_object_mut() {
+                    let mut devices = HashMap::new();
+                    devices.insert(device.to_string(), simd_json::json!(dev_config));
+                    obj.insert("devices".to_string(), simd_json::json!(devices));
+                }
+                Self::incus_update_instance(name, data).await?;
+                Ok(Vec::new())
+            }
+            _ => Err(anyhow::anyhow!(
+                "Unmapped incus CLI args: {:?}",
+                args
+            )),
+        }
     }
 
     /// Parse raw JSON output from `incus list --format=json` into IncusInstance structs.

@@ -70,6 +70,7 @@ pub struct McpGatewayManager {
 
 impl McpGatewayManager {
     /// Create new MCP Gateway Manager
+    #[tracing::instrument(skip(wireguard_auth))]
     pub async fn new(wireguard_auth: Arc<WireGuardAuthManager>) -> Result<Self> {
         info!("Initializing MCP Gateway Manager");
 
@@ -81,6 +82,7 @@ impl McpGatewayManager {
     }
 
     /// Route client to appropriate MCP backend based on authentication
+    #[tracing::instrument(skip(self))]
     pub async fn route_client(&self, client_info: McpClientInfo) -> Result<RoutingDecision> {
         debug!("Routing client: {}", client_info.name);
 
@@ -139,6 +141,7 @@ impl McpGatewayManager {
     }
 
     /// Create MCP session for client
+    #[tracing::instrument(skip(self))]
     pub async fn create_session(&self, client_info: McpClientInfo) -> Result<McpSession> {
         let routing_decision = self.route_client(client_info.clone()).await?;
 
@@ -162,6 +165,7 @@ impl McpGatewayManager {
     }
 
     /// Validate MCP session
+    #[tracing::instrument(skip(self))]
     pub async fn validate_session(&self, session_id: &str) -> Result<bool> {
         let sessions = self.sessions.read().await;
         if let Some(session) = sessions.get(session_id) {
@@ -182,12 +186,14 @@ impl McpGatewayManager {
     }
 
     /// Get session information
+    #[tracing::instrument(skip(self))]
     pub async fn get_session(&self, session_id: &str) -> Result<Option<McpSession>> {
         let sessions = self.sessions.read().await;
         Ok(sessions.get(session_id).cloned())
     }
 
     /// List active sessions
+    #[tracing::instrument(skip(self))]
     pub async fn list_sessions(&self) -> Result<Vec<McpSession>> {
         let sessions = self.sessions.read().await;
         Ok(sessions.values().cloned().collect())
@@ -251,6 +257,7 @@ impl McpGatewayManager {
     }
 
     /// Clean up expired sessions
+    #[tracing::instrument(skip(self))]
     pub async fn cleanup_expired_sessions(&self) -> Result<usize> {
         let now = Self::current_timestamp();
         let mut expired_sessions = Vec::new();

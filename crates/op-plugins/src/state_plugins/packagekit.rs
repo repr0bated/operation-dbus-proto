@@ -3,13 +3,12 @@
 //! Manages system packages via PackageKit D-Bus interface
 //! Provides declarative package installation/removal
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
 use std::collections::HashMap;
-use std::process::Command;
 use zbus::proxy;
 
 use op_state::{
@@ -83,100 +82,123 @@ impl PackageKitPlugin {
         Self
     }
 
-    /// Install package via direct package manager
+    /// Install package via PackageKit D-Bus (AGENTS.md §4: no subprocess bypasses)
     async fn install_via_direct(&self, package_name: &str) -> Result<()> {
-        // Try apt
-        if Command::new("apt-get")
-            .args(["install", "-y", package_name])
-            .status()?
-            .success()
-        {
-            return Ok(());
-        }
+        let conn = zbus::Connection::system()
+            .await
+            .context("Failed to connect to D-Bus for PackageKit")?;
+        let pk_proxy = zbus::Proxy::new(
+            &conn,
+            "org.freedesktop.PackageKit",
+            "/org/freedesktop/PackageKit",
+            "org.freedesktop.PackageKit",
+        )
+        .await
+        .context("Failed to create PackageKit proxy")?;
 
-        // Try dnf
-        if Command::new("dnf")
-            .args(["install", "-y", package_name])
-            .status()?
-            .success()
-        {
-            return Ok(());
-        }
+        let tx_path: String = pk_proxy
+            .call("CreateTransaction", &())
+            .await
+            .context("Failed to create PackageKit transaction")?;
 
-        // Try pacman
-        if Command::new("pacman")
-            .args(["-S", "--noconfirm", package_name])
-            .status()?
-            .success()
-        {
-            return Ok(());
-        }
+        let tx_proxy = zbus::Proxy::new(
+            &conn,
+            "org.freedesktop.PackageKit",
+            tx_path.as_str(),
+            "org.freedesktop.PackageKit.Transaction",
+        )
+        .await
+        .context("Failed to create PackageKit transaction proxy")?;
 
-        Err(anyhow::anyhow!("No suitable package manager found"))
+        let flags: u64 = 0;
+        let pkgs = vec![package_name.to_string()];
+        tx_proxy
+            .call::<_, _, ()>("InstallPackages", &(flags, pkgs))
+            .await
+            .context(format!("PackageKit install failed for {}", package_name))?;
+
+        Ok(())
     }
 
-    /// Remove package via direct package manager
+    /// Remove package via PackageKit D-Bus (AGENTS.md §4: no subprocess bypasses)
     async fn remove_via_direct(&self, package_name: &str) -> Result<()> {
-        // Try apt
-        if Command::new("apt-get")
-            .args(["remove", "-y", package_name])
-            .status()?
-            .success()
-        {
-            return Ok(());
-        }
+        let conn = zbus::Connection::system()
+            .await
+            .context("Failed to connect to D-Bus for PackageKit")?;
+        let pk_proxy = zbus::Proxy::new(
+            &conn,
+            "org.freedesktop.PackageKit",
+            "/org/freedesktop/PackageKit",
+            "org.freedesktop.PackageKit",
+        )
+        .await
+        .context("Failed to create PackageKit proxy")?;
 
-        // Try dnf
-        if Command::new("dnf")
-            .args(["remove", "-y", package_name])
-            .status()?
-            .success()
-        {
-            return Ok(());
-        }
+        let tx_path: String = pk_proxy
+            .call("CreateTransaction", &())
+            .await
+            .context("Failed to create PackageKit transaction")?;
 
-        // Try pacman
-        if Command::new("pacman")
-            .args(["-R", "--noconfirm", package_name])
-            .status()?
-            .success()
-        {
-            return Ok(());
-        }
+        let tx_proxy = zbus::Proxy::new(
+            &conn,
+            "org.freedesktop.PackageKit",
+            tx_path.as_str(),
+            "org.freedesktop.PackageKit.Transaction",
+        )
+        .await
+        .context("Failed to create PackageKit transaction proxy")?;
 
-        Err(anyhow::anyhow!("No suitable package manager found"))
+        let flags: u64 = 0;
+        let pkgs = vec![package_name.to_string()];
+        tx_proxy
+            .call::<_, _, ()>("RemovePackages", &(flags, pkgs, false, false))
+            .await
+            .context(format!("PackageKit remove failed for {}", package_name))?;
+
+        Ok(())
     }
 
-    /// Check if package is installed
+    /// Check if package is installed by reading package databases directly (AGENTS.md §4: no subprocess bypasses)
     async fn package_installed(&self, package_name: &str) -> Result<bool> {
-        // Try dpkg (Debian/Ubuntu)
-        if Command::new("dpkg")
-            .args(["-l", package_name])
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-        {
-            return Ok(true);
+        // Check dpkg status (Debian/Ubuntu)
+        if let Ok(content) = tokio::fs::read_to_string("/var/lib/dpkg/status").await {
+            let mut current_name = String::new();
+            let mut current_status = String::new();
+            for line in content.lines() {
+                if let Some(stripped) = line.strip_prefix("Package: ") {
+                    current_name = stripped.trim().to_string();
+                } else if let Some(stripped) = line.strip_prefix("Status: ") {
+                    current_status = stripped.trim().to_string();
+                } else if line.is_empty() {
+                    if current_name == package_name && current_status.contains("installed") {
+                        return Ok(true);
+                    }
+                    current_name.clear();
+                    current_status.clear();
+                }
+            }
+            if current_name == package_name && current_status.contains("installed") {
+                return Ok(true);
+            }
         }
 
-        // Try rpm (Fedora/RHEL)
-        if Command::new("rpm")
-            .args(["-q", package_name])
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-        {
-            return Ok(true);
+        // Check pacman local directory (Arch)
+        if let Ok(mut entries) = tokio::fs::read_dir("/var/lib/pacman/local").await {
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.starts_with(&format!("{}-", package_name)) {
+                    return Ok(true);
+                }
+            }
         }
 
-        // Try pacman (Arch)
-        if Command::new("pacman")
-            .args(["-Q", package_name])
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+        // Check rpm sqlite db presence (Fedora/RHEL heuristic)
+        if std::path::Path::new("/var/lib/rpm/rpmdb.sqlite").exists()
+            || std::path::Path::new("/usr/lib/sysimage/rpm/rpmdb.sqlite").exists()
         {
-            return Ok(true);
+            // Rely on PackageKit D-Bus for rpm systems; direct rpm db query requires subprocess
+            // or complex BDB/SQLite parsing. Return false here and let PackageKit handle it.
+            return Ok(false);
         }
 
         Ok(false)

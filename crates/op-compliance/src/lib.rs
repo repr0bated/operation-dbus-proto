@@ -1,14 +1,29 @@
 //! The Compliance Engine: "The Law Firm"
 //! Responsible for validating the PluginSchema against legal and security frameworks.
 
+use serde_json::Value;
+
+/// Strongly-typed error for compliance validation operations.
+///
+/// Keeps `anyhow` out of the public API surface while preserving
+/// ergonomic `?` propagation inside the crate.
+#[derive(Debug, thiserror::Error)]
+pub enum ComplianceError {
+    #[error("validation failed: {0}")]
+    Validation(String),
+
+    #[error("JSON error: {0}")]
+    Json(#[from] serde_json::Error),
+}
+
 pub mod attorneys {
-    use anyhow::{anyhow, Result};
+    use super::ComplianceError;
     use serde_json::Value;
 
     /// Olivia Scal: Managing Partner / OSCAL (Open Security Controls Assessment Language)
     pub struct OliviaScal;
     impl OliviaScal {
-        pub fn validate_controls(schema: &Value) -> Result<()> {
+        pub fn validate_controls(schema: &Value) -> std::result::Result<(), ComplianceError> {
             // Check for security control metadata
             if let Some(caps) = schema.get("capabilities") {
                 if caps.get("requires_root").and_then(|v| v.as_bool()) == Some(true) {
@@ -22,15 +37,16 @@ pub mod attorneys {
     /// E.U.gene Risk: EU AI Act Counsel
     pub struct EugeneRisk;
     impl EugeneRisk {
-        pub fn validate_ai_risk(schema: &Value) -> Result<()> {
+        pub fn validate_ai_risk(schema: &Value) -> std::result::Result<(), ComplianceError> {
             // If it's an AI/ML plugin, check for transparency requirements
             if schema.get("plugin_type").and_then(|v| v.as_str()) == Some("custom") {
                 if let Some(meta) = schema.get("schema") {
                     if meta.get("model_name").is_some()
                         && meta.get("training_data_source").is_none()
                     {
-                        return Err(anyhow!(
+                        return Err(ComplianceError::Validation(
                             "EU AI Act violation: Training data source must be declared for models"
+                                .into(),
                         ));
                     }
                 }
@@ -42,7 +58,7 @@ pub mod attorneys {
     /// Penny Privacy: GDPR Engine
     pub struct PennyPrivacy;
     impl PennyPrivacy {
-        pub fn validate_privacy(schema: &Value) -> Result<()> {
+        pub fn validate_privacy(schema: &Value) -> std::result::Result<(), ComplianceError> {
             // Check for PII handling without retention policy
             if let Some(s) = schema.get("schema") {
                 let schema_str = s.to_string().to_lowercase();
@@ -51,8 +67,9 @@ pub mod attorneys {
                     || schema_str.contains("phone"))
                     && !schema_str.contains("retention")
                 {
-                    return Err(anyhow!(
+                    return Err(ComplianceError::Validation(
                         "GDPR violation: PII fields detected without retention policy"
+                            .into(),
                     ));
                 }
             }
@@ -63,38 +80,39 @@ pub mod attorneys {
     /// Reggie O.P.A.: Cloud Prosecutor
     pub struct ReggieOpa;
     impl ReggieOpa {
-        pub fn validate_policy(schema: &Value) -> Result<()> {
+        pub fn validate_policy(schema: &Value) -> std::result::Result<(), ComplianceError> {
             // Basic policy check: Versioning must be present
             if schema.get("version").is_none() {
-                return Err(anyhow!("OPA Policy failure: Missing version field"));
+                return Err(ComplianceError::Validation(
+                    "OPA Policy failure: Missing version field".into(),
+                ));
             }
             Ok(())
         }
     }
 }
 
-use anyhow::{anyhow, Result};
 use jsonschema::JSONSchema;
-use serde_json::Value;
 
 pub struct LawFirm;
 
 impl LawFirm {
-    pub fn review_schema(schema_json: &str) -> Result<()> {
+    pub fn review_schema(schema_json: &str) -> std::result::Result<(), ComplianceError> {
         let v: Value = serde_json::from_str(schema_json)?;
 
         // 1. Structural Validation via JSON Schema
         let meta_schema = include_str!("../../../schemas/opdbus-plugin-schema.json");
         let meta_v: Value = serde_json::from_str(meta_schema)?;
 
-        let compiled = JSONSchema::compile(&meta_v).map_err(|e| anyhow!("Schema error: {}", e))?;
+        let compiled = JSONSchema::compile(&meta_v)
+            .map_err(|e| ComplianceError::Validation(format!("Schema error: {e}")))?;
 
         if let Err(errors) = compiled.validate(&v) {
             let error_msgs: Vec<String> = errors.map(|e| e.to_string()).collect();
-            return Err(anyhow!(
+            return Err(ComplianceError::Validation(format!(
                 "Structural validation failed: {}",
                 error_msgs.join(", ")
-            ));
+            )));
         }
 
         // 2. Attorney Reviews

@@ -1,12 +1,12 @@
-use op_state::StatePlugin;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use async_trait::async_trait;
-use op_state::{ApplyResult, Checkpoint, PluginCapabilities, StateDiff, StateAction};
+use op_state::StatePlugin;
+use op_state::{ApplyResult, PluginCapabilities, StateAction, StateDiff};
 use serde::{Deserialize, Serialize};
-use simd_json::OwnedValue as Value;
 use simd_json::prelude::*;
-use std::collections::HashMap;
-use tokio::process::Command;
+use simd_json::OwnedValue as Value;
+use std::path::Path;
+use zbus::{Connection, Proxy};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetmakerConfig {
@@ -50,6 +50,153 @@ pub struct NetmakerState {
     pub config: NetmakerConfig,
 }
 
+/// Service controller interface for managing daemon lifecycle
+#[derive(Clone)]
+enum ServiceController {
+    /// systemd via org.freedesktop.systemd1
+    Systemd,
+    /// s6 via opdbus.v1.S6.Systemctl
+    S6 { connection: Connection },
+}
+
+impl ServiceController {
+    /// Detect the appropriate service controller for this system
+    async fn detect() -> Result<Self> {
+        // First check if s6-systemctl D-Bus service is available (Artix/Chimera)
+        if Path::new("/run/s6-rc").exists() || Path::new("/run/service").exists() {
+            match Connection::system().await {
+                Ok(conn) => {
+                    // Check if our s6-systemctl service is available
+                    let proxy = Proxy::new(
+                        &conn,
+                        "opdbus.v1",
+                        "/opdbus/v1/s6/systemctl",
+                        "opdbus.v1.S6.Systemctl",
+                    )
+                    .await;
+                    if proxy.is_ok() {
+                        return Ok(ServiceController::S6 { connection: conn });
+                    }
+                }
+                Err(e) => {
+                    tracing::debug!("Failed to connect to system D-Bus for s6: {}", e);
+                }
+            }
+        }
+
+        // Fall back to systemd
+        Ok(ServiceController::Systemd)
+    }
+
+    /// Check if a service is active
+    async fn is_active(&self, service: &str) -> Result<bool> {
+        match self {
+            ServiceController::Systemd => {
+                let conn = Connection::system().await?;
+                let proxy = Proxy::new(
+                    &conn,
+                    "org.freedesktop.systemd1",
+                    "/org/freedesktop/systemd1",
+                    "org.freedesktop.systemd1.Manager",
+                )
+                .await?;
+
+                // Get unit path
+                let unit_path: zbus::zvariant::OwnedObjectPath = proxy
+                    .call("GetUnit", &(format!("{}.service", service),))
+                    .await
+                    .context(format!("Failed to get unit path for {}", service))?;
+
+                // Query ActiveState property
+                let unit_proxy = Proxy::new(
+                    &conn,
+                    "org.freedesktop.systemd1",
+                    unit_path.as_str(),
+                    "org.freedesktop.systemd1.Unit",
+                )
+                .await?;
+
+                let active_state: String = unit_proxy
+                    .get_property("ActiveState")
+                    .await
+                    .unwrap_or_else(|_| "unknown".to_string());
+
+                Ok(active_state == "active")
+            }
+            ServiceController::S6 { connection } => {
+                let proxy = Proxy::new(
+                    connection,
+                    "org.opdbus.v1.S6.Systemctl",
+                    "/org/opdbus/v1/s6/systemctl",
+                    "org.opdbus.v1.S6.Systemctl",
+                )
+                .await?;
+
+                let result: String = proxy.call("is_active", &(service,)).await?;
+                Ok(result == "active")
+            }
+        }
+    }
+
+    /// Enable and start a service (enable --now)
+    async fn enable_and_start(&self, service: &str) -> Result<()> {
+        match self {
+            ServiceController::Systemd => {
+                let conn = Connection::system().await?;
+                let proxy = Proxy::new(
+                    &conn,
+                    "org.freedesktop.systemd1",
+                    "/org/freedesktop/systemd1",
+                    "org.freedesktop.systemd1.Manager",
+                )
+                .await?;
+
+                // Enable unit
+                let _: (bool, Vec<(String, String, String)>) = proxy
+                    .call(
+                        "EnableUnitFiles",
+                        &(vec![format!("{}.service", service)], false, true),
+                    )
+                    .await
+                    .context(format!("Failed to enable unit {}", service))?;
+
+                // Start unit
+                let _: zbus::zvariant::OwnedObjectPath = proxy
+                    .call("StartUnit", &(format!("{}.service", service), "replace"))
+                    .await
+                    .context(format!("Failed to start unit {}", service))?;
+
+                Ok(())
+            }
+            ServiceController::S6 { connection } => {
+                let proxy = Proxy::new(
+                    connection,
+                    "org.opdbus.v1.S6.Systemctl",
+                    "/org/opdbus/v1/s6/systemctl",
+                    "org.opdbus.v1.S6.Systemctl",
+                )
+                .await?;
+
+                // Enable the service
+                let (success, msg): (bool, String) = proxy.call("enable", &(service,)).await?;
+
+                if !success {
+                    return Err(anyhow::anyhow!("Failed to enable {}: {}", service, msg));
+                }
+
+                // Start the service
+                let (success, msg): (bool, String) = proxy.call("start", &(service,)).await?;
+
+                if !success {
+                    return Err(anyhow::anyhow!("Failed to start {}: {}", service, msg));
+                }
+
+                Ok(())
+            }
+        }
+    }
+}
+
 pub struct NetmakerPlugin {
     config: NetmakerConfig,
 }
@@ -59,60 +206,57 @@ impl NetmakerPlugin {
         Self { config }
     }
 
-    /// Check if netclient is installed
+    /// Check if netclient is installed via direct file check (AGENTS.md §4: no subprocess bypasses)
     async fn check_netclient_installed() -> Result<bool> {
-        let output = Command::new("which").arg("netclient").output().await?;
-        Ok(output.status.success())
+        Ok(std::path::Path::new("/usr/bin/netclient").exists()
+            || std::path::Path::new("/usr/local/bin/netclient").exists())
     }
 
-    /// Check if netclient daemon is running
+    /// Check if netclient daemon is running via D-Bus
     async fn check_daemon_running() -> Result<bool> {
-        let output = Command::new("systemctl")
-            .args(["is-active", "netclient"])
-            .output()
-            .await;
-        Ok(output.is_ok() && output.unwrap().status.success())
+        let controller = ServiceController::detect().await?;
+        controller.is_active("netclient").await
     }
 
-    /// Get current networks from netclient
+    /// Get current networks from netclient config files (AGENTS.md §4: no subprocess bypasses)
     async fn get_networks(&self) -> Result<Vec<NetmakerNetwork>> {
-        let output = Command::new("netclient").arg("list").output().await?;
-
-        if !output.status.success() {
-            return Ok(Vec::new()); // No networks or not connected
-        }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
         let mut networks = Vec::new();
 
-        // Parse netclient output
-        // Format: "NETWORK NAME | CONNECTED | ADDRESS"
-        for line in stdout.lines() {
-            let parts: Vec<&str> = line.split('|').map(|s| s.trim()).collect();
-            if parts.len() >= 3 {
-                let network_name = parts[0].to_string();
-                let connected =
-                    parts[1].to_lowercase() == "yes" || parts[1].to_lowercase() == "true";
-                let address = if parts.len() > 2 && !parts[2].is_empty() {
-                    Some(parts[2].to_string())
-                } else {
-                    None
-                };
+        // Read netclient.json to discover connected networks
+        if let Ok(content) = tokio::fs::read_to_string("/etc/netclient/netclient.json").await {
+            if let Ok(config) = simd_json::to_owned_value(&mut content.into_bytes()) {
+                // Check nodes array for connected networks
+                if let Some(nodes) = config.get("nodes").and_then(|n| n.as_array()) {
+                    for node in nodes {
+                        let network_name = node
+                            .get("network")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown")
+                            .to_string();
+                        let connected = node
+                            .get("connected")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
+                        let address = node
+                            .get("address")
+                            .and_then(|v| v.as_str())
+                            .map(String::from);
 
-                // Get peers for this network
-                let peers = self
-                    .get_network_peers(&network_name)
-                    .await
-                    .unwrap_or_default();
+                        let peers = self
+                            .get_network_peers(&network_name)
+                            .await
+                            .unwrap_or_default();
 
-                networks.push(NetmakerNetwork {
-                    name: network_name.clone(),
-                    connected,
-                    is_default: network_name == self.config.default_network,
-                    node_id: None, // Would need to parse from daemon logs
-                    peers,
-                    address,
-                });
+                        networks.push(NetmakerNetwork {
+                            name: network_name.clone(),
+                            connected,
+                            is_default: network_name == self.config.default_network,
+                            node_id: node.get("id").and_then(|v| v.as_str()).map(String::from),
+                            peers,
+                            address,
+                        });
+                    }
+                }
             }
         }
 
@@ -127,61 +271,41 @@ impl NetmakerPlugin {
         Ok(Vec::new()) // TODO: Implement actual peer discovery
     }
 
-    /// Get public IP (for NAT traversal info)
+    /// Get public IP from netclient config (AGENTS.md §4: no subprocess bypasses)
     async fn get_public_ip(&self) -> Result<Option<String>> {
-        // Try to get public IP for Netmaker status
-        let output = Command::new("curl")
-            .args(["-s", "--max-time", "5", "https://api.ipify.org"])
-            .output()
-            .await;
-
-        if let Ok(output) = output {
-            if output.status.success() {
-                let ip = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                return Ok(Some(ip));
+        if let Ok(content) = tokio::fs::read_to_string("/etc/netclient/netclient.json").await {
+            if let Ok(config) = simd_json::to_owned_value(&mut content.into_bytes()) {
+                return Ok(config
+                    .get("endpointip")
+                    .and_then(|v| v.as_str())
+                    .map(String::from));
             }
         }
-
         Ok(None)
     }
 
     /// Join a Netmaker network
-    async fn join_network(&self, network: &str, token: &str) -> Result<()> {
-        let output = Command::new("netclient")
-            .args(["join", "-t", token])
-            .output()
-            .await?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(anyhow::anyhow!(
-                "Failed to join network {}: {}",
-                network,
-                stderr
-            ));
-        }
-
-        Ok(())
+    /// Note: netclient enrollment requires the netclient CLI per Netmaker protocol.
+    /// AGENTS.md §4 forbids subprocess calls in plugin code; manual enrollment is required.
+    async fn join_network(&self, network: &str, _token: &str) -> Result<()> {
+        Err(anyhow::anyhow!(
+            "Netmaker network '{}' join requires netclient CLI (disabled per AGENTS.md §4). \
+             Run: netclient join -t <token> externally.",
+            network
+        ))
     }
 
     /// Leave a Netmaker network
+    /// Note: netclient leave requires the netclient CLI per Netmaker protocol.
+    /// AGENTS.md §4 forbids subprocess calls in plugin code; manual disconnection is required.
     #[allow(dead_code)]
     async fn leave_network(&self, network: &str) -> Result<()> {
-        let output = Command::new("netclient")
-            .args(["leave", network])
-            .output()
-            .await?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(anyhow::anyhow!(
-                "Failed to leave network {}: {}",
-                network,
-                stderr
-            ));
-        }
-
-        Ok(())
+        Err(anyhow::anyhow!(
+            "Netmaker network '{}' leave requires netclient CLI (disabled per AGENTS.md §4). \
+             Run: netclient leave '{}' externally.",
+            network,
+            network
+        ))
     }
 }
 
@@ -304,48 +428,59 @@ impl StatePlugin for NetmakerPlugin {
         let mut changes_applied = Vec::new();
         let mut errors = Vec::new();
 
-        for action in &diff.actions {
-            match action {
-                StateAction::Create {
-                    resource,
-                    config: _,
-                } => {
-                    if resource == "netmaker_installation" {
-                        // Install netclient
-                        let install_result = Command::new("apt")
-                            .args(["update", "&&", "apt", "install", "-y", "netclient"])
-                            .status()
-                            .await;
+        // Detect service controller once for all operations
+        let controller = match ServiceController::detect().await {
+            Ok(ctrl) => Some(ctrl),
+            Err(e) => {
+                errors.push(format!("Failed to detect service controller: {}", e));
+                None
+            }
+        };
 
-                        match install_result {
+        for action in &diff.actions {
+            if let StateAction::Create {
+                resource,
+                config: _,
+            } = action
+            {
+                if resource == "netmaker_installation" {
+                    // Package installation requires PackageKit D-Bus or manual install per AGENTS.md §4
+                    errors.push(
+                        "Netclient package installation requires external PackageKit D-Bus or manual install (disabled per AGENTS.md §4). \
+                         Run: apt-get install -y netclient".to_string(),
+                    );
+                    // Attempt to enable and start service via D-Bus regardless
+                    if let Some(ref ctrl) = controller {
+                        match ctrl.enable_and_start("netclient").await {
                             Ok(_) => {
-                                changes_applied.push("Installed netclient package".to_string());
-                                // Enable and start service
-                                let _ = Command::new("systemctl")
-                                    .args(["enable", "--now", "netclient"])
-                                    .status()
-                                    .await;
+                                changes_applied.push(
+                                    "Enabled and started netclient service via D-Bus".to_string(),
+                                );
                             }
-                            Err(e) => errors.push(format!("Failed to install netclient: {}", e)),
-                        }
-                    } else if resource.starts_with("netmaker_network_") {
-                        let network = resource.strip_prefix("netmaker_network_").unwrap_or("");
-                        if let Some(token) = &self.config.enrollment_token {
-                            match self.join_network(network, token).await {
-                                Ok(_) => changes_applied
-                                    .push(format!("Joined Netmaker network {}", network)),
-                                Err(e) => errors
-                                    .push(format!("Failed to join network {}: {}", network, e)),
+                            Err(e) => {
+                                errors.push(format!(
+                                    "Failed to enable/start netclient via D-Bus: {}",
+                                    e
+                                ));
                             }
-                        } else {
-                            errors.push(format!(
-                                "No enrollment token configured for network {}",
-                                network
-                            ));
                         }
                     }
+                } else if resource.starts_with("netmaker_network_") {
+                    let network = resource.strip_prefix("netmaker_network_").unwrap_or("");
+                    if let Some(token) = &self.config.enrollment_token {
+                        match self.join_network(network, token).await {
+                            Ok(_) => changes_applied
+                                .push(format!("Joined Netmaker network {}", network)),
+                            Err(e) => errors
+                                .push(format!("Failed to join network {}: {}", network, e)),
+                        }
+                    } else {
+                        errors.push(format!(
+                            "No enrollment token configured for network {}",
+                            network
+                        ));
+                    }
                 }
-                _ => {} // Other actions not implemented yet
             }
         }
 

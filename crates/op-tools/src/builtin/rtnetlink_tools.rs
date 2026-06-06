@@ -56,69 +56,21 @@ impl Tool for RtnetlinkListInterfacesTool {
 
         let filter_state = input.get("filter_state").and_then(|v| v.as_str());
 
-        match op_network::rtnetlink::list_interfaces().await {
-            Ok(mut interfaces) => {
-                // Apply filters
-                if let Some(state) = filter_state {
-                    interfaces.retain(|iface| iface.state == state);
-                }
+        let mut interfaces = op_network::rtnetlink::list_interfaces().await.map_err(|e| {
+            anyhow::anyhow!("Failed to list interfaces via rtnetlink: {}", e)
+        })?;
 
-                let count = interfaces.len();
-                Ok(json!({
-                    "protocol": "rtnetlink",
-                    "count": count,
-                    "interfaces": interfaces
-                }))
-            }
-            Err(e) => {
-                // Fallback to `ip -j addr show`
-                use tokio::process::Command;
-
-                info!(
-                    "Native rtnetlink failed ({}), trying 'ip' command fallback",
-                    e
-                );
-
-                let output = Command::new("ip")
-                    .args(["-j", "addr", "show"])
-                    .output()
-                    .await;
-
-                match output {
-                    Ok(out) if out.status.success() => {
-                        let mut stdout_mut = String::from_utf8_lossy(&out.stdout).to_string();
-                        let mut interfaces: Value =
-                            unsafe { simd_json::from_str(stdout_mut.as_mut_str()) }.map_err(
-                                |je| anyhow::anyhow!("Failed to parse ip command output: {}", je),
-                            )?;
-
-                        // Basic filtering if it's an array
-                        if let Some(arr) = interfaces.as_array_mut() {
-                            if let Some(state) = filter_state {
-                                let state_upper = state.to_uppercase();
-                                arr.retain(|iface| {
-                                    iface
-                                        .get("operstate")
-                                        .and_then(|s| s.as_str())
-                                        .map(|s| s == state_upper)
-                                        .unwrap_or(false)
-                                });
-                            }
-                        }
-
-                        Ok(json!({
-                            "protocol": "cli_fallback",
-                            "interfaces": interfaces,
-                            "native_error": e.to_string()
-                        }))
-                    }
-                    _ => Err(anyhow::anyhow!(
-                        "Failed to list interfaces (native: {}, cli: failed)",
-                        e
-                    )),
-                }
-            }
+        // Apply filters
+        if let Some(state) = filter_state {
+            interfaces.retain(|iface| iface.state == state);
         }
+
+        let count = interfaces.len();
+        Ok(json!({
+            "protocol": "rtnetlink",
+            "count": count,
+            "interfaces": interfaces
+        }))
     }
 }
 

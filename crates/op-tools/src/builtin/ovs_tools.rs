@@ -50,7 +50,7 @@ impl Tool for TestTool {
 
         Ok(json!({
             "message": "Test tool executed successfully",
-            "timestamp": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs()
+            "timestamp": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).expect("system time should be after unix epoch").as_secs()
         }))
     }
 }

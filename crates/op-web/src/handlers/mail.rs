@@ -2,7 +2,6 @@
 
 use axum::{extract::Extension, response::Json};
 use serde::{Deserialize, Serialize};
-use std::process::Command;
 use std::sync::Arc;
 
 use crate::state::AppState;
@@ -26,21 +25,36 @@ pub struct MailQueueItem {
     pub created_at: String,
 }
 
+/// Check whether the maddy process is running by scanning `/proc/*/comm`.
+/// Container processes are visible from the host procfs, so this covers
+/// both containerised and host-native deployments without shelling out.
+async fn is_maddy_running() -> bool {
+    let mut entries = match tokio::fs::read_dir("/proc").await {
+        Ok(e) => e,
+        Err(_) => return false,
+    };
+
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let name = entry.file_name();
+        let Some(pid_str) = name.to_str() else { continue };
+        if pid_str.parse::<u32>().is_err() {
+            continue;
+        }
+
+        let comm_path = entry.path().join("comm");
+        if let Ok(comm) = tokio::fs::read_to_string(&comm_path).await {
+            if comm.trim() == "maddy" {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
 /// GET /api/mail/status - Get mail server status
 pub async fn mail_status_handler(Extension(_state): Extension<Arc<AppState>>) -> Json<MailStatus> {
-    // Check if maddy is running in container
-    let running = Command::new("incus")
-        .args([
-            "exec",
-            "crd-astral",
-            "--",
-            "systemctl",
-            "is-active",
-            "maddy",
-        ])
-        .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false);
+    let running = is_maddy_running().await;
 
     Json(MailStatus {
         running,

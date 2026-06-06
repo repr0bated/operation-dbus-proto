@@ -251,29 +251,29 @@ impl DbusMethodTool {
     /// Convert OwnedValue to JSON
     fn owned_value_to_json(&self, value: zbus::zvariant::OwnedValue) -> Result<Value> {
         // Try common conversions
-        if let Ok(s) = <String as TryFrom<zbus::zvariant::OwnedValue>>::try_from(value.try_clone().unwrap()) {
+        if let Ok(s) = <String as TryFrom<zbus::zvariant::OwnedValue>>::try_from(value.clone()) {
             return Ok(Value::String(s));
         }
-        if let Ok(b) = <bool as TryFrom<zbus::zvariant::OwnedValue>>::try_from(value.try_clone().unwrap()) {
+        if let Ok(b) = <bool as TryFrom<zbus::zvariant::OwnedValue>>::try_from(value.clone()) {
             return Ok(Value::Bool(b));
         }
-        if let Ok(n) = <i32 as TryFrom<zbus::zvariant::OwnedValue>>::try_from(value.try_clone().unwrap()) {
+        if let Ok(n) = <i32 as TryFrom<zbus::zvariant::OwnedValue>>::try_from(value.clone()) {
             return Ok(Value::Number(n.into()));
         }
-        if let Ok(n) = <u32 as TryFrom<zbus::zvariant::OwnedValue>>::try_from(value.try_clone().unwrap()) {
+        if let Ok(n) = <u32 as TryFrom<zbus::zvariant::OwnedValue>>::try_from(value.clone()) {
             return Ok(Value::Number(n.into()));
         }
-        if let Ok(n) = <i64 as TryFrom<zbus::zvariant::OwnedValue>>::try_from(value.try_clone().unwrap()) {
+        if let Ok(n) = <i64 as TryFrom<zbus::zvariant::OwnedValue>>::try_from(value.clone()) {
             return Ok(Value::Number(n.into()));
         }
-        if let Ok(n) = <u64 as TryFrom<zbus::zvariant::OwnedValue>>::try_from(value.try_clone().unwrap()) {
+        if let Ok(n) = <u64 as TryFrom<zbus::zvariant::OwnedValue>>::try_from(value.clone()) {
             return Ok(Value::Number(n.into()));
         }
 
         // For object paths
         if let Ok(path) =
             <zbus::zvariant::OwnedObjectPath as TryFrom<zbus::zvariant::OwnedValue>>::try_from(
-                value.try_clone().unwrap(),
+                value.clone(),
             )
         {
             return Ok(Value::String(path.to_string()));

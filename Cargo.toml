@@ -19,8 +19,10 @@ members = [
     "crates/op-agents",
     "crates/op-plugins",
     "crates/op-workflows",
-    # "crates/op-ml",  # Disabled: ort API compatibility issues (see #ml-fixme)    "crates/op-blockchain",
+    # "crates/op-ml",  # Disabled: ort API compatibility issues (see #ml-fixme)
+    "crates/op-blockchain",
     "crates/op-deployment",
+    "crates/op-openvswitch-daemon",
     "crates/op-mcp",
     "crates/op-mcp-aggregator",
     "crates/op-identity",
@@ -34,6 +36,8 @@ members = [
     "crates/op-compliance",
     "crates/op-projection",
     "crates/op-assistant-grpc",
+    "crates/op-s6-systemctl",
+    "crates/op-xray-daemon",
 ]
 
 [workspace.package]
@@ -67,8 +71,11 @@ op-grpc-bridge = { path = "crates/op-grpc-bridge" }
 op-identity = { path = "crates/op-identity" }
 op-dbus-mirror = { path = "crates/op-dbus-mirror" }
 op-jsonrpc = { path = "crates/op-jsonrpc" }
+op-openvswitch-daemon = { path = "crates/op-openvswitch-daemon" }
 op-projection = { path = "crates/op-projection" }
 op-cozo-store = { path = "crates/op-cozo-store" }
+op-s6-systemctl = { path = "crates/op-s6-systemctl" }
+op-xray-daemon = { path = "crates/op-xray-daemon" }
 
 # Async
 tokio = { version = "1", features = ["full"] }

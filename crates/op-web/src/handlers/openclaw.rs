@@ -90,7 +90,7 @@ pub async fn openclaw_status_handler(
     let client = Client::builder()
         .timeout(Duration::from_secs(5))
         .build()
-        .unwrap();
+        .expect("HTTP client builder with timeout should succeed");
 
     let ping_url = format!("{}/v1/chat/completions", base_url);
     let mut response = OpenClawStatusResponse {
@@ -161,7 +161,7 @@ pub async fn openclaw_chat_handler(
     let client = Client::builder()
         .timeout(Duration::from_secs(60))
         .build()
-        .unwrap();
+        .expect("HTTP client builder with timeout should succeed");
 
     let chat_url = format!("{}/v1/chat/completions", base_url);
 
@@ -236,7 +236,7 @@ pub async fn openclaw_models_handler(Extension(_state): Extension<Arc<AppState>>
     let client = Client::builder()
         .timeout(Duration::from_secs(10))
         .build()
-        .unwrap();
+        .expect("HTTP client builder with timeout should succeed");
 
     let models_url = format!("{}/v1/models", base_url);
 

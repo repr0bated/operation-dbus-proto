@@ -1,8 +1,8 @@
 //! Incus Container Management Tools
 //!
 //! These tools expose Incus instance operations (containers and VMs) to the
-//! LLM chat system using the `incus` CLI. Mirrors the LXC tools pattern but
-//! targets the Incus container manager instead of Proxmox API.
+//! LLM chat system using the Incus REST API over Unix socket.
+//! NO CLI COMMANDS (incus) are used.
 
 use crate::Tool;
 use crate::ToolRegistry;
@@ -11,22 +11,124 @@ use async_trait::async_trait;
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
 use std::sync::Arc;
-use tokio::process::Command;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::net::UnixStream;
+
+const INCUS_SOCKET: &str = "/var/lib/incus/unix.socket";
 
 // ---------------------------------------------------------------------------
-// Helper: run an incus command and return (stdout, stderr, success)
+// Helper: raw HTTP/1.1 over Unix socket to Incus REST API
 // ---------------------------------------------------------------------------
 
-async fn run_incus(args: &[&str]) -> Result<(String, String, bool)> {
-    let output = Command::new("incus")
-        .args(args)
-        .output()
+async fn incus_rest_request(method: &str, path: &str, body: Option<Value>) -> Result<Value> {
+    let stream = UnixStream::connect(INCUS_SOCKET)
         .await
-        .map_err(|e| anyhow::anyhow!("Failed to execute incus command: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("Cannot connect to Incus socket {}: {}", INCUS_SOCKET, e))?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    Ok((stdout, stderr, output.status.success()))
+    let (reader, mut writer) = stream.into_split();
+    let mut reader = BufReader::new(reader);
+
+    let body_str = body
+        .map(|b| simd_json::to_string(&b).unwrap_or_default())
+        .unwrap_or_default();
+
+    let request = format!(
+        "{} {} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        method,
+        path,
+        body_str.len(),
+        body_str
+    );
+
+    writer
+        .write_all(request.as_bytes())
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to write to Incus socket: {}", e))?;
+
+    // Read status line
+    let mut status_line = String::new();
+    reader
+        .read_line(&mut status_line)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to read Incus response: {}", e))?;
+
+    // Parse status code from something like "HTTP/1.1 200 OK\r\n"
+    let status_code = status_line
+        .split_whitespace()
+        .nth(1)
+        .and_then(|s| s.parse::<u16>().ok())
+        .unwrap_or(0);
+
+    // Read headers until empty line
+    let mut content_length = None;
+    loop {
+        let mut line = String::new();
+        reader
+            .read_line(&mut line)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to read Incus headers: {}", e))?;
+        if line.trim().is_empty() {
+            break;
+        }
+        let lower = line.to_lowercase();
+        if lower.starts_with("content-length:") {
+            content_length = lower
+                .split(':')
+                .nth(1)
+                .and_then(|s| s.trim().parse::<usize>().ok());
+        }
+        // Handle chunked transfer (Incus shouldn't use it for small responses,
+        // but if it does we'll read until connection closes — not ideal but rare)
+    }
+
+    // Read body
+    let mut body_buf = Vec::new();
+    if let Some(len) = content_length {
+        body_buf.resize(len, 0);
+        reader
+            .read_exact(&mut body_buf)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to read Incus body: {}", e))?;
+    } else {
+        // Fallback: read all remaining bytes
+        let mut remainder = Vec::new();
+        reader
+            .read_to_end(&mut remainder)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to read Incus body: {}", e))?;
+        body_buf = remainder;
+    }
+
+    let body_str = String::from_utf8_lossy(&body_buf);
+    let mut json_bytes = body_str.into_bytes();
+    let response: Value = simd_json::from_slice(&mut json_bytes)
+        .map_err(|e| anyhow::anyhow!("Failed to parse Incus JSON: {}", e))?;
+
+    if status_code >= 400 {
+        let err_msg = response
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Unknown Incus error")
+            .to_string();
+        return Err(anyhow::anyhow!("Incus API error ({}): {}", status_code, err_msg));
+    }
+
+    Ok(response)
+}
+
+// ---------------------------------------------------------------------------
+// Helper: extract metadata or error from Incus sync response
+// ---------------------------------------------------------------------------
+
+fn incus_sync_metadata(response: Value) -> Result<Value> {
+    let err = response
+        .get("error")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if !err.is_empty() {
+        return Err(anyhow::anyhow!("Incus error: {}", err));
+    }
+    Ok(response.get("metadata").cloned().unwrap_or(Value::Null))
 }
 
 // ---------------------------------------------------------------------------
@@ -63,24 +165,25 @@ impl Tool for IncusCheckAvailableTool {
     }
 
     async fn execute(&self, _input: Value) -> Result<Value> {
-        match run_incus(&["version"]).await {
-            Ok((stdout, _stderr, true)) => {
-                let version = stdout.trim().to_string();
+        match incus_rest_request("GET", "/1.0", None).await {
+            Ok(response) => {
+                let metadata = incus_sync_metadata(response)?;
+                let version = metadata
+                    .get("environment")
+                    .and_then(|e| e.get("server_version"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown")
+                    .to_string();
                 Ok(json!({
                     "available": true,
                     "version": version,
                     "message": format!("Incus {} is available", version)
                 }))
             }
-            Ok((_stdout, stderr, false)) => Ok(json!({
-                "available": false,
-                "error": stderr.trim(),
-                "message": "Incus is not available or incusd is not running"
-            })),
             Err(e) => Ok(json!({
                 "available": false,
                 "error": e.to_string(),
-                "message": "Incus CLI is not installed or not in PATH"
+                "message": "Incus is not available or incusd is not running"
             })),
         }
     }
@@ -128,15 +231,14 @@ impl Tool for IncusListInstancesTool {
     async fn execute(&self, input: Value) -> Result<Value> {
         let type_filter = input.get("type").and_then(|v| v.as_str());
 
-        let (stdout, stderr, success) = run_incus(&["list", "--format=json"]).await?;
-        if !success {
-            return Err(anyhow::anyhow!("incus list failed: {}", stderr.trim()));
-        }
+        let response = incus_rest_request("GET", "/1.0/instances?recursion=1", None).await?;
+        let metadata = incus_sync_metadata(response)?;
 
-        // Parse the JSON array output from incus
-        let mut json_bytes = stdout.into_bytes();
-        let instances: Vec<Value> = simd_json::from_slice(&mut json_bytes)
-            .map_err(|e| anyhow::anyhow!("Failed to parse incus list JSON: {}", e))?;
+        let instances: Vec<Value> = if let Some(arr) = metadata.as_array() {
+            arr.clone()
+        } else {
+            Vec::new()
+        };
 
         // Apply type filter if provided
         let filtered: Vec<&Value> = if let Some(filter) = type_filter {
@@ -206,19 +308,13 @@ impl Tool for IncusGetInstanceTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing required argument: name"))?;
 
-        let (stdout, stderr, success) =
-            run_incus(&["config", "show", name, "--expanded"]).await?;
-        if !success {
-            return Err(anyhow::anyhow!(
-                "incus config show {} failed: {}",
-                name,
-                stderr.trim()
-            ));
-        }
+        let path = format!("/1.0/instances/{}", name);
+        let response = incus_rest_request("GET", &path, None).await?;
+        let metadata = incus_sync_metadata(response)?;
 
         Ok(json!({
             "name": name,
-            "config": stdout.trim(),
+            "config": metadata,
             "message": format!("Configuration for instance '{}'", name)
         }))
     }
@@ -294,28 +390,30 @@ impl Tool for IncusLaunchInstanceTool {
         let instance_type = input.get("type").and_then(|v| v.as_str());
         let profile = input.get("profile").and_then(|v| v.as_str());
 
-        // Build command arguments
-        let mut args: Vec<&str> = vec!["launch", image, name];
+        let mut body = json!({
+            "name": name,
+            "source": {
+                "type": "image",
+                "alias": image,
+                "mode": "pull",
+                "protocol": "simplestreams",
+                "server": "https://images.linuxcontainers.org"
+            }
+        });
 
-        if instance_type == Some("virtual-machine") {
-            args.push("--vm");
+        if let Some(t) = instance_type {
+            if let Some(obj) = body.as_object_mut() {
+                obj.insert("type".to_string(), json!(t));
+            }
         }
-
-        // We need to own the profile string for the borrow checker
-        let profile_flag;
         if let Some(p) = profile {
-            args.push("--profile");
-            profile_flag = p.to_string();
-            args.push(&profile_flag);
+            if let Some(obj) = body.as_object_mut() {
+                obj.insert("profiles".to_string(), json!([p]));
+            }
         }
 
-        let (stdout, stderr, success) = run_incus(&args).await?;
-        if !success {
-            return Err(anyhow::anyhow!(
-                "incus launch failed: {}",
-                stderr.trim()
-            ));
-        }
+        let response = incus_rest_request("POST", "/1.0/instances", Some(body)).await?;
+        let metadata = incus_sync_metadata(response)?;
 
         Ok(json!({
             "success": true,
@@ -323,7 +421,7 @@ impl Tool for IncusLaunchInstanceTool {
             "image": image,
             "type": instance_type.unwrap_or("container"),
             "profile": profile,
-            "output": stdout.trim(),
+            "metadata": metadata,
             "message": format!("Instance '{}' launched successfully from {}", name, image)
         }))
     }
@@ -378,19 +476,15 @@ impl Tool for IncusStartInstanceTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing required argument: name"))?;
 
-        let (stdout, stderr, success) = run_incus(&["start", name]).await?;
-        if !success {
-            return Err(anyhow::anyhow!(
-                "incus start {} failed: {}",
-                name,
-                stderr.trim()
-            ));
-        }
+        let path = format!("/1.0/instances/{}/state", name);
+        let body = json!({"action": "start"});
+        let response = incus_rest_request("PUT", &path, Some(body)).await?;
+        let metadata = incus_sync_metadata(response)?;
 
         Ok(json!({
             "success": true,
             "name": name,
-            "output": stdout.trim(),
+            "metadata": metadata,
             "message": format!("Instance '{}' started successfully", name)
         }))
     }
@@ -454,26 +548,20 @@ impl Tool for IncusStopInstanceTool {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
-        let args: Vec<&str> = if force {
-            vec!["stop", name, "--force"]
+        let path = format!("/1.0/instances/{}/state", name);
+        let body = if force {
+            json!({"action": "stop", "force": true})
         } else {
-            vec!["stop", name]
+            json!({"action": "stop"})
         };
-
-        let (stdout, stderr, success) = run_incus(&args).await?;
-        if !success {
-            return Err(anyhow::anyhow!(
-                "incus stop {} failed: {}",
-                name,
-                stderr.trim()
-            ));
-        }
+        let response = incus_rest_request("PUT", &path, Some(body)).await?;
+        let metadata = incus_sync_metadata(response)?;
 
         Ok(json!({
             "success": true,
             "name": name,
             "force": force,
-            "output": stdout.trim(),
+            "metadata": metadata,
             "message": format!("Instance '{}' stopped successfully", name)
         }))
     }
@@ -537,26 +625,19 @@ impl Tool for IncusDeleteInstanceTool {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
-        let args: Vec<&str> = if force {
-            vec!["delete", name, "--force"]
+        let path = if force {
+            format!("/1.0/instances/{}?force=true", name)
         } else {
-            vec!["delete", name]
+            format!("/1.0/instances/{}", name)
         };
-
-        let (stdout, stderr, success) = run_incus(&args).await?;
-        if !success {
-            return Err(anyhow::anyhow!(
-                "incus delete {} failed: {}",
-                name,
-                stderr.trim()
-            ));
-        }
+        let response = incus_rest_request("DELETE", &path, None).await?;
+        let metadata = incus_sync_metadata(response)?;
 
         Ok(json!({
             "success": true,
             "name": name,
             "force": force,
-            "output": stdout.trim(),
+            "metadata": metadata,
             "message": format!("Instance '{}' deleted successfully", name)
         }))
     }
@@ -622,45 +703,111 @@ impl Tool for IncusExecTool {
             .get("command")
             .ok_or_else(|| anyhow::anyhow!("Missing required argument: command"))?;
 
-        // Build the command parts depending on whether command is a string or array
-        let cmd_parts: Vec<String> = if let Some(cmd_str) = command_value.as_str() {
-            // String command: wrap in sh -c
-            vec!["sh".into(), "-c".into(), cmd_str.to_string()]
+        let (cmd, args): (String, Vec<String>) = if let Some(cmd_str) = command_value.as_str() {
+            ("sh".into(), vec!["-c".into(), cmd_str.to_string()])
         } else if let Some(cmd_array) = command_value.as_array() {
-            // Array command: use directly
-            cmd_array
+            let parts: Vec<String> = cmd_array
                 .iter()
                 .filter_map(|v| v.as_str().map(String::from))
-                .collect()
+                .collect();
+            if parts.is_empty() {
+                return Err(anyhow::anyhow!("command must not be empty"));
+            }
+            let head = parts[0].clone();
+            let tail = parts.into_iter().skip(1).collect();
+            (head, tail)
         } else {
             return Err(anyhow::anyhow!(
                 "command must be a string or array of strings"
             ));
         };
 
-        if cmd_parts.is_empty() {
-            return Err(anyhow::anyhow!("command must not be empty"));
+        let body = json!({
+            "command": [cmd],
+            "args": args,
+            "wait-for-websocket": false,
+            "record-output": true,
+            "interactive": false
+        });
+
+        let path = format!("/1.0/instances/{}/exec", name);
+        let response = incus_rest_request("POST", &path, Some(body)).await?;
+        let metadata = incus_sync_metadata(response)?;
+
+        // Incus exec returns an operation ID; poll it for results.
+        let op_id = metadata
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        if op_id.is_empty() {
+            return Ok(json!({
+                "name": name,
+                "message": format!("Command submitted in '{}' but no operation ID returned", name),
+                "metadata": metadata
+            }));
         }
 
-        // Build: incus exec <name> -- <cmd_parts...>
-        let mut args: Vec<String> = vec!["exec".into(), name.to_string(), "--".into()];
-        args.extend(cmd_parts);
+        // Poll operation until it completes (max ~10s)
+        let mut stdout = String::new();
+        let mut stderr = String::new();
+        let mut return_code = -1;
 
-        let args_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-        let (stdout, stderr, success) = run_incus(&args_refs).await?;
+        for _ in 0..50 {
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            let op_path = format!("/1.0/operations/{}", op_id);
+            let op_resp = incus_rest_request("GET", &op_path, None).await?;
+            let op_meta = incus_sync_metadata(op_resp)?;
 
-        let exit_code = if success { 0 } else { 1 };
+            let status = op_meta
+                .get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
 
+            if status == "Success" {
+                if let Some(ret) = op_meta.get("return") {
+                    return_code = ret.as_i64().unwrap_or(-1) as i32;
+                }
+                if let Some(out) = op_meta.get("output") {
+                    if let Some(one) = out.get("1") {
+                        stdout = one
+                            .get("data")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                    }
+                    if let Some(two) = out.get("2") {
+                        stderr = two
+                            .get("data")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                    }
+                }
+                break;
+            } else if status == "Failure" {
+                return_code = 1;
+                stderr = op_meta
+                    .get("err")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Command failed")
+                    .to_string();
+                break;
+            }
+        }
+
+        let success = return_code == 0;
         Ok(json!({
             "name": name,
             "stdout": stdout,
             "stderr": stderr,
-            "exit_code": exit_code,
+            "exit_code": return_code,
             "success": success,
             "message": if success {
                 format!("Command executed successfully in '{}'", name)
             } else {
-                format!("Command failed in '{}': {}", name, stderr.trim())
+                format!("Command failed in '{}'", name)
             }
         }))
     }
@@ -694,7 +841,7 @@ pub async fn register_incus_tools(registry: &ToolRegistry) -> Result<()> {
         .register_tool(Arc::new(IncusDeleteInstanceTool))
         .await?;
     registry.register_tool(Arc::new(IncusExecTool)).await?;
-    tracing::info!("Registered 8 Incus container tools");
+    tracing::info!("Registered 8 Incus container tools (REST API over Unix socket)");
     Ok(())
 }
 

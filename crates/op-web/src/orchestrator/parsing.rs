@@ -27,8 +27,8 @@ impl UnifiedOrchestrator {
                 if let (Some(name), Some(args)) = (cap.get(1), cap.get(2)) {
                     let tool_name = name.as_str().to_string();
                     if available.contains(&tool_name) {
-                        let mut raw = args.as_str().trim().to_string();
-                        if let Ok(parsed) = unsafe { simd_json::from_str(&mut raw) } {
+                        let raw = args.as_str().trim().to_string();
+                        if let Ok(parsed) = serde_json::from_str(&raw) {
                             info!("Extracted tool call from XML tags: {}", tool_name);
                             calls.push((tool_name, parsed));
                         }
@@ -83,8 +83,8 @@ impl UnifiedOrchestrator {
                     let tool_name = name.as_str().to_string();
                     if available.contains(&tool_name) && !calls.iter().any(|(n, _)| n == &tool_name)
                     {
-                        let mut raw = args.as_str().trim().to_string();
-                        if let Ok(parsed) = unsafe { simd_json::from_str(&mut raw) } {
+                        let raw = args.as_str().trim().to_string();
+                        if let Ok(parsed) = serde_json::from_str(&raw) {
                             info!("Extracted tool call from function syntax: {}", tool_name);
                             calls.push((tool_name, parsed));
                         }
@@ -107,11 +107,8 @@ impl UnifiedOrchestrator {
         // First, check native tool calls
         if let Some(ref tc) = tool_calls {
             for call in tc {
-                let args: Value = if call.arguments.is_str() {
-                    {
-                        let mut raw = call.arguments.as_str().unwrap().to_string();
-                        unsafe { simd_json::from_str(&mut raw) }.unwrap_or(json!({}))
-                    }
+                let args: Value = if let Some(s) = call.arguments.as_str() {
+                    serde_json::from_str(s).unwrap_or(json!({}))
                 } else {
                     call.arguments.clone()
                 };
@@ -126,8 +123,7 @@ impl UnifiedOrchestrator {
             if let Some(start) = content.find("```json") {
                 if let Some(end) = content[start..].find("```").map(|e| start + e + 3) {
                     let json_str = &content[start + 7..end - 3];
-                    let mut raw = json_str.to_string();
-                    if let Ok(parsed) = unsafe { simd_json::from_str::<Value>(&mut raw) } {
+                    if let Ok(parsed) = serde_json::from_str::<Value>(json_str) {
                         if let Some(name) = parsed.get("tool").and_then(|v| v.as_str()) {
                             let args = parsed.get("arguments").cloned().unwrap_or(json!({}));
                             calls.push((name.to_string(), args));

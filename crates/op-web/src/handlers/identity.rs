@@ -20,6 +20,11 @@ use crate::state::AppState;
 pub async fn identity_sled_handler(Extension(_state): Extension<Arc<AppState>>) -> Response {
     match read_sled() {
         Ok((ptr, _mmap)) => {
+            // SAFETY: `ptr` is derived from a live `memmap2::Mmap` (`_mmap`). The mapping
+            // outlives this borrow because `_mmap` is dropped after `sled` goes out of
+            // scope. `IdentitySled` is a plain-data struct (no padding gaps, no references)
+            // so a bitwise read from the mmap is valid as long as the backing file was
+            // written with a canonical `IdentitySled` layout.
             let sled: &IdentitySled = unsafe { &*ptr };
 
             let schema_catalog_hash = std::fs::read("/dev/shm/live-schema.json")
@@ -45,8 +50,8 @@ pub async fn identity_sled_handler(Extension(_state): Extension<Arc<AppState>>) 
             Response::builder()
                 .status(StatusCode::OK)
                 .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(serde_json::to_vec(&body).unwrap()))
-                .unwrap()
+                .body(Body::from(serde_json::to_vec(&body).expect("identity body serialization should not fail")))
+                .expect("response with valid body should not fail")
         }
         Err(e) => {
             warn!(error = %e, "Identity sled not available");
@@ -57,7 +62,7 @@ pub async fn identity_sled_handler(Extension(_state): Extension<Arc<AppState>>) 
                     r#"{{"error":"Identity sled not available","detail":"{}"}}"#,
                     e
                 )))
-                .unwrap()
+                .expect("response with valid body should not fail")
         }
     }
 }

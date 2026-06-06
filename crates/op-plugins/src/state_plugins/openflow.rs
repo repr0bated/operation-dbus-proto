@@ -213,8 +213,8 @@ const OPENFLOW_PROTOCOL: &str = "OpenFlow13";
 
 /// OpenFlow plugin implementation
 pub struct OpenFlowPlugin {
-    /// OVSDB client for OVS operations
-    ovsdb_client: Arc<op_network::ovsdb::OvsdbClient>,
+    /// D-Bus OVSDB client for OVS operations
+    ovsdb_client: Arc<op_network::rovs_proxy::OvsdbDbusClient>,
 }
 
 impl Default for OpenFlowPlugin {
@@ -225,7 +225,7 @@ impl Default for OpenFlowPlugin {
 
 impl OpenFlowPlugin {
     pub fn new() -> Self {
-        let ovsdb_client = Arc::new(op_network::ovsdb::OvsdbClient::new());
+        let ovsdb_client = Arc::new(op_network::rovs_proxy::OvsdbDbusClient::new());
 
         Self { ovsdb_client }
     }
@@ -341,24 +341,33 @@ impl OpenFlowPlugin {
         Err(anyhow!("Could not find ofport for {}", port_name))
     }
 
+    /// Route `ovs-ofctl` through the D-Bus daemon (AGENTS.md §4 — no plugin subprocesses).
     async fn run_ovs_ofctl(args: &[&str]) -> Result<String> {
-        let output = tokio::process::Command::new("ovs-ofctl")
-            .args(args)
-            .output()
-            .await
-            .context("failed to execute ovs-ofctl")?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!(
-                "ovs-ofctl {} failed (exit {}): {}",
-                args.join(" "),
-                output.status.code().unwrap_or(-1),
-                stderr.trim()
-            );
+        // The first three args are fixed: -O, OpenFlow13, <command>
+        // The last arg is the bridge name.
+        // Everything in between are the command-specific args.
+        if args.len() < 4 {
+            anyhow::bail!("run_ovs_ofctl: expected at least 4 args, got {}", args.len());
         }
-
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+        let bridge = args[args.len() - 1];
+        let extra: Vec<String> = args[2..args.len() - 1].iter().map(|s| s.to_string()).collect();
+        let proxy = op_network::rovs_proxy::openflow_proxy()
+            .await
+            .context("connect to op-openvswitch-daemon D-Bus for ofctl")?;
+        let result = proxy
+            .ofctl(bridge, &serde_json::to_string(&extra)?)
+            .await
+            .context("D-Bus ofctl call failed")?;
+        let parsed: serde_json::Value = serde_json::from_str(&result)
+            .context("daemon returned invalid JSON from ofctl")?;
+        if let Some(error) = parsed.get("error").and_then(|e| e.as_str()) {
+            anyhow::bail!("ovs-ofctl via D-Bus daemon failed: {}", error);
+        }
+        Ok(parsed
+            .get("stdout")
+            .and_then(|s| s.as_str())
+            .unwrap_or("")
+            .to_string())
     }
 
     fn is_managed_socket_port(port_name: &str) -> Option<SocketPortType> {
@@ -466,11 +475,9 @@ impl OpenFlowPlugin {
     fn policy_matches(policy: &FlowPolicy, container: &DiscoveredContainer) -> bool {
         let selector = &policy.selector;
 
-        if selector.starts_with("container:") {
-            let pattern = selector.strip_prefix("container:").unwrap();
+        if let Some(pattern) = selector.strip_prefix("container:") {
             return Self::container_name_matches(pattern, &container.name);
-        } else if selector.starts_with("port:") {
-            let pattern = selector.strip_prefix("port:").unwrap();
+        } else if let Some(pattern) = selector.strip_prefix("port:") {
             return Self::port_name_matches(pattern, &container.port_name);
         }
 
@@ -901,7 +908,7 @@ impl OpenFlowPlugin {
             if let Some(first_row) = rows.first() {
                 if let Some(uuid_array) = first_row["_uuid"].as_array() {
                     if uuid_array.len() == 2 && uuid_array[0] == "uuid" {
-                        return Ok(uuid_array[1].as_str().unwrap().to_string());
+                        return Ok(uuid_array.get(1).and_then(|v| v.as_str()).ok_or_else(|| anyhow::anyhow!("invalid UUID array"))?.to_string());
                     }
                 }
             }
@@ -925,7 +932,7 @@ impl OpenFlowPlugin {
             if let Some(first_row) = rows.first() {
                 if let Some(uuid_array) = first_row["_uuid"].as_array() {
                     if uuid_array.len() == 2 && uuid_array[0] == "uuid" {
-                        return Ok(uuid_array[1].as_str().unwrap().to_string());
+                        return Ok(uuid_array.get(1).and_then(|v| v.as_str()).ok_or_else(|| anyhow::anyhow!("invalid UUID array"))?.to_string());
                     }
                 }
             }

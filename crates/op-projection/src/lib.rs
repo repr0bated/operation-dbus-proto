@@ -43,12 +43,23 @@ pub mod schema_validator;
 pub mod sled_reader;
 
 pub use access_control::ProjectionAccessController;
-pub use data_models::*;
+pub use data_models::{
+    AccessControlAudit, AccessPolicy, AIContextProjection, AuditProjection, ChangeType,
+    CompositeHealth, Constraint, DashboardProjection, EventType, FieldSchema, FieldType,
+    HealthStatus, HistoricalProjection, Link, Node, OrchestrationProjection, PluginSchema,
+    Projection, ProjectionEvent, ProjectionState, ProjectionUpdate, Relationship, RelationshipType,
+    Requester, SemanticRelationship, TopologyProjection, UpdateType, ValidationError,
+    ValidationResult,
+};
 pub use dbus_reader::SystemDbusReader;
 pub use dbus_server::ProjectionDbusServer;
 pub use event_materializer::ProjectionMaterializer;
 pub use grpc_reader::SystemGrpcReader;
-pub use interfaces::*;
+pub use interfaces::{
+    AccessController, AuditTrail, DbusReader, EventMaterializer, GrpcReader, HistoricalStore,
+    JsonStreamServer, JsonStreamStatus, OvsdbMirrorProjection, PluginLifecycleEvent, PluginReader,
+    ProcfsReader, ProjectionEngine, RawEntity, SchemaRegistry, SourceReader,
+};
 pub use json_stream::ProjectionStreamServer;
 pub use ovsdb_mirror::OvsdbMirrorProjectionImpl;
 pub use plugin_reader::{convert_schema, SystemPluginReader};

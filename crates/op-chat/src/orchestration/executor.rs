@@ -227,17 +227,15 @@ impl OrchestratedExecutor {
     async fn determine_mode(&self, name: &str, arguments: &Value) -> ExecutionMode {
         // Check for workstack prefix
         if name.starts_with("workstack_") {
-            let workstack_id = name.strip_prefix("workstack_").unwrap();
             return ExecutionMode::Workstack {
-                workstack_id: workstack_id.to_string(),
+                workstack_id: name["workstack_".len()..].to_string(),
             };
         }
 
         // Check for workflow prefix
         if name.starts_with("workflow_") {
-            let workflow_id = name.strip_prefix("workflow_").unwrap();
             return ExecutionMode::Workflow {
-                workflow_id: workflow_id.to_string(),
+                workflow_id: name["workflow_".len()..].to_string(),
             };
         }
 

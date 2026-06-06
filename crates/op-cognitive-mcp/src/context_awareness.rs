@@ -506,19 +506,21 @@ impl ContextAwarenessEngine {
             if evaluation.should_push
                 && evaluation.relevance_score >= self.config.min_relevance_score
             {
-                drop(state);
+                if let Some(trigger) = evaluation.trigger {
+                    drop(state);
 
-                if let Err(e) = self
-                    .generate_and_push(
-                        &session_id,
-                        evaluation.trigger.unwrap(),
-                        evaluation.trigger_reason,
-                        evaluation.relevance_score,
-                        evaluation.context_query,
-                    )
-                    .await
-                {
-                    warn!(error = %e, session_id = %session_id, "Failed to generate knowledge push");
+                    if let Err(e) = self
+                        .generate_and_push(
+                            &session_id,
+                            trigger,
+                            evaluation.trigger_reason,
+                            evaluation.relevance_score,
+                            evaluation.context_query,
+                        )
+                        .await
+                    {
+                        warn!(error = %e, session_id = %session_id, "Failed to generate knowledge push");
+                    }
                 }
             }
         }

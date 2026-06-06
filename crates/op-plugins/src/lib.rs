@@ -49,6 +49,19 @@ pub mod prelude {
 
     // Re-export state plugins
     pub use super::dynamic_loading::DynamicLoadingPlugin;
-    pub use super::state_plugins::*;
+    pub use super::state_plugins::{
+        AdcPlugin, AgentConfigPlugin, AntigravityChatPlugin, AntigravityPlugin, BtrfsPlugin,
+        CognitiveMcpPlugin, CompactMcpPlugin, ConfigPlugin, CronPlugin, CtlPlaneChatbotPlugin,
+        DnsResolverPlugin, EndpointPlugin, ExecutionResult, FactoryPlugin, Fail2banPlugin,
+        FreeDesktopPlugin, FullSystemPlugin, GcloudAdcPlugin, HardwarePlugin, IncusPlugin,
+        KeypairPlugin, KeyringPlugin, KnowledgePlugin, Login1Plugin, LxcPlugin, MailServerPlugin,
+        McpStatePlugin, MemoryPlugin, NetStatePlugin, NetmakerConfig, NetmakerPlugin,
+        OpenFlowObfuscationPlugin, OpenFlowPlugin, OvsBridgePlugin, OvsdbDaemonPlugin,
+        PackageKitPlugin, PciDeclPlugin, PrivacyRouterPlugin, PrivacyRoutesPlugin, ProcfsPlugin,
+        ProxmoxPlugin, ProxyServerPlugin, RovsCommandsPlugin, RtnetlinkPlugin, S6StatePlugin,
+        SchemaRendererPlugin, ServicePlugin, SessDeclPlugin, SoftwarePlugin, ToolDefinition,
+        UnixSocketPlugin, UsersPlugin, WebUiPlugin, WireGuardPlugin, WorkflowsPlugin,
+        ZeroclawPlugin,
+    };
 }
 pub mod state_publisher;

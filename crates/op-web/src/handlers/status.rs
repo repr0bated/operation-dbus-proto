@@ -195,38 +195,29 @@ async fn get_key_services(_client: &op_grpc_bridge::RemoteOperationClient) -> Ve
         "op-web",
     ];
 
-    // Try to get statuses via s6-rc -a -l /run/s6-rc list
-    let out = tokio::process::Command::new("s6-rc")
-        .args(["-a", "-l", "/run/s6-rc", "list"])
-        .output()
-        .await;
-
-    if let Ok(output) = out {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        // s6-rc -a list prints one running service name per line
-        let running: std::collections::HashSet<&str> = stdout.lines().map(|l| l.trim()).collect();
-        for name in key_services {
-            let status = if running.contains(name) {
-                "active".to_string()
-            } else {
-                "inactive".to_string()
-            };
-            services.push(ServiceStatus {
-                name: name.to_string(),
-                status,
-            });
-        }
-    } else {
-        // Fallback if s6-rc is unavailable
-        for name in key_services {
-            services.push(ServiceStatus {
-                name: name.to_string(),
-                status: "unknown".to_string(),
-            });
-        }
+    for name in key_services {
+        let status = if is_s6_service_running(name).await {
+            "active".to_string()
+        } else {
+            "inactive".to_string()
+        };
+        services.push(ServiceStatus {
+            name: name.to_string(),
+            status,
+        });
     }
 
     services
+}
+
+async fn is_s6_service_running(name: &str) -> bool {
+    let stat_path = format!("/run/service/{}/supervise/stat", name);
+    if let Ok(content) = tokio::fs::read_to_string(&stat_path).await {
+        content.trim() == "run"
+    } else {
+        // Fallback: check /proc for process with the service name
+        false
+    }
 }
 
 async fn get_network_info() -> NetworkInfo {

@@ -163,8 +163,8 @@ impl ToolRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
     use crate::tool::Tool;
+    use async_trait::async_trait;
 
     struct TestTool {
         name: String,

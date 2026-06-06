@@ -116,8 +116,7 @@ impl DbusAgentService {
             &task_json[..task_json.len().min(200)]
         );
 
-        let mut task_json_mut = task_json.to_string();
-        let task: AgentTask = unsafe { simd_json::from_str(&mut task_json_mut) }.map_err(|e| {
+        let task: AgentTask = serde_json::from_str(&task_json).map_err(|e| {
             error!("[{}] Invalid task JSON: {}", self.agent_id, e);
             zbus::fdo::Error::InvalidArgs(format!("Invalid task JSON: {}", e))
         })?;

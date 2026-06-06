@@ -3,7 +3,8 @@
 //! Single registry for all agent types with lazy loading.
 
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use parking_lot::RwLock;
 use once_cell::sync::Lazy;
 
 use super::agent_trait::{UnifiedAgent, AgentCategory, AgentMetadata};
@@ -49,7 +50,7 @@ impl UnifiedAgentRegistry {
     pub fn get(&self, id: &str) -> Option<Arc<dyn UnifiedAgent>> {
         // Check if already loaded
         {
-            let agents = self.agents.read().unwrap();
+            let agents = self.agents.read();
             if let Some(agent) = agents.get(id) {
                 return Some(Arc::clone(agent));
             }
@@ -58,7 +59,7 @@ impl UnifiedAgentRegistry {
         // Try to load from factory
         if let Some(factory) = self.factories.get(id) {
             let agent: Arc<dyn UnifiedAgent> = Arc::from(factory());
-            let mut agents = self.agents.write().unwrap();
+            let mut agents = self.agents.write();
             agents.insert(id.to_string(), Arc::clone(&agent));
             return Some(agent);
         }

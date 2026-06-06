@@ -155,8 +155,7 @@ impl AutoPlugin {
             ));
         }
 
-        let mut data = result.data;
-        let parsed = unsafe { simd_json::from_str(&mut data) }
+        let parsed = serde_json::from_str(&result.data)
             .map_err(|e| anyhow!("invalid agent JSON response: {}", e))?;
         Ok(parsed)
     }

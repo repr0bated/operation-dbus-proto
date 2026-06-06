@@ -6,7 +6,6 @@ use serde::{Deserialize, Serialize};
 use simd_json::OwnedValue as Value;
 use std::fs;
 use std::path::Path;
-use std::process::Command;
 
 use op_state::{
     ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
@@ -89,15 +88,8 @@ impl PciDeclPlugin {
         }
     }
 
-    fn lspci_present(addr: &str) -> bool {
-        if let Ok(out) = Command::new("sh")
-            .arg("-c")
-            .arg(format!("lspci -s {} >/dev/null 2>&1; echo $?", addr))
-            .output()
-        {
-            return out.stdout.first().map(|b| *b == b'0').unwrap_or(false);
-        }
-        false
+    fn sysfs_present(addr: &str) -> bool {
+        Path::new(&Self::sys_path(addr)).exists()
     }
 
     fn compliant(l: &PciLive, i: &PciItem) -> bool {
@@ -154,7 +146,7 @@ impl StatePlugin for PciDeclPlugin {
         let mut actions = Vec::new();
         for item in &want.items {
             let live = Self::live_for(&item.address);
-            let present = live.present || Self::lspci_present(&item.address);
+            let present = live.present || Self::sysfs_present(&item.address);
             if let Mode::ObserveOnly = item.mode {
                 actions.push(StateAction::NoOp {
                     resource: item.id.clone(),

@@ -57,8 +57,7 @@ impl SearchSpecialistAgent {
 
     fn extract_query(task: &AgentTask) -> String {
         if let Some(raw) = task.args.as_deref() {
-            let mut raw_owned = raw.to_string();
-            if let Ok(parsed) = unsafe { simd_json::from_str::<Value>(&mut raw_owned) } {
+            if let Ok(parsed) = serde_json::from_str::<Value>(raw) {
                 if let Some(query) = parsed.get("query").and_then(|v| v.as_str()) {
                     if !query.trim().is_empty() {
                         return query.trim().to_string();

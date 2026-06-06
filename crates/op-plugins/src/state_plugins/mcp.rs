@@ -161,8 +161,7 @@ impl McpStatePlugin {
 
         match content {
             Ok(c) => {
-                let mut c_mut = c;
-                unsafe { simd_json::from_str(&mut c_mut) }.context("Failed to parse MCP config")
+                serde_json::from_str(&c).context("Failed to parse MCP config")
             }
             Err(_) => {
                 // Return default config with requested agents auto-loaded
@@ -454,8 +453,7 @@ impl StatePlugin for McpStatePlugin {
 
         for action in &diff.actions {
             if let StateAction::Modify { resource, changes } = action {
-                let result = if resource.starts_with("server:") {
-                    let server_name = resource.strip_prefix("server:").unwrap();
+                let result = if let Some(server_name) = resource.strip_prefix("server:") {
                     let server_config: McpServerConfig =
                         simd_json::serde::from_owned_value(changes.clone())?;
                     self.apply_server_config(server_name, &server_config).await

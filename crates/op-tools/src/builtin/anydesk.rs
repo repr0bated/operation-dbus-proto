@@ -11,6 +11,7 @@ use simd_json::{json, OwnedValue as Value};
 use std::fs;
 use std::path::Path;
 use std::process::Command;
+use zbus::Connection;
 
 use crate::Tool;
 
@@ -61,7 +62,7 @@ impl Tool for AnyDeskGetIdTool {
     async fn execute(&self, _input: Value) -> Result<Value> {
         // Try to get AnyDesk ID from various sources
         // First check if AnyDesk is running and can provide the ID
-        match get_anydesk_id() {
+        match get_anydesk_id().await {
             Ok(id) => Ok(json!({
                 "success": true,
                 "anydesk_id": id
@@ -111,7 +112,7 @@ impl Tool for AnyDeskGetStatusTool {
     }
 
     async fn execute(&self, _input: Value) -> Result<Value> {
-        match get_anydesk_status() {
+        match get_anydesk_status().await {
             Ok(status) => Ok(json!({
                 "success": true,
                 "status": status
@@ -174,7 +175,7 @@ impl Tool for AnyDeskServiceControlTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow!("Missing required parameter: action"))?;
 
-        match control_anydesk_service(action) {
+        match control_anydesk_service(action).await {
             Ok(result) => Ok(json!({
                 "success": true,
                 "action": action,
@@ -281,7 +282,7 @@ impl Tool for AnyDeskCheckX11DisplayTool {
     }
 
     async fn execute(&self, _input: Value) -> Result<Value> {
-        match check_x11_display_environment() {
+        match check_x11_display_environment().await {
             Ok(result) => Ok(json!({
                 "success": true,
                 "x11_environment": result
@@ -330,7 +331,7 @@ impl Tool for AnyDeskDiagnoseX11AccessTool {
     }
 
     async fn execute(&self, _input: Value) -> Result<Value> {
-        match diagnose_x11_access_issues() {
+        match diagnose_x11_access_issues().await {
             Ok(result) => Ok(json!({
                 "success": true,
                 "diagnosis": result
@@ -361,8 +362,175 @@ impl Tool for AnyDeskDiagnoseX11AccessTool {
     }
 }
 
+// ============================================================================
+// SYSTEMD D-BUS HELPERS (no systemctl bypasses)
+// ============================================================================
+
+async fn get_systemd_unit_pid_dbus(unit: &str) -> Result<u32> {
+    let connection = Connection::system().await?;
+    let manager_proxy = zbus::Proxy::new(
+        &connection,
+        "org.freedesktop.systemd1",
+        "/org/freedesktop/systemd1",
+        "org.freedesktop.systemd1.Manager",
+    )
+    .await?;
+
+    let unit_path: zbus::zvariant::OwnedObjectPath = manager_proxy
+        .call("GetUnit", &(unit,))
+        .await
+        .map_err(|_| anyhow!("Unit {} not found", unit))?;
+
+    let unit_proxy = zbus::Proxy::new(
+        &connection,
+        "org.freedesktop.systemd1",
+        unit_path.as_str(),
+        "org.freedesktop.systemd1.Unit",
+    )
+    .await?;
+
+    let main_pid: u32 = unit_proxy.get_property("MainPID").await?;
+    Ok(main_pid)
+}
+
+async fn get_systemd_unit_active_state_dbus(unit: &str) -> Result<String> {
+    let connection = Connection::system().await?;
+    let manager_proxy = zbus::Proxy::new(
+        &connection,
+        "org.freedesktop.systemd1",
+        "/org/freedesktop/systemd1",
+        "org.freedesktop.systemd1.Manager",
+    )
+    .await?;
+
+    let unit_path: zbus::zvariant::OwnedObjectPath = manager_proxy
+        .call("GetUnit", &(unit,))
+        .await
+        .map_err(|_| anyhow!("Unit {} not found", unit))?;
+
+    let unit_proxy = zbus::Proxy::new(
+        &connection,
+        "org.freedesktop.systemd1",
+        unit_path.as_str(),
+        "org.freedesktop.systemd1.Unit",
+    )
+    .await?;
+
+    let active_state: String = unit_proxy.get_property("ActiveState").await?;
+    Ok(active_state)
+}
+
+async fn control_systemd_unit_dbus(unit: &str, action: &str) -> Result<String> {
+    let connection = Connection::system().await?;
+    let manager_proxy = zbus::Proxy::new(
+        &connection,
+        "org.freedesktop.systemd1",
+        "/org/freedesktop/systemd1",
+        "org.freedesktop.systemd1.Manager",
+    )
+    .await?;
+
+    let method = match action {
+        "start" => "StartUnit",
+        "stop" => "StopUnit",
+        "restart" => "RestartUnit",
+        _ => return Err(anyhow!("Invalid action: {}", action)),
+    };
+
+    let job_path: zbus::zvariant::OwnedObjectPath = manager_proxy
+        .call(method, &(unit, "replace"))
+        .await?;
+
+    Ok(format!(
+        "AnyDesk service {} via D-Bus (job: {})",
+        action, job_path
+    ))
+}
+
+async fn get_systemd_unit_environment_dbus(unit: &str) -> Result<Vec<String>> {
+    let connection = Connection::system().await?;
+    let manager_proxy = zbus::Proxy::new(
+        &connection,
+        "org.freedesktop.systemd1",
+        "/org/freedesktop/systemd1",
+        "org.freedesktop.systemd1.Manager",
+    )
+    .await?;
+
+    let unit_path: zbus::zvariant::OwnedObjectPath = manager_proxy
+        .call("GetUnit", &(unit,))
+        .await
+        .map_err(|_| anyhow!("Unit {} not found", unit))?;
+
+    let unit_proxy = zbus::Proxy::new(
+        &connection,
+        "org.freedesktop.systemd1",
+        unit_path.as_str(),
+        "org.freedesktop.systemd1.Unit",
+    )
+    .await?;
+
+    let env: Vec<String> = unit_proxy.get_property("Environment").await?;
+    Ok(env)
+}
+
+// ============================================================================
+// /proc HELPERS (no pgrep / netstat bypasses)
+// ============================================================================
+
+fn find_pids_by_name(name: &str) -> Vec<String> {
+    let mut pids = Vec::new();
+    if let Ok(entries) = std::fs::read_dir("/proc") {
+        for entry in entries.filter_map(|e| e.ok()) {
+            let file_name = entry.file_name();
+            if file_name.to_string_lossy().parse::<u32>().is_ok() {
+                let cmdline_path = entry.path().join("cmdline");
+                if let Ok(cmdline) = std::fs::read_to_string(&cmdline_path) {
+                    if cmdline.contains(name) {
+                        pids.push(file_name.to_string_lossy().to_string());
+                    }
+                }
+            }
+        }
+    }
+    pids
+}
+
+fn read_proc_net_tcp() -> Result<String> {
+    std::fs::read_to_string("/proc/net/tcp")
+        .map_err(|e| anyhow!("Failed to read /proc/net/tcp: {}", e))
+}
+
+// ============================================================================
+// X11 HELPERS (no xdpyinfo / xauth bypasses)
+// ============================================================================
+
+fn check_x11_socket(display: &str) -> bool {
+    let socket_path = if display.starts_with(':') {
+        format!("/tmp/.X11-unix/X{}", display.trim_start_matches(':'))
+    } else {
+        return false;
+    };
+    Path::new(&socket_path).exists()
+}
+
+fn read_xauth_cookie(_display: &str) -> bool {
+    let xauthority = std::env::var("XAUTHORITY").unwrap_or_else(|_| {
+        dirs::home_dir()
+            .map(|h| h.join(".Xauthority").to_string_lossy().to_string())
+            .unwrap_or_default()
+    });
+    if Path::new(&xauthority).exists() {
+        // We don't parse the xauth file; just verify it exists and is non-empty.
+        if let Ok(meta) = std::fs::metadata(&xauthority) {
+            return meta.len() > 0;
+        }
+    }
+    false
+}
+
 /// Helper function to get AnyDesk ID
-fn get_anydesk_id() -> Result<String> {
+async fn get_anydesk_id() -> Result<String> {
     // Try to get ID from AnyDesk configuration or command
     // First check if we can run anydesk command to get ID
 
@@ -403,24 +571,11 @@ fn get_anydesk_id() -> Result<String> {
         _ => {}
     }
 
-    // Fallback: check systemd service and extract from logs or process
-    match Command::new("systemctl")
-        .args(["show", "anydesk", "--property=MainPID"])
-        .output()
-    {
-        Ok(output) if output.status.success() => {
-            let pid_str = String::from_utf8_lossy(&output.stdout);
-            if let Some(pid_line) = pid_str.lines().next() {
-                if let Some(pid) = pid_line.strip_prefix("MainPID=") {
-                    if let Ok(pid_num) = pid.parse::<u32>() {
-                        // Could potentially inspect process environment or memory
-                        // For now, return a placeholder indicating AnyDesk is running
-                        return Ok(format!("running_pid_{}", pid_num));
-                    }
-                }
-            }
+    // Fallback: check systemd service MainPID via D-Bus
+    if let Ok(pid_num) = get_systemd_unit_pid_dbus("anydesk.service").await {
+        if pid_num > 0 {
+            return Ok(format!("running_pid_{}", pid_num));
         }
-        _ => {}
     }
 
     Err(anyhow!(
@@ -429,33 +584,23 @@ fn get_anydesk_id() -> Result<String> {
 }
 
 /// Helper function to get AnyDesk service status
-fn get_anydesk_status() -> Result<Value> {
+async fn get_anydesk_status() -> Result<Value> {
     let mut status = json!({
         "service_running": false,
         "version": null,
         "connections": []
     });
 
-    // Check systemd service status
-    if let Ok(output) = Command::new("systemctl")
-        .args(["is-active", "anydesk"])
-        .output()
-    {
-        let state_str = String::from_utf8_lossy(&output.stdout);
-        let state = state_str.trim();
-        status["service_running"] = json!(state == "active");
+    // Check systemd service status via D-Bus
+    if let Ok(active_state) = get_systemd_unit_active_state_dbus("anydesk.service").await {
+        status["service_running"] = json!(active_state == "active");
+        status["active_state"] = json!(active_state);
     }
 
-    // Check if anydesk process is running
-    match Command::new("pgrep").arg("anydesk").output() {
-        Ok(output) if output.status.success() => {
-            let pids: Vec<String> = String::from_utf8_lossy(&output.stdout)
-                .lines()
-                .map(|s| s.to_string())
-                .collect();
-            status["process_pids"] = json!(pids);
-        }
-        _ => {}
+    // Check if anydesk process is running via /proc
+    let pids = find_pids_by_name("anydesk");
+    if !pids.is_empty() {
+        status["process_pids"] = json!(pids);
     }
 
     // Try to get version
@@ -471,24 +616,8 @@ fn get_anydesk_status() -> Result<Value> {
 }
 
 /// Helper function to control AnyDesk service
-fn control_anydesk_service(action: &str) -> Result<String> {
-    let systemctl_action = match action {
-        "start" => "start",
-        "stop" => "stop",
-        "restart" => "restart",
-        _ => return Err(anyhow!("Invalid action: {}", action)),
-    };
-
-    let output = Command::new("sudo")
-        .args(["systemctl", systemctl_action, "anydesk"])
-        .output()?;
-
-    if output.status.success() {
-        Ok(format!("AnyDesk service {} successful", action))
-    } else {
-        let error = String::from_utf8_lossy(&output.stderr);
-        Err(anyhow!("Failed to {} AnyDesk service: {}", action, error))
-    }
+async fn control_anydesk_service(action: &str) -> Result<String> {
+    control_systemd_unit_dbus("anydesk.service", action).await
 }
 
 /// Helper function to get AnyDesk connections
@@ -499,33 +628,32 @@ fn get_anydesk_connections() -> Result<Vec<Value>> {
 
     let connections = Vec::new();
 
-    // Check for any active connections by looking at network connections
-    // or AnyDesk process status
-
-    match Command::new("netstat").args(["-tuln"]).output() {
-        Ok(output) if output.status.success() => {
-            let netstat_output = String::from_utf8_lossy(&output.stdout);
-            // Look for AnyDesk-related ports (typically 7070, 6568, etc.)
-            let anydesk_ports = ["7070", "6568", "80", "443"];
-            for line in netstat_output.lines() {
-                for port in &anydesk_ports {
-                    if line.contains(&format!(":{} ", port))
-                        || line.contains(&format!(":{}\n", port))
-                    {
-                        // Found a potential AnyDesk connection
-                        // This is a simplified detection
+    // Check for any active connections by looking at /proc/net/tcp
+    // instead of spawning netstat. AnyDesk typically uses ports 7070, 6568.
+    if let Ok(tcp_output) = read_proc_net_tcp() {
+        let anydesk_ports = ["7070", "6568", "1B9E", "19A8"]; // decimal + hex
+        for line in tcp_output.lines().skip(1) {
+            // /proc/net/tcp columns: sl local_address rem_address st tx_queue:rx_queue ...
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 4 {
+                let local_addr = parts[1];
+                // Port is the second half of local_address (hex after colon)
+                if let Some(colon_pos) = local_addr.rfind(':') {
+                    let port_hex = &local_addr[colon_pos + 1..];
+                    if anydesk_ports.contains(&port_hex) {
+                        // Potential AnyDesk listening port found
+                        // Full parsing would convert hex IP:port to readable form
                     }
                 }
             }
         }
-        _ => {}
     }
 
     Ok(connections)
 }
 
 /// Helper function to check X11 display environment
-fn check_x11_display_environment() -> Result<Value> {
+async fn check_x11_display_environment() -> Result<Value> {
     let mut result = json!({
         "display_available": false,
         "display_variable": null,
@@ -539,56 +667,35 @@ fn check_x11_display_environment() -> Result<Value> {
     // Check DISPLAY environment variable
     if let Ok(display) = std::env::var("DISPLAY") {
         result["display_variable"] = json!(display);
-    }
-
-    // Check XAUTHORITY environment variable
-    if let Ok(xauthority) = std::env::var("XAUTHORITY") {
-        result["xauthority_path"] = json!(xauthority);
-        result["xauthority_available"] = json!(Path::new(&xauthority).exists());
-    }
-
-    // Check if X11 server is running by testing display access
-    if let Ok(display) = std::env::var("DISPLAY") {
-        match Command::new("xdpyinfo").env("DISPLAY", &display).output() {
-            Ok(output) if output.status.success() => {
-                result["x11_server_running"] = json!(true);
-                result["display_available"] = json!(true);
-            }
-            _ => {}
+        // Check X11 Unix socket directly instead of spawning xdpyinfo
+        if check_x11_socket(&display) {
+            result["x11_server_running"] = json!(true);
+            result["display_available"] = json!(true);
         }
     }
 
-    // Check AnyDesk service environment
-    match Command::new("systemctl")
-        .args(["show", "anydesk", "--property=Environment"])
-        .output()
-    {
-        Ok(output) if output.status.success() => {
-            let env_str = String::from_utf8_lossy(&output.stdout);
-            let env_vars: std::collections::HashMap<String, String> = env_str
-                .strip_prefix("Environment=")
-                .unwrap_or("")
-                .split_whitespace()
-                .filter_map(|kv| {
-                    kv.split_once('=')
-                        .map(|(k, v)| (k.to_string(), v.to_string()))
-                })
-                .collect();
-            result["anydesk_service_environment"] = json!(env_vars);
-        }
-        _ => {}
+    // Check XAUTHORITY environment variable and file
+    let xauthority = std::env::var("XAUTHORITY").unwrap_or_else(|_| {
+        dirs::home_dir()
+            .map(|h| h.join(".Xauthority").to_string_lossy().to_string())
+            .unwrap_or_default()
+    });
+    result["xauthority_path"] = json!(xauthority);
+    result["xauthority_available"] = json!(Path::new(&xauthority).exists());
+
+    // Check AnyDesk service environment via D-Bus
+    if let Ok(env) = get_systemd_unit_environment_dbus("anydesk.service").await {
+        let env_map: std::collections::HashMap<String, String> = env
+            .iter()
+            .filter_map(|kv| kv.split_once('=').map(|(k, v)| (k.to_string(), v.to_string())))
+            .collect();
+        result["anydesk_service_environment"] = json!(env_map);
     }
 
-    // Check X11 authentication
+    // Check X11 authentication via file existence instead of xauth
     if let Ok(display) = std::env::var("DISPLAY") {
-        match Command::new("xauth").args(["list", &display]).output() {
-            Ok(output) if output.status.success() => {
-                let auth_output = String::from_utf8_lossy(&output.stdout);
-                if !auth_output.trim().is_empty() {
-                    result["x11_auth_configured"] = json!(true);
-                }
-            }
-            _ => {}
+        if read_xauth_cookie(&display) {
+            result["x11_auth_configured"] = json!(true);
         }
     }
 
@@ -596,24 +703,19 @@ fn check_x11_display_environment() -> Result<Value> {
 }
 
 /// Helper function to diagnose X11 access issues
-fn diagnose_x11_access_issues() -> Result<Value> {
+async fn diagnose_x11_access_issues() -> Result<Value> {
     let mut issues = Vec::new();
     let mut recommendations = Vec::new();
     let mut fix_commands = Vec::new();
 
-    // Check if AnyDesk service is running
-    match Command::new("systemctl")
-        .args(["is-active", "anydesk"])
-        .output()
-    {
-        Ok(output) => {
-            let state_str = String::from_utf8_lossy(&output.stdout);
-            let state = state_str.trim();
-            if state != "active" {
+    // Check if AnyDesk service is running via D-Bus
+    match get_systemd_unit_active_state_dbus("anydesk.service").await {
+        Ok(active_state) => {
+            if active_state != "active" {
                 issues.push("AnyDesk service is not running".to_string());
                 recommendations
-                    .push("Start AnyDesk service with: sudo systemctl start anydesk".to_string());
-                fix_commands.push("sudo systemctl start anydesk".to_string());
+                    .push("Start AnyDesk service via D-Bus: dbus_systemd_start_unit anydesk.service".to_string());
+                fix_commands.push("dbus_systemd_start_unit anydesk.service".to_string());
             }
         }
         _ => {
@@ -621,20 +723,16 @@ fn diagnose_x11_access_issues() -> Result<Value> {
         }
     }
 
-    // Check DISPLAY environment for AnyDesk service
-    match Command::new("systemctl")
-        .args(["show", "anydesk", "--property=Environment"])
-        .output()
-    {
-        Ok(output) if output.status.success() => {
-            let env_str = String::from_utf8_lossy(&output.stdout);
-            let has_display = env_str.contains("DISPLAY=");
-            let has_xauthority = env_str.contains("XAUTHORITY=");
+    // Check DISPLAY / XAUTHORITY environment for AnyDesk service via D-Bus
+    match get_systemd_unit_environment_dbus("anydesk.service").await {
+        Ok(env) => {
+            let has_display = env.iter().any(|e| e.starts_with("DISPLAY="));
+            let has_xauthority = env.iter().any(|e| e.starts_with("XAUTHORITY="));
 
             if !has_display {
                 issues.push("AnyDesk service missing DISPLAY environment variable".to_string());
                 recommendations.push("Add DISPLAY=:99 to AnyDesk service environment".to_string());
-                fix_commands.push("sudo sed -i '/^Environment=/a Environment=DISPLAY=:99' /etc/systemd/system/anydesk.service && sudo systemctl daemon-reload && sudo systemctl restart anydesk".to_string());
+                fix_commands.push("dbus_systemd_set_unit_environment anydesk.service DISPLAY=:99".to_string());
             }
 
             if !has_xauthority {
@@ -642,7 +740,7 @@ fn diagnose_x11_access_issues() -> Result<Value> {
                 recommendations.push(
                     "Add XAUTHORITY=/root/.Xauthority to AnyDesk service environment".to_string(),
                 );
-                fix_commands.push("sudo sed -i '/^Environment=/a Environment=XAUTHORITY=/root/.Xauthority' /etc/systemd/system/anydesk.service && sudo systemctl daemon-reload && sudo systemctl restart anydesk".to_string());
+                fix_commands.push("dbus_systemd_set_unit_environment anydesk.service XAUTHORITY=/root/.Xauthority".to_string());
             }
         }
         _ => {
@@ -650,55 +748,44 @@ fn diagnose_x11_access_issues() -> Result<Value> {
         }
     }
 
-    // Check X11 server accessibility
+    // Check X11 server accessibility via Unix socket instead of xdpyinfo
     if let Ok(display) = std::env::var("DISPLAY") {
-        match Command::new("xdpyinfo").env("DISPLAY", &display).output() {
-            Ok(output) if output.status.success() => {
-                // X11 server is accessible
-            }
-            _ => {
-                issues.push(format!("Cannot access X11 display {}", display));
-                recommendations.push(
-                    "Ensure Xvfb or X server is running on the specified display".to_string(),
-                );
-            }
+        if !check_x11_socket(&display) {
+            issues.push(format!("Cannot access X11 display {}", display));
+            recommendations.push(
+                "Ensure Xvfb or X server is running on the specified display".to_string(),
+            );
         }
     } else {
         issues.push("DISPLAY environment variable not set".to_string());
         recommendations.push("Set DISPLAY=:99 for headless X11 server".to_string());
     }
 
-    // Check X11 authentication
+    // Check X11 authentication via file instead of xauth
     if let Ok(display) = std::env::var("DISPLAY") {
-        match Command::new("xauth").args(["list", &display]).output() {
-            Ok(output) if output.status.success() => {
-                let auth_output = String::from_utf8_lossy(&output.stdout);
-                if auth_output.trim().is_empty() {
-                    issues.push(format!(
-                        "No X11 authentication configured for display {}",
-                        display
-                    ));
-                    recommendations.push(
-                        "Generate X11 authentication cookie with: xauth generate :99 . trusted"
-                            .to_string(),
-                    );
-                    fix_commands.push("xauth generate :99 . trusted".to_string());
-                }
-            }
-            _ => {
-                issues.push("Cannot check X11 authentication".to_string());
-            }
+        if !read_xauth_cookie(&display) {
+            issues.push(format!(
+                "No X11 authentication configured for display {}",
+                display
+            ));
+            recommendations.push(
+                "Generate X11 authentication cookie with: xauth generate :99 . trusted"
+                    .to_string(),
+            );
+            fix_commands.push("xauth generate :99 . trusted".to_string());
         }
+    } else {
+        issues.push("Cannot check X11 authentication (DISPLAY not set)".to_string());
     }
 
     // Check if Xauthority file exists for root
     if !Path::new("/root/.Xauthority").exists() {
         issues.push("Xauthority file missing for root user".to_string());
         recommendations.push(
-            "Copy user Xauthority to root: sudo cp /home/user/.Xauthority /root/.Xauthority"
+            "Copy user Xauthority to root: cp /home/user/.Xauthority /root/.Xauthority"
                 .to_string(),
         );
-        fix_commands.push("sudo cp /home/jeremy/.Xauthority /root/.Xauthority && sudo chown root:root /root/.Xauthority && sudo chmod 600 /root/.Xauthority".to_string());
+        fix_commands.push("cp /home/jeremy/.Xauthority /root/.Xauthority && chown root:root /root/.Xauthority && chmod 600 /root/.Xauthority".to_string());
     }
 
     let diagnosis = json!({

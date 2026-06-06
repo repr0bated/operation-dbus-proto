@@ -325,8 +325,7 @@ impl AgentDbusService {
     async fn execute(&self, task_json: &str) -> String {
         debug!(agent = %self.agent_type, task = %task_json, "Executing");
 
-        let mut task_json_mut = task_json.to_string();
-        let task: Value = match unsafe { simd_json::from_str(&mut task_json_mut) } {
+        let task: Value = match serde_json::from_str(task_json) {
             Ok(t) => t,
             Err(e) => {
                 return json!({
@@ -508,8 +507,7 @@ impl AgentExecutor for DbusAgentExecutor {
                 Err(e) => return Err(anyhow::anyhow!("D-Bus call failed: {}", e)),
             };
 
-            let mut result_mut = result;
-            let parsed: Value = unsafe { simd_json::from_str(&mut result_mut)? };
+            let parsed: Value = serde_json::from_str(&result)?;
             info!(agent = %normalized_agent, operation = %operation, "Completed");
             return Ok(parsed);
         }

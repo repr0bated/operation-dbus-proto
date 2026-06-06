@@ -2,9 +2,8 @@
 
 use axum::{extract::Extension, response::Json};
 use serde::{Deserialize, Serialize};
-use std::process::Command;
 use std::sync::Arc;
-use tracing::{error, warn};
+use tracing::warn;
 
 use crate::state::AppState;
 
@@ -43,16 +42,60 @@ pub struct VpnConfig {
     pub dns: String,
 }
 
+/// Check whether a WireGuard interface is active by looking at sysfs.
+fn is_wg_interface_up(interface: &str) -> bool {
+    std::fs::metadata(format!("/sys/class/net/{}/wireguard", interface)).is_ok()
+}
+
+/// Read peer count and transfer totals from `/proc/net/wireguard`.
+fn read_wg_proc_stats(interface: &str) -> Option<(usize, u64, u64)> {
+    let data = std::fs::read_to_string("/proc/net/wireguard").ok()?;
+    let mut lines = data.lines();
+
+    while let Some(line) = lines.next() {
+        // Interface line starts with "<iface>: ..."
+        if let Some(rest) = line.strip_prefix(interface) {
+            if !rest.starts_with(':') {
+                continue;
+            }
+
+            let mut peer_count = 0;
+            let mut total_rx = 0u64;
+            let mut total_tx = 0u64;
+
+            // Peer lines are tab-indented after the interface line
+            for peer_line in lines.by_ref() {
+                if !peer_line.starts_with('\t') {
+                    // Next interface or end of file
+                    break;
+                }
+                let trimmed = peer_line.trim_start_matches('\t');
+                if !trimmed.starts_with("peer:") {
+                    continue;
+                }
+                let parts: Vec<&str> = trimmed.split_whitespace().collect();
+                // peer: public_key preshared_key endpoint allowed_ips latest_handshake transfer_rx transfer_tx persistent_keepalive
+                if parts.len() >= 8 {
+                    peer_count += 1;
+                    if let Ok(rx) = parts[5].parse::<u64>() {
+                        total_rx += rx;
+                    }
+                    if let Ok(tx) = parts[6].parse::<u64>() {
+                        total_tx += tx;
+                    }
+                }
+            }
+            return Some((peer_count, total_rx, total_tx));
+        }
+    }
+    None
+}
+
 /// GET /api/vpn/status - Get VPN server status
 pub async fn vpn_status_handler(Extension(_state): Extension<Arc<AppState>>) -> Json<VpnStatus> {
     let interface = "wg0";
 
-    // Check if WireGuard is running by trying to get interface info
-    let running = Command::new("wg")
-        .args(["show", interface])
-        .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false);
+    let running = is_wg_interface_up(interface);
 
     if !running {
         return Json(VpnStatus {
@@ -64,28 +107,11 @@ pub async fn vpn_status_handler(Extension(_state): Extension<Arc<AppState>>) -> 
         });
     }
 
-    // Parse wg show output to get peer count and bandwidth
-    let output = Command::new("wg")
-        .args(["show", interface, "dump"])
-        .output();
-
-    let (peer_count, total_rx, total_tx) = match output {
-        Ok(output) if output.status.success() => {
-            let data = String::from_utf8_lossy(&output.stdout);
-            parse_wg_dump(&data)
-        }
-        Ok(output) => {
-            warn!(
-                "wg show dump failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
+    let (peer_count, total_rx, total_tx) =
+        read_wg_proc_stats(interface).unwrap_or_else(|| {
+            warn!("Failed to read /proc/net/wireguard for {}", interface);
             (0, 0, 0)
-        }
-        Err(e) => {
-            error!("Failed to run wg command: {}", e);
-            (0, 0, 0)
-        }
-    };
+        });
 
     Json(VpnStatus {
         running: true,
@@ -111,19 +137,15 @@ pub async fn vpn_connections_handler(
 pub async fn vpn_config_handler(Extension(_state): Extension<Arc<AppState>>) -> Json<VpnConfig> {
     let interface = "wg0";
 
-    // Get server public key
-    let server_public_key = Command::new("wg")
-        .args(["show", interface, "public-key"])
-        .output()
-        .ok()
-        .and_then(|output| {
-            if output.status.success() {
-                Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
-            } else {
-                None
-            }
-        })
-        .unwrap_or_else(|| "unknown".to_string());
+    // Get server public key from sysfs
+    let server_public_key = std::fs::read_to_string(format!(
+        "/sys/class/net/{}/wireguard/public_key",
+        interface
+    ))
+    .ok()
+    .map(|s| s.trim().to_string())
+    .filter(|s| !s.is_empty())
+    .unwrap_or_else(|| "unknown".to_string());
 
     // Get endpoint from environment or default
     let endpoint =
@@ -145,39 +167,6 @@ struct WgPeer {
     rx: u64,
     tx: u64,
     last_handshake: String,
-}
-
-/// Parse `wg show dump` output
-/// Format: interface, private-key, public-key, listen-port, fwmark
-///         public-key, preshared-key, endpoint, allowed-ips, latest-handshake, transfer-rx, transfer-tx, persistent-keepalive
-fn parse_wg_dump(data: &str) -> (usize, u64, u64) {
-    let mut peer_count = 0;
-    let mut total_rx = 0u64;
-    let mut total_tx = 0u64;
-
-    for (i, line) in data.lines().enumerate() {
-        if i == 0 {
-            // Skip interface line
-            continue;
-        }
-
-        let parts: Vec<&str> = line.split('\t').collect();
-        if parts.len() >= 7 {
-            peer_count += 1;
-
-            // Parse transfer-rx (index 5)
-            if let Ok(rx) = parts[5].parse::<u64>() {
-                total_rx += rx;
-            }
-
-            // Parse transfer-tx (index 6)
-            if let Ok(tx) = parts[6].parse::<u64>() {
-                total_tx += tx;
-            }
-        }
-    }
-
-    (peer_count, total_rx, total_tx)
 }
 
 /// Parse `wg show dump` output into peer list

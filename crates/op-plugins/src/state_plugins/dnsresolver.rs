@@ -4,7 +4,6 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use simd_json::OwnedValue as Value;
 use std::fs;
-use std::process::Command;
 
 use op_state::{
     ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
@@ -90,11 +89,6 @@ impl DnsResolverPlugin {
     }
 
     fn read_resolv_conf() -> String {
-        if let Ok(out) = Command::new("cat").arg("/etc/resolv.conf").output() {
-            if out.status.success() {
-                return String::from_utf8(out.stdout).unwrap_or_default();
-            }
-        }
         fs::read_to_string("/etc/resolv.conf").unwrap_or_default()
     }
 
@@ -122,16 +116,7 @@ impl DnsResolverPlugin {
 
         let tmp_path = "/etc/resolv.conf.sysdecl.tmp";
         fs::write(tmp_path, buf.as_bytes()).context("write temp resolv.conf")?;
-        let mv_cmd = format!("mv -f {} /etc/resolv.conf", tmp_path);
-        let mv_ok = Command::new("sh")
-            .arg("-c")
-            .arg(&mv_cmd)
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
-        if !mv_ok {
-            fs::rename(tmp_path, "/etc/resolv.conf").context("rename resolv.conf")?;
-        }
+        fs::rename(tmp_path, "/etc/resolv.conf").context("rename resolv.conf")?;
         Ok(())
     }
 

@@ -64,6 +64,9 @@ impl IdentitySledReader {
     fn read_sled_entity(&self) -> Result<RawEntity> {
         let (ptr, _mmap) =
             read_sled().map_err(|e| anyhow::anyhow!("Failed to read sled: {}", e))?;
+        // SAFETY: `read_sled()` returns a pointer to a valid `IdentitySled` mapped
+        // into shared memory (`/dev/shm`). The `_mmap` guard owns the mapping and
+        // keeps it alive for the duration of this borrow, so the pointer is valid.
         let sled = unsafe { &*ptr };
 
         let footprint = hex::encode(sled.hashed_footprint);

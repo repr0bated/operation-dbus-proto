@@ -3,7 +3,7 @@
 use crate::service_def::{
     ExecCommand, LogType, ReadyNotification, RestartPolicy, ServiceDef, ServiceName, ServiceType,
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
 use serde::{Deserialize, Serialize};
@@ -11,6 +11,7 @@ use simd_json::{json, OwnedValue as Value};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+use zbus::{Connection, Proxy};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceLifecycle {
@@ -47,6 +48,62 @@ impl ServicePlugin {
             ServiceBackend::Systemd
         };
         Self { backend }
+    }
+
+    /// Connect to systemd via D-Bus.
+    async fn connect_systemd(&self) -> Result<Proxy<'static>> {
+        let conn = Connection::system()
+            .await
+            .context("Failed to connect to system D-Bus")?;
+        Proxy::new(
+            &conn,
+            "org.freedesktop.systemd1",
+            "/org/freedesktop/systemd1",
+            "org.freedesktop.systemd1.Manager",
+        )
+        .await
+        .context("Failed to create systemd D-Bus proxy")
+    }
+
+    /// List systemd services via D-Bus.
+    async fn list_systemd_services(&self) -> Result<Vec<String>> {
+        let proxy = self.connect_systemd().await?;
+        #[allow(clippy::type_complexity)]
+        let units: Vec<(String, String, String, String, String, String, zbus::zvariant::OwnedObjectPath, u32, String, zbus::zvariant::OwnedObjectPath)> = proxy
+            .call("ListUnits", &())
+            .await
+            .context("Failed to list systemd units")?;
+        Ok(units
+            .into_iter()
+            .filter(|(name, _, _, _, _, _, _, _, _, _)| name.ends_with(".service"))
+            .map(|(name, _, _, _, _, _, _, _, _, _)| name)
+            .collect())
+    }
+
+    /// Query ActiveEnterTimestamp for a systemd unit via D-Bus.
+    async fn systemd_last_active(&self, name: &str) -> Result<Option<u64>> {
+        let proxy = self.connect_systemd().await?;
+        let path: zbus::zvariant::OwnedObjectPath = proxy
+            .call("GetUnit", &(name,))
+            .await
+            .context("Failed to get unit path")?;
+        let conn = Connection::system().await?;
+        let unit_proxy = Proxy::new(
+            &conn,
+            "org.freedesktop.systemd1",
+            path,
+            "org.freedesktop.systemd1.Unit",
+        )
+        .await?;
+        let ts_usec: u64 = unit_proxy
+            .get_property::<u64>("ActiveEnterTimestamp")
+            .await
+            .unwrap_or(0);
+        if ts_usec > 0 {
+            Ok(Some(ts_usec / 1_000_000))
+        } else {
+            Ok(None)
+        }
     }
 
     /// Auto-generate service from installed binary
@@ -204,46 +261,29 @@ impl ServicePlugin {
         Ok(())
     }
 
-    /// List running services via `s6-rc -a -l /run/s6-rc list`.
+    /// List running s6 services via D-Bus.
     async fn list_s6_services(&self) -> Result<Vec<String>> {
-        let out = tokio::process::Command::new("s6-rc")
-            .arg("-l")
-            .arg(S6_RC_LIVE)
-            .args(["-a", "list"])
-            .output()
-            .await
-            .map_err(|e| anyhow::anyhow!("failed to run s6-rc: {e}"))?;
-
-        if !out.status.success() {
-            return Ok(Vec::new());
+        let client = crate::state_plugins::s6::S6DbusClient::new();
+        let units = client.list_units().await.unwrap_or_default();
+        let mut running = Vec::new();
+        for unit in units {
+            if let Some(name) = unit.get("name").and_then(|v| v.as_str()) {
+                if let Some(active) = unit.get("active").and_then(|v| v.as_str()) {
+                    if active == "true" || active == "up" {
+                        running.push(name.to_string());
+                    }
+                }
+            }
         }
-
-        Ok(String::from_utf8_lossy(&out.stdout)
-            .lines()
-            .map(|l| l.trim().to_string())
-            .filter(|l| !l.is_empty())
-            .collect())
+        Ok(running)
     }
 
     async fn check_lifecycle(&self, name: &str) -> Result<ServiceLifecycle> {
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
 
         let last_active = match self.backend {
-            ServiceBackend::Systemd => {
-                let out = tokio::process::Command::new("systemctl")
-                    .args(["show", name, "--property=ActiveEnterTimestamp"])
-                    .output()
-                    .await?;
-
-                String::from_utf8_lossy(&out.stdout).lines().find_map(|l| {
-                    l.split_once('=').and_then(|(_, v)| {
-                        chrono::DateTime::parse_from_rfc3339(v)
-                            .ok()
-                            .map(|ts| ts.timestamp() as u64)
-                    })
-                })
-            }
-            // s6 does not expose activation timestamps via CLI
+            ServiceBackend::Systemd => self.systemd_last_active(name).await.ok().flatten(),
+            // s6 does not expose activation timestamps via D-Bus
             ServiceBackend::S6 => None,
         };
 
@@ -253,8 +293,10 @@ impl ServicePlugin {
         let orphan_reason = if is_orphaned {
             Some(if last_active.is_none() {
                 "never run".to_string()
+            } else if let Some(days) = days_since_active {
+                format!("inactive {} days", days)
             } else {
-                format!("inactive {} days", days_since_active.unwrap())
+                "inactive unknown days".to_string()
             })
         } else {
             None
@@ -286,22 +328,7 @@ impl StatePlugin for ServicePlugin {
         let mut services = HashMap::new();
 
         let service_list = match self.backend {
-            ServiceBackend::Systemd => {
-                let out = tokio::process::Command::new("systemctl")
-                    .args([
-                        "list-units",
-                        "--type=service",
-                        "--all",
-                        "--no-pager",
-                        "--plain",
-                    ])
-                    .output()
-                    .await?;
-                String::from_utf8_lossy(&out.stdout)
-                    .lines()
-                    .filter_map(|l| l.split_whitespace().next().map(String::from))
-                    .collect::<Vec<_>>()
-            }
+            ServiceBackend::Systemd => self.list_systemd_services().await.unwrap_or_default(),
             ServiceBackend::S6 => self.list_s6_services().await?,
         };
 

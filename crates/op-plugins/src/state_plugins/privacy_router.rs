@@ -15,7 +15,6 @@ use simd_json::{json, OwnedValue as Value};
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::path::Path;
-use tokio::process::Command;
 
 use crate::state_plugins::incus::{IncusInstance, IncusPlugin, IncusState};
 use crate::state_plugins::openflow::{
@@ -677,10 +676,26 @@ impl PrivacyRouterPlugin {
 
     async fn ensure_wg_quick_interface(&self, name: &str, config_path: &str) -> Result<()> {
         self.validate_wg_quick_config(name, config_path)?;
-        self.run_command("/usr/bin/wg-quick", &["up", config_path])
-            .await?;
-        self.run_command("/usr/bin/ip", &["link", "set", "up", "dev", name])
-            .await?;
+
+        // Check if WireGuard interface already exists via rtnetlink (AGENTS.md §4: no subprocess bypasses)
+        let interfaces = op_network::rtnetlink::list_interfaces()
+            .await
+            .context("list interfaces for wg-quick check")?;
+        let exists = interfaces.iter().any(|iface| iface.name == name);
+
+        if !exists {
+            anyhow::bail!(
+                "WireGuard interface '{}' does not exist. \"wg-quick up {}\" must be run externally before privacy router provisioning.",
+                name,
+                config_path
+            );
+        }
+
+        // Bring interface up via rtnetlink instead of `ip link set up`
+        op_network::rtnetlink::link_up(name)
+            .await
+            .with_context(|| format!("bring wg interface '{}' up", name))?;
+
         Ok(())
     }
 
@@ -731,24 +746,6 @@ impl PrivacyRouterPlugin {
             );
         }
 
-        Ok(())
-    }
-
-    async fn run_command(&self, binary: &str, args: &[&str]) -> Result<()> {
-        let output = Command::new(binary)
-            .args(args)
-            .output()
-            .await
-            .with_context(|| format!("execute {}", binary))?;
-        if !output.status.success() {
-            bail!(
-                "{} {} failed (exit {}): {}",
-                binary,
-                args.join(" "),
-                output.status.code().unwrap_or(-1),
-                String::from_utf8_lossy(&output.stderr).trim()
-            );
-        }
         Ok(())
     }
 
@@ -915,9 +912,9 @@ impl PrivacyRouterPlugin {
         for (index, rule) in config.openflow.privacy_flows.iter().enumerate() {
             let mut actions = Vec::new();
             for action_str in &rule.actions {
-                if action_str.starts_with("output:") {
+                if let Some(port) = action_str.strip_prefix("output:") {
                     actions.push(FlowAction::Output {
-                        port: action_str.strip_prefix("output:").unwrap().to_string(),
+                        port: port.to_string(),
                     });
                 } else if action_str == "arp_responder" {
                     // Default ARP responder for the bridge IP

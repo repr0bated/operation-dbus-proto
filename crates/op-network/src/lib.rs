@@ -16,6 +16,7 @@ pub mod ovs_netlink;
 pub mod ovsdb;
 pub mod plugin;
 pub mod proxmox;
+pub mod rovs_proxy;
 pub mod rtnetlink;
 
 pub use controller::OpenFlowController;

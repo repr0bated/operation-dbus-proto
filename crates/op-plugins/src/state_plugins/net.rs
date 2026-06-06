@@ -143,14 +143,13 @@ impl NetStatePlugin {
         Ok(())
     }
 
-    /// Check if OVS is available via JSON-RPC
+    /// Check if OVS is available via D-Bus daemon
     pub async fn check_ovs_available(&self) -> Result<bool> {
-        // Try to connect to OVSDB unix socket
-        let client = op_network::ovsdb::OvsdbClient::new();
+        let client = op_network::rovs_proxy::OvsdbDbusClient::new();
         match client.list_dbs().await {
             Ok(_) => Ok(true),
             Err(_) => {
-                log::info!("OVSDB socket not available - skipping OVS operations");
+                log::info!("OVSDB not reachable via D-Bus daemon - skipping OVS operations");
                 Ok(false)
             }
         }
@@ -223,24 +222,21 @@ impl NetStatePlugin {
         None
     }
 
-    /// Query OVS bridges directly via JSON-RPC
+    /// Query OVS bridges via D-Bus daemon
     pub async fn query_ovs_bridges(&self) -> Result<Vec<InterfaceConfig>> {
-        // Use OVSDB JSON-RPC client - native protocol
-        let client = op_network::ovsdb::OvsdbClient::new();
+        let client = op_network::rovs_proxy::OvsdbDbusClient::new();
 
-        // Check if OVSDB is available
         if client.list_dbs().await.is_err() {
-            log::info!("OVSDB socket not available - skipping OVS operations");
+            log::info!("OVSDB not reachable via D-Bus daemon - skipping OVS operations");
             return Ok(Vec::new());
         }
 
         let mut bridges = Vec::new();
 
-        // Get all bridge names via JSON-RPC
         let bridge_names = match client.list_bridges().await {
             Ok(names) => names,
             Err(_) => {
-                log::info!("Failed to list OVS bridges via JSON-RPC");
+                log::info!("Failed to list OVS bridges via D-Bus daemon");
                 return Ok(Vec::new());
             }
         };
@@ -256,10 +252,7 @@ impl NetStatePlugin {
             };
 
             // Parse JSON string to HashMap
-            let mut bridge_info: HashMap<String, Value> = match unsafe {
-                let mut bridge_info_json_mut = bridge_info_json;
-                simd_json::from_str::<HashMap<String, Value>>(&mut bridge_info_json_mut)
-            } {
+            let mut bridge_info: HashMap<String, Value> = match serde_json::from_str::<HashMap<String, Value>>(&bridge_info_json) {
                 Ok(info) => info,
                 Err(_) => {
                     log::debug!("Failed to parse bridge info JSON for: {}", bridge_name);
@@ -334,32 +327,31 @@ impl NetStatePlugin {
         Ok(bridges)
     }
 
-    /// Apply OVS bridge configuration via JSON-RPC and rtnetlink
+    /// Apply OVS bridge configuration via D-Bus daemon and rtnetlink
     pub async fn apply_ovs_config(&self, config: &InterfaceConfig) -> Result<()> {
-        let client = op_network::ovsdb::OvsdbClient::new();
+        let client = op_network::rovs_proxy::OvsdbDbusClient::new();
         log::info!("Starting apply_ovs_config for {}", config.name);
 
-        // Ensure bridge exists via OVSDB JSON-RPC
+        // Ensure bridge exists via D-Bus daemon
         if !client
             .bridge_exists(&config.name)
             .await
-            .context("Failed to check bridge existence")?
+            .context("Failed to check bridge existence via D-Bus")?
         {
             client
                 .create_bridge(&config.name)
                 .await
-                .context("Failed to create OVS bridge via JSON-RPC")?;
-            log::info!("Created OVS bridge via JSON-RPC: {}", config.name);
+                .context("Failed to create OVS bridge via D-Bus daemon")?;
+            log::info!("Created OVS bridge via D-Bus daemon: {}", config.name);
         }
 
-        // Add ports to bridge if specified via OVSDB JSON-RPC
+        // Add ports to bridge if specified via D-Bus daemon
         // Skip netmaker interfaces (nm-*) - they are managed by netclient
         if let Some(ref ports) = config.tunable.ports {
-            // Get current ports via JSON-RPC instead of ovs-vsctl
             let current_ports = client
                 .list_bridge_ports(&config.name)
                 .await
-                .context("Failed to list ports via JSON-RPC")?;
+                .context("Failed to list ports via D-Bus daemon")?;
 
             for port in ports {
                 // Skip netmaker/wireguard interfaces - netclient manages them
@@ -521,14 +513,14 @@ impl NetStatePlugin {
         Ok(())
     }
 
-    /// Delete OVS bridge via JSON-RPC
+    /// Delete OVS bridge via D-Bus daemon
     pub async fn delete_ovs_bridge(&self, name: &str) -> Result<()> {
-        let client = op_network::ovsdb::OvsdbClient::new();
+        let client = op_network::rovs_proxy::OvsdbDbusClient::new();
 
         client
             .delete_bridge(name)
             .await
-            .context("Failed to delete OVS bridge via JSON-RPC")?;
+            .context("Failed to delete OVS bridge via D-Bus daemon")?;
 
         Ok(())
     }

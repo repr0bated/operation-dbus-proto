@@ -50,7 +50,7 @@ pub async fn serve_embedded_ui(uri: Uri) -> impl IntoResponse {
             .header("X-Content-Type-Options", "nosniff")
             .header("Referrer-Policy", "strict-origin-when-cross-origin")
             .body(Body::from(content.data.into_owned()))
-            .unwrap();
+            .expect("response with valid body should not fail");
     }
 
     // SPA fallback: serve index.html for client-side routing
@@ -62,7 +62,7 @@ pub async fn serve_embedded_ui(uri: Uri) -> impl IntoResponse {
             .header("X-Content-Type-Options", "nosniff")
             .header("Referrer-Policy", "strict-origin-when-cross-origin")
             .body(Body::from(content.data.into_owned()))
-            .unwrap();
+            .expect("response with valid body should not fail");
     }
 
     // No UI built yet - return helpful message
@@ -91,7 +91,7 @@ cargo build -p op-web
 </html>
 "#,
         ))
-        .unwrap()
+        .expect("response with valid body should not fail")
 }
 
 /// Check if UI assets are available

@@ -2,11 +2,12 @@
 //!
 //! Schema-as-code: These types ARE the schema. Validation happens at parse time.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use tracing::info;
+use zbus::{Connection, Proxy};
 
 /// Service name - validated on construction
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -409,32 +410,47 @@ impl SystemdPlugin {
     }
 
     pub async fn get_service_status(&self, name: &str) -> Result<ServiceState> {
-        let out = tokio::process::Command::new("systemctl")
-            .args(["show", name, "--property=ActiveState,SubState,LoadState"])
-            .output()
-            .await?;
+        let conn = Connection::system()
+            .await
+            .context("Failed to connect to system D-Bus")?;
+        let proxy = Proxy::new(
+            &conn,
+            "org.freedesktop.systemd1",
+            "/org/freedesktop/systemd1",
+            "org.freedesktop.systemd1.Manager",
+        )
+        .await
+        .context("Failed to create systemd D-Bus proxy")?;
 
-        if !out.status.success() {
-            anyhow::bail!("systemctl show failed for {}", name);
-        }
+        let unit_name = format!("{}.service", name);
+        let path: zbus::zvariant::OwnedObjectPath = proxy
+            .call("GetUnit", &(unit_name,))
+            .await
+            .context(format!("Failed to get unit path for {}", name))?;
 
-        let stdout = String::from_utf8_lossy(&out.stdout);
-        let mut active = "unknown";
-        let mut sub = "unknown";
-        let mut load = "unknown";
+        let unit_proxy = Proxy::new(
+            &conn,
+            "org.freedesktop.systemd1",
+            path.as_str(),
+            "org.freedesktop.systemd1.Unit",
+        )
+        .await
+        .context("Failed to create unit D-Bus proxy")?;
 
-        for line in stdout.lines() {
-            if let Some((k, v)) = line.split_once('=') {
-                match k {
-                    "ActiveState" => active = v,
-                    "SubState" => sub = v,
-                    "LoadState" => load = v,
-                    _ => {}
-                }
-            }
-        }
+        let active: String = unit_proxy
+            .get_property("ActiveState")
+            .await
+            .unwrap_or_else(|_| "unknown".to_string());
+        let sub: String = unit_proxy
+            .get_property("SubState")
+            .await
+            .unwrap_or_else(|_| "unknown".to_string());
+        let load: String = unit_proxy
+            .get_property("LoadState")
+            .await
+            .unwrap_or_else(|_| "unknown".to_string());
 
-        let active_state = match active {
+        let active_state = match active.as_str() {
             "active" => ActiveState::Active,
             "inactive" => ActiveState::Inactive,
             "activating" => ActiveState::Activating,
@@ -447,26 +463,61 @@ impl SystemdPlugin {
         Ok(ServiceState {
             name: ServiceName::new(name)?,
             active_state,
-            sub_state: sub.to_string(),
-            load_state: load.to_string(),
+            sub_state: sub,
+            load_state: load,
         })
     }
 
     async fn ctl(&self, name: &str, action: &str) -> Result<()> {
-        info!("systemctl {} {}", action, name);
-        let out = tokio::process::Command::new("systemctl")
-            .args([action, name])
-            .output()
-            .await?;
+        info!("systemd D-Bus {} {}", action, name);
+        let conn = Connection::system()
+            .await
+            .context("Failed to connect to system D-Bus")?;
+        let proxy = Proxy::new(
+            &conn,
+            "org.freedesktop.systemd1",
+            "/org/freedesktop/systemd1",
+            "org.freedesktop.systemd1.Manager",
+        )
+        .await
+        .context("Failed to create systemd D-Bus proxy")?;
 
-        if !out.status.success() {
-            anyhow::bail!(
-                "systemctl {} {} failed: {}",
-                action,
-                name,
-                String::from_utf8_lossy(&out.stderr)
-            );
+        let unit_name = format!("{}.service", name);
+
+        match action {
+            "start" => {
+                let _: zbus::zvariant::OwnedObjectPath = proxy
+                    .call("StartUnit", &(unit_name, "replace"))
+                    .await
+                    .context(format!("Failed to start {}", name))?;
+            }
+            "stop" => {
+                let _: zbus::zvariant::OwnedObjectPath = proxy
+                    .call("StopUnit", &(unit_name, "replace"))
+                    .await
+                    .context(format!("Failed to stop {}", name))?;
+            }
+            "restart" => {
+                let _: zbus::zvariant::OwnedObjectPath = proxy
+                    .call("ReloadOrRestartUnit", &(unit_name, "replace"))
+                    .await
+                    .context(format!("Failed to restart {}", name))?;
+            }
+            "enable" => {
+                let _: (bool, Vec<(String, String, String)>) = proxy
+                    .call("EnableUnitFiles", &(vec![unit_name], false, true))
+                    .await
+                    .context(format!("Failed to enable {}", name))?;
+            }
+            "disable" => {
+                let _: (bool, Vec<(String, String)>) = proxy
+                    .call("DisableUnitFiles", &(vec![unit_name], false))
+                    .await
+                    .context(format!("Failed to disable {}", name))?;
+            }
+            other => anyhow::bail!("Unsupported systemd action: {}", other),
         }
+
         Ok(())
     }
 }

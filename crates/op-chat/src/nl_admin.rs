@@ -91,15 +91,16 @@ impl ToolCallParser {
             xml_tag_regex: Regex::new(
                 r"(?s)<tool_call>\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\((.*?)\)\s*</tool_call>",
             )
-            .unwrap(),
+            .expect("hardcoded regex pattern is valid"),
             // Matches: ```tool\ntool_name({"arg": "value"})\n```
             // Also handles ```tool_code format
-            code_block_regex: Regex::new(r"(?s)```(?:tool|tool_code)\s*\n(.+?)\n```").unwrap(),
+            code_block_regex: Regex::new(r"(?s)```(?:tool|tool_code)\s*\n(.+?)\n```")
+                .expect("hardcoded regex pattern is valid"),
             // Matches: tool_name({"arg": "value"}) or tool_name({multi-line json})
             function_call_regex: Regex::new(
                 r"(?s)\b([a-zA-Z_][a-zA-Z0-9_]*)\s*\(\s*(\{.*?\})\s*\)",
             )
-            .unwrap(),
+            .expect("hardcoded regex pattern is valid"),
         }
     }
 
@@ -187,7 +188,7 @@ impl ToolCallParser {
                 }
 
                 if let Ok(arguments) =
-                    unsafe { simd_json::from_str::<Value>(&mut args_str.to_string()) }
+                    serde_json::from_str::<Value>(args_str)
                 {
                     calls.push(ExtractedToolCall {
                         name: tool_name,
@@ -218,7 +219,7 @@ impl ToolCallParser {
                 }
 
                 if let Ok(arguments) =
-                    unsafe { simd_json::from_str::<Value>(&mut args_str.to_string()) }
+                    serde_json::from_str::<Value>(args_str)
                 {
                     info!("Extracted tool call: {}", tool_name);
                     calls.push(ExtractedToolCall {
@@ -656,23 +657,28 @@ impl NLAdminOrchestrator {
     /// Clean tool_call tags from LLM response
     fn clean_llm_response(&self, response: &str) -> String {
         // Remove <tool_call>...</tool_call> tags (single line)
-        let re = Regex::new(r"<tool_call>.*?</tool_call>").unwrap();
+        let re = Regex::new(r"<tool_call>.*?</tool_call>")
+            .expect("hardcoded regex pattern is valid");
         let cleaned = re.replace_all(response, "");
 
         // Remove ```tool...``` blocks (single line)
-        let re2 = Regex::new(r"```tool\s*\n.*?\n```").unwrap();
+        let re2 = Regex::new(r"```tool\s*\n.*?\n```")
+            .expect("hardcoded regex pattern is valid");
         let cleaned = re2.replace_all(&cleaned, "");
 
         // Remove ```tool_code...``` blocks (multiline)
-        let re3 = Regex::new(r"(?s)```tool_code\s*\n.*?\n```").unwrap();
+        let re3 = Regex::new(r"(?s)```tool_code\s*\n.*?\n```")
+            .expect("hardcoded regex pattern is valid");
         let cleaned = re3.replace_all(&cleaned, "");
 
         // Remove tool call patterns like: ovs_list_bridges({})
-        let re4 = Regex::new(r"\w+\(\s*\{\s*\}\s*\)").unwrap();
+        let re4 = Regex::new(r"\w+\(\s*\{\s*\}\s*\)")
+            .expect("hardcoded regex pattern is valid");
         let cleaned = re4.replace_all(&cleaned, "");
 
         // Clean up multiple blank lines
-        let re5 = Regex::new(r"\n{3,}").unwrap();
+        let re5 = Regex::new(r"\n{3,}")
+            .expect("hardcoded regex pattern is valid");
         let cleaned = re5.replace_all(&cleaned, "\n\n");
 
         cleaned.trim().to_string()

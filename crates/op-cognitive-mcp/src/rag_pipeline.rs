@@ -150,6 +150,7 @@ impl RagPipeline {
     }
 
     /// Ingest a single repomix file from the zip into Qdrant.
+    #[tracing::instrument(skip(self, zip_path), fields(entry_name, collection))]
     pub async fn ingest_repomix_entry(
         &self,
         zip_path: &Path,
@@ -246,6 +247,7 @@ impl RagPipeline {
     }
 
     /// Semantic search over a Qdrant collection.
+    #[tracing::instrument(skip(self), fields(collection, query_text, limit))]
     pub async fn query(
         &self,
         collection: &str,
@@ -315,10 +317,7 @@ impl RagPipeline {
     ) {
         match self
             .qdrant
-            .upsert_points(UpsertPointsBuilder::new(
-                collection,
-                std::mem::take(batch),
-            ))
+            .upsert_points(UpsertPointsBuilder::new(collection, std::mem::take(batch)))
             .await
         {
             Ok(_) => stats.chunks_upserted += VOYAGE_BATCH.min(batch.capacity()),
@@ -524,9 +523,9 @@ fn extract_rust(lines: &[String]) -> (Vec<String>, Vec<String>, Vec<String>) {
         Regex::new(
             r"^\s*pub(?:\(crate\))?\s+(fn|struct|enum|trait|type|mod|const|static|impl)\s+(\w+)",
         )
-        .unwrap()
+        .expect("static regex pattern is valid")
     });
-    let re_use = RE_USE.get_or_init(|| Regex::new(r"^\s*use\s+([\w::{}, ]+);").unwrap());
+    let re_use = RE_USE.get_or_init(|| Regex::new(r"^\s*use\s+([\w::{}, ]+);").expect("static regex pattern is valid"));
 
     let mut symbols = Vec::new();
     let mut doc_comments = Vec::new();
@@ -582,10 +581,10 @@ fn extract_ts(lines: &[String]) -> (Vec<String>, Vec<String>, Vec<String>) {
     static RE_IMPORT: OnceLock<Regex> = OnceLock::new();
 
     let re_export = RE_EXPORT.get_or_init(|| {
-        Regex::new(r"^export\s+(?:default\s+)?(?:async\s+)?(?:function|class|interface|type|const|enum)\s+(\w+)").unwrap()
+        Regex::new(r"^export\s+(?:default\s+)?(?:async\s+)?(?:function|class|interface|type|const|enum)\s+(\w+)").expect("static regex pattern is valid")
     });
     let re_import =
-        RE_IMPORT.get_or_init(|| Regex::new(r#"^import\s+.+from\s+['"]([^'"]+)['"]"#).unwrap());
+        RE_IMPORT.get_or_init(|| Regex::new(r#"^import\s+.+from\s+['"]([^'"]+)['"]"#).expect("static regex pattern is valid"));
 
     let mut symbols = Vec::new();
     let mut imports = Vec::new();
@@ -622,8 +621,8 @@ fn extract_python(lines: &[String]) -> (Vec<String>, Vec<String>, Vec<String>) {
     static RE_DEF: OnceLock<Regex> = OnceLock::new();
     static RE_IMP: OnceLock<Regex> = OnceLock::new();
 
-    let re_def = RE_DEF.get_or_init(|| Regex::new(r"^(?:class|def|async def)\s+(\w+)").unwrap());
-    let re_imp = RE_IMP.get_or_init(|| Regex::new(r"^(?:import|from)\s+([\w.]+)").unwrap());
+    let re_def = RE_DEF.get_or_init(|| Regex::new(r"^(?:class|def|async def)\s+(\w+)").expect("static regex pattern is valid"));
+    let re_imp = RE_IMP.get_or_init(|| Regex::new(r"^(?:import|from)\s+([\w.]+)").expect("static regex pattern is valid"));
 
     let mut symbols = Vec::new();
     let mut imports = Vec::new();
@@ -653,9 +652,9 @@ fn extract_go(lines: &[String]) -> (Vec<String>, Vec<String>, Vec<String>) {
 
     let re_decl = RE_DECL.get_or_init(|| {
         Regex::new(r"^func\s+(?:\(\w+\s+\*?\w+\)\s+)?(\w+)|^type\s+(\w+)\s+(?:struct|interface)")
-            .unwrap()
+            .expect("static regex pattern is valid")
     });
-    let re_imp = RE_IMP.get_or_init(|| Regex::new(r#"^\s+"([^"]+)""#).unwrap());
+    let re_imp = RE_IMP.get_or_init(|| Regex::new(r#"^\s+"([^"]+)""#).expect("static regex pattern is valid"));
 
     let mut symbols = Vec::new();
     let mut imports = Vec::new();
@@ -794,8 +793,8 @@ fn build_embed_text(repo: &str, file_path: &str, meta: &FileMeta, content: &str)
     if !meta.symbols.is_empty() {
         header.push_str(&format!("SYMBOLS: {}\n", meta.symbols.join(", ")));
     }
-    if !meta.doc_comments.is_empty() {
-        header.push_str(&format!("DOCS: {}\n", meta.doc_comments.first().unwrap()));
+    if let Some(first_doc) = meta.doc_comments.first() {
+        header.push_str(&format!("DOCS: {}\n", first_doc));
     }
     if !meta.imports.is_empty() {
         header.push_str(&format!("DEPS: {}\n", meta.imports.join(", ")));

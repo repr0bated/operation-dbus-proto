@@ -1,0 +1,13 @@
+# Artix/s6 makepkg hook — auto-patch libsystemd → libelogind in AUR builds
+# Install: sudo cp 50-autopatch-systemd-to-elogind.hook /etc/makepkg.d/
+# Or:  mkdir -p ~/.config/makepkg.d && cp 50-autopatch-systemd-to-elogind.hook ~/.config/makepkg.d/
+
+[Trigger]
+Operation = Build
+Type = Package
+Target = *
+
+[Action]
+Description = Auto-patching libsystemd → libelogind for Artix/s6 compatibility
+When = PreBuild
+Exec = /usr/local/lib/makepkg-hooks/autopatch-systemd-to-elogind.sh

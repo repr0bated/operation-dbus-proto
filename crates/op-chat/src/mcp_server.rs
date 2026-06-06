@@ -20,6 +20,7 @@ use simd_json::{json, OwnedValue as Value};
 use std::sync::Arc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{transport::Server, Request, Response, Status};
+use tracing::info;
 
 // ============================================================================
 // LOCALLY DEFINED MCP TYPES
@@ -509,7 +510,9 @@ impl McpService for ChatMcpServer {
 // GRPC SERVER RUNNER
 // ============================================================================
 
+#[tracing::instrument(skip(actor))]
 pub async fn run_chat_mcp_server(addr: std::net::SocketAddr, actor: Arc<ChatActor>) -> Result<()> {
+    info!(%addr, "Starting chat MCP server");
     let service = ChatMcpServer::new(actor);
     Server::builder()
         .add_service(McpServiceServer::new(service))

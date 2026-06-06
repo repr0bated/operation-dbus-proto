@@ -8,8 +8,9 @@ use simd_json::json;
 use std::process::Stdio;
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
+use crate::security::get_security_validator;
 use crate::Tool;
 use op_core::{ToolDefinition, ToolRequest, ToolResult};
 
@@ -77,6 +78,41 @@ impl Tool for ShellExecuteTool {
             .and_then(|v| v.as_str())
             .unwrap_or("/tmp");
 
+        // Security validation
+        let validator = get_security_validator();
+        let max_timeout = validator.max_timeout().await;
+        let max_output = validator.max_output().await;
+        let timeout_secs = timeout_secs.min(max_timeout.as_secs());
+
+        // Validate working directory exists and is not a path traversal
+        let working_dir_canonical = std::fs::canonicalize(working_dir).unwrap_or_else(|_| std::path::PathBuf::from(working_dir));
+        if !working_dir_canonical.exists() {
+            return ToolResult::error(
+                request.id,
+                format!("Working directory does not exist: {}", working_dir),
+                start.elapsed().as_millis() as u64,
+            );
+        }
+
+        // Check command access (returns warning for native alternatives, error for restricted)
+        match validator.check_command(command).await {
+            Ok(Some(warning)) => {
+                warn!(
+                    command = %command,
+                    recommendation = %warning,
+                    "Consider using native protocol tools"
+                );
+            }
+            Ok(None) => {}
+            Err(e) => {
+                return ToolResult::error(
+                    request.id,
+                    format!("Security validation failed: {}", e),
+                    start.elapsed().as_millis() as u64,
+                );
+            }
+        }
+
         info!(
             "Executing shell command: {} (timeout: {}s, cwd: {})",
             command, timeout_secs, working_dir
@@ -85,7 +121,7 @@ impl Tool for ShellExecuteTool {
         // Execute the command
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(timeout_secs),
-            execute_command(command, working_dir),
+            execute_command(command, working_dir, max_output),
         )
         .await;
 
@@ -132,6 +168,7 @@ impl Tool for ShellExecuteTool {
 async fn execute_command(
     command: &str,
     working_dir: &str,
+    max_output: usize,
 ) -> Result<(String, String, i32), String> {
     let mut child = Command::new("bash")
         .arg("-c")
@@ -139,6 +176,7 @@ async fn execute_command(
         .current_dir(working_dir)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .stdin(Stdio::null())
         .spawn()
         .map_err(|e| format!("Failed to spawn command: {}", e))?;
 
@@ -167,7 +205,6 @@ async fn execute_command(
     let exit_code = status.code().unwrap_or(-1);
 
     // Truncate very long output
-    let max_output = 50000; // 50KB max per stream
     if stdout.len() > max_output {
         stdout.truncate(max_output);
         stdout.push_str("\n... (output truncated)");

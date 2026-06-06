@@ -154,9 +154,7 @@ impl OvsBridgePlugin {
         let Some(ref info_str) = info else {
             return (String::new(), None, false, false);
         };
-        let mut buf = info_str.clone();
-        // SAFETY: simd_json requires mutable access for in-place parsing
-        let v: std::result::Result<Value, _> = unsafe { simd_json::from_str(&mut buf) };
+        let v: std::result::Result<Value, _> = serde_json::from_str(info_str);
         match v {
             Ok(row) => (
                 row.get("datapath_type")

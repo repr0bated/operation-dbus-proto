@@ -14,6 +14,7 @@ use op_state_store::PluginSchema;
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
+use zbus::{Connection, Proxy};
 
 const S6_SV_PATH: &str = "/run/service/op-mcp-compact";
 const ENV_DIR: &str = "/etc/s6/sv/op-mcp-compact/env";
@@ -121,18 +122,36 @@ impl CompactMcpPlugin {
     }
 
     async fn reload_service() -> Result<()> {
-        let out = tokio::process::Command::new("s6-svc")
-            .args(["-r", S6_SV_PATH])
-            .output()
+        // D-Bus only per AGENTS.md §4 - no subprocess fallbacks
+        Self::reload_service_dbus().await
+    }
+
+    async fn reload_service_dbus() -> Result<()> {
+        let conn = Connection::system()
             .await
-            .context("s6-svc -r op-mcp-compact")?;
-        if !out.status.success() {
-            tracing::warn!(
-                "s6-svc -r op-mcp-compact: {}",
-                String::from_utf8_lossy(&out.stderr)
-            );
+            .context("Failed to connect to system D-Bus")?;
+
+        let proxy = Proxy::new(
+            &conn,
+            "opdbus.v1",
+            "/opdbus/v1/s6/systemctl",
+            "opdbus.v1.S6.Systemctl",
+        )
+        .await
+        .context("Failed to create s6-systemctl D-Bus proxy")?;
+
+        let (success, message): (bool, String) =
+            proxy
+                .call("reload", &("op-mcp-compact",))
+                .await
+                .context("Failed to call reload on s6-systemctl")?;
+
+        if success {
+            tracing::info!("Reloaded op-mcp-compact via D-Bus: {}", message);
+            Ok(())
+        } else {
+            anyhow::bail!("s6-systemctl reload failed: {}", message)
         }
-        Ok(())
     }
 }
 

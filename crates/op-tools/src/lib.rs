@@ -50,8 +50,30 @@ pub use security::{
 pub use tool::{BoxedTool, Tool};
 pub use validation::{InputValidator, ValidatedInput, ValidationConfig};
 
-/// Register all built-in tools
-pub async fn register_builtin_tools(registry: &ToolRegistry) -> anyhow::Result<()> {
+/// Public error type for tool registry operations.
+///
+/// Uses `thiserror` per AGENTS.md coding standards.  This keeps `anyhow`
+/// out of the public API while preserving ergonomic `?` propagation
+/// inside the crate.
+#[derive(Debug, thiserror::Error)]
+pub enum ToolsError {
+    #[error("tool registration failed: {0}")]
+    Registration(String),
+}
+
+impl From<anyhow::Error> for ToolsError {
+    fn from(e: anyhow::Error) -> Self {
+        Self::Registration(e.to_string())
+    }
+}
+
+/// Register all built-in tools.
+///
+/// Returns a strongly-typed [`ToolsError`] rather than leaking `anyhow`
+/// into the public API surface.
+pub async fn register_builtin_tools(
+    registry: &ToolRegistry,
+) -> std::result::Result<(), ToolsError> {
     builtin::register_all_builtin_tools(registry).await?;
     builtin::register_response_tools(registry).await?;
     if let Err(err) = mcptools::register_mcp_tools(registry).await {

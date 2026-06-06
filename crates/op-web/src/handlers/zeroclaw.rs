@@ -233,7 +233,7 @@ fn json_error_response(status: StatusCode, message: &str) -> Response {
             Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
                 .body(Body::empty())
-                .unwrap()
+                .expect("empty body should always succeed")
         })
 }
 

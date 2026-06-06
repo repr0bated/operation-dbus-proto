@@ -16,6 +16,7 @@ use std::fs::{self, File};
 use std::io::Write;
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
+use zbus::{Connection, Proxy};
 
 pub const SHM_SLED_PATH: &str = "/dev/shm/plugin_schema.dat";
 pub const SHM_XRAY_CONFIG: &str = "/dev/shm/xray-ghostbridge.json";
@@ -776,14 +777,52 @@ pub fn run_schema_shuttle() -> Result<(), Box<dyn std::error::Error>> {
         SHM_XRAY_CONFIG
     );
 
-    // 5. Spawn Xray — config lives entirely in /dev/shm
-    Command::new("xray")
-        .args(["run", "-c", SHM_XRAY_CONFIG])
-        .spawn()?;
+    // 5. Start Xray via D-Bus — config lives entirely in /dev/shm
+    // Per AGENTS.md §4: D-Bus first. D-Bus always. D-Bus only.
+    // Use block_on since run_schema_shuttle is synchronous
+    let rt = tokio::runtime::Runtime::new()?;
+    match rt.block_on(start_xray_via_dbus(SHM_XRAY_CONFIG)) {
+        Ok(()) => tracing::info!("Xray started via D-Bus opdbus.v1"),
+        Err(e) => {
+            tracing::error!(
+                "Failed to start Xray via D-Bus: {}. Ensure op-xray-daemon is running.",
+                e
+            );
+            return Err(e.into());
+        }
+    }
 
     // 6. Watch for new WireGuard handshakes and keep the sled current
     let iface = env::var("WG_INTERFACE").unwrap_or_else(|_| "wg0".to_string());
     std::thread::spawn(move || watch_wireguard_handshakes(&iface));
 
     Ok(())
+}
+
+/// Start Xray via D-Bus service (opdbus.v1.Xray)
+///
+/// Per AGENTS.md §4: All control plane operations must go through D-Bus.
+/// The op-xray-daemon manages the xray process lifecycle.
+async fn start_xray_via_dbus(config_path: &str) -> anyhow::Result<()> {
+    let conn = Connection::system()
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to connect to system D-Bus: {}", e))?;
+
+    let proxy = Proxy::new(&conn, "opdbus.v1", "/opdbus/v1/xray", "opdbus.v1.Xray")
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to create Xray D-Bus proxy: {}", e))?;
+
+    let (success, message): (bool, String) = proxy
+        .call_method("start", &(config_path,))
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to call Xray start via D-Bus: {}", e))?
+        .body()
+        .deserialize()
+        .map_err(|e| anyhow::anyhow!("Failed to deserialize Xray response: {}", e))?;
+
+    if success {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!("Xray D-Bus start failed: {}", message))
+    }
 }

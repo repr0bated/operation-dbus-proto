@@ -16,7 +16,12 @@ pub use gcloud::{
     introspect_gcloud, GCloudArg, GCloudCommand, GCloudFlag, GCloudParser, GCloudSchema,
     GCloudStats,
 };
-pub use introspective_gadget::*;
+pub use introspective_gadget::{
+    BinaryPattern, ContainerInspection, ContainerInspectionWithKnowledge, ContainerMount,
+    ContainerProcess, InspectionInput, InspectionResult, InspectionSource, IntrospectiveGadget,
+    KnowledgeBase, LegacyInspection, ObjectSchema, ParsedObject, SchemaDefinition, SchemaProperty,
+    XmlElementInfo, XmlInspection,
+};
 
 use op_introspection::IntrospectionService;
 use std::sync::Arc;

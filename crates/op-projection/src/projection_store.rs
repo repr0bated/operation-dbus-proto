@@ -44,10 +44,7 @@ impl ProjectionStore {
                 is_quarantined: old.state == ProjectionState::Quarantined,
             };
 
-            self.history
-                .entry(id.clone())
-                .or_default()
-                .push(historical);
+            self.history.entry(id.clone()).or_default().push(historical);
         }
 
         self.projections.insert(id, projection);

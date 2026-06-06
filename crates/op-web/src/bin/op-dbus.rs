@@ -29,7 +29,7 @@ async fn main() -> anyhow::Result<()> {
         std::env::var("OP_DBUS_GRPC_LISTEN").unwrap_or_else(|_| "10.200.0.2:50051".to_string());
     let addr: std::net::SocketAddr = listen
         .parse()
-        .unwrap_or_else(|_| "10.200.0.2:50051".parse().unwrap());
+        .unwrap_or_else(|_| "10.200.0.2:50051".parse().expect("default bind address should parse"));
 
     let chain = Arc::new(RwLock::new(EventChain::new(ChainConfig::default())));
     let ovsdb = Arc::new(OvsdbClient::new());

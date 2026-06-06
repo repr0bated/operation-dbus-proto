@@ -1,7 +1,8 @@
 //! Network Engineer Agent
 
 use async_trait::async_trait;
-use std::process::Command;
+use std::fs;
+use std::net::ToSocketAddrs;
 
 use crate::agents::base::{validation, AgentTask, AgentTrait, TaskResult};
 use crate::security::SecurityProfile;
@@ -23,53 +24,85 @@ impl NetworkEngineerAgent {
     }
 
     fn show_interfaces(&self) -> Result<String, String> {
-        let mut cmd = Command::new("ip");
-        cmd.arg("addr").arg("show");
+        let mut output = String::new();
 
-        let output = cmd.output().map_err(|e| format!("Failed: {}", e))?;
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
+        if let Ok(dev) = fs::read_to_string("/proc/net/dev") {
+            output.push_str("--- /proc/net/dev ---\n");
+            output.push_str(&dev);
+        }
 
-        Ok(format!("Network interfaces:\n{}\n{}", stdout, stderr))
+        if let Ok(if_inet6) = fs::read_to_string("/proc/net/if_inet6") {
+            output.push_str("\n--- /proc/net/if_inet6 ---\n");
+            output.push_str(&if_inet6);
+        }
+
+        if output.is_empty() {
+            return Err("Failed to read network interface data from /proc/net".to_string());
+        }
+
+        Ok(format!("Network interfaces:\n{}", output))
     }
 
     fn show_routes(&self) -> Result<String, String> {
-        let mut cmd = Command::new("ip");
-        cmd.arg("route").arg("show");
+        let mut output = String::new();
 
-        let output = cmd.output().map_err(|e| format!("Failed: {}", e))?;
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
+        if let Ok(route) = fs::read_to_string("/proc/net/route") {
+            output.push_str("--- /proc/net/route ---\n");
+            output.push_str(&route);
+        }
 
-        Ok(format!("Routes:\n{}\n{}", stdout, stderr))
+        if let Ok(ipv6_route) = fs::read_to_string("/proc/net/ipv6_route") {
+            output.push_str("\n--- /proc/net/ipv6_route ---\n");
+            output.push_str(&ipv6_route);
+        }
+
+        if output.is_empty() {
+            return Err("Failed to read route data from /proc/net".to_string());
+        }
+
+        Ok(format!("Routes:\n{}", output))
     }
 
     fn show_connections(&self) -> Result<String, String> {
-        let mut cmd = Command::new("ss");
-        cmd.arg("-tuln");
+        let mut output = String::new();
+        let files = [
+            ("/proc/net/tcp", "TCP"),
+            ("/proc/net/tcp6", "TCP6"),
+            ("/proc/net/udp", "UDP"),
+            ("/proc/net/udp6", "UDP6"),
+        ];
 
-        let output = cmd.output().map_err(|e| format!("Failed: {}", e))?;
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
+        for (path, label) in &files {
+            if let Ok(content) = fs::read_to_string(path) {
+                output.push_str(&format!("--- {} ({}) ---\n{}\n", label, path, content));
+            }
+        }
 
-        Ok(format!("Active connections:\n{}\n{}", stdout, stderr))
+        if output.is_empty() {
+            return Err("Failed to read socket data from /proc/net".to_string());
+        }
+
+        Ok(format!("Active connections:\n{}", output))
     }
 
     fn dns_lookup(&self, host: Option<&str>) -> Result<String, String> {
-        let mut cmd = Command::new("dig");
-
         if let Some(h) = host {
             validation::validate_args(h)?;
-            cmd.arg(h);
+            let addr = format!("{}:0", h);
+            let resolved: Vec<String> = addr
+                .to_socket_addrs()
+                .map_err(|e| format!("DNS resolution failed: {}", e))?
+                .map(|a| a.ip().to_string())
+                .collect();
+
+            if resolved.is_empty() {
+                return Err(format!("No addresses found for {}", h));
+            }
+
+            Ok(format!("DNS lookup for {}:\n{}", h, resolved.join("\n")))
         } else {
-            return Err("Host required".to_string());
+            Err("Host required".to_string())
         }
-
-        let output = cmd.output().map_err(|e| format!("Failed: {}", e))?;
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-
-        Ok(format!("DNS lookup:\n{}\n{}", stdout, stderr))
     }
 }
 

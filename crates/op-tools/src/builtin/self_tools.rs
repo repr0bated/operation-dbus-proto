@@ -20,6 +20,7 @@ use std::sync::Arc;
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use tracing::{info, warn};
+use zbus::Connection;
 
 use crate::tool::{SecurityLevel, Tool};
 
@@ -900,20 +901,22 @@ impl Tool for SelfDeployTool {
         }
         
         info!("Deploying self: restarting {}", service);
-        
-        let output = Command::new("systemctl")
-            .args(["restart", service])
-            .output()
-            .await?;
-        
-        let success = output.status.success();
-        
+
+        // Restart via systemd D-Bus (not systemctl)
+        let restart_result = restart_unit_dbus(service).await;
+
+        let success = restart_result.is_ok();
+
         Ok(json!({
             "success": success,
             "service": service,
             "built": build_first,
-            "message": if success { "Deployed successfully" } else { "Deploy may have failed" },
-            "stderr": String::from_utf8_lossy(&output.stderr).to_string()
+            "message": if success {
+                "Deployed successfully"
+            } else {
+                format!("Deploy may have failed: {}", restart_result.unwrap_err())
+            },
+            "protocol": "D-Bus"
         }))
     }
 }
@@ -921,6 +924,25 @@ impl Tool for SelfDeployTool {
 // =============================================================================
 // TOOL REGISTRATION
 // =============================================================================
+
+/// Restart a systemd unit via D-Bus (not systemctl)
+async fn restart_unit_dbus(unit: &str) -> Result<String> {
+    let connection = Connection::system().await?;
+
+    let proxy = zbus::Proxy::new(
+        &connection,
+        "org.freedesktop.systemd1",
+        "/org/freedesktop/systemd1",
+        "org.freedesktop.systemd1.Manager",
+    )
+    .await?;
+
+    let job_path: zbus::zvariant::OwnedObjectPath = proxy
+        .call("RestartUnit", &(unit, "replace"))
+        .await?;
+
+    Ok(job_path.to_string())
+}
 
 /// Create all self-repository tools
 pub fn create_self_tools() -> Vec<Arc<dyn Tool>> {

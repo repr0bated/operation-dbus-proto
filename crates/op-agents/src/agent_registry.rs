@@ -234,8 +234,7 @@ impl AgentRegistry {
             .await
             .context("Failed to read agent specifications file")?;
 
-        let mut content = content;
-        let specs: Vec<AgentSpec> = unsafe { simd_json::from_str(&mut content) }
+        let specs: Vec<AgentSpec> = serde_json::from_str(&content)
             .context("Failed to parse agent specifications")?;
 
         for spec in specs {

@@ -3,6 +3,10 @@
 //! Builds a list of agent descriptors with operations for MCP/tool exposure.
 
 use crate::agents::{
+    compliance::{
+        ComplianceTrestleAgent, FedRampAgent, GdprCounselAgent, OpenControlAgent,
+        OscalAuditorAgent, PolicyEnforcerAgent, SchemaAsCodeAgent, StigAuditorAgent,
+    },
     aiml::{
         AIEngineerAgent, DataEngineerAgent, DataScientistAgent, MLEngineerAgent,
         MLOpsEngineerAgent, PromptEngineerAgent,
@@ -150,6 +154,15 @@ pub fn builtin_agent_descriptors() -> Vec<AgentDescriptor> {
         Box::new(MLEngineerAgent::new(agent_id.clone())),
         Box::new(MLOpsEngineerAgent::new(agent_id.clone())),
         Box::new(PromptEngineerAgent::new(agent_id.clone())),
+        // Compliance agents
+        Box::new(OscalAuditorAgent::new(agent_id.clone())),
+        Box::new(ComplianceTrestleAgent::new(agent_id.clone())),
+        Box::new(FedRampAgent::new(agent_id.clone())),
+        Box::new(StigAuditorAgent::new(agent_id.clone())),
+        Box::new(PolicyEnforcerAgent::new(agent_id.clone())),
+        Box::new(SchemaAsCodeAgent::new(agent_id.clone())),
+        Box::new(GdprCounselAgent::new(agent_id.clone())),
+        Box::new(OpenControlAgent::new(agent_id.clone())),
         // Web frameworks
         Box::new(DjangoProAgent::new(agent_id.clone())),
         Box::new(FastAPIProAgent::new(agent_id.clone())),

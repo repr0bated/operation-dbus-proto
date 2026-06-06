@@ -400,6 +400,8 @@ struct VoyageEmbeddingRequest<'a> {
 fn read_identity_sled(path: &Path) -> Result<IdentitySled> {
     let file = File::open(path)
         .with_context(|| format!("failed to open SchemaEngine sled at {}", path.display()))?;
+    // SAFETY: The file is opened read-only and we only read a validated-length region.
+    // The mmap is dropped before this function returns, so no dangling pointers escape.
     let mmap = unsafe { MmapOptions::new().map(&file) }
         .with_context(|| format!("failed to mmap SchemaEngine sled at {}", path.display()))?;
 
@@ -411,6 +413,8 @@ fn read_identity_sled(path: &Path) -> Result<IdentitySled> {
     );
 
     let sled_ptr = mmap.as_ptr().cast::<IdentitySled>();
+    // SAFETY: We validated mmap.len() >= size_of::<IdentitySled>() above, so the pointer is
+    // within the mapped region. read_unaligned is safe because we only copy the value out.
     let sled = unsafe { std::ptr::read_unaligned(sled_ptr) };
 
     Ok(sled)
