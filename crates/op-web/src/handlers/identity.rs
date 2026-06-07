@@ -50,7 +50,9 @@ pub async fn identity_sled_handler(Extension(_state): Extension<Arc<AppState>>) 
             Response::builder()
                 .status(StatusCode::OK)
                 .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(serde_json::to_vec(&body).expect("identity body serialization should not fail")))
+                .body(Body::from(
+                    serde_json::to_vec(&body).expect("identity body serialization should not fail"),
+                ))
                 .expect("response with valid body should not fail")
         }
         Err(e) => {

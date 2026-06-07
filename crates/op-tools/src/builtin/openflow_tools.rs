@@ -7,7 +7,7 @@
 //! - openflow_add_flow: Add a flow rule via OVSDB flow table
 //! - openflow_delete_flows: Delete flows  
 //! - openflow_list_flows: List flows on a bridge
-//! - openflow_create_socket_port: Create a dynamic container socket port
+//! - openflow_create_privacy_socket: Create a privacy chain socket (gbr_wg/gbr_xray/gbr_warp)
 
 use crate::tool::Tool;
 use crate::ToolRegistry;
@@ -27,7 +27,7 @@ impl Tool for OpenFlowAddFlowTool {
 
     fn description(&self) -> &str {
         "Add an OpenFlow rule to an OVS bridge. Creates flow entries for privacy tunnel \
-         (priv_wg → priv_warp → priv_xray) or dynamic container socket routing (sock_*)."
+         (gbr_wg → gbr_warp → gbr_xray) or shared ingress routing."
     }
 
     fn input_schema(&self) -> Value {
@@ -45,11 +45,11 @@ impl Tool for OpenFlowAddFlowTool {
                 },
                 "in_port": {
                     "type": "string",
-                    "description": "Input port name (e.g., 'priv_wg', 'sock_vectordb')"
+                    "description": "Input port name (e.g., 'gbr_wg', 'ovsbr0-sock')"
                 },
                 "out_port": {
                     "type": "string",
-                    "description": "Output port name (e.g., 'priv_warp', 'priv_xray')"
+                    "description": "Output port name (e.g., 'gbr_warp', 'gbr_xray')"
                 },
                 "dl_type": {
                     "type": "string",
@@ -83,7 +83,7 @@ impl Tool for OpenFlowAddFlowTool {
         }
 
         // Use OVSDB to add flow via Flow table
-        let ovsdb_client = op_network::ovsdb::OvsdbClient::new();
+        let ovsdb_client = op_network::rovs_proxy::OvsdbDbusClient::new();
         
         // Build flow rule string (ovs-ofctl format for reference)
         let flow_rule = format!(
@@ -240,92 +240,7 @@ impl Tool for OpenFlowListFlowsTool {
     }
 }
 
-/// Create Socket Port Tool - Creates dynamic container socket with OpenFlow rules
-pub struct OpenFlowCreateSocketPortTool;
-
-#[async_trait]
-impl Tool for OpenFlowCreateSocketPortTool {
-    fn name(&self) -> &str {
-        "openflow_create_socket_port"
-    }
-
-    fn description(&self) -> &str {
-        "Create a dynamic container socket port (sock_{container_name}) on the OVS bridge. \
-         This creates an OVS internal port for containerless networking."
-    }
-
-    fn input_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "bridge": {
-                    "type": "string",
-                    "description": "OVS bridge name",
-                    "default": "ovs-br0"
-                },
-                "container_name": {
-                    "type": "string",
-                    "description": "Container name (will create port sock_{name})"
-                }
-            },
-            "required": ["container_name"]
-        })
-    }
-
-    fn namespace(&self) -> &str {
-        "openflow"
-    }
-
-    async fn execute(&self, input: Value) -> Result<Value> {
-        let bridge = input["bridge"].as_str().unwrap_or("ovs-br0");
-        let container_name = match input["container_name"].as_str() {
-            Some(name) if !name.is_empty() => name,
-            _ => return Ok(json!({
-                "success": false,
-                "error": "container_name is required"
-            }))
-        };
-
-        let port_name = format!("sock_{}", container_name);
-        
-        // Create OVS internal port via OVSDB
-        let ovsdb_client = op_network::ovsdb::OvsdbClient::new();
-        
-        // Add port to bridge
-        if let Err(e) = ovsdb_client.add_port(bridge, &port_name).await {
-            return Ok(json!({
-                "success": false,
-                "error": format!("Failed to create port: {}", e)
-            }));
-        }
-
-        // Set port type to internal
-        if let Err(e) = ovsdb_client.set_interface_type(&port_name, "internal").await {
-            return Ok(json!({
-                "success": false,
-                "error": format!("Failed to set port type: {}", e),
-                "port_created": true,
-                "port_name": port_name
-            }));
-        }
-
-        Ok(json!({
-            "success": true,
-            "bridge": bridge,
-            "port_name": port_name,
-            "port_type": "internal",
-            "container_name": container_name,
-            "message": format!("Created socket port '{}' on bridge '{}'", port_name, bridge),
-            "next_steps": [
-                "Use openflow_add_flow to install routing rules",
-                "Assign IP if needed via rtnetlink",
-                "Configure application to use this socket"
-            ]
-        }))
-    }
-}
-
-/// Create Privacy Socket Tool - Creates priv_wg or priv_xray socket
+/// Create Privacy Socket Tool - Creates gbr_wg, gbr_xray, or gbr_warp socket
 pub struct OpenFlowCreatePrivacySocketTool;
 
 #[async_trait]
@@ -335,8 +250,8 @@ impl Tool for OpenFlowCreatePrivacySocketTool {
     }
 
     fn description(&self) -> &str {
-        "Create a privacy socket port (priv_wg or priv_xray) for the privacy tunnel chain. \
-         These are predefined sockets for WireGuard gateway and XRay client."
+        "Create a privacy socket port (gbr_wg, gbr_xray, or gbr_warp) for the privacy tunnel chain. \
+         These are predefined sockets for WireGuard gateway, Warp middlebox, and XRay client."
     }
 
     fn input_schema(&self) -> Value {
@@ -350,7 +265,7 @@ impl Tool for OpenFlowCreatePrivacySocketTool {
                 },
                 "socket_type": {
                     "type": "string",
-                    "enum": ["priv_wg", "priv_xray"],
+                    "enum": ["gbr_wg", "gbr_xray", "gbr_warp"],
                     "description": "Privacy socket type"
                 }
             },
@@ -365,16 +280,17 @@ impl Tool for OpenFlowCreatePrivacySocketTool {
     async fn execute(&self, input: Value) -> Result<Value> {
         let bridge = input["bridge"].as_str().unwrap_or("ovs-br0");
         let socket_type = match input["socket_type"].as_str() {
-            Some("priv_wg") => "priv_wg",
-            Some("priv_xray") => "priv_xray",
+            Some("gbr_wg") => "gbr_wg",
+            Some("gbr_xray") => "gbr_xray",
+            Some("gbr_warp") => "gbr_warp",
             _ => return Ok(json!({
                 "success": false,
-                "error": "socket_type must be 'priv_wg' or 'priv_xray'"
+                "error": "socket_type must be 'gbr_wg', 'gbr_xray', or 'gbr_warp'"
             }))
         };
 
         // Create OVS internal port via OVSDB
-        let ovsdb_client = op_network::ovsdb::OvsdbClient::new();
+        let ovsdb_client = op_network::rovs_proxy::OvsdbDbusClient::new();
         
         // Add port to bridge
         if let Err(e) = ovsdb_client.add_port(bridge, socket_type).await {
@@ -393,8 +309,9 @@ impl Tool for OpenFlowCreatePrivacySocketTool {
         }
 
         let description = match socket_type {
-            "priv_wg" => "WireGuard gateway entry point",
-            "priv_xray" => "XRay client exit to VPS",
+            "gbr_wg" => "WireGuard gateway entry point (netmaker-managed peer)",
+            "gbr_xray" => "XRay client exit to VPS",
+            "gbr_warp" => "Warp middlebox (Cloudflare WARP)",
             _ => "Privacy socket"
         };
 
@@ -405,7 +322,7 @@ impl Tool for OpenFlowCreatePrivacySocketTool {
             "port_type": "internal",
             "description": description,
             "message": format!("Created privacy socket '{}' on bridge '{}'", socket_type, bridge),
-            "privacy_chain": "priv_wg(CT100) → priv_warp(CT101) → priv_xray(CT102) → VPS → Internet"
+            "privacy_chain": "gbr_wg(CT100) → gbr_warp(CT101) → gbr_xray(CT102) → VPS → Internet"
         }))
     }
 }
@@ -415,9 +332,8 @@ pub async fn register_openflow_tools(registry: &ToolRegistry) -> Result<()> {
     registry.register_tool(Arc::new(OpenFlowAddFlowTool)).await?;
     registry.register_tool(Arc::new(OpenFlowDeleteFlowsTool)).await?;
     registry.register_tool(Arc::new(OpenFlowListFlowsTool)).await?;
-    registry.register_tool(Arc::new(OpenFlowCreateSocketPortTool)).await?;
     registry.register_tool(Arc::new(OpenFlowCreatePrivacySocketTool)).await?;
     
-    tracing::info!("Registered 5 OpenFlow tools");
+    tracing::info!("Registered 4 OpenFlow tools");
     Ok(())
 }

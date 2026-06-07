@@ -3,9 +3,14 @@
 //! This plugin owns the base privacy fabric as system-managed Incus containers and
 //! bridge/OpenFlow policy, separate from per-user privacy containers.
 
+use crate::state_plugins::incus::{IncusInstance, IncusPlugin, IncusState};
+use crate::state_plugins::openflow::{
+    BridgeFlowConfig, FlowAction, FlowEntry, OpenFlowConfig, OpenFlowPlugin,
+};
+use crate::state_plugins::privacy_routes::{PrivacyRoute, PrivacyRoutesPlugin, PrivacyRoutesState};
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
-use op_network::{openflow::OpenFlowClient, OvsdbClient};
+use op_network::{openflow::OpenFlowClient, rovs_proxy::OvsdbDbusClient};
 use op_state::{
     ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
 };
@@ -16,12 +21,6 @@ use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::path::Path;
 
-use crate::state_plugins::incus::{IncusInstance, IncusPlugin, IncusState};
-use crate::state_plugins::openflow::{
-    BridgeFlowConfig, FlowAction, FlowEntry, OpenFlowConfig, OpenFlowPlugin,
-};
-use crate::state_plugins::privacy_routes::{PrivacyRoute, PrivacyRoutesPlugin, PrivacyRoutesState};
-
 const DEFAULT_BRIDGE_NAME: &str = "ovsbr0";
 const DEFAULT_UPLINK_PORT: &str = "ens3";
 const DEFAULT_MGMT_PORT: &str = "ovsbr0-mgmt";
@@ -31,8 +30,8 @@ const DEFAULT_MGMT_CIDR: &str = "10.200.0.1/24";
 const DEFAULT_OPENFLOW_CONTROLLER: &str = "10.200.0.1:6653";
 const DEFAULT_DATAPATH_TYPE: &str = "system";
 const DEFAULT_FAIL_MODE: &str = "secure";
-const DEFAULT_WARP_INTERFACE: &str = "wgcf";
-const DEFAULT_WGCF_CONFIG: &str = "/etc/wireguard/wgcf.conf";
+const DEFAULT_WARP_INTERFACE: &str = "gbr_warp";
+const DEFAULT_WARP_NETCLIENT_NETWORK: &str = "gbr_warp";
 const SYSTEM_FLOW_COOKIE_PREFIX: u64 = 0x5053_0000_0000_0000;
 const SYSTEM_FLOW_COOKIE_MASK: u64 = 0xFFFF_0000_0000_0000;
 
@@ -89,7 +88,8 @@ pub struct ContainerResources {
 pub struct WarpConfig {
     pub enabled: bool,
     pub bridge_interface: String,
-    pub wgcf_config: String,
+    /// Netmaker network name for netclient-provisioned WARP tunnel (not a raw WG config file)
+    pub netclient_network: String,
     pub warp_license: Option<String>,
 }
 
@@ -210,7 +210,7 @@ impl Default for PrivacyRouterConfig {
             wireguard: WireGuardConfig {
                 enabled: true,
                 container_id: 100,
-                socket_port: "priv_wg".to_string(),
+                socket_port: "gbr_wg".to_string(),
                 zero_config: true,
                 listen_port: 51820,
                 resources: default_resources(),
@@ -218,13 +218,13 @@ impl Default for PrivacyRouterConfig {
             warp: WarpConfig {
                 enabled: true,
                 bridge_interface: DEFAULT_WARP_INTERFACE.to_string(),
-                wgcf_config: DEFAULT_WGCF_CONFIG.to_string(),
+                netclient_network: DEFAULT_WARP_NETCLIENT_NETWORK.to_string(),
                 warp_license: None,
             },
             xray: XRayConfig {
                 enabled: true,
                 container_id: 101,
-                socket_port: "priv_xray".to_string(),
+                socket_port: "gbr_xray".to_string(),
                 socks_port: 1080,
                 vps_address: "vps.example.com".to_string(),
                 vps_port: 443,
@@ -238,11 +238,11 @@ impl Default for PrivacyRouterConfig {
                 enabled: true,
                 privacy_sockets: vec![
                     PrivacySocketPort {
-                        name: "priv_wg".to_string(),
+                        name: "gbr_wg".to_string(),
                         container_id: Some(100),
                     },
                     PrivacySocketPort {
-                        name: "priv_xray".to_string(),
+                        name: "gbr_xray".to_string(),
                         container_id: Some(101),
                     },
                 ],
@@ -286,21 +286,21 @@ fn default_privacy_flows() -> Vec<PrivacyFlowRule> {
     vec![
         PrivacyFlowRule {
             priority: 100,
-            match_fields: HashMap::from([("in_port".to_string(), "priv_wg".to_string())]),
-            actions: vec!["output:wgcf".to_string()],
-            description: Some("priv_wg -> wgcf".to_string()),
+            match_fields: HashMap::from([("in_port".to_string(), "gbr_wg".to_string())]),
+            actions: vec!["output:gbr_warp".to_string()],
+            description: Some("gbr_wg -> gbr_warp".to_string()),
         },
         PrivacyFlowRule {
             priority: 100,
-            match_fields: HashMap::from([("in_port".to_string(), "wgcf".to_string())]),
-            actions: vec!["output:priv_xray".to_string()],
-            description: Some("wgcf -> priv_xray".to_string()),
+            match_fields: HashMap::from([("in_port".to_string(), "gbr_warp".to_string())]),
+            actions: vec!["output:gbr_xray".to_string()],
+            description: Some("gbr_warp -> gbr_xray".to_string()),
         },
         PrivacyFlowRule {
             priority: 100,
-            match_fields: HashMap::from([("in_port".to_string(), "priv_xray".to_string())]),
-            actions: vec!["output:wgcf".to_string()],
-            description: Some("priv_xray -> wgcf".to_string()),
+            match_fields: HashMap::from([("in_port".to_string(), "gbr_xray".to_string())]),
+            actions: vec!["output:gbr_warp".to_string()],
+            description: Some("gbr_xray -> gbr_warp".to_string()),
         },
         PrivacyFlowRule {
             priority: 200,
@@ -340,7 +340,7 @@ impl PrivacyRouterPlugin {
     }
 
     async fn query_bridge_ports(&self, bridge_name: &str) -> Result<Vec<String>> {
-        OvsdbClient::new()
+        OvsdbDbusClient::new()
             .list_bridge_ports(bridge_name)
             .await
             .with_context(|| format!("list ports on {}", bridge_name))
@@ -470,7 +470,7 @@ impl PrivacyRouterPlugin {
             return Ok(());
         }
 
-        let ovs = op_network::OvsdbClient::new();
+        let ovs = op_network::rovs_proxy::OvsdbDbusClient::new();
         let ports = ovs
             .list_bridge_ports(&config.bridge_name)
             .await
@@ -490,15 +490,16 @@ impl PrivacyRouterPlugin {
             .iter()
             .any(|iface| iface.name == config.warp.bridge_interface)
         {
-            if !std::path::Path::new(&config.warp.wgcf_config).exists() {
-                bail!(
-                    "warp interface '{}' missing and wgcf config '{}' not found",
-                    config.warp.bridge_interface,
-                    config.warp.wgcf_config
-                );
-            }
-            self.ensure_wg_quick_interface(&config.warp.bridge_interface, &config.warp.wgcf_config)
-                .await?;
+            // D-Bus first: do NOT spawn wg-quick/ip subprocesses.
+            // The WARP interface must be provisioned by netclient
+            // (Netmaker mesh) before the privacy router can attach it
+            // to the OVS bridge.
+            bail!(
+                "WARP interface '{}' not found on host. Provision it via netclient \
+                 (e.g. netclient join -t <token> for network '{}') before enabling privacy router.",
+                config.warp.bridge_interface,
+                config.warp.netclient_network
+            );
         }
 
         ovs.add_port(&config.bridge_name, &config.warp.bridge_interface)
@@ -517,7 +518,7 @@ impl PrivacyRouterPlugin {
 
     async fn ensure_host_bridge_topology(&self, config: &PrivacyRouterConfig) -> Result<()> {
         let host = PrivacyHostBootstrapConfig::from_env(&config.bridge_name);
-        let ovs = OvsdbClient::new();
+        let ovs = OvsdbDbusClient::new();
 
         ovs.list_dbs()
             .await
@@ -668,81 +669,6 @@ impl PrivacyRouterPlugin {
             log::warn!(
                 "Invalid PRIVACY_OPENFLOW_CONTROLLER '{}'; skipping OpenFlow probe",
                 host.openflow_controller
-            );
-        }
-
-        Ok(())
-    }
-
-    async fn ensure_wg_quick_interface(&self, name: &str, config_path: &str) -> Result<()> {
-        self.validate_wg_quick_config(name, config_path)?;
-
-        // Check if WireGuard interface already exists via rtnetlink (AGENTS.md §4: no subprocess bypasses)
-        let interfaces = op_network::rtnetlink::list_interfaces()
-            .await
-            .context("list interfaces for wg-quick check")?;
-        let exists = interfaces.iter().any(|iface| iface.name == name);
-
-        if !exists {
-            anyhow::bail!(
-                "WireGuard interface '{}' does not exist. \"wg-quick up {}\" must be run externally before privacy router provisioning.",
-                name,
-                config_path
-            );
-        }
-
-        // Bring interface up via rtnetlink instead of `ip link set up`
-        op_network::rtnetlink::link_up(name)
-            .await
-            .with_context(|| format!("bring wg interface '{}' up", name))?;
-
-        Ok(())
-    }
-
-    fn validate_wg_quick_config(&self, interface_name: &str, config_path: &str) -> Result<()> {
-        let config = std::fs::read_to_string(config_path)
-            .with_context(|| format!("read wg-quick config '{}'", config_path))?;
-        let normalized = config
-            .lines()
-            .map(|line| line.trim())
-            .filter(|line| !line.is_empty() && !line.starts_with('#'))
-            .collect::<Vec<_>>();
-
-        if !normalized
-            .iter()
-            .any(|line| line.eq_ignore_ascii_case("[Interface]"))
-        {
-            bail!(
-                "wg-quick config '{}' for '{}' is missing [Interface]",
-                config_path,
-                interface_name
-            );
-        }
-        if !normalized.iter().any(|line| {
-            line.split_once('=')
-                .map(|(key, value)| {
-                    key.trim().eq_ignore_ascii_case("PrivateKey") && !value.trim().is_empty()
-                })
-                .unwrap_or(false)
-        }) {
-            bail!(
-                "wg-quick config '{}' for '{}' is missing PrivateKey",
-                config_path,
-                interface_name
-            );
-        }
-        if !normalized.iter().any(|line| {
-            line.split_once('=')
-                .map(|(key, value)| {
-                    key.trim().eq_ignore_ascii_case("Table")
-                        && value.trim().eq_ignore_ascii_case("off")
-                })
-                .unwrap_or(false)
-        }) {
-            bail!(
-                "wg-quick config '{}' for '{}' must set 'Table = off' before bridging to OVS",
-                config_path,
-                interface_name
             );
         }
 
@@ -912,9 +838,9 @@ impl PrivacyRouterPlugin {
         for (index, rule) in config.openflow.privacy_flows.iter().enumerate() {
             let mut actions = Vec::new();
             for action_str in &rule.actions {
-                if let Some(port) = action_str.strip_prefix("output:") {
+                if action_str.starts_with("output:") {
                     actions.push(FlowAction::Output {
-                        port: port.to_string(),
+                        port: action_str.strip_prefix("output:").unwrap().to_string(),
                     });
                 } else if action_str == "arp_responder" {
                     // Default ARP responder for the bridge IP
@@ -942,7 +868,6 @@ impl PrivacyRouterPlugin {
 
         current.bridges.push(bridge);
         current.bridges.sort_by(|a, b| a.name.cmp(&b.name));
-        current.auto_discover_containers = false;
         current.enable_security_flows =
             current.enable_security_flows || config.openflow.enable_security_flows;
         current.obfuscation_level = current
@@ -1042,8 +967,6 @@ impl StatePlugin for PrivacyRouterPlugin {
         let openflow_state = self.query_openflow_state().await.unwrap_or(OpenFlowConfig {
             bridges: Vec::new(),
             controller_endpoint: None,
-            flow_policies: None,
-            auto_discover_containers: false,
             enable_security_flows: false,
             obfuscation_level: 0,
         });
@@ -1066,7 +989,7 @@ impl StatePlugin for PrivacyRouterPlugin {
                 json!({
                     "enabled": true,
                     "bridge_interface": self.config.warp.bridge_interface,
-                    "wgcf_config": self.config.warp.wgcf_config,
+                    "netclient_network": self.config.warp.netclient_network,
                 }),
             );
         }

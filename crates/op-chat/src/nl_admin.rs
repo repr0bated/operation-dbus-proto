@@ -187,9 +187,7 @@ impl ToolCallParser {
                     continue;
                 }
 
-                if let Ok(arguments) =
-                    serde_json::from_str::<Value>(args_str)
-                {
+                if let Ok(arguments) = serde_json::from_str::<Value>(args_str) {
                     calls.push(ExtractedToolCall {
                         name: tool_name,
                         arguments,
@@ -218,9 +216,7 @@ impl ToolCallParser {
                     continue;
                 }
 
-                if let Ok(arguments) =
-                    serde_json::from_str::<Value>(args_str)
-                {
+                if let Ok(arguments) = serde_json::from_str::<Value>(args_str) {
                     info!("Extracted tool call: {}", tool_name);
                     calls.push(ExtractedToolCall {
                         name: tool_name,
@@ -657,28 +653,25 @@ impl NLAdminOrchestrator {
     /// Clean tool_call tags from LLM response
     fn clean_llm_response(&self, response: &str) -> String {
         // Remove <tool_call>...</tool_call> tags (single line)
-        let re = Regex::new(r"<tool_call>.*?</tool_call>")
-            .expect("hardcoded regex pattern is valid");
+        let re =
+            Regex::new(r"<tool_call>.*?</tool_call>").expect("hardcoded regex pattern is valid");
         let cleaned = re.replace_all(response, "");
 
         // Remove ```tool...``` blocks (single line)
-        let re2 = Regex::new(r"```tool\s*\n.*?\n```")
-            .expect("hardcoded regex pattern is valid");
+        let re2 = Regex::new(r"```tool\s*\n.*?\n```").expect("hardcoded regex pattern is valid");
         let cleaned = re2.replace_all(&cleaned, "");
 
         // Remove ```tool_code...``` blocks (multiline)
-        let re3 = Regex::new(r"(?s)```tool_code\s*\n.*?\n```")
-            .expect("hardcoded regex pattern is valid");
+        let re3 =
+            Regex::new(r"(?s)```tool_code\s*\n.*?\n```").expect("hardcoded regex pattern is valid");
         let cleaned = re3.replace_all(&cleaned, "");
 
         // Remove tool call patterns like: ovs_list_bridges({})
-        let re4 = Regex::new(r"\w+\(\s*\{\s*\}\s*\)")
-            .expect("hardcoded regex pattern is valid");
+        let re4 = Regex::new(r"\w+\(\s*\{\s*\}\s*\)").expect("hardcoded regex pattern is valid");
         let cleaned = re4.replace_all(&cleaned, "");
 
         // Clean up multiple blank lines
-        let re5 = Regex::new(r"\n{3,}")
-            .expect("hardcoded regex pattern is valid");
+        let re5 = Regex::new(r"\n{3,}").expect("hardcoded regex pattern is valid");
         let cleaned = re5.replace_all(&cleaned, "\n\n");
 
         cleaned.trim().to_string()

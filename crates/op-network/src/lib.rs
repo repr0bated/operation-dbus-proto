@@ -13,29 +13,30 @@ pub mod openflow;
 pub mod ovs_capabilities;
 pub mod ovs_error;
 pub mod ovs_netlink;
-pub mod ovsdb;
 pub mod plugin;
 pub mod proxmox;
 pub mod rovs_proxy;
 pub mod rtnetlink;
 
+// OvsdbClient deleted per M3 - use OvsdbDbusClient from rovs_proxy instead
 pub use controller::OpenFlowController;
 pub use openflow::{FlowAction, FlowEntry, FlowMatch, OpenFlowClient, OpenFlowVersion};
 pub use ovs_capabilities::{counter_excuses, excuses_to_llm_context, OvsCapabilities};
 pub use ovs_error::OvsError;
 pub use ovs_netlink::{Datapath, KernelFlow, OvsNetlinkClient, Vport, VportConfig, VportType};
-pub use ovsdb::OvsdbClient;
 pub use plugin::{NetworkInterface, NetworkPlugin, OpenFlowConfig, OvsBridge, OvsdbConfig};
 pub use proxmox::{
     ContainerStatus, CreateContainerRequest, LxcContainer, ProxmoxClient, ProxmoxToken,
 };
+// Re-export D-Bus proxy client under its canonical name
+pub use rovs_proxy::OvsdbDbusClient;
 
 /// Prelude for convenient imports
 pub mod prelude {
     pub use super::openflow::{FlowAction, FlowEntry, FlowMatch, OpenFlowClient, OpenFlowVersion};
     pub use super::ovs_capabilities::OvsCapabilities;
     pub use super::ovs_netlink::{Datapath, OvsNetlinkClient, Vport};
-    pub use super::ovsdb::OvsdbClient;
+    // OvsdbClient migrated to D-Bus proxy - use rovs_proxy::OvsdbDbusClient
     pub use super::plugin::{NetworkInterface, NetworkPlugin, OvsBridge};
     pub use super::proxmox::{CreateContainerRequest, LxcContainer, ProxmoxClient};
 }

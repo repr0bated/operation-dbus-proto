@@ -17,8 +17,8 @@ use tokio::sync::RwLock;
 use tracing::{debug, error, info};
 
 use crate::nonnet::NonNetDb;
-use crate::ovsdb::OvsdbClient;
 use crate::protocol::{error_codes, JsonRpcRequest, JsonRpcResponse};
+use crate::OvsdbDbusClient;
 
 /// Handler function type
 pub type HandlerFn = Box<dyn Fn(JsonRpcRequest) -> JsonRpcResponse + Send + Sync>;
@@ -299,7 +299,7 @@ impl JsonRpcServerConnection {
 
     /// Handle OVSDB proxy request
     async fn handle_ovsdb_request(&self, request: JsonRpcRequest) -> JsonRpcResponse {
-        let client = OvsdbClient::new();
+        let client = OvsdbDbusClient::new();
 
         let result = match request.method.as_str() {
             "ovsdb.list_dbs" => match client.list_dbs().await {

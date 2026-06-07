@@ -107,11 +107,10 @@ pub async fn vpn_status_handler(Extension(_state): Extension<Arc<AppState>>) -> 
         });
     }
 
-    let (peer_count, total_rx, total_tx) =
-        read_wg_proc_stats(interface).unwrap_or_else(|| {
-            warn!("Failed to read /proc/net/wireguard for {}", interface);
-            (0, 0, 0)
-        });
+    let (peer_count, total_rx, total_tx) = read_wg_proc_stats(interface).unwrap_or_else(|| {
+        warn!("Failed to read /proc/net/wireguard for {}", interface);
+        (0, 0, 0)
+    });
 
     Json(VpnStatus {
         running: true,
@@ -138,14 +137,12 @@ pub async fn vpn_config_handler(Extension(_state): Extension<Arc<AppState>>) -> 
     let interface = "wg0";
 
     // Get server public key from sysfs
-    let server_public_key = std::fs::read_to_string(format!(
-        "/sys/class/net/{}/wireguard/public_key",
-        interface
-    ))
-    .ok()
-    .map(|s| s.trim().to_string())
-    .filter(|s| !s.is_empty())
-    .unwrap_or_else(|| "unknown".to_string());
+    let server_public_key =
+        std::fs::read_to_string(format!("/sys/class/net/{}/wireguard/public_key", interface))
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "unknown".to_string());
 
     // Get endpoint from environment or default
     let endpoint =

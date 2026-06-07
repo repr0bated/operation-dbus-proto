@@ -12,7 +12,7 @@ use tracing_subscriber::{EnvFilter, FmtSubscriber};
 use op_grpc_bridge::run_grpc_server;
 use op_grpc_bridge::SchemaEngine;
 use op_jsonrpc::nonnet::NonNetDb;
-use op_network::ovsdb::OvsdbClient;
+use op_network::rovs_proxy::OvsdbDbusClient;
 use op_state_store::{ChainConfig, EventChain};
 use tokio::sync::RwLock;
 
@@ -27,12 +27,14 @@ async fn main() -> anyhow::Result<()> {
 
     let listen =
         std::env::var("OP_DBUS_GRPC_LISTEN").unwrap_or_else(|_| "10.200.0.2:50051".to_string());
-    let addr: std::net::SocketAddr = listen
-        .parse()
-        .unwrap_or_else(|_| "10.200.0.2:50051".parse().expect("default bind address should parse"));
+    let addr: std::net::SocketAddr = listen.parse().unwrap_or_else(|_| {
+        "10.200.0.2:50051"
+            .parse()
+            .expect("default bind address should parse")
+    });
 
     let chain = Arc::new(RwLock::new(EventChain::new(ChainConfig::default())));
-    let ovsdb = Arc::new(OvsdbClient::new());
+    let ovsdb = Arc::new(OvsdbDbusClient::new());
     let nonnet = Arc::new(NonNetDb::new());
     let engine = Arc::new(SchemaEngine::new(chain, ovsdb, nonnet));
 

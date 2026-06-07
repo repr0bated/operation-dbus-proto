@@ -36,7 +36,9 @@ async fn is_maddy_running() -> bool {
 
     while let Ok(Some(entry)) = entries.next_entry().await {
         let name = entry.file_name();
-        let Some(pid_str) = name.to_str() else { continue };
+        let Some(pid_str) = name.to_str() else {
+            continue;
+        };
         if pid_str.parse::<u32>().is_err() {
             continue;
         }

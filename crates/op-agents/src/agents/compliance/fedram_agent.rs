@@ -26,9 +26,15 @@ impl FedRampAgent {
 
         let result = match op {
             "select_baseline" => {
-                let baseline = if input.contains("high") || input.contains("dod") || input.contains("classified") {
+                let baseline = if input.contains("high")
+                    || input.contains("dod")
+                    || input.contains("classified")
+                {
                     "High"
-                } else if input.contains("low") || input.contains("public") || input.contains("saas") {
+                } else if input.contains("low")
+                    || input.contains("public")
+                    || input.contains("saas")
+                {
                     "Low"
                 } else {
                     "Moderate"

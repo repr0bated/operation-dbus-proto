@@ -30,7 +30,10 @@ impl SchemaAsCodeAgent {
                     "OpenAPI 3.1"
                 } else if input.contains("proto") || input.contains("grpc") {
                     "Protocol Buffers 3"
-                } else if input.contains("asyncapi") || input.contains("event") || input.contains("kafka") {
+                } else if input.contains("asyncapi")
+                    || input.contains("event")
+                    || input.contains("kafka")
+                {
                     "AsyncAPI 3.0"
                 } else if input.contains("oscal") {
                     "OSCAL JSON Schema"

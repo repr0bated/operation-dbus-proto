@@ -342,8 +342,7 @@ pub fn parse_tool_calls(llm_response: &Value) -> Vec<ToolCall> {
                 call.get("function").and_then(|f| f.get("arguments")),
             ) {
                 let arguments = if let Some(args_str) = args.as_str() {
-                    serde_json::from_str(args_str)
-                        .unwrap_or_else(|_| Value::null())
+                    serde_json::from_str(args_str).unwrap_or_else(|_| Value::null())
                 } else {
                     args.clone()
                 };

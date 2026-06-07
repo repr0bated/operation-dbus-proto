@@ -31,10 +31,6 @@ pub fn create_agent(
     agent_id: String,
 ) -> Result<Box<dyn AgentTrait + Send + Sync>, String> {
     use agents::{
-        compliance::{
-            ComplianceTrestleAgent, FedRampAgent, GdprCounselAgent, OpenControlAgent,
-            OscalAuditorAgent, PolicyEnforcerAgent, SchemaAsCodeAgent, StigAuditorAgent,
-        },
         aiml::{
             AIEngineerAgent, DataEngineerAgent, DataScientistAgent, MLEngineerAgent,
             MLOpsEngineerAgent, PromptEngineerAgent,
@@ -46,6 +42,10 @@ pub fn create_agent(
         business::{
             BusinessAnalystAgent, CustomerSupportAgent, HRProAgent, LegalAdvisorAgent,
             PaymentIntegrationAgent, SalesAutomatorAgent,
+        },
+        compliance::{
+            ComplianceTrestleAgent, FedRampAgent, GdprCounselAgent, OpenControlAgent,
+            OscalAuditorAgent, PolicyEnforcerAgent, SchemaAsCodeAgent, StigAuditorAgent,
         },
         content::{
             ApiDocumenterAgent, DocsArchitectAgent, MermaidExpertAgent, TutorialEngineerAgent,

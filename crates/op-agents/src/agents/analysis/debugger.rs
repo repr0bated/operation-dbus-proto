@@ -38,7 +38,10 @@ impl DebuggerAgent {
             let collected: Vec<&str> = content.lines().collect();
             let start = collected.len().saturating_sub(num_lines);
             let filtered = collected[start..].join("\n");
-            Ok(format!("Log output (last {} lines):\n{}", num_lines, filtered))
+            Ok(format!(
+                "Log output (last {} lines):\n{}",
+                num_lines, filtered
+            ))
         } else {
             Err("Log file path required".to_string())
         }
@@ -83,7 +86,10 @@ impl DebuggerAgent {
                 .filter(|line| line.contains(u))
                 .collect::<Vec<_>>()
                 .join("\n");
-            Ok(format!("Journal output (filtered by '{}'):\n{}", u, filtered))
+            Ok(format!(
+                "Journal output (filtered by '{}'):\n{}",
+                u, filtered
+            ))
         } else {
             Ok(format!("Journal output (direct file reads):\n{}", output))
         }
@@ -95,8 +101,7 @@ impl DebuggerAgent {
         }
 
         let mut entries = Vec::new();
-        let proc_dir = fs::read_dir("/proc")
-            .map_err(|e| format!("Failed to read /proc: {}", e))?;
+        let proc_dir = fs::read_dir("/proc").map_err(|e| format!("Failed to read /proc: {}", e))?;
 
         for entry in proc_dir {
             let entry = entry.map_err(|e| format!("Dir entry error: {}", e))?;
@@ -118,7 +123,11 @@ impl DebuggerAgent {
                     "{} {} {}",
                     name_str,
                     proc_name,
-                    if cmdline.is_empty() { "[kernel]" } else { &cmdline }
+                    if cmdline.is_empty() {
+                        "[kernel]"
+                    } else {
+                        &cmdline
+                    }
                 );
                 if let Some(p) = pid {
                     if entry_line.contains(p) {

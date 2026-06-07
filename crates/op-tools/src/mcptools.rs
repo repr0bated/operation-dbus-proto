@@ -203,8 +203,7 @@ fn load_mcp_config() -> Result<McpToolsConfig> {
             });
         }
 
-        if let Ok(list) = serde_json::from_str::<Vec<McpToolsServerConfig>>(&raw)
-        {
+        if let Ok(list) = serde_json::from_str::<Vec<McpToolsServerConfig>>(&raw) {
             return Ok(McpToolsConfig {
                 allow_unprefixed_names,
                 servers: list,

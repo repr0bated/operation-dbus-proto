@@ -8,7 +8,7 @@
 use op_grpc_bridge::{ChangeType, SchemaEngine};
 use op_jsonrpc::nonnet::NonNetDb;
 use op_jsonrpc::protocol::JsonRpcRequest;
-use op_network::ovsdb::OvsdbClient;
+use op_network::rovs_proxy::OvsdbDbusClient;
 use serde_json::Value;
 use std::sync::Arc;
 use zbus::interface;
@@ -20,12 +20,12 @@ fn str_to_simd(s: &str) -> Result<simd_json::OwnedValue, zbus::fdo::Error> {
 
 /// OVSDB D-Bus interface - mirrors JSON-RPC methods
 pub struct OvsdbInterface {
-    pub client: Arc<OvsdbClient>,
+    pub client: Arc<OvsdbDbusClient>,
     pub schema_engine: Option<Arc<SchemaEngine>>,
 }
 
 impl OvsdbInterface {
-    pub fn new(client: Arc<OvsdbClient>, schema_engine: Option<Arc<SchemaEngine>>) -> Self {
+    pub fn new(client: Arc<OvsdbDbusClient>, schema_engine: Option<Arc<SchemaEngine>>) -> Self {
         Self {
             client,
             schema_engine,

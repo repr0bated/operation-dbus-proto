@@ -63,8 +63,9 @@ pub struct CozoGraphShuttle {
 
 impl CozoGraphShuttle {
     pub fn new_in_memory() -> std::result::Result<Self, CozoError> {
-        let db = DbInstance::new("mem", "", Default::default())
-            .map_err(|e| CozoError::Other(format!("failed to create CozoDB in-memory instance: {e}")))?;
+        let db = DbInstance::new("mem", "", Default::default()).map_err(|e| {
+            CozoError::Other(format!("failed to create CozoDB in-memory instance: {e}"))
+        })?;
         let s = Self { db: Arc::new(db) };
         s.seed_schema().map_err(CozoError::from)?;
         Ok(s)
@@ -236,7 +237,11 @@ impl CozoGraphShuttle {
 
     // ── Raw query ──────────────────────────────────────────────────────────────
 
-    pub fn run_query(&self, query: &str, params: Option<Value>) -> std::result::Result<Value, CozoError> {
+    pub fn run_query(
+        &self,
+        query: &str,
+        params: Option<Value>,
+    ) -> std::result::Result<Value, CozoError> {
         let p = params.map(json_obj_to_params).unwrap_or_default();
         let rows = cozo_run(&self.db, query, p)
             .map_err(|e| CozoError::Other(format!("CozoDB query failed: {e}")))?;
@@ -302,7 +307,8 @@ impl CozoGraphShuttle {
         p.insert("reason".into(), DataValue::Str(reason.into()));
         p.insert("control_ref".into(), DataValue::Str(control_ref.into()));
         p.insert("ts".into(), DataValue::Str(now_rfc3339().into()));
-        cozo_run(&self.db, query, p).map_err(|e| CozoError::Other(format!("store compliance rule: {e}")))?;
+        cozo_run(&self.db, query, p)
+            .map_err(|e| CozoError::Other(format!("store compliance rule: {e}")))?;
         Ok(())
     }
 
@@ -344,13 +350,19 @@ impl CozoGraphShuttle {
         p.insert("crefs".into(), DataValue::Str(control_refs.into()));
         p.insert("srefs".into(), DataValue::Str(statement_refs.into()));
         p.insert("ts".into(), DataValue::Str(now_rfc3339().into()));
-        cozo_run(&self.db, query, p).map_err(|e| CozoError::Other(format!("register subid: {e}")))?;
+        cozo_run(&self.db, query, p)
+            .map_err(|e| CozoError::Other(format!("register subid: {e}")))?;
         Ok(())
     }
 
     // ── Graph ──────────────────────────────────────────────────────────────────
 
-    pub fn store_node(&self, id: &str, label: &str, props: Value) -> std::result::Result<(), CozoError> {
+    pub fn store_node(
+        &self,
+        id: &str,
+        label: &str,
+        props: Value,
+    ) -> std::result::Result<(), CozoError> {
         let query = r#"
             ?[id, label, props] <- [[$id, $label, $props]]
             :put graph_node { id => label, props }
@@ -359,11 +371,18 @@ impl CozoGraphShuttle {
         p.insert("id".into(), DataValue::Str(id.into()));
         p.insert("label".into(), DataValue::Str(label.into()));
         p.insert("props".into(), DataValue::Str(props.to_string().into()));
-        cozo_run(&self.db, query, p).map_err(|e| CozoError::Other(format!("store graph node: {e}")))?;
+        cozo_run(&self.db, query, p)
+            .map_err(|e| CozoError::Other(format!("store graph node: {e}")))?;
         Ok(())
     }
 
-    pub fn store_edge(&self, src: &str, rel: &str, dst: &str, props: Option<Value>) -> std::result::Result<(), CozoError> {
+    pub fn store_edge(
+        &self,
+        src: &str,
+        rel: &str,
+        dst: &str,
+        props: Option<Value>,
+    ) -> std::result::Result<(), CozoError> {
         let query = r#"
             ?[src, rel, dst, props] <- [[$src, $rel, $dst, $props]]
             :put graph_edge { src, rel, dst => props }
@@ -382,7 +401,8 @@ impl CozoGraphShuttle {
                     .into(),
             ),
         );
-        cozo_run(&self.db, query, p).map_err(|e| CozoError::Other(format!("store graph edge: {e}")))?;
+        cozo_run(&self.db, query, p)
+            .map_err(|e| CozoError::Other(format!("store graph edge: {e}")))?;
         Ok(())
     }
 
@@ -423,7 +443,11 @@ impl CozoGraphShuttle {
     }
 
     /// BFS traversal using CozoDB's native recursive rules.
-    pub fn traverse_graph(&self, start_node: &str, max_depth: u32) -> std::result::Result<Value, CozoError> {
+    pub fn traverse_graph(
+        &self,
+        start_node: &str,
+        max_depth: u32,
+    ) -> std::result::Result<Value, CozoError> {
         let query = r#"
             reachable[to, d] := to = $start, d = 0
             reachable[to, d] := reachable[from, d0], *graph_edge[from, _, to, _],
@@ -434,7 +458,8 @@ impl CozoGraphShuttle {
         let mut p: Params = BTreeMap::new();
         p.insert("start".into(), DataValue::Str(start_node.into()));
         p.insert("max_depth".into(), dv_int(max_depth as i64));
-        let r = cozo_run(&self.db, query, p).map_err(|e| CozoError::Other(format!("traverse graph: {e}")))?;
+        let r = cozo_run(&self.db, query, p)
+            .map_err(|e| CozoError::Other(format!("traverse graph: {e}")))?;
         Ok(named_rows_to_json(r))
     }
 
@@ -472,7 +497,8 @@ impl CozoGraphShuttle {
         p.insert("reason".into(), DataValue::Str(reason.into()));
         p.insert("cref".into(), DataValue::Str(control_ref.into()));
         p.insert("ts".into(), DataValue::Str(now_rfc3339().into()));
-        cozo_run(&self.db, query, p).map_err(|e| CozoError::Other(format!("append audit event: {e}")))?;
+        cozo_run(&self.db, query, p)
+            .map_err(|e| CozoError::Other(format!("append audit event: {e}")))?;
         Ok(())
     }
 
@@ -578,11 +604,15 @@ impl CozoGraphShuttle {
             DataValue::Str(api_credentials_json.into()),
         );
         p.insert("ts".into(), DataValue::Str(created_at.into()));
-        cozo_run(&self.db, query, p).map_err(|e| CozoError::Other(format!("upsert privacy user: {e}")))?;
+        cozo_run(&self.db, query, p)
+            .map_err(|e| CozoError::Other(format!("upsert privacy user: {e}")))?;
         Ok(())
     }
 
-    pub fn get_privacy_user(&self, id: &str) -> std::result::Result<Option<Vec<DataValue>>, CozoError> {
+    pub fn get_privacy_user(
+        &self,
+        id: &str,
+    ) -> std::result::Result<Option<Vec<DataValue>>, CozoError> {
         let mut p: Params = BTreeMap::new();
         p.insert("id".into(), DataValue::Str(id.into()));
         let r = cozo_run(
@@ -603,7 +633,10 @@ impl CozoGraphShuttle {
         Ok(r.rows.into_iter().next())
     }
 
-    pub fn get_privacy_user_by_email(&self, email: &str) -> std::result::Result<Option<Vec<DataValue>>, CozoError> {
+    pub fn get_privacy_user_by_email(
+        &self,
+        email: &str,
+    ) -> std::result::Result<Option<Vec<DataValue>>, CozoError> {
         let mut p: Params = BTreeMap::new();
         p.insert("email".into(), DataValue::Str(email.into()));
         let r = cozo_run(
@@ -624,7 +657,10 @@ impl CozoGraphShuttle {
         Ok(r.rows.into_iter().next())
     }
 
-    pub fn get_privacy_user_by_google_id(&self, google_id: &str) -> std::result::Result<Option<Vec<DataValue>>, CozoError> {
+    pub fn get_privacy_user_by_google_id(
+        &self,
+        google_id: &str,
+    ) -> std::result::Result<Option<Vec<DataValue>>, CozoError> {
         let mut p: Params = BTreeMap::new();
         p.insert("gid".into(), DataValue::Str(google_id.into()));
         let r = cozo_run(
@@ -694,12 +730,16 @@ impl CozoGraphShuttle {
             "exp".into(),
             DataValue::Str(expires_at.unwrap_or("").into()),
         );
-        cozo_run(&self.db, query, p).map_err(|e| CozoError::Other(format!("create session: {e}")))?;
+        cozo_run(&self.db, query, p)
+            .map_err(|e| CozoError::Other(format!("create session: {e}")))?;
         Ok(())
     }
 
     /// Resolve a session_id to (wg_pubkey, created_at, expires_at). None if absent.
-    pub fn lookup_session(&self, session_id: &str) -> std::result::Result<Option<(String, String, String)>, CozoError> {
+    pub fn lookup_session(
+        &self,
+        session_id: &str,
+    ) -> std::result::Result<Option<(String, String, String)>, CozoError> {
         let mut p: Params = BTreeMap::new();
         p.insert("sid".into(), DataValue::Str(session_id.into()));
         let r = cozo_run(

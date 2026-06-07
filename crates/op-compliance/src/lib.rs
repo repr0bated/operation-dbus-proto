@@ -68,8 +68,7 @@ pub mod attorneys {
                     && !schema_str.contains("retention")
                 {
                     return Err(ComplianceError::Validation(
-                        "GDPR violation: PII fields detected without retention policy"
-                            .into(),
+                        "GDPR violation: PII fields detected without retention policy".into(),
                     ));
                 }
             }

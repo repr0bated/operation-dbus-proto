@@ -204,18 +204,16 @@ impl UnifiedOrchestrator {
         }
 
         match self.tool_registry.get_definition(tool_name).await {
-            Some(def) => {
-                ToolResult {
-                    name: "get_tool_schema".to_string(),
-                    success: true,
-                    result: Some(json!({
-                        "name": def.name,
-                        "description": def.description,
-                        "input_schema": def.input_schema,
-                    })),
-                    error: None,
-                }
-            }
+            Some(def) => ToolResult {
+                name: "get_tool_schema".to_string(),
+                success: true,
+                result: Some(json!({
+                    "name": def.name,
+                    "description": def.description,
+                    "input_schema": def.input_schema,
+                })),
+                error: None,
+            },
             None => ToolResult {
                 name: "get_tool_schema".to_string(),
                 success: false,

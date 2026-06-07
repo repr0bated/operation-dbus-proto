@@ -90,7 +90,10 @@ impl MailServerPlugin {
     async fn incus_api_get(path: &str) -> Result<simd_json::OwnedValue> {
         let socket_path = "/var/lib/incus/unix.socket";
         if !std::path::Path::new(socket_path).exists() {
-            return Err(anyhow::anyhow!("Incus Unix socket not found at {}", socket_path));
+            return Err(anyhow::anyhow!(
+                "Incus Unix socket not found at {}",
+                socket_path
+            ));
         }
 
         let mut stream = tokio::net::UnixStream::connect(socket_path)
@@ -124,7 +127,10 @@ impl MailServerPlugin {
 
         let mut body = response[body_start..].to_vec();
         let headers = std::str::from_utf8(&response[..body_start]).unwrap_or("");
-        if headers.to_lowercase().contains("transfer-encoding: chunked") {
+        if headers
+            .to_lowercase()
+            .contains("transfer-encoding: chunked")
+        {
             let mut decoded = Vec::new();
             let mut pos = 0;
             while pos < body.len() {
@@ -135,10 +141,11 @@ impl MailServerPlugin {
                 if line_end >= body.len() {
                     break;
                 }
-                let line = std::str::from_utf8(&body[pos..line_end]).unwrap_or("").trim();
-                let size =
-                    usize::from_str_radix(line.split(';').next().unwrap_or("0").trim(), 16)
-                        .unwrap_or(0);
+                let line = std::str::from_utf8(&body[pos..line_end])
+                    .unwrap_or("")
+                    .trim();
+                let size = usize::from_str_radix(line.split(';').next().unwrap_or("0").trim(), 16)
+                    .unwrap_or(0);
                 if size == 0 {
                     break;
                 }
@@ -274,7 +281,12 @@ impl StatePlugin for MailServerPlugin {
         }
 
         // Query container devices from Incus REST API (AGENTS.md §4: no subprocess bypasses)
-        if let Ok(config) = Self::incus_api_get(&format!("/1.0/instances/{}?recursion=1", state.container_name)).await {
+        if let Ok(config) = Self::incus_api_get(&format!(
+            "/1.0/instances/{}?recursion=1",
+            state.container_name
+        ))
+        .await
+        {
             if let Some(devices) = config.get("devices") {
                 if let Ok(dev_map) = simd_json::serde::from_owned_value::<
                     HashMap<String, HashMap<String, String>>,

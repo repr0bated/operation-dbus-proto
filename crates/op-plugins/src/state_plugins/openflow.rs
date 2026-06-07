@@ -1,7 +1,6 @@
-// OpenFlow Controller Plugin - Flow-based networking for containerless communication
-// Manages OpenFlow flows for socket-based container networking without veth interfaces
-
-#![allow(clippy::vec_init_then_push)]
+// OpenFlow Controller Plugin - Flow-based networking via shared ingress + privacy chain
+// Manages OpenFlow flows for the GhostBridge privacy tunnel (gbr_wg → gbr_warp → gbr_xray)
+// and the shared gRPC bridge ingress port. No per-container sock_* ports.
 
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
@@ -13,7 +12,6 @@ use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
 use std::collections::HashMap;
-use std::sync::Arc;
 
 /// OpenFlow controller configuration - Policy-based, not interface-based
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -24,14 +22,6 @@ pub struct OpenFlowConfig {
     /// Controller endpoint (tcp:IP:PORT)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub controller_endpoint: Option<String>,
-
-    /// Flow policies to apply (discovered containers get flows based on policies)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub flow_policies: Option<Vec<FlowPolicy>>,
-
-    /// Enable automatic container discovery and flow generation
-    #[serde(default = "default_auto_discover")]
-    pub auto_discover_containers: bool,
 
     /// Enable security hardening flows (default: true)
     #[serde(default = "default_security_enabled")]
@@ -51,40 +41,6 @@ fn default_security_enabled() -> bool {
 
 fn default_obfuscation_level() -> u8 {
     1 // Basic obfuscation enabled by default
-}
-
-fn default_auto_discover() -> bool {
-    true
-}
-
-/// Flow policy - Applied to discovered containers/ports
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FlowPolicy {
-    /// Policy name
-    pub name: String,
-
-    /// Match selector (e.g., "container:*", "container:100-199", "port:internal_*")
-    pub selector: String,
-
-    /// Flow template to generate
-    pub template: FlowTemplate,
-}
-
-/// Flow template for policy-based generation
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FlowTemplate {
-    /// Table to insert flow
-    pub table: u8,
-
-    /// Priority
-    pub priority: u16,
-
-    /// Actions to perform (can use variables like {container_id}, {port_name})
-    pub actions: Vec<FlowAction>,
-
-    /// Additional match fields (beyond the auto-generated in_port match)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub additional_matches: Option<HashMap<String, String>>,
 }
 
 /// Per-bridge flow configuration
@@ -158,23 +114,19 @@ pub enum FlowAction {
     ArpResponder { mac: String, ip: String },
 }
 
-/// Socket port for containerless networking
+/// Socket port for privacy chain and shared ingress
 ///
-/// THREE TYPES:
-/// 1. Privacy sockets (predefined): priv_wg, priv_xray, priv_warp
+/// TWO TYPES:
+/// 1. Privacy sockets (predefined): gbr_wg, gbr_xray, gbr_warp
 /// 2. Shared ingress sockets (one per bridge): ovsbr0-sock
-/// 3. Legacy container sockets (dynamic): sock_{container_name}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SocketPort {
     /// Port name:
-    /// - Privacy: "priv_wg", "priv_xray" (predefined)
-    /// - Container: "sock_{container_name}" (dynamic, created at runtime)
+    /// - Privacy: "gbr_wg", "gbr_xray", "gbr_warp" (predefined GhostBridge chain)
+    /// - SharedIngress: "{bridge}-sock" (shared gRPC bridge ingress)
     pub name: String,
 
-    /// Container name this port serves (for sock_* ports)
-    pub container_name: Option<String>,
-
-    /// Port type: "privacy" or "container"
+    /// Port type
     pub port_type: SocketPortType,
 
     /// OVS port number (assigned by OVS)
@@ -185,49 +137,22 @@ pub struct SocketPort {
 /// Type of socket port
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum SocketPortType {
-    /// Privacy tunnel sockets (priv_wg, priv_xray) - predefined
+    /// Privacy tunnel sockets (gbr_wg, gbr_xray, gbr_warp) - predefined GhostBridge chain
     Privacy,
-    /// Shared ingress port routing many privacy routes
+    /// Shared ingress port routing many privacy routes via tag/identity
     SharedIngress,
-    /// Container sockets (sock_{name}) - dynamic, created from container name
-    Container,
 }
 
-/// Discovered container from OVSDB introspection
-#[derive(Debug, Clone)]
-struct DiscoveredContainer {
-    /// Container name (extracted from sock_{name} port)
-    name: String,
-
-    /// Port name in OVS (sock_{container_name})
-    port_name: String,
-
-    /// Bridge this container is attached to
-    bridge: String,
-
-    /// OpenFlow port number
-    _ofport: Option<u16>,
-}
-
-const OPENFLOW_PROTOCOL: &str = "OpenFlow13";
-
-/// OpenFlow plugin implementation
 pub struct OpenFlowPlugin {
-    /// D-Bus OVSDB client for OVS operations
-    ovsdb_client: Arc<op_network::rovs_proxy::OvsdbDbusClient>,
-}
-
-impl Default for OpenFlowPlugin {
-    fn default() -> Self {
-        Self::new()
-    }
+    /// OVSDB client routed through the op-openvswitch-daemon over D-Bus.
+    ovsdb_client: op_network::rovs_proxy::OvsdbDbusClient,
 }
 
 impl OpenFlowPlugin {
     pub fn new() -> Self {
-        let ovsdb_client = Arc::new(op_network::rovs_proxy::OvsdbDbusClient::new());
-
-        Self { ovsdb_client }
+        Self {
+            ovsdb_client: op_network::rovs_proxy::OvsdbDbusClient::new(),
+        }
     }
 
     /// Create OpenFlow client for a bridge
@@ -247,92 +172,33 @@ impl OpenFlowPlugin {
         Ok(client)
     }
 
-    /// Discover containers from OVSDB introspection
-    ///
-    /// Looks for sock_{container_name} ports (dynamic container sockets)
-    /// Privacy sockets (priv_wg, priv_xray) are NOT included - they are predefined
-    async fn discover_containers(&self) -> Result<Vec<DiscoveredContainer>> {
-        let mut containers = Vec::new();
-
-        // Get all bridges
-        let bridges = self.ovsdb_client.list_bridges().await?;
-
-        for bridge in bridges {
-            // Get ports on this bridge
-            let ports = self.ovsdb_client.list_bridge_ports(&bridge).await?;
-
-            for port in ports {
-                // Only discover container sockets (sock_*), not privacy sockets (priv_*)
-                if Self::is_container_socket(&port) {
-                    if let Some(container_name) = Self::extract_container_name(&port) {
-                        containers.push(DiscoveredContainer {
-                            name: container_name,
-                            port_name: port.clone(),
-                            bridge: bridge.clone(),
-                            _ofport: self.get_port_ofport(&port).await.ok(),
-                        });
-                    }
-                }
-            }
-        }
-
-        log::info!(
-            "Discovered {} container sockets (sock_*) from OVS introspection",
-            containers.len()
-        );
-        Ok(containers)
-    }
-
-    /// Extract container name from port name
-    ///
-    /// Port naming patterns:
-    /// - Privacy sockets: priv_wg, priv_xray (returns None - not container ports)
-    /// - Container sockets: sock_{container_name} (returns container name)
-    /// - Legacy veth: vi{VMID} (returns VMID for backwards compat)
-    fn extract_container_name(port_name: &str) -> Option<String> {
-        if port_name.starts_with("sock_") {
-            // Dynamic container socket: sock_vectordb-prod -> vectordb-prod
-            port_name.strip_prefix("sock_").map(|s| s.to_string())
-        } else if port_name.starts_with("vi") {
-            // Legacy Proxmox veth pattern: vi100 -> 100
-            port_name.strip_prefix("vi").map(|s| s.to_string())
-        } else if port_name.starts_with("priv_") {
-            // Privacy sockets are not container ports
-            None
-        } else {
-            None
-        }
-    }
-
-    /// Check if port is a privacy socket (priv_wg, priv_xray)
+    /// Check if port is a privacy socket (gbr_wg, gbr_xray, gbr_warp)
     fn is_privacy_socket(port_name: &str) -> bool {
-        port_name == "priv_wg" || port_name == "priv_xray"
-    }
-
-    /// Check if port is a container socket (sock_*)
-    fn is_container_socket(port_name: &str) -> bool {
-        port_name.starts_with("sock_")
-    }
-
-    /// Generate socket port name from container name
-    pub fn socket_port_name(container_name: &str) -> String {
-        format!("sock_{}", container_name)
+        port_name == "gbr_wg" || port_name == "gbr_xray" || port_name == "gbr_warp"
     }
 
     /// Get OpenFlow port number for a port name
     async fn get_port_ofport(&self, port_name: &str) -> Result<u16> {
-        let operations = simd_json::json!([{
+        let jsonrpc = Self::get_jsonrpc_proxy().await?;
+
+        let req = simd_json::json!(["Open_vSwitch", {
             "op": "select",
             "table": "Interface",
             "where": [["name", "==", port_name]],
             "columns": ["ofport"]
         }]);
 
-        let result = self.ovsdb_client.transact_simd(operations).await?;
+        let resp = jsonrpc.transact("transact", &req.to_string()).await?;
+        let res: Value = simd_json::to_owned_value(&mut resp.into_bytes())?;
 
-        if let Some(rows) = result[0]["rows"].as_array() {
+        if let Some(rows) = res
+            .as_array()
+            .and_then(|a| a.get(0))
+            .and_then(|r| r.get("rows"))
+            .and_then(|r| r.as_array())
+        {
             if let Some(first_row) = rows.first() {
-                if let Some(ofport) = first_row["ofport"].as_i64() {
+                if let Some(ofport) = first_row.get("ofport").and_then(|o| o.as_i64()) {
                     return Ok(ofport as u16);
                 }
             }
@@ -341,33 +207,22 @@ impl OpenFlowPlugin {
         Err(anyhow!("Could not find ofport for {}", port_name))
     }
 
-    /// Route `ovs-ofctl` through the D-Bus daemon (AGENTS.md §4 — no plugin subprocesses).
-    async fn run_ovs_ofctl(args: &[&str]) -> Result<String> {
-        // The first three args are fixed: -O, OpenFlow13, <command>
-        // The last arg is the bridge name.
-        // Everything in between are the command-specific args.
-        if args.len() < 4 {
-            anyhow::bail!("run_ovs_ofctl: expected at least 4 args, got {}", args.len());
-        }
-        let bridge = args[args.len() - 1];
-        let extra: Vec<String> = args[2..args.len() - 1].iter().map(|s| s.to_string()).collect();
-        let proxy = op_network::rovs_proxy::openflow_proxy()
+    async fn get_jsonrpc_proxy<'a>() -> Result<op_network::rovs_proxy::RovsJsonRpcProxy<'a>> {
+        let conn = zbus::Connection::system()
             .await
-            .context("connect to op-openvswitch-daemon D-Bus for ofctl")?;
-        let result = proxy
-            .ofctl(bridge, &serde_json::to_string(&extra)?)
+            .context("Failed to connect to system bus")?;
+        op_network::rovs_proxy::RovsJsonRpcProxy::new(&conn)
             .await
-            .context("D-Bus ofctl call failed")?;
-        let parsed: serde_json::Value = serde_json::from_str(&result)
-            .context("daemon returned invalid JSON from ofctl")?;
-        if let Some(error) = parsed.get("error").and_then(|e| e.as_str()) {
-            anyhow::bail!("ovs-ofctl via D-Bus daemon failed: {}", error);
-        }
-        Ok(parsed
-            .get("stdout")
-            .and_then(|s| s.as_str())
-            .unwrap_or("")
-            .to_string())
+            .context("Failed to create RovsJsonRpcProxy")
+    }
+
+    async fn get_openflow_proxy<'a>() -> Result<op_network::rovs_proxy::RovsOpenFlowProxy<'a>> {
+        let conn = zbus::Connection::system()
+            .await
+            .context("Failed to connect to system bus")?;
+        op_network::rovs_proxy::RovsOpenFlowProxy::new(&conn)
+            .await
+            .context("Failed to create RovsOpenFlowProxy")
     }
 
     fn is_managed_socket_port(port_name: &str) -> Option<SocketPortType> {
@@ -375,8 +230,6 @@ impl OpenFlowPlugin {
             Some(SocketPortType::Privacy)
         } else if port_name.ends_with("-sock") {
             Some(SocketPortType::SharedIngress)
-        } else if Self::is_container_socket(port_name) {
-            Some(SocketPortType::Container)
         } else {
             None
         }
@@ -438,213 +291,46 @@ impl OpenFlowPlugin {
         Ok(normalized)
     }
 
-    /// Apply flow policies to discovered containers
-    async fn apply_flow_policies(
-        &self,
-        bridge: &str,
-        containers: &[DiscoveredContainer],
-        policies: &[FlowPolicy],
-    ) -> Result<Vec<FlowEntry>> {
-        let mut generated_flows = Vec::new();
-
-        for container in containers {
-            for policy in policies {
-                if Self::policy_matches(policy, container) {
-                    let flow = Self::generate_flow_from_policy(policy, container)?;
-                    generated_flows.push(flow);
-                    log::debug!(
-                        "Generated flow for container {} from policy '{}'",
-                        container.name,
-                        policy.name
-                    );
-                }
-            }
-        }
-
-        log::info!(
-            "Generated {} flows for {} containers on bridge {}",
-            generated_flows.len(),
-            containers.len(),
-            bridge
-        );
-
-        Ok(generated_flows)
-    }
-
-    /// Check if policy selector matches container
-    fn policy_matches(policy: &FlowPolicy, container: &DiscoveredContainer) -> bool {
-        let selector = &policy.selector;
-
-        if let Some(pattern) = selector.strip_prefix("container:") {
-            return Self::container_name_matches(pattern, &container.name);
-        } else if let Some(pattern) = selector.strip_prefix("port:") {
-            return Self::port_name_matches(pattern, &container.port_name);
-        }
-
-        false
-    }
-
-    /// Check if container name matches pattern (*, exact, prefix*)
-    fn container_name_matches(pattern: &str, container_name: &str) -> bool {
-        if pattern == "*" {
-            return true;
-        }
-
-        if pattern == container_name {
-            return true;
-        }
-
-        // Prefix pattern: vectordb* matches vectordb-prod, vectordb-dev
-        if pattern.ends_with('*') {
-            let prefix = pattern.trim_end_matches('*');
-            return container_name.starts_with(prefix);
-        }
-
-        // Suffix pattern: *-prod matches vectordb-prod, redis-prod
-        if pattern.starts_with('*') {
-            let suffix = pattern.trim_start_matches('*');
-            return container_name.ends_with(suffix);
-        }
-
-        false
-    }
-
-    /// Check if port name matches pattern (internal_*, vi*)
-    fn port_name_matches(pattern: &str, port_name: &str) -> bool {
-        if pattern == "*" {
-            return true;
-        }
-
-        if pattern.ends_with('*') {
-            let prefix = pattern.trim_end_matches('*');
-            return port_name.starts_with(prefix);
-        }
-
-        pattern == port_name
-    }
-
-    /// Generate flow from policy template, substituting variables
-    fn generate_flow_from_policy(
-        policy: &FlowPolicy,
-        container: &DiscoveredContainer,
-    ) -> Result<FlowEntry> {
-        let template = &policy.template;
-
-        // Build match fields
-        let mut match_fields = HashMap::new();
-        match_fields.insert("in_port".to_string(), container.port_name.clone());
-
-        if let Some(additional) = &template.additional_matches {
-            for (k, v) in additional {
-                let value = Self::substitute_variables(v, container);
-                match_fields.insert(k.clone(), value);
-            }
-        }
-
-        // Substitute variables in actions
-        let actions: Vec<FlowAction> = template
-            .actions
-            .iter()
-            .map(|action| Self::substitute_action_variables(action, container))
-            .collect();
-
-        Ok(FlowEntry {
-            table: template.table,
-            priority: template.priority,
-            match_fields,
-            actions,
-            // Use hash of container name for cookie since names aren't numeric
-            cookie: Some(Self::hash_container_name(&container.name)),
-            idle_timeout: 0,
-            hard_timeout: 0,
-        })
-    }
-
-    /// Generate a numeric hash from container name for flow cookie
-    fn hash_container_name(name: &str) -> u64 {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-        let mut hasher = DefaultHasher::new();
-        name.hash(&mut hasher);
-        hasher.finish()
-    }
-
-    /// Substitute variables in string ({container_name}, {port_name}, {bridge})
-    fn substitute_variables(text: &str, container: &DiscoveredContainer) -> String {
-        text.replace("{container_name}", &container.name)
-            .replace("{container_id}", &container.name) // backwards compat
-            .replace("{port_name}", &container.port_name)
-            .replace("{bridge}", &container.bridge)
-    }
-
-    /// Substitute variables in flow action
-    fn substitute_action_variables(
-        action: &FlowAction,
-        container: &DiscoveredContainer,
-    ) -> FlowAction {
-        match action {
-            FlowAction::Output { port } => FlowAction::Output {
-                port: Self::substitute_variables(port, container),
-            },
-            FlowAction::SetField { field, value } => FlowAction::SetField {
-                field: field.clone(),
-                value: Self::substitute_variables(value, container),
-            },
-            FlowAction::LoadRegister { register, value } => {
-                // Try to parse {container_id} as numeric value
-                let substituted = Self::substitute_variables(&value.to_string(), container);
-                let numeric_value = substituted.parse::<u64>().unwrap_or(*value);
-                FlowAction::LoadRegister {
-                    register: *register,
-                    value: numeric_value,
-                }
-            }
-            _ => action.clone(),
-        }
-    }
-
-    /// Install a flow via native OpenFlow protocol
+    /// Install a flow via native DBus OpenFlow protocol
     async fn install_flow(&self, bridge: &str, flow: &FlowEntry) -> Result<()> {
         let normalized = self.normalize_flow_for_bridge(bridge, flow).await?;
-        let rule = self.flow_to_string(&normalized);
-        log::info!("Installing flow on {}: {}", bridge, rule);
-        Self::run_ovs_ofctl(&["-O", OPENFLOW_PROTOCOL, "add-flow", bridge, &rule]).await?;
+        let flow_json = serde_json::to_string(&normalized)?;
+        log::info!("Installing flow on {}: {}", bridge, flow_json);
+
+        let proxy = Self::get_openflow_proxy().await?;
+        proxy
+            .send_flow(&flow_json)
+            .await
+            .context("DBus send_flow failed")?;
         Ok(())
     }
 
-    /// Query current flows via native OpenFlow protocol
-    async fn query_flows(&self, bridge: &str) -> Result<Vec<FlowEntry>> {
-        let output = Self::run_ovs_ofctl(&["-O", OPENFLOW_PROTOCOL, "dump-flows", bridge]).await?;
-        self.parse_flows(&output)
+    /// Query current flows via native DBus OpenFlow protocol
+    async fn query_flows(&self, _bridge: &str) -> Result<Vec<FlowEntry>> {
+        let proxy = Self::get_openflow_proxy().await?;
+        let flow_strings = proxy.dump_flows().await.context("DBus dump_flows failed")?;
+
+        let mut flows = Vec::new();
+        for s in flow_strings {
+            if let Ok(f) = serde_json::from_str::<FlowEntry>(&s) {
+                flows.push(f);
+            }
+        }
+        Ok(flows)
     }
 
     async fn delete_flow(&self, bridge: &str, flow: &FlowEntry) -> Result<()> {
         let normalized = self.normalize_flow_for_bridge(bridge, flow).await?;
-        let mut match_parts = vec![format!("table={}", normalized.table)];
-        if let Some(cookie) = normalized.cookie {
-            match_parts.push(format!("cookie=0x{cookie:x}/-1"));
-        } else {
-            let mut match_fields: Vec<_> = normalized.match_fields.iter().collect();
-            match_fields.sort_by(|a, b| a.0.cmp(b.0));
-            for (key, value) in match_fields {
-                if value.is_empty() {
-                    match_parts.push(key.clone());
-                } else {
-                    match_parts.push(format!("{key}={value}"));
-                }
-            }
-        }
-        let matcher = match_parts.join(",");
-        log::info!("Deleting flow on {}: {}", bridge, matcher);
-        Self::run_ovs_ofctl(&[
-            "-O",
-            OPENFLOW_PROTOCOL,
-            "--strict",
-            "del-flows",
-            bridge,
-            &matcher,
-        ])
-        .await?;
+        let flow_json = serde_json::to_string(&normalized)?;
+        log::info!("Deleting flow on {}: {}", bridge, flow_json);
+
+        let proxy = Self::get_openflow_proxy().await?;
+        // For now, OpenFlow deletions might need a specialized method or send_flow with a delete command.
+        // Assuming send_flow handles the delete action via its JSON schema.
+        proxy
+            .send_flow(&flow_json)
+            .await
+            .context("DBus send_flow failed for delete")?;
         Ok(())
     }
 
@@ -848,10 +534,10 @@ impl OpenFlowPlugin {
     /// Create OVS internal port for socket networking
     async fn create_socket_port(&self, bridge: &str, port: &SocketPort) -> Result<()> {
         log::info!(
-            "Creating socket port {} on {} for container {:?}",
+            "Creating socket port {} on {} (type {:?})",
             port.name,
             bridge,
-            port.container_name.as_deref().unwrap_or("(privacy)")
+            port.port_type,
         );
 
         // Add internal port to OVS bridge
@@ -908,7 +594,7 @@ impl OpenFlowPlugin {
             if let Some(first_row) = rows.first() {
                 if let Some(uuid_array) = first_row["_uuid"].as_array() {
                     if uuid_array.len() == 2 && uuid_array[0] == "uuid" {
-                        return Ok(uuid_array.get(1).and_then(|v| v.as_str()).ok_or_else(|| anyhow::anyhow!("invalid UUID array"))?.to_string());
+                        return Ok(uuid_array[1].as_str().unwrap().to_string());
                     }
                 }
             }
@@ -932,7 +618,7 @@ impl OpenFlowPlugin {
             if let Some(first_row) = rows.first() {
                 if let Some(uuid_array) = first_row["_uuid"].as_array() {
                     if uuid_array.len() == 2 && uuid_array[0] == "uuid" {
-                        return Ok(uuid_array.get(1).and_then(|v| v.as_str()).ok_or_else(|| anyhow::anyhow!("invalid UUID array"))?.to_string());
+                        return Ok(uuid_array[1].as_str().unwrap().to_string());
                     }
                 }
             }
@@ -1418,11 +1104,10 @@ impl StatePlugin for OpenFlowPlugin {
 
     fn is_available(&self) -> bool {
         std::path::Path::new("/var/run/openvswitch/db.sock").exists()
-            && std::path::Path::new("/usr/bin/ovs-ofctl").exists()
     }
 
     fn unavailable_reason(&self) -> String {
-        "OpenFlow requires /var/run/openvswitch/db.sock and /usr/bin/ovs-ofctl".to_string()
+        "OpenFlow requires /var/run/openvswitch/db.sock (OVSDB daemon)".to_string()
     }
 
     async fn query_current_state(&self) -> Result<Value> {
@@ -1444,11 +1129,6 @@ impl StatePlugin for OpenFlowPlugin {
                 .filter_map(|port_name| {
                     Self::is_managed_socket_port(&port_name).map(|port_type| SocketPort {
                         ofport: None,
-                        container_name: if port_type == SocketPortType::Container {
-                            Self::extract_container_name(&port_name)
-                        } else {
-                            None
-                        },
                         name: port_name,
                         port_type,
                     })
@@ -1469,8 +1149,6 @@ impl StatePlugin for OpenFlowPlugin {
         let config = OpenFlowConfig {
             bridges: bridge_configs,
             controller_endpoint: None,
-            flow_policies: None,
-            auto_discover_containers: false,
             enable_security_flows: false, // Query mode: don't inject, report actual state
             obfuscation_level: 0,         // Query mode: report actual flows, no injection
         };
@@ -1528,41 +1206,6 @@ impl StatePlugin for OpenFlowPlugin {
                     flow_count,
                     desired_config.obfuscation_level
                 );
-            }
-        }
-
-        // If auto-discovery is enabled and policies are defined, generate flows
-        if desired_config.auto_discover_containers {
-            if let Some(policies) = &desired_config.flow_policies {
-                log::info!("Auto-discovery enabled, generating flows from policies");
-                let discovered_containers = self.discover_containers().await.unwrap_or_default();
-
-                for bridge_config in &mut desired_config.bridges {
-                    // Filter containers for this bridge
-                    let bridge_containers: Vec<DiscoveredContainer> = discovered_containers
-                        .iter()
-                        .filter(|c| c.bridge == bridge_config.name)
-                        .cloned()
-                        .collect();
-
-                    // Generate flows from policies
-                    let policy_flows = self
-                        .apply_flow_policies(&bridge_config.name, &bridge_containers, policies)
-                        .await?;
-
-                    let policy_count = policy_flows.len();
-                    let static_count = bridge_config.flows.len();
-
-                    // Merge policy-generated flows with static flows
-                    bridge_config.flows.extend(policy_flows);
-
-                    log::info!(
-                        "Bridge {}: {} static flows + {} policy-generated flows",
-                        bridge_config.name,
-                        static_count,
-                        policy_count
-                    );
-                }
             }
         }
 

@@ -437,9 +437,8 @@ async fn control_systemd_unit_dbus(unit: &str, action: &str) -> Result<String> {
         _ => return Err(anyhow!("Invalid action: {}", action)),
     };
 
-    let job_path: zbus::zvariant::OwnedObjectPath = manager_proxy
-        .call(method, &(unit, "replace"))
-        .await?;
+    let job_path: zbus::zvariant::OwnedObjectPath =
+        manager_proxy.call(method, &(unit, "replace")).await?;
 
     Ok(format!(
         "AnyDesk service {} via D-Bus (job: {})",
@@ -687,7 +686,10 @@ async fn check_x11_display_environment() -> Result<Value> {
     if let Ok(env) = get_systemd_unit_environment_dbus("anydesk.service").await {
         let env_map: std::collections::HashMap<String, String> = env
             .iter()
-            .filter_map(|kv| kv.split_once('=').map(|(k, v)| (k.to_string(), v.to_string())))
+            .filter_map(|kv| {
+                kv.split_once('=')
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+            })
             .collect();
         result["anydesk_service_environment"] = json!(env_map);
     }
@@ -713,8 +715,10 @@ async fn diagnose_x11_access_issues() -> Result<Value> {
         Ok(active_state) => {
             if active_state != "active" {
                 issues.push("AnyDesk service is not running".to_string());
-                recommendations
-                    .push("Start AnyDesk service via D-Bus: dbus_systemd_start_unit anydesk.service".to_string());
+                recommendations.push(
+                    "Start AnyDesk service via D-Bus: dbus_systemd_start_unit anydesk.service"
+                        .to_string(),
+                );
                 fix_commands.push("dbus_systemd_start_unit anydesk.service".to_string());
             }
         }
@@ -732,7 +736,9 @@ async fn diagnose_x11_access_issues() -> Result<Value> {
             if !has_display {
                 issues.push("AnyDesk service missing DISPLAY environment variable".to_string());
                 recommendations.push("Add DISPLAY=:99 to AnyDesk service environment".to_string());
-                fix_commands.push("dbus_systemd_set_unit_environment anydesk.service DISPLAY=:99".to_string());
+                fix_commands.push(
+                    "dbus_systemd_set_unit_environment anydesk.service DISPLAY=:99".to_string(),
+                );
             }
 
             if !has_xauthority {
@@ -752,9 +758,8 @@ async fn diagnose_x11_access_issues() -> Result<Value> {
     if let Ok(display) = std::env::var("DISPLAY") {
         if !check_x11_socket(&display) {
             issues.push(format!("Cannot access X11 display {}", display));
-            recommendations.push(
-                "Ensure Xvfb or X server is running on the specified display".to_string(),
-            );
+            recommendations
+                .push("Ensure Xvfb or X server is running on the specified display".to_string());
         }
     } else {
         issues.push("DISPLAY environment variable not set".to_string());
@@ -769,8 +774,7 @@ async fn diagnose_x11_access_issues() -> Result<Value> {
                 display
             ));
             recommendations.push(
-                "Generate X11 authentication cookie with: xauth generate :99 . trusted"
-                    .to_string(),
+                "Generate X11 authentication cookie with: xauth generate :99 . trusted".to_string(),
             );
             fix_commands.push("xauth generate :99 . trusted".to_string());
         }
@@ -782,8 +786,7 @@ async fn diagnose_x11_access_issues() -> Result<Value> {
     if !Path::new("/root/.Xauthority").exists() {
         issues.push("Xauthority file missing for root user".to_string());
         recommendations.push(
-            "Copy user Xauthority to root: cp /home/user/.Xauthority /root/.Xauthority"
-                .to_string(),
+            "Copy user Xauthority to root: cp /home/user/.Xauthority /root/.Xauthority".to_string(),
         );
         fix_commands.push("cp /home/jeremy/.Xauthority /root/.Xauthority && chown root:root /root/.Xauthority && chmod 600 /root/.Xauthority".to_string());
     }

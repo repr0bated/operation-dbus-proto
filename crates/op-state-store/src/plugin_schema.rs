@@ -3870,7 +3870,7 @@ fn create_openflow_schema() -> PluginSchema {
                             required: true,
                             description: "OpenFlow actions".to_string(),
                             default: None,
-                            example: Some(json!([{"type": "output", "port": "priv_wg"}])),
+                            example: Some(json!([{"type": "output", "port": "gbr_wg"}])),
                             constraints: Vec::new(),
                             read_only: false,
                             read_only_when: None,
@@ -4033,7 +4033,7 @@ fn create_openflow_schema() -> PluginSchema {
                             "table": 0,
                             "priority": 22000,
                             "match_fields": {"in_port": "ovsbr0-sock", "ip": "", "nw_src": "10.100.0.2"},
-                            "actions": [{"type": "output", "port": "priv_wg"}],
+                            "actions": [{"type": "output", "port": "gbr_wg"}],
                             "cookie": 5787125521171081216u64,
                             "idle_timeout": 0,
                             "hard_timeout": 0
@@ -4169,8 +4169,8 @@ fn create_privacy_router_schema() -> PluginSchema {
                 required: false,
                 description: "Host-side bridge port name for the WireGuard ingress container"
                     .to_string(),
-                default: Some(json!("priv_wg")),
-                example: Some(json!("priv_wg")),
+                default: Some(json!("gbr_wg")),
+                example: Some(json!("gbr_wg")),
                 constraints: Vec::new(),
                 read_only: false,
                 read_only_when: None,
@@ -4209,14 +4209,14 @@ fn create_privacy_router_schema() -> PluginSchema {
             },
         );
         fields.insert(
-            "wgcf_config".to_string(),
+            "netclient_network".to_string(),
             FieldSchema {
                 field_type: FieldType::String,
                 required: false,
-                description: "Path to wgcf WireGuard config used to create the host interface"
+                description: "Netclient network name for the WARP egress interface"
                     .to_string(),
-                default: Some(json!("/etc/wireguard/wgcf.conf")),
-                example: Some(json!("/etc/wireguard/wgcf.conf")),
+                default: Some(json!("gbr_warp")),
+                example: Some(json!("gbr_warp")),
                 constraints: Vec::new(),
                 read_only: false,
                 read_only_when: None,
@@ -4262,8 +4262,8 @@ fn create_privacy_router_schema() -> PluginSchema {
                 field_type: FieldType::String,
                 required: false,
                 description: "Host-side bridge port for the local XRay client".to_string(),
-                default: Some(json!("priv_xray")),
-                example: Some(json!("priv_xray")),
+                default: Some(json!("gbr_xray")),
+                example: Some(json!("gbr_xray")),
                 constraints: Vec::new(),
                 read_only: false,
                 read_only_when: None,
@@ -4382,18 +4382,18 @@ fn create_privacy_router_schema() -> PluginSchema {
             "wireguard": {
                 "enabled": true,
                 "container_id": 100,
-                "socket_port": "priv_wg",
+                "socket_port": "gbr_wg",
                 "listen_port": 51820
             },
             "warp": {
                 "enabled": true,
                 "bridge_interface": "wgcf",
-                "wgcf_config": "/etc/wireguard/wgcf.conf"
+                "netclient_network": "gbr_warp"
             },
             "xray": {
                 "enabled": true,
                 "container_id": 101,
-                "socket_port": "priv_xray",
+                "socket_port": "gbr_xray",
                 "socks_port": 1080,
                 "vps_address": "vps.example.com",
                 "vps_port": 443
@@ -4537,8 +4537,8 @@ fn create_privacy_routes_schema() -> PluginSchema {
                 field_type: FieldType::String,
                 required: true,
                 description: "First logical next hop for this route".to_string(),
-                default: Some(json!("priv_wg")),
-                example: Some(json!("priv_wg")),
+                default: Some(json!("gbr_wg")),
+                example: Some(json!("gbr_wg")),
                 constraints: Vec::new(),
                 read_only: false,
                 read_only_when: None,
@@ -4609,7 +4609,7 @@ fn create_privacy_routes_schema() -> PluginSchema {
                     "selector_ip": "10.100.0.2",
                     "container_name": "privacy-user-550e8400",
                     "ingress_port": "ovsbr0-sock",
-                    "next_hop": "priv_wg",
+                    "next_hop": "gbr_wg",
                     "enabled": true,
                     "created_at": "2026-01-01T00:00:00Z",
                     "updated_at": "2026-01-01T00:00:00Z"
@@ -5096,7 +5096,7 @@ mod tests {
             "wireguard": {
                 "enabled": true,
                 "container_id": 100,
-                "socket_port": "priv_wg",
+                "socket_port": "gbr_wg",
                 "listen_port": 51820,
                 "resources": {
                     "vcpus": 1,
@@ -5110,12 +5110,12 @@ mod tests {
             "warp": {
                 "enabled": true,
                 "bridge_interface": "wgcf",
-                "wgcf_config": "/etc/wireguard/wgcf.conf"
+                "netclient_network": "gbr_warp"
             },
             "xray": {
                 "enabled": true,
                 "container_id": 101,
-                "socket_port": "priv_xray",
+                "socket_port": "gbr_xray",
                 "socks_port": 1080,
                 "vps_address": "vps.example.com",
                 "vps_port": 443,
@@ -5136,11 +5136,11 @@ mod tests {
                 "enabled": true,
                 "privacy_sockets": [
                     {
-                        "name": "priv_wg",
+                        "name": "gbr_wg",
                         "container_id": 100
                     },
                     {
-                        "name": "priv_xray",
+                        "name": "gbr_xray",
                         "container_id": 101
                     }
                 ]

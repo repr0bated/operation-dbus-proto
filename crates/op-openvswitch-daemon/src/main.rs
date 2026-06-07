@@ -15,9 +15,13 @@ use tracing::{info, warn};
 use zbus::connection::Connection;
 
 mod dbus;
+mod execution;
 mod grpc;
+mod grpc_streaming;
 
 use dbus::{DaemonState, JsonRpcService, OpenFlowService};
+use execution::PluginExecutionService;
+use grpc_streaming::{EventBus, StreamingService};
 
 // ── CLI ───────────────────────────────────────────────────────────────────────
 
@@ -92,7 +96,10 @@ async fn main() -> Result<()> {
 
     // Eager-connect OVSDB so early callers don't wait.
     if let Err(e) = state.get_ovsdb().await {
-        warn!("Could not connect to OVSDB: {}. Will retry on first request.", e);
+        warn!(
+            "Could not connect to OVSDB: {}. Will retry on first request.",
+            e
+        );
     }
 
     let conn = Connection::system()
@@ -115,6 +122,12 @@ async fn main() -> Result<()> {
         .await
         .context("Failed to register /org/opdbus/rovs/openflow")?;
 
+    let exec_service = PluginExecutionService::new();
+    conn.object_server()
+        .at("/org/opdbus/execution", exec_service)
+        .await
+        .context("Failed to register /org/opdbus/execution")?;
+
     // Request single well-known bus name.
     conn.request_name("org.opdbus.v1")
         .await
@@ -123,15 +136,21 @@ async fn main() -> Result<()> {
     info!("D-Bus services registered:");
     info!("  /org/opdbus/rovs/jsonrpc  -> org.opdbus.rovs.jsonrpc");
     info!("  /org/opdbus/rovs/openflow -> org.opdbus.rovs.openflow");
+    info!("  /org/opdbus/execution     -> org.opdbus.execution");
 
-    // Optional gRPC
+    // Optional gRPC with streaming support (M2)
     if let Some(grpc_addr) = args.grpc_addr {
-        let addr: std::net::SocketAddr = grpc_addr
-            .parse()
-            .context("Invalid --grpc address")?;
+        let addr: std::net::SocketAddr = grpc_addr.parse().context("Invalid --grpc address")?;
         info!("Starting gRPC server on {}", addr);
+
+        // Create shared event bus for streaming subscriptions
+        let event_bus = EventBus::new();
+        let streaming_service = StreamingService::new(grpc_state.clone(), event_bus);
+
         tokio::spawn(async move {
-            if let Err(e) = grpc::run_grpc_server(addr, grpc_state).await {
+            if let Err(e) =
+                grpc::run_grpc_server_with_streaming(addr, grpc_state, streaming_service).await
+            {
                 warn!("gRPC server error: {}", e);
             }
         });

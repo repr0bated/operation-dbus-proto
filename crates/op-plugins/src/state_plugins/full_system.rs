@@ -27,8 +27,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::process::Command;
 use tokio::sync::RwLock;
-use zbus::{Connection, Proxy};
 use tracing::{debug, info, warn};
+use zbus::{Connection, Proxy};
 
 /// Full system state for disaster recovery
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -394,7 +394,18 @@ impl FullSystemPlugin {
         .context("Failed to create systemd D-Bus proxy")?;
 
         #[allow(clippy::type_complexity)]
-        let units: Vec<(String, String, String, String, String, String, zbus::zvariant::OwnedObjectPath, u32, String, zbus::zvariant::OwnedObjectPath)> = proxy
+        let units: Vec<(
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+            zbus::zvariant::OwnedObjectPath,
+            u32,
+            String,
+            zbus::zvariant::OwnedObjectPath,
+        )> = proxy
             .call("ListUnits", &())
             .await
             .context("Failed to list systemd units")?;
@@ -410,7 +421,19 @@ impl FullSystemPlugin {
             .map(|(name, state)| (name, state == "enabled"))
             .collect();
 
-        for (name, _desc, _load_state, active_state, _sub_state, _followed, _path, _job_id, _job_type, _job_path) in units {
+        for (
+            name,
+            _desc,
+            _load_state,
+            active_state,
+            _sub_state,
+            _followed,
+            _path,
+            _job_id,
+            _job_type,
+            _job_path,
+        ) in units
+        {
             if !name.ends_with(".service") {
                 continue;
             }
@@ -488,7 +511,10 @@ impl FullSystemPlugin {
                     .map(|s| s.to_string())
                     .collect();
                 for member in &members {
-                    group_map.entry(member.clone()).or_default().push(group_name.clone());
+                    group_map
+                        .entry(member.clone())
+                        .or_default()
+                        .push(group_name.clone());
                 }
             }
         }
@@ -621,7 +647,13 @@ impl FullSystemPlugin {
             while let Ok(Some(entry)) = entries.next_entry().await {
                 let name = entry.file_name().to_string_lossy().to_string();
                 // Skip files, only directories are containers
-                if !entry.file_type().await.ok().map(|t| t.is_dir()).unwrap_or(false) {
+                if !entry
+                    .file_type()
+                    .await
+                    .ok()
+                    .map(|t| t.is_dir())
+                    .unwrap_or(false)
+                {
                     continue;
                 }
                 state.lxc.push(LxcContainerInfo {

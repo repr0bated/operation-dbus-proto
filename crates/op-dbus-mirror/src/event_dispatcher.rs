@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 use op_jsonrpc::nonnet::NonNetDb;
-use op_network::ovsdb::OvsdbClient;
+use op_network::rovs_proxy::OvsdbDbusClient;
 use op_state::manager::StateManager;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -21,7 +21,7 @@ use crate::DbusMirror;
 pub struct EventDispatcher {
     pub broadcast_tx: broadcast::Sender<MirrorEvent>,
     mirror: Arc<DbusMirror>,
-    ovsdb_client: Arc<OvsdbClient>,
+    ovsdb_client: Arc<OvsdbDbusClient>,
     nonnet_db: Arc<NonNetDb>,
     state_manager: Option<Arc<StateManager>>,
     grpc_server: Option<Arc<op_grpc_bridge::OperationGrpcServer>>,
@@ -33,7 +33,7 @@ impl EventDispatcher {
     /// Create a new EventDispatcher
     pub fn new(
         mirror: Arc<DbusMirror>,
-        ovsdb_client: Arc<OvsdbClient>,
+        ovsdb_client: Arc<OvsdbDbusClient>,
         nonnet_db: Arc<NonNetDb>,
         state_manager: Option<Arc<StateManager>>,
         grpc_server: Option<Arc<op_grpc_bridge::OperationGrpcServer>>,

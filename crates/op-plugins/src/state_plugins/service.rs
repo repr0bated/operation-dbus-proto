@@ -69,7 +69,18 @@ impl ServicePlugin {
     async fn list_systemd_services(&self) -> Result<Vec<String>> {
         let proxy = self.connect_systemd().await?;
         #[allow(clippy::type_complexity)]
-        let units: Vec<(String, String, String, String, String, String, zbus::zvariant::OwnedObjectPath, u32, String, zbus::zvariant::OwnedObjectPath)> = proxy
+        let units: Vec<(
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+            zbus::zvariant::OwnedObjectPath,
+            u32,
+            String,
+            zbus::zvariant::OwnedObjectPath,
+        )> = proxy
             .call("ListUnits", &())
             .await
             .context("Failed to list systemd units")?;

@@ -128,7 +128,9 @@ impl DynamicLoadingPlugin {
     async fn ensure_btrfs_subvolume(&self) -> Result<()> {
         // Check if the path is on a btrfs filesystem by reading mountinfo
         let path_str = self.storage_path.to_string_lossy();
-        let mounts = tokio::fs::read_to_string("/proc/self/mountinfo").await.unwrap_or_default();
+        let mounts = tokio::fs::read_to_string("/proc/self/mountinfo")
+            .await
+            .unwrap_or_default();
 
         let is_btrfs = mounts.lines().any(|line| {
             let parts: Vec<&str> = line.split_whitespace().collect();
@@ -154,7 +156,9 @@ impl DynamicLoadingPlugin {
     /// Get BTRFS filesystem information via sysfs
     pub async fn get_btrfs_info(&self) -> Result<Value> {
         let path_str = self.storage_path.to_string_lossy();
-        let mounts = tokio::fs::read_to_string("/proc/self/mountinfo").await.unwrap_or_default();
+        let mounts = tokio::fs::read_to_string("/proc/self/mountinfo")
+            .await
+            .unwrap_or_default();
 
         let mut info = json!({
             "subvolume": self.storage_path.display().to_string(),

@@ -44,9 +44,7 @@ impl GroupsConfig {
 
         // Try to load from disk
         if let Ok(content) = std::fs::read_to_string(GROUPS_CONFIG_PATH) {
-            if let Ok(saved) =
-                serde_json::from_str::<HashMap<String, EnabledGroups>>(&content)
-            {
+            if let Ok(saved) = serde_json::from_str::<HashMap<String, EnabledGroups>>(&content) {
                 info!(
                     "Loaded {} tool group profiles from {}",
                     saved.len(),

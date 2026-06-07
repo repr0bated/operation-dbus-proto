@@ -331,9 +331,7 @@ impl ImageManager {
                 let metadata_path = path.join(".image-metadata.json");
                 if metadata_path.exists() {
                     let content = async_fs::read_to_string(&metadata_path).await?;
-                    if let Ok(metadata) =
-                        serde_json::from_str::<ImageMetadata>(&content)
-                    {
+                    if let Ok(metadata) = serde_json::from_str::<ImageMetadata>(&content) {
                         images.push(metadata);
                     }
                 }

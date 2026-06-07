@@ -303,7 +303,10 @@ impl OvsdbDbusClient {
                     "columns": ["name"]
                 }))
                 .await?;
-            if let Some(row) = result.get("rows").and_then(|r| r.as_array()).and_then(|a| a.first())
+            if let Some(row) = result
+                .get("rows")
+                .and_then(|r| r.as_array())
+                .and_then(|a| a.first())
             {
                 if let Some(n) = row.get("name").and_then(|v| v.as_str()) {
                     names.push(n.to_string());
@@ -367,7 +370,8 @@ impl OvsdbDbusClient {
         let bridge_rows = bridge_result.get("rows").and_then(|r| r.as_array());
         let (bridge_uuid, bridge_row) = match bridge_rows {
             Some(rows) if !rows.is_empty() => {
-                let uuid = rows[0].get("_uuid")
+                let uuid = rows[0]
+                    .get("_uuid")
                     .and_then(|u| u.as_array())
                     .and_then(|a| a.get(1))
                     .and_then(|v| v.as_str())
@@ -463,7 +467,11 @@ impl OvsdbDbusClient {
         ];
         let result = self.transact_many(ops).await?;
         Self::check_errors(&result)?;
-        log::info!("Port {} added to bridge {} via D-Bus daemon", port_name, bridge_name);
+        log::info!(
+            "Port {} added to bridge {} via D-Bus daemon",
+            port_name,
+            bridge_name
+        );
         Ok(())
     }
 
@@ -513,27 +521,300 @@ impl OvsdbDbusClient {
 
     /// Set the `type` column on an Interface row (e.g. "internal", "system").
     pub async fn set_interface_type(&self, iface_name: &str, iface_type: &str) -> Result<()> {
-        let ops = vec![
-            serde_json::json!({
-                "op": "update",
-                "table": "Interface",
-                "where": [["name", "==", iface_name]],
-                "row": { "type": iface_type }
-            }),
-        ];
+        let ops = vec![serde_json::json!({
+            "op": "update",
+            "table": "Interface",
+            "where": [["name", "==", iface_name]],
+            "row": { "type": iface_type }
+        })];
         let result = self.transact_many(ops).await?;
         Self::check_errors(&result)?;
-        log::info!("Interface {} type set to {} via D-Bus daemon", iface_name, iface_type);
+        log::info!(
+            "Interface {} type set to {} via D-Bus daemon",
+            iface_name,
+            iface_type
+        );
         Ok(())
+    }
+
+    /// Set a bridge property (e.g., "datapath_type", "fail_mode").
+    pub async fn set_bridge_property(
+        &self,
+        bridge_name: &str,
+        property: &str,
+        value: &str,
+    ) -> Result<()> {
+        let ops = vec![serde_json::json!({
+            "op": "update",
+            "table": "Bridge",
+            "where": [["name", "==", bridge_name]],
+            "row": { property: value }
+        })];
+        let result = self.transact_many(ops).await?;
+        Self::check_errors(&result)?;
+        log::info!(
+            "Bridge {} property {} set to {} via D-Bus daemon",
+            bridge_name,
+            property,
+            value
+        );
+        Ok(())
+    }
+
+    /// Delete a port from a bridge and remove associated Interface.
+    pub async fn delete_port(&self, bridge_name: &str, port_name: &str) -> Result<()> {
+        // First get the port UUID and its interface UUID
+        let port_result = self
+            .transact_one(serde_json::json!({
+                "op": "select",
+                "table": "Port",
+                "where": [["name", "==", port_name]],
+                "columns": ["_uuid", "interfaces"]
+            }))
+            .await?;
+
+        let port_uuid = port_result
+            .get("rows")
+            .and_then(|r| r.as_array())
+            .and_then(|a| a.first())
+            .and_then(|row| row.get("_uuid"))
+            .and_then(|u| u.as_array())
+            .and_then(|a| a.get(1))
+            .and_then(|u| u.as_str())
+            .map(String::from)
+            .ok_or_else(|| anyhow::anyhow!("Port '{}' not found", port_name))?;
+
+        // Get interface UUIDs from port
+        let mut iface_uuids: Vec<String> = Vec::new();
+        if let Some(rows) = port_result.get("rows").and_then(|r| r.as_array()) {
+            if let Some(row) = rows.first() {
+                if let Some(ifaces) = row.get("interfaces") {
+                    Self::collect_uuids(ifaces, &mut iface_uuids);
+                }
+            }
+        }
+
+        // Build delete operations: remove from bridge, delete port, delete interfaces
+        let mut ops = vec![
+            serde_json::json!({
+                "op": "mutate",
+                "table": "Bridge",
+                "where": [["name", "==", bridge_name]],
+                "mutations": [["ports", "delete", ["uuid", port_uuid.clone()]]]
+            }),
+            serde_json::json!({
+                "op": "delete",
+                "table": "Port",
+                "where": [["_uuid", "==", ["uuid", port_uuid]]]
+            }),
+        ];
+
+        for iface_uuid in iface_uuids {
+            ops.push(serde_json::json!({
+                "op": "delete",
+                "table": "Interface",
+                "where": [["_uuid", "==", ["uuid", iface_uuid]]]
+            }));
+        }
+
+        let result = self.transact_many(ops).await?;
+        Self::check_errors(&result)?;
+        log::info!(
+            "Port {} deleted from bridge {} via D-Bus daemon",
+            port_name,
+            bridge_name
+        );
+        Ok(())
+    }
+
+    /// Add a port with specific type to a bridge.
+    pub async fn add_port_with_type(
+        &self,
+        bridge_name: &str,
+        port_name: &str,
+        port_type: Option<&str>,
+    ) -> Result<()> {
+        let ops = match port_type {
+            Some(ptype) => vec![
+                serde_json::json!({
+                    "op": "insert",
+                    "table": "Interface",
+                    "row": { "name": port_name, "type": ptype },
+                    "uuid-name": "new_iface"
+                }),
+                serde_json::json!({
+                    "op": "insert",
+                    "table": "Port",
+                    "row": {
+                        "name": port_name,
+                        "interfaces": ["set", [["named-uuid", "new_iface"]]]
+                    },
+                    "uuid-name": "new_port"
+                }),
+                serde_json::json!({
+                    "op": "mutate",
+                    "table": "Bridge",
+                    "where": [["name", "==", bridge_name]],
+                    "mutations": [["ports", "insert", ["named-uuid", "new_port"]]]
+                }),
+            ],
+            None => vec![
+                serde_json::json!({
+                    "op": "insert",
+                    "table": "Interface",
+                    "row": { "name": port_name },
+                    "uuid-name": "new_iface"
+                }),
+                serde_json::json!({
+                    "op": "insert",
+                    "table": "Port",
+                    "row": {
+                        "name": port_name,
+                        "interfaces": ["set", [["named-uuid", "new_iface"]]]
+                    },
+                    "uuid-name": "new_port"
+                }),
+                serde_json::json!({
+                    "op": "mutate",
+                    "table": "Bridge",
+                    "where": [["name", "==", bridge_name]],
+                    "mutations": [["ports", "insert", ["named-uuid", "new_port"]]]
+                }),
+            ],
+        };
+
+        let result = self.transact_many(ops).await?;
+        Self::check_errors(&result)?;
+        log::info!(
+            "Port {} added to bridge {} via D-Bus daemon",
+            port_name,
+            bridge_name
+        );
+        Ok(())
+    }
+
+    /// Dump the contents of an OVSDB database as JSON.
+    /// Returns a JSON object with database contents.
+    pub async fn dump_db(&self, database: &str) -> Result<serde_json::Value> {
+        // Query all tables in the database
+        let tables_result = self
+            .transact_one(serde_json::json!({
+                "op": "select",
+                "table": "Open_vSwitch",
+                "where": [],
+                "columns": []
+            }))
+            .await?;
+
+        // Build a dump structure with all tables
+        let mut dump = serde_json::json!({
+            "database": database,
+            "tables": {}
+        });
+
+        // Get list of tables from the database schema
+        let schema_result = self
+            .transact_one(serde_json::json!({
+                "op": "get_schema",
+                "id": "dump"
+            }))
+            .await?;
+
+        if let Some(tables) = schema_result.get("tables").and_then(|t| t.as_object()) {
+            for table_name in tables.keys() {
+                let table_data = self
+                    .transact_one(serde_json::json!({
+                        "op": "select",
+                        "table": table_name,
+                        "where": [],
+                        "columns": []
+                    }))
+                    .await?;
+
+                if let Some(rows) = table_data.get("rows") {
+                    dump["tables"][table_name] = rows.clone();
+                }
+            }
+        }
+
+        Ok(dump)
+    }
+
+    /// Monitor OVSDB for changes to a database.
+    /// Returns a broadcast receiver that will receive JSON updates.
+    /// NOTE: This is a compatibility shim. In the new architecture, use gRPC streaming
+    /// (op-openvswitch-daemon/src/grpc_streaming.rs) for production monitoring.
+    pub async fn monitor_db(
+        &self,
+        database: &str,
+    ) -> Result<tokio::sync::broadcast::Receiver<serde_json::Value>> {
+        let proxy = self.get_proxy().await?;
+        // Create a stream/monitor subscription via D-Bus
+        let _stream_id = proxy
+            .new_stream(database)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to create OVSDB monitor stream: {}", e))?;
+
+        // Create a broadcast channel for updates
+        // In a full implementation, this would be connected to the daemon's notification stream
+        let (tx, rx) = tokio::sync::broadcast::channel(128);
+
+        // Spawn a task that polls for notifications from the daemon
+        let proxy_clone = self.proxy.clone();
+        tokio::spawn(async move {
+            loop {
+                match proxy_clone.get() {
+                    Some(proxy) => {
+                        // Check if there are pending notifications
+                        match proxy.has_pending_notifications().await {
+                            Ok(true) => {
+                                let drain_result: zbus::Result<String> =
+                                    proxy.drain_notifications().await;
+                                match drain_result {
+                                    Ok(json_str) => {
+                                        if let Ok(json) =
+                                            serde_json::from_str::<serde_json::Value>(&json_str)
+                                        {
+                                            let _ = tx.send(json);
+                                        }
+                                    }
+                                    Err(e) => {
+                                        log::warn!("Failed to drain notifications: {}", e);
+                                    }
+                                }
+                            }
+                            Ok(false) => {
+                                // No notifications pending, wait a bit
+                                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                            }
+                            Err(e) => {
+                                log::warn!("Failed to check for pending notifications: {}", e);
+                                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                            }
+                        }
+                    }
+                    None => {
+                        log::warn!("Proxy not available for monitoring");
+                        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                    }
+                }
+            }
+        });
+
+        Ok(rx)
     }
 
     /// Compatibility shim for plugins that pass `simd_json::OwnedValue`.
     /// Converts to `serde_json::Value` and routes through the D-Bus daemon.
-    pub async fn transact_simd(&self, operations: simd_json::OwnedValue) -> Result<serde_json::Value> {
+    pub async fn transact_simd(
+        &self,
+        operations: simd_json::OwnedValue,
+    ) -> Result<serde_json::Value> {
         let text = simd_json::to_string(&operations)
             .context("failed to serialize simd_json operations to JSON text")?;
         let converted: serde_json::Value = serde_json::from_str(&text)
             .context("failed to deserialize simd_json operations as serde_json::Value")?;
-        self.transact_many(converted.as_array().cloned().unwrap_or_default()).await
+        self.transact_many(converted.as_array().cloned().unwrap_or_default())
+            .await
     }
 }

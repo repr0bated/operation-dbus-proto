@@ -234,8 +234,8 @@ impl AgentRegistry {
             .await
             .context("Failed to read agent specifications file")?;
 
-        let specs: Vec<AgentSpec> = serde_json::from_str(&content)
-            .context("Failed to parse agent specifications")?;
+        let specs: Vec<AgentSpec> =
+            serde_json::from_str(&content).context("Failed to parse agent specifications")?;
 
         for spec in specs {
             self.register_spec(spec).await?;

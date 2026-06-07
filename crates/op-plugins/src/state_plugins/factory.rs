@@ -4,6 +4,12 @@
 //! autonomy controls, token tracking) through PluginSchema so the UI can
 //! render Factory configuration, session controls, and model selection from
 //! the D-Bus projection.
+//!
+//! ## BYOM Integration
+//!
+//! The factory plugin discovers external model sources (BYOM) via D-Bus projection.
+//! It reads from the zeroclaw plugin's `model_routes` projection at
+//! `/opdbus/v1/plugins/zeroclaw` and surfaces them as `byom_sources`.
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -25,6 +31,9 @@ pub struct FactoryState {
     pub tools: Value,
     pub config_schema: Value,
     pub ui_surfaces: Value,
+    /// BYOM (Bring Your Own Model) sources discovered from external providers
+    /// via D-Bus projection (e.g., zeroclaw's model_routes)
+    pub byom_sources: Value,
 }
 
 pub struct FactoryPlugin;
@@ -35,12 +44,105 @@ impl Default for FactoryPlugin {
     }
 }
 
+/// D-Bus projection client for reading plugin states
+mod projection {
+    use simd_json::json;
+    use simd_json::prelude::*;
+    use simd_json::OwnedValue as Value;
+
+    const SHM_SCHEMA_PATH: &str = "/dev/shm/live-schema.json";
+
+    /// Read zeroclaw's model_routes from D-Bus projection cache
+    pub fn read_zeroclaw_model_routes() -> Option<Value> {
+        // Read the projection from shared memory JSON
+        let bytes = std::fs::read(SHM_SCHEMA_PATH).ok()?;
+        let mut bytes = bytes;
+        let schema: Value = simd_json::to_owned_value(&mut bytes).ok()?;
+
+        // Check if zeroclaw plugin exists in schema
+        schema.get("zeroclaw")?;
+
+        // Read zeroclaw projection from D-Bus via /dev/shm projection cache
+        // The actual projection is written by op-dbus at /dev/shm/plugin-{name}.json
+        let projection_path = "/dev/shm/plugin-zeroclaw.json";
+        let proj_bytes = std::fs::read(projection_path).ok()?;
+        let mut proj_bytes = proj_bytes;
+        let zeroclaw_proj: Value = simd_json::to_owned_value(&mut proj_bytes).ok()?;
+
+        // Extract model_routes
+        zeroclaw_proj.get("model_routes").cloned()
+    }
+
+    /// Convert zeroclaw routes to BYOM model sources
+    pub fn routes_to_byom_sources(routes: &Value) -> Value {
+        use simd_json::prelude::*;
+
+        let Some(routes_arr) = routes.as_array() else {
+            return json!([]);
+        };
+
+        let sources: Vec<Value> = routes_arr
+            .iter()
+            .filter_map(|route| {
+                let model = route.get("model")?.as_str()?;
+                let provider = route.get("provider")?.as_str().unwrap_or("unknown");
+                let upstream = route
+                    .get("upstream_provider")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(provider);
+                let hint = route.get("hint").and_then(|v| v.as_str());
+                let kind = route.get("kind").and_then(|v| v.as_str());
+                let available = route
+                    .get("available")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let transport = route.get("transport").and_then(|v| v.as_str());
+                let status_reason = route.get("status_reason").and_then(|v| v.as_str());
+
+                Some(json!({
+                    "id": format!("{}/{}", upstream, model),
+                    "model": model,
+                    "provider": provider,
+                    "upstream_provider": upstream,
+                    "family": upstream,
+                    "hint": hint,
+                    "kind": kind,
+                    "available": available,
+                    "transport": transport,
+                    "status_reason": status_reason,
+                    "source": "zeroclaw",
+                    "byom": true
+                }))
+            })
+            .collect();
+
+        json!(sources)
+    }
+}
+
 impl FactoryPlugin {
     pub fn new() -> Self {
         Self
     }
     fn env_or(key: &str, fallback: &str) -> String {
         std::env::var(key).unwrap_or_else(|_| fallback.to_string())
+    }
+
+    /// Discover BYOM sources from zeroclaw D-Bus projection
+    fn discover_byom_sources() -> Value {
+        // Try to read zeroclaw model routes via D-Bus projection
+        match projection::read_zeroclaw_model_routes() {
+            Some(routes) => projection::routes_to_byom_sources(&routes),
+            None => {
+                // Fallback: return empty array with discovery metadata
+                json!({
+                    "sources": [],
+                    "discovery_status": "zeroclaw_projection_unavailable",
+                    "discovery_path": "/opdbus/v1/plugins/zeroclaw",
+                    "note": "BYOM sources will appear when zeroclaw plugin is projected via D-Bus"
+                })
+            }
+        }
     }
 
     pub(crate) fn current_state() -> FactoryState {
@@ -126,17 +228,28 @@ impl FactoryPlugin {
                     {"hint": "code", "provider": "factory", "model": "deepseek-v4-pro", "kind": "chat", "available": true, "status_reason": "DeepSeek V4 Pro via Factory"}
                 ]
             }),
-            providers: json!([{
-                "id": "factory", "route": "factory", "kind": "orchestrator",
-                "aliases": ["default", "auto", "droid"],
-                "endpoint": "https://api.factory.ai/api/v0", "auth": "bearer"
-            }]),
+            providers: json!([
+                {
+                    "id": "factory", "route": "factory", "kind": "orchestrator",
+                    "aliases": ["default", "auto", "droid"],
+                    "endpoint": "https://api.factory.ai/api/v0", "auth": "bearer"
+                },
+                {
+                    "id": "zeroclaw", "route": "zeroclaw", "kind": "byom_router",
+                    "aliases": ["byom", "local", "openrouter", "ollama"],
+                    "endpoint": "/opdbus/v1/plugins/zeroclaw", "auth": "dbus_projection",
+                    "description": "BYOM source - discovers models from zeroclaw D-Bus projection",
+                    "discovery_plugin": "zeroclaw",
+                    "discovery_path": "/opdbus/v1/plugins/zeroclaw"
+                }
+            ]),
             tools: json!([
                 {"name": "factory.session.create", "description": "Create a Factory Droid coding session", "parameters": {"type": "object", "properties": {"computerId": {"type": "string"}, "sessionSettings": {"type": "object"}}, "required": ["computerId"]}},
                 {"name": "factory.session.send", "description": "Send a message to a Factory session", "parameters": {"type": "object", "properties": {"sessionId": {"type": "string"}, "text": {"type": "string"}}, "required": ["sessionId", "text"]}},
                 {"name": "factory.session.list", "description": "List active Factory sessions", "parameters": {"type": "object", "properties": {"computerId": {"type": "string"}}, "required": []}},
                 {"name": "factory.computer.create", "description": "Create a Factory computer environment", "parameters": {"type": "object", "properties": {"name": {"type": "string"}, "provider": {"type": "string", "enum": ["byom", "e2b"]}}, "required": ["name"]}},
-                {"name": "factory.models.list", "description": "List available models through Factory", "parameters": {"type": "object", "properties": {"family": {"type": "string"}}, "required": []}}
+                {"name": "factory.models.list", "description": "List available models through Factory", "parameters": {"type": "object", "properties": {"family": {"type": "string"}}, "required": []}},
+                {"name": "factory.byom.list", "description": "List BYOM (Bring Your Own Model) sources discovered from zeroclaw", "parameters": {"type": "object", "properties": {"provider": {"type": "string"}, "available_only": {"type": "boolean"}}, "required": []}}
             ]),
             config_schema: json!({
                 "source": "factory public api v0",
@@ -146,8 +259,10 @@ impl FactoryPlugin {
             ui_surfaces: json!([
                 {"path": "/factory", "name": "Factory Droid", "schema": "factory"},
                 {"path": "/factory/sessions", "name": "Sessions", "schema": "factory.sessions"},
-                {"path": "/factory/models", "name": "Models", "schema": "factory.models"}
+                {"path": "/factory/models", "name": "Models", "schema": "factory.models"},
+                {"path": "/factory/byom", "name": "BYOM Sources", "schema": "factory.byom_sources"}
             ]),
+            byom_sources: Self::discover_byom_sources(),
         }
     }
 }

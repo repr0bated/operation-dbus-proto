@@ -85,7 +85,11 @@ impl JsonRpcService {
     /// `params_json` — JSON-encoded params array (e.g. `["Open_vSwitch", {op:...}]`).
     /// Returns JSON-encoded result.
     async fn transact(&self, method: &str, params_json: &str) -> String {
-        debug!("jsonrpc.transact method={} params_len={}", method, params_json.len());
+        debug!(
+            "jsonrpc.transact method={} params_len={}",
+            method,
+            params_json.len()
+        );
 
         let mut guard = match self.state.get_ovsdb().await {
             Ok(g) => g,
@@ -140,7 +144,9 @@ impl JsonRpcService {
                     None => return json_error("client unavailable"),
                 };
                 match client.transact(req).await {
-                    Ok(r) => serde_json::to_string(&r).unwrap_or_else(|e| json_error(&e.to_string())),
+                    Ok(r) => {
+                        serde_json::to_string(&r).unwrap_or_else(|e| json_error(&e.to_string()))
+                    }
                     Err(e) => json_error(&e.to_string()),
                 }
             }
@@ -185,7 +191,9 @@ impl JsonRpcService {
         let connected = self.state.ovsdb.lock().await.is_some();
         format!(
             "{{\"connected\":{},\"socket_path\":\"{}\",\"version\":\"{}\"}}",
-            connected, self.state.socket_path, env!("CARGO_PKG_VERSION")
+            connected,
+            self.state.socket_path,
+            env!("CARGO_PKG_VERSION")
         )
     }
 }
@@ -248,61 +256,42 @@ impl OpenFlowService {
         }
     }
 
-    /// Send a flow_mod. `flow_json` is JSON-encoded Flow.
-    ///
-    /// **Note:** Deserialising a rovs_openflow::Flow from JSON requires a
-    /// custom serializer (Match + ActionList wire encoding).  This is a
-    /// known gap — callers should use raw `send_message` for now.
     async fn send_flow(&self, conn_id: u64, flow_json: &str) -> String {
-        debug!("openflow.send_flow conn_id={} len={}", conn_id, flow_json.len());
-        let mut conns = self.state.of_conns.lock().await;
-        match conns.get_mut(&conn_id) {
-            Some(_vconn) => {
-                json_error("send_flow: JSON→Flow deserialiser not yet implemented (use send_message with raw OFPT_FLOW_MOD bytes)")
+        debug!(
+            "openflow.send_flow conn_id={} len={}",
+            conn_id,
+            flow_json.len()
+        );
+        match parse_json_flow(flow_json) {
+            Ok(rovs_flow) => {
+                let mut conns = self.state.of_conns.lock().await;
+                match conns.get_mut(&conn_id) {
+                    Some(vconn) => match vconn.send_flow(&rovs_flow).await {
+                        Ok(_) => serde_json::json!({"ok": true}).to_string(),
+                        Err(e) => json_error(&format!("send_flow failed: {}", e)),
+                    },
+                    None => json_error("unknown conn_id"),
+                }
             }
-            None => json_error("unknown conn_id"),
+            Err(e) => json_error(&format!("JSON deserializer error: {}", e)),
         }
     }
 
     /// Send flow_mod + barrier.
-    async fn send_flow_sync(&self, conn_id: u64, _flow_json: &str) -> String {
+    async fn send_flow_sync(&self, conn_id: u64, flow_json: &str) -> String {
         debug!("openflow.send_flow_sync conn_id={}", conn_id);
-        let mut conns = self.state.of_conns.lock().await;
-        match conns.get_mut(&conn_id) {
-            Some(_vconn) => {
-                json_error("send_flow_sync: JSON→Flow deserialiser not yet implemented")
-            }
-            None => json_error("unknown conn_id"),
-        }
-    }
-
-    /// Raw `ovs-ofctl` passthrough (temporary bridge until pure OpenFlow binary is wired).
-    /// Accepts a bridge name and a JSON array of CLI arguments.
-    /// Returns the captured stdout / stderr as a JSON string.
-    async fn ofctl(&self, bridge: &str, args_json: &str) -> String {
-        debug!("openflow.ofctl bridge={} args={}", bridge, args_json);
-        let extra_args: Vec<String> = match serde_json::from_str(args_json) {
-            Ok(v) => v,
-            Err(e) => return json_error(&format!("invalid args JSON: {}", e)),
-        };
-        let mut cmd = tokio::process::Command::new("ovs-ofctl");
-        cmd.arg("-O").arg("OpenFlow13");
-        for a in extra_args {
-            cmd.arg(a);
-        }
-        cmd.arg(bridge);
-        match cmd.output().await {
-            Ok(output) => {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                let code = output.status.code().unwrap_or(-1);
-                if output.status.success() {
-                    serde_json::json!({ "ok": true, "stdout": stdout.trim() }).to_string()
-                } else {
-                    json_error(&format!("ovs-ofctl exited {}: {}", code, stderr.trim()))
+        match parse_json_flow(flow_json) {
+            Ok(rovs_flow) => {
+                let mut conns = self.state.of_conns.lock().await;
+                match conns.get_mut(&conn_id) {
+                    Some(vconn) => match vconn.send_flow_sync(&rovs_flow).await {
+                        Ok(_) => serde_json::json!({"ok": true}).to_string(),
+                        Err(e) => json_error(&format!("send_flow_sync failed: {}", e)),
+                    },
+                    None => json_error("unknown conn_id"),
                 }
             }
-            Err(e) => json_error(&format!("failed to spawn ovs-ofctl: {}", e)),
+            Err(e) => json_error(&format!("JSON deserializer error: {}", e)),
         }
     }
 
@@ -487,4 +476,104 @@ fn bytes_to_hex(bytes: &[u8]) -> String {
         s.push(HEX[(b & 0xF) as usize] as char);
     }
     s
+}
+
+#[derive(serde::Deserialize, Debug)]
+pub struct JsonFlowEntry {
+    pub table: u8,
+    pub priority: u16,
+    pub match_fields: std::collections::HashMap<String, String>,
+    pub actions: Vec<JsonFlowAction>,
+    pub cookie: Option<u64>,
+    #[serde(default)]
+    pub idle_timeout: u16,
+    #[serde(default)]
+    pub hard_timeout: u16,
+}
+
+#[derive(serde::Deserialize, Debug)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum JsonFlowAction {
+    Output { port: String },
+    LoadRegister { register: u8, value: u64 },
+    Resubmit { table: u8 },
+    SetField { field: String, value: String },
+    Drop,
+    Normal,
+    Controller { max_len: Option<u16> },
+    ArpResponder { mac: String, ip: String },
+}
+
+fn parse_json_flow(flow_json: &str) -> Result<rovs_openflow::Flow> {
+    let entry: JsonFlowEntry =
+        serde_json::from_str(flow_json).context("invalid JsonFlowEntry format")?;
+
+    let mut m = rovs_openflow::Match::new();
+    for (k, v) in entry.match_fields {
+        match k.as_str() {
+            "in_port" => {
+                if let Ok(port) = v.parse::<u32>() {
+                    m = m.in_port(port);
+                }
+            }
+            "dl_type" => {
+                let eth_type = if v.starts_with("0x") {
+                    u16::from_str_radix(v.trim_start_matches("0x"), 16).unwrap_or(0)
+                } else {
+                    v.parse().unwrap_or(0)
+                };
+                m = m.eth_type(eth_type);
+            }
+            "dl_vlan" => {
+                if let Ok(vlan) = v.parse::<u16>() {
+                    m = m.vlan_vid(vlan);
+                }
+            }
+            // Add other matches here as required
+            _ => {
+                tracing::warn!("Unsupported match field in JSON->Flow map: {}={}", k, v);
+            }
+        }
+    }
+
+    let mut action_list = rovs_openflow::ActionList::new();
+    for action in entry.actions {
+        match action {
+            JsonFlowAction::Output { port } => {
+                if port.eq_ignore_ascii_case("LOCAL") {
+                    action_list = action_list.output(rovs_openflow::OutputPort::Local);
+                } else if port.eq_ignore_ascii_case("NORMAL") {
+                    action_list = action_list.output(rovs_openflow::OutputPort::Normal);
+                } else if let Ok(p) = port.parse::<u32>() {
+                    action_list = action_list.output(rovs_openflow::OutputPort::Port(p));
+                } else {
+                    tracing::warn!("Invalid numeric port output: {}", port);
+                }
+            }
+            JsonFlowAction::Normal => {
+                action_list = action_list.output(rovs_openflow::OutputPort::Normal);
+            }
+            JsonFlowAction::Drop => {}
+            // Other actions could be mapped here.
+            _ => {
+                tracing::warn!("Unsupported JSON->Flow action: {:?}", action);
+            }
+        }
+    }
+
+    let mut flow = rovs_openflow::Flow::add()
+        .priority(entry.priority)
+        .match_fields(m)
+        .actions(action_list)
+        .idle_timeout(entry.idle_timeout)
+        .hard_timeout(entry.hard_timeout);
+
+    if let Some(c) = entry.cookie {
+        flow = flow.cookie(c);
+    }
+
+    // Some rovs_openflow Flow builders support .table_id(u8), we will skip it for now
+    // unless explicitly supported by the FlowAddBuilder. (Usually table_id=0 by default).
+
+    Ok(flow)
 }

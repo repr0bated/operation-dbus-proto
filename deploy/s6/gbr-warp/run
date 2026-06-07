@@ -1,0 +1,17 @@
+#!/bin/sh
+# gbr-warp - Cloudflare WARP WireGuard tunnel (GhostBridge privacy chain middle hop)
+# Creates gbr_warp OVS internal port via wg-quick
+
+# Load interface configuration
+IFACE="${IFACE:-wgcf}"
+WG_CONF="${WG_CONF:-/etc/wireguard/wgcf.conf}"
+
+# Check if config exists
+if [ ! -f "$WG_CONF" ]; then
+    echo "WireGuard config not found: $WG_CONF"
+    exit 0
+fi
+
+# Bring up WireGuard interface
+exec 2>&1
+exec wg-quick up "${IFACE}" && exec pause

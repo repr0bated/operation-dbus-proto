@@ -44,7 +44,7 @@ pub mod sled_reader;
 
 pub use access_control::ProjectionAccessController;
 pub use data_models::{
-    AccessControlAudit, AccessPolicy, AIContextProjection, AuditProjection, ChangeType,
+    AIContextProjection, AccessControlAudit, AccessPolicy, AuditProjection, ChangeType,
     CompositeHealth, Constraint, DashboardProjection, EventType, FieldSchema, FieldType,
     HealthStatus, HistoricalProjection, Link, Node, OrchestrationProjection, PluginSchema,
     Projection, ProjectionEvent, ProjectionState, ProjectionUpdate, Relationship, RelationshipType,

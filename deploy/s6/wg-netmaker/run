@@ -1,0 +1,19 @@
+#!/bin/sh
+# wg-netmaker - Netmaker WireGuard mesh network service
+# AGENTS.md: D-Bus-first, gbr_* naming for privacy network
+
+# Load Netmaker configuration
+NETMAKER_SERVER="${NETMAKER_SERVER:-netmaker.3tched.com}"
+NETMAKER_NETWORK="${NETMAKER_NETWORK:-ghostbridge}"
+
+# Check for netclient binary
+if [ -x /usr/local/bin/netclient ]; then
+    exec 2>&1
+    exec /usr/local/bin/netclient daemon
+elif [ -x /usr/bin/netclient ]; then
+    exec 2>&1
+    exec /usr/bin/netclient daemon
+else
+    echo "Error: netclient binary not found"
+    exit 1
+fi

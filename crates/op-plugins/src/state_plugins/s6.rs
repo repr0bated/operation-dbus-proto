@@ -87,19 +87,30 @@ async fn detect_systemd_suffix(name: &str) -> &'static str {
         return ".timer";
     }
     // Check for socket subdirectory or s6-socketmux
-    if tokio::fs::metadata(format!("{svc_dir}/socket")).await.is_ok()
-        || tokio::fs::metadata(format!("{svc_dir}/env/SOCKET")).await.is_ok()
+    if tokio::fs::metadata(format!("{svc_dir}/socket"))
+        .await
+        .is_ok()
+        || tokio::fs::metadata(format!("{svc_dir}/env/SOCKET"))
+            .await
+            .is_ok()
     {
         return ".socket";
     }
     // Check for ftrig / path trigger
-    if tokio::fs::metadata(format!("{svc_dir}/ftrig")).await.is_ok()
-        || tokio::fs::metadata(format!("{svc_dir}/env/PATH")).await.is_ok()
+    if tokio::fs::metadata(format!("{svc_dir}/ftrig"))
+        .await
+        .is_ok()
+        || tokio::fs::metadata(format!("{svc_dir}/env/PATH"))
+            .await
+            .is_ok()
     {
         return ".path";
     }
     // Check for mount-related env
-    if tokio::fs::metadata(format!("{svc_dir}/env/MOUNTPOINT")).await.is_ok() {
+    if tokio::fs::metadata(format!("{svc_dir}/env/MOUNTPOINT"))
+        .await
+        .is_ok()
+    {
         return ".mount";
     }
     ".service"

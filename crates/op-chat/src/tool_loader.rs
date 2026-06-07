@@ -18,7 +18,7 @@ use simd_json::{json, OwnedValue as Value};
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
-use op_network::OvsdbClient;
+use op_network::rovs_proxy::OvsdbDbusClient;
 use op_tools::registry::{ToolDefinition, ToolRegistry};
 use op_tools::tool::{BoxedTool, Tool};
 
@@ -1455,7 +1455,7 @@ impl Tool for OvsListBridgesTool {
     }
 
     async fn execute(&self, _input: Value) -> Result<Value> {
-        let client = OvsdbClient::new();
+        let client = OvsdbDbusClient::new();
         match client.list_bridges().await {
             Ok(bridges) => Ok(json!({"success": true, "bridges": bridges, "count": bridges.len()})),
             Err(e) => Ok(json!({"success": false, "error": e.to_string()})),
@@ -1498,7 +1498,7 @@ impl Tool for OvsShowBridgeTool {
         let bridge = input.get("bridge").and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing required field: bridge"))?;
 
-        let client = OvsdbClient::new();
+        let client = OvsdbDbusClient::new();
         match client.get_bridge_info(bridge).await {
             Ok(info) => Ok(json!({"success": true, "bridge": bridge, "info": info})),
             Err(e) => Ok(json!({"success": false, "error": e.to_string()})),
@@ -1541,7 +1541,7 @@ impl Tool for OvsListPortsTool {
         let bridge = input.get("bridge").and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing required field: bridge"))?;
 
-        let client = OvsdbClient::new();
+        let client = OvsdbDbusClient::new();
         match client.list_bridge_ports(bridge).await {
             Ok(ports) => Ok(json!({"success": true, "bridge": bridge, "ports": ports, "count": ports.len()})),
             Err(e) => Ok(json!({"success": false, "error": e.to_string()})),
@@ -1645,7 +1645,7 @@ impl Tool for OvsAddBridgeTool {
         let bridge = input.get("bridge").and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing required field: bridge"))?;
 
-        let client = OvsdbClient::new();
+        let client = OvsdbDbusClient::new();
         match client.create_bridge(bridge).await {
             Ok(()) => Ok(json!({"success": true, "bridge": bridge, "action": "created"})),
             Err(e) => Ok(json!({"success": false, "error": e.to_string()})),
@@ -1688,7 +1688,7 @@ impl Tool for OvsDelBridgeTool {
         let bridge = input.get("bridge").and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing required field: bridge"))?;
 
-        let client = OvsdbClient::new();
+        let client = OvsdbDbusClient::new();
         match client.delete_bridge(bridge).await {
             Ok(()) => Ok(json!({"success": true, "bridge": bridge, "action": "deleted"})),
             Err(e) => Ok(json!({"success": false, "error": e.to_string()})),
@@ -1733,7 +1733,7 @@ impl Tool for OvsAddPortTool {
         let port = input.get("port").and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing required field: port"))?;
 
-        let client = OvsdbClient::new();
+        let client = OvsdbDbusClient::new();
         match client.add_port(bridge, port).await {
             Ok(()) => Ok(json!({"success": true, "bridge": bridge, "port": port, "action": "added"})),
             Err(e) => Ok(json!({"success": false, "error": e.to_string()})),
@@ -1778,7 +1778,7 @@ impl Tool for OvsDelPortTool {
         let port = input.get("port").and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing required field: port"))?;
 
-        let client = OvsdbClient::new();
+        let client = OvsdbDbusClient::new();
         match client.delete_port(bridge, port).await {
             Ok(()) => Ok(json!({"success": true, "bridge": bridge, "port": port, "action": "deleted"})),
             Err(e) => Ok(json!({"success": false, "error": e.to_string()})),

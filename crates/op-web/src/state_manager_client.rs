@@ -34,8 +34,8 @@ where
         .call("QueryState", &())
         .await
         .context("query current state from StateManager")?;
-    let query_state: QueryStateResponse = serde_json::from_str(&state_json)
-        .context("parse StateManager query_state payload")?;
+    let query_state: QueryStateResponse =
+        serde_json::from_str(&state_json).context("parse StateManager query_state payload")?;
 
     if let Some(existing) = query_state.plugins.get(plugin_id) {
         let value = simd_json::serde::from_owned_value(existing.clone())

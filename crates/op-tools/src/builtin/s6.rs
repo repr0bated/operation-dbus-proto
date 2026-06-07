@@ -311,11 +311,14 @@ impl Tool for S6ListServicesTool {
         let services = match get_proxy().await {
             Ok(proxy) => {
                 let raw = proxy.list_units().await.unwrap_or_default();
-                let parsed: Vec<serde_json::Value> =
-                    serde_json::from_str(&raw).unwrap_or_default();
+                let parsed: Vec<serde_json::Value> = serde_json::from_str(&raw).unwrap_or_default();
                 parsed
                     .into_iter()
-                    .filter_map(|u| u.get("name").and_then(|v| v.as_str()).map(|s| s.to_string()))
+                    .filter_map(|u| {
+                        u.get("name")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string())
+                    })
                     .collect::<Vec<String>>()
             }
             Err(_) => {

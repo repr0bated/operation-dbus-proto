@@ -90,8 +90,8 @@ impl ZeroclawPlugin {
                 "model": "gemma4",
                 "endpoint": router_endpoint,
                 "scope": "all",
-                "role": "classifier",
-                "emits": ["provider", "model", "hint", "candidate_subids", "confidence"],
+                "role": "context_aware_allocator",
+                "emits": ["provider", "model", "hint", "candidate_subids", "confidence", "thinking_budget", "reasoning_effort"],
             }),
             model_routes: json!([
                 {
@@ -177,6 +177,18 @@ impl ZeroclawPlugin {
                     "status": "declared",
                     "available": false,
                     "status_reason": "Factory local route -> ollama/gemma4; requires backend projection.",
+                    "api_key": null
+                },
+                {
+                    "hint": "reasoning",
+                    "provider": "factory",
+                    "upstream_provider": "antigravity",
+                    "transport": "direct",
+                    "model": "gemini-3-pro-preview",
+                    "kind": "chat",
+                    "status": "declared",
+                    "available": false,
+                    "status_reason": "Factory reasoning route; Gemma dynamically allocates thinking budget.",
                     "api_key": null
                 },
                 // Compliance baseline routed through the OSCAL policy provider; the

@@ -7,11 +7,11 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 
 /// Direct OVSDB JSON-RPC client
-pub struct OvsdbClient {
+pub struct OvsdbDbusClient {
     socket_path: String,
 }
 
-impl OvsdbClient {
+impl OvsdbDbusClient {
     /// Connect to OVSDB unix socket
     pub fn new() -> Self {
         Self {
@@ -358,7 +358,7 @@ impl OvsdbClient {
     }
 }
 
-impl Default for OvsdbClient {
+impl Default for OvsdbDbusClient {
     fn default() -> Self {
         Self::new()
     }

@@ -279,7 +279,9 @@ pub fn gather_metrics() -> String {
     let encoder = prometheus::TextEncoder::new();
     let metric_families = REGISTRY.gather();
     let mut buffer = Vec::new();
-    encoder.encode(&metric_families, &mut buffer).expect("hardcoded metric definition is valid");
+    encoder
+        .encode(&metric_families, &mut buffer)
+        .expect("hardcoded metric definition is valid");
     String::from_utf8(buffer).unwrap_or_default()
 }
 

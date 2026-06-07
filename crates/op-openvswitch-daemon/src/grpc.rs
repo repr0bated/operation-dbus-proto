@@ -21,9 +21,9 @@ pub mod proto {
 
 use proto::ovsdb_service_server::{OvsdbService, OvsdbServiceServer};
 use proto::{
-    BridgeRequest, BridgeResponse, BridgesRequest, BridgesResponse,
-    DatabaseRequest, DatabaseResponse, PortRequest, PortResponse,
-    PortsRequest, PortsResponse, StatusRequest, StatusResponse,
+    BridgeRequest, BridgeResponse, BridgesRequest, BridgesResponse, DatabaseRequest,
+    DatabaseResponse, PortRequest, PortResponse, PortsRequest, PortsResponse, StatusRequest,
+    StatusResponse,
 };
 
 /// gRPC service implementation — delegates to the shared `DaemonState`.
@@ -37,10 +37,13 @@ impl OvsdbServiceImpl {
     }
 
     /// Helper: acquire the OVSDB client from the shared state.
-    async fn ovsdb_client(&self) -> Result<tokio::sync::MutexGuard<'_, Option<rovs_ovsdb::Client>>, Status> {
-        self.state.get_ovsdb().await.map_err(|e| {
-            Status::internal(format!("OVSDB not available: {}", e))
-        })
+    async fn ovsdb_client(
+        &self,
+    ) -> Result<tokio::sync::MutexGuard<'_, Option<rovs_ovsdb::Client>>, Status> {
+        self.state
+            .get_ovsdb()
+            .await
+            .map_err(|e| Status::internal(format!("OVSDB not available: {}", e)))
     }
 }
 
@@ -54,7 +57,9 @@ impl OvsdbService for OvsdbServiceImpl {
         info!("gRPC create_bridge: {}", name);
 
         let mut guard = self.ovsdb_client().await?;
-        let client = guard.as_mut().ok_or_else(|| Status::internal("OVSDB client unavailable"))?;
+        let client = guard
+            .as_mut()
+            .ok_or_else(|| Status::internal("OVSDB client unavailable"))?;
 
         let ops = serde_json::json!([
             {
@@ -72,15 +77,30 @@ impl OvsdbService for OvsdbServiceImpl {
         ]);
 
         match client.transact(ops).await {
-            Ok(_) => Ok(Response::new(BridgeResponse {
-                name,
-                success: true,
-                message: "Bridge created".to_string(),
-            })),
+            Ok(result) => {
+                // Extract bridge UUID from result if available
+                let uuid = result
+                    .get("result")
+                    .and_then(|r| r.as_array())
+                    .and_then(|a| a.first())
+                    .and_then(|o| o.get("uuid"))
+                    .and_then(|u| u.as_array())
+                    .and_then(|a| a.get(1))
+                    .and_then(|u| u.as_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_default();
+                Ok(Response::new(BridgeResponse {
+                    name,
+                    success: true,
+                    message: "Bridge created".to_string(),
+                    uuid,
+                }))
+            }
             Err(e) => Ok(Response::new(BridgeResponse {
                 name,
                 success: false,
                 message: format!("Failed: {}", e),
+                uuid: String::new(),
             })),
         }
     }
@@ -93,7 +113,9 @@ impl OvsdbService for OvsdbServiceImpl {
         info!("gRPC delete_bridge: {}", name);
 
         let mut guard = self.ovsdb_client().await?;
-        let client = guard.as_mut().ok_or_else(|| Status::internal("OVSDB client unavailable"))?;
+        let client = guard
+            .as_mut()
+            .ok_or_else(|| Status::internal("OVSDB client unavailable"))?;
 
         let del_ops = serde_json::json!([
             {
@@ -114,11 +136,13 @@ impl OvsdbService for OvsdbServiceImpl {
                 name,
                 success: true,
                 message: "Bridge deleted".to_string(),
+                uuid: String::new(),
             })),
             Err(e) => Ok(Response::new(BridgeResponse {
                 name,
                 success: false,
                 message: format!("Failed: {}", e),
+                uuid: String::new(),
             })),
         }
     }
@@ -128,7 +152,9 @@ impl OvsdbService for OvsdbServiceImpl {
         _request: Request<BridgesRequest>,
     ) -> Result<Response<BridgesResponse>, Status> {
         let mut guard = self.ovsdb_client().await?;
-        let client = guard.as_mut().ok_or_else(|| Status::internal("OVSDB client unavailable"))?;
+        let client = guard
+            .as_mut()
+            .ok_or_else(|| Status::internal("OVSDB client unavailable"))?;
 
         let ops = serde_json::json!([{
             "op": "select",
@@ -164,7 +190,9 @@ impl OvsdbService for OvsdbServiceImpl {
         info!("gRPC add_port: {} to {}", name, bridge);
 
         let mut guard = self.ovsdb_client().await?;
-        let client = guard.as_mut().ok_or_else(|| Status::internal("OVSDB client unavailable"))?;
+        let client = guard
+            .as_mut()
+            .ok_or_else(|| Status::internal("OVSDB client unavailable"))?;
 
         let ops = serde_json::json!([
             {
@@ -196,12 +224,14 @@ impl OvsdbService for OvsdbServiceImpl {
                 bridge,
                 success: true,
                 message: "Port added".to_string(),
+                uuid: String::new(),
             })),
             Err(e) => Ok(Response::new(PortResponse {
                 name,
                 bridge,
                 success: false,
                 message: format!("Failed: {}", e),
+                uuid: String::new(),
             })),
         }
     }
@@ -212,7 +242,9 @@ impl OvsdbService for OvsdbServiceImpl {
     ) -> Result<Response<PortsResponse>, Status> {
         let bridge = request.into_inner().bridge;
         let mut guard = self.ovsdb_client().await?;
-        let client = guard.as_mut().ok_or_else(|| Status::internal("OVSDB client unavailable"))?;
+        let client = guard
+            .as_mut()
+            .ok_or_else(|| Status::internal("OVSDB client unavailable"))?;
 
         let ops = serde_json::json!([{
             "op": "select",
@@ -237,10 +269,17 @@ impl OvsdbService for OvsdbServiceImpl {
                                                 "where": [["_uuid", "==", ["uuid", uuid]]],
                                                 "columns": ["name"]
                                             }]);
-                                            if let Ok(name_result) = client.transact(name_ops).await {
-                                                if let Some(name_rows) = name_result.get("rows").and_then(|r| r.as_array()) {
+                                            if let Ok(name_result) = client.transact(name_ops).await
+                                            {
+                                                if let Some(name_rows) = name_result
+                                                    .get("rows")
+                                                    .and_then(|r| r.as_array())
+                                                {
                                                     if let Some(name_row) = name_rows.first() {
-                                                        if let Some(port_name) = name_row.get("name").and_then(|n| n.as_str()) {
+                                                        if let Some(port_name) = name_row
+                                                            .get("name")
+                                                            .and_then(|n| n.as_str())
+                                                        {
                                                             ports.push(port_name.to_string());
                                                         }
                                                     }
@@ -254,9 +293,64 @@ impl OvsdbService for OvsdbServiceImpl {
                     }
                 }
                 let count = ports.len() as i32;
-                Ok(Response::new(PortsResponse { bridge, ports, count }))
+                Ok(Response::new(PortsResponse {
+                    bridge,
+                    ports,
+                    count,
+                }))
             }
             Err(e) => Err(Status::internal(format!("OVSDB query failed: {}", e))),
+        }
+    }
+
+    async fn remove_port(
+        &self,
+        request: Request<PortRequest>,
+    ) -> Result<Response<PortResponse>, Status> {
+        let req = request.into_inner();
+        let name = req.name;
+        let bridge = req.bridge;
+        info!("gRPC remove_port: {} from {}", name, bridge);
+
+        let mut guard = self.ovsdb_client().await?;
+        let client = guard
+            .as_mut()
+            .ok_or_else(|| Status::internal("OVSDB client unavailable"))?;
+
+        let ops = serde_json::json!([
+            {
+                "op": "mutate",
+                "table": "Bridge",
+                "where": [["name", "==", &bridge]],
+                "mutations": [["ports", "delete", ["name", &name]]]
+            },
+            {
+                "op": "delete",
+                "table": "Port",
+                "where": [["name", "==", &name]]
+            },
+            {
+                "op": "delete",
+                "table": "Interface",
+                "where": [["name", "==", &name]]
+            },
+        ]);
+
+        match client.transact(ops).await {
+            Ok(_) => Ok(Response::new(PortResponse {
+                name,
+                bridge,
+                success: true,
+                message: "Port removed".to_string(),
+                uuid: String::new(),
+            })),
+            Err(e) => Ok(Response::new(PortResponse {
+                name,
+                bridge,
+                success: false,
+                message: format!("Failed: {}", e),
+                uuid: String::new(),
+            })),
         }
     }
 
@@ -265,12 +359,17 @@ impl OvsdbService for OvsdbServiceImpl {
         _request: Request<DatabaseRequest>,
     ) -> Result<Response<DatabaseResponse>, Status> {
         let mut guard = self.ovsdb_client().await?;
-        let client = guard.as_mut().ok_or_else(|| Status::internal("OVSDB client unavailable"))?;
+        let client = guard
+            .as_mut()
+            .ok_or_else(|| Status::internal("OVSDB client unavailable"))?;
 
         match client.list_dbs().await {
             Ok(dbs) => {
                 let count = dbs.len() as i32;
-                Ok(Response::new(DatabaseResponse { databases: dbs, count }))
+                Ok(Response::new(DatabaseResponse {
+                    databases: dbs,
+                    count,
+                }))
             }
             Err(e) => Err(Status::internal(format!("OVSDB query failed: {}", e))),
         }
@@ -301,6 +400,27 @@ pub async fn run_grpc_server(addr: SocketAddr, state: DaemonState) -> Result<()>
 
     tonic::transport::Server::builder()
         .add_service(OvsdbServiceServer::new(service))
+        .serve(addr)
+        .await
+        .map_err(|e| anyhow::anyhow!("gRPC server error: {}", e))?;
+
+    Ok(())
+}
+
+/// Run the gRPC server with streaming support (M2: gRPC transport + projection wiring)
+pub async fn run_grpc_server_with_streaming(
+    addr: SocketAddr,
+    state: DaemonState,
+    streaming_service: crate::grpc_streaming::StreamingService,
+) -> Result<()> {
+    info!("gRPC server with streaming starting on {}", addr);
+
+    let base_service = OvsdbServiceImpl::new(state);
+    let stream_server = streaming_service.into_server();
+
+    tonic::transport::Server::builder()
+        .add_service(OvsdbServiceServer::new(base_service))
+        .add_service(stream_server)
         .serve(addr)
         .await
         .map_err(|e| anyhow::anyhow!("gRPC server error: {}", e))?;

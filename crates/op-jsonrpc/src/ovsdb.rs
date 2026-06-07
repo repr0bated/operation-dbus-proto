@@ -11,12 +11,12 @@ use tokio::net::UnixStream;
 use tracing::{debug, info};
 
 /// OVSDB JSON-RPC client
-pub struct OvsdbClient {
+pub struct OvsdbDbusClient {
     socket_path: String,
     timeout: Duration,
 }
 
-impl OvsdbClient {
+impl OvsdbDbusClient {
     /// Create a new OVSDB client with default socket path
     pub fn new() -> Self {
         Self {
@@ -580,7 +580,7 @@ impl OvsdbClient {
     }
 }
 
-impl Default for OvsdbClient {
+impl Default for OvsdbDbusClient {
     fn default() -> Self {
         Self::new()
     }
@@ -595,16 +595,17 @@ mod tests {
 
     #[test]
     fn parse_json_response_accepts_plain_json() {
-        let parsed =
-            OvsdbClient::parse_json_response(r#"{"result":["Open_vSwitch"],"error":null,"id":0}"#)
-                .expect("parse response");
+        let parsed = OvsdbDbusClient::parse_json_response(
+            r#"{"result":["Open_vSwitch"],"error":null,"id":0}"#,
+        )
+        .expect("parse response");
         assert_eq!(parsed["id"], 0);
         assert_eq!(parsed["result"][0], "Open_vSwitch");
     }
 
     #[test]
     fn parse_json_response_falls_back_to_last_valid_line() {
-        let parsed = OvsdbClient::parse_json_response(
+        let parsed = OvsdbDbusClient::parse_json_response(
             "noise line\n{\"result\":[\"Open_vSwitch\"],\"error\":null,\"id\":0}\n",
         )
         .expect("parse response");
@@ -614,14 +615,14 @@ mod tests {
     #[test]
     fn extract_uuid_set_supports_singleton_atom() {
         let value = json!(["uuid", "abc"]);
-        let uuids = OvsdbClient::extract_uuid_set(&value);
+        let uuids = OvsdbDbusClient::extract_uuid_set(&value);
         assert_eq!(uuids, vec!["abc".to_string()]);
     }
 
     #[test]
     fn extract_uuid_set_supports_set_encoding() {
         let value = json!(["set", [["uuid", "a"], ["uuid", "b"]]]);
-        let uuids = OvsdbClient::extract_uuid_set(&value);
+        let uuids = OvsdbDbusClient::extract_uuid_set(&value);
         assert_eq!(uuids, vec!["a".to_string(), "b".to_string()]);
     }
 
@@ -644,7 +645,7 @@ mod tests {
             socket.shutdown().await.expect("shutdown socket");
         });
 
-        let client = OvsdbClient::with_socket(socket_path.to_string_lossy().to_string())
+        let client = OvsdbDbusClient::with_socket(socket_path.to_string_lossy().to_string())
             .with_timeout(Duration::from_secs(2));
         let dbs = client.list_dbs().await.expect("list dbs");
         assert_eq!(dbs, vec!["Open_vSwitch".to_string(), "_Server".to_string()]);

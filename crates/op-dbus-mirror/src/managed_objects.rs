@@ -3,7 +3,7 @@
 //! Provides `GetManagedObjects` so any D-Bus client can enumerate every object
 //! created by a plugin in a single round-trip call.
 //!
-//! The interface is registered at `/opdbus/v1/plugins`.  Every plugin
+//! The interface is registered at `/org/opdbus/v1/plugin/plugins`.  Every plugin
 //! object published under that path is reflected in the registry; the
 //! `InterfacesAdded` / `InterfacesRemoved` signals are emitted as objects
 //! come and go.

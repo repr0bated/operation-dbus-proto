@@ -432,7 +432,9 @@ pub async fn add_default_route_onlink(ifname: &str, gateway: &str) -> Result<()>
     nh.hops = 0;
     nh.interface_index = ifindex;
     nh.attributes = vec![RouteAttribute::Gateway(RouteAddress::Inet(gw))];
-    route_msg.attributes.push(RouteAttribute::MultiPath(vec![nh]));
+    route_msg
+        .attributes
+        .push(RouteAttribute::MultiPath(vec![nh]));
 
     // Build netlink envelope
     let mut header = NetlinkHeader::default();

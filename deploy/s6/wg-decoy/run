@@ -1,0 +1,15 @@
+#!/bin/sh
+# wg-decoy - WireGuard decoy tunnel to Oracle VPS (identity ingress)
+# AGENTS.md: Oracle VPS = decoy WG ingress, 3tched = Xray/data plane
+# WG protocol is dropped after identity injection; Xray on 3tched handles data plane
+
+WG_CONF="/etc/wireguard/wg-decoy.conf"
+IFACE="wg-decoy"
+
+if [ ! -f "$WG_CONF" ]; then
+    echo "[wg-decoy] Config not found: $WG_CONF"
+    exit 0
+fi
+
+exec 2>&1
+exec wg-quick up "${IFACE}" && exec pause

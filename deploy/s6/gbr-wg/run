@@ -1,0 +1,21 @@
+#!/bin/sh
+# gbr-wg - WireGuard entry point for GhostBridge privacy chain
+# AGENTS.md: Privacy network uses gbr_* prefix (gbr_wg → gbr_warp → gbr_xray)
+
+# Load WireGuard configuration
+WG_CONF="${WG_CONF:-/etc/wireguard/wg0.conf}"
+IFACE="${IFACE:-wg0}"
+
+# OVS ports (gbr_wg) are created by ovs-attach-ports.sh during boot
+# This service just brings up the WireGuard interface
+
+# Check if config exists
+if [ ! -f "$WG_CONF" ]; then
+    echo "WireGuard config not found: $WG_CONF"
+    # Exit but tell s6 to not restart immediately
+    exit 0
+fi
+
+# Bring up WireGuard
+exec 2>&1
+exec wg-quick up "${IFACE}" && exec pause
