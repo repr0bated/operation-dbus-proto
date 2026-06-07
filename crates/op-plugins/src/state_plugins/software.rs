@@ -45,8 +45,7 @@ impl SoftwarePlugin {
             } else if let Some(stripped) = line.strip_prefix("Version: ") {
                 current_version = Some(stripped.trim().to_string());
             } else if line.is_empty() {
-                if let (Some(name), Some(version)) = (current_name.take(), current_version.take())
-                {
+                if let (Some(name), Some(version)) = (current_name.take(), current_version.take()) {
                     packages.push(PackageInfo {
                         name,
                         version,

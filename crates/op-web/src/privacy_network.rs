@@ -10,15 +10,15 @@
 // - priv_* internal ports are created by ovs-attach-ports.sh
 
 use anyhow::{Context, Result};
-use op_network::{openflow::OpenFlowClient, OvsdbClient};
+use op_network::{openflow::OpenFlowClient, OvsdbDbusClient};
 use std::path::Path;
 use tracing::{info, warn};
 
 const DEFAULT_BRIDGE: &str = "ovsbr0";
 const DEFAULT_PRIVACY_PORTS: &[&str] = &[
-    "priv_xray",
-    "priv_warp",
-    "priv_wg",
+    "gbr_xray",
+    "gbr_warp",
+    "gbr_wg",
     "ovsbr0-mgmt",
     "ovsbr0-sock",
 ];
@@ -80,7 +80,7 @@ async fn ensure_host_privacy_network_with_config(cfg: &PrivacyNetworkHostConfig)
         cfg.bridge_name, cfg.privacy_ports
     );
 
-    let ovs = OvsdbClient::new();
+    let ovs = OvsdbDbusClient::new();
 
     // Verify OVSDB connectivity
     ovs.list_dbs()

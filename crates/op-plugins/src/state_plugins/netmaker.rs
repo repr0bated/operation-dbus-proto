@@ -43,11 +43,15 @@ pub struct NetmakerNetwork {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetmakerState {
+    pub software: String,
+    pub version: String,
+    pub dependencies: Vec<String>,
     pub installed: bool,
     pub daemon_running: bool,
     pub networks: Vec<NetmakerNetwork>,
     pub public_ip: Option<String>,
     pub config: NetmakerConfig,
+    pub tools: Value,
 }
 
 /// Service controller interface for managing daemon lifecycle
@@ -307,6 +311,51 @@ impl NetmakerPlugin {
             network
         ))
     }
+
+    pub(crate) fn current_state() -> NetmakerState {
+        let tools = simd_json::json!([
+            {
+                "name": "netmaker.join",
+                "description": "Join a Netmaker network",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "token": {
+                            "type": "string",
+                            "description": "The enrollment token"
+                        }
+                    },
+                    "required": ["token"]
+                }
+            },
+            {
+                "name": "netmaker.leave",
+                "description": "Leave a Netmaker network",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "network": {
+                            "type": "string",
+                            "description": "The network name to leave"
+                        }
+                    },
+                    "required": ["network"]
+                }
+            }
+        ]);
+
+        NetmakerState {
+            software: "netclient".to_string(),
+            version: "1.0.0".to_string(),
+            dependencies: vec!["net".to_string(), "s6".to_string()],
+            installed: false,
+            daemon_running: false,
+            networks: Vec::new(),
+            public_ip: None,
+            config: NetmakerConfig::default(),
+            tools,
+        }
+    }
 }
 
 #[async_trait]
@@ -317,6 +366,10 @@ impl StatePlugin for NetmakerPlugin {
 
     fn version(&self) -> &str {
         "1.0.0"
+    }
+
+    fn schema(&self) -> Option<op_state_store::PluginSchema> {
+        Some(super::plugin_schema_defs::netmaker_plugin_schema())
     }
 
     fn capabilities(&self) -> PluginCapabilities {
@@ -344,13 +397,12 @@ impl StatePlugin for NetmakerPlugin {
 
         let public_ip = self.get_public_ip().await.unwrap_or(None);
 
-        let state = NetmakerState {
-            installed,
-            daemon_running,
-            networks,
-            public_ip,
-            config: self.config.clone(),
-        };
+        let mut state = Self::current_state();
+        state.installed = installed;
+        state.daemon_running = daemon_running;
+        state.networks = networks;
+        state.public_ip = public_ip;
+        state.config = self.config.clone();
 
         Ok(simd_json::serde::to_owned_value(state)?)
     }
@@ -469,10 +521,12 @@ impl StatePlugin for NetmakerPlugin {
                     let network = resource.strip_prefix("netmaker_network_").unwrap_or("");
                     if let Some(token) = &self.config.enrollment_token {
                         match self.join_network(network, token).await {
-                            Ok(_) => changes_applied
-                                .push(format!("Joined Netmaker network {}", network)),
-                            Err(e) => errors
-                                .push(format!("Failed to join network {}: {}", network, e)),
+                            Ok(_) => {
+                                changes_applied.push(format!("Joined Netmaker network {}", network))
+                            }
+                            Err(e) => {
+                                errors.push(format!("Failed to join network {}: {}", network, e))
+                            }
                         }
                     } else {
                         errors.push(format!(

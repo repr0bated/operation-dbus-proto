@@ -61,7 +61,7 @@ impl GcloudAdcPlugin {
                 for line in content.lines() {
                     let trimmed = line.trim();
                     if trimmed.starts_with('[') && trimmed.ends_with(']') {
-                        current_section = trimmed[1..trimmed.len()-1].to_string();
+                        current_section = trimmed[1..trimmed.len() - 1].to_string();
                     } else if let Some((key, value)) = trimmed.split_once('=') {
                         let key = key.trim();
                         let value = value.trim().trim_matches('"').to_string();

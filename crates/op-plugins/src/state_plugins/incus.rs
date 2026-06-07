@@ -75,7 +75,10 @@ impl IncusPlugin {
     async fn incus_api_request(method: &str, path: &str, body: Option<&str>) -> Result<Vec<u8>> {
         let socket_path = "/var/lib/incus/unix.socket";
         if !std::path::Path::new(socket_path).exists() {
-            return Err(anyhow::anyhow!("Incus Unix socket not found at {}", socket_path));
+            return Err(anyhow::anyhow!(
+                "Incus Unix socket not found at {}",
+                socket_path
+            ));
         }
 
         let mut stream = tokio::net::UnixStream::connect(socket_path)
@@ -122,7 +125,10 @@ impl IncusPlugin {
         let mut body = response[body_start..].to_vec();
 
         // Handle chunked transfer encoding
-        if headers.to_lowercase().contains("transfer-encoding: chunked") {
+        if headers
+            .to_lowercase()
+            .contains("transfer-encoding: chunked")
+        {
             let mut decoded = Vec::new();
             let mut pos = 0;
             while pos < body.len() {
@@ -133,10 +139,11 @@ impl IncusPlugin {
                 if line_end >= body.len() {
                     break;
                 }
-                let line = std::str::from_utf8(&body[pos..line_end]).unwrap_or("").trim();
-                let size =
-                    usize::from_str_radix(line.split(';').next().unwrap_or("0").trim(), 16)
-                        .unwrap_or(0);
+                let line = std::str::from_utf8(&body[pos..line_end])
+                    .unwrap_or("")
+                    .trim();
+                let size = usize::from_str_radix(line.split(';').next().unwrap_or("0").trim(), 16)
+                    .unwrap_or(0);
                 if size == 0 {
                     break;
                 }
@@ -186,8 +193,9 @@ impl IncusPlugin {
 
     /// Fetch current instance configuration via REST API
     async fn incus_get_instance(name: &str) -> Result<simd_json::OwnedValue> {
-        let body = Self::incus_api_call("GET", &format!("/1.0/instances/{}?recursion=1", name), None)
-            .await?;
+        let body =
+            Self::incus_api_call("GET", &format!("/1.0/instances/{}?recursion=1", name), None)
+                .await?;
         let mut raw = body;
         simd_json::from_slice(&mut raw).context("Failed to parse Incus instance")
     }
@@ -266,34 +274,23 @@ impl IncusPlugin {
             }
             ["start", name] => {
                 let body = r#"{"action":"start"}"#;
-                Self::incus_api_call(
-                    "PUT",
-                    &format!("/1.0/instances/{}/state", name),
-                    Some(body),
-                )
-                .await
+                Self::incus_api_call("PUT", &format!("/1.0/instances/{}/state", name), Some(body))
+                    .await
             }
             ["stop", name] => {
                 let body = r#"{"action":"stop"}"#;
-                Self::incus_api_call(
-                    "PUT",
-                    &format!("/1.0/instances/{}/state", name),
-                    Some(body),
-                )
-                .await
+                Self::incus_api_call("PUT", &format!("/1.0/instances/{}/state", name), Some(body))
+                    .await
             }
             ["pause", name] => {
                 let body = r#"{"action":"freeze"}"#;
-                Self::incus_api_call(
-                    "PUT",
-                    &format!("/1.0/instances/{}/state", name),
-                    Some(body),
-                )
-                .await
+                Self::incus_api_call("PUT", &format!("/1.0/instances/{}/state", name), Some(body))
+                    .await
             }
             ["profile", "remove", name, profile] => {
                 let mut data = Self::incus_get_instance(name).await?;
-                if let Some(profiles_arr) = data.get_mut("profiles").and_then(|p| p.as_array_mut()) {
+                if let Some(profiles_arr) = data.get_mut("profiles").and_then(|p| p.as_array_mut())
+                {
                     profiles_arr.retain(|p| p.as_str() != Some(profile));
                 }
                 Self::incus_update_instance(name, data).await?;
@@ -365,10 +362,7 @@ impl IncusPlugin {
                 Self::incus_update_instance(name, data).await?;
                 Ok(Vec::new())
             }
-            _ => Err(anyhow::anyhow!(
-                "Unmapped incus CLI args: {:?}",
-                args
-            )),
+            _ => Err(anyhow::anyhow!("Unmapped incus CLI args: {:?}", args)),
         }
     }
 

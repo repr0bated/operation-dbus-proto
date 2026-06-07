@@ -62,7 +62,11 @@ impl RedisStream {
         // Generate unique consumer name
         let consumer_name = format!(
             "op-dbus-{}",
-            uuid::Uuid::new_v4().to_string().split('-').next().expect("UUID string always contains hyphens")
+            uuid::Uuid::new_v4()
+                .to_string()
+                .split('-')
+                .next()
+                .expect("UUID string always contains hyphens")
         );
 
         let stream = Self {

@@ -128,7 +128,7 @@ impl LxcPlugin {
             }
         };
 
-        let ovsdb = op_network::ovsdb::OvsdbClient::new();
+        let ovsdb = op_network::rovs_proxy::OvsdbDbusClient::new();
         let bridges = ovsdb.list_bridges().await.unwrap_or_default();
 
         let mut results = Vec::new();
@@ -183,7 +183,7 @@ impl LxcPlugin {
 
     /// Fallback: Discover containers from OVS ports (when API is unavailable)
     async fn discover_from_ovs(&self) -> Result<Vec<ContainerInfo>> {
-        let client = op_network::ovsdb::OvsdbClient::new();
+        let client = op_network::rovs_proxy::OvsdbDbusClient::new();
         // If OVSDB is not reachable, return empty list
         if client.list_dbs().await.is_err() {
             return Ok(Vec::new());
@@ -521,7 +521,9 @@ impl LxcPlugin {
         }
 
         // Check if path is on a btrfs filesystem via mountinfo
-        let mounts = tokio::fs::read_to_string("/proc/self/mountinfo").await.unwrap_or_default();
+        let mounts = tokio::fs::read_to_string("/proc/self/mountinfo")
+            .await
+            .unwrap_or_default();
         let is_btrfs = mounts.lines().any(|line| {
             let parts: Vec<&str> = line.split_whitespace().collect();
             if parts.len() > 8 {
@@ -764,7 +766,7 @@ WantedBy=multi-user.target
 
     /// Cleanup OVS port for deleted container
     async fn cleanup_ovs_port_for_container(ct_id: &str) -> Result<String> {
-        let client = op_network::ovsdb::OvsdbClient::new();
+        let client = op_network::rovs_proxy::OvsdbDbusClient::new();
 
         // Find port names matching this container (vi{VMID} or internal_{VMID})
         let potential_ports = vec![
@@ -795,7 +797,12 @@ WantedBy=multi-user.target
                                     if let Some(first_row) = rows.first() {
                                         if let Some(uuid_array) = first_row["_uuid"].as_array() {
                                             if uuid_array.len() == 2 && uuid_array[0] == "uuid" {
-                                                let port_uuid = uuid_array.get(1).and_then(|v| v.as_str()).ok_or_else(|| anyhow::anyhow!("invalid UUID array"))?;
+                                                let port_uuid = uuid_array
+                                                    .get(1)
+                                                    .and_then(|v| v.as_str())
+                                                    .ok_or_else(|| {
+                                                        anyhow::anyhow!("invalid UUID array")
+                                                    })?;
 
                                                 // Get bridge UUID
                                                 let bridge_ops = simd_json::json!([{
@@ -1054,7 +1061,8 @@ impl StatePlugin for LxcPlugin {
                                     };
 
                                     if !target_bridge.is_empty() {
-                                        let ovsdb_client = op_network::ovsdb::OvsdbClient::new();
+                                        let ovsdb_client =
+                                            op_network::rovs_proxy::OvsdbDbusClient::new();
                                         match ovsdb_client
                                             .add_port(&target_bridge, &veth_name)
                                             .await

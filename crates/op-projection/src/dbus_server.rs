@@ -1,8 +1,9 @@
 //! D-Bus object server for projections.
 //!
 //! Serves every Projection as a D-Bus object under org.opdbus.projection at
-//! /org/opdbus/<category>/<id>, e.g. /org/opdbus/system/memory or
-//! /org/opdbus/system/process/1234.
+//! /org/opdbus/v1/plugins/<category>/<id>, e.g. /org/opdbus/v1/plugins/system/memory
+//! or /org/opdbus/v1/plugins/system/process/1234. Nothing mounts outside the
+//! plugins root: no plugin means no schema means no object.
 
 use anyhow::Result;
 use std::collections::HashMap;
@@ -55,11 +56,17 @@ impl ProjectedObject {
 
 /// Derives the D-Bus object path from a projection's entity_type and entity_id.
 ///
-/// entity_type "system.memory"    → /org/opdbus/system/memory
-/// entity_type "system.process"   → /org/opdbus/system/process/<entity_id>
-/// entity_type "identity.sled"    → /org/opdbus/identity/sled
-/// entity_type "ovsdb_bridge"     → /org/opdbus/ovsdb/bridge/<entity_id>
+/// Every projected object lives under the single plugins root. No plugin means
+/// no schema means no object — nothing is ever mounted outside this path.
+///
+/// entity_type "system.memory"    → /org/opdbus/v1/plugins/system/memory
+/// entity_type "system.process"   → /org/opdbus/v1/plugins/system/process/<entity_id>
+/// entity_type "identity.sled"    → /org/opdbus/v1/plugins/identity/sled
+/// entity_type "ovsdb_bridge"     → /org/opdbus/v1/plugins/ovsdb/bridge/<entity_id>
 pub fn projection_path(entity_type: &str, entity_id: &str) -> String {
+    // The ONLY path projections are allowed to mount under.
+    const PLUGIN_ROOT: &str = "/org/opdbus/v1/plugins";
+
     // Replace dots and underscores in type with slashes for the path prefix
     let type_path = entity_type.replace(['.', '_'], "/").to_lowercase();
 
@@ -74,7 +81,7 @@ pub fn projection_path(entity_type: &str, entity_id: &str) -> String {
         || entity_id == "sled";
 
     if is_singleton {
-        format!("/org/opdbus/{}", type_path)
+        format!("{}/{}", PLUGIN_ROOT, type_path)
     } else {
         // Sanitize entity_id for use in a path segment
         let safe_id: String = entity_id
@@ -87,7 +94,7 @@ pub fn projection_path(entity_type: &str, entity_id: &str) -> String {
                 }
             })
             .collect();
-        format!("/org/opdbus/{}/{}", type_path, safe_id)
+        format!("{}/{}/{}", PLUGIN_ROOT, type_path, safe_id)
     }
 }
 

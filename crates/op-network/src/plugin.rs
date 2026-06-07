@@ -11,7 +11,7 @@ use tokio::time::sleep;
 use tracing::{info, warn};
 
 use crate::openflow::OpenFlowClient;
-use crate::ovsdb::OvsdbClient;
+use crate::OvsdbDbusClient;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct NetworkPlugin {
@@ -185,7 +185,7 @@ impl NetworkPlugin {
 
     /// Get current network state
     pub async fn get_state(&self) -> Result<Value> {
-        let client = OvsdbClient::new();
+        let client = OvsdbDbusClient::new();
 
         // Get list of bridges
         let bridges = client.list_bridges().await.unwrap_or_default();
@@ -246,7 +246,7 @@ impl NetworkPlugin {
             self.ovsdb.timeout_seconds
         );
 
-        let client = OvsdbClient::new();
+        let client = OvsdbDbusClient::new();
         let timeout = Duration::from_secs(self.ovsdb.timeout_seconds);
         let start = std::time::Instant::now();
 
@@ -279,7 +279,7 @@ impl NetworkPlugin {
         info!("  Internal ports: {:?}", bridge.internal_ports);
         info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
-        let client = OvsdbClient::new();
+        let client = OvsdbDbusClient::new();
 
         // Check if bridge already exists
         let exists = client.bridge_exists(&bridge.name).await?;
@@ -411,7 +411,10 @@ impl NetworkPlugin {
         for path in &lease_paths {
             if tokio::fs::metadata(path).await.is_ok() {
                 found_lease = true;
-                info!("    Found existing DHCP lease file for {}: {}", interface, path);
+                info!(
+                    "    Found existing DHCP lease file for {}: {}",
+                    interface, path
+                );
             }
         }
         if !found_lease {
@@ -420,7 +423,10 @@ impl NetworkPlugin {
                 interface
             );
         }
-        info!("    ✓ DHCP status checked on {} (native client pending)", interface);
+        info!(
+            "    ✓ DHCP status checked on {} (native client pending)",
+            interface
+        );
         Ok(())
     }
 

@@ -85,9 +85,9 @@ impl Tool for OvsListBridgesTool {
     }
 
     async fn execute(&self, _input: Value) -> Result<Value> {
-        use op_network::OvsdbClient;
+        use op_network::rovs_proxy::OvsdbDbusClient;
 
-        let bridges = OvsdbClient::new()
+        let bridges = OvsdbDbusClient::new()
             .list_bridges()
             .await
             .map_err(|e| anyhow::anyhow!("Failed to list bridges via OVSDB: {}", e))?;
@@ -353,14 +353,14 @@ impl Tool for OvsCreateBridgeTool {
     }
 
     async fn execute(&self, input: Value) -> Result<Value> {
-        use op_network::OvsdbClient;
+        use op_network::rovs_proxy::OvsdbDbusClient;
 
         let bridge_name = input
             .get("name")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing required argument: name"))?;
 
-        let client = OvsdbClient::new();
+        let client = OvsdbDbusClient::new();
 
         let bridges = client
             .list_bridges()
@@ -436,14 +436,14 @@ impl Tool for OvsDeleteBridgeTool {
     }
 
     async fn execute(&self, input: Value) -> Result<Value> {
-        use op_network::OvsdbClient;
+        use op_network::rovs_proxy::OvsdbDbusClient;
 
         let bridge_name = input
             .get("name")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing required argument: name"))?;
 
-        let client = OvsdbClient::new();
+        let client = OvsdbDbusClient::new();
 
         client
             .delete_bridge(bridge_name)
@@ -506,7 +506,7 @@ impl Tool for OvsAddPortTool {
     }
 
     async fn execute(&self, input: Value) -> Result<Value> {
-        use op_network::OvsdbClient;
+        use op_network::rovs_proxy::OvsdbDbusClient;
 
         let bridge_name = input
             .get("bridge")
@@ -519,7 +519,7 @@ impl Tool for OvsAddPortTool {
             .ok_or_else(|| anyhow::anyhow!("Missing required argument: port"))?;
         let port_type = input.get("type").and_then(|v| v.as_str());
 
-        let client = OvsdbClient::new();
+        let client = OvsdbDbusClient::new();
 
         match port_type {
             Some(port_type) => client
@@ -577,14 +577,14 @@ impl Tool for OvsListPortsTool {
     }
 
     async fn execute(&self, input: Value) -> Result<Value> {
-        use op_network::OvsdbClient;
+        use op_network::rovs_proxy::OvsdbDbusClient;
 
         let bridge_name = input
             .get("bridge")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing required argument: bridge"))?;
 
-        let client = OvsdbClient::new();
+        let client = OvsdbDbusClient::new();
 
         let ports = client
             .list_bridge_ports(bridge_name)
@@ -661,14 +661,14 @@ impl Tool for OvsGetBridgeInfoTool {
     }
 
     async fn execute(&self, input: Value) -> Result<Value> {
-        use op_network::OvsdbClient;
+        use op_network::rovs_proxy::OvsdbDbusClient;
 
         let bridge_name = input
             .get("bridge")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing required argument: bridge"))?;
 
-        let client = OvsdbClient::new();
+        let client = OvsdbDbusClient::new();
 
         let info = client
             .get_bridge_info(bridge_name)
@@ -712,9 +712,9 @@ impl Tool for OvsCheckAvailableTool {
     }
 
     async fn execute(&self, _input: Value) -> Result<Value> {
-        use op_network::OvsdbClient;
+        use op_network::rovs_proxy::OvsdbDbusClient;
 
-        let client = OvsdbClient::new();
+        let client = OvsdbDbusClient::new();
 
         match client.list_dbs().await {
             Ok(dbs) => {
@@ -779,7 +779,7 @@ impl Tool for OvsAutoInstallTool {
     }
 
     async fn execute(&self, input: Value) -> Result<Value> {
-        use op_network::OvsdbClient;
+        use op_network::rovs_proxy::OvsdbDbusClient;
         use zbus::Connection;
 
         let force = input
@@ -789,7 +789,7 @@ impl Tool for OvsAutoInstallTool {
 
         // Step 1: Check if OVS is already available via OVSDB socket
         if !force {
-            let client = OvsdbClient::new();
+            let client = OvsdbDbusClient::new();
             if client.list_dbs().await.is_ok() {
                 return Ok(json!({
                     "success": true,
@@ -843,7 +843,7 @@ impl Tool for OvsAutoInstallTool {
         tokio::time::sleep(Duration::from_secs(3)).await;
 
         // Step 6: Verify installation via OVSDB connection (no CLI)
-        let client = OvsdbClient::new();
+        let client = OvsdbDbusClient::new();
         let ovsdb_available = client.list_dbs().await.is_ok();
         let socket_exists = tokio::fs::metadata("/var/run/openvswitch/db.sock")
             .await
@@ -1020,7 +1020,7 @@ impl Tool for OvsSetBridgePropertyTool {
     }
 
     async fn execute(&self, input: Value) -> Result<Value> {
-        use op_network::OvsdbClient;
+        use op_network::rovs_proxy::OvsdbDbusClient;
 
         let bridge_name = input
             .get("bridge")
@@ -1037,7 +1037,7 @@ impl Tool for OvsSetBridgePropertyTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing required argument: value"))?;
 
-        let client = OvsdbClient::new();
+        let client = OvsdbDbusClient::new();
 
         client
             .set_bridge_property(bridge_name, property, value)
@@ -1098,7 +1098,7 @@ impl Tool for OvsDeletePortTool {
     }
 
     async fn execute(&self, input: Value) -> Result<Value> {
-        use op_network::OvsdbClient;
+        use op_network::rovs_proxy::OvsdbDbusClient;
 
         let bridge_name = input
             .get("bridge")
@@ -1110,7 +1110,7 @@ impl Tool for OvsDeletePortTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing required argument: port"))?;
 
-        let client = OvsdbClient::new();
+        let client = OvsdbDbusClient::new();
 
         client
             .delete_port(bridge_name, port_name)
@@ -1157,9 +1157,9 @@ impl Tool for OvsApplyObfuscationTool {
                 },
                 "privacy_ports": {
                     "type": "array",
-                    "description": "Privacy tunnel ports (default: [priv_wg, priv_warp, priv_xray])",
+                    "description": "Privacy tunnel ports (default: [gbr_wg, gbr_warp, gbr_xray])",
                     "items": {"type": "string"},
-                    "default": ["priv_wg", "priv_warp", "priv_xray"]
+                    "default": ["gbr_wg", "gbr_warp", "gbr_xray"]
                 }
             },
             "required": []
@@ -1201,9 +1201,9 @@ impl Tool for OvsApplyObfuscationTool {
                 .filter_map(|v| v.as_str().map(String::from))
                 .collect(),
             None => vec![
-                "priv_wg".to_string(),
-                "priv_warp".to_string(),
-                "priv_xray".to_string(),
+                "gbr_wg".to_string(),
+                "gbr_warp".to_string(),
+                "gbr_xray".to_string(),
             ],
         };
 

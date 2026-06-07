@@ -106,8 +106,7 @@ impl MemoryAgent {
     /// Parse memory entries from JSON string
     fn parse_memory_entries(content: &str) -> HashMap<String, MemoryEntry> {
         let mut cache = HashMap::new();
-        let value: simd_json::OwnedValue =
-            serde_json::from_str(content).unwrap_or_default();
+        let value: simd_json::OwnedValue = serde_json::from_str(content).unwrap_or_default();
 
         if let Some(obj) = value.as_object() {
             for (key, entry_val) in obj.iter() {
@@ -198,8 +197,7 @@ impl MemoryAgent {
     /// Migrate from old format (key-value pairs)
     fn migrate_old_format(content: &str) -> HashMap<String, MemoryEntry> {
         let mut cache = HashMap::new();
-        let old_cache: HashMap<String, String> =
-            serde_json::from_str(content).unwrap_or_default();
+        let old_cache: HashMap<String, String> = serde_json::from_str(content).unwrap_or_default();
         for (key, value) in old_cache {
             let entry = MemoryEntry::new(key.clone(), value, MemoryType::Persistent, vec![]);
             cache.insert(key, entry);

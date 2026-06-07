@@ -30,11 +30,12 @@ use crate::state_plugins::{
     DnsResolverPlugin, EndpointPlugin, FactoryPlugin, Fail2banPlugin, FreeDesktopPlugin,
     FullSystemPlugin, GcloudAdcPlugin, HardwarePlugin, IncusPlugin, KeypairPlugin, KeyringPlugin,
     KnowledgePlugin, Login1Plugin, LxcPlugin, MailServerPlugin, McpStatePlugin, MemoryPlugin,
-    NetStatePlugin, NetmakerConfig, NetmakerPlugin, OpenFlowPlugin, OvsBridgePlugin, OvsdbDaemonPlugin,
-    PackageKitPlugin, PciDeclPlugin, PrivacyRouterPlugin, PrivacyRoutesPlugin, ProcfsPlugin,
-    ProxmoxPlugin, ProxyServerPlugin, RovsCommandsPlugin, RtnetlinkPlugin, S6StatePlugin,
-    SchemaRendererPlugin, ServicePlugin, SessDeclPlugin, SoftwarePlugin, UnixSocketPlugin,
-    UsersPlugin, WebUiPlugin, WireGuardPlugin, WorkflowsPlugin, ZeroclawPlugin,
+    NetStatePlugin, NetmakerConfig, NetmakerPlugin, OpenFlowPlugin, OvsBridgePlugin,
+    OvsdbDaemonPlugin, PackageKitPlugin, PciDeclPlugin, PrivacyRouterPlugin, PrivacyRoutesPlugin,
+    ProcfsPlugin, ProxmoxPlugin, ProxyServerPlugin, RovsCommandsPlugin, RtnetlinkPlugin,
+    S6StatePlugin, SchemaRendererPlugin, ServicePlugin, SessDeclPlugin, SoftwarePlugin,
+    UnixSocketPlugin, UsersPlugin, WebUiPlugin, WgcfPlugin, WireGuardPlugin, WorkflowsPlugin,
+    XrayPlugin, ZeroclawPlugin,
 };
 use crate::AutoPlugin;
 
@@ -83,6 +84,8 @@ fn default_auto_load() -> Vec<String> {
         "incus".to_string(),
         "mail_server".to_string(),
         "unix_socket".to_string(),
+        "wgcf".to_string(),
+        "xray".to_string(),
         "net".to_string(),
         "openflow".to_string(),
         "ovsdb_bridge".to_string(),
@@ -312,6 +315,12 @@ impl DefaultPluginRegistry {
             "incus" => Arc::new(IncusPlugin::new()),
             "mail_server" => Arc::new(MailServerPlugin::new()),
             "unix_socket" => Arc::new(UnixSocketPlugin::new()),
+            "wgcf" => Arc::new(WgcfPlugin::new(
+                crate::state_plugins::wgcf::WgcfConfig::default(),
+            )),
+            "xray" => Arc::new(XrayPlugin::new(
+                crate::state_plugins::xray::XrayConfig::default(),
+            )),
             "net" => Arc::new(NetStatePlugin::new()),
             "openflow" => Arc::new(OpenFlowPlugin::new()),
             "privacy_router" => {

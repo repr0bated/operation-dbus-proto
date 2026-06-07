@@ -62,9 +62,9 @@ impl Default for OpenFlowObfuscationConfig {
             obfuscation_level: 2,
             enable_security_flows: true,
             privacy_ports: vec![
-                "priv_wg".to_string(),
-                "priv_warp".to_string(),
-                "priv_xray".to_string(),
+                "gbr_wg".to_string(),
+                "gbr_warp".to_string(),
+                "gbr_xray".to_string(),
             ],
             custom_flows: vec![],
         }
@@ -286,7 +286,7 @@ impl OpenFlowObfuscationPlugin {
 
         // Table 40: Final forwarding
 
-        // Forward through privacy chain: priv_wg → priv_warp → priv_xray
+        // Forward through privacy chain: gbr_wg → gbr_warp → gbr_xray
         for (idx, port) in self.config.privacy_ports.iter().enumerate() {
             if idx < self.config.privacy_ports.len() - 1 {
                 let next_port = &self.config.privacy_ports[idx + 1];
@@ -300,7 +300,7 @@ impl OpenFlowObfuscationPlugin {
             }
         }
 
-        // Return path: priv_xray → priv_warp → priv_wg
+        // Return path: gbr_xray → gbr_warp → gbr_wg
         let ports: Vec<_> = self.config.privacy_ports.iter().collect();
         for (idx, port) in ports.into_iter().enumerate().rev() {
             if idx > 0 {

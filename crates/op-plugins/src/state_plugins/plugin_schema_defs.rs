@@ -1,4 +1,5 @@
 use op_state_store::{Constraint, FieldSchema, FieldType, PluginSchema, ReadOnlyCondition};
+use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
 use std::collections::HashMap;
 
@@ -830,7 +831,7 @@ pub(crate) fn openflow_plugin_schema() -> PluginSchema {
                             required: true,
                             description: "OpenFlow actions".to_string(),
                             default: None,
-                            example: Some(json!([{"type": "output", "port": "priv_wg"}])),
+                            example: Some(json!([{"type": "output", "port": "gbr_wg"}])),
                             constraints: Vec::new(),
                             read_only: false,
                             read_only_when: None,
@@ -997,7 +998,7 @@ pub(crate) fn openflow_plugin_schema() -> PluginSchema {
                             "table": 0,
                             "priority": 22000,
                             "match_fields": {"in_port": "ovsbr0-sock", "ip": "", "nw_src": "10.100.0.2"},
-                            "actions": [{"type": "output", "port": "priv_wg"}],
+                            "actions": [{"type": "output", "port": "gbr_wg"}],
                             "cookie": 5787125521171081216u64,
                             "idle_timeout": 0,
                             "hard_timeout": 0
@@ -1132,8 +1133,8 @@ pub(crate) fn privacy_router_plugin_schema() -> PluginSchema {
                 required: false,
                 description: "Host-side bridge port name for the WireGuard ingress container"
                     .to_string(),
-                default: Some(json!("priv_wg")),
-                example: Some(json!("priv_wg")),
+                default: Some(json!("gbr_wg")),
+                example: Some(json!("gbr_wg")),
                 constraints: Vec::new(),
                 read_only: false,
                 read_only_when: None,
@@ -1172,14 +1173,14 @@ pub(crate) fn privacy_router_plugin_schema() -> PluginSchema {
             },
         );
         fields.insert(
-            "wgcf_config".to_string(),
+            "netclient_network".to_string(),
             FieldSchema {
                 field_type: FieldType::String,
                 required: false,
-                description: "Path to wgcf WireGuard config used to create the host interface"
+                description: "Netclient network name for the WARP egress interface"
                     .to_string(),
-                default: Some(json!("/etc/wireguard/wgcf.conf")),
-                example: Some(json!("/etc/wireguard/wgcf.conf")),
+                default: Some(json!("gbr_warp")),
+                example: Some(json!("gbr_warp")),
                 constraints: Vec::new(),
                 read_only: false,
                 read_only_when: None,
@@ -1225,8 +1226,8 @@ pub(crate) fn privacy_router_plugin_schema() -> PluginSchema {
                 field_type: FieldType::String,
                 required: false,
                 description: "Host-side bridge port for the local XRay client".to_string(),
-                default: Some(json!("priv_xray")),
-                example: Some(json!("priv_xray")),
+                default: Some(json!("gbr_xray")),
+                example: Some(json!("gbr_xray")),
                 constraints: Vec::new(),
                 read_only: false,
                 read_only_when: None,
@@ -1345,18 +1346,18 @@ pub(crate) fn privacy_router_plugin_schema() -> PluginSchema {
             "wireguard": {
                 "enabled": true,
                 "container_id": 100,
-                "socket_port": "priv_wg",
+                "socket_port": "gbr_wg",
                 "listen_port": 51820
             },
             "warp": {
                 "enabled": true,
                 "bridge_interface": "wgcf",
-                "wgcf_config": "/etc/wireguard/wgcf.conf"
+                "netclient_network": "gbr_warp"
             },
             "xray": {
                 "enabled": true,
                 "container_id": 101,
-                "socket_port": "priv_xray",
+                "socket_port": "gbr_xray",
                 "socks_port": 1080,
                 "vps_address": "vps.example.com",
                 "vps_port": 443
@@ -1581,8 +1582,8 @@ pub(crate) fn privacy_routes_plugin_schema() -> PluginSchema {
                 field_type: FieldType::String,
                 required: true,
                 description: "First logical next hop for this route".to_string(),
-                default: Some(json!("priv_wg")),
-                example: Some(json!("priv_wg")),
+                default: Some(json!("gbr_wg")),
+                example: Some(json!("gbr_wg")),
                 constraints: Vec::new(),
                 read_only: false,
                 read_only_when: None,
@@ -1653,7 +1654,7 @@ pub(crate) fn privacy_routes_plugin_schema() -> PluginSchema {
                     "selector_ip": "10.100.0.2",
                     "container_name": "privacy-user-550e8400",
                     "ingress_port": "ovsbr0-sock",
-                    "next_hop": "priv_wg",
+                    "next_hop": "gbr_wg",
                     "enabled": true,
                     "created_at": "2026-01-01T00:00:00Z",
                     "updated_at": "2026-01-01T00:00:00Z"
@@ -2385,6 +2386,42 @@ pub(crate) fn compact_mcp_plugin_schema() -> PluginSchema {
             read_only_when: None,
         })
         .build()
+}
+
+pub(crate) fn netmaker_plugin_schema() -> PluginSchema {
+    let state = simd_json::serde::to_owned_value(super::netmaker::NetmakerPlugin::current_state())
+        .unwrap_or_else(|_| json!({}));
+    schema_from_state(
+        "netmaker",
+        "net",
+        "1.0.0",
+        "Netmaker daemon state and execution schema",
+        &state,
+    )
+}
+
+pub(crate) fn wgcf_plugin_schema() -> PluginSchema {
+    let state = simd_json::serde::to_owned_value(super::wgcf::WgcfPlugin::current_state())
+        .unwrap_or_else(|_| json!({}));
+    schema_from_state(
+        "wgcf",
+        "net",
+        "1.0.0",
+        "WireGuard Cloudflare (WGCF) state and execution schema",
+        &state,
+    )
+}
+
+pub(crate) fn xray_plugin_schema() -> PluginSchema {
+    let state = simd_json::serde::to_owned_value(super::xray::XrayPlugin::current_state())
+        .unwrap_or_else(|_| json!({}));
+    schema_from_state(
+        "xray",
+        "net",
+        "1.0.0",
+        "Xray proxy state and execution schema",
+        &state,
+    )
 }
 
 pub(crate) fn zeroclaw_plugin_schema() -> PluginSchema {
@@ -3133,13 +3170,23 @@ pub(crate) fn oscal_subid_registry_plugin_schema() -> PluginSchema {
 pub(crate) fn factory_plugin_schema() -> PluginSchema {
     let state = simd_json::serde::to_owned_value(super::factory::FactoryPlugin::current_state())
         .unwrap_or_else(|_| json!({}));
-    schema_from_state(
-        "factory",
-        "llm",
-        "1.0.0",
-        "Factory Droid agent platform — computers, sessions, models, autonomy controls",
-        &state,
-    )
+
+    let mut builder = PluginSchema::builder("factory")
+        .version("1.0.0")
+        .category("llm")
+        .description("Factory Droid agent platform — computers, sessions, models, autonomy controls, BYOM discovery");
+
+    // Add BYOM dependency on zeroclaw for model discovery via D-Bus projection
+    builder = builder.dependency("zeroclaw");
+
+    // Add fields from live state
+    if let Some(obj) = state.as_object() {
+        for (key, value) in obj.iter() {
+            builder = builder.field(&key.to_string(), field_from_value(value));
+        }
+    }
+
+    builder.example(state.clone()).build()
 }
 
 pub(crate) fn fail2ban_plugin_schema() -> PluginSchema {

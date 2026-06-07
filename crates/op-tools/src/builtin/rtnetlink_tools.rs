@@ -56,9 +56,9 @@ impl Tool for RtnetlinkListInterfacesTool {
 
         let filter_state = input.get("filter_state").and_then(|v| v.as_str());
 
-        let mut interfaces = op_network::rtnetlink::list_interfaces().await.map_err(|e| {
-            anyhow::anyhow!("Failed to list interfaces via rtnetlink: {}", e)
-        })?;
+        let mut interfaces = op_network::rtnetlink::list_interfaces()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to list interfaces via rtnetlink: {}", e))?;
 
         // Apply filters
         if let Some(state) = filter_state {

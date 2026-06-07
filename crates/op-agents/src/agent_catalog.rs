@@ -3,10 +3,6 @@
 //! Builds a list of agent descriptors with operations for MCP/tool exposure.
 
 use crate::agents::{
-    compliance::{
-        ComplianceTrestleAgent, FedRampAgent, GdprCounselAgent, OpenControlAgent,
-        OscalAuditorAgent, PolicyEnforcerAgent, SchemaAsCodeAgent, StigAuditorAgent,
-    },
     aiml::{
         AIEngineerAgent, DataEngineerAgent, DataScientistAgent, MLEngineerAgent,
         MLOpsEngineerAgent, PromptEngineerAgent,
@@ -16,6 +12,10 @@ use crate::agents::{
     business::{
         BusinessAnalystAgent, CustomerSupportAgent, HRProAgent, LegalAdvisorAgent,
         PaymentIntegrationAgent, SalesAutomatorAgent,
+    },
+    compliance::{
+        ComplianceTrestleAgent, FedRampAgent, GdprCounselAgent, OpenControlAgent,
+        OscalAuditorAgent, PolicyEnforcerAgent, SchemaAsCodeAgent, StigAuditorAgent,
     },
     content::{ApiDocumenterAgent, DocsArchitectAgent, MermaidExpertAgent, TutorialEngineerAgent},
     database::{DatabaseArchitectAgent, DatabaseOptimizerAgent, SqlProAgent},

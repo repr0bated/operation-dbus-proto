@@ -6,7 +6,7 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use op_network::OvsdbClient;
+use op_network::rovs_proxy::OvsdbDbusClient;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
@@ -83,7 +83,7 @@ pub struct InterfaceConfig {
 // ============================================================================
 
 pub struct OvsBridgePlugin {
-    ovsdb: Arc<OvsdbClient>,
+    ovsdb: Arc<OvsdbDbusClient>,
 }
 
 impl Default for OvsBridgePlugin {
@@ -95,7 +95,7 @@ impl Default for OvsBridgePlugin {
 impl OvsBridgePlugin {
     pub fn new() -> Self {
         Self {
-            ovsdb: Arc::new(OvsdbClient::new()),
+            ovsdb: Arc::new(OvsdbDbusClient::new()),
         }
     }
 

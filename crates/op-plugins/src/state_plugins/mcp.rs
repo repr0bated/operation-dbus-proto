@@ -160,9 +160,7 @@ impl McpStatePlugin {
         let content = tokio::fs::read_to_string(&self.config_path).await;
 
         match content {
-            Ok(c) => {
-                serde_json::from_str(&c).context("Failed to parse MCP config")
-            }
+            Ok(c) => serde_json::from_str(&c).context("Failed to parse MCP config"),
             Err(_) => {
                 // Return default config with requested agents auto-loaded
                 let mut servers = HashMap::new();

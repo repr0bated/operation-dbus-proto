@@ -34,7 +34,7 @@ use managed_objects::{
 use op_core::types::BusType;
 use op_grpc_bridge::{OperationGrpcServer, SchemaEngine};
 use op_jsonrpc::nonnet::NonNetDb;
-use op_network::ovsdb::OvsdbClient;
+use op_network::rovs_proxy::OvsdbDbusClient;
 use op_state::manager::StateManager;
 use procfs::Current as _;
 use serde_json::{Map, Value};
@@ -60,7 +60,7 @@ pub mod tree;
 /// Responsible for maintaining a 1:1 D-Bus object view of authoritative
 /// internal databases.
 pub struct DbusMirror {
-    ovsdb: Arc<OvsdbClient>,
+    ovsdb: Arc<OvsdbDbusClient>,
     nonnet: Arc<NonNetDb>,
     schema_engine: Option<Arc<SchemaEngine>>,
     connection: Connection,
@@ -84,7 +84,7 @@ impl DbusMirror {
     /// Create a new D-Bus publication service.
     pub async fn new(
         bus_type: BusType,
-        ovsdb: Arc<OvsdbClient>,
+        ovsdb: Arc<OvsdbDbusClient>,
         nonnet: Arc<NonNetDb>,
         schema_engine: Option<Arc<SchemaEngine>>,
     ) -> std::result::Result<Self, MirrorError> {
@@ -144,7 +144,7 @@ impl DbusMirror {
         let plugin_snap = plugin_iface.snapshot_handle();
         self.connection
             .object_server()
-            .at("/opdbus/v1/plugins", plugin_iface)
+            .at("/org/opdbus/v1/plugin/plugins", plugin_iface)
             .await?;
 
         // Register mirror-management interface
@@ -833,17 +833,17 @@ impl DbusMirror {
 
     fn plugin_dbus_path(plugin_id: &str) -> String {
         format!(
-            "/opdbus/v1/plugins/{}",
+            "/org/opdbus/v1/plugin/plugins/{}",
             Self::sanitize_dbus_path_segment(plugin_id)
         )
     }
 
     fn is_permanent_plugin_path(path: &str) -> bool {
-        if !path.starts_with("/opdbus/v1/plugins/") {
+        if !path.starts_with("/org/opdbus/v1/plugin/plugins/") {
             return false;
         }
 
-        let remainder = &path["/opdbus/v1/plugins/".len()..];
+        let remainder = &path["/org/opdbus/v1/plugin/plugins/".len()..];
         !remainder.is_empty() && !remainder.contains('/')
     }
 
@@ -1087,7 +1087,7 @@ impl DbusMirror {
 
     /// Load plugin state into the mirror (Seeding).
     ///
-    /// Each plugin gets both a `MirrorObject` at `/opdbus/v1/plugins/{id}`
+    /// Each plugin gets both a `MirrorObject` at `/org/opdbus/v1/plugin/plugins/{id}`
     /// and an entry in the `ObjectManagerInterface` registry so that
     /// `GetManagedObjects` immediately returns all loaded plugins.
     pub async fn load_plugin_state(&self, plugins: &std::collections::HashMap<String, Value>) {
@@ -1210,7 +1210,7 @@ impl DbusMirror {
 
             // If this was a plugin-managed object, remove it from the registry
             // and emit InterfacesRemoved.
-            if path.starts_with("/opdbus/v1/plugins/") {
+            if path.starts_with("/org/opdbus/v1/plugin/plugins/") {
                 self.deregister_from_object_manager(&path).await;
             }
         }

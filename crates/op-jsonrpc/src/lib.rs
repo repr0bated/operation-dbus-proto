@@ -11,13 +11,13 @@ pub mod protocol;
 pub mod server;
 
 pub use nonnet::NonNetDb;
-pub use ovsdb::OvsdbClient;
+pub use ovsdb::OvsdbDbusClient;
 pub use server::JsonRpcServer;
 
 /// Prelude for convenient imports
 pub mod prelude {
     pub use super::nonnet::NonNetDb;
-    pub use super::ovsdb::OvsdbClient;
+    pub use super::ovsdb::OvsdbDbusClient;
     pub use super::protocol::{JsonRpcRequest, JsonRpcResponse};
     pub use super::server::JsonRpcServer;
 }

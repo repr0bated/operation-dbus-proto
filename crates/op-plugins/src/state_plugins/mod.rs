@@ -57,8 +57,10 @@ pub mod software;
 pub mod unix_socket;
 pub mod users;
 pub mod web_ui;
+pub mod wgcf;
 pub mod wireguard;
 pub mod workflows_plugin;
+pub mod xray;
 pub mod zeroclaw;
 pub use antigravity::AntigravityPlugin;
 pub use antigravity_chat::AntigravityChatPlugin;
@@ -114,7 +116,9 @@ pub use mail_server::MailServerPlugin;
 pub use unix_socket::UnixSocketPlugin;
 pub use users::UsersPlugin;
 pub use web_ui::WebUiPlugin;
+pub use wgcf::WgcfPlugin;
 pub use wireguard::WireGuardPlugin;
+pub use xray::XrayPlugin;
 pub use zeroclaw::ZeroclawPlugin;
 // pub use systemd_networkd::SystemdNetworkdPlugin; // TODO: Plugin not yet implemented
 

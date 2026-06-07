@@ -252,13 +252,14 @@ impl NetStatePlugin {
             };
 
             // Parse JSON string to HashMap
-            let mut bridge_info: HashMap<String, Value> = match serde_json::from_str::<HashMap<String, Value>>(&bridge_info_json) {
-                Ok(info) => info,
-                Err(_) => {
-                    log::debug!("Failed to parse bridge info JSON for: {}", bridge_name);
-                    continue;
-                }
-            };
+            let mut bridge_info: HashMap<String, Value> =
+                match serde_json::from_str::<HashMap<String, Value>>(&bridge_info_json) {
+                    Ok(info) => info,
+                    Err(_) => {
+                        log::debug!("Failed to parse bridge info JSON for: {}", bridge_name);
+                        continue;
+                    }
+                };
 
             // Enrich with routing info (via rtnetlink) for this bridge
             if let Ok(routes) = op_network::rtnetlink::list_routes_for_interface(&bridge_name).await

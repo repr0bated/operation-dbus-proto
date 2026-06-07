@@ -284,7 +284,7 @@ mod tests {
             selector_ip: selector_ip.to_string(),
             container_name: Some(format!("privacy-user-{route_id}")),
             ingress_port: "ovsbr0-sock".to_string(),
-            next_hop: "priv_wg".to_string(),
+            next_hop: "gbr_wg".to_string(),
             enabled: true,
             created_at: "2026-01-01T00:00:00Z".to_string(),
             updated_at: "2026-01-01T00:00:00Z".to_string(),

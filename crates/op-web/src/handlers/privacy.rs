@@ -661,10 +661,16 @@ pub async fn google_auth(
     let client = oauth2::basic::BasicClient::new(
         ClientId::new(config.client_id.clone()),
         Some(ClientSecret::new(config.client_secret.clone())),
-        AuthUrl::new("https://accounts.google.com/o/oauth2/v2/auth".to_string()).expect("hardcoded Google auth URL is valid"),
-        Some(TokenUrl::new("https://www.googleapis.com/oauth2/v4/token".to_string()).expect("hardcoded Google token URL is valid")),
+        AuthUrl::new("https://accounts.google.com/o/oauth2/v2/auth".to_string())
+            .expect("hardcoded Google auth URL is valid"),
+        Some(
+            TokenUrl::new("https://www.googleapis.com/oauth2/v4/token".to_string())
+                .expect("hardcoded Google token URL is valid"),
+        ),
     )
-    .set_redirect_uri(RedirectUrl::new(config.redirect_url.clone()).expect("configured redirect URL is valid"));
+    .set_redirect_uri(
+        RedirectUrl::new(config.redirect_url.clone()).expect("configured redirect URL is valid"),
+    );
 
     // Generate the authorization URL
     let (auth_url, csrf_token) = client
@@ -735,10 +741,16 @@ pub async fn google_callback(
     let client = oauth2::basic::BasicClient::new(
         ClientId::new(config.client_id.clone()),
         Some(ClientSecret::new(config.client_secret.clone())),
-        AuthUrl::new("https://accounts.google.com/o/oauth2/v2/auth".to_string()).expect("hardcoded Google auth URL is valid"),
-        Some(TokenUrl::new("https://www.googleapis.com/oauth2/v4/token".to_string()).expect("hardcoded Google token URL is valid")),
+        AuthUrl::new("https://accounts.google.com/o/oauth2/v2/auth".to_string())
+            .expect("hardcoded Google auth URL is valid"),
+        Some(
+            TokenUrl::new("https://www.googleapis.com/oauth2/v4/token".to_string())
+                .expect("hardcoded Google token URL is valid"),
+        ),
     )
-    .set_redirect_uri(RedirectUrl::new(config.redirect_url.clone()).expect("configured redirect URL is valid"));
+    .set_redirect_uri(
+        RedirectUrl::new(config.redirect_url.clone()).expect("configured redirect URL is valid"),
+    );
 
     // Exchange authorization code for token
     let token_result = client

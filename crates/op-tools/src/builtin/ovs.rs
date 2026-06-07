@@ -4,7 +4,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use simd_json::{json, OwnedValue as Value};
 use std::sync::Arc;
-use op_network::OvsdbClient;
+use op_network::rovs_proxy::OvsdbDbusClient;
 
 use crate::tool::Tool;
 use crate::ToolRegistry;
@@ -73,7 +73,7 @@ impl Tool for OvsTool {
     }
 
     async fn execute(&self, args: Value) -> Result<Value> {
-        let client = OvsdbClient::new();
+        let client = OvsdbDbusClient::new();
         
         match self.name.as_str() {
             "ovs_list_bridges" => {

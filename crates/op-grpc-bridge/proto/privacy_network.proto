@@ -73,7 +73,7 @@ message GetNetworkStatusResponse {
 }
 
 message NetworkComponent {
-  string name = 1; // "wgcf", "ovsbr0", "xray", "priv_xray", etc
+  string name = 1; // "wgcf", "ovsbr0", "xray", "gbr_xray", etc
   string status = 2; // "up", "down", "configuring"
   string type = 3; // "wireguard", "bridge", "proxy", "interface"
   string ip_address = 4;

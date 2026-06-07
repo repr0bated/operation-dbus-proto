@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::users::PrivacyUser;
 
 const DEFAULT_INGRESS_PORT: &str = "ovsbr0-sock";
-const DEFAULT_NEXT_HOP: &str = "priv_wg";
+const DEFAULT_NEXT_HOP: &str = "gbr_wg";
 const ROUTE_HKDF_INFO: &[u8] = b"op-dbus/privacy-route/v1";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

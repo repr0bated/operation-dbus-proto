@@ -525,7 +525,9 @@ fn extract_rust(lines: &[String]) -> (Vec<String>, Vec<String>, Vec<String>) {
         )
         .expect("static regex pattern is valid")
     });
-    let re_use = RE_USE.get_or_init(|| Regex::new(r"^\s*use\s+([\w::{}, ]+);").expect("static regex pattern is valid"));
+    let re_use = RE_USE.get_or_init(|| {
+        Regex::new(r"^\s*use\s+([\w::{}, ]+);").expect("static regex pattern is valid")
+    });
 
     let mut symbols = Vec::new();
     let mut doc_comments = Vec::new();
@@ -583,8 +585,9 @@ fn extract_ts(lines: &[String]) -> (Vec<String>, Vec<String>, Vec<String>) {
     let re_export = RE_EXPORT.get_or_init(|| {
         Regex::new(r"^export\s+(?:default\s+)?(?:async\s+)?(?:function|class|interface|type|const|enum)\s+(\w+)").expect("static regex pattern is valid")
     });
-    let re_import =
-        RE_IMPORT.get_or_init(|| Regex::new(r#"^import\s+.+from\s+['"]([^'"]+)['"]"#).expect("static regex pattern is valid"));
+    let re_import = RE_IMPORT.get_or_init(|| {
+        Regex::new(r#"^import\s+.+from\s+['"]([^'"]+)['"]"#).expect("static regex pattern is valid")
+    });
 
     let mut symbols = Vec::new();
     let mut imports = Vec::new();
@@ -621,8 +624,12 @@ fn extract_python(lines: &[String]) -> (Vec<String>, Vec<String>, Vec<String>) {
     static RE_DEF: OnceLock<Regex> = OnceLock::new();
     static RE_IMP: OnceLock<Regex> = OnceLock::new();
 
-    let re_def = RE_DEF.get_or_init(|| Regex::new(r"^(?:class|def|async def)\s+(\w+)").expect("static regex pattern is valid"));
-    let re_imp = RE_IMP.get_or_init(|| Regex::new(r"^(?:import|from)\s+([\w.]+)").expect("static regex pattern is valid"));
+    let re_def = RE_DEF.get_or_init(|| {
+        Regex::new(r"^(?:class|def|async def)\s+(\w+)").expect("static regex pattern is valid")
+    });
+    let re_imp = RE_IMP.get_or_init(|| {
+        Regex::new(r"^(?:import|from)\s+([\w.]+)").expect("static regex pattern is valid")
+    });
 
     let mut symbols = Vec::new();
     let mut imports = Vec::new();
@@ -654,7 +661,8 @@ fn extract_go(lines: &[String]) -> (Vec<String>, Vec<String>, Vec<String>) {
         Regex::new(r"^func\s+(?:\(\w+\s+\*?\w+\)\s+)?(\w+)|^type\s+(\w+)\s+(?:struct|interface)")
             .expect("static regex pattern is valid")
     });
-    let re_imp = RE_IMP.get_or_init(|| Regex::new(r#"^\s+"([^"]+)""#).expect("static regex pattern is valid"));
+    let re_imp = RE_IMP
+        .get_or_init(|| Regex::new(r#"^\s+"([^"]+)""#).expect("static regex pattern is valid"));
 
     let mut symbols = Vec::new();
     let mut imports = Vec::new();
