@@ -331,7 +331,7 @@
       <p>A 152-byte <code>repr(C)</code> struct is written to <code>/dev/shm/plugin_schema.dat</code> — tmpfs only, no disk I/O.</p>
 
       <div class="sled-layout">
-        <div class="sled-header">IdentitySled — 152 bytes total &nbsp;·&nbsp; <code>op-mcp-proxy/src/sled.rs</code></div>
+        <div class="sled-header">IdentitySled — 208 bytes total &nbsp;·&nbsp; <code>op-mcp-proxy/src/sled.rs</code></div>
         <div class="sled-row">
           <div class="sled-offset">[0..32]</div>
           <div class="sled-field wg">wireguard_pubkey [u8; 32]</div>
@@ -343,24 +343,34 @@
           <div class="sled-desc">Schema version counter</div>
         </div>
         <div class="sled-row">
-          <div class="sled-offset">[40..72]</div>
+          <div class="sled-offset">[40..41]</div>
+          <div class="sled-field">is_valid bool</div>
+          <div class="sled-desc">Non-zero = sled is live</div>
+        </div>
+        <div class="sled-row">
+          <div class="sled-offset">[41..48]</div>
+          <div class="sled-field">_pad [u8; 7]</div>
+          <div class="sled-desc">Alignment padding</div>
+        </div>
+        <div class="sled-row">
+          <div class="sled-offset">[48..80]</div>
           <div class="sled-field fp">hashed_footprint [u8; 32]</div>
           <div class="sled-desc">Blake3(schema state) — the hologram</div>
         </div>
         <div class="sled-row">
-          <div class="sled-offset">[72..88]</div>
-          <div class="sled-field trace">trace_id [u8; 16]</div>
+          <div class="sled-offset">[80..96]</div>
+          <div class="sled-field trace">schema_uuid [u8; 16]</div>
           <div class="sled-desc">UUID v4 — wristband serial number</div>
         </div>
         <div class="sled-row">
-          <div class="sled-offset">[88..92]</div>
-          <div class="sled-field">schema_version u32</div>
-          <div class="sled-desc"></div>
+          <div class="sled-offset">[96..160]</div>
+          <div class="sled-field">subid [u8; 64]</div>
+          <div class="sled-desc">Subscriber / peer identifier</div>
         </div>
         <div class="sled-row">
-          <div class="sled-offset">[92..152]</div>
-          <div class="sled-field">reserved [u8; 60]</div>
-          <div class="sled-desc"></div>
+          <div class="sled-offset">[160..192]</div>
+          <div class="sled-field">control_source [u8; 32]</div>
+          <div class="sled-desc">Originating control plane</div>
         </div>
         <div class="sled-row">
           <div class="sled-offset">[192..208]</div>
