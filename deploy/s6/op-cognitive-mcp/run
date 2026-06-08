@@ -1,4 +1,5 @@
 #!/bin/sh
+exec 2>&1
 export COGNITIVE_MCP_DB_PATH="${COGNITIVE_MCP_DB_PATH:-/var/lib/op-dbus/cognitive.db}"
 export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/op-dbus/session-bus.sock}"
 export WG_INTERFACE="${WG_INTERFACE:-netmaker}"

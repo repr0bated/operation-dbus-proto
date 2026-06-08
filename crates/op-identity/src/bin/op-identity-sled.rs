@@ -16,6 +16,8 @@ const COMPACT_FOOTPRINT_OFFSET: usize = 48;
 struct Args {
     path: String,
     iface: String,
+    pubkey: Option<String>,
+    trace_id: Option<String>,
     refresh: bool,
     pretty: bool,
 }
@@ -39,7 +41,13 @@ fn main() -> Result<()> {
     let args = parse_args()?;
 
     if args.refresh {
-        let pubkey = read_wg_pubkey(&args.iface)?;
+        let pubkey = match args.pubkey.as_deref() {
+            Some(pubkey) => pubkey.to_string(),
+            None => read_wg_pubkey(&args.iface)?,
+        };
+        if let Some(trace_id) = args.trace_id.as_deref() {
+            env::set_var("GB_TRACE_ID", normalize_trace_id(trace_id)?);
+        }
         write_sled_from_wg(&pubkey).context("failed to refresh sled from WireGuard public key")?;
     }
 
@@ -59,6 +67,8 @@ fn parse_args() -> Result<Args> {
     let mut parsed = Args {
         path: env::var("OP_IDENTITY_SLED_PATH").unwrap_or_else(|_| SHM_SLED_PATH.to_string()),
         iface: env::var("WG_INTERFACE").unwrap_or_else(|_| "wg0".to_string()),
+        pubkey: env::var("WG_PUBKEY").ok(),
+        trace_id: env::var("GB_TRACE_ID").ok(),
         refresh: false,
         pretty: false,
     };
@@ -70,6 +80,18 @@ fn parse_args() -> Result<Args> {
             }
             "--iface" | "-i" => {
                 parsed.iface = args.next().context("--iface requires an interface name")?;
+            }
+            "--pubkey" => {
+                parsed.pubkey = Some(
+                    args.next()
+                        .context("--pubkey requires a WireGuard public key")?,
+                );
+            }
+            "--trace-id" => {
+                parsed.trace_id = Some(
+                    args.next()
+                        .context("--trace-id requires a hex or UUID value")?,
+                );
             }
             "--refresh" => parsed.refresh = true,
             "--pretty" => parsed.pretty = true,
@@ -87,8 +109,8 @@ fn parse_args() -> Result<Args> {
 fn print_help() {
     println!(
         "op-identity-sled\n\n\
-Usage:\n  op-identity-sled [--path FILE] [--iface IFACE] [--refresh] [--pretty]\n\n\
-Options:\n  --path FILE     Read sled from FILE instead of /dev/shm/plugin_schema.dat\n  -i, --iface     WireGuard interface used with --refresh, default wg0\n  --refresh       Rewrite the sled from wg show <iface> public-key before reading\n  --pretty        Print a compact human-readable view instead of JSON\n\n\
+Usage:\n  op-identity-sled [--path FILE] [--iface IFACE] [--pubkey KEY] [--trace-id ID] [--refresh] [--pretty]\n\n\
+Options:\n  --path FILE     Read sled from FILE instead of /dev/shm/plugin_schema.dat\n  -i, --iface     WireGuard interface used with --refresh, default wg0\n  --pubkey KEY    Detached WireGuard public key used with --refresh instead of wg show\n  --trace-id ID   Detached random wristband trace ID, as UUID or 32 hex chars\n  --refresh       Rewrite the sled from --pubkey, WG_PUBKEY, or wg show <iface> public-key\n  --pretty        Print a compact human-readable view instead of JSON\n\n\
 The reader accepts both the canonical op-identity sled and the legacy 80-byte\n\
 bridge sled used by older Ghostbridge components.\n"
     );
@@ -112,6 +134,14 @@ fn read_wg_pubkey(iface: &str) -> Result<String> {
         bail!("wg show {iface} public-key returned an empty key");
     }
     Ok(pubkey)
+}
+
+fn normalize_trace_id(trace_id: &str) -> Result<String> {
+    let compact = trace_id.trim().replace('-', "");
+    if compact.len() != 32 || !compact.chars().all(|c| c.is_ascii_hexdigit()) {
+        bail!("--trace-id must be a UUID or 32 hex characters");
+    }
+    Ok(compact)
 }
 
 fn read_sled_view(path: &str) -> Result<SledView> {

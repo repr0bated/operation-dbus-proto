@@ -15,10 +15,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
+    let out = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
     // Compile proto files
     tonic_build::configure()
         .build_server(true)
         .build_client(true)
+        .file_descriptor_set_path(out.join("op_chat_descriptor.bin"))
         .out_dir("src/orchestration/proto")
         .compile(&[proto_path], &["proto"])?;
 

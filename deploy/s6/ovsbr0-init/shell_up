@@ -1,0 +1,80 @@
+#!/bin/sh
+set -eu
+
+BR="${BR:-ovsbr0}"
+EXPECTED_DATAPATH="${OVS_DATAPATH_TYPE:-system}"
+EXPECTED_FAIL_MODE="${OVS_FAIL_MODE:-standalone}"
+GW_ADDR="${OVSBR0_GATEWAY:-10.200.0.2/30}"
+OVSDB_SOCK="${OVSDB_SOCK:-/usr/local/var/run/openvswitch/db.sock}"
+
+check_socket() {
+    for i in $(seq 1 30); do
+        [ -S "$OVSDB_SOCK" ] && return 0
+        sleep 1
+    done
+    echo "ovsbr0-init: OVSDB socket $OVSDB_SOCK not found after 30s" >&2
+    exit 1
+}
+
+ensure_bridge() {
+    # Wait for incus to create the managed bridge
+    for i in $(seq 1 30); do
+        if ovs-vsctl br-exists "$BR" 2>/dev/null; then
+            break
+        fi
+        sleep 1
+    done
+
+    if ! ovs-vsctl br-exists "$BR" 2>/dev/null; then
+        echo "ovsbr0-init: bridge $BR not found after 30s (incus must create it)" >&2
+        exit 1
+    fi
+
+    dt="$(ovs-vsctl get bridge "$BR" datapath_type 2>/dev/null || echo missing)"
+    fm="$(ovs-vsctl get bridge "$BR" fail_mode 2>/dev/null || echo missing)"
+
+    if [ "$dt" != "$EXPECTED_DATAPATH" ]; then
+        echo "ovsbr0-init: $BR datapath_type=$dt -> $EXPECTED_DATAPATH"
+        ovs-vsctl set bridge "$BR" datapath_type="$EXPECTED_DATAPATH"
+    fi
+
+    if [ "$fm" != "$EXPECTED_FAIL_MODE" ]; then
+        echo "ovsbr0-init: $BR fail_mode=$fm -> $EXPECTED_FAIL_MODE"
+        ovs-vsctl set bridge "$BR" fail_mode="$EXPECTED_FAIL_MODE"
+    fi
+}
+
+remove_veth_ports() {
+    for port in $(ovs-vsctl list-ports "$BR" 2>/dev/null); do
+        case "$port" in
+            veth*)
+                echo "ovsbr0-init: removing stale veth port $port from $BR"
+                ovs-vsctl del-port "$BR" "$port"
+                ;;
+        esac
+    done
+}
+
+set_gateway_ip() {
+    ip link set "$BR" up
+    if ! ip addr show "$BR" | grep -q "$GW_ADDR"; then
+        ip addr add "$GW_ADDR" dev "$BR"
+    fi
+}
+
+# Bootstrap iptables: allow forwarding between ovsbr0 and opdbus WG
+# These will be replaced by D-Bus-managed rules once op-openvswitch-daemon is up
+set_forwarding() {
+    iptables -C FORWARD -i "$BR" -o opdbus -j ACCEPT 2>/dev/null || \
+        iptables -I FORWARD -i "$BR" -o opdbus -j ACCEPT
+    iptables -C FORWARD -i opdbus -o "$BR" -j ACCEPT 2>/dev/null || \
+        iptables -I FORWARD -i opdbus -o "$BR" -j ACCEPT
+}
+
+check_socket
+ensure_bridge
+remove_veth_ports
+set_gateway_ip
+set_forwarding
+
+echo "ovsbr0-init: $BR ready (datapath_type=$EXPECTED_DATAPATH fail_mode=$EXPECTED_FAIL_MODE gw=$GW_ADDR)"

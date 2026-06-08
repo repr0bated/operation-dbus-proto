@@ -27,162 +27,105 @@ async fn main() -> Result<()> {
     // 1. Initialize Schema Engine
     let mut schema_engine = SchemaEngine::new();
 
-    // Register some initial schemas (in production, load from files)
-    let memory_schema = PluginSchema {
-        name: "system.memory".to_string(),
-        version: "1.0.0".to_string(),
-        fields: vec![
-            FieldSchema {
-                name: "total_kb".to_string(),
-                field_type: FieldType::Integer,
-                required: true,
-                description: Some("Total system memory in KB".to_string()),
-                constraints: vec![Constraint::MinValue(0)],
-                example: None,
-                read_only: true,
-            },
-            FieldSchema {
-                name: "free_kb".to_string(),
-                field_type: FieldType::Integer,
-                required: true,
-                description: Some("Free system memory in KB".to_string()),
-                constraints: vec![Constraint::MinValue(0)],
-                example: None,
-                read_only: true,
-            },
-        ],
-        category: Some("system".to_string()),
-        examples: None,
-        secret_paths: vec![],
-        pii_paths: vec![],
+    // Register some initial schemas (in production, load from files).
+    // Built with the canonical PluginSchema builder — the plugin is the schema.
+    let ro_field = |field_type: FieldType, description: &str, constraints: Vec<Constraint>| {
+        FieldSchema {
+            field_type,
+            required: true,
+            description: description.to_string(),
+            default: None,
+            example: None,
+            constraints,
+            read_only: true,
+            read_only_when: None,
+        }
     };
 
+    let memory_schema = PluginSchema::builder("system.memory")
+        .version("1.0.0")
+        .category("system")
+        .field(
+            "total_kb",
+            ro_field(
+                FieldType::Integer,
+                "Total system memory in KB",
+                vec![Constraint::Min { value: 0.0 }],
+            ),
+        )
+        .field(
+            "free_kb",
+            ro_field(
+                FieldType::Integer,
+                "Free system memory in KB",
+                vec![Constraint::Min { value: 0.0 }],
+            ),
+        )
+        .build();
     schema_engine.register_schema(memory_schema)?;
 
-    let cpu_schema = PluginSchema {
-        name: "system.cpu".to_string(),
-        version: "1.0.0".to_string(),
-        fields: vec![
-            FieldSchema {
-                name: "cores".to_string(),
-                field_type: FieldType::Integer,
-                required: true,
-                description: Some("Number of CPU cores".to_string()),
-                constraints: vec![],
-                example: None,
-                read_only: true,
-            },
-            FieldSchema {
-                name: "model".to_string(),
-                field_type: FieldType::String,
-                required: true,
-                description: Some("CPU model name".to_string()),
-                constraints: vec![],
-                example: None,
-                read_only: true,
-            },
-        ],
-        category: Some("system".to_string()),
-        examples: None,
-        secret_paths: vec![],
-        pii_paths: vec![],
-    };
+    let cpu_schema = PluginSchema::builder("system.cpu")
+        .version("1.0.0")
+        .category("system")
+        .field(
+            "cores",
+            ro_field(FieldType::Integer, "Number of CPU cores", vec![]),
+        )
+        .field("model", ro_field(FieldType::String, "CPU model name", vec![]))
+        .build();
     schema_engine.register_schema(cpu_schema)?;
 
-    let network_schema = PluginSchema {
-        name: "system.network".to_string(),
-        version: "1.0.0".to_string(),
-        fields: vec![FieldSchema {
-            name: "interfaces".to_string(),
-            field_type: FieldType::Array(Box::new(FieldType::String)),
-            required: true,
-            description: Some("List of network interfaces".to_string()),
-            constraints: vec![],
-            example: None,
-            read_only: true,
-        }],
-        category: Some("system".to_string()),
-        examples: None,
-        secret_paths: vec![],
-        pii_paths: vec![],
-    };
+    let network_schema = PluginSchema::builder("system.network")
+        .version("1.0.0")
+        .category("system")
+        .field(
+            "interfaces",
+            ro_field(
+                FieldType::Array(Box::new(FieldType::String)),
+                "List of network interfaces",
+                vec![],
+            ),
+        )
+        .build();
     schema_engine.register_schema(network_schema)?;
 
-    let sled_schema = PluginSchema {
-        name: "identity.sled".to_string(),
-        version: "1.0.0".to_string(),
-        fields: vec![
-            FieldSchema {
-                name: "mutation_index".to_string(),
-                field_type: FieldType::Integer,
-                required: true,
-                description: Some("Current mutation index".to_string()),
-                constraints: vec![],
-                example: None,
-                read_only: true,
-            },
-            FieldSchema {
-                name: "hashed_footprint".to_string(),
-                field_type: FieldType::String,
-                required: true,
-                description: Some("Blake3 hashed footprint".to_string()),
-                constraints: vec![],
-                example: None,
-                read_only: true,
-            },
-            FieldSchema {
-                name: "wireguard_pubkey".to_string(),
-                field_type: FieldType::String,
-                required: true,
-                description: Some("WireGuard public key".to_string()),
-                constraints: vec![],
-                example: None,
-                read_only: true,
-            },
-        ],
-        category: Some("identity".to_string()),
-        examples: None,
-        secret_paths: vec![],
-        pii_paths: vec![],
-    };
+    let sled_schema = PluginSchema::builder("identity.sled")
+        .version("1.0.0")
+        .category("identity")
+        .field(
+            "mutation_index",
+            ro_field(FieldType::Integer, "Current mutation index", vec![]),
+        )
+        .field(
+            "hashed_footprint",
+            ro_field(FieldType::String, "Blake3 hashed footprint", vec![]),
+        )
+        .field(
+            "wireguard_pubkey",
+            ro_field(FieldType::String, "WireGuard public key", vec![]),
+        )
+        .build();
     schema_engine.register_schema(sled_schema)?;
 
-    let process_schema = PluginSchema {
-        name: "system.process".to_string(),
-        version: "1.0.0".to_string(),
-        fields: vec![FieldSchema {
-            name: "name".to_string(),
-            field_type: FieldType::String,
-            required: true,
-            description: Some("Process name".to_string()),
-            constraints: vec![],
-            example: None,
-            read_only: true,
-        }],
-        category: Some("system".to_string()),
-        examples: None,
-        secret_paths: vec![],
-        pii_paths: vec![],
-    };
+    let process_schema = PluginSchema::builder("system.process")
+        .version("1.0.0")
+        .category("system")
+        .field("name", ro_field(FieldType::String, "Process name", vec![]))
+        .build();
     schema_engine.register_schema(process_schema)?;
 
-    let filesystems_schema = PluginSchema {
-        name: "system.filesystems".to_string(),
-        version: "1.0.0".to_string(),
-        fields: vec![FieldSchema {
-            name: "types".to_string(),
-            field_type: FieldType::Array(Box::new(FieldType::String)),
-            required: true,
-            description: Some("Filesystem types listed by /proc/filesystems".to_string()),
-            constraints: vec![],
-            example: None,
-            read_only: true,
-        }],
-        category: Some("system".to_string()),
-        examples: None,
-        secret_paths: vec![],
-        pii_paths: vec![],
-    };
+    let filesystems_schema = PluginSchema::builder("system.filesystems")
+        .version("1.0.0")
+        .category("system")
+        .field(
+            "types",
+            ro_field(
+                FieldType::Array(Box::new(FieldType::String)),
+                "Filesystem types listed by /proc/filesystems",
+                vec![],
+            ),
+        )
+        .build();
     schema_engine.register_schema(filesystems_schema)?;
 
     let plugin_reader = match SystemPluginReader::new().await {
@@ -203,8 +146,7 @@ async fn main() -> Result<()> {
     // Register all builtin schemas from op-state-store so the shm catalog
     // is the single source of truth for UI, blockchain, everything.
     // These include web_ui, mcp, wireguard, incus, openflow, etc.
-    for runtime_schema in builtin_plugin_schemas() {
-        let schema = convert_schema(&runtime_schema);
+    for schema in builtin_plugin_schemas() {
         register_schema_if_missing(&mut schema_engine, schema)?;
     }
 

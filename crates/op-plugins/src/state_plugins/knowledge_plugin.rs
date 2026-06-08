@@ -4,6 +4,11 @@ use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateD
 use op_state_store::PluginSchema;
 use serde::{Deserialize, Serialize};
 use simd_json::{json, OwnedValue as Value};
+use simd_json::prelude::ValueAsMutContainer;
+use std::net::TcpStream;
+use std::time::Duration;
+
+const DEFAULT_QDRANT_ENDPOINT: &str = "http://127.0.0.1:6334";
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KnowledgeState {
     pub status: String,
@@ -21,12 +26,44 @@ impl KnowledgePlugin {
     pub fn new() -> Self {
         Self
     }
+    fn qdrant_endpoint() -> String {
+        std::env::var("COGNITIVE_MCP_QDRANT_URL")
+            .or_else(|_| std::env::var("QDRANT_URL"))
+            .unwrap_or_else(|_| DEFAULT_QDRANT_ENDPOINT.to_string())
+    }
+
+    fn endpoint_tcp_addr(endpoint: &str) -> Option<String> {
+        let stripped = endpoint
+            .strip_prefix("http://")
+            .or_else(|| endpoint.strip_prefix("https://"))
+            .unwrap_or(endpoint);
+        let host_port = stripped.split('/').next()?;
+        if host_port.contains(':') {
+            Some(host_port.to_string())
+        } else {
+            None
+        }
+    }
+
+    fn qdrant_reachable(endpoint: &str) -> bool {
+        let addr = match Self::endpoint_tcp_addr(endpoint) {
+            Some(addr) => addr,
+            None => return false,
+        };
+        let socket_addr = match addr.parse() {
+            Ok(addr) => addr,
+            Err(_) => return false,
+        };
+        TcpStream::connect_timeout(&socket_addr, Duration::from_millis(750)).is_ok()
+    }
+
     pub(crate) fn current_state() -> KnowledgeState {
+        let qdrant_endpoint = Self::qdrant_endpoint();
         KnowledgeState {
             status: "active".to_string(),
-            stores: json!([{"name": "qdrant", "type": "vector", "status": "unavailable", "collections": [], "dimensions": 1536}, {"name": "cozo", "type": "graph", "status": "active", "relations": 0, "stored_procedure_count": 0}, {"name": "sled", "type": "kv", "status": "active", "path": "/dev/shm/plugin_schema.dat"}]),
+            stores: json!([{"name": "qdrant", "type": "vector", "status": "unknown", "endpoint": qdrant_endpoint, "collections": [], "dimensions": 1536}, {"name": "cozo", "type": "graph", "status": "active", "relations": 0, "stored_procedure_count": 0}, {"name": "sled", "type": "kv", "status": "active", "path": "/dev/shm/plugin_schema.dat"}]),
             embedding: json!({"pipeline": "default", "provider": "none", "model": null, "queue_size": 0, "worker_status": "idle", "chunk_size": 512, "chunk_overlap": 50}),
-            config: json!({"qdrant_endpoint": "http://127.0.0.1:6334", "cozo_db": "/var/lib/op-dbus/cognitive.db", "auto_capture": false, "suggest_on_query": true}),
+            config: json!({"qdrant_endpoint": qdrant_endpoint, "cozo_db": "/var/lib/op-dbus/cognitive.db", "auto_capture": false, "suggest_on_query": true}),
         }
     }
 }
@@ -42,7 +79,24 @@ impl StatePlugin for KnowledgePlugin {
         Some(super::plugin_schema_defs::knowledge_plugin_schema())
     }
     async fn query_current_state(&self) -> Result<Value> {
-        Ok(simd_json::serde::to_owned_value(Self::current_state())?)
+        let mut state = Self::current_state();
+        let qdrant_endpoint = Self::qdrant_endpoint();
+        let reachable = Self::qdrant_reachable(&qdrant_endpoint);
+        if let Some(stores) = state.stores.as_array_mut() {
+            if let Some(qdrant) = stores.get_mut(0).and_then(|v| v.as_object_mut()) {
+                qdrant.insert(
+                    "status".into(),
+                    simd_json::OwnedValue::from(if reachable { "active" } else { "unavailable" }),
+                );
+            }
+        }
+        if let Some(config) = state.config.as_object_mut() {
+            config.insert(
+                "qdrant_endpoint".into(),
+                simd_json::OwnedValue::from(qdrant_endpoint),
+            );
+        }
+        Ok(simd_json::serde::to_owned_value(state)?)
     }
     async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {
         Ok(StateDiff {

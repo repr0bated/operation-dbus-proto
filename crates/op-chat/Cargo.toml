@@ -38,6 +38,7 @@ op-agents = { path = "../op-agents" }
 op-mcp = { path = "../op-mcp", features = ["grpc"] }
 op-cognitive-mcp = { path = "../op-cognitive-mcp" }
 tonic = { workspace = true }
+tonic-web = { workspace = true }
 tonic-reflection = { workspace = true }
 tokio-stream = { workspace = true }
 prost = { workspace = true }

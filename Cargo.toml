@@ -156,6 +156,7 @@ lazy_static = "1.4"
 hyper = { version = "1.0", features = ["full"] }
 hyper-util = { version = "0.1", features = ["full"] }
 rtnetlink = "0.14"
+netlink-packet-route = "0.19"
 gethostname = "0.5"
 num_cpus = "1.16"
 tempfile = "3"

@@ -3,7 +3,9 @@
 //! Single persistent backend (CozoDB) hosts every relation:
 //! memory namespaces/entries, users, sessions, compliance graph, subid registry, audit log.
 
+use crate::code_tools::register_code_tools;
 use crate::cognitive_tools::CognitiveToolRegistry;
+use crate::context_awareness::{ContextAwarenessConfig, ContextAwarenessEngine};
 use crate::cozo_shuttle::CozoGraphShuttle;
 use crate::gemini_fallback::GeminiFallback;
 use crate::grpc_service::CognitiveGrpcService;
@@ -11,6 +13,7 @@ use crate::memory_store::CognitiveMemoryStore;
 use crate::proto::cognitive_tool_service_server::CognitiveToolServiceServer;
 use crate::qdrant_shuttle::QdrantSemanticShuttle;
 use crate::quota::QuotaManager;
+use crate::rag_pipeline::{RagPipeline, DEFAULT_COLLECTION};
 use crate::session::SessionManager;
 use crate::typed_tools;
 use op_mcp::tool_registry::{RegistryExecutor, ToolRegistry};
@@ -25,6 +28,10 @@ pub struct CognitiveMcpServer {
     session_manager: Arc<SessionManager>,
     quota_manager: Arc<QuotaManager>,
     gemini_fallback: Arc<GeminiFallback>,
+    /// Code-RAG pipeline (Voyage + Qdrant). `None` when no Voyage key is found.
+    rag_pipeline: Option<Arc<RagPipeline>>,
+    /// Proactive coding-context awareness engine.
+    context_engine: Arc<ContextAwarenessEngine>,
 }
 
 impl CognitiveMcpServer {
@@ -61,6 +68,38 @@ impl CognitiveMcpServer {
         )
         .await?;
 
+        // Code-RAG pipeline: optional, like qdrant_shuttle. Without a Voyage key
+        // (env or ~/.ssh/mongo-voyage) the cognitive MCP still serves memory tools.
+        let rag_pipeline = match RagPipeline::from_env() {
+            Ok(p) => Some(Arc::new(p)),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "RAG pipeline unavailable; code-context tools will not be registered"
+                );
+                None
+            }
+        };
+
+        // Context-awareness engine drives session signals and proactive pushes.
+        let context_engine = Arc::new(ContextAwarenessEngine::new(
+            ContextAwarenessConfig::default(),
+            memory_store.clone(),
+            rag_pipeline.clone(),
+        ));
+        context_engine.clone().start_monitoring();
+
+        if let Some(rag) = &rag_pipeline {
+            let n = register_code_tools(
+                &tool_registry,
+                rag.clone(),
+                context_engine.clone(),
+                DEFAULT_COLLECTION.to_string(),
+            )
+            .await?;
+            tracing::info!(registered = n, "Registered code-context tools");
+        }
+
         Ok(Self {
             memory_store,
             cozo_shuttle,
@@ -69,10 +108,13 @@ impl CognitiveMcpServer {
             session_manager,
             quota_manager,
             gemini_fallback,
+            rag_pipeline,
+            context_engine,
         })
     }
 
     pub async fn start_http_server(self, addr: &str) -> Result<(), Box<dyn std::error::Error>> {
+        use crate::context_server::build_context_router;
         use op_mcp::{HttpSseTransport, McpServer, McpServerConfig, Transport};
 
         let config = McpServerConfig {
@@ -83,9 +125,23 @@ impl CognitiveMcpServer {
 
         let executor = Arc::new(RegistryExecutor::new(self.tool_registry.clone()));
         let mcp_server = Arc::new(McpServer::with_executor(config, executor));
-        let transport = HttpSseTransport::new(addr.to_string());
 
-        tracing::info!("Cognitive MCP Server listening on {}", addr);
+        let mut transport = HttpSseTransport::new(addr.to_string());
+        if std::env::var("COGNITIVE_MCP_CONTEXT_HTTP_DISABLED").as_deref() != Ok("1") {
+            // Mount the context-awareness SSE endpoints on the same HTTP server
+            // so they share auth, CORS, and the port with the MCP protocol routes.
+            let context_router = build_context_router(
+                self.context_engine.clone(),
+                self.memory_store.clone(),
+                self.session_manager.clone(),
+            );
+            transport = transport.with_extra_router(context_router);
+        }
+
+        tracing::info!(
+            addr = %addr,
+            "Cognitive MCP Server listening (MCP + context-awareness endpoints)"
+        );
         transport.serve(mcp_server).await?;
         Ok(())
     }
@@ -216,5 +272,13 @@ impl CognitiveMcpServer {
 
     pub fn quota_manager(&self) -> Arc<QuotaManager> {
         self.quota_manager.clone()
+    }
+
+    pub fn rag_pipeline(&self) -> Option<Arc<RagPipeline>> {
+        self.rag_pipeline.clone()
+    }
+
+    pub fn context_engine(&self) -> Arc<ContextAwarenessEngine> {
+        self.context_engine.clone()
     }
 }

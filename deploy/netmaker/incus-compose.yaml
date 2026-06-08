@@ -1,58 +1,91 @@
-# Netmaker Incus OCI deployment — managed via incus CLI, not incus-compose
-# incus-compose v0.2.0 doesn't support nictype=routed or custom devices
+# Netmaker — incus-compose (bketelsen/incus-compose v0.2.0)
 #
-# Network layout:
-#   ovsbr0 (10.200.0.0/24) — gRPC bridge, dedicated
-#   10.0.0.1 — aliased on netmaker container eth0, exposed to mesh via WG AllowedIPs
-#   Decoy VPS (129.153.134.63) — WG decoy ingress, identity injection only
-#   wgcf — Cloudflare Warp tunnel, NO public IP needed
+# Step 1: incus-compose up  — creates containers with default NIC
+# Step 2: install.sh        — removes NIC, installs unix socket proxy devices,
+#                             wires wg-xray, restarts containers
+#
+# Final topology (after install.sh):
+#   netmaker / netmaker-mq / netmaker-ui — loopback only, no NIC
+#   /run/netmaker/*.sock on host — incus proxy devices on each container
+#   wg-xray — mounts /run/netmaker, has container-side TCP→unix proxy devices
+#   xray — routes inbound ports to unix sockets via those TCP proxies
 
 services:
   netmaker:
-    image: docker.io/gravitl/netmaker:v1.5.1
-    # nictype=routed on ovsbr0, ipv4.address=10.200.0.3
-    # + alias 10.0.0.1/32 on eth0 inside container for mesh-gRPC reachability
+    image: docker:gravitl/netmaker:v1.5.1
+    container_name: netmaker
+    restart: unless-stopped
+    x-incus-storage: default
     environment:
-      - SERVER_HOST=129.153.134.63
-      - SERVER_API_CONN_STRING=api.3tched.com:443
-      - SERVER_HTTP_HOST=api.3tched.com
-      - SERVER_NAME=3tched.com
-      - BROKER_ENDPOINT=wss://broker.3tched.com
-      - COREDNS_ADDR=10.200.0.2
-      - REST_BACKEND=on
-      - DATABASE=sqlite
-      - API_PORT=8081
-      - VERBOSITY=1
-      - CORS_ALLOWED_ORIGIN=*
-      - DISPLAY_KEYS=on
-      - DNS_MODE=off
-      - CACHING_ENABLED=true
-      - ENDPOINT_DETECTION=true
-      - TELEMETRY=on
-      - INSTALL_TYPE=ce
-      - DEFAULT_DOMAIN=nm.internal
-      - MANAGE_DNS=false
-      - RAC_RESTRICT_TO_SINGLE_NETWORK=false
-      - JWT_VALIDITY_DURATION=43200
-      - MQ_USERNAME=netmaker
-      - MQ_PASSWORD=${MQ_PASSWORD}
-      - STUN_SERVERS=stun1.l.google.com:19302,stun2.l.google.com:19302,stun3.l.google.com:19302,stun4.l.google.com:19302
+      SERVER_HOST: "129.153.134.63"
+      SERVER_API_CONN_STRING: "api.ghostbridge.tech:443"
+      SERVER_HTTP_HOST: "api.ghostbridge.tech"
+      SERVER_NAME: "ghostbridge.tech"
+      BROKER_ENDPOINT: "wss://broker.ghostbridge.tech"
+      COREDNS_ADDR: "127.0.0.1"
+      REST_BACKEND: "on"
+      DATABASE: "sqlite"
+      API_PORT: "8081"
+      VERBOSITY: "1"
+      CORS_ALLOWED_ORIGIN: "*"
+      DISPLAY_KEYS: "on"
+      DNS_MODE: "off"
+      CACHING_ENABLED: "true"
+      ENDPOINT_DETECTION: "true"
+      TELEMETRY: "on"
+      INSTALL_TYPE: "ce"
+      DEFAULT_DOMAIN: "nm.internal"
+      MANAGE_DNS: "false"
+      RAC_RESTRICT_TO_SINGLE_NETWORK: "false"
+      JWT_VALIDITY_DURATION: "43200"
+      MQ_HOST: "127.0.0.1"
+      MQ_PORT: "1883"
+      MQ_USERNAME: "netmaker"
     volumes:
       - nm-sqldata:/root/data
       - nm-dnsconfig:/root/config/dnsconfig
 
-  netmaker-ui:
-    image: docker.io/gravitl/netmaker-ui:v1.5.1
-    # nictype=routed on ovsbr0, ipv4.address=10.200.0.4
-    environment:
-      - BACKEND_URL=https://api.3tched.com
-
   mq:
-    image: docker.io/eclipse-mosquitto:2.0.15-openssl
-    # nictype=routed on ovsbr0, ipv4.address=10.200.0.5
+    # eclipse-mosquitto OCI image incompatible with incus (missing /run in rootfs)
+    # use alpine/edge + apk install mosquitto instead
+    image: images:alpine/edge
+    container_name: netmaker-mq
+    restart: unless-stopped
+    x-incus-storage: default
     environment:
-      - MQ_USERNAME=netmaker
-      - MQ_PASSWORD=${MQ_PASSWORD}
+      MQ_USERNAME: "netmaker"
     volumes:
       - nm-mosquitto-data:/mosquitto/data
       - nm-mosquitto-logs:/mosquitto/log
+      - type: bind
+        source: /etc/netmaker/mosquitto.conf
+        target: /mosquitto/config/mosquitto.conf
+        read_only: true
+
+  netmaker-ui:
+    image: docker:gravitl/netmaker-ui:v1.5.1
+    container_name: netmaker-ui
+    restart: unless-stopped
+    x-incus-storage: default
+    environment:
+      BACKEND_URL: "https://api.ghostbridge.tech"
+
+volumes:
+  nm-sqldata:
+    driver_opts:
+      pool: default
+    x-incus-snapshot:
+      schedule: '@daily'
+      expiry: 7d
+  nm-dnsconfig:
+    driver_opts:
+      pool: default
+  nm-mosquitto-data:
+    driver_opts:
+      pool: default
+    x-incus-snapshot:
+      schedule: '@daily'
+      expiry: 7d
+  nm-mosquitto-logs:
+    driver_opts:
+      pool: default

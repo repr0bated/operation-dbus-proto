@@ -9,7 +9,7 @@ echo "Factory/Droid Cognitive-MCP Verifier"
 echo "=========================================="
 echo ""
 
-COGNITIVE_MCP_URL="http://100.90.37.254:3003"
+COGNITIVE_MCP_URL="${COGNITIVE_MCP_URL:-http://127.0.0.1:3003}"
 WG_INTERFACE="${WG_INTERFACE:-netmaker}"
 
 echo "Configuration:"

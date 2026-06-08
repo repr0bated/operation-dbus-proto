@@ -22,6 +22,19 @@ const SHM_SCHEMA_PATH: &str = "/dev/shm/live-schema.json";
 /// Schema version identifier
 pub type SchemaVersion = u64;
 
+/// Returns the comparable magnitude of a value for `Min`/`Max` constraints:
+/// numeric value for numbers, element/char count for arrays/strings.
+fn numeric_or_length(value: &Value) -> Option<f64> {
+    match value {
+        Value::Static(StaticNode::I64(v)) => Some(*v as f64),
+        Value::Static(StaticNode::U64(v)) => Some(*v as f64),
+        Value::Static(StaticNode::F64(v)) => Some(*v),
+        Value::String(s) => Some(s.chars().count() as f64),
+        Value::Array(a) => Some(a.len() as f64),
+        _ => None,
+    }
+}
+
 /// The authoritative schema registry that validates and manages all PluginSchema definitions.
 ///
 /// This is the single source of truth for all projections. All projections must have
@@ -254,42 +267,24 @@ impl SchemaRegistry for SchemaEngine {
         }
 
         // Validate fields
-        for (index, field) in schema.fields.iter().enumerate() {
-            let field_path = format!("fields[{}].name", index);
-
+        for (field_name, field) in &schema.fields {
             // Check field name
-            if field.name.is_empty() {
+            if field_name.is_empty() {
                 errors.push(ValidationError {
-                    path: field_path.clone(),
+                    path: "fields".to_string(),
                     message: "Field name cannot be empty".to_string(),
                     code: "FIELD_NAME_EMPTY".to_string(),
                 });
             }
 
-            // Validate field type is valid
-            match &field.field_type {
-                FieldType::Array(inner_type) => {
-                    // Array type must have a valid inner type
-                    match inner_type.as_ref() {
-                        FieldType::String
-                        | FieldType::Integer
-                        | FieldType::Number
-                        | FieldType::Boolean
-                        | FieldType::Object
-                        | FieldType::Enum(_)
-                        | FieldType::Any => {}
-                        _ => {
-                            errors.push(ValidationError {
-                                path: format!("fields[{}].type", index),
-                                message: "Array field type must have a valid inner type"
-                                    .to_string(),
-                                code: "INVALID_ARRAY_TYPE".to_string(),
-                            });
-                        }
-                    }
-                }
-                _ => {
-                    // Valid field type
+            // Array fields must not directly nest another array
+            if let FieldType::Array(inner_type) = &field.field_type {
+                if matches!(inner_type.as_ref(), FieldType::Array(_)) {
+                    errors.push(ValidationError {
+                        path: format!("fields.{}.type", field_name),
+                        message: "Array field type must have a valid inner type".to_string(),
+                        code: "INVALID_ARRAY_TYPE".to_string(),
+                    });
                 }
             }
         }
@@ -375,14 +370,19 @@ impl SchemaValidator {
     }
 
     /// Validates a single field against its schema
-    pub fn validate_field(&self, field: &FieldSchema, value: &Value) -> Result<ValidationResult> {
+    pub fn validate_field(
+        &self,
+        field_name: &str,
+        field: &FieldSchema,
+        value: &Value,
+    ) -> Result<ValidationResult> {
         let mut errors = Vec::new();
 
         // Check required fields
         if field.required && value.is_null() {
             errors.push(ValidationError {
-                path: field.name.clone(),
-                message: format!("Required field '{}' is missing", field.name),
+                path: field_name.to_string(),
+                message: format!("Required field '{}' is missing", field_name),
                 code: "FIELD_REQUIRED".to_string(),
             });
             return Ok(ValidationResult {
@@ -410,13 +410,13 @@ impl SchemaValidator {
             ) => {
                 // Integer type matches
             }
-            (FieldType::Number, Value::Static(StaticNode::F64(_))) => {
-                // Number type matches
+            (FieldType::Float, Value::Static(StaticNode::F64(_))) => {
+                // Float type matches
             }
             (FieldType::Boolean, Value::Static(StaticNode::Bool(_))) => {
                 // Boolean type matches
             }
-            (FieldType::Object, Value::Object(_)) => {
+            (FieldType::Object(_), Value::Object(_)) => {
                 // Object type matches
             }
             (FieldType::Array(_), Value::Array(_)) => {
@@ -425,7 +425,7 @@ impl SchemaValidator {
             (FieldType::Enum(values), Value::String(s)) => {
                 if !values.contains(&s.to_string()) {
                     errors.push(ValidationError {
-                        path: field.name.clone(),
+                        path: field_name.to_string(),
                         message: format!(
                             "Field value '{}' is not in allowed values: {:?}",
                             s, values
@@ -439,7 +439,7 @@ impl SchemaValidator {
             }
             (field_type, value) => {
                 errors.push(ValidationError {
-                    path: field.name.clone(),
+                    path: field_name.to_string(),
                     message: format!(
                         "Field type mismatch: expected {:?}, got {:?}",
                         field_type, value
@@ -453,7 +453,7 @@ impl SchemaValidator {
         let constraint_result = self.validate_constraints(&field.constraints, value);
         if let Err(e) = constraint_result {
             errors.push(ValidationError {
-                path: field.name.clone(),
+                path: field_name.to_string(),
                 message: e.to_string(),
                 code: "CONSTRAINT_VALIDATION_FAILED".to_string(),
             });
@@ -464,50 +464,60 @@ impl SchemaValidator {
         Ok(ValidationResult { valid, errors })
     }
 
-    /// Validates constraints on a value
+    /// Validates constraints on a value.
+    ///
+    /// `Min`/`Max` apply to numeric magnitude and to string/array length
+    /// (matching the canonical PluginSchema semantics). `RequiresField` and
+    /// `Custom` are cross-field/host concerns and are not enforced here.
     pub fn validate_constraints(&self, constraints: &[Constraint], value: &Value) -> Result<()> {
         for constraint in constraints {
-            match (constraint, value) {
-                (Constraint::MinLength(min), Value::String(s)) if s.len() < *min => {
-                    return Err(anyhow::anyhow!(
-                        "String length {} is less than minimum {}",
-                        s.len(),
-                        min
-                    ));
+            match constraint {
+                Constraint::Min { value: min } => {
+                    if let Some(measure) = numeric_or_length(value) {
+                        if measure < *min {
+                            return Err(anyhow::anyhow!(
+                                "Value/length {} is less than minimum {}",
+                                measure,
+                                min
+                            ));
+                        }
+                    }
                 }
-                (Constraint::MaxLength(max), Value::String(s)) if s.len() > *max => {
-                    return Err(anyhow::anyhow!(
-                        "String length {} exceeds maximum {}",
-                        s.len(),
-                        max
-                    ));
+                Constraint::Max { value: max } => {
+                    if let Some(measure) = numeric_or_length(value) {
+                        if measure > *max {
+                            return Err(anyhow::anyhow!(
+                                "Value/length {} exceeds maximum {}",
+                                measure,
+                                max
+                            ));
+                        }
+                    }
                 }
-                (Constraint::MinValue(min), Value::Static(StaticNode::I64(v))) if *v < *min => {
-                    return Err(anyhow::anyhow!("Value {} is less than minimum {}", *v, min));
+                Constraint::Pattern { regex } => {
+                    if let Value::String(s) = value {
+                        let re = Regex::new(regex)
+                            .map_err(|_| anyhow::anyhow!("Invalid regex pattern: '{}'", regex))?;
+                        if !re.is_match(s) {
+                            return Err(anyhow::anyhow!(
+                                "String '{}' does not match pattern '{}'",
+                                s,
+                                regex
+                            ));
+                        }
+                    }
                 }
-                (Constraint::MaxValue(max), Value::Static(StaticNode::I64(v))) if *v > *max => {
-                    return Err(anyhow::anyhow!("Value {} exceeds maximum {}", *v, max));
-                }
-                (Constraint::Pattern(pattern), Value::String(s)) => {
-                    let regex = Regex::new(pattern)
-                        .map_err(|_| anyhow::anyhow!("Invalid regex pattern: '{}'", pattern))?;
-                    if !regex.is_match(s) {
+                Constraint::OneOf { values } => {
+                    if !values.iter().any(|allowed| allowed == value) {
                         return Err(anyhow::anyhow!(
-                            "String '{}' does not match pattern '{}'",
-                            s,
-                            pattern
+                            "Value {:?} is not in allowed values: {:?}",
+                            value,
+                            values
                         ));
                     }
                 }
-                (Constraint::Enum(values), Value::String(s)) if !values.contains(s) => {
-                    return Err(anyhow::anyhow!(
-                        "Value '{}' is not in allowed values: {:?}",
-                        s,
-                        values
-                    ));
-                }
-                _ => {
-                    // Constraint doesn't apply to this value type
+                Constraint::RequiresField { .. } | Constraint::Custom { .. } => {
+                    // Cross-field / host-defined constraints are not enforced here.
                 }
             }
         }
@@ -538,12 +548,12 @@ impl SchemaValidator {
         let mut errors = Vec::new();
 
         // Validate each field in the schema
-        for field in &schema.fields {
+        for (field_name, field) in &schema.fields {
             // Get field value from entity data
-            let field_value = self.get_field_value(&entity.data, &field.name);
+            let field_value = self.get_field_value(&entity.data, field_name);
 
             // Validate field
-            let field_result = self.validate_field(field, &field_value);
+            let field_result = self.validate_field(field_name, field, &field_value);
 
             if let Ok(result) = field_result {
                 if !result.valid {
@@ -551,7 +561,7 @@ impl SchemaValidator {
                 }
             } else {
                 errors.push(ValidationError {
-                    path: field.name.clone(),
+                    path: field_name.to_string(),
                     message: "Failed to validate field".to_string(),
                     code: "FIELD_VALIDATION_ERROR".to_string(),
                 });
@@ -595,9 +605,26 @@ impl SchemaValidator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data_models::{FieldType, PluginSchema};
+    use crate::data_models::{Constraint, FieldSchema, FieldType, PluginSchema};
     use crate::interfaces::SchemaRegistry;
-    use simd_json::OwnedValue as Value;
+    use simd_json::{json, OwnedValue as Value};
+
+    fn empty_schema(name: &str, version: &str) -> PluginSchema {
+        PluginSchema::builder(name).version(version).build()
+    }
+
+    fn string_field(required: bool, constraints: Vec<Constraint>) -> FieldSchema {
+        FieldSchema {
+            field_type: FieldType::String,
+            required,
+            description: String::new(),
+            default: None,
+            example: None,
+            constraints,
+            read_only: false,
+            read_only_when: None,
+        }
+    }
 
     #[test]
     fn test_schema_engine_creation() {
@@ -609,17 +636,9 @@ mod tests {
     fn test_register_schema() {
         let mut engine = SchemaEngine::new();
 
-        let schema = PluginSchema {
-            name: "test_entity".to_string(),
-            version: "1.0.0".to_string(),
-            fields: vec![],
-            category: None,
-            examples: None,
-            secret_paths: vec![],
-            pii_paths: vec![],
-        };
-
-        let version = engine.register_schema(schema).unwrap();
+        let version = engine
+            .register_schema(empty_schema("test_entity", "1.0.0"))
+            .unwrap();
         assert_eq!(version, 1);
         assert!(engine.has_valid_schema("test_entity"));
     }
@@ -628,28 +647,12 @@ mod tests {
     fn test_register_multiple_versions() {
         let mut engine = SchemaEngine::new();
 
-        let schema1 = PluginSchema {
-            name: "test_entity".to_string(),
-            version: "1.0.0".to_string(),
-            fields: vec![],
-            category: None,
-            examples: None,
-            secret_paths: vec![],
-            pii_paths: vec![],
-        };
-
-        let schema2 = PluginSchema {
-            name: "test_entity".to_string(),
-            version: "2.0.0".to_string(),
-            fields: vec![],
-            category: None,
-            examples: None,
-            secret_paths: vec![],
-            pii_paths: vec![],
-        };
-
-        let version1 = engine.register_schema(schema1).unwrap();
-        let version2 = engine.register_schema(schema2).unwrap();
+        let version1 = engine
+            .register_schema(empty_schema("test_entity", "1.0.0"))
+            .unwrap();
+        let version2 = engine
+            .register_schema(empty_schema("test_entity", "2.0.0"))
+            .unwrap();
 
         assert_eq!(version1, 1);
         assert_eq!(version2, 2);
@@ -662,17 +665,9 @@ mod tests {
     fn test_get_schema() {
         let mut engine = SchemaEngine::new();
 
-        let schema = PluginSchema {
-            name: "test_entity".to_string(),
-            version: "1.0.0".to_string(),
-            fields: vec![],
-            category: None,
-            examples: None,
-            secret_paths: vec![],
-            pii_paths: vec![],
-        };
-
-        engine.register_schema(schema).unwrap();
+        engine
+            .register_schema(empty_schema("test_entity", "1.0.0"))
+            .unwrap();
 
         let retrieved = engine.get_schema("test_entity");
         assert!(retrieved.is_some());
@@ -683,17 +678,9 @@ mod tests {
     fn test_quarantine_schema() {
         let mut engine = SchemaEngine::new();
 
-        let schema = PluginSchema {
-            name: "test_entity".to_string(),
-            version: "1.0.0".to_string(),
-            fields: vec![],
-            category: None,
-            examples: None,
-            secret_paths: vec![],
-            pii_paths: vec![],
-        };
-
-        engine.register_schema(schema).unwrap();
+        engine
+            .register_schema(empty_schema("test_entity", "1.0.0"))
+            .unwrap();
         engine.quarantine_schema("test_entity", "Invalid schema");
 
         assert!(!engine.has_valid_schema("test_entity"));
@@ -703,17 +690,9 @@ mod tests {
     fn test_validate_schema() {
         let engine = SchemaEngine::new();
 
-        let schema = PluginSchema {
-            name: "test_entity".to_string(),
-            version: "1.0.0".to_string(),
-            fields: vec![],
-            category: None,
-            examples: None,
-            secret_paths: vec![],
-            pii_paths: vec![],
-        };
-
-        let result = engine.validate_schema(&schema).unwrap();
+        let result = engine
+            .validate_schema(&empty_schema("test_entity", "1.0.0"))
+            .unwrap();
         assert!(result.valid);
     }
 
@@ -721,17 +700,7 @@ mod tests {
     fn test_validate_schema_empty_name() {
         let engine = SchemaEngine::new();
 
-        let schema = PluginSchema {
-            name: "".to_string(),
-            version: "1.0.0".to_string(),
-            fields: vec![],
-            category: None,
-            examples: None,
-            secret_paths: vec![],
-            pii_paths: vec![],
-        };
-
-        let result = engine.validate_schema(&schema).unwrap();
+        let result = engine.validate_schema(&empty_schema("", "1.0.0")).unwrap();
         assert!(!result.valid);
         assert!(result.errors.iter().any(|e| e.code == "SCHEMA_NAME_EMPTY"));
     }
@@ -741,18 +710,10 @@ mod tests {
         let engine = SchemaEngine::new();
         let validator = SchemaValidator::new(engine);
 
-        let field = FieldSchema {
-            name: "test_field".to_string(),
-            field_type: FieldType::String,
-            required: true,
-            description: None,
-            constraints: vec![],
-            example: None,
-            read_only: false,
-        };
+        let field = string_field(true, vec![]);
 
         let result = validator
-            .validate_field(&field, &Value::String("test".to_string()))
+            .validate_field("test_field", &field, &Value::String("test".to_string()))
             .unwrap();
         assert!(result.valid);
     }
@@ -762,18 +723,10 @@ mod tests {
         let engine = SchemaEngine::new();
         let validator = SchemaValidator::new(engine);
 
-        let field = FieldSchema {
-            name: "test_field".to_string(),
-            field_type: FieldType::String,
-            required: true,
-            description: None,
-            constraints: vec![],
-            example: None,
-            read_only: false,
-        };
+        let field = string_field(true, vec![]);
 
         let result = validator
-            .validate_field(&field, &Value::Static(StaticNode::I64(123)))
+            .validate_field("test_field", &field, &Value::Static(StaticNode::I64(123)))
             .unwrap();
         assert!(!result.valid);
         assert!(result
@@ -787,7 +740,7 @@ mod tests {
         let engine = SchemaEngine::new();
         let validator = SchemaValidator::new(engine);
 
-        let constraints = vec![Constraint::MinLength(5)];
+        let constraints = vec![Constraint::Min { value: 5.0 }];
         let result =
             validator.validate_constraints(&constraints, &Value::String("test".to_string()));
 
@@ -799,7 +752,7 @@ mod tests {
         let engine = SchemaEngine::new();
         let validator = SchemaValidator::new(engine);
 
-        let constraints = vec![Constraint::MaxLength(3)];
+        let constraints = vec![Constraint::Max { value: 3.0 }];
         let result =
             validator.validate_constraints(&constraints, &Value::String("test".to_string()));
 
@@ -811,7 +764,9 @@ mod tests {
         let engine = SchemaEngine::new();
         let validator = SchemaValidator::new(engine);
 
-        let constraints = vec![Constraint::Pattern("^test".to_string())];
+        let constraints = vec![Constraint::Pattern {
+            regex: "^test".to_string(),
+        }];
         let result =
             validator.validate_constraints(&constraints, &Value::String("other".to_string()));
 
@@ -823,7 +778,9 @@ mod tests {
         let engine = SchemaEngine::new();
         let validator = SchemaValidator::new(engine);
 
-        let constraints = vec![Constraint::Enum(vec!["a".to_string(), "b".to_string()])];
+        let constraints = vec![Constraint::OneOf {
+            values: vec![json!("a"), json!("b")],
+        }];
         let result = validator.validate_constraints(&constraints, &Value::String("c".to_string()));
 
         assert!(result.is_err());

@@ -1,4 +1,5 @@
 #!/bin/sh
+exec 2>&1
 export HOME="${HOME:-/home/jeremy}"
 export PATH="/home/jeremy/.local/bin:/usr/local/bin:/usr/bin:/bin"
 

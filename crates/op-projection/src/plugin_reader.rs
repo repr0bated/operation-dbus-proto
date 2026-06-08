@@ -4,15 +4,12 @@
 //! runtime plugins, querying their live state, and emitting both top-level
 //! plugin state entities and nested object projections.
 
-use crate::data_models::{Constraint, FieldSchema, FieldType, PluginSchema};
+use crate::data_models::{FieldSchema, FieldType, PluginSchema};
 use crate::interfaces::{PluginLifecycleEvent, PluginReader, RawEntity, SourceReader};
 use anyhow::{Context, Result};
 use op_plugins::DefaultPluginRegistry;
 use op_state::StatePlugin;
-use op_state_store::{
-    builtin_plugin_schema, Constraint as RuntimeConstraint, FieldSchema as RuntimeFieldSchema,
-    FieldType as RuntimeFieldType, MemoryStore, PluginSchema as RuntimePluginSchema, StateStore,
-};
+use op_state_store::{builtin_plugin_schema, MemoryStore, StateStore};
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
 use std::future::Future;
@@ -21,7 +18,7 @@ use tracing::{debug, info, warn};
 
 struct LoadedPlugin {
     name: String,
-    schema: Option<RuntimePluginSchema>,
+    schema: Option<PluginSchema>,
     plugin: Arc<dyn StatePlugin>,
 }
 
@@ -93,60 +90,51 @@ impl SystemPluginReader {
 
     /// The schema used to validate nested plugin object projections.
     pub fn nested_object_projection_schema() -> PluginSchema {
-        PluginSchema {
-            name: "plugin.object".to_string(),
-            version: "1.0.0".to_string(),
-            fields: vec![
+        let read_only_string = |description: &str| FieldSchema {
+            field_type: FieldType::String,
+            required: true,
+            description: description.to_string(),
+            default: None,
+            example: None,
+            constraints: Vec::new(),
+            read_only: true,
+            read_only_when: None,
+        };
+
+        PluginSchema::builder("plugin.object")
+            .version("1.0.0")
+            .category("plugin")
+            .field("plugin_id", read_only_string("Owning plugin identifier"))
+            .field("parent_id", read_only_string("Parent projection entity ID"))
+            .field(
+                "object_path",
+                read_only_string("JSON pointer-like path to the nested object"),
+            )
+            .field(
+                "value",
                 FieldSchema {
-                    name: "plugin_id".to_string(),
-                    field_type: FieldType::String,
-                    required: true,
-                    description: Some("Owning plugin identifier".to_string()),
-                    constraints: Vec::new(),
-                    example: None,
-                    read_only: true,
-                },
-                FieldSchema {
-                    name: "parent_id".to_string(),
-                    field_type: FieldType::String,
-                    required: true,
-                    description: Some("Parent projection entity ID".to_string()),
-                    constraints: Vec::new(),
-                    example: None,
-                    read_only: true,
-                },
-                FieldSchema {
-                    name: "object_path".to_string(),
-                    field_type: FieldType::String,
-                    required: true,
-                    description: Some("JSON pointer-like path to the nested object".to_string()),
-                    constraints: Vec::new(),
-                    example: None,
-                    read_only: true,
-                },
-                FieldSchema {
-                    name: "value".to_string(),
                     field_type: FieldType::Any,
                     required: true,
-                    description: Some("Nested object value mirrored from plugin state".to_string()),
-                    constraints: Vec::new(),
+                    description: "Nested object value mirrored from plugin state".to_string(),
+                    default: None,
                     example: None,
+                    constraints: Vec::new(),
                     read_only: true,
+                    read_only_when: None,
                 },
-            ],
-            category: Some("plugin".to_string()),
-            examples: None,
-            secret_paths: Vec::new(),
-            pii_paths: Vec::new(),
-        }
+            )
+            .build()
     }
 
     /// Returns all schemas required for plugin state projection.
+    ///
+    /// Plugin schemas are the canonical `PluginSchema` directly — no conversion:
+    /// the plugin is the schema.
     pub fn projection_schemas(&self) -> Vec<PluginSchema> {
         let mut schemas = self
             .plugins
             .iter()
-            .filter_map(|plugin| plugin.schema.as_ref().map(convert_schema))
+            .filter_map(|plugin| plugin.schema.clone())
             .collect::<Vec<_>>();
         schemas.push(Self::nested_object_projection_schema());
         schemas
@@ -428,73 +416,6 @@ impl PluginReader for SystemPluginReader {
     }
 }
 
-/// Convert an `op_state_store::PluginSchema` into an `op_projection::PluginSchema`.
-pub fn convert_schema(schema: &RuntimePluginSchema) -> PluginSchema {
-    PluginSchema {
-        name: schema.name.clone(),
-        version: schema.version.clone(),
-        fields: schema
-            .fields
-            .iter()
-            .map(|(name, field)| convert_field(name, field))
-            .collect(),
-        category: Some(schema.category.clone()),
-        examples: schema.example.clone().map(|example| vec![example]),
-        secret_paths: Vec::new(),
-        pii_paths: Vec::new(),
-    }
-}
-
-fn convert_field(name: &str, field: &RuntimeFieldSchema) -> FieldSchema {
-    FieldSchema {
-        name: name.to_string(),
-        field_type: convert_field_type(&field.field_type),
-        required: field.required,
-        description: Some(field.description.clone()).filter(|description| !description.is_empty()),
-        constraints: field
-            .constraints
-            .iter()
-            .filter_map(convert_constraint)
-            .collect(),
-        example: field.example.clone(),
-        read_only: field.read_only,
-    }
-}
-
-fn convert_field_type(field_type: &RuntimeFieldType) -> FieldType {
-    match field_type {
-        RuntimeFieldType::String => FieldType::String,
-        RuntimeFieldType::Integer => FieldType::Integer,
-        RuntimeFieldType::Float => FieldType::Number,
-        RuntimeFieldType::Boolean => FieldType::Boolean,
-        RuntimeFieldType::Array(inner) => FieldType::Array(Box::new(convert_field_type(inner))),
-        RuntimeFieldType::Object(_) => FieldType::Object,
-        RuntimeFieldType::Enum(values) => FieldType::Enum(values.clone()),
-        RuntimeFieldType::Any => FieldType::Any,
-    }
-}
-
-fn convert_constraint(constraint: &RuntimeConstraint) -> Option<Constraint> {
-    match constraint {
-        RuntimeConstraint::Min { value } => Some(Constraint::MinValue(*value as i64)),
-        RuntimeConstraint::Max { value } => Some(Constraint::MaxValue(*value as i64)),
-        RuntimeConstraint::Pattern { regex } => Some(Constraint::Pattern(regex.clone())),
-        RuntimeConstraint::OneOf { values } => {
-            let values = values
-                .iter()
-                .filter_map(|value| value.as_str().map(ToString::to_string))
-                .collect::<Vec<_>>();
-
-            if values.is_empty() {
-                None
-            } else {
-                Some(Constraint::Enum(values))
-            }
-        }
-        RuntimeConstraint::RequiresField { .. } | RuntimeConstraint::Custom { .. } => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -536,15 +457,17 @@ mod tests {
     }
 
     #[test]
-    fn should_convert_runtime_schema_to_projection_schema() {
-        let schema = RuntimePluginSchema::builder("net")
+    fn should_consume_canonical_plugin_schema_directly() {
+        // The plugin is the schema: projection uses the canonical PluginSchema
+        // with no conversion. Fields are keyed in a HashMap.
+        let schema = PluginSchema::builder("net")
             .version("1.2.3")
             .category("network")
             .description("Network schema")
             .field(
                 "interfaces",
-                RuntimeFieldSchema {
-                    field_type: RuntimeFieldType::Array(Box::new(RuntimeFieldType::String)),
+                FieldSchema {
+                    field_type: FieldType::Array(Box::new(FieldType::String)),
                     required: true,
                     description: "Interface names".to_string(),
                     default: None,
@@ -556,15 +479,14 @@ mod tests {
             )
             .build();
 
-        let converted = convert_schema(&schema);
-        assert_eq!(converted.name, "net");
-        assert_eq!(converted.version, "1.2.3");
-        assert_eq!(converted.fields.len(), 1);
-        assert_eq!(converted.fields[0].name, "interfaces");
+        assert_eq!(schema.name, "net");
+        assert_eq!(schema.version, "1.2.3");
+        assert_eq!(schema.fields.len(), 1);
+        let interfaces = schema.fields.get("interfaces").expect("interfaces field");
         assert_eq!(
-            converted.fields[0].field_type,
+            interfaces.field_type,
             FieldType::Array(Box::new(FieldType::String))
         );
-        assert!(converted.fields[0].read_only);
+        assert!(interfaces.read_only);
     }
 }

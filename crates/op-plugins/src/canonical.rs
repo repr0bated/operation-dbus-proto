@@ -8,8 +8,8 @@
 //!
 //! ### D-Bus Object Paths
 //! ```text
-//! /org/opdbus/v1/plugin/plugins/{plugin_name}
-//! /org/opdbus/v1/plugin/plugins/{plugin_name}/{child_object}
+//! /org/opdbus/v1/plugins/{plugin_name}
+//! /org/opdbus/v1/plugins/{plugin_name}/{child_object}
 //! ```
 //!
 //! ### D-Bus Interface Names
@@ -43,7 +43,10 @@
 //! ## Migration Guide
 //!
 //! Old (deprecated): `/opdbus/v1/plugins/net`
-//! New (canonical): `/org/opdbus/v1/plugin/plugins/net`
+//! New (canonical): `/org/opdbus/v1/plugins/net`
+//!
+//! Old (deprecated alias): `/org/opdbus/v1/plugin/plugins/net`
+//! New (canonical): `/org/opdbus/v1/plugins/net`
 //!
 //! Old (deprecated): `org.opdbus.NetPlugin`
 //! New (canonical): `org.opdbus.v1.Plugin.Plugins.Net`
@@ -52,7 +55,7 @@
 pub const DBUS_ROOT_PATH: &str = "/org/opdbus/v1";
 
 /// Canonical base path for all plugins
-pub const PLUGIN_BASE_PATH: &str = "/org/opdbus/v1/plugin/plugins";
+pub const PLUGIN_BASE_PATH: &str = "/org/opdbus/v1/plugins";
 
 /// Base interface name for plugin-related interfaces
 pub const PLUGIN_BASE_INTERFACE: &str = "org.opdbus.v1.Plugin";
@@ -96,7 +99,7 @@ pub const LEGACY_PLUGIN_PATH: &str = "/opdbus/v1/plugins";
     since = "2.0.0",
     note = "Use PLUGIN_BASE_PATH instead. Legacy paths will be removed in v3.0.0"
 )]
-pub const LEGACY_ALT_PLUGIN_PATH: &str = "/org/opdbus/v1/plugins";
+pub const LEGACY_ALT_PLUGIN_PATH: &str = "/org/opdbus/v1/plugin/plugins";
 
 /// Build the full D-Bus object path for a plugin
 ///
@@ -105,7 +108,7 @@ pub const LEGACY_ALT_PLUGIN_PATH: &str = "/org/opdbus/v1/plugins";
 /// use op_plugins::canonical::plugin_path;
 ///
 /// let path = plugin_path("incus");
-/// assert_eq!(path, "/org/opdbus/v1/plugin/plugins/incus");
+/// assert_eq!(path, "/org/opdbus/v1/plugins/incus");
 /// ```
 pub fn plugin_path(name: &str) -> String {
     format!("{}/{}", PLUGIN_BASE_PATH, sanitize_plugin_name(name))
@@ -146,7 +149,7 @@ pub fn plugin_schema_path(name: &str) -> String {
 /// use op_plugins::canonical::plugin_child_path;
 ///
 /// let path = plugin_child_path("incus", "instance-1");
-/// assert_eq!(path, "/org/opdbus/v1/plugin/plugins/incus/instance-1");
+/// assert_eq!(path, "/org/opdbus/v1/plugins/incus/instance-1");
 /// ```
 pub fn plugin_child_path(plugin_name: &str, child_id: &str) -> String {
     format!(
@@ -233,25 +236,25 @@ pub fn is_canonical_plugin_path(path: &str) -> bool {
 /// Converts legacy paths to canonical paths
 ///
 /// # Examples
-/// - `/opdbus/v1/plugins/net` → `/org/opdbus/v1/plugin/plugins/net`
-/// - `/org/opdbus/v1/plugins/net` → `/org/opdbus/v1/plugin/plugins/net`
-/// - `/org/opdbus/v1/plugin/plugins/net` → `/org/opdbus/v1/plugin/plugins/net` (already canonical)
+/// - `/opdbus/v1/plugins/net` → `/org/opdbus/v1/plugins/net`
+/// - `/org/opdbus/v1/plugin/plugins/net` → `/org/opdbus/v1/plugins/net`
+/// - `/org/opdbus/v1/plugins/net` → `/org/opdbus/v1/plugins/net` (already canonical)
 pub fn normalize_plugin_path(path: &str) -> Option<String> {
     let trimmed = path.trim().trim_matches('/');
 
     // Already canonical
-    if trimmed.starts_with("org/opdbus/v1/plugin/plugins/") {
+    if trimmed.starts_with("org/opdbus/v1/plugins/") {
         return Some(format!("/{}", trimmed));
     }
 
-    // Legacy: /opdbus/v1/plugins/{name}
-    if let Some(rest) = trimmed.strip_prefix("opdbus/v1/plugins/") {
+    // Legacy alias: /org/opdbus/v1/plugin/plugins/{name}
+    if let Some(rest) = trimmed.strip_prefix("org/opdbus/v1/plugin/plugins/") {
         let name = rest.split('/').next()?;
         return Some(plugin_path(name));
     }
 
-    // Alternative legacy: /org/opdbus/v1/plugins/{name}
-    if let Some(rest) = trimmed.strip_prefix("org/opdbus/v1/plugins/") {
+    // Legacy: /opdbus/v1/plugins/{name}
+    if let Some(rest) = trimmed.strip_prefix("opdbus/v1/plugins/") {
         let name = rest.split('/').next()?;
         return Some(plugin_path(name));
     }
@@ -267,7 +270,7 @@ pub fn normalize_plugin_path(path: &str) -> Option<String> {
 /// Extract plugin name from a path (canonical or legacy)
 ///
 /// # Examples
-/// - `/org/opdbus/v1/plugin/plugins/net` → `Some("net")`
+/// - `/org/opdbus/v1/plugins/net` → `Some("net")`
 /// - `/opdbus/v1/plugins/net` → `Some("net")` (legacy)
 /// - `/other/path` → `None`
 pub fn extract_plugin_name(path: &str) -> Option<String> {
@@ -286,14 +289,14 @@ mod tests {
 
     #[test]
     fn test_plugin_path() {
-        assert_eq!(plugin_path("incus"), "/org/opdbus/v1/plugin/plugins/incus");
+        assert_eq!(plugin_path("incus"), "/org/opdbus/v1/plugins/incus");
         assert_eq!(
             plugin_path("my-plugin"),
-            "/org/opdbus/v1/plugin/plugins/my_plugin"
+            "/org/opdbus/v1/plugins/my_plugin"
         );
         assert_eq!(
             plugin_path("123invalid"),
-            "/org/opdbus/v1/plugin/plugins/plugin_123invalid"
+            "/org/opdbus/v1/plugins/plugin_123invalid"
         );
     }
 
@@ -318,7 +321,7 @@ mod tests {
     fn test_plugin_child_path() {
         assert_eq!(
             plugin_child_path("incus", "instance-1"),
-            "/org/opdbus/v1/plugin/plugins/incus/instance-1"
+            "/org/opdbus/v1/plugins/incus/instance-1"
         );
     }
 
@@ -334,24 +337,24 @@ mod tests {
     fn test_normalize_plugin_path() {
         // Canonical (no change needed)
         assert_eq!(
-            normalize_plugin_path("/org/opdbus/v1/plugin/plugins/net"),
-            Some("/org/opdbus/v1/plugin/plugins/net".to_string())
+            normalize_plugin_path("/org/opdbus/v1/plugins/net"),
+            Some("/org/opdbus/v1/plugins/net".to_string())
         );
 
         // Legacy paths
         assert_eq!(
             normalize_plugin_path("/opdbus/v1/plugins/net"),
-            Some("/org/opdbus/v1/plugin/plugins/net".to_string())
+            Some("/org/opdbus/v1/plugins/net".to_string())
         );
         assert_eq!(
-            normalize_plugin_path("/org/opdbus/v1/plugins/net"),
-            Some("/org/opdbus/v1/plugin/plugins/net".to_string())
+            normalize_plugin_path("/org/opdbus/v1/plugin/plugins/net"),
+            Some("/org/opdbus/v1/plugins/net".to_string())
         );
 
         // Just plugin name
         assert_eq!(
             normalize_plugin_path("net"),
-            Some("/org/opdbus/v1/plugin/plugins/net".to_string())
+            Some("/org/opdbus/v1/plugins/net".to_string())
         );
 
         // Invalid
@@ -361,7 +364,7 @@ mod tests {
     #[test]
     fn test_extract_plugin_name() {
         assert_eq!(
-            extract_plugin_name("/org/opdbus/v1/plugin/plugins/net"),
+            extract_plugin_name("/org/opdbus/v1/plugins/net"),
             Some("net".to_string())
         );
         assert_eq!(
@@ -373,17 +376,15 @@ mod tests {
 
     #[test]
     fn test_is_canonical_plugin_path() {
-        assert!(is_canonical_plugin_path(
-            "/org/opdbus/v1/plugin/plugins/net"
-        ));
+        assert!(is_canonical_plugin_path("/org/opdbus/v1/plugins/net"));
         assert!(!is_canonical_plugin_path("/opdbus/v1/plugins/net"));
-        assert!(!is_canonical_plugin_path("/org/opdbus/v1/plugins/net"));
+        assert!(!is_canonical_plugin_path("/org/opdbus/v1/plugin/plugins/net"));
     }
 
     #[test]
     fn test_constants() {
         assert_eq!(DBUS_ROOT_PATH, "/org/opdbus/v1");
-        assert_eq!(PLUGIN_BASE_PATH, "/org/opdbus/v1/plugin/plugins");
+        assert_eq!(PLUGIN_BASE_PATH, "/org/opdbus/v1/plugins");
         assert_eq!(PLUGINS_INTERFACE, "org.opdbus.v1.Plugin.Plugins");
         assert_eq!(BASE_SERVICE_NAME, "org.opdbus.v1");
     }

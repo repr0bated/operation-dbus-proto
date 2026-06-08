@@ -14,6 +14,7 @@
 pub mod activity_filter;
 pub mod agent_tools;
 pub mod client_config;
+pub mod code_tools;
 pub mod cognitive_tools;
 pub mod context_awareness;
 pub mod context_server;
@@ -43,6 +44,7 @@ pub use client_config::{
     CognitiveMcpClientFactory, PoolConfig, RetryConfig, COGNITIVE_MCP_DEFAULT_ENDPOINT,
     COMPACT_MCP_DEFAULT_ENDPOINT,
 };
+pub use code_tools::register_code_tools;
 pub use cognitive_tools::CognitiveToolRegistry;
 pub use context_awareness::{
     ActivityEvent as ContextActivityEvent, ActivityType, ContextAwarenessConfig,
@@ -55,6 +57,7 @@ pub use memory_store::CognitiveMemoryStore;
 pub use op_identity::IdentitySled;
 pub use qdrant_shuttle::{QdrantSemanticShuttle, SessionTraceContext};
 pub use quota::{QuotaManager, QuotaTier};
+pub use rag_pipeline::{CodeFilter, RagPipeline, RagResult, DEFAULT_COLLECTION};
 pub use server::CognitiveMcpServer;
 pub use session::SessionManager;
 pub use soul_memory::{AgentNamespaceBinding, SoulMemory, SoulMemoryStore, SoulUpdate};

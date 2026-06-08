@@ -194,6 +194,52 @@ pub enum ActivityType {
     Error,
     Idle,
     ReturnFromIdle,
+    // ─── coding signals ───
+    /// A source file was opened/viewed in the workspace.
+    FileOpened,
+    /// An edit was applied to a source file.
+    EditApplied,
+    /// A build/compile error occurred (counts as an error signal).
+    BuildError,
+    /// A test failed (counts as an error signal).
+    TestFailure,
+    /// A diff/changeset was viewed.
+    DiffViewed,
+    /// Navigation to a symbol (definition/reference).
+    SymbolNavigated,
+}
+
+impl ActivityType {
+    /// Whether this activity should increment the recent-error counter used by
+    /// stuck/error-assistance detection. Build errors and test failures are
+    /// first-class error signals for coding sessions.
+    pub fn is_error_signal(self) -> bool {
+        matches!(
+            self,
+            ActivityType::Error | ActivityType::BuildError | ActivityType::TestFailure
+        )
+    }
+
+    /// Parse a wire string into an `ActivityType`. Unknown values fall back to
+    /// `Query` so callers never reject a request on a typo. Shared by the HTTP
+    /// `/context/record` handler and the `code_context` MCP tool.
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "tool_call" => ActivityType::ToolCall,
+            "query" => ActivityType::Query,
+            "context_switch" => ActivityType::ContextSwitch,
+            "error" => ActivityType::Error,
+            "idle" => ActivityType::Idle,
+            "return_from_idle" => ActivityType::ReturnFromIdle,
+            "file_opened" => ActivityType::FileOpened,
+            "edit_applied" => ActivityType::EditApplied,
+            "build_error" => ActivityType::BuildError,
+            "test_failure" => ActivityType::TestFailure,
+            "diff_viewed" => ActivityType::DiffViewed,
+            "symbol_navigated" => ActivityType::SymbolNavigated,
+            _ => ActivityType::Query,
+        }
+    }
 }
 
 /// Per-session context state
@@ -238,7 +284,7 @@ impl SessionContextState {
     ) {
         self.last_activity = Instant::now();
 
-        if activity_type == ActivityType::Error {
+        if activity_type.is_error_signal() {
             self.recent_error_count += 1;
         }
 
@@ -254,7 +300,7 @@ impl SessionContextState {
         // Keep window size bounded
         while self.activity_window.len() > ACTIVITY_WINDOW_SIZE {
             if let Some(removed) = self.activity_window.pop_front() {
-                if removed.activity_type == ActivityType::Error {
+                if removed.activity_type.is_error_signal() {
                     self.recent_error_count = self.recent_error_count.saturating_sub(1);
                 }
             }
@@ -442,6 +488,23 @@ impl ContextAwarenessEngine {
         };
 
         let _ = self.activity_tx.send(event).await;
+    }
+
+    /// Snapshot the awareness signals for a session (async, never blocks).
+    ///
+    /// Returns `None` if the session has no recorded activity. Used by the
+    /// `code_context` tool to report stuck/error/topic state alongside results.
+    pub async fn get_session_signals(&self, session_id: &str) -> Option<serde_json::Value> {
+        let entry = self.session_states.get(session_id)?;
+        let state = entry.read().await;
+        Some(serde_json::json!({
+            "session_id": state.session_id,
+            "activity_count": state.activity_window.len(),
+            "recent_error_count": state.recent_error_count,
+            "is_stuck": state.is_stuck(),
+            "is_idle": state.is_idle(),
+            "current_topics": state.current_topics,
+        }))
     }
 
     /// Start the background context monitoring task

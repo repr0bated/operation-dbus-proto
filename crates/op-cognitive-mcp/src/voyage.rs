@@ -3,11 +3,17 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::env;
 
+/// Default public Voyage AI endpoint.
+const VOYAGE_PUBLIC_URL: &str = "https://api.voyageai.com/v1/embeddings";
+/// MongoDB-hosted Voyage AI endpoint (for keys prefixed with `al-`).
+const VOYAGE_MONGODB_URL: &str = "https://ai.mongodb.com/v1/embeddings";
+
 /// Voyage AI client for text embeddings
 pub struct VoyageClient {
     client: Client,
     api_key: String,
     model: String,
+    base_url: String,
 }
 
 #[derive(Serialize)]
@@ -28,16 +34,21 @@ struct EmbeddingResponse {
 }
 
 impl VoyageClient {
-    /// Create a new Voyage client
+    /// Create a new Voyage client.
+    ///
+    /// Auto-detects the endpoint: MongoDB-hosted keys (`al-*`) route to
+    /// `https://ai.mongodb.com/v1/embeddings`; all others use the public
+    /// `https://api.voyageai.com/v1/embeddings` endpoint.
     pub fn new() -> Result<Self> {
         let api_key = env::var("VOYAGE_API_KEY").context("VOYAGE_API_KEY not found")?;
-        // Use voyage-law-2 or voyage-4-large as specified
-        let model = env::var("VOYAGE_MODEL").unwrap_or_else(|_| "voyage-law-2".to_string());
+        let model = env::var("VOYAGE_MODEL").unwrap_or_else(|_| "voyage-4".to_string());
+        let base_url = voyage_url_for_key(&api_key);
 
         Ok(Self {
             client: Client::new(),
             api_key,
             model,
+            base_url,
         })
     }
 
@@ -51,7 +62,7 @@ impl VoyageClient {
 
         let resp = self
             .client
-            .post("https://api.voyageai.com/v1/embeddings")
+            .post(&self.base_url)
             .bearer_auth(&self.api_key)
             .json(&req)
             .send()
@@ -68,5 +79,15 @@ impl VoyageClient {
             .next()
             .map(|d| d.embedding)
             .context("Voyage API returned no embeddings")
+    }
+}
+
+/// Determine the correct Voyage endpoint for a given API key.
+fn voyage_url_for_key(key: &str) -> String {
+    let trimmed = key.trim();
+    if trimmed.starts_with("al-") {
+        VOYAGE_MONGODB_URL.to_string()
+    } else {
+        VOYAGE_PUBLIC_URL.to_string()
     }
 }
