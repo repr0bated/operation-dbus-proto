@@ -331,7 +331,7 @@
       <p>A 152-byte <code>repr(C)</code> struct is written to <code>/dev/shm/plugin_schema.dat</code> — tmpfs only, no disk I/O.</p>
 
       <div class="sled-layout">
-        <div class="sled-header">IdentitySled — 208 bytes total &nbsp;·&nbsp; <code>op-mcp-proxy/src/sled.rs</code></div>
+        <div class="sled-header">IdentitySled — 152 bytes, #[repr(C)] &nbsp;·&nbsp; <code>op-identity/src/schema_bridge.rs:171</code></div>
         <div class="sled-row">
           <div class="sled-offset">[0..32]</div>
           <div class="sled-field wg">wireguard_pubkey [u8; 32]</div>
@@ -343,43 +343,40 @@
           <div class="sled-desc">Schema version counter</div>
         </div>
         <div class="sled-row">
-          <div class="sled-offset">[40..41]</div>
-          <div class="sled-field">is_valid bool</div>
-          <div class="sled-desc">Non-zero = sled is live</div>
-        </div>
-        <div class="sled-row">
-          <div class="sled-offset">[41..48]</div>
-          <div class="sled-field">_pad [u8; 7]</div>
-          <div class="sled-desc">Alignment padding</div>
-        </div>
-        <div class="sled-row">
-          <div class="sled-offset">[48..80]</div>
+          <div class="sled-offset">[40..72]</div>
           <div class="sled-field fp">hashed_footprint [u8; 32]</div>
-          <div class="sled-desc">Blake3(schema state) — the hologram</div>
+          <div class="sled-desc">Blake3(pubkey + mutation_index) — the hologram</div>
         </div>
         <div class="sled-row">
-          <div class="sled-offset">[80..96]</div>
-          <div class="sled-field trace">schema_uuid [u8; 16]</div>
-          <div class="sled-desc">UUID v4 — wristband serial number</div>
+          <div class="sled-offset">[72..88]</div>
+          <div class="sled-field trace">trace_id [u8; 16]</div>
+          <div class="sled-desc">UUID v4, network byte order — wristband serial number</div>
         </div>
         <div class="sled-row">
-          <div class="sled-offset">[96..160]</div>
-          <div class="sled-field">subid [u8; 64]</div>
-          <div class="sled-desc">Subscriber / peer identifier</div>
+          <div class="sled-offset">[88..92]</div>
+          <div class="sled-field">schema_version u32</div>
+          <div class="sled-desc">Currently always 1</div>
         </div>
         <div class="sled-row">
-          <div class="sled-offset">[160..192]</div>
-          <div class="sled-field">control_source [u8; 32]</div>
-          <div class="sled-desc">Originating control plane</div>
+          <div class="sled-offset">[92..108]</div>
+          <div class="sled-field trace">vector_id [u8; 16]</div>
+          <div class="sled-desc">Qdrant vector UUID — accountability linkage</div>
         </div>
         <div class="sled-row">
-          <div class="sled-offset">[192..208]</div>
-          <div class="sled-field dns">nextdns_profile [u8; 16]</div>
-          <div class="sled-desc">e.g., "689ec7" — VIP section pass</div>
+          <div class="sled-offset">[108..152]</div>
+          <div class="sled-field">reserved [u8; 44]</div>
+          <div class="sled-desc">Zero-padded, reserved for future fields</div>
         </div>
       </div>
 
-      <p>The <strong>footprint</strong> is the hologram — Blake3 of live schema state. A wristband stamped against last week's schema will fail tonight's UV check. The <strong>trace_id</strong> is the serial number, linked immutably to a Qdrant vector record for full audit.</p>
+      <p style="color:var(--muted);font-size:.8rem;margin-top:.3rem;">
+        The MCP proxy reads an extended 208-byte view of the same file (<code>op-mcp-proxy/src/sled.rs</code>),
+        appending <code>subid</code>, <code>control_source</code>, and <code>nextdns_profile</code> fields written
+        by the SchemaEngine. The interceptor validates only against the canonical 152-byte
+        <code>IdentitySled</code> above.
+      </p>
+
+      <p>The <strong>footprint</strong> is the hologram — Blake3 of the peer pubkey + mutation index. A wristband stamped in a previous schema epoch fails the UV check the moment the schema mutates. The <strong>trace_id</strong> is the serial number, linked immutably to a Qdrant vector record via <code>vector_id</code>.</p>
     </div>
   </div>
 
@@ -426,30 +423,42 @@
       <span class="flow-tag tag-guard">Backstage door — wristband scanner</span>
       <p>Tonic gRPC middleware on port <strong>18789</strong>. Every call hits this before any handler. <code>op-grpc-bridge/src/interceptor.rs:34</code></p>
 
-      <pre><span class="kw">pub fn</span> <span class="fn">ghostbridge_interceptor</span>(req: <span class="ty">Request</span>&lt;()&gt;) -&gt; <span class="ty">Result</span>&lt;<span class="ty">Request</span>&lt;()&gt;, <span class="ty">Status</span>&gt; {
-    <span class="cm">// 1. Wristband must be present</span>
-    <span class="kw">let</span> footprint = req.metadata().<span class="fn">get</span>(<span class="str">"x-ghostbridge-footprint"</span>);
-    <span class="kw">let</span> trace_id  = req.metadata().<span class="fn">get</span>(<span class="str">"x-ghostbridge-trace-id"</span>);
-    <span class="kw">if</span> footprint.<span class="fn">is_none</span>() || trace_id.<span class="fn">is_none</span>() {
+      <pre><span class="kw">pub fn</span> <span class="fn">ghostbridge_interceptor</span>(<span class="kw">mut</span> req: <span class="ty">Request</span>&lt;()&gt;) -&gt; <span class="ty">Result</span>&lt;<span class="ty">Request</span>&lt;()&gt;, <span class="ty">Status</span>&gt; {
+    <span class="cm">// 1. Clone headers upfront — releases the immutable borrow before extensions_mut()</span>
+    <span class="kw">let</span> footprint_value = req.metadata().<span class="fn">get</span>(<span class="str">"x-ghostbridge-footprint"</span>).<span class="fn">cloned</span>();
+    <span class="kw">let</span> trace_value     = req.metadata().<span class="fn">get</span>(<span class="str">"x-ghostbridge-trace-id"</span>).<span class="fn">cloned</span>();
+
+    <span class="kw">if</span> footprint_value.<span class="fn">is_none</span>() || trace_value.<span class="fn">is_none</span>() {
         <span class="kw">return</span> <span class="ty">Err</span>(<span class="ty">Status</span>::<span class="fn">unauthenticated</span>(
             <span class="str">"A.N.N.A. Scribe: Missing Ghostbridge Identity Sled. Connection Dropped."</span>
         ));
     }
 
-    <span class="cm">// 2. Zero-copy mmap read — no DB, no network, just tmpfs</span>
-    <span class="kw">let</span> (sled_ptr, _mmap) = op_identity::<span class="fn">read_sled</span>()?;
+    <span class="cm">// 2. Zero-copy mmap read — error mapped to Status so ? operator compiles</span>
+    <span class="kw">let</span> (sled_ptr, _mmap) = op_identity::<span class="fn">read_sled</span>()
+        .<span class="fn">map_err</span>(|_| <span class="ty">Status</span>::<span class="fn">internal</span>(<span class="str">"SchemaEngine Memory Unreachable"</span>))?;
     <span class="kw">let</span> sled = <span class="kw">unsafe</span> { &amp;*sled_ptr };
 
-    <span class="cm">// 3. Hologram check — footprint must match TONIGHT's schema</span>
-    <span class="kw">let</span> expected = <span class="fn">hex::encode</span>(sled.hashed_footprint);
-    <span class="kw">if</span> request_footprint != expected {
+    <span class="kw">if</span> !<span class="fn">is_sled_valid</span>(sled) {
+        <span class="kw">return</span> <span class="ty">Err</span>(<span class="ty">Status</span>::<span class="fn">failed_precondition</span>(<span class="str">"A.N.N.A. Scribe: Invalid Schema State."</span>));
+    }
+
+    <span class="cm">// 3. Hologram check — extract request footprint, compare to live sled</span>
+    <span class="kw">let</span> request_footprint = footprint_value.<span class="fn">as_ref</span>().<span class="fn">unwrap</span>()
+        .<span class="fn">to_str</span>()
+        .<span class="fn">map_err</span>(|_| <span class="ty">Status</span>::<span class="fn">invalid_argument</span>(<span class="str">"Invalid footprint header encoding"</span>))?;
+    <span class="kw">let</span> expected_footprint = <span class="fn">hex::encode</span>(sled.hashed_footprint);
+
+    <span class="kw">if</span> request_footprint != expected_footprint {
         <span class="kw">return</span> <span class="ty">Err</span>(<span class="ty">Status</span>::<span class="fn">permission_denied</span>(
             <span class="str">"A.N.N.A. Scribe: Temporal Hash Mismatch. Session footprint out of sync."</span>
         ));
     }
 
-    <span class="cm">// 4. Stamp trace ID into gRPC extensions — rides every downstream call</span>
-    req.extensions_mut().<span class="fn">insert</span>(trace_id);
+    <span class="cm">// 4. Embed trace ID into gRPC extensions — rides every downstream call</span>
+    <span class="kw">if let</span> <span class="ty">Some</span>(trace_val) = trace_value {
+        req.<span class="fn">extensions_mut</span>().<span class="fn">insert</span>(trace_val);
+    }
     <span class="ty">Ok</span>(req)
 }</pre>
 
