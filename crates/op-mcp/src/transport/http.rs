@@ -403,6 +403,7 @@ pub struct HttpSseTransport {
     bind_addr: String,
     base_path: String,
     validator: Arc<dyn AuthValidator>,
+    extra_router: Option<axum::Router>,
 }
 
 impl HttpSseTransport {
@@ -411,6 +412,7 @@ impl HttpSseTransport {
             bind_addr: bind_addr.into(),
             base_path: String::new(),
             validator: default_validator(),
+            extra_router: None,
         }
     }
 
@@ -421,6 +423,14 @@ impl HttpSseTransport {
 
     pub fn with_auth_validator(mut self, validator: Arc<dyn AuthValidator>) -> Self {
         self.validator = validator;
+        self
+    }
+
+    /// Mount an additional Axum router alongside the MCP protocol routes.
+    /// Useful for exposing extra endpoints (e.g. context-awareness SSE) on
+    /// the same port with shared auth and CORS layers.
+    pub fn with_extra_router(mut self, router: axum::Router) -> Self {
+        self.extra_router = Some(router);
         self
     }
 }
@@ -438,7 +448,7 @@ impl Transport for HttpSseTransport {
         let mut app = Router::new()
             .route("/", get(root_handler).post(mcp_handler::<H>))
             .route("/sse", get(sse_handler::<H>))
-            .route("/mcp", post(mcp_handler::<H>))
+            .route("/mcp", get(sse_handler::<H>).post(mcp_handler::<H>))
             .route("/message", post(mcp_handler::<H>))
             .route("/health", get(health_handler))
             .route(
@@ -460,6 +470,14 @@ impl Transport for HttpSseTransport {
                     &format!("{}/tools/call", base_path),
                     post(tools_call_handler::<H>),
                 );
+        }
+
+        // Mount extra routes (e.g. context-awareness endpoints) before applying
+        // shared auth / CORS layers so they are protected too.
+        // nest_service is used because the extra router has its own state type
+        // (different from HttpState<H>) and Router::merge requires matching state.
+        if let Some(extra) = self.extra_router {
+            app = app.nest_service("/context", extra.into_service());
         }
 
         let app = app

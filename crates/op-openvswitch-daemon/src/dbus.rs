@@ -1,12 +1,16 @@
 //! Pure passthrough D-Bus interfaces for the op-openvswitch-daemon.
 //!
-//! TWO separate object paths (locked design):
+//! THREE D-Bus object paths (locked design):
 //! - `/org/opdbus/rovs/jsonrpc`  → interface `org.opdbus.rovs.jsonrpc`
 //! - `/org/opdbus/rovs/openflow` → interface `org.opdbus.rovs.openflow`
+//! - `/org/opdbus/rovs/proxy`    → interface `org.opdbus.rovs.proxy`
 //!
-//! The daemon knows NOTHING about bridges, ports, or containers.  It only
-//! proxies raw `rovs-jsonrpc` / `rovs-openflow` primitives over D-Bus.
+//! The daemon knows NOTHING about bridges, ports, or containers on the jsonrpc/openflow
+//! paths.  It only proxies raw `rovs-jsonrpc` / `rovs-openflow` primitives over D-Bus.
 //! Business logic lives in the consuming plugins.
+//!
+//! The `proxy` path provides the openvswitch proxy operations for container
+//! network namespace management (attach/detach OVS internal ports).
 
 use anyhow::{Context, Result};
 use rovs_ovsdb::Client;
@@ -14,7 +18,7 @@ use rovs_transport::Address;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 use zbus::interface;
 
 // ── Shared daemon state ───────────────────────────────────────────────────────
@@ -576,4 +580,220 @@ fn parse_json_flow(flow_json: &str) -> Result<rovs_openflow::Flow> {
     // unless explicitly supported by the FlowAddBuilder. (Usually table_id=0 by default).
 
     Ok(flow)
+}
+
+// ── OVS Proxy object (/org/opdbus/rovs/proxy) ─────────────────────────────────
+
+/// D-Bus service for the openvswitch proxy: attach/detach OVS internal ports
+/// to container network namespaces.
+pub struct ProxyService {
+    state: DaemonState,
+}
+
+impl ProxyService {
+    pub fn new(state: DaemonState) -> Self {
+        Self { state }
+    }
+}
+
+#[interface(name = "org.opdbus.rovs.proxy")]
+impl ProxyService {
+    /// Create an OVS internal port on a bridge, move it into a container's
+    /// netns, rename it, and bring it up.
+    ///
+    /// `params_json` — JSON: {"port_name":"..","bridge":"..","target_pid":N,"iface_name":"..","ip_addrs":[".."]}
+    /// Returns JSON: {"success":bool,"message":"..","iface_name":".."}
+    async fn attach_port(&self, params_json: &str) -> String {
+        debug!("proxy.attach_port params_len={}", params_json.len());
+
+        let params: serde_json::Value = match serde_json::from_str(params_json) {
+            Ok(v) => v,
+            Err(e) => return json_error(&format!("invalid params JSON: {}", e)),
+        };
+
+        let port_name = match params.get("port_name").and_then(|v| v.as_str()) {
+            Some(n) => n.to_string(),
+            None => return json_error("missing port_name"),
+        };
+        let bridge = match params.get("bridge").and_then(|v| v.as_str()) {
+            Some(b) => b.to_string(),
+            None => return json_error("missing bridge"),
+        };
+        let target_pid = match params.get("target_pid").and_then(|v| v.as_u64()) {
+            Some(p) => p as u32,
+            None => return json_error("missing target_pid"),
+        };
+        let iface_name = params
+            .get("iface_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or(&port_name)
+            .to_string();
+        let ip_addrs: Vec<String> = params
+            .get("ip_addrs")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        // Step 1: Create OVS internal port via OVSDB transact
+        let iface_row = serde_json::json!({ "name": &port_name, "type": "internal" });
+        let add_ops = serde_json::json!([
+            {
+                "op": "insert",
+                "table": "Interface",
+                "row": iface_row,
+                "uuid-name": "new_iface"
+            },
+            {
+                "op": "insert",
+                "table": "Port",
+                "row": {
+                    "name": &port_name,
+                    "interfaces": ["set", [["named-uuid", "new_iface"]]]
+                },
+                "uuid-name": "new_port"
+            },
+            {
+                "op": "mutate",
+                "table": "Bridge",
+                "where": [["name", "==", &bridge]],
+                "mutations": [["ports", "insert", ["named-uuid", "new_port"]]]
+            },
+        ]);
+
+        let mut guard = match self.state.get_ovsdb().await {
+            Ok(g) => g,
+            Err(e) => return json_error(&format!("OVSDB connect failed: {}", e)),
+        };
+        let client = match guard.as_mut() {
+            Some(c) => c,
+            None => return json_error("OVSDB client unavailable"),
+        };
+
+        match client.transact(add_ops).await {
+            Ok(_) => info!("OVSDB: internal port {} created on {}", port_name, bridge),
+            Err(e) => {
+                return serde_json::json!({
+                    "success": false,
+                    "message": format!("OVSDB add_port failed: {}", e),
+                    "iface_name": ""
+                })
+                .to_string();
+            }
+        }
+        drop(guard);
+
+        // Step 2: Bring up on host, move to netns, rename, bring up
+        if let Err(e) = crate::netns::set_link_up_rtnetlink(&port_name) {
+            return serde_json::json!({
+                "success": false,
+                "message": format!("bring up on host failed: {}", e),
+                "iface_name": ""
+            })
+            .to_string();
+        }
+
+        if let Err(e) = crate::netns::move_interface_to_netns(&port_name, target_pid) {
+            return serde_json::json!({
+                "success": false,
+                "message": format!("move to netns failed: {}", e),
+                "iface_name": ""
+            })
+            .to_string();
+        }
+
+        if port_name != iface_name {
+            if let Err(e) = crate::netns::rename_in_netns(&port_name, &iface_name, target_pid) {
+                return serde_json::json!({
+                    "success": false,
+                    "message": format!("rename in netns failed: {}", e),
+                    "iface_name": iface_name
+                })
+                .to_string();
+            }
+        }
+
+        let _ = crate::netns::set_link_up_in_netns(&iface_name, target_pid);
+
+        // Step 3: Add IP addresses
+        for addr in &ip_addrs {
+            match crate::netns::add_addr_in_netns(&iface_name, addr, target_pid) {
+                Ok(_) => info!("proxy: added addr {} to {}", addr, iface_name),
+                Err(e) => warn!("proxy: failed to add addr {} to {}: {}", addr, iface_name, e),
+            }
+        }
+
+        serde_json::json!({
+            "success": true,
+            "message": format!("Port {} attached to PID {} as {}", port_name, target_pid, iface_name),
+            "iface_name": iface_name
+        })
+        .to_string()
+    }
+
+    /// Remove an OVS port from a bridge (works regardless of which netns it's in).
+    ///
+    /// `params_json` — JSON: {"port_name":"..","bridge":".."}
+    /// Returns JSON: {"success":bool,"message":".."}
+    async fn detach_port(&self, params_json: &str) -> String {
+        debug!("proxy.detach_port params_len={}", params_json.len());
+
+        let params: serde_json::Value = match serde_json::from_str(params_json) {
+            Ok(v) => v,
+            Err(e) => return json_error(&format!("invalid params JSON: {}", e)),
+        };
+
+        let port_name = match params.get("port_name").and_then(|v| v.as_str()) {
+            Some(n) => n.to_string(),
+            None => return json_error("missing port_name"),
+        };
+        let bridge = match params.get("bridge").and_then(|v| v.as_str()) {
+            Some(b) => b.to_string(),
+            None => return json_error("missing bridge"),
+        };
+
+        let mut guard = match self.state.get_ovsdb().await {
+            Ok(g) => g,
+            Err(e) => return json_error(&format!("OVSDB connect failed: {}", e)),
+        };
+        let client = match guard.as_mut() {
+            Some(c) => c,
+            None => return json_error("OVSDB client unavailable"),
+        };
+
+        let del_ops = serde_json::json!([
+            {
+                "op": "mutate",
+                "table": "Bridge",
+                "where": [["name", "==", &bridge]],
+                "mutations": [["ports", "delete", ["name", &port_name]]]
+            },
+            {
+                "op": "delete",
+                "table": "Port",
+                "where": [["name", "==", &port_name]]
+            },
+            {
+                "op": "delete",
+                "table": "Interface",
+                "where": [["name", "==", &port_name]]
+            },
+        ]);
+
+        match client.transact(del_ops).await {
+            Ok(_) => serde_json::json!({
+                "success": true,
+                "message": format!("Port {} detached from {}", port_name, bridge)
+            })
+            .to_string(),
+            Err(e) => serde_json::json!({
+                "success": false,
+                "message": format!("OVSDB remove failed: {}", e)
+            })
+            .to_string(),
+        }
+    }
 }

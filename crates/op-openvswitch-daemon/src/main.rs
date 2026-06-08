@@ -18,8 +18,9 @@ mod dbus;
 mod execution;
 mod grpc;
 mod grpc_streaming;
+mod netns;
 
-use dbus::{DaemonState, JsonRpcService, OpenFlowService};
+use dbus::{DaemonState, JsonRpcService, OpenFlowService, ProxyService};
 use execution::PluginExecutionService;
 use grpc_streaming::{EventBus, StreamingService};
 
@@ -110,7 +111,8 @@ async fn main() -> Result<()> {
     // Register TWO separate object paths (locked design).
     let grpc_state = state.clone();
     let json_service = JsonRpcService::new(state.clone());
-    let of_service = OpenFlowService::new(state);
+    let of_service = OpenFlowService::new(state.clone());
+    let proxy_service = ProxyService::new(state);
 
     conn.object_server()
         .at("/org/opdbus/rovs/jsonrpc", json_service)
@@ -121,6 +123,11 @@ async fn main() -> Result<()> {
         .at("/org/opdbus/rovs/openflow", of_service)
         .await
         .context("Failed to register /org/opdbus/rovs/openflow")?;
+
+    conn.object_server()
+        .at("/org/opdbus/rovs/proxy", proxy_service)
+        .await
+        .context("Failed to register /org/opdbus/rovs/proxy")?;
 
     let exec_service = PluginExecutionService::new();
     conn.object_server()
@@ -136,6 +143,7 @@ async fn main() -> Result<()> {
     info!("D-Bus services registered:");
     info!("  /org/opdbus/rovs/jsonrpc  -> org.opdbus.rovs.jsonrpc");
     info!("  /org/opdbus/rovs/openflow -> org.opdbus.rovs.openflow");
+    info!("  /org/opdbus/rovs/proxy    -> org.opdbus.rovs.proxy");
     info!("  /org/opdbus/execution     -> org.opdbus.execution");
 
     // Optional gRPC with streaming support (M2)

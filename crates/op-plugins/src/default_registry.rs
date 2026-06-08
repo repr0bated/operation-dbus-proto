@@ -12,7 +12,7 @@
 //! ## Canonical Path Enforcement
 //!
 //! All plugins must use canonical D-Bus paths:
-//! - Path: `/org/opdbus/v1/plugin/plugins/{name}`
+//! - Path: `/org/opdbus/v1/plugins/{name}`
 //! - Interface: `org.opdbus.v1.Plugin.Plugins.{Name}`
 //!
 //! Legacy paths are deprecated and will be rejected.
@@ -101,6 +101,7 @@ fn default_auto_load() -> Vec<String> {
         "knowledge".to_string(),
         "schema_renderer".to_string(),
         "workflows".to_string(),
+        "netmaker".to_string(),
     ]
 }
 
@@ -190,18 +191,19 @@ impl DefaultPluginRegistry {
 
     /// Resolve user/request-facing plugin references into canonical loader names.
     ///
-    /// Supports direct names, aliases, and CANONICAL projection paths like
-    /// `/org/opdbus/v1/plugin/plugins/<plugin>/...`.
+    /// Supports direct names, aliases, and projection paths like
+    /// `/org/opdbus/v1/plugins/<plugin>/...`.
     ///
-    /// Legacy paths like `/opdbus/v1/plugins/...` are NO LONGER SUPPORTED.
-    /// Use canonical paths as defined in `crate::canonical`.
+    /// The old `/org/opdbus/v1/plugin/plugins/...` spelling is accepted as a
+    /// compatibility alias and normalized to the canonical plural base path.
     pub fn resolve_requested_plugin_name(requested: &str) -> Result<String> {
         let trimmed = requested.trim();
         if trimmed.is_empty() {
             return Err(anyhow!("Plugin identifier cannot be empty"));
         }
 
-        let from_path = Self::extract_plugin_name_from_projection_path(trimmed).unwrap_or(trimmed);
+        let extracted = Self::extract_plugin_name_from_projection_path(trimmed);
+        let from_path = extracted.as_deref().unwrap_or(trimmed);
         let normalized = from_path
             .trim()
             .trim_matches('/')
@@ -224,28 +226,15 @@ impl DefaultPluginRegistry {
         Ok(canonical.to_string())
     }
 
-    fn extract_plugin_name_from_projection_path(requested: &str) -> Option<&str> {
-        // CANONICAL PATH ONLY: /org/opdbus/v1/plugin/plugins/{name}
-        // Legacy paths are deprecated and will be rejected
-        use crate::canonical::PLUGIN_BASE_PATH;
-
-        // Check canonical path prefix
-        if let Some(rest) = requested.strip_prefix(PLUGIN_BASE_PATH) {
-            return rest
-                .trim_start_matches('/')
-                .split('/')
-                .find(|segment| !segment.is_empty());
-        }
-
-        // Also accept the /org/opdbus/v1/plugin/plugins/ prefix without leading slash
-        if let Some(rest) = requested.strip_prefix(&PLUGIN_BASE_PATH[1..]) {
-            return rest
-                .trim_start_matches('/')
-                .split('/')
-                .find(|segment| !segment.is_empty());
-        }
-
-        None
+    fn extract_plugin_name_from_projection_path(requested: &str) -> Option<String> {
+        // Normalize aliases first, then extract the top-level plugin name.
+        let normalized = crate::canonical::normalize_plugin_path(requested)?;
+        normalized
+            .strip_prefix(crate::canonical::PLUGIN_BASE_PATH)?
+            .trim_start_matches('/')
+            .split('/')
+            .find(|segment| !segment.is_empty())
+            .map(|segment| segment.to_string())
     }
 
     /// Load all auto-load plugins
@@ -566,16 +555,24 @@ mod tests {
     }
 
     #[test]
-    fn test_legacy_paths_are_rejected() {
-        // Legacy paths should NOT be resolved
-        assert!(
+    fn test_alias_paths_are_resolved() {
+        assert_eq!(
             DefaultPluginRegistry::resolve_requested_plugin_name("/opdbus/v1/plugins/procfs")
-                .is_err()
+                .unwrap(),
+            "procfs"
         );
-        assert!(DefaultPluginRegistry::resolve_requested_plugin_name(
-            "/org/opdbus/v1/plugins/procfs"
-        )
-        .is_err());
+        assert_eq!(
+            DefaultPluginRegistry::resolve_requested_plugin_name(
+                "/org/opdbus/v1/plugin/plugins/procfs"
+            )
+            .unwrap(),
+            "procfs"
+        );
+        assert_eq!(
+            DefaultPluginRegistry::resolve_requested_plugin_name("/org/opdbus/v1/plugins/procfs")
+                .unwrap(),
+            "procfs"
+        );
     }
 
     #[tokio::test]

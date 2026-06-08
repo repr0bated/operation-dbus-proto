@@ -62,7 +62,7 @@ pub use interfaces::{
 };
 pub use json_stream::ProjectionStreamServer;
 pub use ovsdb_mirror::OvsdbMirrorProjectionImpl;
-pub use plugin_reader::{convert_schema, SystemPluginReader};
+pub use plugin_reader::SystemPluginReader;
 pub use procfs_reader::SystemProcfsReader;
 pub use projection_engine::ProjectionSystemEngine;
 pub use projection_store::ProjectionStore;

@@ -39,13 +39,16 @@ pub struct ContextServerState {
     pub session_manager: Arc<SessionManager>,
 }
 
-/// Create a context-aware server with proactive SSE pushes
+/// Create a context-aware server with proactive SSE pushes.
+/// **Deprecated in favour of [`build_context_router`]**: this function
+/// instantiates its own `ContextAwarenessEngine`.  In the main server the
+/// engine is already created in `CognitiveMcpServer::new`, so use
+/// `build_context_router` to avoid duplicate engines.
 pub async fn create_context_aware_server(
     memory_store: Arc<CognitiveMemoryStore>,
     session_manager: Arc<SessionManager>,
     rag_pipeline: Option<Arc<RagPipeline>>,
 ) -> anyhow::Result<(Router, Arc<ContextAwarenessEngine>)> {
-    // Create context awareness engine
     let config = ContextAwarenessConfig::default();
     let engine = Arc::new(ContextAwarenessEngine::new(
         config,
@@ -53,14 +56,7 @@ pub async fn create_context_aware_server(
         rag_pipeline,
     ));
 
-    let activity_tx = engine.activity_sender();
-
-    let state = ContextServerState {
-        context_engine: engine.clone(),
-        activity_tx: activity_tx.clone(),
-        memory_store: memory_store.clone(),
-        session_manager,
-    };
+    let router = build_context_router(engine.clone(), memory_store, session_manager);
 
     // Start background monitoring
     let engine_clone = engine.clone();
@@ -68,18 +64,38 @@ pub async fn create_context_aware_server(
         engine_clone.start_monitoring();
     });
 
-    // Build router with context-aware endpoints
+    Ok((router, engine))
+}
+
+/// Build an Axum router for the context-awareness endpoints using an
+/// *existing* `ContextAwarenessEngine`.
+///
+/// Call this from `CognitiveMcpServer::start_http_server` so the engine
+/// created in `CognitiveMcpServer::new` is reused rather than duplicated.
+pub fn build_context_router(
+    engine: Arc<ContextAwarenessEngine>,
+    memory_store: Arc<CognitiveMemoryStore>,
+    session_manager: Arc<SessionManager>,
+) -> Router {
+    let activity_tx = engine.activity_sender();
+
+    let state = ContextServerState {
+        context_engine: engine,
+        activity_tx,
+        memory_store,
+        session_manager,
+    };
+
     let router = Router::new()
-        .route("/context/stream/:session_id", get(sse_push_stream))
-        .route("/context/status/:session_id", get(get_session_status))
-        .route("/context/record", post(record_activity))
-        .route("/context/request_push", post(request_knowledge_push))
-        .route("/context/health", get(context_health))
+        .route("/stream/:session_id", get(sse_push_stream))
+        .route("/status/:session_id", get(get_session_status))
+        .route("/record", post(record_activity))
+        .route("/request_push", post(request_knowledge_push))
+        .route("/health", get(context_health))
         .with_state(state);
 
     info!("Context-aware server endpoints registered");
-
-    Ok((router, engine))
+    router
 }
 
 /// SSE stream handler for proactive knowledge pushes
@@ -223,15 +239,7 @@ async fn record_activity(
     State(state): State<ContextServerState>,
     Json(input): Json<RecordActivityInput>,
 ) -> Json<serde_json::Value> {
-    let activity_type = match input.activity_type.as_str() {
-        "tool_call" => ActivityType::ToolCall,
-        "query" => ActivityType::Query,
-        "context_switch" => ActivityType::ContextSwitch,
-        "error" => ActivityType::Error,
-        "idle" => ActivityType::Idle,
-        "return_from_idle" => ActivityType::ReturnFromIdle,
-        _ => ActivityType::Query,
-    };
+    let activity_type = ActivityType::parse(&input.activity_type);
 
     debug!(
         session_id = %input.session_id,

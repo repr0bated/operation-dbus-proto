@@ -139,12 +139,12 @@ impl DbusMirror {
             .at("/org/opdbus/v1", om)
             .await?;
 
-        // Register PluginsV1 at the plugins path.
+        // Register PluginsV1 at the canonical plugins path.
         let plugin_iface = plugin_interface::PluginInterface::new();
         let plugin_snap = plugin_iface.snapshot_handle();
         self.connection
             .object_server()
-            .at("/org/opdbus/v1/plugin/plugins", plugin_iface)
+            .at("/org/opdbus/v1/plugins", plugin_iface)
             .await?;
 
         // Register mirror-management interface
@@ -832,19 +832,18 @@ impl DbusMirror {
     }
 
     fn plugin_dbus_path(plugin_id: &str) -> String {
-        format!(
-            "/org/opdbus/v1/plugin/plugins/{}",
-            Self::sanitize_dbus_path_segment(plugin_id)
-        )
+        format!("/org/opdbus/v1/plugins/{}", Self::sanitize_dbus_path_segment(plugin_id))
     }
 
     fn is_permanent_plugin_path(path: &str) -> bool {
-        if !path.starts_with("/org/opdbus/v1/plugin/plugins/") {
-            return false;
+        const CANONICAL: &str = "/org/opdbus/v1/plugins/";
+        const LEGACY: &str = "/org/opdbus/v1/plugin/plugins/";
+        if let Some(remainder) = path.strip_prefix(CANONICAL).or_else(|| path.strip_prefix(LEGACY))
+        {
+            !remainder.is_empty() && !remainder.contains('/')
+        } else {
+            false
         }
-
-        let remainder = &path["/org/opdbus/v1/plugin/plugins/".len()..];
-        !remainder.is_empty() && !remainder.contains('/')
     }
 
     fn sanitize_dbus_path_segment(segment: &str) -> String {
@@ -1087,7 +1086,7 @@ impl DbusMirror {
 
     /// Load plugin state into the mirror (Seeding).
     ///
-    /// Each plugin gets both a `MirrorObject` at `/org/opdbus/v1/plugin/plugins/{id}`
+    /// Each plugin gets both a `MirrorObject` at `/org/opdbus/v1/plugins/{id}`
     /// and an entry in the `ObjectManagerInterface` registry so that
     /// `GetManagedObjects` immediately returns all loaded plugins.
     pub async fn load_plugin_state(&self, plugins: &std::collections::HashMap<String, Value>) {
@@ -1210,7 +1209,9 @@ impl DbusMirror {
 
             // If this was a plugin-managed object, remove it from the registry
             // and emit InterfacesRemoved.
-            if path.starts_with("/org/opdbus/v1/plugin/plugins/") {
+            if path.starts_with("/org/opdbus/v1/plugins/")
+                || path.starts_with("/org/opdbus/v1/plugin/plugins/")
+            {
                 self.deregister_from_object_manager(&path).await;
             }
         }

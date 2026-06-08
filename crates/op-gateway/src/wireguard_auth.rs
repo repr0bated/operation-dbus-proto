@@ -22,7 +22,7 @@ use tracing::{debug, info, warn};
 use argon2::Argon2;
 use base64::{engine::general_purpose, Engine as _};
 use blake2::{Blake2s256, Digest};
-use ring::rand::SystemRandom;
+use ring::rand::{SecureRandom, SystemRandom};
 
 use crate::encrypted_storage::{EncryptedKeyStorage, EncryptedStorageConfig, KeyType};
 use anyhow::Result;
@@ -336,12 +336,21 @@ impl WireGuardAuthManager {
             }
         }
 
-        // Generate session ID and stable PSK (no timestamp)
-        let session_id = self.generate_session_id(peer_pubkey).await?;
+        // The public wristband must be unguessable. Keep the WireGuard-derived
+        // claim ticket only as non-bearer metadata for correlation.
+        let session_id = Self::generate_wristband_id()?;
+        let claim_ticket = self.derive_wireguard_claim_ticket(peer_pubkey).await?;
         let psk = self.derive_psk(peer_pubkey).await?;
 
         let now = Self::current_timestamp();
         let expires_at = now + 3600; // 1 hour default
+        let mut flags = HashMap::new();
+        flags.insert("wireguard_claim_ticket".to_string(), claim_ticket);
+        flags.insert("wristband_issuer".to_string(), "op-gateway".to_string());
+        flags.insert(
+            "wristband_entropy".to_string(),
+            "256-bit-random".to_string(),
+        );
 
         let session = WireGuardSession {
             session_id: session_id.clone(),
@@ -355,7 +364,7 @@ impl WireGuardAuthManager {
             client_version: client_info.as_ref().and_then(|c| c.version.clone()),
             auth_method: "wireguard".to_string(),
             key_rotation_count: 0,
-            flags: HashMap::new(),
+            flags,
         };
 
         // Store in database
@@ -531,8 +540,17 @@ impl WireGuardAuthManager {
         Ok(stats.clone())
     }
 
-    /// Generate session ID using SIMD-accelerated BLAKE2s
-    async fn generate_session_id(&self, peer_pubkey: &str) -> anyhow::Result<String> {
+    /// Generate the bearer wristband ID with high-entropy randomness.
+    fn generate_wristband_id() -> anyhow::Result<String> {
+        let mut token = [0u8; 32];
+        SystemRandom::new()
+            .fill(&mut token)
+            .map_err(|_| anyhow::anyhow!("Failed to generate WireGuard wristband ID"))?;
+        Ok(hex::encode(token))
+    }
+
+    /// Derive a non-bearer claim ticket using SIMD-accelerated BLAKE2s.
+    async fn derive_wireguard_claim_ticket(&self, peer_pubkey: &str) -> anyhow::Result<String> {
         let input = format!("WG-SESSION-{}-{}", peer_pubkey, Self::current_timestamp());
         let session_ids = self
             .crypto_engine

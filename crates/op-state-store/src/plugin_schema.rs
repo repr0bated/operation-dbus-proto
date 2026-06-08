@@ -131,6 +131,11 @@ pub struct PluginSchema {
     /// Mutation index for the identity sled
     #[serde(default)]
     pub mutation_index: Option<u64>,
+    /// OSCAL subids keyed by field/tool name (e.g. "code_search" →
+    /// "obs.service.code-rag.search@v1"). The single place a field's
+    /// operational taxonomy key is declared; surfaced via `field_input_schema`.
+    #[serde(default)]
+    pub subids: HashMap<String, String>,
 }
 
 fn default_dialect() -> String {
@@ -288,6 +293,28 @@ impl PluginSchema {
         }
 
         schema
+    }
+
+    /// Render a single named field as a standalone JSON Schema suitable for an
+    /// MCP tool's `input_schema()`. The field is expected to be a
+    /// `FieldType::Object` describing the tool's input parameters.
+    ///
+    /// This makes the `PluginSchema` the single source of truth for a tool's
+    /// input contract: the tool derives its schema from here rather than
+    /// declaring it inline. The field's registered OSCAL subid (if any) is
+    /// attached as `x-oscal-subid`. Returns `None` if the field is absent.
+    pub fn field_input_schema(&self, field_name: &str) -> Option<Value> {
+        let field = self.fields.get(field_name)?;
+        let mut schema = field_type_to_json_schema_2026(&field.field_type);
+        if let Some(obj) = schema.as_object_mut() {
+            if !field.description.is_empty() {
+                obj.insert("description".to_string(), json!(field.description));
+            }
+            if let Some(subid) = self.subids.get(field_name) {
+                obj.insert("x-oscal-subid".to_string(), json!(subid));
+            }
+        }
+        Some(schema)
     }
 
     /// Convert to JSON Schema draft-07 format (deprecated, for backward compatibility)
@@ -584,6 +611,7 @@ pub struct PluginSchemaBuilder {
     immutable_paths: Vec<String>,
     tags: Vec<String>,
     dialect: String,
+    subids: HashMap<String, String>,
 }
 
 impl PluginSchemaBuilder {
@@ -599,6 +627,7 @@ impl PluginSchemaBuilder {
             immutable_paths: Vec::new(),
             tags: Vec::new(),
             dialect: DEFAULT_SCHEMA_DIALECT.to_string(),
+            subids: HashMap::new(),
         }
     }
 
@@ -754,6 +783,14 @@ impl PluginSchemaBuilder {
         self
     }
 
+    /// Register an OSCAL subid for a named field/tool. This is the single
+    /// declaration site for that artifact's taxonomy key; it is surfaced in the
+    /// field's rendered input schema (`field_input_schema`) as `x-oscal-subid`.
+    pub fn subid(mut self, field: &str, subid: &str) -> Self {
+        self.subids.insert(field.to_string(), subid.to_string());
+        self
+    }
+
     pub fn build(self) -> PluginSchema {
         PluginSchema {
             name: self.name,
@@ -767,6 +804,7 @@ impl PluginSchemaBuilder {
             tags: self.tags,
             dialect: self.dialect,
             mutation_index: None,
+            subids: self.subids,
         }
     }
 }

@@ -1,4 +1,5 @@
 #!/bin/sh
+exec 2>&1
 export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/op-dbus/session-bus.sock}"
 export OP_DBUS_MIRROR_BUS="${OP_DBUS_MIRROR_BUS:-system}"
 export OVSDB_SOCK="${OVSDB_SOCK:-/run/openvswitch/db.sock}"

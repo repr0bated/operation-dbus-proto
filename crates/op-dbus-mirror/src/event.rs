@@ -50,7 +50,7 @@ impl MirrorEvent {
             } => Some(format!("/org/opdbus/v1/ovsdb/{}/{}", table_name, uuid)),
             MirrorEvent::NonNet { key, .. } => Some(format!("/org/opdbus/v1/nonnet/{}", key)),
             MirrorEvent::Plugin { plugin_id, .. } => {
-                Some(format!("/org/opdbus/v1/plugin/plugins/{}", plugin_id))
+                Some(format!("/org/opdbus/v1/plugins/{}", plugin_id))
             }
             MirrorEvent::Registry { event, .. } => {
                 let component = event.component.as_ref()?;

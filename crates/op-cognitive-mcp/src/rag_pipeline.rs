@@ -10,8 +10,8 @@ use anyhow::{Context, Result};
 use qdrant_client::{
     qdrant::{
         vectors_config::Config as VectorsConfigEnum, Condition, CreateCollectionBuilder, Distance,
-        Filter, PointStruct, SearchPointsBuilder, UpsertPointsBuilder, VectorParamsBuilder,
-        VectorsConfig,
+        Filter, PointStruct, ScoredPoint, SearchPointsBuilder, UpsertPointsBuilder,
+        VectorParamsBuilder, VectorsConfig,
     },
     Payload, Qdrant,
 };
@@ -20,6 +20,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
+    collections::HashMap,
     io::{BufRead, BufReader},
     path::Path,
     sync::OnceLock,
@@ -33,7 +34,8 @@ pub const DEFAULT_COLLECTION: &str = "repomix_rag";
 const VECTOR_DIM: u64 = 1024; // voyage-4 default
 const CHUNK_LINES: usize = 80; // ~2 kB of code per chunk
 const OVERLAP_LINES: usize = 12;
-const VOYAGE_API_URL: &str = "https://api.voyageai.com/v1/embeddings";
+const VOYAGE_PUBLIC_URL: &str = "https://api.voyageai.com/v1/embeddings";
+const VOYAGE_MONGODB_URL: &str = "https://ai.mongodb.com/v1/embeddings";
 const VOYAGE_BATCH: usize = 32; // points per upsert batch
 const VOYAGE_RATE_DELAY_MS: u64 = 120; // ms between Voyage calls
 
@@ -123,6 +125,65 @@ pub struct RagResult {
     pub content: String,
 }
 
+/// Structured filters for code-aware semantic retrieval.
+///
+/// `repo`/`language`/`file_type` are pushed into Qdrant as server-side `must`
+/// conditions. `path_contains`/`symbol_contains`/`exclude_tests` are applied
+/// client-side after scoring, because they are substring/boolean predicates
+/// over payload fields rather than exact keyword matches.
+#[derive(Debug, Clone, Default)]
+pub struct CodeFilter {
+    pub repo: Option<String>,
+    pub language: Option<String>,
+    pub file_type: Option<String>,
+    pub path_contains: Option<String>,
+    pub symbol_contains: Option<String>,
+    pub exclude_tests: bool,
+}
+
+impl CodeFilter {
+    fn qdrant_filter(&self) -> Option<Filter> {
+        let mut conds: Vec<Condition> = Vec::new();
+        if let Some(repo) = &self.repo {
+            conds.push(Condition::matches("repo", repo.clone()));
+        }
+        if let Some(lang) = &self.language {
+            conds.push(Condition::matches("language", lang.clone()));
+        }
+        if let Some(ft) = &self.file_type {
+            conds.push(Condition::matches("file_type", ft.clone()));
+        }
+        if conds.is_empty() {
+            None
+        } else {
+            Some(Filter::must(conds))
+        }
+    }
+
+    fn post_matches(&self, r: &RagResult) -> bool {
+        if self.exclude_tests && r.is_test {
+            return false;
+        }
+        if let Some(p) = &self.path_contains {
+            if !r.file_path.to_lowercase().contains(&p.to_lowercase()) {
+                return false;
+            }
+        }
+        if let Some(s) = &self.symbol_contains {
+            let needle = s.to_lowercase();
+            let hit = r
+                .symbols
+                .iter()
+                .any(|sym| sym.to_lowercase().contains(&needle))
+                || r.file_path.to_lowercase().contains(&needle);
+            if !hit {
+                return false;
+            }
+        }
+        true
+    }
+}
+
 pub struct RagPipeline {
     qdrant: Qdrant,
     voyage_key: String,
@@ -134,10 +195,28 @@ impl RagPipeline {
     pub fn from_env() -> Result<Self> {
         let voyage_key = std::env::var("VOYAGE_API_KEY")
             .or_else(|_| std::env::var("COGNITIVE_MCP_VOYAGE_API_KEY"))
-            .context("VOYAGE_API_KEY not set")?;
+            .ok()
+            .or_else(voyage_key_from_file)
+            .context(
+                "Voyage API key not found: set VOYAGE_API_KEY, \
+                 or place the key in ~/.ssh/mongo-voyage \
+                 (override path with COGNITIVE_MCP_VOYAGE_KEY_FILE)",
+            )?;
+        // Default: voyage-4 (balanced quality/cost in the 4-series).
+        // Override with COGNITIVE_MCP_VOYAGE_MODEL env var.
+        //
+        // Model selection guide (all 4-series are cross-compatible):
+        //   • voyage-4-lite        – lowest cost, good general quality
+        //   • voyage-4             – balanced cost/quality (DEFAULT)
+        //   • voyage-4-large       – highest quality, highest cost
+        //   • voyage-code-3        – best for code retrieval, premium price
+        //
+        // Because 4-series embeddings are cross-compatible, you can index
+        // with voyage-4 and later query with voyage-code-3 (or vice versa)
+        // without rebuilding the Qdrant collection.
         let voyage_model = std::env::var("COGNITIVE_MCP_VOYAGE_MODEL")
             .or_else(|_| std::env::var("VOYAGE_MODEL"))
-            .unwrap_or_else(|_| "voyage-4-lite".into());
+            .unwrap_or_else(|_| "voyage-4".into());
 
         let qdrant = qdrant_client_from_env()?;
 
@@ -265,30 +344,196 @@ impl RagPipeline {
 
         let response = self.qdrant.search_points(builder).await?;
 
-        Ok(response
+        Ok(response.result.into_iter().map(point_to_result).collect())
+    }
+
+    /// Code-aware semantic search with structured filters.
+    ///
+    /// Server-side filters (`repo`, `language`, `file_type`) are pushed into
+    /// Qdrant; path/symbol/test filters are applied client-side after scoring.
+    /// subid: `obs.service.code-rag.search@v1`
+    #[tracing::instrument(skip(self, filter), fields(collection, query_text, limit))]
+    pub async fn query_filtered(
+        &self,
+        collection: &str,
+        query_text: &str,
+        limit: u64,
+        filter: &CodeFilter,
+    ) -> Result<Vec<RagResult>> {
+        let vector = self.embed_query(query_text).await?;
+        let fetch = limit.saturating_mul(3).max(limit);
+
+        let mut builder = SearchPointsBuilder::new(collection, vector, fetch).with_payload(true);
+        if let Some(f) = filter.qdrant_filter() {
+            builder = builder.filter(f);
+        }
+
+        let response = self.qdrant.search_points(builder).await?;
+        let mut results: Vec<RagResult> = response
             .result
             .into_iter()
-            .map(|pt| {
-                let p = serde_json::to_value(&pt.payload).unwrap_or_default();
-                RagResult {
-                    score: pt.score,
-                    repo: str_field(&p, "repo"),
-                    file_path: str_field(&p, "file_path"),
-                    language: str_field(&p, "language"),
-                    file_type: str_field(&p, "file_type"),
-                    symbols: str_arr(&p, "symbols"),
-                    doc_comments: str_arr(&p, "doc_comments"),
-                    imports: str_arr(&p, "imports"),
-                    tags: str_arr(&p, "tags"),
-                    is_test: p["is_test"].as_bool().unwrap_or(false),
-                    line_start: p["line_start"].as_i64().unwrap_or(0),
-                    line_end: p["line_end"].as_i64().unwrap_or(0),
-                    chunk_index: p["chunk_index"].as_i64().unwrap_or(0),
-                    total_chunks: p["total_chunks"].as_i64().unwrap_or(1),
-                    content: str_field(&p, "content"),
+            .map(point_to_result)
+            .filter(|r| filter.post_matches(r))
+            .collect();
+        results.truncate(limit as usize);
+        Ok(results)
+    }
+
+    /// Fused code retrieval: semantic score + lexical/symbol boost, then
+    /// deduplicated to the single best-scoring chunk per file.
+    ///
+    /// This is the primary retrieval surface for the `code_context` tool: it
+    /// avoids returning many chunks of the same file and surfaces files whose
+    /// symbols or paths lexically match the query terms.
+    /// subid: `obs.service.code-rag.fused-search@v1`
+    #[tracing::instrument(skip(self, filter), fields(collection, query_text, limit))]
+    pub async fn query_fused(
+        &self,
+        collection: &str,
+        query_text: &str,
+        limit: u64,
+        filter: &CodeFilter,
+    ) -> Result<Vec<RagResult>> {
+        let vector = self.embed_query(query_text).await?;
+        let fetch = limit.saturating_mul(4).clamp(limit, 64);
+
+        let mut builder = SearchPointsBuilder::new(collection, vector, fetch).with_payload(true);
+        if let Some(f) = filter.qdrant_filter() {
+            builder = builder.filter(f);
+        }
+
+        let response = self.qdrant.search_points(builder).await?;
+
+        let terms: Vec<String> = query_text
+            .to_lowercase()
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|t| t.len() > 2)
+            .map(String::from)
+            .collect();
+
+        let mut best: HashMap<String, RagResult> = HashMap::new();
+        for pt in response.result {
+            let mut r = point_to_result(pt);
+            if !filter.post_matches(&r) {
+                continue;
+            }
+
+            // Lexical/symbol boost on top of the cosine score.
+            let mut boost = 0.0f32;
+            let sym = r.symbols.join(" ").to_lowercase();
+            let path = r.file_path.to_lowercase();
+            for t in &terms {
+                if sym.contains(t) {
+                    boost += 0.05;
                 }
+                if path.contains(t) {
+                    boost += 0.03;
+                }
+            }
+            r.score += boost.min(0.25);
+
+            best.entry(r.file_path.clone())
+                .and_modify(|e| {
+                    if r.score > e.score {
+                        *e = r.clone();
+                    }
+                })
+                .or_insert(r);
+        }
+
+        let mut results: Vec<RagResult> = best.into_values().collect();
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        results.truncate(limit as usize);
+        Ok(results)
+    }
+
+    /// Index a single in-memory source file (live workspace indexing).
+    ///
+    /// Unlike `ingest_repomix_entry`, this takes raw file content directly so a
+    /// changed buffer can be re-indexed without a repomix zip. Enrichment,
+    /// chunking, embedding, and upsert are identical to the repomix path.
+    /// subid: `src.software.workspace.index@v1`
+    #[tracing::instrument(skip(self, content), fields(repo, file_path, collection))]
+    pub async fn ingest_source_text(
+        &self,
+        repo: &str,
+        file_path: &str,
+        content: &str,
+        collection: &str,
+    ) -> Result<IngestStats> {
+        self.ensure_collection(collection).await?;
+
+        let lines: Vec<String> = content.lines().map(str::to_string).collect();
+        let meta = enrich(file_path, &lines);
+        let chunks = build_chunks(repo, file_path, meta, lines);
+
+        let mut stats = IngestStats {
+            files_parsed: 1,
+            ..Default::default()
+        };
+        let mut batch: Vec<PointStruct> = Vec::new();
+
+        for chunk in chunks {
+            stats.chunks_created += 1;
+
+            let vector = match self.embed_document(&chunk.embed_text).await {
+                Ok(v) => v,
+                Err(e) => {
+                    warn!(file = %chunk.file_path, error = %e, "Embed failed, skipping chunk");
+                    stats.errors += 1;
+                    continue;
+                }
+            };
+
+            let payload: Payload = serde_json::json!({
+                "repo":          chunk.repo,
+                "file_path":     chunk.file_path,
+                "language":      chunk.meta.language,
+                "file_type":     chunk.meta.file_type.as_str(),
+                "symbols":       chunk.meta.symbols,
+                "doc_comments":  chunk.meta.doc_comments,
+                "imports":       chunk.meta.imports,
+                "tags":          chunk.meta.tags,
+                "is_test":       chunk.meta.is_test,
+                "line_start":    chunk.line_start,
+                "line_end":      chunk.line_end,
+                "chunk_index":   chunk.chunk_index,
+                "total_chunks":  chunk.total_chunks,
+                "content":       chunk.content,
+                "content_hash":  chunk.content_hash,
             })
-            .collect())
+            .try_into()
+            .context("Failed to build payload")?;
+
+            batch.push(PointStruct::new(
+                stable_uuid(&chunk.content_hash),
+                vector,
+                payload,
+            ));
+
+            if batch.len() >= VOYAGE_BATCH {
+                self.flush_batch(collection, &mut batch, &mut stats).await;
+                tokio::time::sleep(Duration::from_millis(VOYAGE_RATE_DELAY_MS)).await;
+            }
+        }
+
+        if !batch.is_empty() {
+            self.flush_batch(collection, &mut batch, &mut stats).await;
+        }
+
+        info!(
+            repo = %repo,
+            file = %file_path,
+            chunks = stats.chunks_created,
+            upserted = stats.chunks_upserted,
+            "Live source ingest complete"
+        );
+
+        Ok(stats)
     }
 
     // ─── private ─────────────────────────────────────────────────────────────
@@ -354,9 +599,11 @@ impl RagPipeline {
             embedding: Vec<f32>,
         }
 
+        let url = voyage_url_for_key(&self.voyage_key);
+
         let resp: Resp = self
             .http
-            .post(VOYAGE_API_URL)
+            .post(url)
             .bearer_auth(&self.voyage_key)
             .json(&Req {
                 input: vec![text],
@@ -873,6 +1120,75 @@ pub fn qdrant_client_from_env() -> Result<Qdrant> {
     Qdrant::from_url(&url)
         .build()
         .context("Failed to build Qdrant client")
+}
+
+/// Load the Voyage API key from a secret file when env vars are unset.
+///
+/// Defaults to `~/.ssh/mongo-voyage`; override with the
+/// `COGNITIVE_MCP_VOYAGE_KEY_FILE` env var. The first non-empty line is used
+/// (so a key file with a trailing newline or comment lines works).
+fn voyage_key_from_file() -> Option<String> {
+    let path = std::env::var("COGNITIVE_MCP_VOYAGE_KEY_FILE")
+        .ok()
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| Path::new(&h).join(".ssh/mongo-voyage")))?;
+
+    let contents = std::fs::read_to_string(&path).ok()?;
+    // The creds file may contain multiple credential types (Atlas service
+    // account ID/secret, plus a Voyage API key).  We must skip service
+    // account lines and pick the actual API key.
+    let key = contents
+        .lines()
+        .map(str::trim)
+        .find(|l| {
+            !l.is_empty()
+                && !l.starts_with('#')
+                // skip Atlas service-account tokens
+                && !l.starts_with("mdb_sa_id_")
+                && !l.starts_with("mdb_sa_sk_")
+                // line should look like a Voyage key (MongoDB-hosted or public)
+                && (l.starts_with("al-") || l.starts_with("pa-"))
+        })?
+        .to_string();
+
+    if key.is_empty() {
+        None
+    } else {
+        info!(path = %path.display(), "Loaded Voyage API key from file");
+        Some(key)
+    }
+}
+
+/// Determine the correct Voyage endpoint for a given API key.
+fn voyage_url_for_key(key: &str) -> &'static str {
+    let trimmed = key.trim();
+    if trimmed.starts_with("al-") {
+        VOYAGE_MONGODB_URL
+    } else {
+        VOYAGE_PUBLIC_URL
+    }
+}
+
+/// Map a scored Qdrant point + payload into a `RagResult`.
+fn point_to_result(pt: ScoredPoint) -> RagResult {
+    let p = serde_json::to_value(&pt.payload).unwrap_or_default();
+    RagResult {
+        score: pt.score,
+        repo: str_field(&p, "repo"),
+        file_path: str_field(&p, "file_path"),
+        language: str_field(&p, "language"),
+        file_type: str_field(&p, "file_type"),
+        symbols: str_arr(&p, "symbols"),
+        doc_comments: str_arr(&p, "doc_comments"),
+        imports: str_arr(&p, "imports"),
+        tags: str_arr(&p, "tags"),
+        is_test: p["is_test"].as_bool().unwrap_or(false),
+        line_start: p["line_start"].as_i64().unwrap_or(0),
+        line_end: p["line_end"].as_i64().unwrap_or(0),
+        chunk_index: p["chunk_index"].as_i64().unwrap_or(0),
+        total_chunks: p["total_chunks"].as_i64().unwrap_or(1),
+        content: str_field(&p, "content"),
+    }
 }
 
 fn str_field(v: &serde_json::Value, key: &str) -> String {

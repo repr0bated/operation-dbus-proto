@@ -8,86 +8,15 @@ use serde::{Deserialize, Serialize};
 use simd_json::OwnedValue as Value;
 use std::collections::HashMap;
 
-/// The authoritative JSON schema that defines the structure and validation rules
-/// for all plugin-provided objects. If no valid schema exists, the entity does not
-/// exist on the system.
-///
-/// This is the single source of truth for all projections.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct PluginSchema {
-    /// Unique name of the schema
-    pub name: String,
-    /// Version string (e.g., "1.0.0")
-    pub version: String,
-    /// Fields defined by this schema
-    pub fields: Vec<FieldSchema>,
-    /// Optional category for grouping schemas
-    pub category: Option<String>,
-    /// Example data instances
-    pub examples: Option<Vec<Value>>,
-    /// Paths to fields containing secrets (for redaction)
-    pub secret_paths: Vec<String>,
-    /// Paths to fields containing PII (for redaction)
-    pub pii_paths: Vec<String>,
-}
-
-/// A field definition within a PluginSchema.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct FieldSchema {
-    /// Field name
-    pub name: String,
-    /// Field type
-    #[serde(rename = "type")]
-    pub field_type: FieldType,
-    /// Whether the field is required
-    pub required: bool,
-    /// Human-readable description
-    pub description: Option<String>,
-    /// Validation constraints
-    pub constraints: Vec<Constraint>,
-    /// Example value
-    pub example: Option<Value>,
-    /// Whether the field is read-only
-    pub read_only: bool,
-}
-
-/// Supported field types in PluginSchema.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub enum FieldType {
-    /// String type
-    String,
-    /// Integer type
-    Integer,
-    /// Number (floating-point) type
-    Number,
-    /// Boolean type
-    Boolean,
-    /// Nested object type
-    Object,
-    /// Array of items
-    Array(Box<FieldType>),
-    /// Enumerated string values
-    Enum(Vec<String>),
-    /// Any type (unconstrained)
-    Any,
-}
-
-/// Validation constraints for fields.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub enum Constraint {
-    /// Minimum string length
-    MinLength(usize),
-    /// Maximum string length
-    MaxLength(usize),
-    /// Minimum numeric value
-    MinValue(i64),
-    /// Maximum numeric value
-    MaxValue(i64),
-    /// Regular expression pattern
-    Pattern(String),
-    /// Enumerated allowed values
-    Enum(Vec<String>),
-}
+// ── Canonical PluginSchema (single source of truth) ────────────────────────
+// "The plugin is the schema." Projection does NOT define its own schema type —
+// plugins are all that is projected, so the canonical `PluginSchema` (and its
+// `FieldSchema` / `FieldType` / `Constraint` / `ReadOnlyCondition`) is imported
+// from the authority surface `op_plugins`. Redaction (`secret_paths`/`pii_paths`)
+// and ordered `Vec` fields are out of D-Bus projection scope and intentionally
+// gone; the canonical type uses a `HashMap<String, FieldSchema>` and is validated
+// via `PluginSchema::validate(...)`.
+pub use op_plugins::{Constraint, FieldSchema, FieldType, PluginSchema, ReadOnlyCondition};
 
 /// Validation result with errors.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

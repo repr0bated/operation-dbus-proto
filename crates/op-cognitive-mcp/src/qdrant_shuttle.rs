@@ -705,6 +705,7 @@ mod tests {
             tags: vec!["audit".into(), "pii".into()],
             dialect: op_state_store::DEFAULT_SCHEMA_DIALECT.into(),
             mutation_index: Some(7),
+            subids: std::collections::HashMap::new(),
         };
 
         let rendered = render_schema_embedding_text(&schema);

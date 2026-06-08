@@ -11,8 +11,12 @@ use anyhow::Result;
 use std::net::SocketAddr;
 use tonic::{Request, Response, Status};
 use tracing::info;
+use tonic_web;
 
 use crate::dbus::DaemonState;
+
+const FILE_DESCRIPTOR_SET: &[u8] =
+    tonic::include_file_descriptor_set!("ovsdaemon_descriptor");
 
 /// Generated protobuf types
 pub mod proto {
@@ -21,8 +25,9 @@ pub mod proto {
 
 use proto::ovsdb_service_server::{OvsdbService, OvsdbServiceServer};
 use proto::{
-    BridgeRequest, BridgeResponse, BridgesRequest, BridgesResponse, DatabaseRequest,
-    DatabaseResponse, PortRequest, PortResponse, PortsRequest, PortsResponse, StatusRequest,
+    AttachPortRequest, AttachPortResponse, BridgeRequest, BridgeResponse, BridgesRequest,
+    BridgesResponse, DatabaseRequest, DatabaseResponse, DetachPortRequest, DetachPortResponse,
+    PortRequest, PortResponse, PortsRequest, PortsResponse, StatusRequest,
     StatusResponse,
 };
 
@@ -187,18 +192,33 @@ impl OvsdbService for OvsdbServiceImpl {
         let req = request.into_inner();
         let name = req.name;
         let bridge = req.bridge;
-        info!("gRPC add_port: {} to {}", name, bridge);
+        let iface_type = if req.interface_type.is_empty() {
+            "system".to_string()
+        } else {
+            req.interface_type
+        };
+        info!("gRPC add_port: {} to {} (type={})", name, bridge, iface_type);
 
         let mut guard = self.ovsdb_client().await?;
         let client = guard
             .as_mut()
             .ok_or_else(|| Status::internal("OVSDB client unavailable"))?;
 
+        let mut iface_row = serde_json::json!({ "name": &name, "type": &iface_type });
+
+        // Apply any extra options from the PortRequest
+        for (key, value) in &req.options {
+            iface_row
+                .as_object_mut()
+                .expect("iface_row is always an object")
+                .insert(key.clone(), serde_json::Value::String(value.clone()));
+        }
+
         let ops = serde_json::json!([
             {
                 "op": "insert",
                 "table": "Interface",
-                "row": { "name": &name, "type": "system" },
+                "row": iface_row,
                 "uuid-name": "new_iface"
             },
             {
@@ -390,16 +410,197 @@ impl OvsdbService for OvsdbServiceImpl {
             },
         }))
     }
+
+    // ── Openvswitch proxy: attach/detach OVS internal port to container netns ────
+
+    async fn attach_port_to_netns(
+        &self,
+        request: Request<AttachPortRequest>,
+    ) -> Result<Response<AttachPortResponse>, Status> {
+        let req = request.into_inner();
+        let port_name = req.port_name;
+        let bridge = req.bridge;
+        let target_pid = req.target_pid;
+        let iface_name = if req.iface_name.is_empty() {
+            port_name.clone()
+        } else {
+            req.iface_name
+        };
+        info!(
+            "gRPC attach_port_to_netns: {} on {} -> PID {} as {}",
+            port_name, bridge, target_pid, iface_name
+        );
+
+        // Step 1: Create the OVS internal port via OVSDB
+        let iface_type = "internal";
+        let mut iface_row =
+            serde_json::json!({ "name": &port_name, "type": iface_type });
+        for (key, value) in &req.options {
+            iface_row
+                .as_object_mut()
+                .expect("iface_row is always an object")
+                .insert(key.clone(), serde_json::Value::String(value.clone()));
+        }
+
+        let mut guard = self.ovsdb_client().await?;
+        let client = guard
+            .as_mut()
+            .ok_or_else(|| Status::internal("OVSDB client unavailable"))?;
+
+        let add_ops = serde_json::json!([
+            {
+                "op": "insert",
+                "table": "Interface",
+                "row": iface_row,
+                "uuid-name": "new_iface"
+            },
+            {
+                "op": "insert",
+                "table": "Port",
+                "row": {
+                    "name": &port_name,
+                    "interfaces": ["set", [["named-uuid", "new_iface"]]]
+                },
+                "uuid-name": "new_port"
+            },
+            {
+                "op": "mutate",
+                "table": "Bridge",
+                "where": [["name", "==", &bridge]],
+                "mutations": [["ports", "insert", ["named-uuid", "new_port"]]]
+            },
+        ]);
+
+        match client.transact(add_ops).await {
+            Ok(_) => info!("OVSDB: internal port {} created on {}", port_name, bridge),
+            Err(e) => {
+                return Ok(Response::new(AttachPortResponse {
+                    port_name,
+                    bridge,
+                    success: false,
+                    message: format!("OVSDB add_port failed: {}", e),
+                    iface_name: String::new(),
+                }));
+            }
+        }
+
+        // Drop the OVSDB lock before doing netns operations
+        drop(guard);
+
+        // Step 2: Move port into container netns, rename, bring up
+        // The OVS internal port is on the host — bring it up first
+        crate::netns::set_link_up_rtnetlink(&port_name)
+            .map_err(|e| Status::internal(format!("bring up {} on host: {}", port_name, e)))?;
+
+        // Move into container's netns
+        match crate::netns::move_interface_to_netns(&port_name, target_pid) {
+            Ok(_) => {}
+            Err(e) => {
+                return Ok(Response::new(AttachPortResponse {
+                    port_name,
+                    bridge,
+                    success: false,
+                    message: format!("move to netns failed: {}", e),
+                    iface_name: String::new(),
+                }));
+            }
+        }
+
+        // Rename inside the container
+        if port_name != iface_name {
+            match crate::netns::rename_in_netns(&port_name, &iface_name, target_pid) {
+                Ok(_) => {}
+                Err(e) => {
+                    return Ok(Response::new(AttachPortResponse {
+                        port_name,
+                        bridge,
+                        success: false,
+                        message: format!("rename in netns failed: {}", e),
+                        iface_name,
+                    }));
+                }
+            }
+        }
+
+        // Bring up inside container
+        let _ = crate::netns::set_link_up_in_netns(&iface_name, target_pid);
+
+        Ok(Response::new(AttachPortResponse {
+            port_name,
+            bridge,
+            success: true,
+            message: "Port attached to container netns".to_string(),
+            iface_name,
+        }))
+    }
+
+    async fn detach_port_from_netns(
+        &self,
+        request: Request<DetachPortRequest>,
+    ) -> Result<Response<DetachPortResponse>, Status> {
+        let req = request.into_inner();
+        let port_name = req.port_name;
+        let bridge = req.bridge;
+        info!("gRPC detach_port_from_netns: {} from {}", port_name, bridge);
+
+        let mut guard = self.ovsdb_client().await?;
+        let client = guard
+            .as_mut()
+            .ok_or_else(|| Status::internal("OVSDB client unavailable"))?;
+
+        // Remove from OVSDB — the port may be in a container netns but OVSDB
+        // operations are namespace-agnostic
+        let del_ops = serde_json::json!([
+            {
+                "op": "mutate",
+                "table": "Bridge",
+                "where": [["name", "==", &bridge]],
+                "mutations": [["ports", "delete", ["name", &port_name]]]
+            },
+            {
+                "op": "delete",
+                "table": "Port",
+                "where": [["name", "==", &port_name]]
+            },
+            {
+                "op": "delete",
+                "table": "Interface",
+                "where": [["name", "==", &port_name]]
+            },
+        ]);
+
+        match client.transact(del_ops).await {
+            Ok(_) => Ok(Response::new(DetachPortResponse {
+                port_name,
+                bridge,
+                success: true,
+                message: "Port detached and removed".to_string(),
+            })),
+            Err(e) => Ok(Response::new(DetachPortResponse {
+                port_name,
+                bridge,
+                success: false,
+                message: format!("OVSDB remove failed: {}", e),
+            })),
+        }
+    }
 }
 
 /// Run the gRPC server
 pub async fn run_grpc_server(addr: SocketAddr, state: DaemonState) -> Result<()> {
     info!("gRPC server starting on {}", addr);
 
+    let reflection = tonic_reflection::server::Builder::configure()
+        .register_encoded_file_descriptor_set(FILE_DESCRIPTOR_SET)
+        .build_v1()
+        .map_err(|e| anyhow::anyhow!("reflection build failed: {}", e))?;
+
     let service = OvsdbServiceImpl::new(state);
 
     tonic::transport::Server::builder()
-        .add_service(OvsdbServiceServer::new(service))
+        .accept_http1(true)
+        .add_service(tonic_web::enable(OvsdbServiceServer::new(service)))
+        .add_service(tonic_web::enable(reflection))
         .serve(addr)
         .await
         .map_err(|e| anyhow::anyhow!("gRPC server error: {}", e))?;
@@ -415,12 +616,19 @@ pub async fn run_grpc_server_with_streaming(
 ) -> Result<()> {
     info!("gRPC server with streaming starting on {}", addr);
 
+    let reflection = tonic_reflection::server::Builder::configure()
+        .register_encoded_file_descriptor_set(FILE_DESCRIPTOR_SET)
+        .build_v1()
+        .map_err(|e| anyhow::anyhow!("reflection build failed: {}", e))?;
+
     let base_service = OvsdbServiceImpl::new(state);
     let stream_server = streaming_service.into_server();
 
     tonic::transport::Server::builder()
-        .add_service(OvsdbServiceServer::new(base_service))
-        .add_service(stream_server)
+        .accept_http1(true)
+        .add_service(tonic_web::enable(OvsdbServiceServer::new(base_service)))
+        .add_service(tonic_web::enable(stream_server))
+        .add_service(tonic_web::enable(reflection))
         .serve(addr)
         .await
         .map_err(|e| anyhow::anyhow!("gRPC server error: {}", e))?;

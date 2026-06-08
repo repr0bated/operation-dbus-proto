@@ -1,0 +1,3 @@
+#!/bin/execlineb -P
+foreground { sh /etc/s6/sv/ovsbr0-init/shell_up }
+exit 0

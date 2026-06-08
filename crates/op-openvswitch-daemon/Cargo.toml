@@ -20,6 +20,9 @@ uuid = { workspace = true }
 chrono = { workspace = true }
 simd-json = { workspace = true }
 tracing-subscriber = { workspace = true }
+libc = { workspace = true }
+rtnetlink = { workspace = true }
+netlink-packet-route = { workspace = true }
 
 # D-Bus
 zbus = { workspace = true }
@@ -33,6 +36,7 @@ rovs-transport = "0.2"
 
 # gRPC
 tonic = { workspace = true }
+tonic-web = { workspace = true }
 tonic-reflection = { workspace = true }
 prost = { workspace = true }
 tokio-stream = { workspace = true, features = ["sync"] }

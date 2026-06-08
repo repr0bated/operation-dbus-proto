@@ -1,3 +1,0 @@
-#!/bin/execlineb -P
-foreground { sh /etc/s6/sv/ovsbr0-netdev-verify/shell_up }
-exit 0
