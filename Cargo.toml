@@ -32,6 +32,7 @@ members = [
     "crates/op-cozo-store",
     "crates/op-dbus-model",
     "crates/op-grpc-bridge",
+    "crates/op-grpc-adapters",
     "crates/op-dbus-mirror",
     "crates/op-compliance",
     "crates/op-projection",

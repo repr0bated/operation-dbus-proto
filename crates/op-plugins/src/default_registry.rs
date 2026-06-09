@@ -1,7 +1,7 @@
-//! Default plugin loader - auto-loads essential plugins
+//! Plugin loader - discovers state plugins and instantiates them
 //!
-//! This module defines which plugins are loaded by default when the system starts.
-//! Plugins can be enabled/disabled via configuration.
+//! This module deliberately does not maintain a second plugin list. If a state
+//! plugin exists in `state_plugins`, the registry discovers it and registers it.
 //!
 //! ## Schema Validation
 //!
@@ -30,19 +30,19 @@ use crate::state_plugins::{
     DnsResolverPlugin, EndpointPlugin, FactoryPlugin, Fail2banPlugin, FreeDesktopPlugin,
     FullSystemPlugin, GcloudAdcPlugin, HardwarePlugin, IncusPlugin, KeypairPlugin, KeyringPlugin,
     KnowledgePlugin, Login1Plugin, LxcPlugin, MailServerPlugin, McpStatePlugin, MemoryPlugin,
-    NetStatePlugin, NetmakerConfig, NetmakerPlugin, OpenFlowPlugin, OvsBridgePlugin,
-    OvsdbDaemonPlugin, PackageKitPlugin, PciDeclPlugin, PrivacyRouterPlugin, PrivacyRoutesPlugin,
-    ProcfsPlugin, ProxmoxPlugin, ProxyServerPlugin, RovsCommandsPlugin, RtnetlinkPlugin,
-    S6StatePlugin, SchemaRendererPlugin, ServicePlugin, SessDeclPlugin, SoftwarePlugin,
-    UnixSocketPlugin, UsersPlugin, WebUiPlugin, WgcfPlugin, WireGuardPlugin, WorkflowsPlugin,
-    XrayPlugin, ZeroclawPlugin,
+    NetStatePlugin, NetmakerConfig, NetmakerPlugin, OpenFlowObfuscationPlugin, OpenFlowPlugin,
+    OvsBridgePlugin, OvsdbDaemonPlugin, PackageKitPlugin, PciDeclPlugin, PrivacyRouterPlugin,
+    PrivacyRoutesPlugin, ProcfsPlugin, ProxmoxPlugin, ProxyServerPlugin, RovsCommandsPlugin,
+    RtnetlinkPlugin, S6StatePlugin, S6SystemctlPlugin, SchemaRendererPlugin, ServicePlugin, SessDeclPlugin,
+    SoftwarePlugin, UnixSocketPlugin, UsersPlugin, WebUiPlugin, WgcfPlugin, WireGuardPlugin,
+    WorkflowsPlugin, XrayPlugin, ZeroclawPlugin,
 };
 use crate::AutoPlugin;
 
 /// Default plugin loader configuration
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PluginRegistryConfig {
-    /// Auto-load plugins on startup
+    /// Deprecated runtime policy field. Registration is discovery-based.
     #[serde(default = "default_auto_load")]
     pub auto_load: Vec<String>,
 
@@ -52,57 +52,25 @@ pub struct PluginRegistryConfig {
 }
 
 fn default_auto_load() -> Vec<String> {
-    let wg_only = std::env::var("OP_DBUS_WG_ONLY")
-        .ok()
-        .map(|v| {
-            let l = v.to_lowercase();
-            !(l == "0" || l == "false" || l == "no")
-        })
-        .unwrap_or(false);
+    Vec::new()
+}
 
-    if wg_only {
-        return vec![
-            "zeroclaw".to_string(),
-            "config".to_string(),
-            "service".to_string(),
-            "s6".to_string(),
-            "net".to_string(),
-            "rtnetlink".to_string(),
-            "procfs".to_string(),
-            "wireguard".to_string(),
-            "agent_config".to_string(),
-        ];
+fn discover_pub_mod_name(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    let rest = trimmed.strip_prefix("pub mod ")?;
+    let name = rest.strip_suffix(';')?.trim();
+    if name.is_empty() {
+        return None;
     }
+    Some(module_name_to_plugin_name(name))
+}
 
-    vec![
-        "mcp".to_string(),
-        "zeroclaw".to_string(),
-        "cognitive_mcp".to_string(),
-        "compact_mcp".to_string(),
-        "config".to_string(),
-        "s6".to_string(),
-        "incus".to_string(),
-        "mail_server".to_string(),
-        "unix_socket".to_string(),
-        "wgcf".to_string(),
-        "xray".to_string(),
-        "net".to_string(),
-        "openflow".to_string(),
-        "ovsdb_bridge".to_string(),
-        "ovsdb_daemon".to_string(),
-        "privacy_router".to_string(),
-        "rovs_commands".to_string(),
-        "privacy_routes".to_string(),
-        "procfs".to_string(),
-        "rtnetlink".to_string(),
-        "agent_config".to_string(),
-        // Always-loaded knowledge / compliance / schema plugins
-        "memory".to_string(),
-        "knowledge".to_string(),
-        "schema_renderer".to_string(),
-        "workflows".to_string(),
-        "netmaker".to_string(),
-    ]
+fn is_state_plugin_helper_module(name: &str) -> bool {
+    matches!(name, "plugin_schema_defs" | "schema_contract")
+}
+
+fn module_name_to_plugin_name(name: &str) -> String {
+    name.strip_suffix("_plugin").unwrap_or(name).to_string()
 }
 
 impl Default for PluginRegistryConfig {
@@ -237,31 +205,42 @@ impl DefaultPluginRegistry {
             .map(|segment| segment.to_string())
     }
 
-    /// Load all auto-load plugins
+    /// Compatibility shim for older callers. Registration is discovery-based:
+    /// if a state plugin exists, it is loaded.
     pub async fn load_default_plugins(&self) -> Result<Vec<Arc<dyn op_state::StatePlugin>>> {
-        let mut plugins: Vec<Arc<dyn op_state::StatePlugin>> = Vec::new();
+        self.load_all_plugins().await
+    }
 
-        for plugin_name in &self.config.auto_load {
-            match self.load_plugin(plugin_name).await {
+    /// Load every built-in plugin implementation so the schema catalog can
+    /// publish the full plugin contract set, not just runtime autoload state.
+    pub async fn load_all_plugins(&self) -> Result<Vec<Arc<dyn op_state::StatePlugin>>> {
+        let mut plugins: Vec<Arc<dyn op_state::StatePlugin>> = Vec::new();
+        let mut plugin_names = Self::available_plugins();
+
+        plugin_names.sort();
+        plugin_names.dedup();
+
+        for plugin_name in plugin_names {
+            match self.load_plugin(&plugin_name).await {
                 Ok(plugin) => {
                     if !plugin.is_available() {
                         tracing::info!(
-                            "Skipping unavailable plugin {}: {}",
+                            "Loaded unavailable plugin schema {}: {}",
                             plugin_name,
                             plugin.unavailable_reason()
                         );
-                        continue;
+                    } else {
+                        tracing::info!("Loaded plugin schema: {}", plugin_name);
                     }
-                    tracing::info!("✅ Loaded plugin: {}", plugin_name);
                     plugins.push(plugin);
                 }
                 Err(e) => {
-                    tracing::warn!("⚠️ Failed to load plugin {}: {}", plugin_name, e);
+                    tracing::warn!("Failed to load plugin schema {}: {}", plugin_name, e);
                 }
             }
         }
 
-        tracing::info!("📦 Loaded {} plugins", plugins.len());
+        tracing::info!("Loaded {} built-in plugin schemas", plugins.len());
         Ok(plugins)
     }
 
@@ -301,6 +280,7 @@ impl DefaultPluginRegistry {
             "compact_mcp" => Arc::new(CompactMcpPlugin::new()),
             "ctl_plane_chatbot" => Arc::new(CtlPlaneChatbotPlugin::new()),
             "s6" => Arc::new(S6StatePlugin::new()),
+            "s6_systemctl" => Arc::new(S6SystemctlPlugin::new()),
             "incus" => Arc::new(IncusPlugin::new()),
             "mail_server" => Arc::new(MailServerPlugin::new()),
             "unix_socket" => Arc::new(UnixSocketPlugin::new()),
@@ -312,6 +292,7 @@ impl DefaultPluginRegistry {
             )),
             "net" => Arc::new(NetStatePlugin::new()),
             "openflow" => Arc::new(OpenFlowPlugin::new()),
+            "openflow_obfuscation" => Arc::new(OpenFlowObfuscationPlugin::new(Default::default())),
             "privacy_router" => {
                 let _config_path = self
                     .get_plugin_config_path("privacy_router", "/etc/op-dbus/privacy-config.json");
@@ -366,28 +347,23 @@ impl DefaultPluginRegistry {
             .to_string()
     }
 
-    /// Get list of available plugins (built-in list)
-    pub fn available_plugins() -> Vec<&'static str> {
-        vec![
-            "mcp",
-            "zeroclaw",
-            "freedesktop",
-            "cognitive_mcp",
-            "compact_mcp",
-            "ctl_plane_chatbot",
-            "config",
-            "s6",
-            "incus",
-            "net",
-            "wireguard",
-            "web_ui",
-            "openflow",
-            "privacy_router",
-            "privacy_routes",
-            // "netmaker",
-            // "lxc",
-            // "packagekit",
-        ]
+    /// Discover plugins from the state-plugin module tree.
+    ///
+    /// This is intentionally not a hand-maintained plugin catalog. The module
+    /// tree is the source of discoverable plugin subjects; unknown subjects
+    /// still flow through `load_plugin()` and the auto-create fallback.
+    pub fn available_plugins() -> Vec<String> {
+        const STATE_PLUGIN_MODS: &str = include_str!("state_plugins/mod.rs");
+
+        let mut plugins = STATE_PLUGIN_MODS
+            .lines()
+            .filter_map(discover_pub_mod_name)
+            .filter(|name| !is_state_plugin_helper_module(name))
+            .collect::<Vec<_>>();
+
+        plugins.sort();
+        plugins.dedup();
+        plugins
     }
 
     /// Get list of plugins with valid schema files
@@ -419,32 +395,32 @@ mod tests {
         let store = Arc::new(SqliteStore::new(":memory:").await.unwrap());
         let registry = DefaultPluginRegistry::new(store);
 
-        // Check default auto-load plugins
-        assert!(registry.is_auto_load("mcp"));
-        assert!(registry.is_auto_load("config"));
-        assert!(registry.is_auto_load("s6"));
-        assert!(registry.is_auto_load("net"));
-
-        // Load plugins
         let plugins = registry.load_default_plugins().await.unwrap();
         assert!(!plugins.is_empty());
+        assert!(plugins.iter().any(|plugin| plugin.name() == "mail_server"));
+        assert!(plugins.iter().any(|plugin| plugin.name() == "zeroclaw"));
     }
 
     #[tokio::test]
-    async fn test_auto_loaded_plugins_publish_schema() {
+    async fn test_discovered_plugins_publish_schema() {
         let store = Arc::new(SqliteStore::new(":memory:").await.unwrap());
         let registry = DefaultPluginRegistry::new(store);
 
-        let plugins = registry.load_default_plugins().await.unwrap();
+        let plugins = registry.load_all_plugins().await.unwrap();
         let missing: Vec<String> = plugins
             .iter()
-            .filter(|plugin| plugin.schema().is_none())
+            .filter(|plugin| {
+                plugin
+                    .schema()
+                    .map(|schema| schema.name != plugin.name())
+                    .unwrap_or(true)
+            })
             .map(|plugin| plugin.name().to_string())
             .collect();
 
         assert!(
             missing.is_empty(),
-            "auto-loaded plugins missing schema(): {:?}",
+            "discovered plugins missing plugin-owned schema: {:?}",
             missing
         );
     }
@@ -502,7 +478,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_custom_config() {
+    async fn test_auto_load_config_does_not_control_registration() {
         let store = Arc::new(SqliteStore::new(":memory:").await.unwrap());
 
         let config = PluginRegistryConfig {
@@ -515,6 +491,10 @@ mod tests {
         assert!(registry.is_auto_load("s6"));
         assert!(!registry.is_auto_load("mcp"));
         assert!(!registry.is_auto_load("config"));
+
+        let plugins = registry.load_default_plugins().await.unwrap();
+        assert!(plugins.iter().any(|plugin| plugin.name() == "mcp"));
+        assert!(plugins.iter().any(|plugin| plugin.name() == "config"));
     }
 
     #[test]

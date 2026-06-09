@@ -123,31 +123,58 @@ impl S6StatePlugin {
         }
     }
 
-    /// Return the names of all currently-up services (observation path).
+    /// Return the names of all currently-up services.
     ///
+    /// Tries D-Bus first; falls back to `s6-rc -a list` when the daemon isn't running.
     /// subid: `obs.service.s6.list-units@v1`
     async fn list_running(&self) -> Result<Vec<String>> {
-        let units = self.dbus.list_units().await?;
-        let mut running = Vec::new();
-        for unit in units {
-            if let Some(name) = unit.get("name").and_then(|v| v.as_str()) {
-                if let Some(active) = unit.get("active").and_then(|v| v.as_str()) {
-                    if active == "true" || active == "up" {
-                        running.push(name.to_string());
+        if let Ok(units) = self.dbus.list_units().await {
+            let mut running = Vec::new();
+            for unit in units {
+                if let Some(name) = unit.get("name").and_then(|v| v.as_str()) {
+                    if let Some(active) = unit.get("active").and_then(|v| v.as_str()) {
+                        if active == "true" || active == "up" {
+                            running.push(name.to_string());
+                        }
                     }
                 }
             }
+            return Ok(running);
         }
-        Ok(running)
+
+        // Fallback: direct s6-rc query
+        let output = tokio::process::Command::new("s6-rc")
+            .args(["-a", "list"])
+            .output()
+            .await
+            .context("s6-rc -a list")?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        Ok(stdout.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect())
     }
 
-    /// Return *all* service definitions (available units) via D-Bus.
+    /// Return *all* available service names.
+    ///
+    /// Tries D-Bus first; falls back to scanning `/etc/s6/sv/`.
     async fn list_all(&self) -> Result<Vec<String>> {
-        let files = self.dbus.list_unit_files().await?;
+        if let Ok(files) = self.dbus.list_unit_files().await {
+            let mut all = Vec::new();
+            for file in files {
+                if let Some(name) = file.get("name").and_then(|v| v.as_str()) {
+                    all.push(name.to_string());
+                }
+            }
+            if !all.is_empty() {
+                return Ok(all);
+            }
+        }
+
+        // Fallback: scan the s6 service directory
         let mut all = Vec::new();
-        for file in files {
-            if let Some(name) = file.get("name").and_then(|v| v.as_str()) {
-                all.push(name.to_string());
+        if let Ok(mut dir) = tokio::fs::read_dir("/etc/s6/sv").await {
+            while let Ok(Some(entry)) = dir.next_entry().await {
+                if let Ok(name) = entry.file_name().into_string() {
+                    all.push(name);
+                }
             }
         }
         Ok(all)

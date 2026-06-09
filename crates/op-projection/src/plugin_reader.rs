@@ -9,7 +9,7 @@ use crate::interfaces::{PluginLifecycleEvent, PluginReader, RawEntity, SourceRea
 use anyhow::{Context, Result};
 use op_plugins::DefaultPluginRegistry;
 use op_state::StatePlugin;
-use op_state_store::{builtin_plugin_schema, MemoryStore, StateStore};
+use op_state_store::{MemoryStore, StateStore};
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
 use std::future::Future;
@@ -59,12 +59,12 @@ impl SystemPluginReader {
         let state_store: Arc<dyn StateStore> = Arc::new(MemoryStore::new());
 
         let registry = DefaultPluginRegistry::new(state_store);
-        let plugins = registry.load_default_plugins().await?;
+        let plugins = registry.load_all_plugins().await?;
         let plugins = plugins
             .into_iter()
             .map(|plugin| {
                 let name = plugin.name().to_string();
-                let schema = plugin.schema().or_else(|| builtin_plugin_schema(&name));
+                let schema = Self::plugin_owned_schema(&name, plugin.schema());
 
                 if schema.is_none() {
                     warn!(
@@ -183,13 +183,28 @@ impl SystemPluginReader {
             .await
             .with_context(|| format!("failed to auto-load requested plugin '{}'", plugin_id))?;
         let name = plugin.name().to_string();
-        let schema = plugin.schema().or_else(|| builtin_plugin_schema(&name));
+        let schema = Self::plugin_owned_schema(&name, plugin.schema());
 
         Ok(LoadedPlugin {
             name,
             schema,
             plugin,
         })
+    }
+
+    fn plugin_owned_schema(plugin_id: &str, schema: Option<PluginSchema>) -> Option<PluginSchema> {
+        match schema {
+            Some(schema) if schema.name == plugin_id => Some(schema),
+            Some(schema) => {
+                warn!(
+                    plugin_id,
+                    schema_name = %schema.name,
+                    "Ignoring schema whose name does not match the owning plugin"
+                );
+                None
+            }
+            None => None,
+        }
     }
 
     /// Reads nested object projections for a single plugin asynchronously.
@@ -226,13 +241,8 @@ impl SystemPluginReader {
             }
         };
 
-        let entity_type = plugin
-            .schema
-            .as_ref()
-            .map(|schema| schema.name.clone())
-            .unwrap_or_else(|| plugin.name.clone());
         let mut entities = vec![RawEntity {
-            entity_type,
+            entity_type: plugin.name.clone(),
             entity_id: plugin.name.clone(),
             data: state.clone(),
             source: self.source.clone(),
@@ -327,7 +337,15 @@ impl SystemPluginReader {
 
                 for (index, child) in array.iter().enumerate() {
                     if child.is_object() || child.is_array() {
-                        let child_path = format!("{}/{}", path, index);
+                        // Use the object's "id" field as the path segment when available,
+                        // so D-Bus paths are named (e.g. /providers/antigravity) instead of
+                        // opaque numeric indexes (e.g. /providers/3).
+                        let segment = ["id", "name", "label", "key", "path", "domain", "host"]
+                            .iter()
+                            .find_map(|&field| child.get(field).and_then(|v| v.as_str()))
+                            .map(|s| s.replace(['/', ' ', ':'], "_"))
+                            .unwrap_or_else(|| index.to_string());
+                        let child_path = format!("{}/{}", path, segment);
                         Self::collect_nested_entities_recursive(
                             entities,
                             plugin_id,
