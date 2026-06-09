@@ -745,6 +745,15 @@ impl PrivacyRouterPlugin {
                 ),
             ])),
             devices: Some(devices),
+            description: None,
+            architecture: None,
+            ephemeral: Some(false),
+            stateful: None,
+            created_at: None,
+            last_used_at: None,
+            location: None,
+            project: None,
+            sockets: Vec::new(),
         }
     }
 

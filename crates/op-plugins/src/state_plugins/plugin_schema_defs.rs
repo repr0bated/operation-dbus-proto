@@ -500,15 +500,138 @@ pub(crate) fn incus_plugin_schema() -> PluginSchema {
             FieldSchema {
                 field_type: FieldType::Any,
                 required: false,
-                description: "Instance device definitions".to_string(),
+                description: "Non-proxy device definitions (NICs, disks, etc.)".to_string(),
                 default: Some(json!({})),
                 example: Some(json!({
-                    "eth0": {
-                        "type": "nic",
-                        "nictype": "bridged",
-                        "parent": "ovsbr0"
-                    }
+                    "eth0": { "type": "nic", "nictype": "bridged", "parent": "ovsbr0" }
                 })),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "description".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Human-readable instance description".to_string(),
+                default: None,
+                example: Some(json!("Mail server")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "architecture".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "CPU architecture (e.g. x86_64)".to_string(),
+                default: None,
+                example: Some(json!("x86_64")),
+                constraints: Vec::new(),
+                read_only: true,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "ephemeral".to_string(),
+            FieldSchema {
+                field_type: FieldType::Boolean,
+                required: false,
+                description: "Delete instance on shutdown".to_string(),
+                default: Some(json!(false)),
+                example: Some(json!(false)),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "stateful".to_string(),
+            FieldSchema {
+                field_type: FieldType::Boolean,
+                required: false,
+                description: "Whether saved state exists on disk".to_string(),
+                default: Some(json!(false)),
+                example: Some(json!(false)),
+                constraints: Vec::new(),
+                read_only: true,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "created_at".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Creation timestamp (ISO8601)".to_string(),
+                default: None,
+                example: Some(json!("2024-01-01T00:00:00Z")),
+                constraints: Vec::new(),
+                read_only: true,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "last_used_at".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Last start timestamp (ISO8601)".to_string(),
+                default: None,
+                example: Some(json!("2024-01-01T00:00:00Z")),
+                constraints: Vec::new(),
+                read_only: true,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "location".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Cluster member name (absent on single-node)".to_string(),
+                default: None,
+                example: Some(json!("node-1")),
+                constraints: Vec::new(),
+                read_only: true,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "project".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Incus project name (absent when default)".to_string(),
+                default: None,
+                example: Some(json!("staging")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "sockets".to_string(),
+            FieldSchema {
+                field_type: FieldType::Any,
+                required: false,
+                description: "Proxy devices exposed as Unix sockets on the host. Each entry has an id field (device name) for named D-Bus paths.".to_string(),
+                default: Some(json!([])),
+                example: Some(json!([
+                    {
+                        "id": "grpc-socket",
+                        "listen": "unix:/run/assistant.sock",
+                        "connect": "tcp:127.0.0.1:50051",
+                        "bind": "host",
+                        "uid": "0",
+                        "gid": "0",
+                        "mode": "0660"
+                    }
+                ])),
                 constraints: Vec::new(),
                 read_only: false,
                 read_only_when: None,

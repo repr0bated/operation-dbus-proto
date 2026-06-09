@@ -10,6 +10,7 @@
 //! and spawns Xray — all without touching any Btrfs-backed path.
 
 use memmap2::MmapOptions;
+use serde::Serialize;
 use std::collections::HashSet;
 use std::env;
 use std::fs::{self, File};
@@ -170,6 +171,7 @@ impl std::fmt::Display for SubidTaxonomy {
 ///   schema_version      u32        offset 88
 ///   reserved            [u8; 60]   offset 92
 #[repr(C)]
+#[derive(Debug, Clone, Serialize)]
 pub struct IdentitySled {
     /// Raw Curve25519 WireGuard peer key.
     pub wireguard_pubkey: [u8; 32],
@@ -185,7 +187,22 @@ pub struct IdentitySled {
     /// Bound to identity: every vectorized episode is traceable to this sled.
     pub vector_id: [u8; 16],
     /// Reserved for future use (zero-initialized).
+    #[serde(skip)]
     pub reserved: [u8; 44],
+}
+
+impl Default for IdentitySled {
+    fn default() -> Self {
+        Self {
+            wireguard_pubkey: [0u8; 32],
+            mutation_index: 0,
+            hashed_footprint: [0u8; 32],
+            trace_id: [0u8; 16],
+            schema_version: 0,
+            vector_id: [0u8; 16],
+            reserved: [0u8; 44],
+        }
+    }
 }
 
 impl IdentitySled {
@@ -640,35 +657,58 @@ pub fn write_sled_full(
     write_sled(&sled)
 }
 
-/// Poll `wg show <iface> latest-handshakes` and re-write the sled + xray config
-/// whenever a new peer handshake is detected.  Runs forever; call from a thread.
+/// Watch for new WireGuard peers using `ip monitor` — fires instantly on handshake,
+/// no polling delay. Re-writes the sled and xray config on each new peer.
+/// Runs forever; call from a thread.
 pub fn watch_wireguard_handshakes(iface: &str) {
     let iface = iface.to_string();
-    let poll_secs = std::time::Duration::from_secs(15);
-    let mut seen: HashSet<String> = HashSet::new();
 
-    loop {
-        std::thread::sleep(poll_secs);
+    // `ip monitor route` inside wg-xray fires the instant a WireGuard peer
+    // route appears — no polling delay. wg0 lives in the container namespace.
+    let mut monitor = loop {
+        match Command::new("incus")
+            .args(["exec", "wg-xray", "--", "ip", "monitor", "route"])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            Ok(child) => break child,
+            Err(e) => {
+                tracing::warn!("incus exec ip monitor spawn failed: {} — retrying in 5s", e);
+                std::thread::sleep(std::time::Duration::from_secs(5));
+            }
+        }
+    };
 
-        // wg0 lives inside the wg-xray Incus container, not on the host.
+    let stdout = monitor.stdout.take().expect("piped");
+    let reader = std::io::BufReader::new(stdout);
+
+    // Track the last pubkey we wrote the sled for — don't re-write for same peer.
+    let mut last_pubkey = String::new();
+
+    use std::io::BufRead;
+    for line in reader.lines() {
+        let Ok(line) = line else { break };
+
+        // Only act on route additions — deletions fire when a peer drops,
+        // which is not a reason to rewrite the sled.
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with("Deleted") || trimmed.starts_with("del") {
+            continue;
+        }
+
+        // Read current peers from inside wg-xray immediately.
         let Ok(out) = Command::new("incus")
-            .args([
-                "exec",
-                "wg-xray",
-                "--",
-                "wg",
-                "show",
-                &iface,
-                "latest-handshakes",
-            ])
+            .args(["exec", "wg-xray", "--", "wg", "show", &iface, "latest-handshakes"])
             .output()
         else {
             continue;
         };
 
-        if !out.status.success() {
-            continue;
-        }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
 
         let stdout = String::from_utf8_lossy(&out.stdout);
         for line in stdout.lines() {
@@ -677,61 +717,41 @@ pub fn watch_wireguard_handshakes(iface: &str) {
                 continue;
             };
             let ts: u64 = ts_str.trim().parse().unwrap_or(0);
-            if ts == 0 {
+            // Only act on handshakes within the last 30 seconds (one keepalive window).
+            if ts == 0 || now.saturating_sub(ts) > 30 {
+                continue;
+            }
+            if pubkey == last_pubkey {
                 continue;
             }
 
-            // Treat any handshake within the last 3 minutes as "new" if not yet seen
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
-            if now.saturating_sub(ts) > 180 {
-                continue;
-            }
-
-            let key = format!("{}:{}", pubkey, ts);
-            if seen.contains(&key) {
-                continue;
-            }
-            seen.insert(key);
-
-            tracing::info!(peer = %pubkey, "WireGuard handshake → updating identity sled");
+            tracing::info!(peer = %pubkey, "WireGuard peer → updating identity sled");
+            last_pubkey = pubkey.to_string();
 
             if let Err(e) = write_sled_from_wg(pubkey) {
                 tracing::warn!("write_sled_from_wg failed: {}", e);
                 continue;
             }
 
-            // Re-bake xray config — NextDNS profile from env, trace_id from sled.
             if let Ok((ptr, _mmap)) = read_sled() {
                 let sled = unsafe { &*ptr };
                 let footprint_hex = hex::encode(sled.hashed_footprint);
                 let trace_id = sled.trace_id_hex();
-                let Ok(profile) = env::var("NEXTDNS_PROFILE_ID") else {
-                    tracing::error!("NEXTDNS_PROFILE_ID not set");
-                    continue;
-                };
-                let Ok(uuid) = env::var("XRAY_UUID") else {
-                    tracing::error!("XRAY_UUID not set");
-                    continue;
-                };
-                let Ok(privkey) = env::var("XRAY_PRIVATE_KEY") else {
-                    tracing::error!("XRAY_PRIVATE_KEY not set");
-                    continue;
-                };
-                let Ok(short) = env::var("XRAY_SHORT_ID") else {
-                    tracing::error!("XRAY_SHORT_ID not set");
-                    continue;
-                };
-                if let Err(e) =
-                    write_xray_config(&footprint_hex, &trace_id, &profile, &uuid, &privkey, &short)
-                {
+                let Ok(profile) = env::var("NEXTDNS_PROFILE_ID") else { continue };
+                let Ok(uuid) = env::var("XRAY_UUID") else { continue };
+                let Ok(privkey) = env::var("XRAY_PRIVATE_KEY") else { continue };
+                let Ok(short) = env::var("XRAY_SHORT_ID") else { continue };
+                if let Err(e) = write_xray_config(&footprint_hex, &trace_id, &profile, &uuid, &privkey, &short) {
                     tracing::warn!("write_xray_config failed: {}", e);
                 }
             }
         }
     }
+
+    // ip monitor exited — respawn the thread.
+    tracing::warn!("ip monitor exited — restarting watcher in 2s");
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    watch_wireguard_handshakes(&iface);
 }
 
 // ── Public entry point ────────────────────────────────────────────────────────

@@ -22,6 +22,26 @@ pub struct IncusState {
     pub instances: Vec<IncusInstance>,
 }
 
+/// A proxy device exposed as a Unix socket on the host.
+/// The `id` field is the Incus device name — used as the D-Bus object path segment.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct IncusProxySocket {
+    /// Incus device name (e.g. "grpc-socket", "mail-imap") — D-Bus path segment.
+    pub id: String,
+    /// Host-side listen address (e.g. "unix:/run/assistant.sock")
+    pub listen: String,
+    /// Container-side connect address (e.g. "tcp:127.0.0.1:50051")
+    pub connect: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uid: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gid: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+}
+
 /// A single Incus instance (container or virtual-machine).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IncusInstance {
@@ -40,16 +60,43 @@ pub struct IncusInstance {
     /// Applied profiles (e.g. ["default"])
     #[serde(default)]
     pub profiles: Vec<String>,
+    /// Human-readable description
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// CPU architecture (e.g. "x86_64")
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub architecture: Option<String>,
+    /// Delete instance on shutdown
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ephemeral: Option<bool>,
+    /// Whether saved state exists on disk
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stateful: Option<bool>,
+    /// Creation timestamp (ISO8601)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+    /// Last start timestamp (ISO8601)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_used_at: Option<String>,
+    /// Cluster member location ("none" on single-node)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location: Option<String>,
+    /// Incus project name
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
     /// Instance configuration key-value pairs
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<HashMap<String, String>>,
-    /// Device definitions (device name -> device key-value config)
+    /// Non-proxy device definitions (NICs, disks, etc.)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub devices: Option<HashMap<String, HashMap<String, String>>>,
+    /// Proxy devices exposed as Unix sockets on the host.
+    /// Each entry has an `id` field (the device name) for named D-Bus paths.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sockets: Vec<IncusProxySocket>,
 }
 
 /// Intermediate struct for deserializing raw `incus list --format=json` output.
-/// The CLI returns more fields than we need; this captures the relevant ones.
 #[derive(Debug, Deserialize)]
 struct RawIncusInstance {
     name: String,
@@ -62,6 +109,58 @@ struct RawIncusInstance {
     config: HashMap<String, String>,
     #[serde(default)]
     devices: HashMap<String, HashMap<String, String>>,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    architecture: String,
+    #[serde(default)]
+    ephemeral: bool,
+    #[serde(default)]
+    stateful: bool,
+    #[serde(default)]
+    created_at: String,
+    #[serde(default)]
+    last_used_at: String,
+    #[serde(default)]
+    location: String,
+    #[serde(default)]
+    project: String,
+}
+
+/// Derive a human-readable socket id from a connect address.
+/// "tcp:127.0.0.1:50051" → "grpc", "tcp:127.0.0.1:143" → "imap", etc.
+/// Falls back to the port number string, then None if unparseable.
+fn socket_id_from_connect(connect: &str) -> Option<String> {
+    let port_str = connect.rsplit(':').next()?;
+    let port: u16 = port_str.trim().parse().ok()?;
+    let name = match port {
+        21 => "ftp",
+        22 => "ssh",
+        25 => "smtp",
+        53 => "dns",
+        80 => "http",
+        110 => "pop3",
+        143 => "imap",
+        443 => "https",
+        465 => "smtps",
+        587 => "submission",
+        993 => "imaps",
+        995 => "pop3s",
+        1883 => "mqtt",
+        3306 => "mysql",
+        5432 => "postgres",
+        5672 => "amqp",
+        6333 => "qdrant-http",
+        6334 => "qdrant-grpc",
+        8080 | 8081 | 8443 => "http-alt",
+        8883 => "mqtt-tls",
+        18789 => "ghostbridge",
+        50051 => "grpc",
+        50052 => "grpc-mcp",
+        50053 => "grpc-services",
+        _ => return Some(port_str.to_string()),
+    };
+    Some(name.to_string())
 }
 
 pub struct IncusPlugin;
@@ -393,11 +492,38 @@ impl IncusPlugin {
                     Some(raw.config)
                 };
 
-                // Only include devices if non-empty
-                let devices = if raw.devices.is_empty() {
+                // Extract proxy devices as named sockets; leave rest in devices.
+                let mut sockets = Vec::new();
+                let mut non_proxy_devices: HashMap<String, HashMap<String, String>> = HashMap::new();
+
+                for (device_name, device_config) in raw.devices {
+                    if device_config.get("type").map(|t| t == "proxy").unwrap_or(false) {
+                        if let (Some(listen), Some(connect)) = (
+                            device_config.get("listen").cloned(),
+                            device_config.get("connect").cloned(),
+                        ) {
+                            let id = socket_id_from_connect(&connect).unwrap_or(device_name);
+                            sockets.push(IncusProxySocket {
+                                id,
+                                listen,
+                                connect,
+                                bind: device_config.get("bind").cloned(),
+                                uid: device_config.get("uid").cloned(),
+                                gid: device_config.get("gid").cloned(),
+                                mode: device_config.get("mode").cloned(),
+                            });
+                        }
+                    } else {
+                        non_proxy_devices.insert(device_name, device_config);
+                    }
+                }
+
+                sockets.sort_by(|a, b| a.id.cmp(&b.id));
+
+                let devices = if non_proxy_devices.is_empty() {
                     None
                 } else {
-                    Some(raw.devices)
+                    Some(non_proxy_devices)
                 };
 
                 IncusInstance {
@@ -407,8 +533,17 @@ impl IncusPlugin {
                     image,
                     storage_pool,
                     profiles: raw.profiles,
+                    description: if raw.description.is_empty() { None } else { Some(raw.description) },
+                    architecture: if raw.architecture.is_empty() { None } else { Some(raw.architecture) },
+                    ephemeral: Some(raw.ephemeral),
+                    stateful: Some(raw.stateful),
+                    created_at: if raw.created_at.is_empty() { None } else { Some(raw.created_at) },
+                    last_used_at: if raw.last_used_at.is_empty() { None } else { Some(raw.last_used_at) },
+                    location: if raw.location.is_empty() || raw.location == "none" { None } else { Some(raw.location) },
+                    project: if raw.project.is_empty() || raw.project == "default" { None } else { Some(raw.project) },
                     config,
                     devices,
+                    sockets,
                 }
             })
             .collect();
