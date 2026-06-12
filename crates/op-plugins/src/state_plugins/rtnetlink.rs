@@ -11,8 +11,9 @@ use op_state::{
 };
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
-use simd_json::OwnedValue as Value;
+use simd_json::{json, OwnedValue as Value};
 use std::collections::HashMap;
+use op_state_store::{FieldSchema, FieldType, PluginSchema};
 
 /// Rtnetlink interface configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -79,7 +80,7 @@ impl StatePlugin for RtnetlinkPlugin {
     }
 
     fn schema(&self) -> Option<op_state_store::PluginSchema> {
-        Some(super::plugin_schema_defs::rtnetlink_plugin_schema())
+        Some(rtnetlink_schema())
     }
 
     fn is_available(&self) -> bool {
@@ -307,4 +308,97 @@ impl StatePlugin for RtnetlinkPlugin {
             atomic_operations: false,
         }
     }
+}
+
+pub(crate) fn rtnetlink_schema() -> PluginSchema {
+    let interface_fields = {
+        let mut fields = HashMap::new();
+        fields.insert(
+            "name".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "Interface name".to_string(),
+                default: None,
+                example: Some(json!("eth0")),
+                constraints: Vec::new(),
+                read_only: true,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "state".to_string(),
+            FieldSchema {
+                field_type: FieldType::Enum(vec!["up".to_string(), "down".to_string()]),
+                required: false,
+                description: "Administrative interface state".to_string(),
+                default: Some(json!("up")),
+                example: Some(json!("up")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "addresses".to_string(),
+            FieldSchema {
+                field_type: FieldType::Array(Box::new(FieldType::String)),
+                required: false,
+                description: "Interface IP addresses in CIDR form".to_string(),
+                default: Some(json!([])),
+                example: Some(json!(["10.0.0.2/24"])),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "mac_address".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Optional MAC address override".to_string(),
+                default: None,
+                example: Some(json!("02:00:00:00:00:01")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "default_gateway".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Default gateway for this interface".to_string(),
+                default: None,
+                example: Some(json!("10.0.0.1")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields
+    };
+
+    PluginSchema::builder("rtnetlink")
+        .version("1.0.0")
+        .description("Native kernel rtnetlink interface management")
+        .array_field(
+            "interfaces",
+            FieldType::Object(interface_fields),
+            true,
+            "Desired rtnetlink-managed interfaces",
+        )
+        .example(json!({
+            "interfaces": [
+                {
+                    "name": "ovsbr0",
+                    "state": "up",
+                    "addresses": ["10.10.0.1/24"],
+                    "default_gateway": "10.10.0.254"
+                }
+            ]
+        }))
+        .build()
 }

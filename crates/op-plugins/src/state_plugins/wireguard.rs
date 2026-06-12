@@ -3,7 +3,12 @@ use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
+use simd_json::json;
+
 use simd_json::OwnedValue as Value;
+
+use op_state_store::{PluginSchema};
+use super::plugin_schema_defs::{simple_schema, any_field};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WireGuardState {
@@ -50,7 +55,7 @@ impl StatePlugin for WireGuardPlugin {
     }
 
     fn schema(&self) -> Option<op_state_store::PluginSchema> {
-        Some(super::plugin_schema_defs::wireguard_plugin_schema())
+        Some(wireguard_schema())
     }
 
     async fn query_current_state(&self) -> Result<Value> {
@@ -106,4 +111,16 @@ impl StatePlugin for WireGuardPlugin {
             atomic_operations: false,
         }
     }
+}
+
+pub(crate) fn wireguard_schema() -> PluginSchema {
+    simple_schema(
+        "wireguard",
+        "WireGuard interface state",
+        &["net"],
+        vec![(
+            "interfaces",
+            any_field(true, "WireGuard interfaces", Some(json!([]))),
+        )],
+    )
 }

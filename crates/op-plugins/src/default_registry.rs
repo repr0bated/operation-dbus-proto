@@ -30,12 +30,12 @@ use crate::state_plugins::{
     DnsResolverPlugin, EndpointPlugin, FactoryPlugin, Fail2banPlugin, FreeDesktopPlugin,
     FullSystemPlugin, GcloudAdcPlugin, HardwarePlugin, IncusPlugin, KeypairPlugin, KeyringPlugin,
     KnowledgePlugin, Login1Plugin, LxcPlugin, MailServerPlugin, McpStatePlugin, MemoryPlugin,
-    NetStatePlugin, NetmakerConfig, NetmakerPlugin, OpenFlowObfuscationPlugin, OpenFlowPlugin,
-    OvsBridgePlugin, OvsdbDaemonPlugin, PackageKitPlugin, PciDeclPlugin, PrivacyRouterPlugin,
-    PrivacyRoutesPlugin, ProcfsPlugin, ProxmoxPlugin, ProxyServerPlugin, RovsCommandsPlugin,
-    RtnetlinkPlugin, S6StatePlugin, S6SystemctlPlugin, SchemaRendererPlugin, ServicePlugin, SessDeclPlugin,
-    SoftwarePlugin, UnixSocketPlugin, UsersPlugin, WebUiPlugin, WgcfPlugin, WireGuardPlugin,
-    WorkflowsPlugin, XrayPlugin, ZeroclawPlugin,
+    NetStatePlugin, NetmakerConfig, NetmakerPlugin, OciPlugin, OpenFlowObfuscationPlugin,
+    OpenFlowPlugin, OscalSubidRegistryPlugin, OvsBridgePlugin, OvsdbDaemonPlugin, PackageKitPlugin, PciDeclPlugin,
+    PrivacyRouterPlugin, PrivacyRoutesPlugin, ProcfsPlugin, ProxmoxPlugin, ProxyServerPlugin,
+    RovsCommandsPlugin, RtnetlinkPlugin, S6StatePlugin, S6SystemctlPlugin, SchemaRendererPlugin,
+    ServicePlugin, SessDeclPlugin, SoftwarePlugin, UnixSocketPlugin, UsersPlugin, WebUiPlugin,
+    WgcfPlugin, WireGuardPlugin, WorkflowsPlugin, XrayPlugin, ZeroclawPlugin,
 };
 use crate::AutoPlugin;
 
@@ -317,6 +317,8 @@ impl DefaultPluginRegistry {
             "sess_decl" => Arc::new(SessDeclPlugin::new()),
             "lxc" => Arc::new(LxcPlugin::new()),
             "netmaker" => Arc::new(NetmakerPlugin::new(NetmakerConfig::default())),
+            "oci" => Arc::new(OciPlugin::new()),
+            "oscal_subid_registry" => Arc::new(OscalSubidRegistryPlugin::new()),
             "adc" => Arc::new(AdcPlugin::new()),
             "endpoint" => Arc::new(EndpointPlugin::new()),
             "proxy_server" => Arc::new(ProxyServerPlugin::new()),

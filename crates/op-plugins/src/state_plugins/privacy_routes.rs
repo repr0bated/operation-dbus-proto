@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 use simd_json::OwnedValue as Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use op_state_store::{FieldSchema, FieldType, PluginSchema};
+use simd_json::json;
 
 const DEFAULT_PRIVACY_ROUTES_PATH: &str = "/var/lib/op-dbus/privacy-routes.json";
 
@@ -89,7 +91,7 @@ impl StatePlugin for PrivacyRoutesPlugin {
     }
 
     fn schema(&self) -> Option<op_state_store::PluginSchema> {
-        Some(super::plugin_schema_defs::privacy_routes_plugin_schema())
+        Some(privacy_routes_schema())
     }
 
     async fn query_current_state(&self) -> Result<Value> {
@@ -290,4 +292,217 @@ mod tests {
             .expect("calculate delete diff");
         assert_eq!(delete_diff.actions.len(), 1);
     }
+}
+
+pub(crate) fn privacy_routes_schema() -> PluginSchema {
+    let route_fields = {
+        let mut fields = HashMap::new();
+        fields.insert(
+            "name".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "Stable route object identifier".to_string(),
+                default: None,
+                example: Some(json!(
+                    "4f5e7f1a2d3c4b5a6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5"
+                )),
+                constraints: Vec::new(),
+                read_only: true,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "route_id".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "Derived route ID from WireGuard public key and shared secret"
+                    .to_string(),
+                default: None,
+                example: Some(json!(
+                    "4f5e7f1a2d3c4b5a6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5"
+                )),
+                constraints: Vec::new(),
+                read_only: true,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "user_id".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "Internal privacy user identifier".to_string(),
+                default: None,
+                example: Some(json!("550e8400-e29b-41d4-a716-446655440000")),
+                constraints: Vec::new(),
+                read_only: true,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "email".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "User email for audit and publication context".to_string(),
+                default: None,
+                example: Some(json!("user@example.com")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "wireguard_public_key".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "WireGuard public key backing this route identity".to_string(),
+                default: None,
+                example: Some(json!("P8c9Kjnv4B3r6C4+J4Q6VQ2sY4bXn4XWz0P2r5s6t7U=")),
+                constraints: Vec::new(),
+                read_only: true,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "assigned_ip".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "Assigned WireGuard tunnel address".to_string(),
+                default: None,
+                example: Some(json!("10.100.0.2/32")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "selector_ip".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "Packet-visible selector used for OpenFlow matching".to_string(),
+                default: None,
+                example: Some(json!("10.100.0.2")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "container_name".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Associated Incus instance name".to_string(),
+                default: None,
+                example: Some(json!("privacy-user-550e8400")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "ingress_port".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "Shared OVS ingress port for route matching".to_string(),
+                default: Some(json!("ovsbr0-sock")),
+                example: Some(json!("ovsbr0-sock")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "next_hop".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "First logical next hop for this route".to_string(),
+                default: Some(json!("gbr_wg")),
+                example: Some(json!("gbr_wg")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "enabled".to_string(),
+            FieldSchema {
+                field_type: FieldType::Boolean,
+                required: true,
+                description: "Whether this route should be active".to_string(),
+                default: Some(json!(true)),
+                example: Some(json!(true)),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "created_at".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "Creation timestamp".to_string(),
+                default: None,
+                example: Some(json!("2026-01-01T00:00:00Z")),
+                constraints: Vec::new(),
+                read_only: true,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "updated_at".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "Last update timestamp".to_string(),
+                default: None,
+                example: Some(json!("2026-01-01T00:05:00Z")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields
+    };
+
+    PluginSchema::builder("privacy_routes")
+        .version("1.0.0")
+        .description("Per-user privacy route objects keyed by WireGuard identity")
+        .dependency("wireguard")
+        .dependency("privacy_router")
+        .array_field(
+            "routes",
+            FieldType::Object(route_fields),
+            true,
+            "Published privacy route objects",
+        )
+        .example(json!({
+            "routes": [
+                {
+                    "name": "4f5e7f1a2d3c4b5a6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5",
+                    "route_id": "4f5e7f1a2d3c4b5a6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5",
+                    "user_id": "550e8400-e29b-41d4-a716-446655440000",
+                    "email": "user@example.com",
+                    "wireguard_public_key": "P8c9Kjnv4B3r6C4+J4Q6VQ2sY4bXn4XWz0P2r5s6t7U=",
+                    "assigned_ip": "10.100.0.2/32",
+                    "selector_ip": "10.100.0.2",
+                    "container_name": "privacy-user-550e8400",
+                    "ingress_port": "ovsbr0-sock",
+                    "next_hop": "gbr_wg",
+                    "enabled": true,
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "updated_at": "2026-01-01T00:00:00Z"
+                }
+            ]
+        }))
+        .build()
 }

@@ -12,9 +12,10 @@ use async_trait::async_trait;
 use op_blockchain::PluginFootprint;
 use op_state::{ApplyResult, Checkpoint, PluginCapabilities, StateDiff, StatePlugin};
 use serde::{Deserialize, Serialize};
-use simd_json::prelude::*;
-use simd_json::OwnedValue as Value;
+use simd_json::{json, prelude::*, OwnedValue as Value};
 use std::collections::HashMap;
+use op_state_store::{Constraint, FieldSchema, FieldType, PluginSchema};
+use super::plugin_schema_defs::{simple_schema, any_field};
 
 // ============================================================================
 // SECTION 1: IMMUTABLE IDENTITY (set once, never changes)
@@ -36,7 +37,7 @@ pub struct WebUiIdentity {
 impl Default for WebUiIdentity {
     fn default() -> Self {
         Self {
-            name: "web-ui".to_string(),
+            name: "web_ui".to_string(),
             version: "1.0.0".to_string(),
             plugin_type: "ui".to_string(),
             driver: "rust-embed".to_string(),
@@ -446,7 +447,7 @@ impl StatePlugin for WebUiPlugin {
     }
 
     fn schema(&self) -> Option<op_state_store::PluginSchema> {
-        Some(super::plugin_schema_defs::web_ui_plugin_schema())
+        Some(web_ui_schema())
     }
 
     fn is_available(&self) -> bool {
@@ -564,7 +565,7 @@ mod tests {
     #[test]
     fn test_default_identity() {
         let identity = WebUiIdentity::default();
-        assert_eq!(identity.name, "web-ui");
+        assert_eq!(identity.name, "web_ui");
         assert_eq!(identity.version, "1.0.0");
         assert_eq!(identity.plugin_type, "ui");
         assert_eq!(identity.driver, "rust-embed");
@@ -607,10 +608,71 @@ mod tests {
     #[tokio::test]
     async fn test_plugin_state() {
         let plugin = WebUiPlugin::new();
-        assert_eq!(plugin.name(), "web-ui");
+        assert_eq!(plugin.name(), "web_ui");
         assert!(plugin.is_available());
 
         let state = plugin.query_current_state().await.unwrap();
         assert!(state.is_object());
     }
+}
+
+pub(crate) fn web_ui_schema() -> PluginSchema {
+    simple_schema(
+        "web_ui",
+        "Web UI tunables",
+        &["mcp"],
+        vec![
+            (
+                "enabled",
+                FieldSchema {
+                    field_type: FieldType::Boolean,
+                    required: true,
+                    description: "Enable UI".to_string(),
+                    default: Some(json!(true)),
+                    example: None,
+                    constraints: Vec::new(),
+                    read_only: false,
+                    read_only_when: None,
+                },
+            ),
+            (
+                "cors_origins",
+                any_field(false, "Allowed CORS origins", Some(json!([]))),
+            ),
+            (
+                "compression",
+                FieldSchema {
+                    field_type: FieldType::Boolean,
+                    required: true,
+                    description: "Enable compression".to_string(),
+                    default: Some(json!(true)),
+                    example: None,
+                    constraints: Vec::new(),
+                    read_only: false,
+                    read_only_when: None,
+                },
+            ),
+            (
+                "cache_ttl",
+                FieldSchema {
+                    field_type: FieldType::Integer,
+                    required: true,
+                    description: "Cache TTL seconds".to_string(),
+                    default: Some(json!(86400)),
+                    example: None,
+                    constraints: vec![Constraint::Min { value: 0.0 }],
+                    read_only: false,
+                    read_only_when: None,
+                },
+            ),
+            (
+                "theme",
+                any_field(true, "Theme name", Some(json!("default"))),
+            ),
+            (
+                "feature_flags",
+                any_field(false, "Feature flag map", Some(json!({}))),
+            ),
+        ],
+    )
 }

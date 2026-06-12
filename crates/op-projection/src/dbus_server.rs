@@ -1,9 +1,8 @@
 //! D-Bus object server for projections.
 //!
 //! Serves every Projection as a D-Bus object under org.opdbus.projection at
-//! /org/opdbus/v1/plugins/<category>/<id>, e.g. /org/opdbus/v1/plugins/system/memory
-//! or /org/opdbus/v1/plugins/system/process/1234. Nothing mounts outside the
-//! plugins root: no plugin means no schema means no object.
+//! /org/opdbus/v1/plugins/<plugin>. Nothing mounts outside the plugins root:
+//! no plugin means no schema means no object.
 
 use anyhow::Result;
 use std::collections::HashMap;
@@ -56,45 +55,58 @@ impl ProjectedObject {
 
 /// Derives the D-Bus object path from a projection's entity_type and entity_id.
 ///
-/// Every projected object lives under the single plugins root. No plugin means
-/// no schema means no object — nothing is ever mounted outside this path.
+/// Every projected object lives under the single plugins root, and nested
+/// objects live under the plugin that produced them. No plugin means no schema
+/// means no object — nothing is ever mounted outside this path.
 ///
-/// entity_type "system.memory"    → /org/opdbus/v1/plugins/system/memory
-/// entity_type "system.process"   → /org/opdbus/v1/plugins/system/process/<entity_id>
-/// entity_type "identity.sled"    → /org/opdbus/v1/plugins/identity/sled
-/// entity_type "ovsdb_bridge"     → /org/opdbus/v1/plugins/ovsdb/bridge/<entity_id>
+/// entity_type "mail_server", entity_id "mail_server"
+///   → /org/opdbus/v1/plugins/mail_server
+/// entity_type "plugin.object", entity_id "wireguard:/interfaces/0"
+///   → /org/opdbus/v1/plugins/wireguard/interfaces/0
 pub fn projection_path(entity_type: &str, entity_id: &str) -> String {
-    // The ONLY path projections are allowed to mount under.
-    const PLUGIN_ROOT: &str = "/org/opdbus/v1/plugins";
+    if entity_type == "plugin.object" {
+        if let Some((plugin_id, object_path)) = entity_id.split_once(':') {
+            return plugin_object_path(plugin_id, object_path);
+        }
+    }
 
-    // Replace dots and underscores in type with slashes for the path prefix
-    let type_path = entity_type.replace(['.', '_'], "/").to_lowercase();
-
-    // For singleton objects (memory, cpu, filesystems, network) the entity_id
-    // is typically the same as the type — omit it to avoid redundancy.
-    let is_singleton = entity_id == entity_type
-        || entity_id.is_empty()
-        || entity_id == "memory"
-        || entity_id == "cpu"
-        || entity_id == "filesystems"
-        || entity_id == "network"
-        || entity_id == "sled";
-
-    if is_singleton {
-        format!("{}/{}", PLUGIN_ROOT, type_path)
+    op_plugins::canonical::plugin_path(if entity_id.is_empty() {
+        entity_type
     } else {
-        // Sanitize entity_id for use in a path segment
-        let safe_id: String = entity_id
-            .chars()
-            .map(|c| {
-                if c.is_ascii_alphanumeric() || c == '_' {
-                    c
-                } else {
-                    '_'
-                }
-            })
-            .collect();
-        format!("{}/{}/{}", PLUGIN_ROOT, type_path, safe_id)
+        entity_id
+    })
+}
+
+fn plugin_object_path(plugin_id: &str, object_path: &str) -> String {
+    let mut path = op_plugins::canonical::plugin_path(plugin_id);
+
+    for segment in object_path.split('/').filter(|segment| !segment.is_empty()) {
+        path.push('/');
+        path.push_str(&sanitize_path_segment(segment));
+    }
+
+    path
+}
+
+fn sanitize_path_segment(segment: &str) -> String {
+    let sanitized: String = segment
+        .chars()
+        .filter_map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                Some(c)
+            } else if c == '-' || c == '.' {
+                Some('_')
+            } else {
+                None
+            }
+        })
+        .take(255)
+        .collect();
+
+    if sanitized.is_empty() {
+        "_".to_string()
+    } else {
+        sanitized
     }
 }
 
@@ -185,7 +197,7 @@ impl ProjectionDbusServer {
             self.conn.object_server().at(path.as_str(), obj).await?;
 
             self.objects.insert(path.clone(), (data_arc, state_arc));
-            info!(path, entity_type = %projection.entity_type, "registered D-Bus projection object");
+            debug!(path, entity_type = %projection.entity_type, "registered D-Bus projection object");
         }
 
         Ok(())
@@ -206,5 +218,30 @@ impl ProjectionDbusServer {
 
     pub fn object_count(&self) -> usize {
         self.objects.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::projection_path;
+
+    #[test]
+    fn projects_plugin_roots_under_canonical_plugin_path() {
+        assert_eq!(
+            projection_path("mail_server", "mail_server"),
+            "/org/opdbus/v1/plugins/mail_server"
+        );
+        assert_eq!(
+            projection_path("ovsdb_bridge", "ovsdb_bridge"),
+            "/org/opdbus/v1/plugins/ovsdb_bridge"
+        );
+    }
+
+    #[test]
+    fn projects_nested_objects_under_owning_plugin() {
+        assert_eq!(
+            projection_path("plugin.object", "wireguard:/interfaces/0/peers"),
+            "/org/opdbus/v1/plugins/wireguard/interfaces/0/peers"
+        );
     }
 }

@@ -1,7 +1,7 @@
 //! D-Bus interface for the Cognitive MCP tool registry.
 //!
 //! service:   org.opdbus.CognitiveMcp
-//! object:    /org/opdbus/v1/cognitive
+//! object:    /org/opdbus/v1/plugins/cognitive_mcp
 //! interface: org.opdbus.CognitiveMcpV1
 //!
 //! Methods:

@@ -619,9 +619,27 @@ impl ProxyService {
             Some(b) => b.to_string(),
             None => return json_error("missing bridge"),
         };
-        let target_pid = match params.get("target_pid").and_then(|v| v.as_u64()) {
-            Some(p) => p as u32,
-            None => return json_error("missing target_pid"),
+        // Resolve target_pid: either directly provided, or via instance_name lookup
+        let target_pid = if let Some(pid) = params.get("target_pid").and_then(|v| v.as_u64()) {
+            pid as u32
+        } else if let Some(name) = params.get("instance_name").and_then(|v| v.as_str()) {
+            // Resolve incus instance name to host PID
+            match crate::container::pid_from_instance_name(name) {
+                Ok(pid) => {
+                    info!("resolved instance_name {} to host PID {}", name, pid);
+                    pid
+                }
+                Err(e) => {
+                    return serde_json::json!({
+                        "success": false,
+                        "message": format!("instance_name {} lookup failed: {}", name, e),
+                        "iface_name": ""
+                    })
+                    .to_string();
+                }
+            }
+        } else {
+            return json_error("missing target_pid or instance_name");
         };
         let iface_name = params
             .get("iface_name")
@@ -630,6 +648,19 @@ impl ProxyService {
             .to_string();
         let ip_addrs: Vec<String> = params
             .get("ip_addrs")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let gateway: Option<String> = params
+            .get("gateway")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let routes: Vec<String> = params
+            .get("routes")
             .and_then(|v| v.as_array())
             .map(|arr| {
                 arr.iter()
@@ -687,51 +718,108 @@ impl ProxyService {
         drop(guard);
 
         // Step 2: Bring up on host, move to netns, rename, bring up
-        if let Err(e) = crate::netns::set_link_up_rtnetlink(&port_name) {
-            return serde_json::json!({
-                "success": false,
-                "message": format!("bring up on host failed: {}", e),
-                "iface_name": ""
-            })
-            .to_string();
-        }
+        // These rtnetlink operations use block_on internally, so they MUST run
+        // in spawn_blocking to avoid deadlocking the tokio runtime.
+        let port_name_cb = port_name.clone();
+        let iface_name_cb = iface_name.clone();
+        let ip_addrs_cb = ip_addrs.clone();
+        let gateway_cb = gateway.clone();
+        let routes_cb = routes.clone();
+        let netns_result = tokio::task::spawn_blocking(move || -> Result<String> {
+            if let Err(e) = crate::netns::set_link_up_rtnetlink(&port_name_cb) {
+                return Ok(serde_json::json!({
+                    "success": false,
+                    "message": format!("bring up on host failed: {}", e),
+                    "iface_name": ""
+                })
+                .to_string());
+            }
 
-        if let Err(e) = crate::netns::move_interface_to_netns(&port_name, target_pid) {
-            return serde_json::json!({
-                "success": false,
-                "message": format!("move to netns failed: {}", e),
-                "iface_name": ""
-            })
-            .to_string();
-        }
+            if let Err(e) = crate::netns::move_interface_to_netns(&port_name_cb, target_pid) {
+                return Ok(serde_json::json!({
+                    "success": false,
+                    "message": format!("move to netns failed: {}", e),
+                    "iface_name": ""
+                })
+                .to_string());
+            }
 
-        if port_name != iface_name {
-            if let Err(e) = crate::netns::rename_in_netns(&port_name, &iface_name, target_pid) {
+            if port_name_cb != iface_name_cb {
+                if let Err(e) =
+                    crate::netns::rename_in_netns(&port_name_cb, &iface_name_cb, target_pid)
+                {
+                    return Ok(serde_json::json!({
+                        "success": false,
+                        "message": format!("rename in netns failed: {}", e),
+                        "iface_name": iface_name_cb
+                    })
+                    .to_string());
+                }
+            }
+
+            let _ = crate::netns::set_link_up_in_netns(&iface_name_cb, target_pid);
+
+            // Step 3: Add IP addresses
+            for addr in &ip_addrs_cb {
+                match crate::netns::add_addr_in_netns(&iface_name_cb, addr, target_pid) {
+                    Ok(_) => info!("proxy: added addr {} to {}", addr, iface_name_cb),
+                    Err(e) => warn!("proxy: failed to add addr {} to {}: {}", addr, iface_name_cb, e),
+                }
+            }
+
+            // Step 4: Add default route via gateway
+            if let Some(gw) = &gateway_cb {
+                match crate::netns::add_route_in_netns(&iface_name_cb, "default", gw, target_pid) {
+                    Ok(_) => info!("proxy: added default route via {}", gw),
+                    Err(e) => warn!("proxy: failed to add default route via {}: {}", gw, e),
+                }
+            }
+
+            // Step 5: Add extra routes
+            for route in &routes_cb {
+                // Format: "dest via gateway" e.g. "10.0.0.1 via 10.200.0.2"
+                let parts: Vec<&str> = route.splitn(2, " via ").collect();
+                if parts.len() == 2 {
+                    match crate::netns::add_route_in_netns(
+                        &iface_name_cb,
+                        parts[0],
+                        parts[1],
+                        target_pid,
+                    ) {
+                        Ok(_) => info!("proxy: added route {} via {}", parts[0], parts[1]),
+                        Err(e) => warn!("proxy: failed to add route {}: {}", route, e),
+                    }
+                }
+            }
+
+            Ok(serde_json::json!({
+                "success": true,
+                "message": format!("Port {} attached to PID {} as {}", port_name_cb, target_pid, iface_name_cb),
+                "iface_name": iface_name_cb
+            })
+            .to_string())
+        })
+        .await;
+
+        match netns_result {
+            Ok(Ok(result_json)) => return result_json,
+            Ok(Err(e)) => {
                 return serde_json::json!({
                     "success": false,
-                    "message": format!("rename in netns failed: {}", e),
+                    "message": format!("netns operation error: {}", e),
+                    "iface_name": iface_name
+                })
+                .to_string();
+            }
+            Err(e) => {
+                return serde_json::json!({
+                    "success": false,
+                    "message": format!("spawn_blocking panic: {}", e),
                     "iface_name": iface_name
                 })
                 .to_string();
             }
         }
-
-        let _ = crate::netns::set_link_up_in_netns(&iface_name, target_pid);
-
-        // Step 3: Add IP addresses
-        for addr in &ip_addrs {
-            match crate::netns::add_addr_in_netns(&iface_name, addr, target_pid) {
-                Ok(_) => info!("proxy: added addr {} to {}", addr, iface_name),
-                Err(e) => warn!("proxy: failed to add addr {} to {}: {}", addr, iface_name, e),
-            }
-        }
-
-        serde_json::json!({
-            "success": true,
-            "message": format!("Port {} attached to PID {} as {}", port_name, target_pid, iface_name),
-            "iface_name": iface_name
-        })
-        .to_string()
     }
 
     /// Remove an OVS port from a bridge (works regardless of which netns it's in).
@@ -792,6 +880,125 @@ impl ProxyService {
             Err(e) => serde_json::json!({
                 "success": false,
                 "message": format!("OVSDB remove failed: {}", e)
+            })
+            .to_string(),
+        }
+    }
+
+    /// Bring up the loopback interface (lo) inside a container's netns.
+    ///
+    /// OCI containers with no NIC device boot with lo DOWN, preventing
+    /// services from binding to 127.0.0.1. This method enters the
+    /// container's netns and runs `ip link set lo up`.
+    ///
+    /// `params_json` — JSON: {"instance_name":".."} or {"target_pid":N}
+    /// Returns JSON: {"success":bool,"message":"..","target_pid":N}
+    async fn bring_up_loopback(&self, params_json: &str) -> String {
+        debug!("proxy.bring_up_loopback params_len={}", params_json.len());
+
+        let params: serde_json::Value = match serde_json::from_str(params_json) {
+            Ok(v) => v,
+            Err(e) => return json_error(&format!("invalid params JSON: {}", e)),
+        };
+
+        let target_pid = if let Some(pid) = params.get("target_pid").and_then(|v| v.as_u64()) {
+            pid as u32
+        } else if let Some(name) = params.get("instance_name").and_then(|v| v.as_str()) {
+            match crate::container::pid_from_instance_name(name) {
+                Ok(pid) => pid,
+                Err(e) => {
+                    return serde_json::json!({
+                        "success": false,
+                        "message": format!("instance_name {} lookup failed: {}", name, e),
+                        "target_pid": 0
+                    })
+                    .to_string();
+                }
+            }
+        } else {
+            return json_error("missing target_pid or instance_name");
+        };
+
+        let pid_cb = target_pid;
+        let result = tokio::task::spawn_blocking(move || {
+            crate::netns::bring_up_loopback(pid_cb)
+        })
+        .await;
+
+        match result {
+            Ok(Ok(_)) => serde_json::json!({
+                "success": true,
+                "message": format!("lo brought up inside PID {}", target_pid),
+                "target_pid": target_pid
+            })
+            .to_string(),
+            Ok(Err(e)) => serde_json::json!({
+                "success": false,
+                "message": format!("lo bring-up failed: {}", e),
+                "target_pid": target_pid
+            })
+            .to_string(),
+            Err(e) => serde_json::json!({
+                "success": false,
+                "message": format!("spawn_blocking panic: {}", e),
+                "target_pid": target_pid
+            })
+            .to_string(),
+        }
+    }
+
+    /// Schema-driven container network initialization.
+    ///
+    /// Performs all host-side bootstrap operations that containers need
+    /// before their services can start: loopback bring-up, OVS port attach,
+    /// route configuration, etc.
+    ///
+    /// `params_json` — JSON: {
+    ///   "instance_name": "..",
+    ///   "loopback_required": true,
+    ///   "port_config": { .. } // optional, same as attach_port params
+    /// }
+    /// Returns JSON: {"success":bool,"instance_name":"..","target_pid":N,"steps":[..]}
+    async fn container_init(&self, params_json: &str) -> String {
+        debug!("proxy.container_init params_len={}", params_json.len());
+
+        let params: serde_json::Value = match serde_json::from_str(params_json) {
+            Ok(v) => v,
+            Err(e) => return json_error(&format!("invalid params JSON: {}", e)),
+        };
+
+        let instance_name = match params.get("instance_name").and_then(|v| v.as_str()) {
+            Some(n) => n.to_string(),
+            None => return json_error("missing instance_name"),
+        };
+        let loopback_required = params
+            .get("loopback_required")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let port_config = params.get("port_config").cloned();
+
+        let instance_name_cb = instance_name.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            crate::netns::container_netns_init(
+                &instance_name_cb,
+                loopback_required,
+                port_config.as_ref(),
+            )
+        })
+        .await;
+
+        match result {
+            Ok(Ok(result_json)) => result_json.to_string(),
+            Ok(Err(e)) => serde_json::json!({
+                "success": false,
+                "instance_name": instance_name,
+                "message": format!("container_init error: {}", e)
+            })
+            .to_string(),
+            Err(e) => serde_json::json!({
+                "success": false,
+                "instance_name": instance_name,
+                "message": format!("spawn_blocking panic: {}", e)
             })
             .to_string(),
         }

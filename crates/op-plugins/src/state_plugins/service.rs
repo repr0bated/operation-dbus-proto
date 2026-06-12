@@ -12,6 +12,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use zbus::{Connection, Proxy};
+use op_state_store::{PluginSchema};
+use super::plugin_schema_defs::{simple_schema, any_field};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceLifecycle {
@@ -332,7 +334,7 @@ impl StatePlugin for ServicePlugin {
     }
 
     fn schema(&self) -> Option<op_state_store::PluginSchema> {
-        Some(super::plugin_schema_defs::service_plugin_schema())
+        Some(service_schema())
     }
 
     async fn query_current_state(&self) -> Result<Value> {
@@ -399,4 +401,13 @@ impl StatePlugin for ServicePlugin {
             atomic_operations: false,
         }
     }
+}
+
+pub(crate) fn service_schema() -> PluginSchema {
+    simple_schema(
+        "service",
+        "Service definition declarations",
+        &["net"],
+        vec![("services", any_field(true, "Service map", Some(json!({}))))],
+    )
 }

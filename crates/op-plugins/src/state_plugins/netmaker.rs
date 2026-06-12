@@ -3,10 +3,11 @@ use async_trait::async_trait;
 use op_state::StatePlugin;
 use op_state::{ApplyResult, PluginCapabilities, StateAction, StateDiff};
 use serde::{Deserialize, Serialize};
-use simd_json::prelude::*;
-use simd_json::OwnedValue as Value;
+use simd_json::{json, prelude::*, OwnedValue as Value};
 use std::path::Path;
 use zbus::{Connection, Proxy};
+use op_state_store::{PluginSchema};
+use super::plugin_schema_defs::{schema_from_state};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetmakerConfig {
@@ -369,7 +370,7 @@ impl StatePlugin for NetmakerPlugin {
     }
 
     fn schema(&self) -> Option<op_state_store::PluginSchema> {
-        Some(super::plugin_schema_defs::netmaker_plugin_schema())
+        Some(netmaker_schema())
     }
 
     fn capabilities(&self) -> PluginCapabilities {
@@ -580,4 +581,16 @@ impl StatePlugin for NetmakerPlugin {
             "Netmaker rollback not implemented - would require leaving and rejoining networks"
         ))
     }
+}
+
+pub(crate) fn netmaker_schema() -> PluginSchema {
+    let state = simd_json::serde::to_owned_value(super::netmaker::NetmakerPlugin::current_state())
+        .unwrap_or_else(|_| json!({}));
+    schema_from_state(
+        "netmaker",
+        "net",
+        "1.0.0",
+        "Netmaker daemon state and execution schema",
+        &state,
+    )
 }

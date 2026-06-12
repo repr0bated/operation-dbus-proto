@@ -14,6 +14,7 @@ use std::path::Path;
 use tracing::{info, warn};
 use zbus::connection::Connection;
 
+mod container;
 mod dbus;
 mod execution;
 mod grpc;
@@ -68,8 +69,12 @@ impl Args {
 
 // ── Socket discovery ────────────────────────────────────────────────────────
 
-const DEFAULT_OVS_SOCKET: &str = "/var/run/openvswitch/db.sock";
-const OVS_SOCKET_PATHS: &[&str] = &["/run/openvswitch/db.sock", "/var/run/openvswitch/db.sock"];
+const DEFAULT_OVS_SOCKET: &str = "/usr/local/var/run/openvswitch/db.sock";
+const OVS_SOCKET_PATHS: &[&str] = &[
+    "/usr/local/var/run/openvswitch/db.sock",
+    "/run/openvswitch/db.sock",
+    "/var/run/openvswitch/db.sock",
+];
 
 fn find_ovs_socket() -> String {
     OVS_SOCKET_PATHS
@@ -103,10 +108,15 @@ async fn main() -> Result<()> {
         );
     }
 
-    let conn = Connection::system()
+    // Connect to the op-dbus session bus (not the system bus).
+    // op-dbus-mirror owns org.opdbus.v1 on a private session bus;
+    // we must join that bus so our rovs/* objects are reachable.
+    let session_bus_addr = std::env::var("DBUS_SESSION_BUS_ADDRESS")
+        .unwrap_or_else(|_| "unix:path=/run/op-dbus/session-bus.sock".to_string());
+    let conn = Connection::session()
         .await
-        .context("Failed to connect to system D-Bus")?;
-    info!("Connected to system D-Bus");
+        .context("Failed to connect to session D-Bus")?;
+    info!("Connected to session D-Bus ({})", session_bus_addr);
 
     // Register TWO separate object paths (locked design).
     let grpc_state = state.clone();
@@ -135,10 +145,10 @@ async fn main() -> Result<()> {
         .await
         .context("Failed to register /org/opdbus/execution")?;
 
-    // Request single well-known bus name.
-    conn.request_name("org.opdbus.v1")
+    // Request the ovsdb plugin bus name — NOT org.opdbus.v1 (owned by op-dbus-mirror).
+    conn.request_name("org.opdbus.v1.plugins.ovsdb")
         .await
-        .context("Failed to request bus name org.opdbus.v1")?;
+        .context("Failed to request bus name org.opdbus.v1.plugins.ovsdb")?;
 
     info!("D-Bus services registered:");
     info!("  /org/opdbus/rovs/jsonrpc  -> org.opdbus.rovs.jsonrpc");

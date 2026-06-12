@@ -14,6 +14,7 @@ use async_trait::async_trait;
 use op_state::{
     ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
 };
+use op_state_store::{FieldSchema, FieldType, PluginSchema};
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
@@ -377,6 +378,28 @@ impl StatePlugin for OpenFlowObfuscationPlugin {
 
     fn version(&self) -> &str {
         "1.0.0"
+    }
+
+    fn schema(&self) -> Option<PluginSchema> {
+        Some(
+            PluginSchema::builder("openflow_obfuscation")
+                .version("1.0.0")
+                .description("OpenFlow traffic obfuscation configuration")
+                .field(
+                    "config",
+                    FieldSchema {
+                        field_type: FieldType::Any,
+                        required: true,
+                        description: "Obfuscation config".to_string(),
+                        default: Some(json!({})),
+                        example: None,
+                        constraints: Vec::new(),
+                        read_only: false,
+                        read_only_when: None,
+                    },
+                )
+                .build(),
+        )
     }
 
     fn capabilities(&self) -> PluginCapabilities {

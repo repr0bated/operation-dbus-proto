@@ -1,9 +1,10 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
-use op_state_store::PluginSchema;
 use serde::{Deserialize, Serialize};
 use simd_json::{json, OwnedValue as Value};
+use op_state_store::{PluginSchema};
+use super::plugin_schema_defs::{schema_from_state};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SchemaRendererState {
@@ -105,7 +106,7 @@ impl StatePlugin for SchemaRendererPlugin {
         "1.0.0"
     }
     fn schema(&self) -> Option<PluginSchema> {
-        Some(super::plugin_schema_defs::schema_renderer_plugin_schema())
+        Some(schema_renderer_schema())
     }
     async fn query_current_state(&self) -> Result<Value> {
         Ok(simd_json::serde::to_owned_value(Self::current_state())?)
@@ -152,4 +153,18 @@ impl StatePlugin for SchemaRendererPlugin {
             atomic_operations: false,
         }
     }
+}
+
+pub(crate) fn schema_renderer_schema() -> PluginSchema {
+    let state = simd_json::serde::to_owned_value(
+        super::schema_renderer::SchemaRendererPlugin::current_state(),
+    )
+    .unwrap_or_else(|_| json!({}));
+    schema_from_state(
+        "schema_renderer",
+        "ui",
+        "1.0.0",
+        "Schema Renderer - dynamic JSON Schema to React form generation with auto-gallery",
+        &state,
+    )
 }

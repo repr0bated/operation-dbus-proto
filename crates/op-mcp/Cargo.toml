@@ -8,7 +8,7 @@ description = "Unified MCP Protocol Server with multiple transport and mode supp
 default = []
 op-chat = []
 code_search = []
-grpc = ["tonic", "prost", "tonic-build"]
+grpc = ["tonic", "prost", "tonic-build", "tonic-reflection", "tonic-health", "tonic-web"]
 
 [dependencies]
 # Core
@@ -40,6 +40,9 @@ clap = { version = "4.0", features = ["derive", "env"] }
 # gRPC (optional)
 tonic = { workspace = true, optional = true }
 prost = { workspace = true, optional = true }
+tonic-reflection = { workspace = true, optional = true }
+tonic-health = { workspace = true, optional = true }
+tonic-web = { workspace = true, optional = true }
 
 # Internal crates
 op-core = { path = "../op-core" }

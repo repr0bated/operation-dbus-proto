@@ -16,6 +16,7 @@ use serde_json::Value as JsonValue;
 use simd_json::prelude::{ValueAsContainer, ValueAsScalar};
 use tokio::sync::{broadcast, RwLock};
 use tokio_stream::Stream;
+use tonic::transport::{Identity, ServerTlsConfig};
 use tonic::{Request, Response, Status};
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{debug, info, warn};
@@ -303,6 +304,7 @@ pub async fn run_grpc_server(
     addr: std::net::SocketAddr,
     schema_engine: Arc<SchemaEngine>,
     plugin_provider: Option<Arc<dyn PluginSchemaProvider>>,
+    tls_identity: Option<Identity>,
 ) -> Result<(), tonic::transport::Error> {
     use crate::proto::dbus_passthrough_server::DbusPassthroughServer;
     use crate::proto::event_chain_service_server::EventChainServiceServer;
@@ -389,9 +391,15 @@ pub async fn run_grpc_server(
         .allow_methods(Any)
         .allow_headers(Any);
 
-    let server = tonic::transport::Server::builder()
+    let mut builder = tonic::transport::Server::builder()
         .accept_http1(true)
-        .layer(cors)
+        .layer(cors);
+
+    if let Some(identity) = tls_identity {
+        builder = builder.tls_config(ServerTlsConfig::new().identity(identity))?;
+    }
+
+    let server = builder
         .add_service(tonic_web::enable(StateSyncServer::with_interceptor(
             server.clone(),
             interceptor::ghostbridge_interceptor,

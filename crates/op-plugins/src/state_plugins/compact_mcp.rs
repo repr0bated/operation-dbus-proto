@@ -10,10 +10,9 @@ use async_trait::async_trait;
 use op_state::{
     ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
 };
-use op_state_store::PluginSchema;
+use op_state_store::{FieldSchema, FieldType, PluginSchema};
 use serde::{Deserialize, Serialize};
-use simd_json::prelude::*;
-use simd_json::OwnedValue as Value;
+use simd_json::{json, prelude::*, OwnedValue as Value};
 use zbus::{Connection, Proxy};
 
 const S6_SV_PATH: &str = "/run/service/op-mcp-compact";
@@ -171,7 +170,7 @@ impl StatePlugin for CompactMcpPlugin {
     }
 
     fn schema(&self) -> Option<PluginSchema> {
-        Some(super::plugin_schema_defs::compact_mcp_plugin_schema())
+        Some(compact_mcp_schema())
     }
 
     fn is_available(&self) -> bool {
@@ -361,4 +360,85 @@ impl StatePlugin for CompactMcpPlugin {
             atomic_operations: false,
         }
     }
+}
+
+pub(crate) fn compact_mcp_schema() -> PluginSchema {
+    PluginSchema::builder("compact_mcp")
+        .version("1.0.0")
+        .description("op-mcp-server — multi-mode MCP server (compact/full/agents) with stdio, HTTP, and WebSocket transports")
+        .field("mode", FieldSchema {
+            field_type: FieldType::Enum(vec![
+                "compact".into(), "full".into(), "agents".into(),
+            ]),
+            required: false,
+            description: "Server mode: compact (5 meta-tools), full (all tools), agents (D-Bus agents)".into(),
+            default: Some(json!("compact")),
+            example: Some(json!("compact")),
+            constraints: vec![],
+            read_only: false,
+            read_only_when: None,
+        })
+        .field("http", FieldSchema {
+            field_type: FieldType::String,
+            required: false,
+            description: "HTTP/SSE bind address (empty = not started)".into(),
+            default: Some(json!("127.0.0.1:11436")),
+            example: Some(json!("100.90.37.254:3001")),
+            constraints: vec![],
+            read_only: false,
+            read_only_when: None,
+        })
+        .field("ws", FieldSchema {
+            field_type: FieldType::String,
+            required: false,
+            description: "WebSocket bind address (empty = not started)".into(),
+            default: Some(json!(null)),
+            example: Some(json!("100.90.37.254:3002")),
+            constraints: vec![],
+            read_only: false,
+            read_only_when: None,
+        })
+        .field("wg_interface", FieldSchema {
+            field_type: FieldType::String,
+            required: false,
+            description: "WireGuard interface for identity sled".into(),
+            default: Some(json!("netmaker")),
+            example: Some(json!("netmaker")),
+            constraints: vec![],
+            read_only: false,
+            read_only_when: None,
+        })
+        .field("stdio", FieldSchema {
+            field_type: FieldType::Boolean,
+            required: false,
+            description: "Run stdio transport (default for Claude Desktop)".into(),
+            default: Some(json!(true)),
+            example: None,
+            constraints: vec![],
+            read_only: false,
+            read_only_when: None,
+        })
+        .field("log_level", FieldSchema {
+            field_type: FieldType::Enum(vec![
+                "trace".into(), "debug".into(), "info".into(), "warn".into(), "error".into(),
+            ]),
+            required: false,
+            description: "Log verbosity".into(),
+            default: Some(json!("info")),
+            example: None,
+            constraints: vec![],
+            read_only: false,
+            read_only_when: None,
+        })
+        .field("running", FieldSchema {
+            field_type: FieldType::Boolean,
+            required: false,
+            description: "Whether the s6 service is currently running".into(),
+            default: Some(json!(false)),
+            example: None,
+            constraints: vec![],
+            read_only: true,
+            read_only_when: None,
+        })
+        .build()
 }

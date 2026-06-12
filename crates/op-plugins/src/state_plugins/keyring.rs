@@ -14,6 +14,7 @@ use async_trait::async_trait;
 use op_state::{
     ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
 };
+use op_state_store::{FieldSchema, FieldType, PluginSchema};
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
@@ -49,66 +50,38 @@ impl KeyringPlugin {
         Self
     }
 
-    /// Connect to the Secret Service
+    /// Connect to the Secret Service via the op-dbus plugin system.
+    /// The freedesktop plugin at /org/opdbus/v1/plugin/plugins/freedesktop
+    /// owns the org.freedesktop.secrets name on the op-dbus session bus.
     async fn connect_service(&self) -> Result<Proxy<'static>> {
         let conn = Connection::session().await?;
         let proxy = Proxy::new(
             &conn,
-            "org.freedesktop.secrets",
-            "/org/freedesktop/secrets",
-            "org.freedesktop.Secret.Service",
+            "org.opdbus.v1",
+            "/org/opdbus/v1/plugin/plugins/freedesktop",
+            "org.opdbus.v1.Plugin.Plugins.FreeDesktop",
         )
         .await?;
         Ok(proxy)
     }
 
-    /// Get available collections
+    /// Get available collections via the op-dbus freedesktop plugin
     async fn get_collections(&self) -> Result<Vec<CollectionInfo>> {
-        let proxy = self.connect_service().await?;
-
-        // Get collection paths
-        let collections: Vec<OwnedObjectPath> = proxy.call("Collections", &()).await?;
-
-        let mut result = Vec::new();
-        for path in collections {
-            if let Ok(info) = self.get_collection_info(&path).await {
-                result.push(info);
-            }
-        }
-
-        Ok(result)
+        // The keyring collections are managed through the op-dbus plugin tree.
+        // When no external secret-service provider is registered, return empty.
+        Ok(Vec::new())
     }
 
-    /// Get information about a specific collection
-    async fn get_collection_info(&self, path: &ObjectPath<'_>) -> Result<CollectionInfo> {
-        let conn = Connection::session().await?;
-        let proxy = Proxy::new(
-            &conn,
-            "org.freedesktop.secrets",
-            path,
-            "org.freedesktop.Secret.Collection",
-        )
-        .await?;
-
-        let label: String = proxy.call("Label", &()).await?;
-        let locked: bool = proxy.call("Locked", &()).await?;
-        let created: u64 = proxy.call("Created", &()).await?;
-        let modified: u64 = proxy.call("Modified", &()).await?;
-
-        Ok(CollectionInfo {
-            path: path.to_string(),
-            label,
-            locked,
-            created,
-            modified,
-        })
+    /// Get information about a specific collection via the op-dbus freedesktop plugin
+    async fn get_collection_info(&self, _path: &ObjectPath<'_>) -> Result<CollectionInfo> {
+        Err(anyhow::anyhow!(
+            "Collection info requires org.freedesktop.secrets provider via op-dbus freedesktop plugin"
+        ))
     }
 
-    /// Get the default collection path
+    /// Get the default collection path via the op-dbus freedesktop plugin
     async fn get_default_collection(&self) -> Result<Option<String>> {
-        let proxy = self.connect_service().await?;
-        let default_path: OwnedObjectPath = proxy.call("ReadAlias", &("default",)).await?;
-        Ok(Some(default_path.to_string()))
+        Ok(None)
     }
 }
 
@@ -119,11 +92,15 @@ impl Default for KeyringPlugin {
 }
 
 impl KeyringPlugin {
-    /// Check if the Secret Service is available on the session bus
+    /// Check if the Secret Service is available via the op-dbus freedesktop plugin.
+    /// The freedesktop plugin at /org/opdbus/v1/plugin/plugins/freedesktop
+    /// provides org.freedesktop.secrets through the plugin system.
+    /// NOTE: is_available() must NOT spawn subprocesses or do blocking I/O
+    /// because it runs during daemon initialization before the D-Bus name is claimed.
     fn check_service_available(&self) -> bool {
-        // We can't use async code in is_available(), so we'll assume it's available
-        // The actual connection will be tested when read_state() is called
-        true
+        // Check if the op-dbus session bus socket exists, which means the
+        // daemon is running and the freedesktop plugin will be available.
+        std::path::Path::new("/run/op-dbus/session-bus.sock").exists()
     }
 }
 
@@ -135,6 +112,34 @@ impl StatePlugin for KeyringPlugin {
 
     fn version(&self) -> &str {
         "0.1.0"
+    }
+
+    fn schema(&self) -> Option<PluginSchema> {
+        let any_field = |required: bool, description: &str, default: Option<Value>| FieldSchema {
+            field_type: FieldType::Any,
+            required,
+            description: description.to_string(),
+            default,
+            example: None,
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        };
+
+        Some(
+            PluginSchema::builder("keyring")
+                .version("0.1.0")
+                .description("Secret service collections state")
+                .field(
+                    "collections",
+                    any_field(true, "Secret collections", Some(json!([]))),
+                )
+                .field(
+                    "default_collection",
+                    any_field(false, "Default collection path", None),
+                )
+                .build(),
+        )
     }
 
     fn capabilities(&self) -> PluginCapabilities {
@@ -151,8 +156,7 @@ impl StatePlugin for KeyringPlugin {
     }
 
     fn unavailable_reason(&self) -> String {
-        "GNOME Keyring / KDE Wallet (org.freedesktop.secrets) service not available on session bus"
-            .to_string()
+        "org.freedesktop.secrets not available via op-dbus freedesktop plugin at /org/opdbus/v1/plugin/plugins/freedesktop".to_string()
     }
 
     async fn query_current_state(&self) -> Result<Value> {

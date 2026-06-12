@@ -10,8 +10,11 @@ use op_network::rovs_proxy::OvsdbDbusClient;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
+use simd_json::json;
 use simd_json::OwnedValue as Value;
 use std::sync::Arc;
+use op_state_store::{PluginSchema};
+use super::plugin_schema_defs::{simple_schema, any_field};
 
 // ============================================================================
 // RFC 7047 §3.2 Schema Types — Bridge → Port → Interface hierarchy
@@ -188,7 +191,7 @@ impl StatePlugin for OvsBridgePlugin {
     }
 
     fn schema(&self) -> Option<op_state_store::PluginSchema> {
-        Some(super::plugin_schema_defs::ovsdb_bridge_plugin_schema())
+        Some(ovsdb_bridge_schema())
     }
 
     fn is_available(&self) -> bool {
@@ -260,4 +263,16 @@ impl StatePlugin for OvsBridgePlugin {
             atomic_operations: true,
         }
     }
+}
+
+pub(crate) fn ovsdb_bridge_schema() -> PluginSchema {
+    simple_schema(
+        "ovsdb_bridge",
+        "OVS bridge declarations",
+        &["net"],
+        vec![(
+            "bridges",
+            any_field(true, "Bridge declarations", Some(json!([]))),
+        )],
+    )
 }
