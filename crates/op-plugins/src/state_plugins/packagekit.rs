@@ -14,6 +14,7 @@ use zbus::proxy;
 use op_state::{
     ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
 };
+use op_state_store::{Constraint, FieldSchema, FieldType, PluginSchema};
 
 // PackageKit D-Bus interface
 #[proxy(
@@ -213,6 +214,41 @@ impl StatePlugin for PackageKitPlugin {
 
     fn version(&self) -> &str {
         "1.0.0"
+    }
+
+    fn schema(&self) -> Option<PluginSchema> {
+        Some(
+            PluginSchema::builder("packagekit")
+                .version("1.0.0")
+                .description("PackageKit package declarations")
+                .field(
+                    "version",
+                    FieldSchema {
+                        field_type: FieldType::Integer,
+                        required: false,
+                        description: "Schema version".to_string(),
+                        default: Some(simd_json::json!(1)),
+                        example: None,
+                        constraints: vec![Constraint::Min { value: 1.0 }],
+                        read_only: false,
+                        read_only_when: None,
+                    },
+                )
+                .field(
+                    "packages",
+                    FieldSchema {
+                        field_type: FieldType::Any,
+                        required: true,
+                        description: "Package declaration map".to_string(),
+                        default: Some(simd_json::json!({})),
+                        example: None,
+                        constraints: Vec::new(),
+                        read_only: false,
+                        read_only_when: None,
+                    },
+                )
+                .build(),
+        )
     }
 
     async fn query_current_state(&self) -> Result<Value> {

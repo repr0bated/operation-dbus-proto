@@ -14,9 +14,10 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
-use op_state_store::PluginSchema;
 use serde::{Deserialize, Serialize};
 use simd_json::{json, OwnedValue as Value};
+use op_state_store::{PluginSchema};
+use super::plugin_schema_defs::{field_from_value};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FactoryState {
@@ -276,7 +277,7 @@ impl StatePlugin for FactoryPlugin {
         "1.0.0"
     }
     fn schema(&self) -> Option<PluginSchema> {
-        Some(super::plugin_schema_defs::factory_plugin_schema())
+        Some(factory_schema())
     }
     async fn query_current_state(&self) -> Result<Value> {
         Ok(simd_json::serde::to_owned_value(Self::current_state())?)
@@ -323,4 +324,27 @@ impl StatePlugin for FactoryPlugin {
             atomic_operations: false,
         }
     }
+}
+
+pub(crate) fn factory_schema() -> PluginSchema {
+    use simd_json::prelude::*;
+    let state = simd_json::serde::to_owned_value(super::factory::FactoryPlugin::current_state())
+        .unwrap_or_else(|_| json!({}));
+
+    let mut builder = PluginSchema::builder("factory")
+        .version("1.0.0")
+        .category("llm")
+        .description("Factory Droid agent platform — computers, sessions, models, autonomy controls, BYOM discovery");
+
+    // Add BYOM dependency on zeroclaw for model discovery via D-Bus projection
+    builder = builder.dependency("zeroclaw");
+
+    // Add fields from live state
+    if let Some(obj) = state.as_object() {
+        for (key, value) in obj.iter() {
+            builder = builder.field(&key.to_string(), field_from_value(value));
+        }
+    }
+
+    builder.example(state.clone()).build()
 }

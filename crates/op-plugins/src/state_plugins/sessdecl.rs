@@ -3,7 +3,10 @@ use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
+use simd_json::json;
 use simd_json::OwnedValue as Value;
+use op_state_store::{PluginSchema};
+use super::plugin_schema_defs::{simple_schema, any_field};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessDeclState {
@@ -41,7 +44,7 @@ impl StatePlugin for SessDeclPlugin {
     }
 
     fn schema(&self) -> Option<op_state_store::PluginSchema> {
-        Some(super::plugin_schema_defs::sess_decl_plugin_schema())
+        Some(sess_decl_schema())
     }
 
     async fn query_current_state(&self) -> Result<Value> {
@@ -97,4 +100,16 @@ impl StatePlugin for SessDeclPlugin {
             atomic_operations: false,
         }
     }
+}
+
+pub(crate) fn sess_decl_schema() -> PluginSchema {
+    simple_schema(
+        "sess_decl",
+        "Session declaration state",
+        &["users"],
+        vec![(
+            "sessions",
+            any_field(true, "Session declarations", Some(json!([]))),
+        )],
+    )
 }

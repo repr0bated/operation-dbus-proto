@@ -8,9 +8,10 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
-use op_state_store::PluginSchema;
 use serde::{Deserialize, Serialize};
 use simd_json::{json, OwnedValue as Value};
+use op_state_store::{PluginSchema};
+use super::plugin_schema_defs::{schema_from_state};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AntigravityState {
@@ -662,7 +663,7 @@ impl StatePlugin for AntigravityPlugin {
     }
 
     fn schema(&self) -> Option<PluginSchema> {
-        Some(super::plugin_schema_defs::antigravity_plugin_schema())
+        Some(antigravity_schema())
     }
 
     async fn query_current_state(&self) -> Result<Value> {
@@ -716,4 +717,11 @@ impl StatePlugin for AntigravityPlugin {
             atomic_operations: false,
         }
     }
+}
+
+pub(crate) fn antigravity_schema() -> PluginSchema {
+    let state =
+        simd_json::serde::to_owned_value(super::antigravity::AntigravityPlugin::current_state())
+            .unwrap_or_else(|_| json!({"status":"error"}));
+    schema_from_state("antigravity", "llm", "1.0.0", "Google Antigravity SDK provider — Vertex AI Gemini models, OAuth auth, structured output, OSCAL compliance routing", &state)
 }

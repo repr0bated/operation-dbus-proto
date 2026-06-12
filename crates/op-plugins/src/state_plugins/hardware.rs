@@ -4,6 +4,9 @@ use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateD
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
+use simd_json::json;
+use op_state_store::{PluginSchema};
+use super::plugin_schema_defs::{simple_schema, any_field};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HardwareState {
@@ -162,7 +165,7 @@ impl StatePlugin for HardwarePlugin {
     }
 
     fn schema(&self) -> Option<op_state_store::PluginSchema> {
-        Some(super::plugin_schema_defs::hardware_plugin_schema())
+        Some(hardware_schema())
     }
 
     async fn query_current_state(&self) -> Result<Value> {
@@ -224,4 +227,17 @@ impl StatePlugin for HardwarePlugin {
             atomic_operations: false,
         }
     }
+}
+
+pub(crate) fn hardware_schema() -> PluginSchema {
+    simple_schema(
+        "hardware",
+        "Hardware inventory snapshot",
+        &[],
+        vec![
+            ("cpu", any_field(true, "CPU info", Some(json!({})))),
+            ("memory", any_field(true, "Memory info", Some(json!({})))),
+            ("disks", any_field(true, "Disk list", Some(json!([])))),
+        ],
+    )
 }

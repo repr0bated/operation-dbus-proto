@@ -98,13 +98,16 @@ incus exec "$CONTAINER" -- mkdir -p /var/lib/qdrant /etc/qdrant
 
 incus exec "$CONTAINER" -- sh -c 'cat > /etc/qdrant/config.yaml' <<'CONF'
 storage:
-  storage_path: /var/lib/qdrant
+  # Qdrant's storage root must contain collections/ directly. The host mount
+  # for this system is /var/lib/qdrant/storage, which contains
+  # collections/repomix_rag.
+  storage_path: /var/lib/qdrant/storage
 
 service:
   host: 127.0.0.1
   http_port: 6333
   grpc_port: 6334
-  enable_cors: false
+  enable_cors: true
 
 cluster:
   enabled: false
@@ -185,7 +188,7 @@ echo "════════════════════════�
 echo " Qdrant ${QDRANT_VERSION} installed in Incus container '${CONTAINER}'"
 echo " Unix socket      : ${SOCKET_PATH}  (Incus proxy → container:6334)"
 echo " Container NIC    : none (sealed)"
-echo " Storage          : /var/lib/qdrant (inside container)"
+echo " Storage          : /var/lib/qdrant/storage (inside container)"
 echo "═══════════════════════════════════════════════════════"
 echo ""
 echo " Xray routes 127.0.0.1:${QDRANT_PORT} → ${SOCKET_PATH} via ds outbound."

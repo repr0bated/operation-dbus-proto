@@ -15,11 +15,11 @@ use op_state::{
     ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
 };
 use serde::{Deserialize, Serialize};
-use simd_json::prelude::*;
-use simd_json::{json, OwnedValue as Value};
+use simd_json::{json, prelude::*, OwnedValue as Value};
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::path::Path;
+use op_state_store::{Constraint, FieldSchema, FieldType, PluginSchema, ReadOnlyCondition};
 
 const DEFAULT_BRIDGE_NAME: &str = "ovsbr0";
 const DEFAULT_UPLINK_PORT: &str = "ens3";
@@ -953,7 +953,7 @@ impl StatePlugin for PrivacyRouterPlugin {
     }
 
     fn schema(&self) -> Option<op_state_store::PluginSchema> {
-        Some(super::plugin_schema_defs::privacy_router_plugin_schema())
+        Some(privacy_router_schema())
     }
 
     fn capabilities(&self) -> PluginCapabilities {
@@ -1275,4 +1275,295 @@ mod tests {
         let actual = plugin.actual_system_containers(&config, &IncusState { instances });
         assert_eq!(actual, vec!["privacy-xray-egress".to_string()]);
     }
+}
+
+pub(crate) fn privacy_router_schema() -> PluginSchema {
+    let wireguard_fields = {
+        let mut fields = HashMap::new();
+        fields.insert(
+            "enabled".to_string(),
+            FieldSchema {
+                field_type: FieldType::Boolean,
+                required: true,
+                description: "Enable WireGuard tunnel".to_string(),
+                default: Some(json!(true)),
+                example: Some(json!(true)),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "container_id".to_string(),
+            FieldSchema {
+                field_type: FieldType::Integer,
+                required: false,
+                description: "Container VMID for WireGuard".to_string(),
+                default: Some(json!(100)),
+                example: Some(json!(100)),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: Some(ReadOnlyCondition {
+                    property: "enabled".to_string(),
+                    value: "true".to_string(),
+                }),
+            },
+        );
+        fields.insert(
+            "listen_port".to_string(),
+            FieldSchema {
+                field_type: FieldType::Integer,
+                required: false,
+                description: "WireGuard listen port".to_string(),
+                default: Some(json!(51820)),
+                example: Some(json!(51820)),
+                constraints: vec![
+                    Constraint::Min { value: 1.0 },
+                    Constraint::Max { value: 65535.0 },
+                ],
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "socket_port".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Host-side bridge port name for the WireGuard ingress container"
+                    .to_string(),
+                default: Some(json!("gbr_wg")),
+                example: Some(json!("gbr_wg")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields
+    };
+
+    let warp_fields = {
+        let mut fields = HashMap::new();
+        fields.insert(
+            "enabled".to_string(),
+            FieldSchema {
+                field_type: FieldType::Boolean,
+                required: true,
+                description: "Enable Cloudflare WARP tunnel".to_string(),
+                default: Some(json!(true)),
+                example: Some(json!(true)),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "bridge_interface".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Host WireGuard interface bridged into OVS for WARP egress"
+                    .to_string(),
+                default: Some(json!("wgcf")),
+                example: Some(json!("wgcf")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "netclient_network".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Netclient network name for the WARP egress interface".to_string(),
+                default: Some(json!("gbr_warp")),
+                example: Some(json!("gbr_warp")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields
+    };
+
+    let xray_fields = {
+        let mut fields = HashMap::new();
+        fields.insert(
+            "enabled".to_string(),
+            FieldSchema {
+                field_type: FieldType::Boolean,
+                required: true,
+                description: "Enable system XRay client tunnel".to_string(),
+                default: Some(json!(true)),
+                example: Some(json!(true)),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "container_id".to_string(),
+            FieldSchema {
+                field_type: FieldType::Integer,
+                required: false,
+                description: "Container VMID for the local XRay client".to_string(),
+                default: Some(json!(101)),
+                example: Some(json!(101)),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: Some(ReadOnlyCondition {
+                    property: "enabled".to_string(),
+                    value: "true".to_string(),
+                }),
+            },
+        );
+        fields.insert(
+            "socket_port".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Host-side bridge port for the local XRay client".to_string(),
+                default: Some(json!("gbr_xray")),
+                example: Some(json!("gbr_xray")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "socks_port".to_string(),
+            FieldSchema {
+                field_type: FieldType::Integer,
+                required: false,
+                description: "SOCKS listener port exposed by the local XRay client".to_string(),
+                default: Some(json!(1080)),
+                example: Some(json!(1080)),
+                constraints: vec![
+                    Constraint::Min { value: 1.0 },
+                    Constraint::Max { value: 65535.0 },
+                ],
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "vps_address".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Remote XRay server hostname or IP".to_string(),
+                default: Some(json!("vps.example.com")),
+                example: Some(json!("vps.example.com")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "vps_port".to_string(),
+            FieldSchema {
+                field_type: FieldType::Integer,
+                required: false,
+                description: "Remote XRay server port".to_string(),
+                default: Some(json!(443)),
+                example: Some(json!(443)),
+                constraints: vec![
+                    Constraint::Min { value: 1.0 },
+                    Constraint::Max { value: 65535.0 },
+                ],
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields
+    };
+
+    let vps_fields = {
+        let mut fields = HashMap::new();
+        fields.insert(
+            "xray_server".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "Remote XRay server hostname or IP".to_string(),
+                default: Some(json!("vps.example.com")),
+                example: Some(json!("vps.example.com")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "xray_port".to_string(),
+            FieldSchema {
+                field_type: FieldType::Integer,
+                required: true,
+                description: "Remote XRay server port".to_string(),
+                default: Some(json!(443)),
+                example: Some(json!(443)),
+                constraints: vec![
+                    Constraint::Min { value: 1.0 },
+                    Constraint::Max { value: 65535.0 },
+                ],
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields
+    };
+
+    PluginSchema::builder("privacy_router")
+        .version("1.1.0")
+        .description("System privacy fabric (WireGuard/XRay ingress, WARP bridge, XRay egress)")
+        .dependency("incus")
+        .dependency("openflow")
+        .dependency("privacy_routes")
+        .string_field("bridge_name", true, "OVS bridge for privacy network")
+        .object_field(
+            "wireguard",
+            wireguard_fields,
+            true,
+            "WireGuard tunnel config",
+        )
+        .object_field("warp", warp_fields, true, "Cloudflare WARP bridge config")
+        .object_field(
+            "xray",
+            xray_fields,
+            true,
+            "XRay REALITY egress client config",
+        )
+        .object_field(
+            "vps",
+            vps_fields,
+            true,
+            "Remote XRay server endpoint config",
+        )
+        .example(json!({
+            "bridge_name": "ovsbr0",
+            "wireguard": {
+                "enabled": true,
+                "container_id": 100,
+                "socket_port": "gbr_wg",
+                "listen_port": 51820
+            },
+            "warp": {
+                "enabled": true,
+                "bridge_interface": "wgcf",
+                "netclient_network": "gbr_warp"
+            },
+            "xray": {
+                "enabled": true,
+                "container_id": 101,
+                "socket_port": "gbr_xray",
+                "socks_port": 1080,
+                "vps_address": "vps.example.com",
+                "vps_port": 443
+            },
+            "vps": {
+                "xray_server": "vps.example.com",
+                "xray_port": 443
+            }
+        }))
+        .build()
 }

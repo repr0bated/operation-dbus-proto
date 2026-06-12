@@ -149,7 +149,11 @@ impl S6StatePlugin {
             .await
             .context("s6-rc -a list")?;
         let stdout = String::from_utf8_lossy(&output.stdout);
-        Ok(stdout.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect())
+        Ok(stdout
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect())
     }
 
     /// Return *all* available service names.
@@ -204,7 +208,7 @@ impl StatePlugin for S6StatePlugin {
     }
 
     fn schema(&self) -> Option<op_state_store::PluginSchema> {
-        Some(super::plugin_schema_defs::s6_plugin_schema())
+        Some(s6_schema())
     }
 
     fn is_available(&self) -> bool {
@@ -400,6 +404,8 @@ impl StatePlugin for S6StatePlugin {
 use std::sync::Arc;
 use tokio::sync::OnceCell;
 use zbus::{proxy, Connection};
+use op_state_store::{FieldSchema, FieldType, PluginSchema};
+use simd_json::json;
 
 /// D-Bus proxy for `org.opdbus.v1.S6.Systemctl`.
 #[proxy(
@@ -591,4 +597,69 @@ impl S6DbusClient {
         let proxy = self.get_proxy().await?;
         Ok(proxy.get_unit_type(unit).await?)
     }
+}
+
+pub(crate) fn s6_schema() -> PluginSchema {
+    let unit_fields = {
+        let mut fields = HashMap::new();
+        fields.insert(
+            "name".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "Unit name".to_string(),
+                default: None,
+                example: Some(json!("nginx.service")),
+                constraints: Vec::new(),
+                read_only: true,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "state".to_string(),
+            FieldSchema {
+                field_type: FieldType::Enum(vec![
+                    "active".to_string(),
+                    "inactive".to_string(),
+                    "failed".to_string(),
+                ]),
+                required: false,
+                description: "Desired unit state".to_string(),
+                default: Some(json!("active")),
+                example: Some(json!("active")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "enabled".to_string(),
+            FieldSchema {
+                field_type: FieldType::Boolean,
+                required: false,
+                description: "Whether unit is enabled at boot".to_string(),
+                default: Some(json!(true)),
+                example: Some(json!(true)),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields
+    };
+
+    PluginSchema::builder("s6")
+        .version("1.0.0")
+        .description("s6 service management")
+        .array_field("units", FieldType::Object(unit_fields), true, "s6 services")
+        .example(json!({
+            "units": [
+                {
+                    "name": "nginx",
+                    "state": "active",
+                    "enabled": true
+                }
+            ]
+        }))
+        .build()
 }

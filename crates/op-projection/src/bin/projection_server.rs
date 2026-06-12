@@ -7,18 +7,14 @@ use anyhow::{Context, Result};
 use op_projection::*;
 use parking_lot::Mutex;
 use std::sync::Arc;
-use tracing::{info, warn, Level};
-
-use tracing_subscriber::FmtSubscriber;
-
-// builtin_plugin_schemas is used from op_state_store
-use op_state_store::builtin_plugin_schemas;
+use tracing::{info, warn};
+use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
 #[tokio::main]
 async fn main() -> Result<()> {
     // Initialize logging
     let subscriber = FmtSubscriber::builder()
-        .with_max_level(Level::DEBUG)
+        .with_env_filter(EnvFilter::from_default_env())
         .finish();
     tracing::subscriber::set_global_default(subscriber)?;
 
@@ -26,107 +22,6 @@ async fn main() -> Result<()> {
 
     // 1. Initialize Schema Engine
     let mut schema_engine = SchemaEngine::new();
-
-    // Register some initial schemas (in production, load from files).
-    // Built with the canonical PluginSchema builder — the plugin is the schema.
-    let ro_field = |field_type: FieldType, description: &str, constraints: Vec<Constraint>| {
-        FieldSchema {
-            field_type,
-            required: true,
-            description: description.to_string(),
-            default: None,
-            example: None,
-            constraints,
-            read_only: true,
-            read_only_when: None,
-        }
-    };
-
-    let memory_schema = PluginSchema::builder("system.memory")
-        .version("1.0.0")
-        .category("system")
-        .field(
-            "total_kb",
-            ro_field(
-                FieldType::Integer,
-                "Total system memory in KB",
-                vec![Constraint::Min { value: 0.0 }],
-            ),
-        )
-        .field(
-            "free_kb",
-            ro_field(
-                FieldType::Integer,
-                "Free system memory in KB",
-                vec![Constraint::Min { value: 0.0 }],
-            ),
-        )
-        .build();
-    schema_engine.register_schema(memory_schema)?;
-
-    let cpu_schema = PluginSchema::builder("system.cpu")
-        .version("1.0.0")
-        .category("system")
-        .field(
-            "cores",
-            ro_field(FieldType::Integer, "Number of CPU cores", vec![]),
-        )
-        .field("model", ro_field(FieldType::String, "CPU model name", vec![]))
-        .build();
-    schema_engine.register_schema(cpu_schema)?;
-
-    let network_schema = PluginSchema::builder("system.network")
-        .version("1.0.0")
-        .category("system")
-        .field(
-            "interfaces",
-            ro_field(
-                FieldType::Array(Box::new(FieldType::String)),
-                "List of network interfaces",
-                vec![],
-            ),
-        )
-        .build();
-    schema_engine.register_schema(network_schema)?;
-
-    let sled_schema = PluginSchema::builder("identity.sled")
-        .version("1.0.0")
-        .category("identity")
-        .field(
-            "mutation_index",
-            ro_field(FieldType::Integer, "Current mutation index", vec![]),
-        )
-        .field(
-            "hashed_footprint",
-            ro_field(FieldType::String, "Blake3 hashed footprint", vec![]),
-        )
-        .field(
-            "wireguard_pubkey",
-            ro_field(FieldType::String, "WireGuard public key", vec![]),
-        )
-        .build();
-    schema_engine.register_schema(sled_schema)?;
-
-    let process_schema = PluginSchema::builder("system.process")
-        .version("1.0.0")
-        .category("system")
-        .field("name", ro_field(FieldType::String, "Process name", vec![]))
-        .build();
-    schema_engine.register_schema(process_schema)?;
-
-    let filesystems_schema = PluginSchema::builder("system.filesystems")
-        .version("1.0.0")
-        .category("system")
-        .field(
-            "types",
-            ro_field(
-                FieldType::Array(Box::new(FieldType::String)),
-                "Filesystem types listed by /proc/filesystems",
-                vec![],
-            ),
-        )
-        .build();
-    schema_engine.register_schema(filesystems_schema)?;
 
     let plugin_reader = match SystemPluginReader::new().await {
         Ok(reader) => reader,
@@ -143,13 +38,6 @@ async fn main() -> Result<()> {
         register_schema_if_missing(&mut schema_engine, schema)?;
     }
 
-    // Register all builtin schemas from op-state-store so the shm catalog
-    // is the single source of truth for UI, blockchain, everything.
-    // These include web_ui, mcp, wireguard, incus, openflow, etc.
-    for schema in builtin_plugin_schemas() {
-        register_schema_if_missing(&mut schema_engine, schema)?;
-    }
-
     info!(
         "Registered initial schemas ({} total)",
         schema_engine.list_schemas().len()
@@ -163,13 +51,9 @@ async fn main() -> Result<()> {
         validator,
     )));
 
-    // 3. Initialize Source Readers
-    let procfs_reader = SystemProcfsReader::new();
-    let sled_reader = IdentitySledReader::new();
-    let _dbus_reader = SystemDbusReader::new();
-    let _grpc_reader = SystemGrpcReader::new();
-
-    info!("Initialized source readers");
+    // 3. Plugin projections are the only D-Bus projection source. System,
+    // procfs, identity, and network state must enter through state plugins.
+    info!("Initialized plugin projection source");
 
     // 4. Initialize JSON-stream Server
     let mut stream_server = ProjectionStreamServer::new();
@@ -183,16 +67,6 @@ async fn main() -> Result<()> {
         let mut initial_entities = Vec::new();
 
         info!("Performing initial scan...");
-
-        if procfs_reader.is_available() {
-            initial_entities.extend(procfs_reader.read_all()?);
-        }
-
-        if sled_reader.is_available() {
-            if let Ok(entities) = sled_reader.read_all() {
-                initial_entities.extend(entities);
-            }
-        }
 
         if plugin_reader.is_available() {
             match plugin_reader.read_all_async().await {
@@ -233,16 +107,6 @@ async fn main() -> Result<()> {
     loop {
         tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
         let mut refresh_entities = Vec::new();
-
-        // Periodic refresh from procfs
-        if let Ok(entities) = procfs_reader.read_all() {
-            refresh_entities.extend(entities);
-        }
-
-        // Periodic refresh from Sled
-        if let Ok(entities) = sled_reader.read_all() {
-            refresh_entities.extend(entities);
-        }
 
         if plugin_reader.is_available() {
             match plugin_reader.read_all_async().await {

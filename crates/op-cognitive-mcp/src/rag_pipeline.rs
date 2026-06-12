@@ -13,7 +13,7 @@ use qdrant_client::{
         Filter, PointStruct, ScoredPoint, SearchPointsBuilder, UpsertPointsBuilder,
         VectorParamsBuilder, VectorsConfig,
     },
-    Payload, Qdrant,
+    Payload, Qdrant, QdrantError,
 };
 use regex::Regex;
 use reqwest::Client;
@@ -334,6 +334,8 @@ impl RagPipeline {
         limit: u64,
         repo_filter: Option<&str>,
     ) -> Result<Vec<RagResult>> {
+        self.ensure_collection(collection).await?;
+
         let vector = self.embed_query(query_text).await?;
 
         let mut builder = SearchPointsBuilder::new(collection, vector, limit).with_payload(true);
@@ -360,6 +362,8 @@ impl RagPipeline {
         limit: u64,
         filter: &CodeFilter,
     ) -> Result<Vec<RagResult>> {
+        self.ensure_collection(collection).await?;
+
         let vector = self.embed_query(query_text).await?;
         let fetch = limit.saturating_mul(3).max(limit);
 
@@ -394,6 +398,8 @@ impl RagPipeline {
         limit: u64,
         filter: &CodeFilter,
     ) -> Result<Vec<RagResult>> {
+        self.ensure_collection(collection).await?;
+
         let vector = self.embed_query(query_text).await?;
         let fetch = limit.saturating_mul(4).clamp(limit, 64);
 
@@ -540,7 +546,8 @@ impl RagPipeline {
 
     async fn ensure_collection(&self, name: &str) -> Result<()> {
         if !self.qdrant.collection_exists(name).await? {
-            self.qdrant
+            match self
+                .qdrant
                 .create_collection(CreateCollectionBuilder::new(name).vectors_config(
                     VectorsConfig {
                         config: Some(VectorsConfigEnum::Params(
@@ -548,8 +555,17 @@ impl RagPipeline {
                         )),
                     },
                 ))
-                .await?;
-            info!(collection = %name, "Created Qdrant collection");
+                .await
+            {
+                Ok(_) => info!(collection = %name, "Created Qdrant collection"),
+                Err(err) if is_already_exists(&err) => {
+                    tracing::debug!(
+                        collection = %name,
+                        "Qdrant collection was created concurrently"
+                    );
+                }
+                Err(err) => return Err(err.into()),
+            }
         }
         Ok(())
     }
@@ -560,12 +576,13 @@ impl RagPipeline {
         batch: &mut Vec<PointStruct>,
         stats: &mut IngestStats,
     ) {
+        let count = batch.len();
         match self
             .qdrant
             .upsert_points(UpsertPointsBuilder::new(collection, std::mem::take(batch)))
             .await
         {
-            Ok(_) => stats.chunks_upserted += VOYAGE_BATCH.min(batch.capacity()),
+            Ok(_) => stats.chunks_upserted += count,
             Err(e) => {
                 warn!(error = %e, "Qdrant upsert failed");
                 stats.errors += 1;
@@ -623,6 +640,22 @@ impl RagPipeline {
             .next()
             .map(|d| d.embedding)
             .context("Voyage returned no embeddings")
+    }
+}
+
+pub fn default_collection_from_env() -> String {
+    std::env::var("COGNITIVE_MCP_RAG_COLLECTION")
+        .or_else(|_| std::env::var("COGNITIVE_MCP_REPOMIX_COLLECTION"))
+        .unwrap_or_else(|_| DEFAULT_COLLECTION.to_string())
+}
+
+fn is_already_exists(err: &QdrantError) -> bool {
+    match err {
+        QdrantError::ResponseError { status }
+        | QdrantError::ResourceExhaustedError { status, .. } => {
+            status.code() == tonic::Code::AlreadyExists
+        }
+        _ => false,
     }
 }
 

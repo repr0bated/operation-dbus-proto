@@ -39,7 +39,7 @@ async fn main() -> anyhow::Result<()> {
     let engine = Arc::new(SchemaEngine::new(chain, ovsdb, nonnet));
 
     info!(addr = %addr, "op-dbus starting");
-    run_grpc_server(addr, engine, None).await?;
+    run_grpc_server(addr, engine, None, None).await?;
 
     Ok(())
 }

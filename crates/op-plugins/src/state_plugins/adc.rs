@@ -4,6 +4,9 @@ use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateD
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
+use simd_json::json;
+use op_state_store::{FieldSchema, FieldType, PluginSchema};
+use super::plugin_schema_defs::{simple_schema};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdcState {
@@ -35,7 +38,7 @@ impl StatePlugin for AdcPlugin {
     }
 
     fn schema(&self) -> Option<op_state_store::PluginSchema> {
-        Some(super::plugin_schema_defs::adc_plugin_schema())
+        Some(adc_schema())
     }
 
     async fn query_current_state(&self) -> Result<Value> {
@@ -91,4 +94,25 @@ impl StatePlugin for AdcPlugin {
             atomic_operations: false,
         }
     }
+}
+
+pub(crate) fn adc_schema() -> PluginSchema {
+    simple_schema(
+        "adc",
+        "Application default credentials state",
+        &[],
+        vec![(
+            "configured",
+            FieldSchema {
+                field_type: FieldType::Boolean,
+                required: true,
+                description: "Whether ADC is configured".to_string(),
+                default: Some(json!(false)),
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        )],
+    )
 }

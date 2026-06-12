@@ -125,12 +125,10 @@ impl S6SystemctlPlugin {
         let mut units = Vec::new();
         for name in all_names {
             let is_active = running.contains(&name);
-            let enabled = tokio::fs::metadata(format!(
-                "/etc/s6-rc/bundle/default/contents.d/{}",
-                name
-            ))
-            .await
-            .is_ok();
+            let enabled =
+                tokio::fs::metadata(format!("/etc/s6-rc/bundle/default/contents.d/{}", name))
+                    .await
+                    .is_ok();
 
             // Get pid/uptime from s6-svstat if active
             let (main_pid, up_time) = if is_active {
@@ -177,11 +175,7 @@ impl S6SystemctlPlugin {
             .nth(1)
             .and_then(|s| s.split(')').next())
             .and_then(|p| p.trim().parse::<u32>().ok());
-        let uptime = text
-            .split_whitespace()
-            .rev()
-            .nth(1)
-            .map(|s| s.to_string());
+        let uptime = text.split_whitespace().rev().nth(1).map(|s| s.to_string());
         (pid, uptime)
     }
 }
@@ -300,11 +294,8 @@ impl StatePlugin for S6SystemctlPlugin {
         let mut actions = Vec::new();
 
         // Diff individual units
-        let current_map: std::collections::HashMap<_, _> = current_s
-            .units
-            .iter()
-            .map(|u| (u.id.clone(), u))
-            .collect();
+        let current_map: std::collections::HashMap<_, _> =
+            current_s.units.iter().map(|u| (u.id.clone(), u)).collect();
 
         for desired_unit in &desired_s.units {
             if let Some(current_unit) = current_map.get(&desired_unit.id) {
@@ -339,24 +330,27 @@ impl StatePlugin for S6SystemctlPlugin {
                 let unit: S6UnitStatus = simd_json::serde::from_owned_value(changes.clone())?;
 
                 let state_result = match unit.active_state.as_str() {
-                    "active" => tokio::process::Command::new("s6")
-                        .args(["process", "start", resource])
-                        .status()
-                        .await,
-                    "inactive" => tokio::process::Command::new("s6")
-                        .args(["process", "stop", resource])
-                        .status()
-                        .await,
+                    "active" => {
+                        tokio::process::Command::new("s6")
+                            .args(["process", "start", resource])
+                            .status()
+                            .await
+                    }
+                    "inactive" => {
+                        tokio::process::Command::new("s6")
+                            .args(["process", "stop", resource])
+                            .status()
+                            .await
+                    }
                     _ => {
                         continue;
                     }
                 };
 
                 match state_result {
-                    Ok(s) if s.success() => changes_applied.push(format!(
-                        "{} -> {}",
-                        resource, unit.active_state
-                    )),
+                    Ok(s) if s.success() => {
+                        changes_applied.push(format!("{} -> {}", resource, unit.active_state))
+                    }
                     Ok(s) => errors.push(format!(
                         "{}: s6 exited {}",
                         resource,

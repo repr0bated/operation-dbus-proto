@@ -9,9 +9,9 @@ use async_trait::async_trait;
 use log;
 use op_state::{ApplyResult, Checkpoint, PluginCapabilities, StateAction, StateDiff, StatePlugin};
 use serde::{Deserialize, Serialize};
-use simd_json::prelude::*;
-use simd_json::OwnedValue as Value;
+use simd_json::{json, prelude::*, OwnedValue as Value};
 use std::collections::HashMap;
+use op_state_store::{FieldSchema, FieldType, PluginSchema};
 // use std::net::Ipv4Addr; // not needed currently
 
 /// Network configuration schema
@@ -672,7 +672,7 @@ impl StatePlugin for NetStatePlugin {
     }
 
     fn schema(&self) -> Option<op_state_store::PluginSchema> {
-        Some(super::plugin_schema_defs::net_plugin_schema())
+        Some(net_schema())
     }
 
     fn is_available(&self) -> bool {
@@ -870,3 +870,89 @@ impl StatePlugin for NetStatePlugin {
 //         Self::new()
 //     }
 // }
+
+pub(crate) fn net_schema() -> PluginSchema {
+    let interface_fields = {
+        let mut fields = HashMap::new();
+        fields.insert(
+            "name".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "Interface name".to_string(),
+                default: None,
+                example: Some(json!("eth0")),
+                constraints: Vec::new(),
+                read_only: true,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "type".to_string(),
+            FieldSchema {
+                field_type: FieldType::Enum(vec![
+                    "ethernet".to_string(),
+                    "bridge".to_string(),
+                    "veth".to_string(),
+                    "vlan".to_string(),
+                    "bond".to_string(),
+                ]),
+                required: true,
+                description: "Interface type".to_string(),
+                default: Some(json!("ethernet")),
+                example: Some(json!("ethernet")),
+                constraints: Vec::new(),
+                read_only: true,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "state".to_string(),
+            FieldSchema {
+                field_type: FieldType::Enum(vec!["up".to_string(), "down".to_string()]),
+                required: false,
+                description: "Interface state".to_string(),
+                default: Some(json!("up")),
+                example: Some(json!("up")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "addresses".to_string(),
+            FieldSchema {
+                field_type: FieldType::Array(Box::new(FieldType::String)),
+                required: false,
+                description: "IP addresses".to_string(),
+                default: Some(json!([])),
+                example: Some(json!(["192.168.1.100/24"])),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields
+    };
+
+    PluginSchema::builder("net")
+        .version("1.0.0")
+        .description("Network interface management via rtnetlink")
+        .array_field(
+            "interfaces",
+            FieldType::Object(interface_fields),
+            true,
+            "List of network interfaces",
+        )
+        .example(json!({
+            "interfaces": [
+                {
+                    "name": "eth0",
+                    "type": "ethernet",
+                    "state": "up",
+                    "addresses": ["192.168.1.100/24"]
+                }
+            ]
+        }))
+        .build()
+}

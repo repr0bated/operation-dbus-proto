@@ -12,6 +12,7 @@ use op_state::plugtree::PlugTree;
 use op_state::{
     ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
 };
+use op_state_store::{Constraint, FieldSchema, FieldType, PluginSchema, ReadOnlyCondition};
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
@@ -947,6 +948,114 @@ impl StatePlugin for LxcPlugin {
     }
     fn version(&self) -> &str {
         "2.0.0" // Version bump for native API support
+    }
+
+    fn schema(&self) -> Option<PluginSchema> {
+        let mut container_fields = HashMap::new();
+        container_fields.insert(
+            "id".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "Container VMID".to_string(),
+                default: None,
+                example: Some(json!("100")),
+                constraints: vec![Constraint::Pattern {
+                    regex: r"^\d+$".to_string(),
+                }],
+                read_only: true,
+                read_only_when: None,
+            },
+        );
+        container_fields.insert(
+            "veth".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Veth interface name".to_string(),
+                default: None,
+                example: Some(json!("vi100")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: Some(ReadOnlyCondition {
+                    property: "running".to_string(),
+                    value: "true".to_string(),
+                }),
+            },
+        );
+        container_fields.insert(
+            "bridge".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "OVS bridge name".to_string(),
+                default: Some(json!("ovs-br0")),
+                example: Some(json!("ovs-br0")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        container_fields.insert(
+            "running".to_string(),
+            FieldSchema {
+                field_type: FieldType::Boolean,
+                required: false,
+                description: "Whether container is running".to_string(),
+                default: Some(json!(false)),
+                example: Some(json!(true)),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        container_fields.insert(
+            "properties".to_string(),
+            FieldSchema {
+                field_type: FieldType::Any,
+                required: false,
+                description: "Container properties (hostname, memory, cores, etc.)".to_string(),
+                default: Some(json!({})),
+                example: Some(json!({
+                    "hostname": "my-container",
+                    "memory": 512,
+                    "cores": 2,
+                    "template": "local:vztmpl/debian-13.tar.zst"
+                })),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+
+        Some(
+            PluginSchema::builder("lxc")
+                .version("2.0.0")
+                .description("LXC container management via native Proxmox API")
+                .array_field(
+                    "containers",
+                    FieldType::Object(container_fields),
+                    true,
+                    "List of containers",
+                )
+                .example(json!({
+                    "containers": [
+                        {
+                            "id": "100",
+                            "veth": "vi100",
+                            "bridge": "ovs-br0",
+                            "running": true,
+                            "properties": {
+                                "hostname": "wireguard-gateway",
+                                "memory": 512,
+                                "cores": 1,
+                                "network_type": "bridge"
+                            }
+                        }
+                    ]
+                }))
+                .build(),
+        )
     }
 
     fn is_available(&self) -> bool {

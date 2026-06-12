@@ -3,7 +3,10 @@ use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
+use simd_json::json;
 use simd_json::OwnedValue as Value;
+use op_state_store::{Constraint, FieldSchema, FieldType, PluginSchema};
+use super::plugin_schema_defs::{simple_schema};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProxyServerState {
@@ -36,7 +39,7 @@ impl StatePlugin for ProxyServerPlugin {
     }
 
     fn schema(&self) -> Option<op_state_store::PluginSchema> {
-        Some(super::plugin_schema_defs::proxy_server_plugin_schema())
+        Some(proxy_server_schema())
     }
 
     async fn query_current_state(&self) -> Result<Value> {
@@ -93,4 +96,43 @@ impl StatePlugin for ProxyServerPlugin {
             atomic_operations: false,
         }
     }
+}
+
+pub(crate) fn proxy_server_schema() -> PluginSchema {
+    simple_schema(
+        "proxy_server",
+        "Proxy server runtime config",
+        &["net"],
+        vec![
+            (
+                "enabled",
+                FieldSchema {
+                    field_type: FieldType::Boolean,
+                    required: true,
+                    description: "Enable proxy".to_string(),
+                    default: Some(json!(false)),
+                    example: None,
+                    constraints: Vec::new(),
+                    read_only: false,
+                    read_only_when: None,
+                },
+            ),
+            (
+                "port",
+                FieldSchema {
+                    field_type: FieldType::Integer,
+                    required: true,
+                    description: "Proxy port".to_string(),
+                    default: Some(json!(8080)),
+                    example: None,
+                    constraints: vec![
+                        Constraint::Min { value: 1.0 },
+                        Constraint::Max { value: 65535.0 },
+                    ],
+                    read_only: false,
+                    read_only_when: None,
+                },
+            ),
+        ],
+    )
 }

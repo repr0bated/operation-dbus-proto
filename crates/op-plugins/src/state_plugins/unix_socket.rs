@@ -4,12 +4,13 @@ use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateD
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
-use simd_json::OwnedValue as Value;
+use simd_json::{json, OwnedValue as Value};
 use std::collections::{HashMap, HashSet};
 use std::os::unix::net::UnixListener;
 use std::path::Path;
 use std::sync::Arc;
 use tracing::{info, warn};
+use op_state_store::{Constraint, FieldSchema, FieldType, PluginSchema};
 
 /// The single active-schema catalog in shared memory. Every plugin reads its
 /// own slice by name from this one file — there is no per-plugin shm file and
@@ -174,7 +175,7 @@ impl StatePlugin for UnixSocketPlugin {
     }
 
     fn schema(&self) -> Option<op_state_store::PluginSchema> {
-        Some(super::plugin_schema_defs::unix_socket_plugin_schema())
+        Some(unix_socket_schema())
     }
 
     async fn query_current_state(&self) -> Result<Value> {
@@ -308,4 +309,109 @@ mod tests {
         assert!(second.changes_applied.is_empty());
         assert_eq!(plugin.active.lock().len(), 2);
     }
+}
+
+pub(crate) fn unix_socket_schema() -> PluginSchema {
+    let mut socket_fields = HashMap::new();
+    socket_fields.insert(
+        "path".to_string(),
+        FieldSchema {
+            field_type: FieldType::String,
+            required: true,
+            description: "Filesystem path of the unix domain socket".to_string(),
+            default: None,
+            example: Some(json!("/run/qdrant.sock")),
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        },
+    );
+    socket_fields.insert(
+        "port".to_string(),
+        FieldSchema {
+            field_type: FieldType::Integer,
+            required: true,
+            description: "Local TCP port xray listens on and proxies into this socket".to_string(),
+            default: None,
+            example: Some(json!(6334)),
+            constraints: vec![
+                Constraint::Min { value: 1.0 },
+                Constraint::Max { value: 65535.0 },
+            ],
+            read_only: false,
+            read_only_when: None,
+        },
+    );
+    socket_fields.insert(
+        "protocol".to_string(),
+        FieldSchema {
+            field_type: FieldType::String,
+            required: false,
+            description: "Transport protocol carried over the socket (grpc, jsonrpc, …)"
+                .to_string(),
+            default: Some(json!("grpc")),
+            example: None,
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        },
+    );
+    socket_fields.insert(
+        "label".to_string(),
+        FieldSchema {
+            field_type: FieldType::String,
+            required: false,
+            description: "Human-readable service label used as the xray outbound tag".to_string(),
+            default: None,
+            example: Some(json!("qdrant-grpc")),
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        },
+    );
+
+    PluginSchema::builder("unix_socket")
+        .version("1.0.0")
+        .description("Unix domain socket endpoints proxied into xray outbounds")
+        .array_field(
+            "sockets",
+            FieldType::Object(socket_fields),
+            true,
+            "Declared unix socket endpoints",
+        )
+        .example(json!({
+            "sockets": [
+                {
+                    "path": "/run/qdrant.sock",
+                    "port": 6334,
+                    "protocol": "grpc",
+                    "label": "qdrant-grpc"
+                },
+                {
+                    "path": "/run/netmaker/api.sock",
+                    "port": 8081,
+                    "protocol": "http",
+                    "label": "netmaker-api"
+                },
+                {
+                    "path": "/run/netmaker/mq.sock",
+                    "port": 1883,
+                    "protocol": "mqtt",
+                    "label": "netmaker-mqtt"
+                },
+                {
+                    "path": "/run/netmaker/mqtts.sock",
+                    "port": 8883,
+                    "protocol": "mqtt",
+                    "label": "netmaker-mqtts"
+                },
+                {
+                    "path": "/run/netmaker/ui.sock",
+                    "port": 80,
+                    "protocol": "http",
+                    "label": "netmaker-ui"
+                }
+            ]
+        }))
+        .build()
 }
