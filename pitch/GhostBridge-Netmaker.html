@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GhostBridge × Netmaker</title>
+<style>
+  :root{
+    --bg:#0a0b10; --bg2:#0f1118; --card:#13161f; --line:#222634;
+    --ink:#e8ebf2; --mut:#9aa3b5; --dim:#6b7385;
+    --a1:#7c5cff; --a2:#22d3ee; --a3:#34d399; --warn:#f59e0b; --red:#f87171;
+    --grad:linear-gradient(120deg,#7c5cff 0%,#22d3ee 100%);
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:radial-gradient(1200px 800px at 80% -10%,#1a1430 0,transparent 60%),
+        radial-gradient(1000px 700px at -10% 20%,#06222b 0,transparent 55%),var(--bg);
+        color:var(--ink);font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;
+        -webkit-font-smoothing:antialiased}
+  .wrap{max-width:1040px;margin:0 auto;padding:0 24px}
+  section{padding:64px 0;border-bottom:1px solid var(--line)}
+  h1,h2,h3{line-height:1.15;letter-spacing:-.02em;margin:0 0 .5em}
+  h1{font-size:clamp(34px,6vw,62px);font-weight:800}
+  h2{font-size:clamp(24px,3.4vw,36px);font-weight:750}
+  h3{font-size:18px;font-weight:700}
+  p{color:var(--mut);margin:0 0 1em}
+  .grad{background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .eyebrow{font:600 12px/1 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.22em;
+           text-transform:uppercase;color:var(--a2);margin-bottom:18px}
+  .lead{font-size:clamp(18px,2.2vw,22px);color:var(--ink);max-width:760px}
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin:22px 0}
+  .chip{font:600 12px/1 ui-monospace,monospace;color:var(--mut);background:var(--card);
+        border:1px solid var(--line);border-radius:999px;padding:8px 13px}
+  .grid{display:grid;gap:16px}
+  .g2{grid-template-columns:repeat(2,1fr)} .g3{grid-template-columns:repeat(3,1fr)}
+  @media(max-width:760px){.g2,.g3{grid-template-columns:1fr}}
+  .card{background:linear-gradient(180deg,#141823,#10131c);border:1px solid var(--line);
+        border-radius:16px;padding:22px}
+  .card h3{display:flex;align-items:center;gap:10px}
+  .card p{margin:0;font-size:14.5px;color:var(--mut)}
+  .dot{width:9px;height:9px;border-radius:3px;background:var(--grad);flex:0 0 auto}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  .kv{color:var(--a2)}
+  .tag{display:inline-block;font:600 11px/1 ui-monospace,monospace;padding:5px 9px;border-radius:6px;
+       border:1px solid var(--line);color:var(--mut);background:#0d1018;margin:2px 4px 2px 0}
+  .hero-sub{color:var(--dim);font-size:14px;max-width:680px;margin-top:18px}
+  .pill{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line);
+        background:var(--card);border-radius:999px;padding:6px 14px;font-size:13px;color:var(--mut)}
+  .live{width:8px;height:8px;border-radius:50%;background:var(--a3);box-shadow:0 0 0 0 #34d39966;animation:pulse 2s infinite}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 #34d39966}70%{box-shadow:0 0 0 8px #34d39900}100%{box-shadow:0 0 0 0 #34d39900}}
+  ul.clean{list-style:none;padding:0;margin:0}
+  ul.clean li{position:relative;padding:6px 0 6px 26px;color:var(--mut);font-size:14.5px}
+  ul.clean li::before{content:"";position:absolute;left:0;top:13px;width:10px;height:10px;border-radius:3px;background:var(--grad)}
+  .quote{font-size:clamp(20px,2.6vw,28px);font-weight:650;color:var(--ink);line-height:1.35;letter-spacing:-.01em}
+  .muted{color:var(--dim);font-size:13px}
+  .svgwrap{background:#0c0e15;border:1px solid var(--line);border-radius:16px;padding:18px;overflow:hidden}
+  text{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  .footer{padding:40px 0 70px;color:var(--dim);font-size:13px}
+  a{color:var(--a2);text-decoration:none}
+</style>
+</head>
+<body>
+
+<!-- HERO -->
+<section style="border:none;padding-top:90px">
+  <div class="wrap">
+    <div class="eyebrow">GhostBridge × Netmaker</div>
+    <h1>Netmaker isn't a dependency in this project.<br><span class="grad">It's core code.</span></h1>
+    <p class="lead">A zero-trust, compliance-grade AI control plane — built in Rust, running on a Netmaker mesh that we treat as the spine: the transport <b style="color:var(--ink)">and</b> the root of identity.</p>
+    <div class="chips">
+      <span class="chip">Rust · 31-crate workspace</span>
+      <span class="chip">No-NIC hardened mesh</span>
+      <span class="chip">OSCAL-gated</span>
+      <span class="chip">Tamper-evident chain</span>
+      <span class="chip">Confrontable AI</span>
+    </div>
+    <p class="hero-sub">Honest note: this is the first time anyone outside the project will have seen it. We booked the trial call because it was the door — but what we really want is for a sharp engineer on your side to look closely and tell us, straight, what you think.</p>
+    <div style="margin-top:20px"><span class="pill"><span class="live"></span> cognitive-mcp verified live this session</span></div>
+  </div>
+</section>
+
+<!-- WHAT IT IS -->
+<section><div class="wrap">
+  <div class="eyebrow">The one paragraph</div>
+  <h2>A mesh you can <span class="grad">trust</span>, not just connect</h2>
+  <p class="lead" style="color:var(--mut)">Traffic flows through a hardened pipeline — decoy ingress, identity sled, Xray header injection, a per-hop interceptor — where every request is classified, routed, gated against machine-readable policy (OSCAL), and recorded into a tamper-evident hash-linked chain. An AI layer reasons over that verified history but <b style="color:var(--ink)">cannot execute anything itself</b>. Same codebase ships as a <b style="color:var(--ink)">privacy</b> edition or a <b style="color:var(--ink)">compliance</b> edition — one config flag decides which world you're in.</p>
+</div></section>
+
+<!-- GOVERNANCE STACK -->
+<section><div class="wrap">
+  <div class="eyebrow">How it works</div>
+  <h2>One governance pattern, every layer</h2>
+  <p>Make the wrong thing impossible first; gate what's left; record everything. The same idea at three scales — <span class="kv">Rust</span> says code can't be wrong, <span class="kv">schema</span> says state can't be invalid, <span class="kv">A.N.N.A.</span> says action can't be unauthorized — and the chain says it's all on the record.</p>
+  <div class="svgwrap" style="margin-top:14px">
+    <svg viewBox="0 0 900 470" width="100%" role="img" aria-label="Governance stack">
+      <defs>
+        <linearGradient id="g" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#7c5cff"/><stop offset="1" stop-color="#22d3ee"/></linearGradient>
+        <marker id="ar" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#5b6478"/></marker>
+      </defs>
+      <!-- rows -->
+      <g font-size="13" fill="#e8ebf2">
+        <!-- helper repeated boxes -->
+        <g>
+          <rect x="40" y="20" width="820" height="46" rx="9" fill="#0f1320" stroke="#2a3550"/>
+          <rect x="40" y="20" width="6" height="46" rx="3" fill="url(#g)"/>
+          <text x="64" y="40" fill="#22d3ee">RUST</text><text x="64" y="57" fill="#8b93a7" font-size="11">the compiler is the first enforcer — invalid code won't build</text>
+        </g>
+        <g>
+          <rect x="40" y="80" width="820" height="46" rx="9" fill="#0f1320" stroke="#2a3550"/>
+          <rect x="40" y="80" width="6" height="46" rx="3" fill="url(#g)"/>
+          <text x="64" y="100" fill="#22d3ee">SCHEMA</text><text x="64" y="117" fill="#8b93a7" font-size="11">invalid STATE is unrepresentable — the silent gate, before any rule runs</text>
+        </g>
+        <g>
+          <rect x="40" y="140" width="820" height="46" rx="9" fill="#0f1320" stroke="#2a3550"/>
+          <rect x="40" y="140" width="6" height="46" rx="3" fill="url(#g)"/>
+          <text x="64" y="160" fill="#22d3ee">TRAFFIC COP · Gemma + Xray</text><text x="64" y="177" fill="#8b93a7" font-size="11">Gemma classifies (what is this?) + Xray routes (where to?) — directs, never authorizes</text>
+        </g>
+        <g>
+          <rect x="40" y="200" width="820" height="46" rx="9" fill="#0f1320" stroke="#2a3550"/>
+          <rect x="40" y="200" width="6" height="46" rx="3" fill="url(#g)"/>
+          <text x="64" y="220" fill="#22d3ee">ZEROCLAW</text><text x="64" y="237" fill="#8b93a7" font-size="11">routes to the right MODEL by cost / reasoning / specialty — schema-native, can't route off-policy</text>
+        </g>
+        <g>
+          <rect x="40" y="260" width="820" height="46" rx="9" fill="#0f1320" stroke="#2a3550"/>
+          <rect x="40" y="260" width="6" height="46" rx="3" fill="url(#g)"/>
+          <text x="64" y="280" fill="#22d3ee">A.N.N.A.</text><text x="64" y="297" fill="#8b93a7" font-size="11">OSCAL-gated approval at EVERY hop (HMAC-stamped identity header) — the higher-up that says yes/no</text>
+        </g>
+        <g>
+          <rect x="40" y="320" width="820" height="46" rx="9" fill="#0f1320" stroke="#2a3550"/>
+          <rect x="40" y="320" width="6" height="46" rx="3" fill="url(#g)"/>
+          <text x="64" y="340" fill="#22d3ee">CHAIN</text><text x="64" y="357" fill="#8b93a7" font-size="11">hash-linked, tamper-evident evidence — every action becomes a block</text>
+        </g>
+        <g>
+          <rect x="40" y="380" width="820" height="46" rx="9" fill="#0f1320" stroke="#2a3550"/>
+          <rect x="40" y="380" width="6" height="46" rx="3" fill="url(#g)"/>
+          <text x="64" y="400" fill="#22d3ee">THE LOOP</text><text x="64" y="417" fill="#8b93a7" font-size="11">AI reassembles chain → Qdrant (semantic) + Cozo (realtime graph) → reasons → new blocks</text>
+        </g>
+      </g>
+      <!-- arrows down right side -->
+      <g stroke="#5b6478" stroke-width="1.4">
+        <line x1="878" y1="66" x2="878" y2="80" marker-end="url(#ar)"/>
+        <line x1="878" y1="126" x2="878" y2="140" marker-end="url(#ar)"/>
+        <line x1="878" y1="186" x2="878" y2="200" marker-end="url(#ar)"/>
+        <line x1="878" y1="246" x2="878" y2="260" marker-end="url(#ar)"/>
+        <line x1="878" y1="306" x2="878" y2="320" marker-end="url(#ar)"/>
+        <line x1="878" y1="366" x2="878" y2="380" marker-end="url(#ar)"/>
+      </g>
+    </svg>
+  </div>
+</div></section>
+
+<!-- IDENTITY & MUTATION VECTORS -->
+<section><div class="wrap">
+  <div class="eyebrow">What's on every block</div>
+  <h2>Identity vector × Mutation vector</h2>
+  <p>Two structured vectors ride every entry in the chain. Together they make <span class="kv mono">"who changed what, when, on whose authority"</span> a provable query — and they're exactly what A.N.N.A. gates on.</p>
+  <div class="grid g2" style="margin-top:14px">
+    <div class="card" style="border-color:#1f3a31">
+      <h3><span class="dot" style="background:var(--a3)"></span>Identity vector — the WHO</h3>
+      <p><span class="mono kv">session_id = Argon2(PSK, salt=WG_pubkey)</span><br><br>Derived from the Netmaker WireGuard key. Stable, deterministic, unforgeable. Privacy mode: the key alone (anonymous, consistent). Compliance mode: resolves to a verified user.</p>
+    </div>
+    <div class="card" style="border-color:#26384a">
+      <h3><span class="dot" style="background:var(--a2)"></span>Mutation vector — the WHAT-CHANGED</h3>
+      <p>The <span class="mono kv">mut</span> class of the subid taxonomy: <i>what kind</i> of change, <i>on what resource</i>, <i>under what OSCAL authority</i>. Reads (<span class="mono">obs</span>) and changes (<span class="mono">mut</span>) are distinct classes — so you can prove nothing was altered, not just that it was logged.</p>
+    </div>
+  </div>
+  <div class="svgwrap" style="margin-top:16px">
+    <svg viewBox="0 0 900 170" width="100%" role="img" aria-label="Identity and mutation vectors combine into a block">
+      <defs><marker id="ar4" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#5b6478"/></marker>
+        <linearGradient id="g4" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#7c5cff"/><stop offset="1" stop-color="#22d3ee"/></linearGradient></defs>
+      <rect x="40" y="40" width="210" height="40" rx="9" fill="#0f1320" stroke="#2a5a4a"/><text x="145" y="65" fill="#34d399" font-size="12" text-anchor="middle" font-family="ui-monospace">identity_vector (WHO)</text>
+      <rect x="40" y="95" width="210" height="40" rx="9" fill="#0f1320" stroke="#26384a"/><text x="145" y="120" fill="#22d3ee" font-size="12" text-anchor="middle" font-family="ui-monospace">mutation_vector (WHAT)</text>
+      <rect x="380" y="55" width="170" height="64" rx="12" fill="#11151f" stroke="#3a3566"/>
+      <text x="465" y="82" fill="#e8ebf2" font-size="13" text-anchor="middle">A.N.N.A.</text>
+      <text x="465" y="101" fill="#8b93a7" font-size="10.5" text-anchor="middle">role satisfies authority?</text>
+      <rect x="690" y="48" width="180" height="78" rx="12" fill="#0c0e15" stroke="#2a3550"/>
+      <text x="780" y="72" fill="#22d3ee" font-size="12" text-anchor="middle" font-family="ui-monospace">BLOCK</text>
+      <text x="780" y="92" fill="#8b93a7" font-size="9.5" text-anchor="middle" font-family="ui-monospace">id · mut · payload#</text>
+      <text x="780" y="108" fill="#8b93a7" font-size="9.5" text-anchor="middle" font-family="ui-monospace">timestamp · prev#</text>
+      <g stroke="#5b6478" stroke-width="1.4">
+        <line x1="250" y1="60" x2="378" y2="78" marker-end="url(#ar4)"/>
+        <line x1="250" y1="115" x2="378" y2="96" marker-end="url(#ar4)"/>
+        <line x1="550" y1="87" x2="688" y2="87" marker-end="url(#ar4)"/>
+      </g>
+    </svg>
+  </div>
+  <p class="muted" style="margin-top:12px">Cross-examination becomes exact: <span class="mono">identity #abc performed mut <b style="color:var(--ink)">config.write</b> on <b style="color:var(--ink)">netmaker.peer</b> at T, authorized by OSCAL <b style="color:var(--ink)">authorizing-official</b>.</span> That's the receipt.</p>
+</div></section>
+
+<!-- VOYAGE / SEMANTIC VECTORS -->
+<section><div class="wrap">
+  <div class="eyebrow">The semantic memory</div>
+  <h2>Voyage vectors → <span class="grad">searchable meaning</span></h2>
+  <p>Identity & mutation vectors are <i>structured provenance</i>. <b style="color:var(--ink)">Voyage vectors are meaning.</b> Every block, document, and transcript is embedded by <span class="mono kv">voyage-code-3</span> into <span class="mono kv">Qdrant</span> — so the chain isn't just verifiable, it's <i>searchable by similarity</i>. This is the bottom pane when you cross-examine the agent, and the raw material the loop reasons over.</p>
+  <div class="grid g3" style="margin-top:14px">
+    <div class="card"><h3><span class="dot"></span>Embed</h3><p><span class="mono">voyage-code-3</span> turns each chunk of the chain (actions, configs, docs, transcripts) into a high-dimensional vector. Code-aware, so it understands infra, not just prose.</p></div>
+    <div class="card"><h3><span class="dot"></span>Store &amp; search</h3><p>Vectors land in <span class="mono">Qdrant</span>, keyed <span class="mono">notebook:source:chunk</span>. Ask <i>"show me peers like the one that misbehaved"</i> — similarity, not keywords.</p></div>
+    <div class="card"><h3><span class="dot"></span>Rebuildable</h3><p>Qdrant is a <b style="color:var(--ink)">derived projection</b> of the chain. Lose it in a disk casualty → re-embed from the canonical blocks. Trust lives in the chain; retrieval lives here.</p></div>
+  </div>
+  <div class="svgwrap" style="margin-top:16px">
+    <svg viewBox="0 0 900 150" width="100%" role="img" aria-label="Voyage embedding pipeline into Qdrant feeding the loop">
+      <defs><marker id="ar5" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#5b6478"/></marker></defs>
+      <g font-size="12" text-anchor="middle">
+        <rect x="30" y="52" width="150" height="46" rx="10" fill="#0c0e15" stroke="#2a3550"/><text x="105" y="73" fill="#e8ebf2">chain blocks</text><text x="105" y="89" fill="#6b7385" font-size="10">+ docs · transcripts</text>
+        <rect x="270" y="52" width="160" height="46" rx="10" fill="#11151f" stroke="#3a3566"/><text x="350" y="73" fill="#22d3ee">voyage-code-3</text><text x="350" y="89" fill="#8b93a7" font-size="10">embed</text>
+        <rect x="520" y="52" width="150" height="46" rx="10" fill="#0f1320" stroke="#2a5a4a"/><text x="595" y="73" fill="#34d399">Qdrant</text><text x="595" y="89" fill="#8b93a7" font-size="10">semantic vectors</text>
+        <rect x="760" y="52" width="120" height="46" rx="10" fill="#0c0e15" stroke="#2a3550"/><text x="820" y="73" fill="#e8ebf2">the loop</text><text x="820" y="89" fill="#6b7385" font-size="10">+ cross-exam</text>
+      </g>
+      <g stroke="#5b6478" stroke-width="1.4">
+        <line x1="180" y1="75" x2="268" y2="75" marker-end="url(#ar5)"/>
+        <line x1="430" y1="75" x2="518" y2="75" marker-end="url(#ar5)"/>
+        <line x1="670" y1="75" x2="758" y2="75" marker-end="url(#ar5)"/>
+      </g>
+    </svg>
+  </div>
+  <p class="muted" style="margin-top:12px">Two vector families, two jobs: <b style="color:var(--a2)">Voyage</b> = "find things <i>like</i> this" (semantic). <b style="color:var(--a3)">Identity / mutation</b> = "who did <i>exactly</i> this, and was it allowed" (provenance). The AI uses both — meaning to reason, provenance to prove.</p>
+</div></section>
+
+<!-- FOUR DIFFERENTIATORS -->
+<section><div class="wrap">
+  <div class="eyebrow">Why it's different</div>
+  <h2>Four things nobody else can credibly claim</h2>
+  <div class="grid g2" style="margin-top:14px">
+    <div class="card"><h3><span class="dot"></span>A brain with no hands</h3><p>The AI is a <b style="color:var(--ink)">delegator, recommender, fixer</b> — and that's the ceiling. <b style="color:var(--ink)">No internet, no execution rights, no execution control.</b> It proposes into a schema-shaped mold; a separate, OSCAL-gated, chained layer disposes. A compromised model can't do damage — worst case is a rejected suggestion.</p></div>
+    <div class="card"><h3><span class="dot"></span>You can cross-examine it</h3><p>Every action is a chained, searchable block. Confront the agent in real time — <span class="mono kv">"why did you do this?"</span> — and it answers with cryptographic receipts pulled live by semantic search. If the model confabulates, the evidence pane contradicts it. <b style="color:var(--ink)">An AI you can put on the stand.</b></p></div>
+    <div class="card"><h3><span class="dot"></span>The chain is the truth</h3><p>The hash-linked chain is canonical and tamper-evident. Qdrant + Cozo are <b style="color:var(--ink)">AI-rebuilt projections</b> of it — lose them, re-derive them. It's a blockchain <i>by structure</i>, kept honest by <b style="color:var(--ink)">anchoring</b>, not consensus — the right call for a single-operator compliance ledger.</p></div>
+    <div class="card"><h3><span class="dot"></span>Schema-native, all the way down</h3><p>Components were <b style="color:var(--ink)">chosen because they're schema-based from the ground up</b> (e.g. zeroclaw), and the code is safe by construction (Rust — memory-safe, race-free, single static binaries). Governance holds at every layer because nothing was bolted on.</p></div>
+  </div>
+</div></section>
+
+<!-- THE DIAL -->
+<section><div class="wrap">
+  <div class="eyebrow">One dial</div>
+  <h2>As <span style="color:var(--a3)">Snowden</span> as you want — or as <span style="color:var(--warn)">Big&nbsp;Brother</span> as you want</h2>
+  <p>Same mesh, same chain, same confrontable AI. <b style="color:var(--ink)">Only the identity-linkage layer changes</b>, and it's a deploy-time config — not a rewrite, not a hidden switch.</p>
+  <div class="svgwrap" style="margin-top:14px">
+    <svg viewBox="0 0 900 210" width="100%" role="img" aria-label="Privacy to compliance dial">
+      <defs><linearGradient id="dial" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#34d399"/><stop offset="1" stop-color="#f59e0b"/></linearGradient></defs>
+      <rect x="60" y="92" width="780" height="12" rx="6" fill="url(#dial)"/>
+      <circle cx="60" cy="98" r="11" fill="#0a0b10" stroke="#34d399" stroke-width="3"/>
+      <circle cx="840" cy="98" r="11" fill="#0a0b10" stroke="#f59e0b" stroke-width="3"/>
+      <text x="60" y="60" fill="#34d399" font-size="15" text-anchor="start">PRIVACY EDITION</text>
+      <text x="60" y="140" fill="#8b93a7" font-size="11.5">key IS identity</text>
+      <text x="60" y="158" fill="#8b93a7" font-size="11.5">no PII · no email</text>
+      <text x="60" y="176" fill="#8b93a7" font-size="11.5">de-anon cryptographically impossible</text>
+      <text x="840" y="60" fill="#f59e0b" font-size="15" text-anchor="end">COMPLIANCE EDITION</text>
+      <text x="840" y="140" fill="#8b93a7" font-size="11.5" text-anchor="end">identity ↔ verified user</text>
+      <text x="840" y="158" fill="#8b93a7" font-size="11.5" text-anchor="end">vault escrow + user graph</text>
+      <text x="840" y="176" fill="#8b93a7" font-size="11.5" text-anchor="end">de-anon only on signed OSCAL authority</text>
+    </svg>
+  </div>
+  <p class="muted" style="margin-top:14px">Even in full-oversight mode, de-anonymization isn't a backdoor — it requires a signed OSCAL <span class="mono">authorizing-official</span> action that <b style="color:var(--ink)">itself becomes a chained, confrontable block.</b> You can cross-examine the watchers.</p>
+</div></section>
+
+<!-- NO-NIC HARDENING -->
+<section><div class="wrap">
+  <div class="eyebrow">For Netmaker specifically</div>
+  <h2>A control server with <span class="grad">no network interface</span></h2>
+  <p>The <span class="mono">netmaker</span>, <span class="mono">netmaker-mq</span> (Mosquitto) and <span class="mono">netmaker-ui</span> containers run loopback-only. Exposed to the host as unix sockets via Incus proxy devices; <span class="mono">wg-xray</span> + Xray terminate TLS and route by SNI to those sockets. <b style="color:var(--ink)">A port scan of the Netmaker server returns nothing.</b></p>
+  <div class="svgwrap" style="margin-top:14px">
+    <svg viewBox="0 0 900 250" width="100%" role="img" aria-label="No-NIC hardening">
+      <defs><marker id="ar2" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#5b6478"/></marker></defs>
+      <rect x="40" y="40" width="200" height="160" rx="12" fill="#0f1320" stroke="#2a3550"/>
+      <text x="140" y="32" fill="#9aa3b5" font-size="12" text-anchor="middle">wg-xray (TLS + SNI)</text>
+      <text x="140" y="125" fill="#22d3ee" font-size="13" text-anchor="middle">Xray</text>
+      <!-- sockets -->
+      <rect x="360" y="30" width="180" height="44" rx="9" fill="#0c0e15" stroke="#2a3550"/><text x="450" y="57" fill="#8b93a7" font-size="11" text-anchor="middle">/run/netmaker/api.sock</text>
+      <rect x="360" y="86" width="180" height="44" rx="9" fill="#0c0e15" stroke="#2a3550"/><text x="450" y="113" fill="#8b93a7" font-size="11" text-anchor="middle">mq.sock · mqtts.sock</text>
+      <rect x="360" y="142" width="180" height="44" rx="9" fill="#0c0e15" stroke="#2a3550"/><text x="450" y="169" fill="#8b93a7" font-size="11" text-anchor="middle">ui.sock</text>
+      <!-- no-nic containers -->
+      <rect x="660" y="30" width="200" height="44" rx="9" fill="#0f1320" stroke="#34d39955"/><text x="760" y="57" fill="#e8ebf2" font-size="12" text-anchor="middle">netmaker (no NIC)</text>
+      <rect x="660" y="86" width="200" height="44" rx="9" fill="#0f1320" stroke="#34d39955"/><text x="760" y="113" fill="#e8ebf2" font-size="12" text-anchor="middle">netmaker-mq (no NIC)</text>
+      <rect x="660" y="142" width="200" height="44" rx="9" fill="#0f1320" stroke="#34d39955"/><text x="760" y="169" fill="#e8ebf2" font-size="12" text-anchor="middle">netmaker-ui (no NIC)</text>
+      <g stroke="#5b6478" stroke-width="1.4">
+        <line x1="240" y1="120" x2="358" y2="52" marker-end="url(#ar2)"/>
+        <line x1="240" y1="120" x2="358" y2="108" marker-end="url(#ar2)"/>
+        <line x1="240" y1="120" x2="358" y2="164" marker-end="url(#ar2)"/>
+        <line x1="540" y1="52" x2="658" y2="52" marker-end="url(#ar2)"/>
+        <line x1="540" y1="108" x2="658" y2="108" marker-end="url(#ar2)"/>
+        <line x1="540" y1="164" x2="658" y2="164" marker-end="url(#ar2)"/>
+      </g>
+      <text x="450" y="225" fill="#6b7385" font-size="11" text-anchor="middle">loopback-only services · exposed as unix sockets · zero open ports</text>
+    </svg>
+  </div>
+</div></section>
+
+<!-- USE CASES -->
+<section><div class="wrap">
+  <div class="eyebrow">Use cases</div>
+  <h2>Three editions, one engine</h2>
+
+  <div class="grid g3" style="margin-top:18px">
+    <!-- PRIVACY -->
+    <div class="card" style="border-color:#1f3a31">
+      <h3><span class="dot" style="background:var(--a3)"></span>Privacy</h3>
+      <p style="margin-bottom:12px">Where the key <i>is</i> the identity and de-anonymization is impossible by design.</p>
+      <ul class="clean">
+        <li>Journalist / source networks — no PII to subpoena</li>
+        <li>Activist & at-risk community meshes</li>
+        <li>Privacy-first SaaS where you <i>can't</i> hand over what you never linked</li>
+        <li>Confidential M&A / deal rooms</li>
+        <li>Personal sovereign infrastructure</li>
+      </ul>
+    </div>
+    <!-- EU COMPLIANCE -->
+    <div class="card" style="border-color:#2a2740">
+      <h3><span class="dot" style="background:var(--a1)"></span>EU Compliance</h3>
+      <p style="margin-bottom:12px">OSCAL-mapped, attributable, auditor-grade — with privacy still defensible.</p>
+      <ul class="clean">
+        <li>GDPR — lawful basis + data-minimization enforced at the schema, not promised</li>
+        <li>NIS2 — per-hop enforcement + tamper-evident incident evidence</li>
+        <li>DORA — ICT risk & audit trail for financial entities</li>
+        <li>EU AI Act — a cross-examinable, no-execution AI with full decision provenance</li>
+        <li>Data residency — sovereign mesh, no silent egress</li>
+      </ul>
+    </div>
+    <!-- ENTERPRISE DROP-IN -->
+    <div class="card" style="border-color:#26384a">
+      <h3><span class="dot" style="background:var(--a2)"></span>Enterprise drop-in</h3>
+      <p style="margin-bottom:12px">Point it at what you already run. It <b style="color:var(--ink)">introspects and generates a schema-backed deployment</b> — no greenfield.</p>
+      <ul class="clean">
+        <li><b style="color:var(--ink)">Active Directory</b> → groups become OSCAL roles</li>
+        <li><b style="color:var(--ink)">Databases</b> → schemas introspected into governed state</li>
+        <li><b style="color:var(--ink)">Slack</b> → workspaces/channels mapped as principals & routes</li>
+        <li><b style="color:var(--ink)">CMS</b> → content + access model wrapped under the chain</li>
+        <li>Result: an existing org, now zero-trust + audited, in days not quarters</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- introspection graphic -->
+  <div class="svgwrap" style="margin-top:18px">
+    <svg viewBox="0 0 900 200" width="100%" role="img" aria-label="Enterprise introspection to schema-backed deployment">
+      <defs><marker id="ar3" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#5b6478"/></marker>
+        <linearGradient id="g3" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#7c5cff"/><stop offset="1" stop-color="#22d3ee"/></linearGradient></defs>
+      <g font-size="11.5" text-anchor="middle">
+        <rect x="30" y="24" width="150" height="34" rx="8" fill="#0f1320" stroke="#2a3550"/><text x="105" y="46" fill="#e8ebf2">Active Directory</text>
+        <rect x="30" y="66" width="150" height="34" rx="8" fill="#0f1320" stroke="#2a3550"/><text x="105" y="88" fill="#e8ebf2">Databases</text>
+        <rect x="30" y="108" width="150" height="34" rx="8" fill="#0f1320" stroke="#2a3550"/><text x="105" y="130" fill="#e8ebf2">Slack</text>
+        <rect x="30" y="150" width="150" height="34" rx="8" fill="#0f1320" stroke="#2a3550"/><text x="105" y="172" fill="#e8ebf2">CMS</text>
+
+        <rect x="360" y="78" width="180" height="56" rx="12" fill="#11151f" stroke="#3a3566"/>
+        <text x="450" y="102" fill="#22d3ee" font-size="13">INTROSPECT</text>
+        <text x="450" y="120" fill="#8b93a7">schema generation</text>
+
+        <rect x="700" y="78" width="170" height="56" rx="12" fill="#0f1320" stroke="#2a5a4a"/>
+        <text x="785" y="102" fill="#34d399" font-size="13">SCHEMA-BACKED</text>
+        <text x="785" y="120" fill="#8b93a7">deployment</text>
+      </g>
+      <g stroke="#5b6478" stroke-width="1.4">
+        <line x1="182" y1="41" x2="356" y2="96" marker-end="url(#ar3)"/>
+        <line x1="182" y1="83" x2="356" y2="103" marker-end="url(#ar3)"/>
+        <line x1="182" y1="125" x2="356" y2="110" marker-end="url(#ar3)"/>
+        <line x1="182" y1="167" x2="356" y2="117" marker-end="url(#ar3)"/>
+        <line x1="540" y1="106" x2="696" y2="106" marker-end="url(#ar3)"/>
+      </g>
+    </svg>
+  </div>
+  <p class="muted" style="margin-top:12px">The same schema-driven engine that enforces also <i>renders</i> — so introspecting your stack produces governance, a control panel, and audit, from one source.</p>
+</div></section>
+
+<!-- WHY NETMAKER IS CORE -->
+<section><div class="wrap">
+  <div class="eyebrow">Why Netmaker is core</div>
+  <h2>You're already load-bearing</h2>
+  <div class="grid g3" style="margin-top:14px">
+    <div class="card"><h3><span class="dot"></span>First-class state plugin</h3><p>Managed by the same engine that runs the whole platform — not wrapped at the edge.</p></div>
+    <div class="card"><h3><span class="dot"></span>Peers <i>are</i> the identity</h3><p><span class="mono kv">session_id = Argon2(PSK, salt=WG_pubkey)</span> — rooted in the WireGuard key you already manage. Remove Netmaker and identity has no root. It's <b style="color:var(--ink)">link #0 of the chain.</b></p></div>
+    <div class="card"><h3><span class="dot"></span>We expand your surface</h3><p>Every GhostBridge deployment is a hardened Netmaker deployment, sold into rooms Netmaker alone doesn't reach yet.</p></div>
+  </div>
+</div></section>
+
+<!-- THE ASK -->
+<section><div class="wrap">
+  <div class="eyebrow">What we're actually after</div>
+  <h2>Be the first humans to <span class="grad">see this</span></h2>
+  <p class="lead" style="color:var(--mut)">No commercial ask. This is the first outside set of eyes on the project, and your team is the right first audience — because you built the layer it all stands on.</p>
+  <div class="grid g3" style="margin-top:18px">
+    <div class="card"><h3>01 — React, honestly</h3><p>Poke at the hardening, the identity model, the chain, the brain-with-no-hands. We want the hard questions, not a thumbs-up.</p></div>
+    <div class="card"><h3>02 — Tell us where we're wrong</h3><p>If we're using Netmaker in a way you'd discourage, or missing a capability that'd make this cleaner — that's gold.</p></div>
+    <div class="card"><h3>03 — One practical itch</h3><p>We're working through <b style="color:var(--ink)">multiple egress</b>. If it's a natural part of the conversation, great. If not, no pressure.</p></div>
+  </div>
+</div></section>
+
+<!-- CLOSE -->
+<section style="border:none">
+  <div class="wrap">
+    <p class="quote">Netmaker connects the machines. GhostBridge proves <span class="grad">who they are</span> and <span class="grad">that policy was enforced</span> — every hop, auditor-grade, in an AI loop you can cross-examine.</p>
+    <p class="lead" style="margin-top:20px;color:var(--mut)">You're already in the core of what we built. We'd just like you to be the first to <i>see</i> it — and tell us, straight, what you think.</p>
+  </div>
+</section>
+
+<div class="wrap footer">
+  GhostBridge — Operation D-Bus · built in Rust on a Netmaker mesh · pre-meeting brief, confidential.
+</div>
+
+</body>
+</html>
