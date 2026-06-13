@@ -13,7 +13,7 @@ tell us what you really think.*
 - We've built a **zero-trust, compliance-grade AI control plane** — in Rust — that runs **on a Netmaker mesh** and treats it as the spine: the transport **and** the root of identity.
 - We deploy your control server in a pattern most of your customers don't: **no network interface at all** — loopback + unix sockets, fronted by Xray. A port scan returns nothing.
 - We already run Netmaker in production. We're not here for a standard enterprise eval — we're here because **you're already load-bearing in something we think is genuinely novel**, and you should see it.
-- **What we want from this meeting:** a real first reaction from someone technical. Pull on any thread below — we'd rather be challenged than flattered. (The one practical thing we're feeling out along the way is **multiple egress**, but that's not the point of the conversation.)
+- **Why we're sending this:** not an ask. We already run this in production on what's available today — we just figured the people who built the layer it all stands on should be the first to see what got built on top of it.
 
 ---
 
@@ -92,12 +92,9 @@ Your control server runs with **no NIC**:
 
 Plainly: **we want a knowledgeable human to look closely and react.** This is the first outside set of eyes on the project, and your team is the right first audience — because you built the layer it all stands on.
 
-So in the meeting:
-1. **Tell us what you really think** — poke at the hardening pattern, the identity model, the chain, the brain-with-no-hands. We want the hard questions, not a thumbs-up.
-2. **Tell us where we're wrong about Netmaker** — if we're using something in a way you'd discourage, or missing a capability that'd make this cleaner, that's gold.
-3. **The one practical itch:** we're working through **multiple egress** — if that's a natural part of the conversation, great; if not, no pressure.
+We're not asking for anything. We already run this in production on what's available today. We just figured the people who built the layer it all stands on should be the first to see what got built on top of it.
 
-No commercial ask. Just: be the first humans to see this, and tell us if it's as interesting as we think it is.
+So in the meeting: if any of it is interesting, we'll happily go deeper. If not — no harm, no homework. Be the first humans to see this, and tell us if it's as interesting as we think it is.
 
 ---
 
@@ -115,4 +112,4 @@ No commercial ask. Just: be the first humans to see this, and tell us if it's as
 - **"Is it really a blockchain if it's not distributed?"** It's a blockchain *by structure* (hashed, chained blocks). Distribution buys trustless multi-party consensus; we don't need that — we get operator-tamper-resistance by **anchoring** the chain head externally. Correct tool for a single-operator compliance ledger.
 - **"What stops the AI going rogue?"** It has no hands — no internet, no execution rights. It recommends; the governed layer executes. Hallucination has no reach.
 - **"Why Rust / why these components?"** Selection principle: **schema-native from the ground up** (e.g. zeroclaw) and **safe by construction** (Rust — memory-safe, race-free, single static binaries). The governance holds at every layer because nothing was bolted on.
-- **"What do you actually want from us?"** An honest technical reaction — you're the first outside eyes on this. Multiple egress is the one practical thing we're working through, but the reason we're excited is that you built the layer this all stands on.
+- **"What do you actually want from us?"** Nothing, really — this is a heads-up, not a request. We already run it on what's available. We just wanted the people who built the layer it stands on to be the first to see it.
