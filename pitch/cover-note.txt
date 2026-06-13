@@ -1,0 +1,8 @@
+Hi [name] — ahead of our call I wanted to give you a heads-up on how I'm actually
+using Netmaker. I put together a quick overview (attached). No need to read it
+closely — happy to walk through anything and answer questions in the meeting.
+
+Fair warning: it's a bit more involved than a typical setup — Netmaker ends up
+pretty central to what I've built. Looking forward to it.
+
+[you]
