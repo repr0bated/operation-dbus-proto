@@ -859,17 +859,14 @@ impl SimdCryptoEngine {
     pub fn derive_stable_psk(&self, peer_key: &[u8; 32]) -> Vec<[u8; 32]> {
         let mut results = Vec::with_capacity(1);
 
-        // Use a fixed salt for consistency (stable PSK)
-        let salt = b"WG-STABLE-PSK-2024";
+        // Use the WG public key as the unique salt, and the stable string as input
+        let salt = peer_key;
 
-        let mut input = Vec::with_capacity(39);
-        input.extend_from_slice(b"WG-PSK-");
-        input.extend_from_slice(peer_key);
-        // No timestamp - PSK should be stable
+        let input = b"WG-STABLE-PSK-2024";
 
         let argon2 = Argon2::default();
         let mut psk = [0u8; 32];
-        if argon2.hash_password_into(&input, salt, &mut psk).is_ok() {
+        if argon2.hash_password_into(input, salt, &mut psk).is_ok() {
             results.push(psk);
         }
 

@@ -39,6 +39,7 @@ members = [
     "crates/op-assistant-grpc",
     "crates/op-s6-systemctl",
     "crates/op-xray-daemon",
+    "crates/op-mcp-shim",
 ]
 
 [workspace.package]
@@ -142,6 +143,7 @@ prost = "0.13"
 prost-types = "0.13"
 tonic-build = "0.12"
 tonic-reflection = "0.12"
+prost-reflect = { version = "0.14", features = ["serde"] }
 tonic-health = "0.12"
 tonic-web = "0.12"
 

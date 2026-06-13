@@ -1,0 +1,46 @@
+{
+  "_comment": "Designated source notebooks for the knowledge pipeline. Feeds two sinks: semantic (Voyage->Qdrant) and learning graph (nodes/edges). Legal/personal notebooks are intentionally excluded.",
+  "updated": "2026-06-13",
+  "master_notebook": "01b00e9c-033a-4bc9-965f-3257360ff4a8",
+  "sinks": {
+    "semantic": {
+      "embedder": "voyage-code-3",
+      "store": "qdrant",
+      "collection": "opdbus_knowledge",
+      "key": "notebook_id:source_id:chunk_idx",
+      "update": "in-place upsert"
+    },
+    "graph": {
+      "store": "tbd (qdrant payload edges | dedicated graph)",
+      "node_types": ["oscal_role", "plugin", "subid", "component", "task", "concept", "source_doc"],
+      "edge_types": ["is_a", "gates", "reads", "routes_to", "projects", "depends_on", "derived_from"],
+      "seed_from_memory_links": true
+    }
+  },
+  "designated": [
+    { "id": "7808dae8-ed28-41d5-ae84-40e8be8a715a", "title": "Operation Dbus", "sources": 144 },
+    { "id": "d3e07e0c-c42d-4449-a094-e68e575ab889", "title": "OpenClaw Baseline: The Stealth Infrastructure Awakening Template", "sources": 93 },
+    { "id": "db1f67ed-5046-46a8-9e1d-bd0a77791eb9", "title": "NBLMrepomix", "sources": 66 },
+    { "id": "c0a83b6a-01d3-49c6-8228-7418f1c01134", "title": "OpenClaw Baseline Templates and OpenControl Schema Specifications", "sources": 63 },
+    { "id": "2b2c3cb0-5510-4ae7-861d-3a20c3247be4", "title": "Claude Export Logs: Zero-Copy AI and Infrastructure Conversations", "sources": 49 },
+    { "id": "4d43350a-f0cf-40bb-ad9a-37df0029cd76", "title": "Realtime D-Bus Shadow Mirror and SHM Orchestration Architecture", "sources": 48 },
+    { "id": "bfc9aab3-4e7e-42ce-afa6-8310d9286f12", "title": "i5t: OSCAL-Backed Zero Trust LLM Control Plane Orchestration", "sources": 2 },
+    { "id": "fd6d6609-7c47-4af9-a1b6-fc7dde9969c9", "title": "Optimizing OpenClaw: The Ultimate AI Agent VPS Setup Guide", "sources": 2 },
+    { "id": "98752d7d-7794-4bd0-b1a0-f67b389b890f", "title": "3tched", "sources": 1 },
+    { "id": "c78ab7fc-b6d9-4798-8ce3-c38482db1bdd", "title": "Identity-State Arbitrator: Machine-Readable Compliance and Shuttle Orchestration", "sources": 0 }
+  ],
+  "also_ingest": [
+    { "path": "WISHLIST.md", "as": "task nodes (OD-##)" },
+    { "path": "SIGNALS.md", "as": "decision + concern/suggestion nodes" },
+    { "path": "memory/*.md", "as": "concept nodes + [[links]] as edges" },
+    { "path": "knowledge/transcripts/*.md", "as": "37 full design-session transcripts — the REASONING behind decisions; prime learning-graph source", "notebook_target": "Full Transcripts (or Ghostbridge Live! master)" }
+  ],
+  "excluded": [
+    "Cargeeks Lawsuit", "WIOA Application for Jeremy Hobson", "Lyft Case",
+    "FORECLOSURE", "Hobson v. Car Geeks", "Log File Analysis",
+    "Linux and Windows Systems Administration Guide", "Microsoft Presidio Project Documentation",
+    "Gemini Enterprise CLI Transition and Billing Audit Summary",
+    "Gemini Enterprise Billing Rebuttal and Technical Audit Case 66825975",
+    "Gemini Chats", "Claude"
+  ]
+}

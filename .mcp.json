@@ -1,11 +1,12 @@
 {
   "mcpServers": {
-    "cognitive-mcp": {
-      "type": "http",
-      "url": "http://127.0.0.1:3003/mcp",
-      "headers": {
-        "x-ghostbridge-footprint": "gemini-cli",
-        "x-ghostbridge-trace-id": "gemini-cli"
+    "cognitive-grpc": {
+      "type": "stdio",
+      "command": "/usr/local/bin/op-mcp-shim",
+      "args": ["--endpoint", "http://10.220.35.1:50052"],
+      "env": {
+        "GHOSTBRIDGE_FOOTPRINT": "claude-code",
+        "GHOSTBRIDGE_TRACE_ID": "claude-code"
       }
     }
   }

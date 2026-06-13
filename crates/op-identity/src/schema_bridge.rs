@@ -314,36 +314,40 @@ pub fn read_sled() -> std::io::Result<(*const IdentitySled, memmap2::Mmap)> {
 
 // ── Unix socket endpoint ──────────────────────────────────────────────────────
 
-/// A unix socket endpoint proxied into an xray inbound + outbound pair.
+/// A nicless container endpoint: a subdomain routed straight into a unix socket.
 ///
-/// Declared via `UNIX_SOCKET_ENDPOINTS=label:path:port[,…]`, e.g.:
-///   `qdrant:/run/qdrant.sock:6334`
+/// Declared via `UNIX_SOCKET_ENDPOINTS=label:path:subdomain[,…]`, e.g.:
+///   `qdrant:/run/qdrant.sock:qdrant.ghostbridge.tech`
+///
+/// Traffic enters through the shared REALITY/TLS ingress; xray sniffs the SNI
+/// and a domain routing rule sends it to the `to-<label>` freedom/ds outbound,
+/// which dials the container's socket. No per-socket TCP inbound, no NIC.
 #[derive(Debug, Clone)]
 pub struct SocketEntry {
-    /// Xray tag suffix (e.g. `"qdrant"`) — becomes `"to-<label>"` / `"<label>-in"`.
+    /// Xray tag suffix (e.g. `"qdrant"`) — becomes the `"to-<label>"` outbound.
     pub label: String,
-    /// Filesystem path of the unix domain socket.
+    /// Filesystem path of the container's unix domain socket.
     pub path: String,
-    /// Local TCP port xray should listen on and proxy into the socket.
-    pub port: u16,
+    /// Subdomain that routes to this socket (matched against the sniffed SNI).
+    pub domain: String,
 }
 
 /// Parse `UNIX_SOCKET_ENDPOINTS` env var into a list of `SocketEntry`.
 ///
-/// Format: `label:/path/to/sock:port[,…]`
-/// Example: `qdrant:/run/qdrant.sock:6334`
+/// Format: `label:/path/to/sock:subdomain[,…]`
+/// Example: `qdrant:/run/qdrant.sock:qdrant.ghostbridge.tech`
 pub fn socket_entries_from_env() -> Vec<SocketEntry> {
     let Ok(raw) = env::var("UNIX_SOCKET_ENDPOINTS") else {
         return vec![];
     };
     raw.split(',')
         .filter_map(|entry| {
-            // Split into exactly 3 parts: label, path, port
+            // Split into exactly 3 parts: label, path, subdomain
             let mut parts = entry.trim().splitn(3, ':');
             let label = parts.next()?.to_string();
             let path = parts.next()?.to_string(); // already has leading '/'
-            let port: u16 = parts.next()?.trim().parse().ok()?;
-            Some(SocketEntry { label, path, port })
+            let domain = parts.next()?.trim().to_string();
+            (!domain.is_empty()).then_some(SocketEntry { label, path, domain })
         })
         .collect()
 }
@@ -379,26 +383,36 @@ fn write_xray_config_with_sockets(
     short_id: &str,
     sockets: &[SocketEntry],
 ) -> std::io::Result<()> {
-    // Build socket inbounds: one dokodemo-door per unix socket endpoint.
-    let socket_inbounds: String = sockets
-        .iter()
-        .map(|s| {
-            format!(
-                r#",
-    {{
-      "tag": "{label}-in",
-      "port": {port},
-      "listen": "127.0.0.1",
-      "protocol": "dokodemo-door",
-      "settings": {{ "network": "tcp", "address": "127.0.0.1", "port": {port} }}
-    }}"#,
-                label = s.label,
-                port = s.port,
-            )
-        })
-        .collect();
+    let config = build_xray_config(
+        footprint,
+        trace_id,
+        nextdns_profile,
+        uuid,
+        private_key,
+        short_id,
+        sockets,
+    );
+    let tmp = format!("{}.tmp", SHM_XRAY_CONFIG);
+    let mut f = File::create(&tmp)?;
+    f.write_all(config.as_bytes())?;
+    f.sync_data()?;
+    fs::rename(&tmp, SHM_XRAY_CONFIG)?;
+    Ok(())
+}
 
-    // Build socket outbounds: freedom via xray domain-socket transport.
+/// Build the Xray config JSON as a string (pure — no I/O). Routes each nicless
+/// container socket from its subdomain (sniffed SNI) into a freedom/ds outbound.
+fn build_xray_config(
+    footprint: &str,
+    trace_id: &str,
+    nextdns_profile: &str,
+    uuid: &str,
+    private_key: &str,
+    short_id: &str,
+    sockets: &[SocketEntry],
+) -> String {
+    // Socket outbounds: freedom over xray's unix-domain-socket transport — dials
+    // the container's socket directly, no NIC.
     let socket_outbounds: String = sockets
         .iter()
         .map(|s| {
@@ -418,13 +432,14 @@ fn write_xray_config_with_sockets(
         })
         .collect();
 
-    // Build socket routing rules: inbound tag → outbound tag.
+    // Subdomain routing: sniffed SNI on the shared ingress → the socket outbound.
     let socket_rules: String = sockets
         .iter()
         .map(|s| {
             format!(
                 r#",
-      {{ "type": "field", "inboundTag": ["{label}-in"], "outboundTag": "to-{label}" }}"#,
+      {{ "type": "field", "inboundTag": ["op-tls", "ghostbridge-reality"], "domain": ["full:{domain}"], "outboundTag": "to-{label}" }}"#,
+                domain = s.domain,
                 label = s.label,
             )
         })
@@ -499,7 +514,7 @@ fn write_xray_config_with_sockets(
         "destOverride": ["http", "tls", "quic"],
         "routeOnly": true
       }}
-    }}{socket_inbounds}
+    }}
   ],
   "outbounds": [
     {{
@@ -566,17 +581,11 @@ fn write_xray_config_with_sockets(
         uuid = uuid,
         private_key = private_key,
         short_id = short_id,
-        socket_inbounds = socket_inbounds,
         socket_outbounds = socket_outbounds,
         socket_rules = socket_rules,
     );
 
-    let tmp = format!("{}.tmp", SHM_XRAY_CONFIG);
-    let mut f = File::create(&tmp)?;
-    f.write_all(config.as_bytes())?;
-    f.sync_data()?;
-    fs::rename(&tmp, SHM_XRAY_CONFIG)?;
-    Ok(())
+    config
 }
 
 // ── WireGuard-driven sled writer ─────────────────────────────────────────────
@@ -886,7 +895,7 @@ async fn start_xray_via_dbus(config_path: &str) -> anyhow::Result<()> {
         .await
         .map_err(|e| anyhow::anyhow!("Failed to connect to system D-Bus: {}", e))?;
 
-    let proxy = Proxy::new(&conn, "opdbus.v1", "/opdbus/v1/xray", "opdbus.v1.Xray")
+    let proxy = Proxy::new(&conn, "opdbus.v1", "/org/opdbus/v1/plugins/xray", "opdbus.v1.Xray")
         .await
         .map_err(|e| anyhow::anyhow!("Failed to create Xray D-Bus proxy: {}", e))?;
 
@@ -902,5 +911,68 @@ async fn start_xray_via_dbus(config_path: &str) -> anyhow::Result<()> {
         Ok(())
     } else {
         Err(anyhow::anyhow!("Xray D-Bus start failed: {}", message))
+    }
+}
+
+#[cfg(test)]
+mod xray_config_tests {
+    use super::*;
+
+    #[test]
+    fn subdomain_routes_into_socket_outbound() {
+        let sockets = vec![
+            SocketEntry {
+                label: "qdrant".into(),
+                path: "/run/qdrant.sock".into(),
+                domain: "qdrant.ghostbridge.tech".into(),
+            },
+            SocketEntry {
+                label: "cozo".into(),
+                path: "/run/cozo.sock".into(),
+                domain: "cozo.ghostbridge.tech".into(),
+            },
+        ];
+        let cfg = build_xray_config("foot", "trace", "abc123", "uuid", "pk", "sid", &sockets);
+
+        // Must be valid JSON.
+        let v: serde_json::Value = serde_json::from_str(&cfg).expect("valid json");
+
+        // No per-socket TCP inbounds — only the two shared ingress listeners.
+        let inbounds = v["inbounds"].as_array().unwrap();
+        assert_eq!(inbounds.len(), 2, "no dokodemo socket inbounds expected");
+
+        // Each socket has a freedom/ds outbound dialing its path.
+        let outbounds = v["outbounds"].as_array().unwrap();
+        let qdrant = outbounds
+            .iter()
+            .find(|o| o["tag"] == "to-qdrant")
+            .expect("to-qdrant outbound");
+        assert_eq!(qdrant["streamSettings"]["network"], "ds");
+        assert_eq!(qdrant["streamSettings"]["dsSettings"]["path"], "/run/qdrant.sock");
+
+        // Each subdomain routes to its socket outbound off the shared ingress.
+        let rules = v["routing"]["rules"].as_array().unwrap();
+        let rule = rules
+            .iter()
+            .find(|r| r["outboundTag"] == "to-cozo")
+            .expect("cozo domain rule");
+        assert_eq!(rule["domain"][0], "full:cozo.ghostbridge.tech");
+        assert!(rule["inboundTag"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("ghostbridge-reality")));
+    }
+
+    #[test]
+    fn parses_label_path_subdomain() {
+        std::env::set_var(
+            "UNIX_SOCKET_ENDPOINTS",
+            "qdrant:/run/qdrant.sock:qdrant.ghostbridge.tech,bad-no-domain:/run/x.sock:",
+        );
+        let entries = socket_entries_from_env();
+        std::env::remove_var("UNIX_SOCKET_ENDPOINTS");
+        assert_eq!(entries.len(), 1, "entry with empty domain is dropped");
+        assert_eq!(entries[0].label, "qdrant");
+        assert_eq!(entries[0].domain, "qdrant.ghostbridge.tech");
     }
 }

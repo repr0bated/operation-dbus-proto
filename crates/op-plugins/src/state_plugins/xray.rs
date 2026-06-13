@@ -46,7 +46,7 @@ impl XrayPlugin {
             software: "xray-core".to_string(),
             version: "1.0.0".to_string(),
             dependencies: vec!["incus".to_string()],
-            oscal_source: Some("/opdbus/v1/plugins/oscal_subid_registry".to_string()),
+            oscal_source: Some("/org/opdbus/v1/plugins/oscal_subid_registry".to_string()),
             config: XrayConfig::default(),
             tools: json!([
                 {
