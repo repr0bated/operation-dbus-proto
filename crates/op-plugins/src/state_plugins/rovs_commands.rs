@@ -10,9 +10,10 @@
 //!
 //! Projected at: `/org/opdbus/v1/plugins/rovs_commands`
 
-use crate::state_plugins::plugin_schema_defs;
-use op_state_store::PluginSchema;
 use simd_json::OwnedValue as Value;
+use std::collections::HashMap;
+use op_state_store::{FieldSchema, FieldType, PluginSchema};
+use simd_json::json;
 
 /// rovs_commands Plugin — Command definitions schema
 ///
@@ -87,7 +88,7 @@ impl RovsCommandsPlugin {
 
     /// Return the plugin schema
     pub fn schema() -> Option<PluginSchema> {
-        Some(plugin_schema_defs::rovs_commands_plugin_schema())
+        Some(rovs_commands_schema())
     }
 }
 
@@ -165,4 +166,50 @@ impl op_state::StatePlugin for RovsCommandsPlugin {
             atomic_operations: false,
         }
     }
+}
+
+pub(crate) fn rovs_commands_schema() -> PluginSchema {
+    PluginSchema::builder("rovs_commands")
+        .version("1.0.0")
+        .category("network")
+        .description("rovs command definitions — schema source of truth for OVS bridge/port/flow operations via D-Bus")
+        .dependency("net")
+        .array_field(
+            "commands",
+            FieldType::Object(HashMap::from([
+                ("name".to_string(), FieldSchema {
+                    field_type: FieldType::String,
+                    required: true,
+                    description: "Command name".to_string(),
+                    default: None,
+                    example: Some(json!("create-bridge")),
+                    constraints: Vec::new(),
+                    read_only: true,
+                    read_only_when: None,
+                }),
+                ("description".to_string(), FieldSchema {
+                    field_type: FieldType::String,
+                    required: true,
+                    description: "Human-readable description".to_string(),
+                    default: None,
+                    example: Some(json!("Create a new OVS bridge")),
+                    constraints: Vec::new(),
+                    read_only: true,
+                    read_only_when: None,
+                }),
+                ("dbus_method".to_string(), FieldSchema {
+                    field_type: FieldType::String,
+                    required: true,
+                    description: "D-Bus method path for this command".to_string(),
+                    default: None,
+                    example: Some(json!("org.opdbus.v1.Ovsdb.JsonRpc.transact")),
+                    constraints: Vec::new(),
+                    read_only: true,
+                    read_only_when: None,
+                }),
+            ])),
+            true,
+            "Available OVS/rovs commands exposed via D-Bus",
+        )
+        .build()
 }

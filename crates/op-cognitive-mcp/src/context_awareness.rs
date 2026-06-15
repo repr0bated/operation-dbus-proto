@@ -58,7 +58,7 @@
 //! - `idle_recovery` - User returned after idle, refresh context
 
 use crate::memory_store::{CognitiveMemoryStore, EntryQuery};
-use crate::rag_pipeline::RagPipeline;
+use crate::rag_pipeline::{default_collection_from_env, RagPipeline};
 use anyhow::{Context as AnyhowContext, Result};
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
@@ -377,6 +377,8 @@ pub struct ContextAwarenessConfig {
     pub idle_threshold_secs: u64,
     /// Maximum pushes per session per hour
     pub max_pushes_per_hour: u32,
+    /// Qdrant collection used for code/repomix RAG retrieval
+    pub rag_collection: String,
 }
 
 impl Default for ContextAwarenessConfig {
@@ -388,6 +390,7 @@ impl Default for ContextAwarenessConfig {
             push_rate_limit_secs: MIN_PUSH_INTERVAL_SECS,
             idle_threshold_secs: IDLE_REFRESH_THRESHOLD_SECS,
             max_pushes_per_hour: 20,
+            rag_collection: default_collection_from_env(),
         }
     }
 }
@@ -795,7 +798,9 @@ impl ContextAwarenessEngine {
             | PushTrigger::IdleRecovery => {
                 // Use RAG for semantic search
                 if let Some(ref rag) = self.rag_pipeline {
-                    let results = rag.query("repomix_rag", query, 5, None).await?;
+                    let results = rag
+                        .query(&self.config.rag_collection, query, 5, None)
+                        .await?;
 
                     let result_values: Vec<serde_json::Value> = results
                         .into_iter()

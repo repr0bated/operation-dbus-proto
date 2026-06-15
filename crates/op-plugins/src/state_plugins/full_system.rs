@@ -20,6 +20,7 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, StateAction, StateDiff, StatePlugin};
+use op_state_store::{Constraint, FieldSchema, FieldType, PluginSchema};
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
@@ -703,6 +704,82 @@ impl StatePlugin for FullSystemPlugin {
 
     fn version(&self) -> &str {
         "1.0.0"
+    }
+
+    fn schema(&self) -> Option<PluginSchema> {
+        let any_field = |required: bool, description: &str, default: Option<Value>| FieldSchema {
+            field_type: FieldType::Any,
+            required,
+            description: description.to_string(),
+            default,
+            example: None,
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        };
+
+        Some(
+            PluginSchema::builder("full_system")
+                .version("1.0.0")
+                .description("Full system recovery snapshot")
+                .field(
+                    "version",
+                    FieldSchema {
+                        field_type: FieldType::Integer,
+                        required: true,
+                        description: "Snapshot schema version".to_string(),
+                        default: Some(json!(1)),
+                        example: None,
+                        constraints: vec![Constraint::Min { value: 1.0 }],
+                        read_only: false,
+                        read_only_when: None,
+                    },
+                )
+                .field(
+                    "captured_at",
+                    FieldSchema {
+                        field_type: FieldType::String,
+                        required: false,
+                        description: "Capture timestamp".to_string(),
+                        default: None,
+                        example: None,
+                        constraints: Vec::new(),
+                        read_only: false,
+                        read_only_when: None,
+                    },
+                )
+                .field("hostname", any_field(true, "Host name", Some(json!(""))))
+                .field(
+                    "system",
+                    any_field(false, "System details", Some(json!({}))),
+                )
+                .field(
+                    "network",
+                    any_field(false, "Network snapshot", Some(json!({}))),
+                )
+                .field(
+                    "services",
+                    any_field(false, "Service snapshot", Some(json!([]))),
+                )
+                .field(
+                    "packages",
+                    any_field(false, "Package snapshot", Some(json!([]))),
+                )
+                .field("users", any_field(false, "User snapshot", Some(json!([]))))
+                .field(
+                    "storage",
+                    any_field(false, "Storage snapshot", Some(json!({}))),
+                )
+                .field(
+                    "containers",
+                    any_field(false, "Container snapshot", Some(json!({}))),
+                )
+                .field(
+                    "plugins",
+                    any_field(false, "Plugin snapshots", Some(json!({}))),
+                )
+                .build(),
+        )
     }
 
     async fn query_current_state(&self) -> Result<Value> {

@@ -32,12 +32,14 @@ members = [
     "crates/op-cozo-store",
     "crates/op-dbus-model",
     "crates/op-grpc-bridge",
+    "crates/op-grpc-adapters",
     "crates/op-dbus-mirror",
     "crates/op-compliance",
     "crates/op-projection",
     "crates/op-assistant-grpc",
     "crates/op-s6-systemctl",
     "crates/op-xray-daemon",
+    "crates/op-mcp-shim",
 ]
 
 [workspace.package]
@@ -141,6 +143,7 @@ prost = "0.13"
 prost-types = "0.13"
 tonic-build = "0.12"
 tonic-reflection = "0.12"
+prost-reflect = { version = "0.14", features = ["serde"] }
 tonic-health = "0.12"
 tonic-web = "0.12"
 

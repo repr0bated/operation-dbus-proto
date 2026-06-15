@@ -92,20 +92,24 @@ impl Tool for CodeSearchTool {
             .unwrap_or(8)
             .clamp(1, 50);
         let filter = filter_from(&input, false);
+        let collection = input
+            .get("collection")
+            .and_then(Value::as_str)
+            .unwrap_or(&self.collection);
 
         let results = if input.get("fused").and_then(Value::as_bool).unwrap_or(true) {
             self.rag
-                .query_fused(&self.collection, query, limit, &filter)
+                .query_fused(collection, query, limit, &filter)
                 .await?
         } else {
             self.rag
-                .query_filtered(&self.collection, query, limit, &filter)
+                .query_filtered(collection, query, limit, &filter)
                 .await?
         };
 
         Ok(json!({
             "count": results.len(),
-            "collection": self.collection,
+            "collection": collection,
             "results": results_to_simd(&results),
         }))
     }
@@ -174,9 +178,13 @@ impl Tool for CodeContextTool {
             .await;
 
         let filter = filter_from(&input, false);
+        let collection = input
+            .get("collection")
+            .and_then(Value::as_str)
+            .unwrap_or(&self.collection);
         let (results, retrieval_error) = match self
             .rag
-            .query_fused(&self.collection, query, limit, &filter)
+            .query_fused(collection, query, limit, &filter)
             .await
         {
             Ok(results) => (results, None),
@@ -197,6 +205,7 @@ impl Tool for CodeContextTool {
 
         Ok(json!({
             "count": results.len(),
+            "collection": collection,
             "session_id": session_id,
             "signals": serde_to_simd(&signals),
             "results": results_to_simd(&results),

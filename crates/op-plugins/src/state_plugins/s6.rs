@@ -123,31 +123,62 @@ impl S6StatePlugin {
         }
     }
 
-    /// Return the names of all currently-up services (observation path).
+    /// Return the names of all currently-up services.
     ///
+    /// Tries D-Bus first; falls back to `s6-rc -a list` when the daemon isn't running.
     /// subid: `obs.service.s6.list-units@v1`
     async fn list_running(&self) -> Result<Vec<String>> {
-        let units = self.dbus.list_units().await?;
-        let mut running = Vec::new();
-        for unit in units {
-            if let Some(name) = unit.get("name").and_then(|v| v.as_str()) {
-                if let Some(active) = unit.get("active").and_then(|v| v.as_str()) {
-                    if active == "true" || active == "up" {
-                        running.push(name.to_string());
+        if let Ok(units) = self.dbus.list_units().await {
+            let mut running = Vec::new();
+            for unit in units {
+                if let Some(name) = unit.get("name").and_then(|v| v.as_str()) {
+                    if let Some(active) = unit.get("active").and_then(|v| v.as_str()) {
+                        if active == "true" || active == "up" {
+                            running.push(name.to_string());
+                        }
                     }
                 }
             }
+            return Ok(running);
         }
-        Ok(running)
+
+        // Fallback: direct s6-rc query
+        let output = tokio::process::Command::new("s6-rc")
+            .args(["-a", "list"])
+            .output()
+            .await
+            .context("s6-rc -a list")?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        Ok(stdout
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect())
     }
 
-    /// Return *all* service definitions (available units) via D-Bus.
+    /// Return *all* available service names.
+    ///
+    /// Tries D-Bus first; falls back to scanning `/etc/s6/sv/`.
     async fn list_all(&self) -> Result<Vec<String>> {
-        let files = self.dbus.list_unit_files().await?;
+        if let Ok(files) = self.dbus.list_unit_files().await {
+            let mut all = Vec::new();
+            for file in files {
+                if let Some(name) = file.get("name").and_then(|v| v.as_str()) {
+                    all.push(name.to_string());
+                }
+            }
+            if !all.is_empty() {
+                return Ok(all);
+            }
+        }
+
+        // Fallback: scan the s6 service directory
         let mut all = Vec::new();
-        for file in files {
-            if let Some(name) = file.get("name").and_then(|v| v.as_str()) {
-                all.push(name.to_string());
+        if let Ok(mut dir) = tokio::fs::read_dir("/etc/s6/sv").await {
+            while let Ok(Some(entry)) = dir.next_entry().await {
+                if let Ok(name) = entry.file_name().into_string() {
+                    all.push(name);
+                }
             }
         }
         Ok(all)
@@ -177,7 +208,7 @@ impl StatePlugin for S6StatePlugin {
     }
 
     fn schema(&self) -> Option<op_state_store::PluginSchema> {
-        Some(super::plugin_schema_defs::s6_plugin_schema())
+        Some(s6_schema())
     }
 
     fn is_available(&self) -> bool {
@@ -373,6 +404,8 @@ impl StatePlugin for S6StatePlugin {
 use std::sync::Arc;
 use tokio::sync::OnceCell;
 use zbus::{proxy, Connection};
+use op_state_store::{FieldSchema, FieldType, PluginSchema};
+use simd_json::json;
 
 /// D-Bus proxy for `org.opdbus.v1.S6.Systemctl`.
 #[proxy(
@@ -564,4 +597,69 @@ impl S6DbusClient {
         let proxy = self.get_proxy().await?;
         Ok(proxy.get_unit_type(unit).await?)
     }
+}
+
+pub(crate) fn s6_schema() -> PluginSchema {
+    let unit_fields = {
+        let mut fields = HashMap::new();
+        fields.insert(
+            "name".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "Unit name".to_string(),
+                default: None,
+                example: Some(json!("nginx.service")),
+                constraints: Vec::new(),
+                read_only: true,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "state".to_string(),
+            FieldSchema {
+                field_type: FieldType::Enum(vec![
+                    "active".to_string(),
+                    "inactive".to_string(),
+                    "failed".to_string(),
+                ]),
+                required: false,
+                description: "Desired unit state".to_string(),
+                default: Some(json!("active")),
+                example: Some(json!("active")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "enabled".to_string(),
+            FieldSchema {
+                field_type: FieldType::Boolean,
+                required: false,
+                description: "Whether unit is enabled at boot".to_string(),
+                default: Some(json!(true)),
+                example: Some(json!(true)),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields
+    };
+
+    PluginSchema::builder("s6")
+        .version("1.0.0")
+        .description("s6 service management")
+        .array_field("units", FieldType::Object(unit_fields), true, "s6 services")
+        .example(json!({
+            "units": [
+                {
+                    "name": "nginx",
+                    "state": "active",
+                    "enabled": true
+                }
+            ]
+        }))
+        .build()
 }

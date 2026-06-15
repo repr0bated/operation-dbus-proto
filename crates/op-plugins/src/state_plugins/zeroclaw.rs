@@ -9,6 +9,7 @@ use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateD
 use op_state_store::PluginSchema;
 use serde::{Deserialize, Serialize};
 use simd_json::{json, OwnedValue as Value};
+use super::plugin_schema_defs::schema_from_state;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ZeroclawState {
@@ -278,7 +279,7 @@ impl StatePlugin for ZeroclawPlugin {
     }
 
     fn schema(&self) -> Option<PluginSchema> {
-        Some(super::plugin_schema_defs::zeroclaw_plugin_schema())
+        Some(zeroclaw_schema())
     }
 
     async fn query_current_state(&self) -> Result<Value> {
@@ -332,4 +333,19 @@ impl StatePlugin for ZeroclawPlugin {
             atomic_operations: false,
         }
     }
+}
+
+pub(crate) fn zeroclaw_schema() -> PluginSchema {
+    // The plugin IS the schema: derive directly from ZeroclawPlugin's live
+    // state. Nothing is indexed here — adding a field to ZeroclawState is the
+    // only way to change this schema.
+    let state = simd_json::serde::to_owned_value(super::zeroclaw::ZeroclawPlugin::current_state())
+        .unwrap_or_else(|_| json!({}));
+    schema_from_state(
+        "zeroclaw",
+        "llm",
+        "1.0.0",
+        "Zeroclaw schema/RPC-native model router for Antigravity UI, CLI providers, and structured JSON output",
+        &state,
+    )
 }

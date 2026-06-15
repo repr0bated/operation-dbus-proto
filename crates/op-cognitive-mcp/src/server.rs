@@ -13,7 +13,7 @@ use crate::memory_store::CognitiveMemoryStore;
 use crate::proto::cognitive_tool_service_server::CognitiveToolServiceServer;
 use crate::qdrant_shuttle::QdrantSemanticShuttle;
 use crate::quota::QuotaManager;
-use crate::rag_pipeline::{RagPipeline, DEFAULT_COLLECTION};
+use crate::rag_pipeline::{default_collection_from_env, RagPipeline};
 use crate::session::SessionManager;
 use crate::typed_tools;
 use op_mcp::tool_registry::{RegistryExecutor, ToolRegistry};
@@ -82,8 +82,12 @@ impl CognitiveMcpServer {
         };
 
         // Context-awareness engine drives session signals and proactive pushes.
+        let rag_collection = default_collection_from_env();
         let context_engine = Arc::new(ContextAwarenessEngine::new(
-            ContextAwarenessConfig::default(),
+            ContextAwarenessConfig {
+                rag_collection: rag_collection.clone(),
+                ..Default::default()
+            },
             memory_store.clone(),
             rag_pipeline.clone(),
         ));
@@ -94,7 +98,7 @@ impl CognitiveMcpServer {
                 &tool_registry,
                 rag.clone(),
                 context_engine.clone(),
-                DEFAULT_COLLECTION.to_string(),
+                rag_collection,
             )
             .await?;
             tracing::info!(registered = n, "Registered code-context tools");
@@ -167,8 +171,14 @@ impl CognitiveMcpServer {
         let socket_addr: std::net::SocketAddr = addr.parse()?;
         tracing::info!(addr = %socket_addr, "Cognitive gRPC Server listening");
 
+        let cors = tower_http::cors::CorsLayer::new()
+            .allow_origin(tower_http::cors::Any)
+            .allow_methods(tower_http::cors::Any)
+            .allow_headers(tower_http::cors::Any);
+
         tonic::transport::Server::builder()
             .accept_http1(true)
+            .layer(cors)
             .add_service(tonic_web::enable(
                 CognitiveToolServiceServer::with_interceptor(
                     grpc_service,
@@ -213,8 +223,14 @@ impl CognitiveMcpServer {
             let socket_addr: std::net::SocketAddr = grpc_addr.parse().expect("invalid gRPC addr");
             tracing::info!(addr = %socket_addr, "Cognitive gRPC Server listening");
 
+            let cors = tower_http::cors::CorsLayer::new()
+                .allow_origin(tower_http::cors::Any)
+                .allow_methods(tower_http::cors::Any)
+                .allow_headers(tower_http::cors::Any);
+
             tonic::transport::Server::builder()
                 .accept_http1(true)
+                .layer(cors)
                 .add_service(tonic_web::enable(
                     CognitiveToolServiceServer::with_interceptor(
                         grpc_service,
@@ -250,15 +266,15 @@ impl CognitiveMcpServer {
     pub async fn start_dbus(&self) -> Result<zbus::Connection, Box<dyn std::error::Error>> {
         use crate::dbus_interface::CognitiveMcpInterface;
 
-        let conn = zbus::Connection::system().await?;
+        let conn = zbus::Connection::session().await?;
         conn.request_name("org.opdbus.CognitiveMcp").await?;
 
         let iface = CognitiveMcpInterface::new(self.tool_registry.clone());
         conn.object_server()
-            .at("/org/opdbus/v1/cognitive", iface)
+            .at("/org/opdbus/v1/plugins/cognitive_mcp", iface)
             .await?;
 
-        tracing::info!("Cognitive MCP D-Bus interface registered at /org/opdbus/v1/cognitive");
+        tracing::info!("Cognitive MCP D-Bus interface registered at /org/opdbus/v1/plugins/cognitive_mcp");
         Ok(conn)
     }
 

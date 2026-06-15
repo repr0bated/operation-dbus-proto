@@ -42,15 +42,17 @@ pub use state::{ChangeOperation, DesiredState, StateChange, ValidationResult};
 // (cognitive-mcp, projection, web, gRPC) imports schema types from `op_plugins`.
 // op-state-store is retired as a public schema surface — code that still (or
 // mistakenly) reaches for the old path can resolve through this alias instead.
+pub use op_state_store::plugin_schema::{
+    PluginSchemaBuilder, ValidationResult as SchemaValidationResult,
+};
 pub use op_state_store::{Constraint, FieldSchema, FieldType, PluginSchema, ReadOnlyCondition};
-pub use op_state_store::plugin_schema::{PluginSchemaBuilder, ValidationResult as SchemaValidationResult};
 
 /// Canonical input/contract schema for the cognitive-mcp gateway, including the
 /// `code_search` / `code_context` / `code_index` tool inputs (each carrying its
 /// OSCAL subid). This is the authoritative accessor; tools derive their
 /// `input_schema()` from this via `PluginSchema::field_input_schema(...)`.
 pub fn cognitive_mcp_plugin_schema() -> PluginSchema {
-    state_plugins::plugin_schema_defs::cognitive_mcp_plugin_schema()
+    state_plugins::cognitive_mcp::cognitive_mcp_schema()
 }
 
 // Re-export chat types

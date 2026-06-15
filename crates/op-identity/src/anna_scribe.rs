@@ -90,16 +90,9 @@ impl AnnaScribe {
     /// Binds the WireGuard public key to the Blake3 hash of the canonical schema catalog
     /// in shared memory (/dev/shm/live-schema.json), plus the mutation index.
     /// This makes the sled footprint a direct function of the single source of truth.
-    pub fn etch_footprint(sled: &IdentitySled) -> [u8; 32] {
-        let schema_catalog_hash = std::fs::read("/dev/shm/live-schema.json")
-            .map(|bytes| blake3::hash(&bytes))
-            .unwrap_or_else(|_| blake3::Hash::from([0u8; 32]));
-
-        let mut hasher = blake3::Hasher::new();
-        hasher.update(&sled.wireguard_pubkey);
-        hasher.update(schema_catalog_hash.as_bytes());
-        hasher.update(&sled.mutation_index.to_le_bytes());
-        hasher.finalize().into()
+    pub fn etch_footprint(sled: &IdentitySled, source_port: u16) -> [u8; 32] {
+        // Single source of truth: delegate to the canonical Strike/Etch.
+        crate::schema_bridge::etch_footprint(&sled.wireguard_pubkey, sled.mutation_index, source_port)
     }
 
     /// THE SNOWBALL: Appends the session ledger.
@@ -228,8 +221,8 @@ mod tests {
             reserved: [0u8; 44],
         };
 
-        let fp1 = AnnaScribe::etch_footprint(&sled);
-        let fp2 = AnnaScribe::etch_footprint(&sled);
+        let fp1 = AnnaScribe::etch_footprint(&sled, 0);
+        let fp2 = AnnaScribe::etch_footprint(&sled, 0);
 
         assert_eq!(fp1, fp2, "Etch footprint must be deterministic");
         assert_ne!(fp1, [0u8; 32], "Footprint must not be all zeros");

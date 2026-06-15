@@ -4,6 +4,9 @@ use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateD
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
+use simd_json::json;
+use op_state_store::{FieldSchema, FieldType, PluginSchema};
+use super::plugin_schema_defs::{simple_schema};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfigState {
@@ -43,7 +46,7 @@ impl StatePlugin for AgentConfigPlugin {
     }
 
     fn schema(&self) -> Option<op_state_store::PluginSchema> {
-        Some(super::plugin_schema_defs::agent_config_plugin_schema())
+        Some(agent_config_schema())
     }
 
     async fn query_current_state(&self) -> Result<Value> {
@@ -221,4 +224,25 @@ impl StatePlugin for AgentConfigPlugin {
             atomic_operations: false,
         }
     }
+}
+
+pub(crate) fn agent_config_schema() -> PluginSchema {
+    simple_schema(
+        "agent_config",
+        "Agent configuration and tool assignments",
+        &[],
+        vec![(
+            "agents",
+            FieldSchema {
+                field_type: FieldType::Array(Box::new(FieldType::Any)),
+                required: true,
+                description: "List of agent configurations".to_string(),
+                default: Some(json!([])),
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        )],
+    )
 }

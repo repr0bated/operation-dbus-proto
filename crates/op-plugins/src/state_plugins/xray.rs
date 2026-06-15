@@ -3,6 +3,8 @@ use async_trait::async_trait;
 use op_state::{ApplyResult, PluginCapabilities, StateDiff, StatePlugin};
 use serde::{Deserialize, Serialize};
 use simd_json::{json, OwnedValue as Value};
+use op_state_store::{PluginSchema};
+use super::plugin_schema_defs::{schema_from_state};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct XrayConfig {
@@ -44,7 +46,7 @@ impl XrayPlugin {
             software: "xray-core".to_string(),
             version: "1.0.0".to_string(),
             dependencies: vec!["incus".to_string()],
-            oscal_source: Some("/opdbus/v1/plugins/oscal_subid_registry".to_string()),
+            oscal_source: Some("/org/opdbus/v1/plugins/oscal_subid_registry".to_string()),
             config: XrayConfig::default(),
             tools: json!([
                 {
@@ -77,7 +79,7 @@ impl StatePlugin for XrayPlugin {
     }
 
     fn schema(&self) -> Option<op_state_store::PluginSchema> {
-        Some(super::plugin_schema_defs::xray_plugin_schema())
+        Some(xray_schema())
     }
 
     fn capabilities(&self) -> PluginCapabilities {
@@ -134,4 +136,16 @@ impl StatePlugin for XrayPlugin {
             "Rollbacks not supported by xray schema plugin"
         ))
     }
+}
+
+pub(crate) fn xray_schema() -> PluginSchema {
+    let state = simd_json::serde::to_owned_value(super::xray::XrayPlugin::current_state())
+        .unwrap_or_else(|_| json!({}));
+    schema_from_state(
+        "xray",
+        "net",
+        "1.0.0",
+        "Xray proxy state and execution schema",
+        &state,
+    )
 }

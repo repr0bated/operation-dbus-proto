@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use op_state::{
     ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
 };
+use op_state_store::{FieldSchema, FieldType, PluginSchema};
 use serde::{Deserialize, Serialize};
 use simd_json::{json, OwnedValue as Value};
 use zbus::zvariant::OwnedObjectPath;
@@ -57,6 +58,28 @@ impl StatePlugin for Login1Plugin {
     }
     fn version(&self) -> &str {
         "1.0.0"
+    }
+
+    fn schema(&self) -> Option<PluginSchema> {
+        Some(
+            PluginSchema::builder("login1")
+                .version("1.0.0")
+                .description("Runtime login sessions")
+                .field(
+                    "sessions",
+                    FieldSchema {
+                        field_type: FieldType::Any,
+                        required: true,
+                        description: "Active sessions".to_string(),
+                        default: Some(json!([])),
+                        example: None,
+                        constraints: Vec::new(),
+                        read_only: false,
+                        read_only_when: None,
+                    },
+                )
+                .build(),
+        )
     }
 
     async fn query_current_state(&self) -> Result<Value> {

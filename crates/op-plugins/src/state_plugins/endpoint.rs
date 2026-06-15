@@ -4,6 +4,9 @@ use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateD
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
+use simd_json::json;
+use op_state_store::{FieldSchema, FieldType, PluginSchema};
+use super::plugin_schema_defs::{simple_schema};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EndpointState {
@@ -35,7 +38,7 @@ impl StatePlugin for EndpointPlugin {
     }
 
     fn schema(&self) -> Option<op_state_store::PluginSchema> {
-        Some(super::plugin_schema_defs::endpoint_plugin_schema())
+        Some(endpoint_schema())
     }
 
     async fn query_current_state(&self) -> Result<Value> {
@@ -91,4 +94,25 @@ impl StatePlugin for EndpointPlugin {
             atomic_operations: false,
         }
     }
+}
+
+pub(crate) fn endpoint_schema() -> PluginSchema {
+    simple_schema(
+        "endpoint",
+        "Endpoint configuration",
+        &["net"],
+        vec![(
+            "endpoints",
+            FieldSchema {
+                field_type: FieldType::Array(Box::new(FieldType::String)),
+                required: true,
+                description: "Declared endpoints".to_string(),
+                default: Some(json!([])),
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        )],
+    )
 }

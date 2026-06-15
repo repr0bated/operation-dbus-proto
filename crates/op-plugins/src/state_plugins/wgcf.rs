@@ -3,6 +3,8 @@ use async_trait::async_trait;
 use op_state::{ApplyResult, PluginCapabilities, StateDiff, StatePlugin};
 use serde::{Deserialize, Serialize};
 use simd_json::{json, OwnedValue as Value};
+use op_state_store::{PluginSchema};
+use super::plugin_schema_defs::{schema_from_state};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WgcfConfig {
@@ -83,7 +85,7 @@ impl StatePlugin for WgcfPlugin {
     }
 
     fn schema(&self) -> Option<op_state_store::PluginSchema> {
-        Some(super::plugin_schema_defs::wgcf_plugin_schema())
+        Some(wgcf_schema())
     }
 
     fn capabilities(&self) -> PluginCapabilities {
@@ -140,4 +142,16 @@ impl StatePlugin for WgcfPlugin {
             "Rollbacks not supported by wgcf schema plugin"
         ))
     }
+}
+
+pub(crate) fn wgcf_schema() -> PluginSchema {
+    let state = simd_json::serde::to_owned_value(super::wgcf::WgcfPlugin::current_state())
+        .unwrap_or_else(|_| json!({}));
+    schema_from_state(
+        "wgcf",
+        "net",
+        "1.0.0",
+        "WireGuard Cloudflare (WGCF) state and execution schema",
+        &state,
+    )
 }

@@ -1,0 +1,186 @@
+#!/usr/bin/env bash
+# dbus - CLI wrapper for op-projection D-Bus objects
+#
+# Usage:
+#   dbus introspect <plugin>            - introspect a plugin object
+#   dbus introspect <plugin> [subpath]  - introspect a sub-path
+#   dbus list                           - list all registered plugin objects
+#   dbus get <plugin> [property]        - get property/data from a plugin
+#   dbus call <plugin> <method> [args]  - call a method on a plugin
+#   dbus watch [plugin]                 - monitor signals
+#
+# The service is org.opdbus.projection
+# Objects live at /org/opdbus/v1/plugins/<plugin>
+
+SERVICE="org.opdbus.projection"
+BASE_PATH="/org/opdbus/v1/plugins"
+IFACE="org.opdbus.projection.v1.Object"
+
+# Normalize plugin name: replace hyphens with underscores (canonical form)
+normalize_plugin() {
+    echo "${1//-/_}"
+}
+
+cmd="${1:-help}"
+shift || true
+
+case "$cmd" in
+    introspect)
+        plugin="${1:-}"
+        subpath="${2:-}"
+
+        if [[ -z "$plugin" ]]; then
+            echo "Usage: dbus introspect <plugin> [subpath]" >&2
+            exit 1
+        fi
+
+        plugin=$(normalize_plugin "$plugin")
+        object_path="${BASE_PATH}/${plugin}"
+        if [[ -n "$subpath" ]]; then
+            subpath="${subpath#/}"
+            object_path="${object_path}/${subpath}"
+        fi
+
+        exec busctl introspect "$SERVICE" "$object_path"
+        ;;
+
+    list|tree)
+        plugin="${1:-}"
+        if [[ -z "$plugin" ]]; then
+            echo "Objects registered under $SERVICE:"
+            busctl tree "$SERVICE" 2>/dev/null || {
+                echo "  (service not running or no objects registered)" >&2
+                exit 1
+            }
+        else
+            plugin=$(normalize_plugin "$plugin")
+            prefix="${BASE_PATH}/${plugin}"
+            busctl tree "$SERVICE" 2>/dev/null \
+                | grep "$prefix" \
+                | sed "s|${BASE_PATH}/||" \
+                || echo "  (no objects found under $prefix)" >&2
+        fi
+        ;;
+
+    get)
+        plugin="${1:-}"
+        property="${2:-Data}"
+
+        if [[ -z "$plugin" ]]; then
+            echo "Usage: dbus get <plugin> [property]" >&2
+            exit 1
+        fi
+
+        plugin=$(normalize_plugin "$plugin")
+        object_path="${BASE_PATH}/${plugin}"
+
+        exec busctl get-property "$SERVICE" "$object_path" "$IFACE" "$property"
+        ;;
+
+    call)
+        plugin="${1:-}"
+        method="${2:-}"
+        shift 2 || true
+
+        if [[ -z "$plugin" || -z "$method" ]]; then
+            echo "Usage: dbus call <plugin> <method> [args...]" >&2
+            exit 1
+        fi
+
+        plugin=$(normalize_plugin "$plugin")
+        object_path="${BASE_PATH}/${plugin}"
+
+        exec busctl call "$SERVICE" "$object_path" "$IFACE" "$method" "$@"
+        ;;
+
+    names)
+        plugin="${1:-}"
+        subpath="${2:-}"
+
+        if [[ -z "$plugin" || -z "$subpath" ]]; then
+            echo "Usage: dbus names <plugin> <subpath>" >&2
+            exit 1
+        fi
+
+        plugin=$(normalize_plugin "$plugin")
+        subpath="${subpath#/}"
+        base_object="${BASE_PATH}/${plugin}/${subpath}"
+
+        # Find all direct children of this path
+        children=$(busctl tree "$SERVICE" 2>/dev/null \
+            | grep -oP "${base_object}/[0-9]+" \
+            | sort -u -V)
+
+        if [[ -z "$children" ]]; then
+            echo "No children found under $base_object" >&2
+            exit 1
+        fi
+
+        printf "%-6s  %s\n" "INDEX" "NAME"
+        while IFS= read -r obj; do
+            idx="${obj##*/}"
+            raw=$(busctl get-property "$SERVICE" "$obj" "$IFACE" Data 2>/dev/null)
+            name=$(python3 -c "
+import sys, json, re
+raw = '''$raw'''
+m = re.match(r's \"(.*)\"$', raw.strip(), re.DOTALL)
+if m:
+    try:
+        d = json.loads(m.group(1))
+        v = d.get('value', d)
+        print(v.get('id', v.get('name', '')))
+    except: pass
+" 2>/dev/null)
+            [[ -z "$name" ]] && name="(no id field)"
+            printf "%-6s  %s\n" "$idx" "$name"
+        done <<< "$children"
+        ;;
+
+    watch)
+        plugin="${1:-}"
+        if [[ -z "$plugin" ]]; then
+            exec busctl monitor "$SERVICE"
+        else
+            plugin=$(normalize_plugin "$plugin")
+            exec busctl monitor "$SERVICE" --match "path=${BASE_PATH}/${plugin}"
+        fi
+        ;;
+
+    help|--help|-h)
+        cat <<'EOF'
+dbus - CLI wrapper for op-projection D-Bus objects
+
+Service:   org.opdbus.projection
+Base path: /org/opdbus/v1/plugins/<plugin>
+Interface: org.opdbus.projection.v1.Object
+
+Commands:
+  dbus introspect <plugin> [subpath]   Show interfaces / methods / properties
+  dbus list                            Tree of all registered plugin objects
+  dbus list <plugin>                   Show subpaths under a specific plugin
+  dbus get <plugin> [property]         Read a property (default: Data)
+  dbus call <plugin> <method> [args]   Call a method on a plugin
+  dbus watch [plugin]                  Monitor D-Bus signals (Ctrl-C to stop)
+
+Properties on each plugin object:
+  EntityType   the schema/entity type  (e.g. "system.memory")
+  EntityId     unique entity ID
+  State        Valid | Quarantined | Degraded | ...
+  Data         full JSON projection data
+
+Examples:
+  dbus introspect keyring
+  dbus introspect wireguard interfaces/0
+  dbus list
+  dbus get keyring
+  dbus get keyring State
+  dbus watch keyring
+EOF
+        ;;
+
+    *)
+        echo "Unknown command: $cmd" >&2
+        echo "Run 'dbus help' for usage." >&2
+        exit 1
+        ;;
+esac

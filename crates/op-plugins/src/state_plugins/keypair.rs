@@ -4,6 +4,9 @@ use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateD
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
+use simd_json::json;
+use op_state_store::{PluginSchema};
+use super::plugin_schema_defs::{simple_schema, any_field};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KeypairState {
@@ -43,7 +46,7 @@ impl StatePlugin for KeypairPlugin {
     }
 
     fn schema(&self) -> Option<op_state_store::PluginSchema> {
-        Some(super::plugin_schema_defs::keypair_plugin_schema())
+        Some(keypair_schema())
     }
 
     async fn query_current_state(&self) -> Result<Value> {
@@ -127,4 +130,16 @@ impl StatePlugin for KeypairPlugin {
             atomic_operations: false,
         }
     }
+}
+
+pub(crate) fn keypair_schema() -> PluginSchema {
+    simple_schema(
+        "keypair",
+        "Keypair declaration state",
+        &[],
+        vec![(
+            "keypairs",
+            any_field(true, "Managed keypairs", Some(json!([]))),
+        )],
+    )
 }

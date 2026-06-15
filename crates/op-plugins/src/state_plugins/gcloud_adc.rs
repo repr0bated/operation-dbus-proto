@@ -4,6 +4,9 @@ use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateD
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
+use simd_json::json;
+use op_state_store::{FieldSchema, FieldType, PluginSchema};
+use super::plugin_schema_defs::{simple_schema, any_field};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GcloudAdcState {
@@ -96,7 +99,7 @@ impl StatePlugin for GcloudAdcPlugin {
     }
 
     fn schema(&self) -> Option<op_state_store::PluginSchema> {
-        Some(super::plugin_schema_defs::gcloud_adc_plugin_schema())
+        Some(gcloud_adc_schema())
     }
 
     async fn query_current_state(&self) -> Result<Value> {
@@ -152,4 +155,29 @@ impl StatePlugin for GcloudAdcPlugin {
             atomic_operations: false,
         }
     }
+}
+
+pub(crate) fn gcloud_adc_schema() -> PluginSchema {
+    simple_schema(
+        "gcloud_adc",
+        "Google Cloud ADC state",
+        &[],
+        vec![
+            ("account", any_field(false, "Authenticated account", None)),
+            ("project_id", any_field(false, "Project id", None)),
+            (
+                "authenticated",
+                FieldSchema {
+                    field_type: FieldType::Boolean,
+                    required: true,
+                    description: "Authentication status".to_string(),
+                    default: Some(json!(false)),
+                    example: None,
+                    constraints: Vec::new(),
+                    read_only: false,
+                    read_only_when: None,
+                },
+            ),
+        ],
+    )
 }

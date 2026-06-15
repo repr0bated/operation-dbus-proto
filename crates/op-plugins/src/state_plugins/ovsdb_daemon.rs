@@ -8,10 +8,10 @@
 //! org.opdbus.v1.plugins.ovsdb. This plugin provides the schema definition
 //! and state representation for the system registry.
 
-use crate::state_plugins::plugin_schema_defs;
 use anyhow::Result;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
 use simd_json::OwnedValue as Value;
+use op_state_store::{FieldType, PluginSchema};
 
 /// OVSDB Daemon Plugin
 ///
@@ -78,7 +78,7 @@ impl StatePlugin for OvsdbDaemonPlugin {
     }
 
     fn schema(&self) -> Option<op_state_store::PluginSchema> {
-        Some(plugin_schema_defs::ovsdb_daemon_plugin_schema())
+        Some(ovsdb_daemon_schema())
     }
 
     /// Query the daemon's current status
@@ -139,4 +139,60 @@ impl StatePlugin for OvsdbDaemonPlugin {
             atomic_operations: false,
         }
     }
+}
+
+pub(crate) fn ovsdb_daemon_schema() -> PluginSchema {
+    PluginSchema::builder("ovsdb_daemon")
+        .version("1.0.0")
+        .category("network")
+        .description("Native OVSDB D-Bus daemon — manages OVS bridges, ports, and flows via D-Bus/org.opdbus.v1.plugins.ovsdb")
+        .dependency("net")
+        .string_field(
+            "daemon_version",
+            true,
+            "Daemon semantic version",
+        )
+        .string_field(
+            "ovs_version",
+            false,
+            "Connected OVS version (if available)",
+        )
+        .string_field(
+            "socket_path",
+            true,
+            "Unix socket path for OVSDB connection",
+        )
+        .boolean_field(
+            "connected",
+            true,
+            "Whether daemon is connected to OVSDB",
+        )
+        .array_field(
+            "bridges",
+            FieldType::String,
+            false,
+            "List of managed bridge names",
+        )
+        .array_field(
+            "operations_supported",
+            FieldType::String,
+            true,
+            "Supported D-Bus operations: create_bridge, delete_bridge, add_port, list_bridges, list_ports, list_dbs",
+        )
+        .string_field(
+            "dbus_bus_name",
+            true,
+            "D-Bus bus name: org.opdbus.v1.plugins.ovsdb",
+        )
+        .string_field(
+            "dbus_object_path",
+            true,
+            "D-Bus object path: /org/opdbus/v1/plugins/ovsdb",
+        )
+        .string_field(
+            "grpc_listen_addr",
+            false,
+            "Optional gRPC listen address (e.g., 0.0.0.0:50051)",
+        )
+        .build()
 }

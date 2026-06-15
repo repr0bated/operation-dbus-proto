@@ -200,37 +200,26 @@ impl S6SystemctlService {
         result
     }
 
-    /// Restart a service (stop + start)
+    /// Restart a service (maps to: s6 process restart <service>)
     async fn restart(&self, service: &str) -> (bool, String) {
         debug!("Restarting service: {}", service);
-        info!(
-            "systemctl restart {} -> s6-rc -d change {} && s6-rc -u change {}",
-            service, service, service
-        );
+        info!("systemctl restart {} -> s6 process restart {}", service, service);
 
-        // Stop first
-        let (stop_ok, stop_msg) = self.run_s6_rc(&["-d", "change", service]);
-        if !stop_ok {
-            warn!(
-                "Failed to stop service {} during restart: {}",
-                service, stop_msg
-            );
-            // Continue to try start anyway
+        match Command::new("s6").args(["process", "restart", service]).output() {
+            Ok(output) => {
+                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                if output.status.success() {
+                    info!("Service {} restarted successfully", service);
+                    (true, if stdout.is_empty() { stderr } else { stdout }.trim().to_string())
+                } else {
+                    let msg = if stderr.is_empty() { stdout } else { stderr }.trim().to_string();
+                    error!("Failed to restart service {}: {}", service, msg);
+                    (false, msg)
+                }
+            }
+            Err(e) => (false, format!("Failed to execute s6 process restart: {}", e)),
         }
-
-        // Small delay to ensure clean shutdown
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-
-        // Start
-        let result = self.run_s6_rc(&["-u", "change", service]);
-
-        if result.0 {
-            info!("Service {} restarted successfully", service);
-        } else {
-            error!("Failed to restart service {}: {}", service, result.1);
-        }
-
-        result
     }
 
     /// Reload a service (maps to: s6-svc -h <service>)

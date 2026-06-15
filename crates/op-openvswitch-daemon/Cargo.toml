@@ -52,3 +52,7 @@ tonic-build = { workspace = true }
 [[bin]]
 name = "op-openvswitch-daemon"
 path = "src/main.rs"
+
+[[bin]]
+name = "ovs-attach"
+path = "src/bin/ovs_attach.rs"
