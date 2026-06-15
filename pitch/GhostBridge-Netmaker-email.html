@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GhostBridge x Netmaker - First Human Eyes</title>
+<style>
+  :root {
+    --bg: #070a12;
+    --panel: #101624;
+    --panel2: #141c2e;
+    --ink: #edf5ff;
+    --muted: #a9b7cc;
+    --soft: #71809a;
+    --line: #263246;
+    --cyan: #18d6ff;
+    --green: #3be58f;
+    --violet: #8b5cf6;
+    --amber: #ffc857;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background:
+      radial-gradient(circle at 18% 0%, rgba(24, 214, 255, .24), transparent 32%),
+      radial-gradient(circle at 86% 8%, rgba(139, 92, 246, .28), transparent 30%),
+      radial-gradient(circle at 50% 100%, rgba(59, 229, 143, .14), transparent 38%),
+      var(--bg);
+    color: var(--ink);
+    font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  .page {
+    width: min(980px, calc(100% - 32px));
+    margin: 0 auto;
+    padding: 36px 0 60px;
+  }
+  .shell {
+    border: 1px solid rgba(255,255,255,.12);
+    background: linear-gradient(180deg, rgba(16,22,36,.92), rgba(7,10,18,.96));
+    box-shadow: 0 24px 80px rgba(0,0,0,.42);
+    overflow: hidden;
+  }
+  .hero {
+    padding: 42px;
+    background:
+      linear-gradient(135deg, rgba(24,214,255,.14), transparent 42%),
+      linear-gradient(315deg, rgba(139,92,246,.18), transparent 46%);
+    border-bottom: 1px solid var(--line);
+  }
+  .eyebrow {
+    margin: 0 0 14px;
+    color: var(--cyan);
+    font: 700 12px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+  }
+  h1, h2, h3 { margin: 0; line-height: 1.08; letter-spacing: 0; }
+  h1 {
+    max-width: 840px;
+    font-size: clamp(38px, 7vw, 76px);
+    font-weight: 850;
+  }
+  .gradient {
+    background: linear-gradient(90deg, var(--cyan), var(--green), var(--violet));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .lead {
+    max-width: 760px;
+    margin: 22px 0 0;
+    color: #dbe8fa;
+    font-size: clamp(18px, 2.2vw, 23px);
+  }
+  .note {
+    margin-top: 22px;
+    max-width: 760px;
+    color: var(--muted);
+    font-size: 15px;
+  }
+  .chips { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 24px; }
+  .chip {
+    border: 1px solid rgba(24,214,255,.26);
+    background: rgba(9,14,24,.72);
+    color: #dff8ff;
+    padding: 8px 12px;
+    font: 700 12px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  .section { padding: 34px 42px; border-bottom: 1px solid var(--line); }
+  .section h2 { font-size: clamp(25px, 3vw, 36px); margin-bottom: 14px; }
+  p { margin: 0 0 14px; color: var(--muted); }
+  strong { color: var(--ink); }
+  .grid { display: grid; gap: 14px; }
+  .g2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .g3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .card {
+    min-height: 100%;
+    border: 1px solid rgba(255,255,255,.11);
+    background: linear-gradient(180deg, rgba(20,28,46,.94), rgba(13,18,31,.94));
+    padding: 18px;
+  }
+  .card h3 {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    margin-bottom: 9px;
+    font-size: 17px;
+  }
+  .card p { margin: 0; font-size: 14px; }
+  .mark {
+    width: 10px;
+    height: 10px;
+    display: inline-block;
+    background: linear-gradient(135deg, var(--cyan), var(--green));
+    box-shadow: 0 0 18px rgba(24,214,255,.4);
+  }
+  .stack {
+    margin-top: 18px;
+    border: 1px solid rgba(255,255,255,.12);
+    background: #080d17;
+    padding: 16px;
+  }
+  .row {
+    display: grid;
+    grid-template-columns: 150px 1fr;
+    gap: 14px;
+    align-items: start;
+    padding: 13px 14px;
+    border: 1px solid rgba(255,255,255,.08);
+    background: linear-gradient(90deg, rgba(24,214,255,.08), rgba(139,92,246,.06));
+    margin-bottom: 9px;
+  }
+  .row:last-child { margin-bottom: 0; }
+  .label {
+    color: var(--cyan);
+    font: 800 12px/1.3 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    text-transform: uppercase;
+  }
+  .row span:last-child { color: var(--muted); font-size: 14px; }
+  ul { margin: 0; padding-left: 21px; color: var(--muted); }
+  li { margin: 8px 0; }
+  .callout {
+    border-left: 4px solid var(--green);
+    background: rgba(59,229,143,.08);
+    padding: 16px 18px;
+    color: #dfffee;
+  }
+  .callout p { color: #dfffee; margin: 0; }
+  .quote {
+    font-size: clamp(22px, 3vw, 34px);
+    line-height: 1.22;
+    color: var(--ink);
+    font-weight: 780;
+  }
+  .small {
+    color: var(--soft);
+    font-size: 13px;
+  }
+  .subject {
+    margin-top: 18px;
+    border: 1px dashed rgba(255,255,255,.22);
+    background: rgba(255,255,255,.04);
+    padding: 13px 15px;
+    color: var(--muted);
+    font-size: 14px;
+  }
+  .subject code {
+    color: var(--ink);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (max-width: 760px) {
+    .hero, .section { padding: 28px 20px; }
+    .g2, .g3 { grid-template-columns: 1fr; }
+    .row { grid-template-columns: 1fr; gap: 5px; }
+  }
+</style>
+</head>
+<body>
+  <main class="page">
+    <article class="shell">
+      <header class="hero">
+        <p class="eyebrow">GhostBridge x Netmaker</p>
+        <h1>Netmaker is not a dependency.<br><span class="gradient">It is core code.</span></h1>
+        <p class="lead">We built a zero-trust, compliance-grade AI control plane in Rust, and Netmaker is the spine: transport, identity root, and link zero of the evidence chain.</p>
+        <p class="note">This is the first time anyone outside the project will have seen it. The meeting started as a trial/sales call, but the real point is simpler: we want a sharp Netmaker engineer to look closely and tell us what you think.</p>
+        <div class="chips">
+          <span class="chip">Rust control plane</span>
+          <span class="chip">Netmaker identity spine</span>
+          <span class="chip">No-NIC hardening pattern</span>
+          <span class="chip">OSCAL-gated actions</span>
+          <span class="chip">Confrontable AI</span>
+        </div>
+        <div class="subject">
+          Suggested subject line: <code>First human eyes: GhostBridge built on Netmaker</code>
+        </div>
+      </header>
+
+      <section class="section">
+        <p class="eyebrow">The One Paragraph</p>
+        <h2>A mesh you can trust, not just connect</h2>
+        <p>GhostBridge turns a Netmaker mesh into a trusted backbone. Traffic moves through decoy ingress, identity sled, Xray header injection, a per-hop interceptor, schema validation, OSCAL policy gates, and a tamper-evident Snowball ledger.</p>
+        <p>An AI layer reasons over verified history, but <strong>it has no hands</strong>: no execution rights, no direct control, and no ability to bypass the governed layer. It recommends into schema. A.N.N.A. Scribe and the Compliance Engine decide what is allowed to become real state.</p>
+      </section>
+
+      <section class="section">
+        <p class="eyebrow">Why This Is Different</p>
+        <div class="grid g2">
+          <div class="card">
+            <h3><span class="mark"></span> AI you can cross-examine</h3>
+            <p>Chatbot on top, Qdrant evidence on the bottom. Ask why something happened and the system answers with semantic receipts from the chain.</p>
+          </div>
+          <div class="card">
+            <h3><span class="mark"></span> Chain is truth</h3>
+            <p>Qdrant and Cozo are rebuildable projections. The canonical record is the hash-linked Snowball ledger, not the search database.</p>
+          </div>
+          <div class="card">
+            <h3><span class="mark"></span> Model has no hands</h3>
+            <p>The AI can reason, delegate, and recommend. It cannot directly execute. Hallucination becomes a rejected recommendation, not an incident.</p>
+          </div>
+          <div class="card">
+            <h3><span class="mark"></span> One privacy dial</h3>
+            <p>Same mesh and chain can run privacy-first or compliance-first. The identity-linkage layer changes, not the whole architecture.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <p class="eyebrow">Governance Stack</p>
+        <h2>Make the wrong thing impossible first</h2>
+        <div class="stack">
+          <div class="row"><span class="label">Rust</span><span>The compiler is the first enforcer: invalid code should not build.</span></div>
+          <div class="row"><span class="label">Schema</span><span>Invalid state is unrepresentable. In this system, plugin is schema; without validated schema, the object does not exist.</span></div>
+          <div class="row"><span class="label">Gemma + Xray</span><span>Classify and route traffic. They direct; they do not authorize.</span></div>
+          <div class="row"><span class="label">ZeroClaw</span><span>Route to the right model by cost, reasoning depth, specialty, and policy.</span></div>
+          <div class="row"><span class="label">A.N.N.A.</span><span>A.N.N.A. Scribe notarizes identity and Snowball session state. The Law Firm gates policy.</span></div>
+          <div class="row"><span class="label">Chain</span><span>Every accepted action becomes a hash-linked, tamper-evident block.</span></div>
+          <div class="row"><span class="label">The Loop</span><span>AI rebuilds semantic and graph projections from the chain, reasons over them, and produces the next governed recommendation.</span></div>
+        </div>
+      </section>
+
+      <section class="section">
+        <p class="eyebrow">Netmaker Hardening Pattern</p>
+        <h2>The part we want Netmaker to see</h2>
+        <div class="callout">
+          <p>The reference pattern is a Netmaker control plane with no exposed service port: loopback-only services, Incus proxy devices, Unix sockets under <strong>/run/netmaker</strong>, and Xray routing by SNI behind WireGuard identity.</p>
+        </div>
+        <div class="grid g3" style="margin-top:16px">
+          <div class="card">
+            <h3><span class="mark"></span> No NIC posture</h3>
+            <p><strong>netmaker</strong>, <strong>netmaker-mq</strong>, and <strong>netmaker-ui</strong> are treated as loopback/socket services, not public daemons.</p>
+          </div>
+          <div class="card">
+            <h3><span class="mark"></span> Sockets not ports</h3>
+            <p>The attack surface moves to socket files such as <strong>/run/netmaker/api.sock</strong> and <strong>ui.sock</strong>, behind the identity gate.</p>
+          </div>
+          <div class="card">
+            <h3><span class="mark"></span> Xray routing</h3>
+            <p><strong>wg-xray</strong> terminates and routes traffic by domain to the correct internal socket-backed service.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <p class="eyebrow">Why Netmaker Is Core</p>
+        <h2>You are at the root of the identity story</h2>
+        <ul>
+          <li>Netmaker is represented as a first-class state plugin, not a bolt-on integration.</li>
+          <li>WireGuard peers are the identity root: <strong>session_id = Argon2(PSK, salt = WG_pubkey)</strong>.</li>
+          <li>Remove Netmaker and the identity layer loses link zero of the evidence chain.</li>
+          <li>GhostBridge turns hardened Netmaker deployments into a regulated-room story: privacy, compliance, accountability, and AI evidence.</li>
+        </ul>
+      </section>
+
+      <section class="section">
+        <p class="eyebrow">What We Want</p>
+        <h2>Not a pitch. A first look.</h2>
+        <p>We are not asking for a purchase decision, a partnership commitment, or homework. We want a knowledgeable human at Netmaker to see what has been built on top of your layer and react like an engineer.</p>
+        <p>The architecture is implemented far enough to deserve that reaction. Some edges are still being hardened, but the core idea is real and implementable with what exists today.</p>
+      </section>
+
+      <section class="section">
+        <p class="quote">Netmaker connects the machines. GhostBridge proves who they are and that policy was enforced, every hop, auditor-grade, in an AI loop you can cross-examine.</p>
+        <p class="small" style="margin-top:18px">Confidential pre-meeting brief. Self-contained HTML; no external assets, no tracking, no remote dependencies.</p>
+      </section>
+    </article>
+  </main>
+</body>
+</html>

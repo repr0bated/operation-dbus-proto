@@ -12,8 +12,8 @@ tell us what you really think.*
 
 - We've built a **zero-trust, compliance-grade AI control plane** — in Rust — that runs **on a Netmaker mesh** and treats it as the spine: the transport **and** the root of identity.
 - We deploy your control server in a pattern most of your customers don't: **no network interface at all** — loopback + unix sockets, fronted by Xray. A port scan returns nothing.
-- We already run Netmaker in production. We're not here for a standard enterprise eval — we're here because **you're already load-bearing in something we think is genuinely novel**, and you should see it.
-- **Why we're sending this:** not an ask. We already run this in production on what's available today — we just figured the people who built the layer it all stands on should be the first to see what got built on top of it.
+- We already use Netmaker as load-bearing design infrastructure. We're not here for a standard enterprise eval — we're here because **you're at the root of something we think is genuinely novel**, and you should see it early.
+- **Why we're sending this:** not an ask. This is an implemented, technically grounded reference architecture built around what exists today — we figured the people who built the layer it all stands on should be the first to see what got built on top of it.
 
 ---
 
@@ -71,12 +71,12 @@ Same mesh, same chain, same confrontable AI — **only the identity-linkage laye
 
 ## The Netmaker hardening pattern (the part we want to show you)
 
-Your control server runs with **no NIC**:
+The hardening pattern is: run the control server with **no NIC**:
 - `netmaker`, `netmaker-mq` (Mosquitto), `netmaker-ui` → loopback only.
 - Exposed to the host as **unix sockets** (`/run/netmaker/api.sock`, `mq.sock`, `mqtts.sock`, `ui.sock`) via Incus proxy devices.
 - `wg-xray` + Xray terminate TLS and route by SNI to those sockets.
 
-**There is no open port on the Netmaker server.** The attack surface is a socket file behind the WireGuard + identity gate. We'd love to publish this jointly as a reference architecture for your security-conscious users.
+The target posture is **no open port on the Netmaker server**: the attack surface becomes a socket file behind the WireGuard + identity gate. We'd love to publish this jointly as a reference architecture for your security-conscious users.
 
 ---
 
@@ -84,7 +84,7 @@ Your control server runs with **no NIC**:
 
 - It's a **first-class state plugin** — managed by the same engine that runs the whole platform.
 - Its peers **are the identity model**: `session_id = Argon2(PSK, salt = WG_pubkey)`, rooted in the WireGuard pre-shared key you already manage. Remove Netmaker and the identity layer has no root. It is **link #0 of the evidence chain.**
-- **Every GhostBridge deployment is a hardened Netmaker deployment**, sold into regulated rooms Netmaker alone doesn't reach yet. We expand your surface; you anchor our spine.
+- **Every GhostBridge deployment wants to be a hardened Netmaker deployment**, sold into regulated rooms Netmaker alone doesn't reach yet. We expand your surface; you anchor our spine.
 
 ---
 
@@ -92,7 +92,7 @@ Your control server runs with **no NIC**:
 
 Plainly: **we want a knowledgeable human to look closely and react.** This is the first outside set of eyes on the project, and your team is the right first audience — because you built the layer it all stands on.
 
-We're not asking for anything. We already run this in production on what's available today. We just figured the people who built the layer it all stands on should be the first to see what got built on top of it.
+We're not asking for anything. The architecture is implemented far enough to be worth a serious engineering reaction, and it is built on what's available today. We just figured the people who built the layer it all stands on should be the first to see what got built on top of it.
 
 So in the meeting: if any of it is interesting, we'll happily go deeper. If not — no harm, no homework. Be the first humans to see this, and tell us if it's as interesting as we think it is.
 
@@ -112,4 +112,4 @@ So in the meeting: if any of it is interesting, we'll happily go deeper. If not 
 - **"Is it really a blockchain if it's not distributed?"** It's a blockchain *by structure* (hashed, chained blocks). Distribution buys trustless multi-party consensus; we don't need that — we get operator-tamper-resistance by **anchoring** the chain head externally. Correct tool for a single-operator compliance ledger.
 - **"What stops the AI going rogue?"** It has no hands — no internet, no execution rights. It recommends; the governed layer executes. Hallucination has no reach.
 - **"Why Rust / why these components?"** Selection principle: **schema-native from the ground up** (e.g. zeroclaw) and **safe by construction** (Rust — memory-safe, race-free, single static binaries). The governance holds at every layer because nothing was bolted on.
-- **"What do you actually want from us?"** Nothing, really — this is a heads-up, not a request. We already run it on what's available. We just wanted the people who built the layer it stands on to be the first to see it.
+- **"What do you actually want from us?"** Nothing, really — this is a heads-up, not a request. We built the pattern around what's available today and want the people who built the layer it stands on to be the first to see it.
