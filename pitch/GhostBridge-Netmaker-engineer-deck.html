@@ -1,0 +1,434 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>GhostBridge x Netmaker - Technical Platform Deck</title>
+<style>
+:root{
+  --bg:#05070d; --ink:#edf4ff; --mut:#a8b5cc; --dim:#68758d; --line:#20283b;
+  --panel:rgba(16,22,36,.66); --panel2:rgba(10,14,24,.82);
+  --cyan:#21d4fd; --green:#35e89a; --violet:#9b5cff; --amber:#f5b84b; --red:#fb7185;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);overflow-x:hidden;
+  font:16px/1.62 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif}
+.bg{position:fixed;inset:-24%;z-index:-3;filter:blur(70px);opacity:.66;pointer-events:none}
+.orb{position:absolute;border-radius:50%;mix-blend-mode:screen;animation:float 24s ease-in-out infinite}
+.o1{width:48vw;height:48vw;background:#7c3cff;left:-8%;top:-10%}
+.o2{width:42vw;height:42vw;background:#06b6d4;right:-10%;top:4%;animation-delay:-6s}
+.o3{width:40vw;height:40vw;background:#10b981;left:18%;bottom:-16%;animation-delay:-13s}
+.o4{width:34vw;height:34vw;background:#f59e0b;right:10%;bottom:-8%;animation-delay:-4s;opacity:.45}
+@keyframes float{0%,100%{transform:translate(0,0) scale(1)}33%{transform:translate(7%,8%) scale(1.12)}66%{transform:translate(-5%,4%) scale(.94)}}
+.scan{position:fixed;inset:0;z-index:-2;opacity:.055;pointer-events:none;
+  background-image:linear-gradient(#fff 1px,transparent 1px),linear-gradient(90deg,#fff 1px,transparent 1px);
+  background-size:48px 48px;mask-image:radial-gradient(ellipse at 50% 0,#000 30%,transparent 78%)}
+#progress{position:fixed;top:0;left:0;height:3px;width:0;z-index:20;background:linear-gradient(90deg,var(--violet),var(--cyan),var(--green));box-shadow:0 0 16px var(--cyan)}
+.wrap{max-width:1160px;margin:0 auto;padding:0 24px}
+section{min-height:80vh;padding:8vh 0;display:flex;align-items:center;position:relative}
+section.short{min-height:auto;padding:7vh 0}
+h1,h2,h3{margin:0 0 .52em;line-height:1.09;letter-spacing:0;font-weight:850}
+h1{font-size:clamp(42px,8.2vw,86px);max-width:1040px}
+h2{font-size:clamp(30px,4.7vw,52px)}
+h3{font-size:18px}
+p{margin:0 0 1em;color:var(--mut)}
+.lead{font-size:clamp(18px,2.3vw,24px);color:#dfe8f7;max-width:900px}
+.grad{background:linear-gradient(100deg,#a78bfa,var(--cyan),var(--green),#a78bfa);
+  background-size:320% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:slide 8s linear infinite}
+@keyframes slide{to{background-position:320% 0}}
+.eyebrow{display:inline-block;margin-bottom:18px;color:var(--cyan);font:850 12px/1 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;letter-spacing:.24em;text-transform:uppercase}
+.eyebrow:before{content:"";display:inline-block;width:28px;height:1px;background:var(--cyan);vertical-align:middle;margin-right:10px;opacity:.65}
+.chips{display:flex;flex-wrap:wrap;gap:9px;margin:24px 0}
+.chip{border:1px solid var(--line);background:var(--panel);backdrop-filter:blur(10px);border-radius:999px;padding:9px 14px;color:var(--mut);font:750 12px/1 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.grid{display:grid;gap:16px}.g2{grid-template-columns:repeat(2,minmax(0,1fr))}.g3{grid-template-columns:repeat(3,minmax(0,1fr))}.g4{grid-template-columns:repeat(4,minmax(0,1fr))}
+@media(max-width:900px){.g2,.g3,.g4{grid-template-columns:1fr}section{min-height:auto;padding:7vh 0}}
+.card{position:relative;overflow:hidden;border:1px solid var(--line);background:linear-gradient(180deg,var(--panel),rgba(8,12,22,.72));border-radius:18px;padding:22px;backdrop-filter:blur(10px);transition:transform .35s,box-shadow .35s,border-color .35s}
+.card:hover{transform:translateY(-5px);box-shadow:0 24px 70px -34px rgba(33,212,253,.55);border-color:rgba(33,212,253,.38)}
+.card h3{display:flex;align-items:center;gap:10px}.card p{font-size:14.5px;margin:0}
+.dot{width:9px;height:9px;border-radius:3px;background:linear-gradient(120deg,var(--violet),var(--cyan));box-shadow:0 0 12px rgba(33,212,253,.6);flex:0 0 auto}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}.kv{color:var(--cyan)}
+.svgwrap{border:1px solid var(--line);border-radius:18px;background:rgba(7,10,18,.7);padding:18px;backdrop-filter:blur(8px);overflow:hidden}
+text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+ul.clean{list-style:none;margin:0;padding:0}
+ul.clean li{position:relative;padding:6px 0 6px 24px;color:var(--mut);font-size:14px}
+ul.clean li:before{content:"";position:absolute;left:0;top:13px;width:9px;height:9px;border-radius:3px;background:linear-gradient(120deg,var(--violet),var(--cyan))}
+.table{border:1px solid var(--line);border-radius:18px;overflow:hidden;background:rgba(8,12,22,.72)}
+.tr{display:grid;grid-template-columns:210px 1fr;border-bottom:1px solid var(--line)}
+.tr:last-child{border-bottom:0}.td{padding:14px 16px;color:var(--mut);font-size:14px}.td:first-child{color:var(--cyan);font:800 12px/1.4 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;text-transform:uppercase;background:rgba(33,212,253,.055)}
+.quote{font-size:clamp(24px,3.6vw,40px);font-weight:820;line-height:1.25;color:var(--ink)}
+.muted{color:var(--dim);font-size:13px}.footer{padding:42px 0 90px;text-align:center;color:var(--dim);font-size:13px}
+.reveal{opacity:0;transform:translateY(26px);transition:opacity .8s cubic-bezier(.2,.7,.2,1),transform .8s cubic-bezier(.2,.7,.2,1)}
+.reveal.in{opacity:1;transform:none}.d1{transition-delay:.08s}.d2{transition-delay:.16s}.d3{transition-delay:.24s}
+.flow{stroke-dasharray:6 8;animation:dash 1.1s linear infinite}@keyframes dash{to{stroke-dashoffset:-28}}
+.pulse{animation:pulse 2.4s ease-in-out infinite}@keyframes pulse{0%,100%{opacity:.55}50%{opacity:1}}
+@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}.reveal{opacity:1;transform:none}}
+</style>
+</head>
+<body>
+<div id="progress"></div>
+<div class="bg"><div class="orb o1"></div><div class="orb o2"></div><div class="orb o3"></div><div class="orb o4"></div></div>
+<div class="scan"></div>
+
+<section>
+  <div class="wrap">
+    <div class="eyebrow reveal">GhostBridge x Netmaker</div>
+    <h1 class="reveal d1">Full technical use case deck.</h1>
+    <p class="lead reveal d2">Netmaker is the mesh and identity backbone of GhostBridge: a Rust control plane platform-as-a-service for governed AI, schema-authored state, no-NIC service hardening, gRPC over Unix domain sockets (UDS), semantic evidence, and immutable, tamper-evident accountability.</p>
+    <div class="chips reveal d3">
+      <span class="chip">Netmaker</span><span class="chip">WireGuard</span><span class="chip">D-Bus</span><span class="chip">PluginSchema</span><span class="chip">Xray</span><span class="chip">Incus</span><span class="chip">Open vSwitch</span><span class="chip">OpenFlow</span><span class="chip">gRPC</span><span class="chip">Tonic</span><span class="chip">Gemma</span><span class="chip">Unix domain sockets</span><span class="chip">Qdrant</span><span class="chip">Cozo</span><span class="chip">Voyage</span><span class="chip">OSCAL</span>
+    </div>
+    <p class="muted reveal d3" style="max-width:850px">First human eyes outside the project. Sending the full system context now; I will answer questions in the meeting tomorrow.</p>
+  </div>
+</section>
+
+<section><div class="wrap">
+  <div class="eyebrow reveal">System thesis</div>
+  <h2 class="reveal d1">A mesh is more than transport when it becomes the root of evidence.</h2>
+    <p class="lead reveal d2" style="color:var(--mut)">GhostBridge treats Netmaker/WireGuard identity as link zero. Every governed action carries identity, mutation, schema, policy authority, trace, footprint, and semantic meaning. AI can reason over the evidence, but only the governed layer can mutate state. gRPC is the service plane that moves these contracts between Rust components over Unix domain sockets and controlled bridge paths, and Tonic is the Rust implementation of that gRPC transport.</p>
+  <div class="grid g3" style="margin-top:20px">
+    <div class="card reveal"><h3><span class="dot"></span>Transport</h3><p>Netmaker mesh carries the trusted path. Xray routes by Server Name Indication (SNI) and injects identity/accountability headers.</p></div>
+    <div class="card reveal d1"><h3><span class="dot"></span>Identity</h3><p>WireGuard peer material anchors <span class="mono kv">session_id = Argon2(PSK, salt = WG_pubkey)</span>.</p></div>
+    <div class="card reveal d2"><h3><span class="dot"></span>Evidence</h3><p>The Snowball ledger is the immutable, tamper-evident memory-loop source: accepted actions are appended as hash-linked blocks, then replayed into semantic projections for retrieval and confrontation.</p></div>
+  </div>
+  <div class="svgwrap reveal d3" style="margin-top:18px">
+    <svg viewBox="0 0 1160 260" width="100%" aria-label="End-to-end GhostBridge flow">
+      <defs>
+        <marker id="arrow1" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#68758d"/></marker>
+      </defs>
+      <g font-size="12" text-anchor="middle">
+        <rect x="24" y="58" width="140" height="54" rx="12" fill="#0f1320" stroke="#2a3550"/><text x="94" y="79" fill="#edf4ff">Netmaker</text><text x="94" y="97" fill="#68758d">WireGuard mesh</text>
+        <rect x="198" y="58" width="140" height="54" rx="12" fill="#0f1320" stroke="#2a3550"/><text x="268" y="79" fill="#edf4ff">Xray</text><text x="268" y="97" fill="#68758d">Server Name Indication</text>
+        <rect x="372" y="58" width="140" height="54" rx="12" fill="#0f1320" stroke="#2a3550"/><text x="442" y="79" fill="#edf4ff">D-Bus</text><text x="442" y="97" fill="#68758d">plugin authority</text>
+        <rect x="546" y="58" width="140" height="54" rx="12" fill="#0f1320" stroke="#2a3550"/><text x="616" y="79" fill="#edf4ff">gRPC/Unix</text><text x="616" y="97" fill="#68758d">Shuttle bridge</text>
+        <rect x="720" y="58" width="140" height="54" rx="12" fill="#0f1320" stroke="#2a3550"/><text x="790" y="79" fill="#edf4ff">Snowball</text><text x="790" y="97" fill="#68758d">hash-linked blocks</text>
+        <rect x="894" y="58" width="140" height="54" rx="12" fill="#0f1320" stroke="#2a3550"/><text x="964" y="79" fill="#edf4ff">Voyage/Qdrant</text><text x="964" y="97" fill="#68758d">semantic evidence</text>
+        <rect x="1040" y="58" width="96" height="54" rx="12" fill="#0f1320" stroke="#35e89a66"/><text x="1088" y="79" fill="#edf4ff">UI</text><text x="1088" y="97" fill="#68758d">chat + evidence</text>
+      </g>
+      <g stroke="#68758d" stroke-width="1.5">
+        <line x1="166" y1="85" x2="194" y2="85" marker-end="url(#arrow1)"/>
+        <line x1="340" y1="85" x2="368" y2="85" marker-end="url(#arrow1)"/>
+        <line x1="514" y1="85" x2="542" y2="85" marker-end="url(#arrow1)"/>
+        <line x1="688" y1="85" x2="716" y2="85" marker-end="url(#arrow1)"/>
+        <line x1="862" y1="85" x2="890" y2="85" marker-end="url(#arrow1)"/>
+        <line x1="988" y1="85" x2="1036" y2="85" marker-end="url(#arrow1)"/>
+      </g>
+      <text x="580" y="214" fill="#68758d" font-size="11" text-anchor="middle">identity enters on the mesh, state is authorized in D-Bus, service contracts move in gRPC over Unix domain sockets, and evidence is searchable in Qdrant</text>
+    </svg>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <div class="eyebrow reveal">Core philosophies</div>
+  <h2 class="reveal d1">What cannot be verified does not exist.</h2>
+  <div class="grid g3" style="margin-top:18px">
+    <div class="card reveal"><h3><span class="dot"></span>No verified schema, no existence</h3><p>If a thing has no validated schema, it is not a real object in this system. That is the primary attack boundary and the primary source of truth.</p></div>
+    <div class="card reveal d1"><h3><span class="dot"></span>Single source of truth</h3><p>Schema-backed D-Bus control-bus projection is authoritative. User interface, gRPC, Model Context Protocol (MCP), search, and evidence are projections or transports, not alternate realities.</p></div>
+    <div class="card reveal d2"><h3><span class="dot"></span>Use live resources</h3><p>Build from working realtime resources that already exist. Do not mine past user data to index, compile, or replay as a substitute for live state.</p></div>
+    <div class="card reveal"><h3><span class="dot"></span>Reality first</h3><p>Prefer observed state, live traces, and actual object graphs over claims, intentions, or clean-room abstractions.</p></div>
+    <div class="card reveal d1"><h3><span class="dot"></span>Future from present</h3><p>The future is shaped by what is already running, measurable, and schema-valid today. That is how the platform stays grounded.</p></div>
+    <div class="card reveal d2"><h3><span class="dot"></span>No speculative resources</h3><p>We do not search for hypothetical resources to invent later. We use current realtime resources to build the next state from the current one.</p></div>
+  </div>
+  <div class="svgwrap reveal d3" style="margin-top:18px">
+    <svg viewBox="0 0 1160 220" width="100%" aria-label="Core philosophies">
+      <defs><marker id="arrowP" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#68758d"/></marker></defs>
+      <g font-size="12" text-anchor="middle">
+        <rect x="30" y="54" width="180" height="54" rx="12" fill="#0f1320" stroke="#2a3550"/><text x="120" y="76" fill="#edf4ff">Realtime resources</text><text x="120" y="94" fill="#68758d">live objects, traces, state</text>
+        <rect x="250" y="54" width="180" height="54" rx="12" fill="#0f1320" stroke="#2a3550"/><text x="340" y="76" fill="#edf4ff">Validated schema</text><text x="340" y="94" fill="#68758d">existence gate</text>
+        <rect x="470" y="54" width="180" height="54" rx="12" fill="#0f1320" stroke="#2a3550"/><text x="560" y="76" fill="#edf4ff">Single truth</text><text x="560" y="94" fill="#68758d">D-Bus projection</text>
+        <rect x="690" y="54" width="180" height="54" rx="12" fill="#0f1320" stroke="#2a3550"/><text x="780" y="76" fill="#edf4ff">Memory loop</text><text x="780" y="94" fill="#68758d">append + replay</text>
+        <rect x="910" y="54" width="220" height="54" rx="12" fill="#0f1320" stroke="#35e89a66"/><text x="1020" y="76" fill="#edf4ff">Future state</text><text x="1020" y="94" fill="#68758d">shaped from present</text>
+      </g>
+      <g stroke="#68758d" stroke-width="1.5">
+        <line x1="214" y1="81" x2="246" y2="81" marker-end="url(#arrowP)"/>
+        <line x1="434" y1="81" x2="466" y2="81" marker-end="url(#arrowP)"/>
+        <line x1="654" y1="81" x2="686" y2="81" marker-end="url(#arrowP)"/>
+        <line x1="874" y1="81" x2="906" y2="81" marker-end="url(#arrowP)"/>
+      </g>
+      <text x="580" y="176" fill="#68758d" font-size="11" text-anchor="middle">live resources are validated into schema; schema becomes truth; memory loop appends/replays; the future is built from the present state, not past user-data mining or imagined inventory</text>
+    </svg>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <div class="eyebrow reveal">Core runtime architecture</div>
+  <h2 class="reveal d1">One control plane. One schema truth. Multiple transport surfaces.</h2>
+  <div class="table reveal d2">
+    <div class="tr"><div class="td">Rust control plane</div><div class="td">The whole system is a Rust control plane first: state, validation, bridges, and projections live in compiled Rust crates rather than ad hoc scripts.</div></div>
+    <div class="tr"><div class="td">D-Bus projection</div><div class="td">Live authority is the D-Bus control bus at <span class="mono kv">org.opdbus.projection</span>; plugin objects publish under <span class="mono kv">/org/opdbus/v1/plugins/&lt;name&gt;</span>.</div></div>
+    <div class="tr"><div class="td">PluginSchema</div><div class="td">Plugin is schema. If a validated schema/object is missing, the thing does not exist in the system.</div></div>
+    <div class="tr"><div class="td">The Sled</div><div class="td">1:1 shared-memory layout for identity/state projection; schema-guided direct read/write semantics.</div></div>
+    <div class="tr"><div class="td">The Shuttle</div><div class="td">Rust bridge/courier between D-Bus, gRPC, vector search, state projection, and UI surfaces.</div></div>
+    <div class="tr"><div class="td">The Snowball</div><div class="td">Immutable, tamper-evident session ledger and memory-loop source. Chat turns, tool actions, and approvals are appended here, then replayed into semantic search and UI evidence.</div></div>
+    <div class="tr"><div class="td">Strike / Etch</div><div class="td">Hash generation and footprint binding for blocks, traces, and payloads.</div></div>
+    <div class="tr"><div class="td">gRPC / Unix</div><div class="td">Internal service RPC over Unix domain sockets or controlled bridge paths; D-Bus remains authority, gRPC is transport.</div></div>
+    <div class="tr"><div class="td">gRPC bridge</div><div class="td">Service-to-service APIs, event-chain search, assistant surfaces, and internal contracts flow over gRPC when they are not directly D-Bus-bound.</div></div>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <div class="eyebrow reveal">Why these choices</div>
+  <h2 class="reveal d1">Tonic, Gemma, and ZeroClaw each fill a specific role.</h2>
+  <div class="grid g3" style="margin-top:18px">
+    <div class="card reveal"><h3><span class="dot"></span>Tonic</h3><p>The gRPC implementation in Rust. It fits the control plane because it keeps service transport type-safe, schema-driven, and local-socket friendly. Tonic reflection lets runtime clients discover the service surface without needing a local .proto file.</p></div>
+    <div class="card reveal d1"><h3><span class="dot"></span>Gemma</h3><p>The traffic classifier/router for the front of the pipeline. Gemma decides what a request is before Xray/OpenFlow decide where it should go.</p></div>
+    <div class="card reveal d2"><h3><span class="dot"></span>ZeroClaw</h3><p>Policy-aware model dispatch. It is not a generic wrapper; it centralizes model routing by cost, reasoning depth, provider, structure, and policy so the rest of the stack stays schema-native.</p></div>
+  </div>
+  <div class="svgwrap reveal d3" style="margin-top:18px">
+    <svg viewBox="0 0 1160 220" width="100%" aria-label="Choice rationale">
+      <defs><marker id="arrowC" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#68758d"/></marker></defs>
+      <g font-size="12" text-anchor="middle">
+        <rect x="34" y="58" width="170" height="54" rx="12" fill="#0f1320" stroke="#2a3550"/><text x="119" y="80" fill="#edf4ff">Request</text><text x="119" y="98" fill="#68758d">user / tool / system</text>
+        <rect x="240" y="58" width="170" height="54" rx="12" fill="#0f1320" stroke="#2a3550"/><text x="325" y="80" fill="#edf4ff">Gemma</text><text x="325" y="98" fill="#68758d">classify / route intent</text>
+        <rect x="446" y="58" width="170" height="54" rx="12" fill="#0f1320" stroke="#2a3550"/><text x="531" y="80" fill="#edf4ff">OpenFlow</text><text x="531" y="98" fill="#68758d">tag routing</text>
+        <rect x="652" y="58" width="170" height="54" rx="12" fill="#0f1320" stroke="#2a3550"/><text x="737" y="80" fill="#edf4ff">ZeroClaw</text><text x="737" y="98" fill="#68758d">pick model / provider</text>
+        <rect x="858" y="58" width="170" height="54" rx="12" fill="#0f1320" stroke="#2a3550"/><text x="943" y="80" fill="#edf4ff">Tonic</text><text x="943" y="98" fill="#68758d">typed gRPC + reflection</text>
+        <rect x="1064" y="58" width="62" height="54" rx="12" fill="#0f1320" stroke="#35e89a66"/><text x="1095" y="80" fill="#edf4ff">UI</text><text x="1095" y="98" fill="#68758d">answer</text>
+      </g>
+      <g stroke="#68758d" stroke-width="1.5">
+        <line x1="204" y1="85" x2="236" y2="85" marker-end="url(#arrowC)"/>
+        <line x1="410" y1="85" x2="442" y2="85" marker-end="url(#arrowC)"/>
+        <line x1="616" y1="85" x2="648" y2="85" marker-end="url(#arrowC)"/>
+        <line x1="822" y1="85" x2="854" y2="85" marker-end="url(#arrowC)"/>
+        <line x1="1028" y1="85" x2="1060" y2="85" marker-end="url(#arrowC)"/>
+      </g>
+      <text x="580" y="176" fill="#68758d" font-size="11" text-anchor="middle">Gemma classifies, OpenFlow tags/routes, ZeroClaw dispatches models, and Tonic carries the typed gRPC call plus reflection metadata</text>
+    </svg>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <div class="eyebrow reveal">Authority plane</div>
+  <h2 class="reveal d1">Plugin is schema. D-Bus is authority. A.N.N.A. notarizes the state.</h2>
+  <p class="lead reveal d2" style="color:var(--mut)">This is the control contract that keeps the rest of the platform honest: D-Bus publishes the object, PluginSchema defines the shape, A.N.N.A. Scribe notarizes identity and trace, and the Law Firm enforces policy references on top.</p>
+  <div class="svgwrap reveal d3" style="margin-top:18px">
+    <svg viewBox="0 0 1160 250" width="100%" aria-label="Authority plane">
+      <defs>
+        <marker id="arrowA" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#68758d"/></marker>
+      </defs>
+      <g font-size="12" text-anchor="middle">
+        <rect x="24" y="66" width="150" height="52" rx="12" fill="#0f1320" stroke="#2a3550"/><text x="99" y="88" fill="#edf4ff">D-Bus</text><text x="99" y="106" fill="#68758d">org.opdbus.projection</text>
+        <rect x="204" y="66" width="180" height="52" rx="12" fill="#0f1320" stroke="#2a3550"/><text x="294" y="88" fill="#edf4ff">PluginSchema</text><text x="294" y="106" fill="#68758d">shape + validation</text>
+        <rect x="414" y="66" width="170" height="52" rx="12" fill="#0f1320" stroke="#2a3550"/><text x="499" y="88" fill="#edf4ff">Plugin Objects</text><text x="499" y="106" fill="#68758d">/org/opdbus/v1/plugins</text>
+        <rect x="614" y="66" width="170" height="52" rx="12" fill="#0f1320" stroke="#2a3550"/><text x="699" y="88" fill="#edf4ff">A.N.N.A. Scribe</text><text x="699" y="106" fill="#68758d">identity + Snowball replay</text>
+        <rect x="814" y="66" width="160" height="52" rx="12" fill="#0f1320" stroke="#2a3550"/><text x="894" y="88" fill="#edf4ff">Law Firm</text><text x="894" y="106" fill="#68758d">OSCAL / OPA / GDPR</text>
+        <rect x="1004" y="66" width="132" height="52" rx="12" fill="#0f1320" stroke="#35e89a66"/><text x="1070" y="88" fill="#edf4ff">UI + MCP</text><text x="1070" y="106" fill="#68758d">user interface + tools</text>
+      </g>
+      <g stroke="#68758d" stroke-width="1.5">
+        <line x1="176" y1="92" x2="200" y2="92" marker-end="url(#arrowA)"/>
+        <line x1="388" y1="92" x2="410" y2="92" marker-end="url(#arrowA)"/>
+        <line x1="586" y1="92" x2="606" y2="92" marker-end="url(#arrowA)"/>
+        <line x1="786" y1="92" x2="806" y2="92" marker-end="url(#arrowA)"/>
+        <line x1="976" y1="92" x2="1000" y2="92" marker-end="url(#arrowA)"/>
+      </g>
+      <g>
+        <rect x="114" y="156" width="190" height="48" rx="12" fill="#0c0e15" stroke="#2a3550"/>
+        <text x="209" y="176" fill="#21d4fd" font-size="12">schema is contract</text>
+        <text x="209" y="193" fill="#68758d" font-size="10.5">if it has no validated schema, it does not exist</text>
+        <rect x="344" y="156" width="190" height="48" rx="12" fill="#0c0e15" stroke="#2a3550"/>
+        <text x="439" y="176" fill="#35e89a" font-size="12">mut/evt/obs/exp</text>
+        <text x="439" y="193" fill="#68758d" font-size="10.5">subid category + control refs + proof data</text>
+        <rect x="574" y="156" width="242" height="48" rx="12" fill="#0c0e15" stroke="#2a3550"/>
+        <text x="695" y="176" fill="#f5b84b" font-size="12">trace / footprint / actor / capability</text>
+        <text x="695" y="193" fill="#68758d" font-size="10.5">notarized by A.N.N.A.; Snowball appends, memory loop replays</text>
+        <rect x="848" y="156" width="234" height="48" rx="12" fill="#0c0e15" stroke="#2a3550"/>
+        <text x="965" y="176" fill="#edf4ff" font-size="12">renderable control plane</text>
+        <text x="965" y="193" fill="#68758d" font-size="10.5">UI, MCP, gRPC, and operator tooling all derive from schema</text>
+      </g>
+      <text x="580" y="232" fill="#68758d" font-size="11" text-anchor="middle">authority starts with the D-Bus object and the schema that defines it; everything else is a projection or transport</text>
+    </svg>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <div class="eyebrow reveal">Technology stack map</div>
+  <h2 class="reveal d1">What is in the stack</h2>
+  <div class="grid g4" style="margin-top:20px">
+    <div class="card reveal"><h3><span class="dot"></span>Mesh</h3><ul class="clean"><li>Netmaker</li><li>WireGuard</li><li>pre-shared key identity root</li><li>peer/session binding</li></ul></div>
+    <div class="card reveal d1"><h3><span class="dot"></span>Network</h3><ul class="clean"><li>Xray</li><li>Server Name Indication routing</li><li>Open vSwitch</li><li>OpenFlow</li><li>Incus proxy sockets</li><li>gRPC bridge</li></ul></div>
+    <div class="card reveal d2"><h3><span class="dot"></span>Control</h3><ul class="clean"><li>D-Bus projection</li><li>PluginSchema</li><li>SchemaEngine</li><li>/dev/shm Sled</li><li>Rust crates</li></ul></div>
+    <div class="card reveal d3"><h3><span class="dot"></span>AI evidence</h3><ul class="clean"><li>cognitive-mcp</li><li>ZeroClaw</li><li>Gemma routing</li><li>Voyage vectors</li><li>Qdrant</li><li>Cozo</li></ul></div>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <div class="eyebrow reveal">Netmaker hardening pattern</div>
+  <h2 class="reveal d1">Control services become socket-backed, identity-gated surfaces.</h2>
+  <p class="lead reveal d2" style="color:var(--mut)">The pattern treats <span class="mono">netmaker</span>, <span class="mono">netmaker-mq</span>, and <span class="mono">netmaker-ui</span> as loopback/socket services. Incus exposes Unix sockets under <span class="mono kv">/run/netmaker</span>. Xray terminates and routes by Server Name Indication (SNI) behind WireGuard identity. The intended public posture is no direct Netmaker service port.</p>
+  <div class="svgwrap reveal d2" style="margin-top:18px">
+    <svg viewBox="0 0 980 260" width="100%" aria-label="No NIC socket-backed Netmaker pattern">
+      <rect x="35" y="54" width="190" height="148" rx="16" fill="#0f1320" stroke="#2a3550"/>
+      <text x="130" y="44" fill="#a8b5cc" font-size="12" text-anchor="middle">wg-xray · TLS + Server Name Indication</text>
+      <text x="130" y="132" fill="#21d4fd" font-size="15" text-anchor="middle">Xray</text>
+      <g font-size="11" text-anchor="middle">
+        <rect x="330" y="42" width="210" height="42" rx="10" fill="#0c0e15" stroke="#2a3550"/><text x="435" y="68" fill="#a8b5cc">/run/netmaker/api.sock</text>
+        <rect x="330" y="100" width="210" height="42" rx="10" fill="#0c0e15" stroke="#2a3550"/><text x="435" y="126" fill="#a8b5cc">mq.sock · mqtts.sock</text>
+        <rect x="330" y="158" width="210" height="42" rx="10" fill="#0c0e15" stroke="#2a3550"/><text x="435" y="184" fill="#a8b5cc">ui.sock</text>
+        <rect x="720" y="42" width="220" height="42" rx="10" fill="#0f1320" stroke="#35e89a66"/><text x="830" y="68" fill="#edf4ff">netmaker API</text>
+        <rect x="720" y="100" width="220" height="42" rx="10" fill="#0f1320" stroke="#35e89a66"/><text x="830" y="126" fill="#edf4ff">netmaker-mq</text>
+        <rect x="720" y="158" width="220" height="42" rx="10" fill="#0f1320" stroke="#35e89a66"/><text x="830" y="184" fill="#edf4ff">netmaker-ui</text>
+      </g>
+      <g stroke="#21d4fd" stroke-width="1.7" fill="none" opacity=".9">
+        <line class="flow" x1="225" y1="128" x2="328" y2="63"/><line class="flow" x1="225" y1="128" x2="328" y2="121"/><line class="flow" x1="225" y1="128" x2="328" y2="179"/>
+        <line class="flow" x1="540" y1="63" x2="718" y2="63"/><line class="flow" x1="540" y1="121" x2="718" y2="121"/><line class="flow" x1="540" y1="179" x2="718" y2="179"/>
+      </g>
+      <text x="490" y="238" fill="#68758d" font-size="11" text-anchor="middle">loopback service posture · Unix domain sockets · Incus proxy devices · Xray routing · WireGuard identity</text>
+    </svg>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <div class="eyebrow reveal">Accountability loop</div>
+  <h2 class="reveal d1">Chatbot on top. Semantic evidence underneath.</h2>
+  <div class="grid g2" style="margin-top:18px">
+    <div class="card reveal"><h3><span class="dot"></span>Header provenance</h3><p>Xray/OpenClaw metadata carries <span class="mono kv">X-Ghostbridge-Footprint</span>, <span class="mono kv">X-Ghostbridge-Trace-ID</span>, or WireGuard pubkey identity.</p></div>
+    <div class="card reveal d1"><h3><span class="dot"></span>Snowball block</h3><p>Accepted action becomes a hash-linked block with previous hash, event hash, trace id, footprint, subid, actor, and capability.</p></div>
+    <div class="card reveal"><h3><span class="dot"></span>Semantic projection</h3><p>The UI queries both Qdrant and Cozo, then combines semantic similarity and graph context into one unified response. Voyage embeds blocks, docs, transcripts, and chat turns so both stores can be rebuilt from the same evidence.</p></div>
+    <div class="card reveal d1"><h3><span class="dot"></span>Cross-examination</h3><p>The model explains. The evidence pane verifies. If the explanation drifts, semantic receipts contradict it.</p></div>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <div class="eyebrow reveal">External client surfaces</div>
+  <h2 class="reveal d1">External clients enter through cognitive-mcp.</h2>
+  <p class="lead reveal d2" style="color:var(--mut)">cognitive-mcp is the universal external gateway for NotebookLM, Droid/factory.ai, Cursor, Codex, Junie, Gemini CLI, and related clients. It is the Model Context Protocol gateway for external clients. compact-mcp remains loopback/chatbot only. The gateway exposes memory, gRPC service, auth, tool surfaces, and context retrieval.</p>
+  <div class="grid g3" style="margin-top:18px">
+    <div class="card reveal"><h3><span class="dot"></span>cognitive-mcp</h3><p>Universal Model Context Protocol gateway, memory tools, gRPC service, auth, and protocol surface.</p></div>
+    <div class="card reveal d1"><h3><span class="dot"></span>ZeroClaw</h3><p>Routes to the right model/provider by cost, reasoning depth, policy, specialty, and structured output needs.</p></div>
+    <div class="card reveal d2"><h3><span class="dot"></span>NotebookLM path</h3><p>Notebook/imported context becomes source material for vectorization and semantic evidence, not an authority bypass.</p></div>
+  </div>
+</div></section>
+
+<section class="short"><div class="wrap">
+  <div class="eyebrow reveal">gRPC plane</div>
+  <h2 class="reveal d1">gRPC is the high-throughput service plane between the governed components.</h2>
+  <div class="grid g3" style="margin-top:18px">
+    <div class="card reveal"><h3><span class="dot"></span>Transport</h3><p>gRPC runs over Unix domain sockets or controlled local bridge paths when the service should stay inside the host boundary.</p></div>
+    <div class="card reveal d1"><h3><span class="dot"></span>Bridge</h3><p>The Shuttle and bridge services move requests between D-Bus authority, memory/state, and higher-level assistants without inventing a second control plane.</p></div>
+    <div class="card reveal d2"><h3><span class="dot"></span>Search/API</h3><p>Semantic search, chat tools, and assistant integration use gRPC surfaces where D-Bus itself is not the best transport.</p></div>
+  </div>
+  <div class="svgwrap reveal d3" style="margin-top:18px">
+    <svg viewBox="0 0 1160 220" width="100%" aria-label="gRPC service plane">
+      <defs>
+        <marker id="arrow2" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#68758d"/></marker>
+      </defs>
+      <g font-size="12" text-anchor="middle">
+        <rect x="34" y="60" width="160" height="54" rx="12" fill="#0f1320" stroke="#2a3550"/><text x="114" y="81" fill="#edf4ff">op-web</text><text x="114" y="99" fill="#68758d">HTTP/UI</text>
+        <rect x="228" y="60" width="160" height="54" rx="12" fill="#0f1320" stroke="#2a3550"/><text x="308" y="81" fill="#edf4ff">ChatActor</text><text x="308" y="99" fill="#68758d">memory loop</text>
+        <rect x="422" y="60" width="160" height="54" rx="12" fill="#0f1320" stroke="#2a3550"/><text x="502" y="81" fill="#edf4ff">gRPC</text><text x="502" y="99" fill="#68758d">Unix socket transport</text>
+        <rect x="616" y="60" width="160" height="54" rx="12" fill="#0f1320" stroke="#2a3550"/><text x="696" y="81" fill="#edf4ff">op-grpc-bridge</text><text x="696" y="99" fill="#68758d">service APIs</text>
+        <rect x="810" y="60" width="160" height="54" rx="12" fill="#0f1320" stroke="#2a3550"/><text x="890" y="81" fill="#edf4ff">op-cognitive-mcp</text><text x="890" y="99" fill="#68758d">tools + auth</text>
+        <rect x="1004" y="60" width="120" height="54" rx="12" fill="#0f1320" stroke="#35e89a66"/><text x="1064" y="81" fill="#edf4ff">Qdrant</text><text x="1064" y="99" fill="#68758d">evidence</text>
+      </g>
+      <g stroke="#68758d" stroke-width="1.5">
+        <line x1="196" y1="87" x2="224" y2="87" marker-end="url(#arrow2)"/>
+        <line x1="390" y1="87" x2="418" y2="87" marker-end="url(#arrow2)"/>
+        <line x1="584" y1="87" x2="612" y2="87" marker-end="url(#arrow2)"/>
+        <line x1="778" y1="87" x2="806" y2="87" marker-end="url(#arrow2)"/>
+        <line x1="972" y1="87" x2="1000" y2="87" marker-end="url(#arrow2)"/>
+      </g>
+      <text x="580" y="176" fill="#68758d" font-size="11" text-anchor="middle">same system, two planes: HTTP/UI for presentation; gRPC for governed service-to-service transport; D-Bus remains authority</text>
+    </svg>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <div class="eyebrow reveal">Schema and subid</div>
+  <h2 class="reveal d1">Every artifact has machine identity and human taxonomy.</h2>
+  <div class="table reveal d2">
+    <div class="tr"><div class="td">uuid</div><div class="td">Machine identity. Exact, stable, never replaced by a subid.</div></div>
+    <div class="tr"><div class="td">subid</div><div class="td"><span class="mono kv">&lt;category&gt;.&lt;component-type&gt;.&lt;subject&gt;.&lt;verb&gt;[.&lt;facet&gt;][@vN]</span></div></div>
+    <div class="tr"><div class="td">categories</div><div class="td"><span class="mono">src · prj · sch · mut · obs · evt · exp</span></div></div>
+    <div class="tr"><div class="td">mut.*</div><div class="td">Write path records require actor_id and capability_id.</div></div>
+    <div class="tr"><div class="td">evt.*</div><div class="td">Event records require event_id or event_hash.</div></div>
+    <div class="tr"><div class="td">OSCAL props</div><div class="td">subid is stored as a prop value. Control refs and statement refs remain metadata arrays.</div></div>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <div class="eyebrow reveal">A.N.N.A. and the Law Firm</div>
+  <h2 class="reveal d1">Human roles as enforcement components.</h2>
+  <div class="grid g3" style="margin-top:18px">
+    <div class="card reveal"><h3><span class="dot"></span>A.N.N.A. Scribe</h3><p>Axon Network Notary Arbitrator. Notarizes WireGuard identity, session state, Snowball trace, footprint, and trace id.</p></div>
+    <div class="card reveal d1"><h3><span class="dot"></span>Olivia Scal</h3><p>Managing Partner / Open Security Controls Assessment Language (OSCAL). Owns control mapping, profiles, and authority structure.</p></div>
+    <div class="card reveal d2"><h3><span class="dot"></span>E.U.gene Risk</h3><p>EU AI Act counsel. Maps model behavior, risk posture, and evidence requirements.</p></div>
+    <div class="card reveal"><h3><span class="dot"></span>Penny Privacy</h3><p>GDPR/privacy counsel. Data minimization, identity linkage mode, privacy posture, and lawful basis.</p></div>
+    <div class="card reveal d1"><h3><span class="dot"></span>Reggie O.P.A.</h3><p>Cloud prosecutor. Open Policy Agent (OPA) enforcement and contradiction checks.</p></div>
+    <div class="card reveal d2"><h3><span class="dot"></span>semantic_vectors</h3><p>Separate plugin for Voyage/Qdrant config, vector schema, endpoint metadata, and revectorization policy.</p></div>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <div class="eyebrow reveal">Vectorization</div>
+  <h2 class="reveal d1">Meaning is a projection, not the source of truth.</h2>
+  <p class="lead reveal d2" style="color:var(--mut)">The chain is canonical. Qdrant and Cozo are rebuildable projections. Voyage embeddings make evidence searchable by meaning; identity and mutation vectors prove exact provenance. The UI merges Qdrant similarity results and Cozo graph results into one answer instead of exposing two separate searches to the user.</p>
+  <div class="grid g3" style="margin-top:18px">
+    <div class="card reveal"><h3><span class="dot"></span>Voyage</h3><p>Initial vector model target: <span class="mono kv">voyage-4</span>, routed through MongoDB AI/Voyage when using <span class="mono">al-*</span> keys.</p></div>
+    <div class="card reveal d1"><h3><span class="dot"></span>Qdrant</h3><p>Semantic vector store for evidence search, trace lookup, transcript search, and chatbot confrontation.</p></div>
+    <div class="card reveal d2"><h3><span class="dot"></span>Cozo</h3><p>Graph database for relationships among sessions, traces, controls, actors, capabilities, and artifacts.</p></div>
+  </div>
+  <div class="svgwrap reveal d3" style="margin-top:18px">
+    <svg viewBox="0 0 1160 220" width="100%" aria-label="Vectorization loop">
+      <defs>
+        <marker id="arrow3" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#68758d"/></marker>
+      </defs>
+      <g font-size="12" text-anchor="middle">
+        <rect x="34" y="60" width="170" height="54" rx="12" fill="#0f1320" stroke="#2a3550"/><text x="119" y="81" fill="#edf4ff">Blocks / Docs / Turns</text><text x="119" y="99" fill="#68758d">canonical evidence</text>
+        <rect x="240" y="60" width="170" height="54" rx="12" fill="#0f1320" stroke="#2a3550"/><text x="325" y="81" fill="#edf4ff">Voyage</text><text x="325" y="99" fill="#68758d">embedding model</text>
+        <rect x="446" y="60" width="170" height="54" rx="12" fill="#0f1320" stroke="#2a3550"/><text x="531" y="81" fill="#edf4ff">Qdrant</text><text x="531" y="99" fill="#68758d">similarity search</text>
+        <rect x="652" y="60" width="170" height="54" rx="12" fill="#0f1320" stroke="#2a3550"/><text x="737" y="81" fill="#edf4ff">Chatbot</text><text x="737" y="99" fill="#68758d">evidence injection</text>
+        <rect x="858" y="60" width="170" height="54" rx="12" fill="#0f1320" stroke="#2a3550"/><text x="943" y="81" fill="#edf4ff">Cozo</text><text x="943" y="99" fill="#68758d">graph projection</text>
+        <rect x="1064" y="60" width="62" height="54" rx="12" fill="#0f1320" stroke="#35e89a66"/><text x="1095" y="81" fill="#edf4ff">UI</text><text x="1095" y="99" fill="#68758d">top/btm</text>
+      </g>
+      <g stroke="#68758d" stroke-width="1.5">
+        <line x1="206" y1="87" x2="236" y2="87" marker-end="url(#arrow3)"/>
+        <line x1="412" y1="87" x2="442" y2="87" marker-end="url(#arrow3)"/>
+        <line x1="618" y1="87" x2="648" y2="87" marker-end="url(#arrow3)"/>
+        <line x1="824" y1="87" x2="854" y2="87" marker-end="url(#arrow3)"/>
+        <line x1="1030" y1="87" x2="1060" y2="87" marker-end="url(#arrow3)"/>
+      </g>
+      <text x="580" y="176" fill="#68758d" font-size="11" text-anchor="middle">semantic projection is derived from evidence; it is not the authority. the authority is the chain + schema + D-Bus control plane, while the UI merges Qdrant and Cozo into one answer.</text>
+    </svg>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <div class="eyebrow reveal">Product surfaces</div>
+  <h2 class="reveal d1">One engine, multiple editions.</h2>
+  <div class="grid g3" style="margin-top:18px">
+    <div class="card reveal"><h3><span class="dot" style="background:var(--green)"></span>Privacy edition</h3><ul class="clean"><li>key is identity</li><li>no PII linkage</li><li>journalist/source networks</li><li>at-risk community meshes</li><li>confidential rooms</li></ul></div>
+    <div class="card reveal d1"><h3><span class="dot" style="background:var(--violet)"></span>Compliance edition</h3><ul class="clean"><li>attributable actors</li><li>signed authority</li><li>GDPR</li><li>NIS2</li><li>DORA</li><li>EU AI Act</li></ul></div>
+    <div class="card reveal d2"><h3><span class="dot" style="background:var(--cyan)"></span>Enterprise drop-in</h3><ul class="clean"><li>Active Directory</li><li>databases</li><li>Slack</li><li>CMS</li><li>schema-backed deployment</li><li>governed mesh</li></ul></div>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <div class="eyebrow reveal">What Netmaker anchors</div>
+  <h2 class="reveal d1">Netmaker is load-bearing in the PaaS architecture.</h2>
+  <div class="grid g3" style="margin-top:18px">
+    <div class="card reveal"><h3><span class="dot"></span>Mesh spine</h3><p>Private, governed connectivity across the platform and customer deployments.</p></div>
+    <div class="card reveal d1"><h3><span class="dot"></span>Identity root</h3><p>WireGuard peer material binds sessions, traces, and actor/accountability records.</p></div>
+    <div class="card reveal d2"><h3><span class="dot"></span>Hardening story</h3><p>No-NIC/socket-backed Netmaker control plane as a reference pattern for security-sensitive customers.</p></div>
+    <div class="card reveal"><h3><span class="dot"></span>Regulated rooms</h3><p>GhostBridge packages Netmaker into privacy/compliance environments with evidence and policy.</p></div>
+    <div class="card reveal d1"><h3><span class="dot"></span>AI accountability</h3><p>The mesh identity becomes the anchor for confrontable AI evidence.</p></div>
+    <div class="card reveal d2"><h3><span class="dot"></span>Future surface</h3><p>Every GhostBridge deployment wants to be a hardened Netmaker deployment.</p></div>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <div class="eyebrow reveal">Tomorrow</div>
+  <h2 class="reveal d1">No pre-work. Bring engineering questions.</h2>
+  <p class="lead reveal d2" style="color:var(--mut)">This deck is the full technical context for the meeting. I am not asking Netmaker to decide anything from the email. I am showing the use case, the platform architecture, and where Netmaker sits in the backbone. I will answer questions live tomorrow.</p>
+  <p class="quote reveal d3" style="margin-top:28px">Netmaker connects the machines. GhostBridge makes the mesh accountable.</p>
+</div></section>
+
+<div class="footer">GhostBridge · Operation D-Bus · Netmaker technical use case deck · self-contained HTML · confidential pre-meeting context</div>
+
+<script>
+const io=new IntersectionObserver((entries)=>entries.forEach(e=>{if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target)}}),{threshold:.12});
+document.querySelectorAll('.reveal').forEach(el=>io.observe(el));
+const progress=document.getElementById('progress');
+addEventListener('scroll',()=>{const h=document.documentElement;progress.style.width=(h.scrollTop/(h.scrollHeight-h.clientHeight)*100)+'%'},{passive:true});
+</script>
+</body>
+</html>
