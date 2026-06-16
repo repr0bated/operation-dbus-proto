@@ -10,10 +10,10 @@
 //!
 //! Projected at: `/org/opdbus/v1/plugins/rovs_commands`
 
-use simd_json::OwnedValue as Value;
-use std::collections::HashMap;
 use op_state_store::{FieldSchema, FieldType, PluginSchema};
 use simd_json::json;
+use simd_json::OwnedValue as Value;
+use std::collections::HashMap;
 
 /// rovs_commands Plugin — Command definitions schema
 ///

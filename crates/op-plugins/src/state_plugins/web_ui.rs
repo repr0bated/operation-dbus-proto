@@ -7,15 +7,15 @@
 //!
 //! Uses op-identity crate for WireGuard-based authentication.
 
+use super::plugin_schema_defs::{any_field, simple_schema};
 use anyhow::Result;
 use async_trait::async_trait;
 use op_blockchain::PluginFootprint;
 use op_state::{ApplyResult, Checkpoint, PluginCapabilities, StateDiff, StatePlugin};
+use op_state_store::{Constraint, FieldSchema, FieldType, PluginSchema};
 use serde::{Deserialize, Serialize};
 use simd_json::{json, prelude::*, OwnedValue as Value};
 use std::collections::HashMap;
-use op_state_store::{Constraint, FieldSchema, FieldType, PluginSchema};
-use super::plugin_schema_defs::{simple_schema, any_field};
 
 // ============================================================================
 // SECTION 1: IMMUTABLE IDENTITY (set once, never changes)

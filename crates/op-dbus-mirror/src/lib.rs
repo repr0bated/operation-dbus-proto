@@ -832,13 +832,18 @@ impl DbusMirror {
     }
 
     fn plugin_dbus_path(plugin_id: &str) -> String {
-        format!("/org/opdbus/v1/plugins/{}", Self::sanitize_dbus_path_segment(plugin_id))
+        format!(
+            "/org/opdbus/v1/plugins/{}",
+            Self::sanitize_dbus_path_segment(plugin_id)
+        )
     }
 
     fn is_permanent_plugin_path(path: &str) -> bool {
         const CANONICAL: &str = "/org/opdbus/v1/plugins/";
         const LEGACY: &str = "/org/opdbus/v1/plugin/plugins/";
-        if let Some(remainder) = path.strip_prefix(CANONICAL).or_else(|| path.strip_prefix(LEGACY))
+        if let Some(remainder) = path
+            .strip_prefix(CANONICAL)
+            .or_else(|| path.strip_prefix(LEGACY))
         {
             !remainder.is_empty() && !remainder.contains('/')
         } else {

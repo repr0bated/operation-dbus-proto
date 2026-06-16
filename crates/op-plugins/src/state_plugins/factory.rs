@@ -11,13 +11,13 @@
 //! It reads from the zeroclaw plugin's `model_routes` projection at
 //! `/opdbus/v1/plugins/zeroclaw` and surfaces them as `byom_sources`.
 
+use super::plugin_schema_defs::field_from_value;
 use anyhow::Result;
 use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
+use op_state_store::PluginSchema;
 use serde::{Deserialize, Serialize};
 use simd_json::{json, OwnedValue as Value};
-use op_state_store::{PluginSchema};
-use super::plugin_schema_defs::{field_from_value};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FactoryState {

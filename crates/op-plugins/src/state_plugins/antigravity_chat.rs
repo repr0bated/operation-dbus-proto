@@ -1,10 +1,10 @@
+use super::plugin_schema_defs::schema_from_state;
 use anyhow::Result;
 use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
+use op_state_store::PluginSchema;
 use serde::{Deserialize, Serialize};
 use simd_json::{json, OwnedValue as Value};
-use op_state_store::{PluginSchema};
-use super::plugin_schema_defs::{schema_from_state};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AntigravityChatState {
     pub status: String,

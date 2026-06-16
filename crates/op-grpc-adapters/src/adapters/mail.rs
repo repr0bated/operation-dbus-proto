@@ -101,29 +101,51 @@ impl MailService for MailAdapter {
             .map_err(|e| Status::internal(format!("IMAP FETCH failed: {}", e)))?;
 
         use futures::TryStreamExt;
-        let raw_msgs: Vec<_> = messages.try_collect().await
+        let raw_msgs: Vec<_> = messages
+            .try_collect()
+            .await
             .map_err(|e| Status::internal(e.to_string()))?;
         // stream dropped here — session borrow released
 
-        let headers: Vec<MailHeader> = raw_msgs.iter().filter_map(|m| {
-            let env = m.envelope()?;
-            let subject = env.subject.as_ref()
-                .map(|s| String::from_utf8_lossy(s).to_string())
-                .unwrap_or_default();
-            let from = env.from.as_ref().and_then(|f| f.first())
-                .map(|a| format!("{}@{}",
-                    a.mailbox.as_ref().map(|m| String::from_utf8_lossy(m).to_string()).unwrap_or_default(),
-                    a.host.as_ref().map(|h| String::from_utf8_lossy(h).to_string()).unwrap_or_default(),
-                )).unwrap_or_default();
-            Some(MailHeader {
-                uid: m.uid.unwrap_or(0) as u64,
-                subject,
-                from,
-                to: String::new(),
-                date: String::new(),
-                seen: m.flags().any(|f| matches!(f, async_imap::types::Flag::Seen)),
+        let headers: Vec<MailHeader> = raw_msgs
+            .iter()
+            .filter_map(|m| {
+                let env = m.envelope()?;
+                let subject = env
+                    .subject
+                    .as_ref()
+                    .map(|s| String::from_utf8_lossy(s).to_string())
+                    .unwrap_or_default();
+                let from = env
+                    .from
+                    .as_ref()
+                    .and_then(|f| f.first())
+                    .map(|a| {
+                        format!(
+                            "{}@{}",
+                            a.mailbox
+                                .as_ref()
+                                .map(|m| String::from_utf8_lossy(m).to_string())
+                                .unwrap_or_default(),
+                            a.host
+                                .as_ref()
+                                .map(|h| String::from_utf8_lossy(h).to_string())
+                                .unwrap_or_default(),
+                        )
+                    })
+                    .unwrap_or_default();
+                Some(MailHeader {
+                    uid: m.uid.unwrap_or(0) as u64,
+                    subject,
+                    from,
+                    to: String::new(),
+                    date: String::new(),
+                    seen: m
+                        .flags()
+                        .any(|f| matches!(f, async_imap::types::Flag::Seen)),
+                })
             })
-        }).collect();
+            .collect();
 
         session.logout().await.ok();
         Ok(Response::new(ListMessagesResponse { messages: headers }))
@@ -147,26 +169,35 @@ impl MailService for MailAdapter {
             .map_err(|e| Status::internal(format!("IMAP UID FETCH failed: {}", e)))?;
 
         use futures::{StreamExt, TryStreamExt};
-        let raw: Vec<_> = messages.try_collect().await
+        let raw: Vec<_> = messages
+            .try_collect()
+            .await
             .map_err(|e| Status::internal(e.to_string()))?;
         // stream dropped — session borrow released
 
-        let msg = raw.into_iter().next()
+        let msg = raw
+            .into_iter()
+            .next()
             .ok_or_else(|| Status::not_found("Message not found"))?;
 
-        let body = msg.body()
+        let body = msg
+            .body()
             .map(|b| String::from_utf8_lossy(b).to_string())
             .unwrap_or_default();
 
         let header = MailHeader {
             uid: msg.uid.unwrap_or(0) as u64,
-            subject: msg.envelope().and_then(|e| e.subject.as_ref())
+            subject: msg
+                .envelope()
+                .and_then(|e| e.subject.as_ref())
                 .map(|s| String::from_utf8_lossy(s).to_string())
                 .unwrap_or_default(),
             from: String::new(),
             to: String::new(),
             date: String::new(),
-            seen: msg.flags().any(|f| matches!(f, async_imap::types::Flag::Seen)),
+            seen: msg
+                .flags()
+                .any(|f| matches!(f, async_imap::types::Flag::Seen)),
         };
 
         drop(msg);
@@ -202,19 +233,28 @@ impl MailService for MailAdapter {
             .map_err(|e| Status::internal(e.to_string()))?;
 
         use futures::TryStreamExt;
-        let raw_msgs: Vec<_> = messages.try_collect().await
+        let raw_msgs: Vec<_> = messages
+            .try_collect()
+            .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
-        let results: Vec<MailHeader> = raw_msgs.iter().map(|m| MailHeader {
-            uid: m.uid.unwrap_or(0) as u64,
-            subject: m.envelope().and_then(|e| e.subject.as_ref())
-                .map(|s| String::from_utf8_lossy(s).to_string())
-                .unwrap_or_default(),
-            from: String::new(),
-            to: String::new(),
-            date: String::new(),
-            seen: m.flags().any(|f| matches!(f, async_imap::types::Flag::Seen)),
-        }).collect();
+        let results: Vec<MailHeader> = raw_msgs
+            .iter()
+            .map(|m| MailHeader {
+                uid: m.uid.unwrap_or(0) as u64,
+                subject: m
+                    .envelope()
+                    .and_then(|e| e.subject.as_ref())
+                    .map(|s| String::from_utf8_lossy(s).to_string())
+                    .unwrap_or_default(),
+                from: String::new(),
+                to: String::new(),
+                date: String::new(),
+                seen: m
+                    .flags()
+                    .any(|f| matches!(f, async_imap::types::Flag::Seen)),
+            })
+            .collect();
 
         session.logout().await.ok();
         Ok(Response::new(SearchMessagesResponse { messages: results }))
@@ -258,7 +298,9 @@ impl MailService for MailAdapter {
         _req: Request<StreamInboxRequest>,
     ) -> Result<Response<Self::StreamInboxStream>, Status> {
         // TODO: implement IMAP IDLE once async-imap IDLE API is stabilised
-        Err(Status::unimplemented("IMAP IDLE streaming not yet implemented"))
+        Err(Status::unimplemented(
+            "IMAP IDLE streaming not yet implemented",
+        ))
     }
 
     async fn send_message(
@@ -293,7 +335,9 @@ impl MailService for MailAdapter {
             (format!("RCPT TO:<{}>\r\n", r.to), "250"),
             ("DATA\r\n".to_string(), "354"),
         ] {
-            writer.write_all(cmd.as_bytes()).await
+            writer
+                .write_all(cmd.as_bytes())
+                .await
                 .map_err(|e| Status::internal(e.to_string()))?;
             lines.next_line().await.ok();
         }
@@ -302,7 +346,9 @@ impl MailService for MailAdapter {
             "Message-ID: <{}>\r\nFrom: {}\r\nTo: {}\r\nSubject: {}\r\nContent-Type: text/plain\r\n\r\n{}\r\n.\r\n",
             msg_id, from, r.to, r.subject, r.body_text
         );
-        writer.write_all(body.as_bytes()).await
+        writer
+            .write_all(body.as_bytes())
+            .await
             .map_err(|e| Status::internal(e.to_string()))?;
         lines.next_line().await.ok();
 

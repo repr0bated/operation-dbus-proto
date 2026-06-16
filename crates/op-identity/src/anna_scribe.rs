@@ -92,7 +92,11 @@ impl AnnaScribe {
     /// This makes the sled footprint a direct function of the single source of truth.
     pub fn etch_footprint(sled: &IdentitySled, source_port: u16) -> [u8; 32] {
         // Single source of truth: delegate to the canonical Strike/Etch.
-        crate::schema_bridge::etch_footprint(&sled.wireguard_pubkey, sled.mutation_index, source_port)
+        crate::schema_bridge::etch_footprint(
+            &sled.wireguard_pubkey,
+            sled.mutation_index,
+            source_port,
+        )
     }
 
     /// THE SNOWBALL: Appends the session ledger.

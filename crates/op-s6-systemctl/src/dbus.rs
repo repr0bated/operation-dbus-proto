@@ -203,22 +203,38 @@ impl S6SystemctlService {
     /// Restart a service (maps to: s6 process restart <service>)
     async fn restart(&self, service: &str) -> (bool, String) {
         debug!("Restarting service: {}", service);
-        info!("systemctl restart {} -> s6 process restart {}", service, service);
+        info!(
+            "systemctl restart {} -> s6 process restart {}",
+            service, service
+        );
 
-        match Command::new("s6").args(["process", "restart", service]).output() {
+        match Command::new("s6")
+            .args(["process", "restart", service])
+            .output()
+        {
             Ok(output) => {
                 let stdout = String::from_utf8_lossy(&output.stdout).to_string();
                 let stderr = String::from_utf8_lossy(&output.stderr).to_string();
                 if output.status.success() {
                     info!("Service {} restarted successfully", service);
-                    (true, if stdout.is_empty() { stderr } else { stdout }.trim().to_string())
+                    (
+                        true,
+                        if stdout.is_empty() { stderr } else { stdout }
+                            .trim()
+                            .to_string(),
+                    )
                 } else {
-                    let msg = if stderr.is_empty() { stdout } else { stderr }.trim().to_string();
+                    let msg = if stderr.is_empty() { stdout } else { stderr }
+                        .trim()
+                        .to_string();
                     error!("Failed to restart service {}: {}", service, msg);
                     (false, msg)
                 }
             }
-            Err(e) => (false, format!("Failed to execute s6 process restart: {}", e)),
+            Err(e) => (
+                false,
+                format!("Failed to execute s6 process restart: {}", e),
+            ),
         }
     }
 

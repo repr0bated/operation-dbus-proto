@@ -17,8 +17,8 @@ use op_grpc_bridge::{grpc_server::run_grpc_server, schema_engine::SchemaEngine};
 use op_jsonrpc::nonnet::NonNetDb;
 use op_network::rovs_proxy::OvsdbDbusClient;
 use op_state_store::{ChainConfig, EventChain};
-use tonic::transport::Identity;
 use tokio::sync::RwLock;
+use tonic::transport::Identity;
 
 /// Load TLS identity from env vars or auto-generate a self-signed cert.
 /// Env: GRPC_TLS_CERT (PEM), GRPC_TLS_KEY (PEM). If both absent, generates one.

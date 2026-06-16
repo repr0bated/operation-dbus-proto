@@ -14,11 +14,11 @@ use async_trait::async_trait;
 use op_state::{
     ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
 };
+use op_state_store::{Constraint, FieldSchema, FieldType, PluginSchema};
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
 use std::collections::HashMap;
-use op_state_store::{Constraint, FieldSchema, FieldType, PluginSchema};
 
 const DEFAULT_VOYAGE_MODEL: &str = "voyage-4-lite";
 const DEFAULT_COLLECTION: &str = "ctl_plane_reasoning_episodes";

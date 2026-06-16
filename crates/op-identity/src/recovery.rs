@@ -36,10 +36,13 @@ pub fn seed_to_mnemonic(seed: &[u8; 32]) -> Result<String> {
 
 /// Parse a BIP39 mnemonic back into its 256-bit seed (recovery).
 pub fn mnemonic_to_seed(mnemonic: &str) -> Result<[u8; 32]> {
-    let m = Mnemonic::parse(mnemonic.trim()).map_err(|e| anyhow!("invalid recovery phrase: {e}"))?;
+    let m =
+        Mnemonic::parse(mnemonic.trim()).map_err(|e| anyhow!("invalid recovery phrase: {e}"))?;
     let (entropy, len) = m.to_entropy_array();
     if len != 32 {
-        return Err(anyhow!("recovery phrase must encode 256 bits (24 words), got {len} bytes"));
+        return Err(anyhow!(
+            "recovery phrase must encode 256 bits (24 words), got {len} bytes"
+        ));
     }
     let mut out = [0u8; 32];
     out.copy_from_slice(&entropy[..32]);

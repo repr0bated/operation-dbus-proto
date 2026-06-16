@@ -10,7 +10,7 @@
 //! and spawns Xray — all without touching any Btrfs-backed path.
 
 use memmap2::MmapOptions;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::env;
 use std::fs::{self, File};
@@ -346,9 +346,64 @@ pub fn socket_entries_from_env() -> Vec<SocketEntry> {
             let label = parts.next()?.to_string();
             let path = parts.next()?.to_string(); // already has leading '/'
             let domain = parts.next()?.trim().to_string();
-            (!domain.is_empty()).then_some(SocketEntry { label, path, domain })
+            (!domain.is_empty()).then_some(SocketEntry {
+                label,
+                path,
+                domain,
+            })
         })
         .collect()
+}
+
+// ── Gemma xray routes ───────────────────────────────────────────────────────
+
+const SHM_XRAY_ROUTES: &str = "/dev/shm/xray-routes.json";
+
+#[derive(Debug, Clone, Deserialize)]
+struct XrayRoute {
+    tag: String,
+    subdomains: Vec<String>,
+    backend: GemmaBackend,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type")]
+enum GemmaBackend {
+    #[serde(rename = "ingress")]
+    Ingress,
+    #[serde(rename = "tcp")]
+    Tcp { host: String, port: u16 },
+    #[serde(rename = "grpc")]
+    Grpc {
+        host: String,
+        port: u16,
+        #[serde(rename = "service_name")]
+        service_name: String,
+    },
+    #[serde(rename = "unix")]
+    Unix { path: String },
+    #[serde(rename = "dns")]
+    Dns { host: String, port: u16 },
+}
+
+/// Load the Gemma routing map from `/dev/shm/xray-routes.json` if present.
+/// Falls back to an empty vector so legacy env-only operation still works.
+fn load_xray_routes() -> Vec<XrayRoute> {
+    let Ok(raw) = fs::read_to_string(SHM_XRAY_ROUTES) else {
+        return vec![];
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return vec![];
+    };
+    value
+        .get("xray_routes")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|item| serde_json::from_value(item.clone()).ok())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 // ── Xray config generator ─────────────────────────────────────────────────────
@@ -382,6 +437,7 @@ fn write_xray_config_with_sockets(
     short_id: &str,
     sockets: &[SocketEntry],
 ) -> std::io::Result<()> {
+    let routes = load_xray_routes();
     let config = build_xray_config(
         footprint,
         trace_id,
@@ -390,6 +446,7 @@ fn write_xray_config_with_sockets(
         private_key,
         short_id,
         sockets,
+        &routes,
     );
     let tmp = format!("{}.tmp", SHM_XRAY_CONFIG);
     let mut f = File::create(&tmp)?;
@@ -399,8 +456,13 @@ fn write_xray_config_with_sockets(
     Ok(())
 }
 
-/// Build the Xray config JSON as a string (pure — no I/O). Routes each nicless
-/// container socket from its subdomain (sniffed SNI) into a freedom/ds outbound.
+/// Build the Xray config JSON as a string (pure — no I/O).
+///
+/// Routes are sourced from Gemma (`/dev/shm/xray-routes.json`) and merged with
+/// legacy `UNIX_SOCKET_ENDPOINTS` entries.  Gemma routes take precedence; legacy
+/// sockets are only added when no Gemma route has the same tag.  The final
+/// catch-all rule sends unmatched ingress traffic to the grpc-bridge, matching
+/// the historical fallback behavior.
 fn build_xray_config(
     footprint: &str,
     trace_id: &str,
@@ -409,40 +471,97 @@ fn build_xray_config(
     private_key: &str,
     short_id: &str,
     sockets: &[SocketEntry],
+    routes: &[XrayRoute],
 ) -> String {
-    // Socket outbounds: freedom over xray's unix-domain-socket transport — dials
-    // the container's socket directly, no NIC.
-    let socket_outbounds: String = sockets
+    // Gemma-supplied routes; empty when Gemma has not yet run.
+    let mut routes = routes.to_vec();
+    let mut seen_tags: HashSet<String> = routes.iter().map(|r| r.tag.clone()).collect();
+
+    // Merge legacy UNIX_SOCKET_ENDPOINTS entries for backward compatibility.
+    for socket in sockets {
+        let tag = socket.label.clone();
+        if seen_tags.contains(&tag) {
+            continue;
+        }
+        seen_tags.insert(tag.clone());
+        routes.push(XrayRoute {
+            tag,
+            subdomains: vec![socket.domain.clone()],
+            backend: GemmaBackend::Unix {
+                path: socket.path.clone(),
+            },
+        });
+    }
+
+    // Outbound for each route that has a backend (ingress tags have none).
+    let route_outbounds: String = routes
         .iter()
-        .map(|s| {
-            format!(
+        .filter_map(|r| route_to_outbound(footprint, trace_id, r))
+        .collect();
+
+    // Subdomain routing rules for each route with subdomains and a real backend.
+    // Ingress-only entries (e.g. xray-tls/xray-reality) describe the listener,
+    // not a destination, so no routing rule is emitted for them.
+    let route_rules: String = routes
+        .iter()
+        .filter_map(|r| {
+            if r.subdomains.is_empty() || matches!(r.backend, GemmaBackend::Ingress) {
+                return None;
+            }
+            let domains = r
+                .subdomains
+                .iter()
+                .map(|d| format!("\"full:{d}\""))
+                .collect::<Vec<_>>()
+                .join(", ");
+            Some(format!(
                 r#",
-    {{
-      "tag": "to-{label}",
-      "protocol": "freedom",
-      "streamSettings": {{
-        "network": "ds",
-        "dsSettings": {{ "path": "{path}", "abstract": false, "padding": false }}
-      }}
-    }}"#,
-                label = s.label,
-                path = s.path,
-            )
+      {{ "type": "field", "inboundTag": ["op-tls", "ghostbridge-reality"], "domain": [{domains}], "outboundTag": "to-{tag}" }}"#,
+                tag = r.tag,
+                domains = domains,
+            ))
         })
         .collect();
 
-    // Subdomain routing: sniffed SNI on the shared ingress → the socket outbound.
-    let socket_rules: String = sockets
-        .iter()
-        .map(|s| {
-            format!(
-                r#",
-      {{ "type": "field", "inboundTag": ["op-tls", "ghostbridge-reality"], "domain": ["full:{domain}"], "outboundTag": "to-{label}" }}"#,
-                domain = s.domain,
-                label = s.label,
-            )
-        })
-        .collect();
+    // Fallback grpc-bridge outbound if Gemma did not provide it.
+    let fallback_outbound = if seen_tags.contains("grpc-bridge") {
+        String::new()
+    } else {
+        format!(
+            r#",
+    {{
+      "tag": "to-grpc-bridge",
+      "protocol": "freedom",
+      "settings": {{ "redirect": "127.0.0.1:18789" }},
+      "streamSettings": {{
+        "network": "grpc",
+        "sockopt": {{ "tcpNoDelay": true, "mark": 255 }},
+        "grpcSettings": {{
+          "serviceName": "Ghostbridge.StateSync",
+          "multiMode": true,
+          "metadata": {{
+            "X-Ghostbridge-Footprint": "{footprint}",
+            "X-Ghostbridge-Trace-ID": "{trace_id}"
+          }}
+        }}
+      }}
+    }}"#
+        )
+    };
+
+    // Final catch-all fallback to the grpc-bridge.
+    let fallback_rule = if seen_tags.contains("grpc-bridge") {
+        format!(
+            r#",
+      {{
+        "type": "field",
+        "inboundTag": ["op-tls", "ghostbridge-reality"],
+        "outboundTag": "to-grpc-bridge"
+      }}"#
+        )
+    } else {
+        String::new()
+    };
 
     // TLS certificate paths — auto-generated by xray or provisioned by ACME.
     let tls_certs = match (
@@ -517,74 +636,100 @@ fn build_xray_config(
   ],
   "outbounds": [
     {{
-      "tag": "to-grpc-bridge",
-      "protocol": "freedom",
-      "settings": {{ "redirect": "127.0.0.1:18789" }},
-      "streamSettings": {{
-        "network": "grpc",
-        "sockopt": {{ "tcpNoDelay": true, "mark": 255 }},
-        "grpcSettings": {{
-          "serviceName": "Ghostbridge.StateSync",
-          "multiMode": true,
-          "metadata": {{
-            "X-Ghostbridge-Footprint": "{footprint}",
-            "X-Ghostbridge-Trace-ID": "{trace_id}"
-          }}
-        }}
-      }}
-    }},
-    {{
-      "tag": "to-cognitive-mcp",
-      "protocol": "freedom",
-      "settings": {{ "redirect": "127.0.0.1:3003" }},
-      "streamSettings": {{
-        "network": "grpc",
-        "sockopt": {{ "tcpNoDelay": true, "mark": 255 }},
-        "grpcSettings": {{
-          "serviceName": "operation.cognitive.v1.CognitiveToolService",
-          "multiMode": true,
-          "metadata": {{
-            "X-Ghostbridge-Footprint": "{footprint}",
-            "X-Ghostbridge-Trace-ID": "{trace_id}"
-          }}
-        }}
-      }}
-    }},
-    {{
       "tag": "direct",
       "protocol": "freedom"
     }},
-    {{ "tag": "dns-out", "protocol": "dns" }}{socket_outbounds}
+    {{ "tag": "dns-out", "protocol": "dns" }}{route_outbounds}{fallback_outbound}
   ],
   "routing": {{
     "domainStrategy": "AsIs",
     "rules": [
-      {{ "type": "field", "port": 53, "outboundTag": "dns-out" }},
-      {{
-        "type": "field",
-        "inboundTag": ["op-tls", "ghostbridge-reality"],
-        "domain": ["full:mcp.internal"],
-        "outboundTag": "to-cognitive-mcp"
-      }},
-      {{
-        "type": "field",
-        "inboundTag": ["op-tls", "ghostbridge-reality"],
-        "outboundTag": "to-grpc-bridge"
-      }}{socket_rules}
+      {{ "type": "field", "port": 53, "outboundTag": "dns-out" }}{route_rules}{fallback_rule}
     ]
   }}
 }}"#,
         profile = nextdns_profile,
-        footprint = footprint,
-        trace_id = trace_id,
         uuid = uuid,
         private_key = private_key,
         short_id = short_id,
-        socket_outbounds = socket_outbounds,
-        socket_rules = socket_rules,
+        route_outbounds = route_outbounds,
+        fallback_outbound = fallback_outbound,
+        route_rules = route_rules,
+        fallback_rule = fallback_rule,
+        tls_certs = tls_certs,
     );
 
     config
+}
+
+/// Translate a Gemma route into an xray outbound JSON fragment.
+fn route_to_outbound(footprint: &str, trace_id: &str, route: &XrayRoute) -> Option<String> {
+    let tag = &route.tag;
+    match &route.backend {
+        GemmaBackend::Ingress => None,
+        GemmaBackend::Tcp { host, port } => Some(format!(
+            r#",
+    {{
+      "tag": "to-{tag}",
+      "protocol": "freedom",
+      "settings": {{ "redirect": "{host}:{port}" }}
+    }}"#
+        )),
+        GemmaBackend::Grpc {
+            host,
+            port,
+            service_name,
+        } => Some(format!(
+            r#",
+    {{
+      "tag": "to-{tag}",
+      "protocol": "freedom",
+      "settings": {{ "redirect": "{host}:{port}" }},
+      "streamSettings": {{
+        "network": "grpc",
+        "sockopt": {{ "tcpNoDelay": true, "mark": 255 }},
+        "grpcSettings": {{
+          "serviceName": "{service_name}",
+          "multiMode": true,
+          "metadata": {{
+            "X-Ghostbridge-Footprint": "{footprint}",
+            "X-Ghostbridge-Trace-ID": "{trace_id}"
+          }}
+        }}
+      }}
+    }}"#,
+            tag = tag,
+            host = host,
+            port = port,
+            service_name = service_name,
+            footprint = footprint,
+            trace_id = trace_id,
+        )),
+        GemmaBackend::Unix { path } => Some(format!(
+            r#",
+    {{
+      "tag": "to-{tag}",
+      "protocol": "freedom",
+      "streamSettings": {{
+        "network": "domainsocket",
+        "dsSettings": {{ "path": "{path}", "abstract": false, "padding": false }}
+      }}
+    }}"#,
+            tag = tag,
+            path = path,
+        )),
+        GemmaBackend::Dns { host, port } => Some(format!(
+            r#",
+    {{
+      "tag": "to-{tag}",
+      "protocol": "freedom",
+      "settings": {{ "redirect": "{host}:{port}" }}
+    }}"#,
+            tag = tag,
+            host = host,
+            port = port,
+        )),
+    }
 }
 
 // ── WireGuard-driven sled writer ─────────────────────────────────────────────
@@ -609,7 +754,11 @@ fn decode_wg_pubkey(b64: &str) -> [u8; 32] {
 /// source_port is the per-session WireGuard-observed source port (0 when none). It binds the
 /// footprint to the session network context for the accountability loop -- it is NOT an auth
 /// factor (WireGuard is the authenticator; see op-grpc-bridge GhostbridgeInterceptor).
-pub fn etch_footprint(wireguard_pubkey: &[u8; 32], mutation_index: u64, source_port: u16) -> [u8; 32] {
+pub fn etch_footprint(
+    wireguard_pubkey: &[u8; 32],
+    mutation_index: u64,
+    source_port: u16,
+) -> [u8; 32] {
     let schema_catalog_hash = std::fs::read("/dev/shm/live-schema.json")
         .map(|bytes| blake3::hash(&bytes))
         .unwrap_or_else(|_| blake3::Hash::from([0u8; 32]));
@@ -629,7 +778,12 @@ pub fn etch_footprint(wireguard_pubkey: &[u8; 32], mutation_index: u64, source_p
 /// so the footprint degrades gracefully to the port-less base.
 pub fn peer_source_port(peer_pubkey: &str) -> u16 {
     let iface = env::var("WG_INTERFACE").unwrap_or_else(|_| "wg0".to_string());
-    let out = match Command::new("wg").arg("show").arg(&iface).arg("dump").output() {
+    let out = match Command::new("wg")
+        .arg("show")
+        .arg(&iface)
+        .arg("dump")
+        .output()
+    {
         Ok(o) if o.status.success() => o,
         _ => return 0,
     };
@@ -765,7 +919,15 @@ pub fn watch_wireguard_handshakes(iface: &str) {
 
         // Read current peers from inside wg-xray immediately.
         let Ok(out) = Command::new("incus")
-            .args(["exec", "wg-xray", "--", "wg", "show", &iface, "latest-handshakes"])
+            .args([
+                "exec",
+                "wg-xray",
+                "--",
+                "wg",
+                "show",
+                &iface,
+                "latest-handshakes",
+            ])
             .output()
         else {
             continue;
@@ -803,11 +965,21 @@ pub fn watch_wireguard_handshakes(iface: &str) {
                 let sled = unsafe { &*ptr };
                 let footprint_hex = hex::encode(sled.hashed_footprint);
                 let trace_id = sled.trace_id_hex();
-                let Ok(profile) = env::var("NEXTDNS_PROFILE_ID") else { continue };
-                let Ok(uuid) = env::var("XRAY_UUID") else { continue };
-                let Ok(privkey) = env::var("XRAY_PRIVATE_KEY") else { continue };
-                let Ok(short) = env::var("XRAY_SHORT_ID") else { continue };
-                if let Err(e) = write_xray_config(&footprint_hex, &trace_id, &profile, &uuid, &privkey, &short) {
+                let Ok(profile) = env::var("NEXTDNS_PROFILE_ID") else {
+                    continue;
+                };
+                let Ok(uuid) = env::var("XRAY_UUID") else {
+                    continue;
+                };
+                let Ok(privkey) = env::var("XRAY_PRIVATE_KEY") else {
+                    continue;
+                };
+                let Ok(short) = env::var("XRAY_SHORT_ID") else {
+                    continue;
+                };
+                if let Err(e) =
+                    write_xray_config(&footprint_hex, &trace_id, &profile, &uuid, &privkey, &short)
+                {
                     tracing::warn!("write_xray_config failed: {}", e);
                 }
             }
@@ -918,7 +1090,16 @@ mod xray_config_tests {
                 domain: "cozo.ghostbridge.tech".into(),
             },
         ];
-        let cfg = build_xray_config("foot", "trace", "abc123", "uuid", "pk", "sid", &sockets);
+        let cfg = build_xray_config(
+            "foot",
+            "trace",
+            "abc123",
+            "uuid",
+            "pk",
+            "sid",
+            &sockets,
+            &[],
+        );
 
         // Must be valid JSON.
         let v: serde_json::Value = serde_json::from_str(&cfg).expect("valid json");
@@ -927,14 +1108,17 @@ mod xray_config_tests {
         let inbounds = v["inbounds"].as_array().unwrap();
         assert_eq!(inbounds.len(), 2, "no dokodemo socket inbounds expected");
 
-        // Each socket has a freedom/ds outbound dialing its path.
+        // Each socket has a freedom/domainsocket outbound dialing its path.
         let outbounds = v["outbounds"].as_array().unwrap();
         let qdrant = outbounds
             .iter()
             .find(|o| o["tag"] == "to-qdrant")
             .expect("to-qdrant outbound");
-        assert_eq!(qdrant["streamSettings"]["network"], "ds");
-        assert_eq!(qdrant["streamSettings"]["dsSettings"]["path"], "/run/qdrant.sock");
+        assert_eq!(qdrant["streamSettings"]["network"], "domainsocket");
+        assert_eq!(
+            qdrant["streamSettings"]["dsSettings"]["path"],
+            "/run/qdrant.sock"
+        );
 
         // Each subdomain routes to its socket outbound off the shared ingress.
         let rules = v["routing"]["rules"].as_array().unwrap();
@@ -947,6 +1131,51 @@ mod xray_config_tests {
             .as_array()
             .unwrap()
             .contains(&serde_json::json!("ghostbridge-reality")));
+    }
+
+    #[test]
+    fn gemma_routes_generate_outbounds_and_rules() {
+        let routes = vec![
+            XrayRoute {
+                tag: "cognitive-mcp".into(),
+                subdomains: vec!["mcp.internal".into()],
+                backend: GemmaBackend::Grpc {
+                    host: "127.0.0.1".into(),
+                    port: 3003,
+                    service_name: "operation.cognitive.v1.CognitiveToolService".into(),
+                },
+            },
+            XrayRoute {
+                tag: "qdrant".into(),
+                subdomains: vec!["qdrant.ghostbridge.tech".into()],
+                backend: GemmaBackend::Tcp {
+                    host: "127.0.0.1".into(),
+                    port: 6334,
+                },
+            },
+        ];
+        let cfg = build_xray_config("foot", "trace", "abc123", "uuid", "pk", "sid", &[], &routes);
+        let v: serde_json::Value = serde_json::from_str(&cfg).expect("valid json");
+
+        let outbounds = v["outbounds"].as_array().unwrap();
+        assert!(outbounds.iter().any(|o| o["tag"] == "to-cognitive-mcp"));
+        assert!(outbounds.iter().any(|o| o["tag"] == "to-qdrant"));
+
+        let rules = v["routing"]["rules"].as_array().unwrap();
+        assert!(rules.iter().any(|r| {
+            r["outboundTag"] == "to-cognitive-mcp"
+                && r["domain"]
+                    .as_array()
+                    .map(|d| d.contains(&serde_json::json!("full:mcp.internal")))
+                    .unwrap_or(false)
+        }));
+        assert!(rules.iter().any(|r| {
+            r["outboundTag"] == "to-qdrant"
+                && r["domain"]
+                    .as_array()
+                    .map(|d| d.contains(&serde_json::json!("full:qdrant.ghostbridge.tech")))
+                    .unwrap_or(false)
+        }));
     }
 
     #[test]

@@ -32,17 +32,17 @@ is declared in the subid registry and maps to one or more subids.
 
 Tags used by the host consolidation:
 
-| tag | purpose | primary subid |
-|---|---|---|
-| `xray-tls` | xray TLS ingress on 443 | `src.network.xray-serve@v1` |
-| `xray-reality` | xray REALITY ingress on 8443 | `src.network.xray-serve@v1` |
-| `grpc-bridge` | zeroclaw gateway on 127.0.0.1:18789 | `exp.service.zeroclaw-serve@v1` |
-| `cognitive-mcp` | cognitive MCP on 127.0.0.1:3003 | `exp.service.cognitive-mcp-serve@v1` |
-| `qdrant` | qdrant vector store | `src.service.qdrant-serve@v1` |
-| `netmaker-api` | Netmaker REST API | `src.service.netmaker-api-serve@v1` |
-| `netmaker-mq` | Netmaker message broker | `src.service.netmaker-mq-serve@v1` |
-| `netmaker-ui` | Netmaker dashboard | `exp.service.netmaker-ui-serve@v1` |
-| `nextdns` | local NextDNS resolver | `src.service.nextdns-serve@v1` |
+| tag | purpose | primary subid | backend |
+|---|---|---|---|
+| `xray-tls` | xray TLS ingress on 443 | `src.network.xray-serve@v1` | ingress |
+| `xray-reality` | xray REALITY ingress on 8443 | `src.network.xray-serve@v1` | ingress |
+| `grpc-bridge` | zeroclaw gateway on 127.0.0.1:18789 | `exp.service.zeroclaw-serve@v1` | gRPC |
+| `cognitive-mcp` | cognitive MCP on 127.0.0.1:3003 | `exp.service.cognitive-mcp-serve@v1` | gRPC |
+| `qdrant` | qdrant vector store on 127.0.0.1:6334 | `src.service.qdrant-serve@v1` | TCP |
+| `netmaker-api` | Netmaker REST API on 127.0.0.1:28081 | `src.service.netmaker-api-serve@v1` | TCP |
+| `netmaker-mq` | Netmaker message broker on 127.0.0.1:21883 | `src.service.netmaker-mq-serve@v1` | TCP |
+| `netmaker-ui` | Netmaker dashboard on 127.0.0.1:28082 | `exp.service.netmaker-ui-serve@v1` | TCP |
+| `nextdns` | local NextDNS resolver on 127.0.0.1:53 | `src.service.nextdns-serve@v1` | DNS redirect |
 
 ## Subid → tag → xray rule
 

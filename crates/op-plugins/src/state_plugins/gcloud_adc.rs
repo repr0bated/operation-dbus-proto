@@ -1,12 +1,12 @@
+use super::plugin_schema_defs::{any_field, simple_schema};
 use anyhow::Result;
 use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
+use op_state_store::{FieldSchema, FieldType, PluginSchema};
 use serde::{Deserialize, Serialize};
+use simd_json::json;
 use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
-use simd_json::json;
-use op_state_store::{FieldSchema, FieldType, PluginSchema};
-use super::plugin_schema_defs::{simple_schema, any_field};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GcloudAdcState {

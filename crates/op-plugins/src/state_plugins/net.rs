@@ -8,10 +8,10 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use log;
 use op_state::{ApplyResult, Checkpoint, PluginCapabilities, StateAction, StateDiff, StatePlugin};
+use op_state_store::{FieldSchema, FieldType, PluginSchema};
 use serde::{Deserialize, Serialize};
 use simd_json::{json, prelude::*, OwnedValue as Value};
 use std::collections::HashMap;
-use op_state_store::{FieldSchema, FieldType, PluginSchema};
 // use std::net::Ipv4Addr; // not needed currently
 
 /// Network configuration schema

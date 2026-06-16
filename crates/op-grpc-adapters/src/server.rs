@@ -21,9 +21,15 @@ pub async fn run(socket_path: &str) -> Result<()> {
     let uds_stream = tokio_stream::wrappers::UnixListenerStream::new(uds);
 
     let (mut health_reporter, health_service) = health_reporter();
-    health_reporter.set_serving::<MailServiceServer<MailAdapter>>().await;
-    health_reporter.set_serving::<NetmakerServiceServer<NetmakerAdapter>>().await;
-    health_reporter.set_serving::<MqServiceServer<MqAdapter>>().await;
+    health_reporter
+        .set_serving::<MailServiceServer<MailAdapter>>()
+        .await;
+    health_reporter
+        .set_serving::<NetmakerServiceServer<NetmakerAdapter>>()
+        .await;
+    health_reporter
+        .set_serving::<MqServiceServer<MqAdapter>>()
+        .await;
 
     let reflection = ReflectionBuilder::configure()
         .register_encoded_file_descriptor_set(FILE_DESCRIPTOR_SET)
@@ -36,9 +42,18 @@ pub async fn run(socket_path: &str) -> Result<()> {
         .layer(tonic_web::GrpcWebLayer::new())
         .add_service(health_service)
         .add_service(reflection)
-        .add_service(MailServiceServer::with_interceptor(MailAdapter::new(), ghostbridge_interceptor))
-        .add_service(NetmakerServiceServer::with_interceptor(NetmakerAdapter::new(), ghostbridge_interceptor))
-        .add_service(MqServiceServer::with_interceptor(MqAdapter::new(), ghostbridge_interceptor))
+        .add_service(MailServiceServer::with_interceptor(
+            MailAdapter::new(),
+            ghostbridge_interceptor,
+        ))
+        .add_service(NetmakerServiceServer::with_interceptor(
+            NetmakerAdapter::new(),
+            ghostbridge_interceptor,
+        ))
+        .add_service(MqServiceServer::with_interceptor(
+            MqAdapter::new(),
+            ghostbridge_interceptor,
+        ))
         .serve_with_incoming(uds_stream)
         .await?;
 

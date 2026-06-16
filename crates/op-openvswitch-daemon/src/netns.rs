@@ -13,10 +13,7 @@ use tracing::{info, warn};
 /// Uses `ip link set` which reliably handles OVS internal ports.
 /// The daemon runs on the host with full privileges.
 pub fn move_interface_to_netns(ifname: &str, target_pid: u32) -> Result<()> {
-    info!(
-        "netns: moving {} into netns of PID {}",
-        ifname, target_pid
-    );
+    info!("netns: moving {} into netns of PID {}", ifname, target_pid);
 
     let output = std::process::Command::new("ip")
         .args(["link", "set", ifname, "netns", &target_pid.to_string()])
@@ -157,9 +154,16 @@ pub fn add_route_in_netns(ifname: &str, dest: &str, via: &str, target_pid: u32) 
 
     for attempt in 0..5 {
         let output = std::process::Command::new("nsenter")
-            .args(["-t", &pid_str, "-n", "ip", "route", "add", dest, "via", via, "dev", ifname])
+            .args([
+                "-t", &pid_str, "-n", "ip", "route", "add", dest, "via", via, "dev", ifname,
+            ])
             .output()
-            .with_context(|| format!("spawn nsenter ip route add {} via {} dev {}", dest, via, ifname))?;
+            .with_context(|| {
+                format!(
+                    "spawn nsenter ip route add {} via {} dev {}",
+                    dest, via, ifname
+                )
+            })?;
 
         if output.status.success() {
             return Ok(());
@@ -299,7 +303,10 @@ pub fn attach_port_to_container(
     for addr in ip_addrs {
         match add_addr_in_netns(iface_name, addr, target_pid) {
             Ok(_) => info!("attach: added addr {} to {}", addr, iface_name),
-            Err(e) => warn!("attach: failed to add addr {} to {}: {}", addr, iface_name, e),
+            Err(e) => warn!(
+                "attach: failed to add addr {} to {}: {}",
+                addr, iface_name, e
+            ),
         }
     }
 
@@ -358,7 +365,17 @@ pub fn bring_up_loopback(target_pid: u32) -> Result<()> {
     // Add 127.0.0.1/8 address (idempotent — uses nsenter for simplicity)
     let pid_str = target_pid.to_string();
     let _ = std::process::Command::new("nsenter")
-        .args(["-t", &pid_str, "-n", "ip", "addr", "add", "127.0.0.1/8", "dev", "lo"])
+        .args([
+            "-t",
+            &pid_str,
+            "-n",
+            "ip",
+            "addr",
+            "add",
+            "127.0.0.1/8",
+            "dev",
+            "lo",
+        ])
         .output();
 
     info!("netns: lo brought up inside PID {}", target_pid);

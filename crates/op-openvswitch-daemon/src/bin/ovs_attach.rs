@@ -103,7 +103,10 @@ async fn main() -> Result<()> {
         }
         thread::sleep(Duration::from_secs(1));
     }
-    anyhow::ensure!(Path::new(DBUS_SOCKET).exists(), "D-Bus socket not found after 60s");
+    anyhow::ensure!(
+        Path::new(DBUS_SOCKET).exists(),
+        "D-Bus socket not found after 60s"
+    );
 
     // Connect to D-Bus
     let address = format!("unix:path={DBUS_SOCKET}");
@@ -125,14 +128,20 @@ async fn main() -> Result<()> {
 
     // ── Step 1: Read this container's config from the OCI plugin schema ──
     eprintln!("reading OCI plugin schema from D-Bus tree...");
-    let (loopback_required, port_attach_config) =
-        read_oci_container_config(&conn, &instance_name).await.unwrap_or((false, None));
+    let (loopback_required, port_attach_config) = read_oci_container_config(&conn, &instance_name)
+        .await
+        .unwrap_or((false, None));
 
     // ── Step 2: Bring up loopback if the OCI schema declares it ────────
     if loopback_required {
         eprintln!("loopback_required=true for {instance_name}, calling BringUpLoopback...");
 
-        let daemon = get_json_property(&conn, "/org/opdbus/v1/plugin/plugins/ovsdb_daemon", "JsonData").await?;
+        let daemon = get_json_property(
+            &conn,
+            "/org/opdbus/v1/plugin/plugins/ovsdb_daemon",
+            "JsonData",
+        )
+        .await?;
         let dbus_bus = daemon["dbus_bus_name"]
             .as_str()
             .unwrap_or("org.opdbus.v1.plugins.ovsdb");
@@ -221,7 +230,12 @@ async fn main() -> Result<()> {
     }
 
     // Discover AttachPort method location
-    let daemon = get_json_property(&conn, "/org/opdbus/v1/plugin/plugins/ovsdb_daemon", "JsonData").await?;
+    let daemon = get_json_property(
+        &conn,
+        "/org/opdbus/v1/plugin/plugins/ovsdb_daemon",
+        "JsonData",
+    )
+    .await?;
     let dbus_bus = daemon["dbus_bus_name"]
         .as_str()
         .unwrap_or("org.opdbus.v1.plugins.ovsdb");

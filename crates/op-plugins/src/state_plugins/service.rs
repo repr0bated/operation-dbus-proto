@@ -1,19 +1,19 @@
 //! Service plugin - auto-generating, validating, init-agnostic service management.
 
+use super::plugin_schema_defs::{any_field, simple_schema};
 use crate::service_def::{
     ExecCommand, LogType, ReadyNotification, RestartPolicy, ServiceDef, ServiceName, ServiceType,
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
+use op_state_store::PluginSchema;
 use serde::{Deserialize, Serialize};
 use simd_json::{json, OwnedValue as Value};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use zbus::{Connection, Proxy};
-use op_state_store::{PluginSchema};
-use super::plugin_schema_defs::{simple_schema, any_field};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceLifecycle {

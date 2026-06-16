@@ -92,7 +92,12 @@ impl NotebookLmPlugin {
         };
 
         NotebookLmState {
-            status: if configured { "configured" } else { "unconfigured" }.to_string(),
+            status: if configured {
+                "configured"
+            } else {
+                "unconfigured"
+            }
+            .to_string(),
             auth: json!({
                 "profile_configured": configured,
                 "profile_path": NLM_PROFILE,

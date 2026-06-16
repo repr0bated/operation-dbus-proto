@@ -36,8 +36,7 @@ pub mod proto {
     tonic::include_proto!("op_cache");
 
     /// Combined FileDescriptorSet for reflection.
-    pub const FILE_DESCRIPTOR_SET: &[u8] =
-        tonic::include_file_descriptor_set!("cache_descriptor");
+    pub const FILE_DESCRIPTOR_SET: &[u8] = tonic::include_file_descriptor_set!("cache_descriptor");
 }
 
 /// Prelude for convenient imports.

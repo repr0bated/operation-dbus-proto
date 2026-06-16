@@ -1,6 +1,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
+use op_state_store::{Constraint, FieldSchema, FieldType, PluginSchema};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
@@ -10,7 +11,6 @@ use std::os::unix::net::UnixListener;
 use std::path::Path;
 use std::sync::Arc;
 use tracing::{info, warn};
-use op_state_store::{Constraint, FieldSchema, FieldType, PluginSchema};
 
 /// The single active-schema catalog in shared memory. Every plugin reads its
 /// own slice by name from this one file — there is no per-plugin shm file and

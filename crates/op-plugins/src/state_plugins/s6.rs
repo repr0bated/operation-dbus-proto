@@ -401,11 +401,11 @@ impl StatePlugin for S6StatePlugin {
 
 // ── D-Bus client wrapper ──────────────────────────────────────────────────────
 
+use op_state_store::{FieldSchema, FieldType, PluginSchema};
+use simd_json::json;
 use std::sync::Arc;
 use tokio::sync::OnceCell;
 use zbus::{proxy, Connection};
-use op_state_store::{FieldSchema, FieldType, PluginSchema};
-use simd_json::json;
 
 /// D-Bus proxy for `org.opdbus.v1.S6.Systemctl`.
 #[proxy(

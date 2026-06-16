@@ -1,10 +1,10 @@
+use super::plugin_schema_defs::schema_from_state;
 use anyhow::Result;
 use async_trait::async_trait;
 use op_state::{ApplyResult, PluginCapabilities, StateDiff, StatePlugin};
+use op_state_store::PluginSchema;
 use serde::{Deserialize, Serialize};
 use simd_json::{json, OwnedValue as Value};
-use op_state_store::{PluginSchema};
-use super::plugin_schema_defs::{schema_from_state};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct XrayConfig {
@@ -142,7 +142,10 @@ impl StatePlugin for XrayPlugin {
                 Err(e) => errors.push(format!("xray reload failed: {e}")),
             }
         } else {
-            match std::process::Command::new("pkill").args(["-x", "xray"]).status() {
+            match std::process::Command::new("pkill")
+                .args(["-x", "xray"])
+                .status()
+            {
                 Ok(_) => changes.push("xray stopped".to_string()),
                 Err(e) => errors.push(format!("xray stop failed: {e}")),
             }
