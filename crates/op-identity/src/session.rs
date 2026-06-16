@@ -3,6 +3,7 @@
 //! Sessions are created when a WireGuard peer connects and
 //! destroyed on disconnect or timeout.
 
+use anyhow::Context;
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use std::sync::Arc;
@@ -11,9 +12,29 @@ use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::gcloud_auth::GCloudAuth;
+use crate::identity_vault::{IdentityVault, UserRecord};
 use crate::wireguard::WireGuardIdentity;
 
 const SESSION_TIMEOUT_SECS: i64 = 3600; // 1 hour
+
+/// Domain-separation context for deriving a deterministic session id from a
+/// WireGuard pubkey. The same pubkey always yields the same session id, so
+/// re-authentication after a timeout resumes the same logical session without
+/// server-side custody of the private key.
+const SESSION_ID_KDF_CONTEXT: &str = "op-identity session-id v1";
+
+/// Derive a stable session id from a WireGuard pubkey using Blake3 KDF.
+///
+/// Output is formatted as a UUID string so existing consumers (headers,
+/// trace IDs, accountability page) do not need to change. The derivation is
+/// deterministic and local-only: no network, no DB, no randomness.
+pub fn derive_session_id(pubkey: &str) -> String {
+    let key_material = blake3::derive_key(SESSION_ID_KDF_CONTEXT, pubkey.as_bytes());
+    let bytes: [u8; 16] = key_material[..16]
+        .try_into()
+        .expect("16 bytes from 32-byte KDF output");
+    Uuid::from_bytes(bytes).to_string()
+}
 
 /// Represents an active session
 #[derive(Debug, Clone)]
@@ -27,20 +48,11 @@ pub struct Session {
     pub last_seen_at: DateTime<Utc>,
 }
 
-/// Mapping of WireGuard pubkey to user information
-#[derive(Debug, Clone)]
-pub struct UserMapping {
-    pub pubkey: String,
-    pub user_email: String,
-    pub allowed_ip: String,
-    pub created_at: DateTime<Utc>,
-}
-
 /// Manages sessions and their lifecycle
 #[derive(Clone)]
 pub struct SessionManager {
     sessions: Arc<DashMap<String, Session>>,
-    wireguard_users: Arc<DashMap<String, UserMapping>>,
+    identity_vault: Arc<Mutex<IdentityVault>>,
     gcloud_auth: GCloudAuth,
     wireguard: WireGuardIdentity,
     current_session_id: Arc<Mutex<Option<String>>>,
@@ -48,15 +60,32 @@ pub struct SessionManager {
 
 impl SessionManager {
     pub fn new() -> anyhow::Result<Self> {
-        Self::with_wireguard_interface("wg0")
+        Self::with_vault_path(crate::identity_vault::DEFAULT_VAULT_PATH)
     }
 
     pub fn with_wireguard_interface(interface: &str) -> anyhow::Result<Self> {
+        Self::with_vault_and_interface(crate::identity_vault::DEFAULT_VAULT_PATH, interface)
+    }
+
+    pub fn with_vault_path<P: AsRef<std::path::Path>>(path: P) -> anyhow::Result<Self> {
+        Self::with_vault_and_interface(path, "wg0")
+    }
+
+    pub fn with_vault_and_interface<P: AsRef<std::path::Path>>(
+        path: P,
+        interface: &str,
+    ) -> anyhow::Result<Self> {
         // SQL is obsolete in the 3tched architecture.
-        // We use in-memory DashMaps to prevent Btrfs mutation loops.
+        // We use in-memory DashMaps to prevent Btrfs mutation loops; the vault
+        // is the only persistent record and is stored under /etc/ghostbridge.
+        let path = path.as_ref().to_path_buf();
+        let vault = IdentityVault::load_from(&path).unwrap_or_else(|e| {
+            tracing::warn!("failed to load identity vault, starting empty: {e}");
+            IdentityVault::new(&path)
+        });
         Ok(Self {
             sessions: Arc::new(DashMap::new()),
-            wireguard_users: Arc::new(DashMap::new()),
+            identity_vault: Arc::new(Mutex::new(vault)),
             gcloud_auth: GCloudAuth::new(),
             wireguard: WireGuardIdentity::with_interface(interface),
             current_session_id: Arc::new(Mutex::new(None)),
@@ -95,16 +124,21 @@ impl SessionManager {
             return Ok(session);
         }
 
-        // Create new session
-        let session_id = Uuid::new_v4().to_string();
+        // Create new session from the derived key for this pubkey.
+        // The same pubkey always yields the same session id, so re-provisioning
+        // the same machine resumes the same logical session without server-side
+        // custody of the private key.
+        let session_id = derive_session_id(pubkey);
         info!(
-            "Creating new session: {} for pubkey: {}",
+            "Creating new derived session: {} for pubkey: {}",
             session_id, pubkey
         );
 
-        // Try to get user email from WireGuard user mapping
+        // Try to get user email from the persistent identity vault.
         let user_email = self
-            .wireguard_users
+            .identity_vault
+            .lock()
+            .await
             .get(pubkey)
             .map(|u| u.user_email.clone());
 
@@ -184,30 +218,38 @@ impl SessionManager {
         Ok(token)
     }
 
-    /// Register a WireGuard user mapping
+    /// Register a WireGuard user mapping in the persistent identity vault.
     pub async fn register_wireguard_user(
         &self,
         pubkey: &str,
         user_email: &str,
         allowed_ip: &str,
     ) -> anyhow::Result<()> {
-        let mapping = UserMapping {
+        let now = Utc::now();
+        let record = UserRecord {
             pubkey: pubkey.to_string(),
             user_email: user_email.to_string(),
             allowed_ip: allowed_ip.to_string(),
-            created_at: Utc::now(),
+            created_at: now,
+            provisioned_at: now,
         };
 
-        self.wireguard_users.insert(pubkey.to_string(), mapping);
+        self.identity_vault
+            .lock()
+            .await
+            .store(record)
+            .context("persist user record to identity vault")?;
 
         info!("Registered WireGuard user: {} -> {}", pubkey, user_email);
         Ok(())
     }
 
-    /// Get user email for a pubkey
+    /// Get user email for a pubkey from the persistent identity vault.
     pub async fn get_user_for_pubkey(&self, pubkey: &str) -> anyhow::Result<Option<String>> {
         Ok(self
-            .wireguard_users
+            .identity_vault
+            .lock()
+            .await
             .get(pubkey)
             .map(|u| u.user_email.clone()))
     }
@@ -251,18 +293,38 @@ impl SessionManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
+
+    fn test_manager() -> (SessionManager, TempDir) {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("vault.json");
+        (SessionManager::with_vault_path(&path).unwrap(), dir)
+    }
+
+    #[test]
+    fn derive_session_id_is_deterministic_and_uuid_like() {
+        let id1 = derive_session_id("test-pubkey");
+        let id2 = derive_session_id("test-pubkey");
+        let id3 = derive_session_id("different-pubkey");
+        assert_eq!(id1, id2);
+        assert_ne!(id1, id3);
+        // Uuid::parse_str accepts both hyphenated and raw hex forms; our output is hyphenated.
+        assert!(uuid::Uuid::parse_str(&id1).is_ok());
+    }
 
     #[tokio::test]
     async fn test_session_creation() {
-        let manager = SessionManager::new().unwrap();
+        let (manager, _dir) = test_manager();
         let session = manager.get_or_create_session("test-pubkey").await.unwrap();
         assert_eq!(session.pubkey, "test-pubkey");
         assert!(manager.current_session_id().await.is_some());
+        // The session id should be the deterministic derivation, not a random UUID.
+        assert_eq!(session.session_id, derive_session_id("test-pubkey"));
     }
 
     #[tokio::test]
     async fn test_session_touch() {
-        let manager = SessionManager::new().unwrap();
+        let (manager, _dir) = test_manager();
         let session = manager.get_or_create_session("test-pubkey").await.unwrap();
         let last_seen = session.last_seen_at;
 
@@ -275,7 +337,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_wireguard_user_registration() {
-        let manager = SessionManager::new().unwrap();
+        let (manager, _dir) = test_manager();
         manager
             .register_wireguard_user("pubkey1", "user@example.com", "10.0.0.1")
             .await
@@ -283,5 +345,21 @@ mod tests {
 
         let email = manager.get_user_for_pubkey("pubkey1").await.unwrap();
         assert_eq!(email, Some("user@example.com".to_string()));
+    }
+
+    #[tokio::test]
+    async fn identity_vault_survives_reconstruction() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("vault.json");
+        {
+            let manager = SessionManager::with_vault_path(&path).unwrap();
+            manager
+                .register_wireguard_user("pubkey2", "vault@example.com", "10.0.0.2")
+                .await
+                .unwrap();
+        }
+        let manager = SessionManager::with_vault_path(&path).unwrap();
+        let email = manager.get_user_for_pubkey("pubkey2").await.unwrap();
+        assert_eq!(email, Some("vault@example.com".to_string()));
     }
 }

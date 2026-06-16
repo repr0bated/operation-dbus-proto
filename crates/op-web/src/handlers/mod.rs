@@ -10,7 +10,6 @@ pub mod llm;
 pub mod logs;
 pub mod mail;
 pub mod mcp;
-pub mod openclaw;
 pub mod privacy;
 pub mod schema;
 pub mod status;
