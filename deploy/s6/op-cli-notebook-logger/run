@@ -1,0 +1,3 @@
+#!/bin/sh
+exec 2>&1
+exec s6-envdir ./env /usr/local/sbin/op-cli-notebook-log-sync.sh

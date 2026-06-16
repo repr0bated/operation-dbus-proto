@@ -3,13 +3,13 @@
 //! Publishes the Antigravity-facing model and CLI routing contract through
 //! `PluginSchema` so the UI can render provider/model controls from D-Bus.
 
+use super::plugin_schema_defs::schema_from_state;
 use anyhow::Result;
 use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
 use op_state_store::PluginSchema;
 use serde::{Deserialize, Serialize};
 use simd_json::{json, OwnedValue as Value};
-use super::plugin_schema_defs::schema_from_state;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ZeroclawState {
@@ -21,6 +21,7 @@ pub struct ZeroclawState {
     pub router: Value,
     pub model_routes: Value,
     pub tools: Value,
+    pub model_transcript_mcp: Value,
     pub config_schema: Value,
     pub ui_surfaces: Value,
     pub structured_output: Value,
@@ -51,6 +52,20 @@ impl ZeroclawPlugin {
         let router_endpoint = Self::env_or("ZEROCLAW_ROUTER_ENDPOINT", "http://localhost:11434");
         let wg_xray_target = Self::env_or("ZEROCLAW_WG_XRAY_TARGET", "wg-xray");
         let grpc_target = Self::env_or("ZEROCLAW_GRPC_TARGET", "http://10.200.0.1:50051");
+        let transcript_source_dir = Self::env_or(
+            "ZEROCLAW_MODEL_TRANSCRIPT_SOURCE_DIR",
+            "/run/op-dbus/zeroclaw/notebooklm-sources.d",
+        );
+        let transcript_drive_root = Self::env_or(
+            "ZEROCLAW_MODEL_TRANSCRIPT_DRIVE_ROOT",
+            "gdrive:NotebookLM/op-dbus/model-transcripts",
+        );
+        let transcript_mcp_server = Self::env_or(
+            "ZEROCLAW_MODEL_TRANSCRIPT_MCP_SERVER",
+            "zeroclaw-model-transcripts",
+        );
+        let transcript_mcp_profile =
+            Self::env_or("ZEROCLAW_MODEL_TRANSCRIPT_MCP_PROFILE", "model-transcripts");
 
         ZeroclawState {
             status: "declared".to_string(),
@@ -234,6 +249,35 @@ impl ZeroclawPlugin {
                     }
                 }
             ]),
+            model_transcript_mcp: json!({
+                "subid": "exp.service.zeroclaw-model-transcripts.mcp@v1",
+                "role": "model_transcript_research",
+                "mcp_gateway": "cognitive-mcp",
+                "notebooklm_server_name": transcript_mcp_server,
+                "notebooklm_profile": transcript_mcp_profile,
+                "tool_prefix": "zeroclaw_model_transcript",
+                "source_specs_dir": transcript_source_dir,
+                "drive_root": transcript_drive_root,
+                "source_policy": {
+                    "one_drive_file_per_client_model": true,
+                    "replace_existing_drive_file": true,
+                    "never_append_notebooklm_sources": true,
+                    "notebooklm_source_slot_budget": 300
+                },
+                "declared_source_spec": {
+                    "OP_CLI_TYPE": "zeroclaw",
+                    "OP_CLI_NAME": "client-name",
+                    "OP_CLI_MODEL": "provider/model",
+                    "OP_NOTEBOOK_ID": "notebooklm notebook id",
+                    "OP_GOOGLE_DRIVE_LOG_FILE": "stable Google Drive source path",
+                    "OP_SESSION_GLOB": "ZeroClaw-projected transcript path(s)"
+                },
+                "tools": [
+                    "zeroclaw_model_transcript_ask_question",
+                    "zeroclaw_model_transcript_create_notebook",
+                    "zeroclaw_model_transcript_add_source"
+                ]
+            }),
             config_schema: json!({
                 "source": "zeroclaw config schema",
                 "schema_crate": "schemars",

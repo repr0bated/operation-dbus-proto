@@ -1,0 +1,28 @@
+[Unit]
+Description=OP CLI NotebookLM Google Drive log sync (%i)
+Documentation=https://github.com/repr0bated/operation-dbus
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/op-dbus/cli-notebook-logger/%i.env
+ExecStart=/usr/local/sbin/op-cli-notebook-log-sync.sh
+Restart=always
+RestartSec=10s
+
+StateDirectory=op-dbus/cli-notebook-logger
+WorkingDirectory=/var/lib/op-dbus/cli-notebook-logger
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/op-dbus /var/log/op-dbus /run/op-dbus
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=op-cli-notebook-log-sync
+
+[Install]
+WantedBy=multi-user.target

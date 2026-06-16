@@ -1,0 +1,13 @@
+#!/bin/sh
+# zeroclaw - Antigravity/ZeroClaw gateway (host-native, replaces openclaw + container zeroclaw)
+# Per AGENTS.md: secrets live in /etc/ghostbridge/*.env, never in unit files.
+
+if [ -f /etc/ghostbridge/zeroclaw.env ]; then
+    . /etc/ghostbridge/zeroclaw.env
+fi
+
+export ZEROCLAW_GATEWAY_HOST="${ZEROCLAW_GATEWAY_HOST:-0.0.0.0}"
+export ZEROCLAW_GATEWAY_PORT="${ZEROCLAW_GATEWAY_PORT:-18789}"
+
+exec 2>&1
+exec /home/jeremy/.cargo/bin/zeroclaw gateway start
