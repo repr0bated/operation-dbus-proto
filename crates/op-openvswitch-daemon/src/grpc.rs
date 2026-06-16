@@ -10,13 +10,12 @@
 use anyhow::Result;
 use std::net::SocketAddr;
 use tonic::{Request, Response, Status};
-use tracing::info;
 use tonic_web;
+use tracing::info;
 
 use crate::dbus::DaemonState;
 
-const FILE_DESCRIPTOR_SET: &[u8] =
-    tonic::include_file_descriptor_set!("ovsdaemon_descriptor");
+const FILE_DESCRIPTOR_SET: &[u8] = tonic::include_file_descriptor_set!("ovsdaemon_descriptor");
 
 /// Generated protobuf types
 pub mod proto {
@@ -27,8 +26,7 @@ use proto::ovsdb_service_server::{OvsdbService, OvsdbServiceServer};
 use proto::{
     AttachPortRequest, AttachPortResponse, BridgeRequest, BridgeResponse, BridgesRequest,
     BridgesResponse, DatabaseRequest, DatabaseResponse, DetachPortRequest, DetachPortResponse,
-    PortRequest, PortResponse, PortsRequest, PortsResponse, StatusRequest,
-    StatusResponse,
+    PortRequest, PortResponse, PortsRequest, PortsResponse, StatusRequest, StatusResponse,
 };
 
 /// gRPC service implementation — delegates to the shared `DaemonState`.
@@ -197,7 +195,10 @@ impl OvsdbService for OvsdbServiceImpl {
         } else {
             req.interface_type
         };
-        info!("gRPC add_port: {} to {} (type={})", name, bridge, iface_type);
+        info!(
+            "gRPC add_port: {} to {} (type={})",
+            name, bridge, iface_type
+        );
 
         let mut guard = self.ovsdb_client().await?;
         let client = guard
@@ -433,8 +434,7 @@ impl OvsdbService for OvsdbServiceImpl {
 
         // Step 1: Create the OVS internal port via OVSDB
         let iface_type = "internal";
-        let mut iface_row =
-            serde_json::json!({ "name": &port_name, "type": iface_type });
+        let mut iface_row = serde_json::json!({ "name": &port_name, "type": iface_type });
         for (key, value) in &req.options {
             iface_row
                 .as_object_mut()

@@ -1,12 +1,12 @@
+use super::plugin_schema_defs::simple_schema;
 use anyhow::Result;
 use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
-use serde::{Deserialize, Serialize};
-use simd_json::prelude::*;
-use simd_json::json;
-use simd_json::OwnedValue as Value;
 use op_state_store::{Constraint, FieldSchema, FieldType, PluginSchema};
-use super::plugin_schema_defs::{simple_schema};
+use serde::{Deserialize, Serialize};
+use simd_json::json;
+use simd_json::prelude::*;
+use simd_json::OwnedValue as Value;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProxyServerState {

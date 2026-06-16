@@ -10,8 +10,8 @@
 
 use anyhow::Result;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
-use simd_json::OwnedValue as Value;
 use op_state_store::{FieldType, PluginSchema};
+use simd_json::OwnedValue as Value;
 
 /// OVSDB Daemon Plugin
 ///

@@ -1,0 +1,17 @@
+#!/bin/sh
+set -eu
+
+GEMMA_BIN="/home/jeremy/git/operation-dbus-proto/target/debug/op-gemma"
+SHUTTLE_BIN="/home/jeremy/git/operation-dbus-proto/target/debug/op-identity-shuttle"
+
+if [ -f /etc/ghostbridge/xray.env ]; then
+    . /etc/ghostbridge/xray.env
+fi
+
+echo "gemma: generating subid → tag → xray + OpenFlow rules"
+"$GEMMA_BIN"
+
+echo "gemma: running identity shuttle to regenerate xray config"
+"$SHUTTLE_BIN"
+
+echo "gemma: ready"

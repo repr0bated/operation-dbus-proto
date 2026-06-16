@@ -27,7 +27,7 @@ use tokio::time::sleep;
 /// Application state
 struct App {
     sled: Option<IdentitySled>,
-    layout: String,             // "canonical" | "compact" | "missing"
+    layout: String, // "canonical" | "compact" | "missing"
     last_refresh: Instant,
     refresh_interval: Duration,
     schema_catalog_hash: String,
@@ -77,20 +77,31 @@ fn ui(f: &mut Frame, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),   // Header
-            Constraint::Min(10),     // Sled content
-            Constraint::Length(3),   // Footer
+            Constraint::Length(3), // Header
+            Constraint::Min(10),   // Sled content
+            Constraint::Length(3), // Footer
         ])
         .split(size);
 
     // ─── Header ──────────────────────────────────────────────
     let header = Paragraph::new(vec![
         Line::from(vec![
-            Span::styled("op-sled-top", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "op-sled-top",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw("  │  "),
-            Span::styled("The Sled (Identity State)", Style::default().fg(Color::White)),
+            Span::styled(
+                "The Sled (Identity State)",
+                Style::default().fg(Color::White),
+            ),
             Span::raw("  │  "),
-            Span::styled(format!("layout: {}", app.layout), Style::default().fg(Color::Yellow)),
+            Span::styled(
+                format!("layout: {}", app.layout),
+                Style::default().fg(Color::Yellow),
+            ),
             Span::raw("  │  "),
             Span::styled(
                 format!("refresh: {:.1}s", app.refresh_interval.as_secs_f32()),
@@ -105,14 +116,20 @@ fn ui(f: &mut Frame, app: &App) {
             Span::styled(&app.schema_catalog_hash, Style::default().fg(Color::White)),
         ]),
     ])
-    .block(Block::default().borders(Borders::ALL).title(" Identity Sled "))
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Identity Sled "),
+    )
     .alignment(Alignment::Left);
     f.render_widget(header, chunks[0]);
 
     // ─── Sled Content ────────────────────────────────────────
     let content = if let Some(sled) = &app.sled {
         let valid_style = if sled.is_sled_valid() {
-            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
         };
@@ -120,19 +137,35 @@ fn ui(f: &mut Frame, app: &App) {
         let items = vec![
             ListItem::new(Line::from(vec![
                 Span::styled("WireGuard Pubkey: ", Style::default().fg(Color::DarkGray)),
-                Span::styled(encode_b64(&sled.wireguard_pubkey), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    encode_b64(&sled.wireguard_pubkey),
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD),
+                ),
             ])),
             ListItem::new(Line::from(vec![
                 Span::styled("Trace ID:        ", Style::default().fg(Color::DarkGray)),
-                Span::styled(&app.trace_id, Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    &app.trace_id,
+                    Style::default()
+                        .fg(Color::Magenta)
+                        .add_modifier(Modifier::BOLD),
+                ),
             ])),
             ListItem::new(Line::from(vec![
                 Span::styled("Mutation Index:  ", Style::default().fg(Color::DarkGray)),
-                Span::styled(sled.mutation_index.to_string(), Style::default().fg(Color::Yellow)),
+                Span::styled(
+                    sled.mutation_index.to_string(),
+                    Style::default().fg(Color::Yellow),
+                ),
             ])),
             ListItem::new(Line::from(vec![
                 Span::styled("Schema Version:  ", Style::default().fg(Color::DarkGray)),
-                Span::styled(sled.schema_version.to_string(), Style::default().fg(Color::Blue)),
+                Span::styled(
+                    sled.schema_version.to_string(),
+                    Style::default().fg(Color::Blue),
+                ),
             ])),
             ListItem::new(Line::from(vec![
                 Span::styled("Vector ID (Qdrant): ", Style::default().fg(Color::DarkGray)),
@@ -140,10 +173,16 @@ fn ui(f: &mut Frame, app: &App) {
             ])),
             ListItem::new(Line::from(vec![
                 Span::styled("Hashed Footprint:  ", Style::default().fg(Color::DarkGray)),
-                Span::styled(hex(&sled.hashed_footprint), Style::default().fg(Color::Cyan)),
+                Span::styled(
+                    hex(&sled.hashed_footprint),
+                    Style::default().fg(Color::Cyan),
+                ),
             ])),
             ListItem::new(Line::from(vec![
-                Span::styled("Valid (Absolute Base): ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    "Valid (Absolute Base): ",
+                    Style::default().fg(Color::DarkGray),
+                ),
                 Span::styled(if sled.is_sled_valid() { "YES" } else { "NO" }, valid_style),
             ])),
             ListItem::new(Line::from(vec![
@@ -152,28 +191,26 @@ fn ui(f: &mut Frame, app: &App) {
             ])),
         ];
 
-        List::new(items).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(format!(
-                    " Sled Data (updated {:.1}s ago) ",
-                    app.last_refresh.elapsed().as_secs_f32()
-                )),
-        )
+        List::new(items).block(Block::default().borders(Borders::ALL).title(format!(
+            " Sled Data (updated {:.1}s ago) ",
+            app.last_refresh.elapsed().as_secs_f32()
+        )))
     } else {
-        List::new(vec![ListItem::new(Line::from(
-            Span::styled(
-                "NO SLED FOUND — /dev/shm/plugin_schema.dat missing or unreadable",
-                Style::default().fg(Color::Red),
-            )
-        ))]).block(Block::default().borders(Borders::ALL).title(" Sled Data "))
+        List::new(vec![ListItem::new(Line::from(Span::styled(
+            "NO SLED FOUND — /dev/shm/plugin_schema.dat missing or unreadable",
+            Style::default().fg(Color::Red),
+        )))])
+        .block(Block::default().borders(Borders::ALL).title(" Sled Data "))
     };
 
     f.render_widget(content, chunks[1]);
 
     // ─── Footer ──────────────────────────────────────────────
     let footer = Paragraph::new(Line::from(vec![
-        Span::styled(" q/ESC ", Style::default().bg(Color::DarkGray).fg(Color::White)),
+        Span::styled(
+            " q/ESC ",
+            Style::default().bg(Color::DarkGray).fg(Color::White),
+        ),
         Span::raw(" quit  │  "),
         Span::styled(" r ", Style::default().bg(Color::DarkGray).fg(Color::White)),
         Span::raw(" refresh now  │  "),
@@ -267,7 +304,10 @@ fn print_sled(app: &App, json: bool) -> Result<()> {
             println!("Schema Version:  {}", sled.schema_version);
             println!("Vector ID:       {}", sled.vector_id_uuid());
             println!("Hashed Footprint:{}", hex(&sled.hashed_footprint));
-            println!("Valid:           {}", if sled.is_sled_valid() { "YES" } else { "NO" });
+            println!(
+                "Valid:           {}",
+                if sled.is_sled_valid() { "YES" } else { "NO" }
+            );
             println!("Layout:          {}", app.layout);
             println!("Schema Catalog:  {}", app.schema_catalog_hash);
         }
@@ -364,7 +404,11 @@ async fn main() -> Result<()> {
     let result = run_tui(app, &mut terminal).await;
 
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
     terminal.show_cursor()?;
 
     result

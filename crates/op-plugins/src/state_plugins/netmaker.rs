@@ -1,13 +1,13 @@
+use super::plugin_schema_defs::schema_from_state;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use op_state::StatePlugin;
 use op_state::{ApplyResult, PluginCapabilities, StateAction, StateDiff};
+use op_state_store::PluginSchema;
 use serde::{Deserialize, Serialize};
 use simd_json::{json, prelude::*, OwnedValue as Value};
 use std::path::Path;
 use zbus::{Connection, Proxy};
-use op_state_store::{PluginSchema};
-use super::plugin_schema_defs::{schema_from_state};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetmakerConfig {

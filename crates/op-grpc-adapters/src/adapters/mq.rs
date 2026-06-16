@@ -2,8 +2,8 @@
 //! Connects via unix socket: /run/netmaker/mq.sock (MQTT :1883)
 
 use crate::proto::{
-    mq_service_server::MqService, ListTopicsRequest, ListTopicsResponse, MqMessage,
-    PublishRequest, PublishResponse, SubscribeRequest,
+    mq_service_server::MqService, ListTopicsRequest, ListTopicsResponse, MqMessage, PublishRequest,
+    PublishResponse, SubscribeRequest,
 };
 use async_trait::async_trait;
 use rumqttc::{AsyncClient, EventLoop, MqttOptions, QoS};
@@ -24,10 +24,7 @@ impl MqAdapter {
     fn mqtt_client(client_id: &str) -> (AsyncClient, EventLoop) {
         let mut opts = MqttOptions::new(client_id, MQTT_HOST, MQTT_PORT);
         opts.set_keep_alive(std::time::Duration::from_secs(30));
-        if let (Ok(user), Ok(pass)) = (
-            std::env::var("MQTT_USER"),
-            std::env::var("MQTT_PASS"),
-        ) {
+        if let (Ok(user), Ok(pass)) = (std::env::var("MQTT_USER"), std::env::var("MQTT_PASS")) {
             opts.set_credentials(user, pass);
         }
         AsyncClient::new(opts, 128)
@@ -65,7 +62,9 @@ impl MqService for MqAdapter {
                 match eventloop.poll().await {
                     Ok(rumqttc::Event::Outgoing(rumqttc::Outgoing::Publish(_))) => break,
                     Ok(_) => continue,
-                    Err(e) => return Err(Status::internal(format!("MQTT event loop error: {}", e))),
+                    Err(e) => {
+                        return Err(Status::internal(format!("MQTT event loop error: {}", e)))
+                    }
                 }
             }
             Ok(())
@@ -89,10 +88,8 @@ impl MqService for MqAdapter {
             _ => QoS::ExactlyOnce,
         };
 
-        let (client, mut eventloop) = Self::mqtt_client(&format!(
-            "op-grpc-adapter-sub-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let (client, mut eventloop) =
+            Self::mqtt_client(&format!("op-grpc-adapter-sub-{}", uuid::Uuid::new_v4()));
 
         for topic in &r.topics {
             client
@@ -141,11 +138,8 @@ impl MqService for MqAdapter {
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
 
         while tokio::time::Instant::now() < deadline {
-            match tokio::time::timeout(
-                std::time::Duration::from_millis(500),
-                eventloop.poll(),
-            )
-            .await
+            match tokio::time::timeout(std::time::Duration::from_millis(500), eventloop.poll())
+                .await
             {
                 Ok(Ok(rumqttc::Event::Incoming(rumqttc::Packet::Publish(p)))) => {
                     topics.push(p.topic);

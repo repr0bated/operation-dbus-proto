@@ -1,9 +1,7 @@
 //! gRPC Server Transport with Infrastructure Integration
 
 #[cfg(feature = "grpc")]
-use crate::grpc::proto::{
-    mcp_service_server::McpServiceServer, FILE_DESCRIPTOR_SET,
-};
+use crate::grpc::proto::{mcp_service_server::McpServiceServer, FILE_DESCRIPTOR_SET};
 #[cfg(feature = "grpc")]
 use crate::grpc::service::{GrpcInfrastructure, McpGrpcService};
 use crate::ServerMode; // Unified ServerMode from lib.rs
@@ -186,13 +184,10 @@ impl GrpcTransport {
             builder = builder.add_service(tonic_web::enable(health_service));
         }
 
-        builder
-            .serve(addr)
-            .await
-            .map_err(|e| {
-                error!(error = %e, "gRPC server error");
-                anyhow::anyhow!("gRPC server error: {}", e)
-            })?;
+        builder.serve(addr).await.map_err(|e| {
+            error!(error = %e, "gRPC server error");
+            anyhow::anyhow!("gRPC server error: {}", e)
+        })?;
 
         Ok(())
     }

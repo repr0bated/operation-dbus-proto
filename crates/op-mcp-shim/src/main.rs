@@ -28,7 +28,11 @@ use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
 #[command(version, about = "MCP stdio shim over gRPC reflection")]
 struct Cli {
     /// Target gRPC endpoint (tonic-web listener also accepts native gRPC)
-    #[arg(long, env = "MCP_GRPC_ENDPOINT", default_value = "http://10.200.0.1:50052")]
+    #[arg(
+        long,
+        env = "MCP_GRPC_ENDPOINT",
+        default_value = "http://10.200.0.1:50052"
+    )]
     endpoint: String,
 
     /// Extra request metadata, repeatable: --header k=v

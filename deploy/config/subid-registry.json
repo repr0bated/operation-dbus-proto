@@ -1,0 +1,204 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "uuid": "2f834f7b-bba8-4bef-be24-6b5210fd582d",
+      "subid": "src.network.xray-serve@v1",
+      "category": "src",
+      "component_type": "network",
+      "subject": "xray",
+      "verb": "serve",
+      "version": 1,
+      "tags": [
+        "xray-tls",
+        "xray-reality"
+      ],
+      "subdomains": [
+        "*.ghostbridge.tech"
+      ],
+      "control_source": "",
+      "control_refs": [],
+      "statement_refs": [],
+      "gemma": {
+        "backend": {
+          "type": "ingress"
+        }
+      }
+    },
+    {
+      "uuid": "e6c51396-649e-471e-95de-ee17224b1afb",
+      "subid": "exp.service.zeroclaw-serve@v1",
+      "category": "exp",
+      "component_type": "service",
+      "subject": "zeroclaw",
+      "verb": "serve",
+      "version": 1,
+      "tags": [
+        "grpc-bridge"
+      ],
+      "subdomains": [
+        "assistant.ghostbridge.tech"
+      ],
+      "control_source": "",
+      "control_refs": [],
+      "statement_refs": [],
+      "gemma": {
+        "backend": {
+          "type": "grpc",
+          "host": "127.0.0.1",
+          "port": 18789,
+          "service_name": "Ghostbridge.StateSync"
+        }
+      }
+    },
+    {
+      "uuid": "99204d8e-35ac-448a-b09e-b5fb648da3aa",
+      "subid": "exp.service.cognitive-mcp-serve@v1",
+      "category": "exp",
+      "component_type": "service",
+      "subject": "cognitive-mcp",
+      "verb": "serve",
+      "version": 1,
+      "tags": [
+        "cognitive-mcp"
+      ],
+      "subdomains": [
+        "mcp.internal"
+      ],
+      "control_source": "",
+      "control_refs": [],
+      "statement_refs": [],
+      "gemma": {
+        "backend": {
+          "type": "grpc",
+          "host": "127.0.0.1",
+          "port": 3003,
+          "service_name": "operation.cognitive.v1.CognitiveToolService"
+        }
+      }
+    },
+    {
+      "uuid": "ab97d8a6-c630-4cff-8fa9-aaaa894e8015",
+      "subid": "src.service.qdrant-serve@v1",
+      "category": "src",
+      "component_type": "service",
+      "subject": "qdrant",
+      "verb": "serve",
+      "version": 1,
+      "tags": [
+        "qdrant"
+      ],
+      "subdomains": [
+        "qdrant.ghostbridge.tech"
+      ],
+      "control_source": "",
+      "control_refs": [],
+      "statement_refs": [],
+      "gemma": {
+        "backend": {
+          "type": "tcp",
+          "host": "127.0.0.1",
+          "port": 6334
+        }
+      }
+    },
+    {
+      "uuid": "54513fa8-ab1f-40e6-911e-8b237c8caa12",
+      "subid": "src.service.netmaker-api-serve@v1",
+      "category": "src",
+      "component_type": "service",
+      "subject": "netmaker-api",
+      "verb": "serve",
+      "version": 1,
+      "tags": [
+        "netmaker-api"
+      ],
+      "subdomains": [
+        "api.ghostbridge.tech"
+      ],
+      "control_source": "",
+      "control_refs": [],
+      "statement_refs": [],
+      "gemma": {
+        "backend": {
+          "type": "tcp",
+          "host": "127.0.0.1",
+          "port": 28081
+        }
+      }
+    },
+    {
+      "uuid": "570dc5ce-526a-475d-bb5b-908f48470b61",
+      "subid": "src.service.netmaker-mq-serve@v1",
+      "category": "src",
+      "component_type": "service",
+      "subject": "netmaker-mq",
+      "verb": "serve",
+      "version": 1,
+      "tags": [
+        "netmaker-mq"
+      ],
+      "subdomains": [
+        "broker.ghostbridge.tech"
+      ],
+      "control_source": "",
+      "control_refs": [],
+      "statement_refs": [],
+      "gemma": {
+        "backend": {
+          "type": "tcp",
+          "host": "127.0.0.1",
+          "port": 21883
+        }
+      }
+    },
+    {
+      "uuid": "8d8d8d49-ac19-44e2-8118-651b31dbc003",
+      "subid": "exp.service.netmaker-ui-serve@v1",
+      "category": "exp",
+      "component_type": "service",
+      "subject": "netmaker-ui",
+      "verb": "serve",
+      "version": 1,
+      "tags": [
+        "netmaker-ui"
+      ],
+      "subdomains": [
+        "dashboard.ghostbridge.tech"
+      ],
+      "control_source": "",
+      "control_refs": [],
+      "statement_refs": [],
+      "gemma": {
+        "backend": {
+          "type": "tcp",
+          "host": "127.0.0.1",
+          "port": 28082
+        }
+      }
+    },
+    {
+      "uuid": "a4b64253-c9d5-4153-ae50-69a842d89c72",
+      "subid": "src.service.nextdns-serve@v1",
+      "category": "src",
+      "component_type": "service",
+      "subject": "nextdns",
+      "verb": "serve",
+      "version": 1,
+      "tags": [
+        "nextdns"
+      ],
+      "subdomains": [],
+      "control_source": "",
+      "control_refs": [],
+      "statement_refs": [],
+      "gemma": {
+        "backend": {
+          "type": "dns",
+          "host": "127.0.0.1",
+          "port": 53
+        }
+      }
+    }
+  ]
+}

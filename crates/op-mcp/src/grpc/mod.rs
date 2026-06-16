@@ -33,6 +33,5 @@ pub mod proto {
     include!("generated/op.mcp.v1.rs");
 
     /// Combined FileDescriptorSet for reflection.
-    pub const FILE_DESCRIPTOR_SET: &[u8] =
-        tonic::include_file_descriptor_set!("mcp_descriptor");
+    pub const FILE_DESCRIPTOR_SET: &[u8] = tonic::include_file_descriptor_set!("mcp_descriptor");
 }

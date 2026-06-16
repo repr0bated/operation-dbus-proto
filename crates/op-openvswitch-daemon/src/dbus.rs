@@ -920,10 +920,8 @@ impl ProxyService {
         };
 
         let pid_cb = target_pid;
-        let result = tokio::task::spawn_blocking(move || {
-            crate::netns::bring_up_loopback(pid_cb)
-        })
-        .await;
+        let result =
+            tokio::task::spawn_blocking(move || crate::netns::bring_up_loopback(pid_cb)).await;
 
         match result {
             Ok(Ok(_)) => serde_json::json!({

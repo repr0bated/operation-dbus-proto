@@ -30,12 +30,13 @@ use crate::state_plugins::{
     DnsResolverPlugin, EndpointPlugin, FactoryPlugin, Fail2banPlugin, FreeDesktopPlugin,
     FullSystemPlugin, GcloudAdcPlugin, HardwarePlugin, IncusPlugin, KeypairPlugin, KeyringPlugin,
     KnowledgePlugin, Login1Plugin, LxcPlugin, MailServerPlugin, McpStatePlugin, MemoryPlugin,
-    NetStatePlugin, NetmakerConfig, NetmakerPlugin, NotebookLmPlugin, OciPlugin, OpenFlowObfuscationPlugin,
-    OpenFlowPlugin, OscalSubidRegistryPlugin, OvsBridgePlugin, OvsdbDaemonPlugin, PackageKitPlugin, PciDeclPlugin,
-    PrivacyRouterPlugin, PrivacyRoutesPlugin, ProcfsPlugin, ProxmoxPlugin, ProxyServerPlugin,
-    RovsCommandsPlugin, RtnetlinkPlugin, S6StatePlugin, S6SystemctlPlugin, SchemaRendererPlugin,
-    ServicePlugin, SessDeclPlugin, SoftwarePlugin, UnixSocketPlugin, UsersPlugin, WebUiPlugin,
-    WgcfPlugin, WireGuardPlugin, WorkflowsPlugin, XrayPlugin, ZeroclawPlugin,
+    NetStatePlugin, NetmakerConfig, NetmakerPlugin, NotebookLmPlugin, OciPlugin,
+    OpenFlowObfuscationPlugin, OpenFlowPlugin, OscalSubidRegistryPlugin, OvsBridgePlugin,
+    OvsdbDaemonPlugin, PackageKitPlugin, PciDeclPlugin, PrivacyRouterPlugin, PrivacyRoutesPlugin,
+    ProcfsPlugin, ProxmoxPlugin, ProxyServerPlugin, RovsCommandsPlugin, RtnetlinkPlugin,
+    S6StatePlugin, S6SystemctlPlugin, SchemaRendererPlugin, ServicePlugin, SessDeclPlugin,
+    SoftwarePlugin, UnixSocketPlugin, UsersPlugin, WebUiPlugin, WgcfPlugin, WireGuardPlugin,
+    WorkflowsPlugin, XrayPlugin, ZeroclawPlugin,
 };
 use crate::AutoPlugin;
 

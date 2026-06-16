@@ -14,12 +14,12 @@ use op_network::{openflow::OpenFlowClient, rovs_proxy::OvsdbDbusClient};
 use op_state::{
     ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
 };
+use op_state_store::{Constraint, FieldSchema, FieldType, PluginSchema, ReadOnlyCondition};
 use serde::{Deserialize, Serialize};
 use simd_json::{json, prelude::*, OwnedValue as Value};
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::path::Path;
-use op_state_store::{Constraint, FieldSchema, FieldType, PluginSchema, ReadOnlyCondition};
 
 const DEFAULT_BRIDGE_NAME: &str = "ovsbr0";
 const DEFAULT_UPLINK_PORT: &str = "ens3";

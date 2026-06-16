@@ -26,7 +26,11 @@ pub async fn build_pool(channel: Channel) -> anyhow::Result<DescriptorPool> {
         if service.starts_with("grpc.reflection") {
             continue;
         }
-        let resp = call(&mut client, MessageRequest::FileContainingSymbol(service.clone())).await?;
+        let resp = call(
+            &mut client,
+            MessageRequest::FileContainingSymbol(service.clone()),
+        )
+        .await?;
         if let MessageResponse::FileDescriptorResponse(fdr) = resp {
             for bytes in fdr.file_descriptor_proto {
                 let fd = FileDescriptorProto::decode(&bytes[..])?;
@@ -50,7 +54,10 @@ pub async fn build_pool(channel: Channel) -> anyhow::Result<DescriptorPool> {
         if remaining.len() == before {
             anyhow::bail!(
                 "unresolvable proto dependencies: {:?}",
-                remaining.iter().map(|f| f.name().to_string()).collect::<Vec<_>>()
+                remaining
+                    .iter()
+                    .map(|f| f.name().to_string())
+                    .collect::<Vec<_>>()
             );
         }
     }
