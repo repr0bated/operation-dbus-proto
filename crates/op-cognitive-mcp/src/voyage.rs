@@ -40,8 +40,16 @@ impl VoyageClient {
     /// `https://ai.mongodb.com/v1/embeddings`; all others use the public
     /// `https://api.voyageai.com/v1/embeddings` endpoint.
     pub fn new() -> Result<Self> {
-        let api_key = env::var("VOYAGE_API_KEY").context("VOYAGE_API_KEY not found")?;
-        let model = env::var("VOYAGE_MODEL").unwrap_or_else(|_| "voyage-4".to_string());
+        let api_key = env::var("COGNITIVE_MCP_VOYAGE_API_KEY")
+            .or_else(|_| env::var("VOYAGE_API_KEY"))
+            .or_else(|_| env::var("VOYAGE_API_KEY_RUST"))
+            .context(
+                "Voyage API key not found: set COGNITIVE_MCP_VOYAGE_API_KEY, \
+                 VOYAGE_API_KEY, or VOYAGE_API_KEY_RUST",
+            )?;
+        let model = env::var("COGNITIVE_MCP_VOYAGE_MODEL")
+            .or_else(|_| env::var("VOYAGE_MODEL"))
+            .unwrap_or_else(|_| "voyage-4".to_string());
         let base_url = voyage_url_for_key(&api_key);
 
         Ok(Self {

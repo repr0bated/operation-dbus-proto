@@ -24,6 +24,7 @@ struct NotebookLmConfig {
     args: Vec<String>,
     server_name: String,
     profile: String,
+    tool_prefix: Option<String>,
     disabled_tools: Option<String>,
 }
 
@@ -44,6 +45,9 @@ impl NotebookLmConfig {
                 .unwrap_or_else(|_| DEFAULT_NOTEBOOKLM_SERVER_NAME.to_string()),
             profile: std::env::var("COGNITIVE_MCP_NOTEBOOKLM_PROFILE")
                 .unwrap_or_else(|_| DEFAULT_NOTEBOOKLM_PROFILE.to_string()),
+            tool_prefix: std::env::var("COGNITIVE_MCP_NOTEBOOKLM_TOOL_PREFIX")
+                .ok()
+                .filter(|value| !value.trim().is_empty()),
             disabled_tools: std::env::var("COGNITIVE_MCP_NOTEBOOKLM_DISABLED_TOOLS").ok(),
         }
     }
@@ -95,10 +99,21 @@ impl NotebookLmConfig {
         }
 
         let normalized = normalized.trim_matches('_');
-        if normalized.is_empty() {
+        let tool_name = if normalized.is_empty() {
             raw_name.to_string()
         } else {
             normalized.to_string()
+        };
+
+        if let Some(prefix) = &self.tool_prefix {
+            let prefix = prefix.trim_matches('_');
+            if prefix.is_empty() {
+                tool_name
+            } else {
+                format!("{prefix}_{tool_name}")
+            }
+        } else {
+            tool_name
         }
     }
 }
@@ -283,6 +298,7 @@ mod tests {
             args: vec!["-y".to_string(), "notebooklm-mcp@latest".to_string()],
             server_name: "notebooklm".to_string(),
             profile: "minimal".to_string(),
+            tool_prefix: None,
             disabled_tools: None,
         };
 
@@ -291,5 +307,23 @@ mod tests {
             "create_notebook"
         );
         assert_eq!(config.published_tool_name("ask question"), "ask_question");
+    }
+
+    #[test]
+    fn should_prefix_zero_claw_notebooklm_tool_names() {
+        let config = NotebookLmConfig {
+            enabled: true,
+            command: "npx".to_string(),
+            args: vec!["-y".to_string(), "notebooklm-mcp@latest".to_string()],
+            server_name: "zeroclaw-model-transcripts".to_string(),
+            profile: "model-transcripts".to_string(),
+            tool_prefix: Some("zeroclaw_model_transcript".to_string()),
+            disabled_tools: None,
+        };
+
+        assert_eq!(
+            config.published_tool_name("notebooklm:ask-question"),
+            "zeroclaw_model_transcript_ask_question"
+        );
     }
 }

@@ -17,7 +17,6 @@ use std::fs::{self, File};
 use std::io::Write;
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
-use zbus::{Connection, Proxy};
 
 pub const SHM_SLED_PATH: &str = "/dev/shm/plugin_schema.dat";
 pub const SHM_XRAY_CONFIG: &str = "/dev/shm/xray-ghostbridge.json";
@@ -864,20 +863,12 @@ pub fn run_schema_shuttle() -> Result<(), Box<dyn std::error::Error>> {
         SHM_XRAY_CONFIG
     );
 
-    // 5. Start Xray via D-Bus — config lives entirely in /dev/shm
-    // Per AGENTS.md §4: D-Bus first. D-Bus always. D-Bus only.
-    // Use block_on since run_schema_shuttle is synchronous
-    let rt = tokio::runtime::Runtime::new()?;
-    match rt.block_on(start_xray_via_dbus(SHM_XRAY_CONFIG)) {
-        Ok(()) => tracing::info!("Xray started via D-Bus opdbus.v1"),
-        Err(e) => {
-            tracing::error!(
-                "Failed to start Xray via D-Bus: {}. Ensure op-xray-daemon is running.",
-                e
-            );
-            return Err(e.into());
-        }
-    }
+    // 5. Reload Xray so it re-reads the freshly written /dev/shm config.
+    // Host-native control (SIGHUP). Deliberate start/stop lifecycle belongs to the
+    // `xray` state plugin projected at /org/opdbus/v1/plugins/xray — NOT an
+    // out-of-tree `opdbus.v1.Xray` daemon name. Xray is supervised by s6 (gbr-xray)
+    // running `xray run -config /dev/shm/xray-ghostbridge.json`.
+    reload_xray()?;
 
     // 6. Watch for new WireGuard handshakes and keep the sled current
     let iface = env::var("WG_INTERFACE").unwrap_or_else(|_| "wg0".to_string());
@@ -886,32 +877,27 @@ pub fn run_schema_shuttle() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Start Xray via D-Bus service (opdbus.v1.Xray)
+/// Reload the running Xray so it re-reads the freshly generated /dev/shm config.
 ///
-/// Per AGENTS.md §4: All control plane operations must go through D-Bus.
-/// The op-xray-daemon manages the xray process lifecycle.
-async fn start_xray_via_dbus(config_path: &str) -> anyhow::Result<()> {
-    let conn = Connection::system()
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to connect to system D-Bus: {}", e))?;
-
-    let proxy = Proxy::new(&conn, "opdbus.v1", "/org/opdbus/v1/plugins/xray", "opdbus.v1.Xray")
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to create Xray D-Bus proxy: {}", e))?;
-
-    let (success, message): (bool, String) = proxy
-        .call_method("start", &(config_path,))
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to call Xray start via D-Bus: {}", e))?
-        .body()
-        .deserialize()
-        .map_err(|e| anyhow::anyhow!("Failed to deserialize Xray response: {}", e))?;
-
-    if success {
-        Ok(())
+/// Host-native control via SIGHUP (Xray re-reads its config without dropping
+/// connections). Deliberate start/stop lifecycle lives on the `xray` state plugin
+/// at `/org/opdbus/v1/plugins/xray` — the only projectable tree — never an
+/// out-of-tree `opdbus.v1.Xray` name.
+fn reload_xray() -> Result<(), Box<dyn std::error::Error>> {
+    let status = std::process::Command::new("pkill")
+        .args(["-HUP", "-x", "xray"])
+        .status()?;
+    if status.success() {
+        tracing::info!("Xray reloaded (SIGHUP) — re-read {}", SHM_XRAY_CONFIG);
     } else {
-        Err(anyhow::anyhow!("Xray D-Bus start failed: {}", message))
+        // pkill exits non-zero when nothing matched: Xray isn't running yet.
+        // s6 (gbr-xray) is responsible for starting it with the shm config.
+        tracing::warn!(
+            "No running xray to SIGHUP; expecting s6 (gbr-xray) to start it with {}",
+            SHM_XRAY_CONFIG
+        );
     }
+    Ok(())
 }
 
 #[cfg(test)]

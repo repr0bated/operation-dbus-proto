@@ -274,7 +274,9 @@ impl CognitiveMcpServer {
             .at("/org/opdbus/v1/plugins/cognitive_mcp", iface)
             .await?;
 
-        tracing::info!("Cognitive MCP D-Bus interface registered at /org/opdbus/v1/plugins/cognitive_mcp");
+        tracing::info!(
+            "Cognitive MCP D-Bus interface registered at /org/opdbus/v1/plugins/cognitive_mcp"
+        );
         Ok(conn)
     }
 

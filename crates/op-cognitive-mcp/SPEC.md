@@ -67,6 +67,41 @@ server
 
 ## Purpose
 
+`op-cognitive-mcp` exposes code-aware retrieval over the Qdrant/Voyage indexes
+used by local coding clients. Retrieval is intentionally split by embedding
+space:
+
+- Rust solo: `rust_lang_rust_lsp_voyage_code_3`, queried with `voyage-code-3`
+  when `COGNITIVE_MCP_VOYAGE_MODEL=voyage-code-3`.
+- Other LSP/spec groups: `repos_lsp_*_voyage_4_lite` and
+  `repos_specs_docs_voyage_4_lite`, queried with the Voyage 4 family. These
+  default to `voyage-4` at query time and are compatible with
+  `voyage-4-lite` indexes.
+
+For context-aware completion, the MCP path should ask Kiro/LSP for exact local
+symbol and hover context first, then call `code_context` with
+`retrieval_mode="completion"`. Completion retrieval embeds the query once,
+queries the compatible configured collections, returns top-k vector hits, and
+does not rerank unless `COGNITIVE_MCP_RERANK_MODE=always`.
+
+Deep chat/edit context can use `retrieval_mode="deep"` with a larger fetch
+window. Rerank is only enabled for deep mode when
+`COGNITIVE_MCP_RERANK_MODE=auto` or `always`.
+
+### Vector Environment
+
+```sh
+COGNITIVE_MCP_VOYAGE_API_KEY=<key>
+# Falls back to VOYAGE_API_KEY, then VOYAGE_API_KEY_RUST, then key file.
+
+COGNITIVE_MCP_COMPLETION_COLLECTIONS=repos_lsp_c_cpp_voyage_4_lite,repos_lsp_go_voyage_4_lite,repos_lsp_java_voyage_4_lite,repos_lsp_python_voyage_4_lite,repos_lsp_typescript_voyage_4_lite,repos_specs_docs_voyage_4_lite
+COGNITIVE_MCP_RUST_COLLECTION=rust_lang_rust_lsp_voyage_code_3
+COGNITIVE_MCP_COMPLETION_TOP_K=12
+COGNITIVE_MCP_DEEP_TOP_K=50
+COGNITIVE_MCP_RERANK_MODE=auto
+COGNITIVE_MCP_KIRO_LSP_STATE_DIR=/home/jeremy/git/logs/kiro-lsp-state
+```
+
 
 ## Build Information
 - **Edition**: 2021

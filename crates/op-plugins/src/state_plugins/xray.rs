@@ -30,7 +30,18 @@ pub struct XrayState {
     pub dependencies: Vec<String>,
     pub oscal_source: Option<String>,
     pub config: XrayConfig,
+    /// Whether an xray process is currently running (host-native).
+    pub running: bool,
     pub tools: Value,
+}
+
+/// Is an xray process currently running on the host? (`pgrep -x xray`)
+fn xray_running() -> bool {
+    std::process::Command::new("pgrep")
+        .args(["-x", "xray"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }
 
 pub struct XrayPlugin {
@@ -48,6 +59,7 @@ impl XrayPlugin {
             dependencies: vec!["incus".to_string()],
             oscal_source: Some("/org/opdbus/v1/plugins/oscal_subid_registry".to_string()),
             config: XrayConfig::default(),
+            running: false,
             tools: json!([
                 {
                     "name": "xray.run",
@@ -94,6 +106,7 @@ impl StatePlugin for XrayPlugin {
     async fn query_current_state(&self) -> Result<Value> {
         let mut state = Self::current_state();
         state.config = self.config.clone();
+        state.running = xray_running();
 
         Ok(simd_json::serde::to_owned_value(state)?)
     }
@@ -113,10 +126,31 @@ impl StatePlugin for XrayPlugin {
     }
 
     async fn apply_state(&self, _diff: &StateDiff) -> Result<ApplyResult> {
+        // xray control point (the ONLY projectable tree: /org/opdbus/v1/plugins/xray).
+        // Host-native lifecycle — no out-of-tree `opdbus.v1.Xray` daemon.
+        let mut changes = Vec::new();
+        let mut errors = Vec::new();
+        if self.config.enabled {
+            // Reload (SIGHUP) so a running xray re-reads its config; if none is
+            // running, the s6 supervisor (gbr-xray) is responsible for starting it.
+            match std::process::Command::new("pkill")
+                .args(["-HUP", "-x", "xray"])
+                .status()
+            {
+                Ok(s) if s.success() => changes.push("xray reloaded (SIGHUP)".to_string()),
+                Ok(_) => changes.push("xray not running; supervisor starts it".to_string()),
+                Err(e) => errors.push(format!("xray reload failed: {e}")),
+            }
+        } else {
+            match std::process::Command::new("pkill").args(["-x", "xray"]).status() {
+                Ok(_) => changes.push("xray stopped".to_string()),
+                Err(e) => errors.push(format!("xray stop failed: {e}")),
+            }
+        }
         Ok(ApplyResult {
-            success: true,
-            changes_applied: vec![],
-            errors: vec![],
+            success: errors.is_empty(),
+            changes_applied: changes,
+            errors,
             checkpoint: None,
         })
     }
