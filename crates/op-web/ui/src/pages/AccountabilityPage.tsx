@@ -207,8 +207,8 @@ export const AccountabilityPage: React.FC = () => {
     }
   }, []);
 
-  /* ── Chat send handler (stub — will bind to gRPC-Web stream) ── */
-  const handleSend = () => {
+  /* ── Chat send handler — wired to the zeroclaw assistant endpoint ── */
+  const handleSend = async () => {
     if (!draft.trim() || !connected) return;
     const userMsg: ChatMessage = {
       id: `msg-${Date.now()}`,
@@ -220,20 +220,56 @@ export const AccountabilityPage: React.FC = () => {
     setDraft("");
     setSending(true);
 
-    // Stub: simulates gRPC-Web round-trip from op-grpc-bridge
-    setTimeout(() => {
+    try {
+      const response = await fetch("/api/assistant/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: userMsg.content,
+          session_id: activeSled?.traceId,
+        }),
+      });
+
+      const data = await response.text();
+      let content = data;
+      try {
+        const parsed = JSON.parse(data);
+        content =
+          typeof parsed.content === "string"
+            ? parsed.content
+            : typeof parsed.response === "string"
+              ? parsed.response
+              : typeof parsed.message === "string"
+                ? parsed.message
+                : data;
+      } catch {
+        // Not JSON — display the raw response text.
+      }
+
       const assistantMsg: ChatMessage = {
         id: `msg-${Date.now()}-resp`,
         role: "assistant",
-        content: `Acknowledged "${userMsg.content}". Compliance trace appended to Snowball.`,
+        content,
         timestamp: Date.now(),
       };
       setMessages((prev) => [...prev, assistantMsg]);
-      setSending(false);
       setActiveSled((prev) =>
         prev ? { ...prev, mutationIndex: prev.mutationIndex + 1 } : prev,
       );
-    }, 600);
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : "Chat request failed";
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `msg-${Date.now()}-err`,
+          role: "assistant",
+          content: `Error: ${errorMsg}`,
+          timestamp: Date.now(),
+        },
+      ]);
+    } finally {
+      setSending(false);
+    }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
