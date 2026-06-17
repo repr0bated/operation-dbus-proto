@@ -153,12 +153,39 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         )
         .route("/llm/model", post(handlers::llm::switch_model_handler))
         .route("/llm/chat", post(handlers::chat::send_message_handler))
-        // Assistant endpoints — now backed by zeroclaw (openclaw retired).
-        // The canonical zeroclaw routes remain at /zeroclaw/*; /assistant/chat
-        // is kept as a user-facing alias for backwards compatibility.
+        // OpenClaw endpoints (internal/base layer)
+        .route(
+            "/openclaw/status",
+            get(handlers::openclaw::openclaw_status_handler),
+        )
+        .route(
+            "/openclaw/config",
+            get(handlers::openclaw::openclaw_config_handler),
+        )
+        .route(
+            "/openclaw/chat",
+            post(handlers::openclaw::openclaw_chat_handler),
+        )
+        .route(
+            "/openclaw/models",
+            get(handlers::openclaw::openclaw_models_handler),
+        )
+        // Assistant endpoints (user-facing aliases — same handlers, branded URLs)
+        .route(
+            "/assistant/status",
+            get(handlers::openclaw::openclaw_status_handler),
+        )
+        .route(
+            "/assistant/config",
+            get(handlers::openclaw::openclaw_config_handler),
+        )
         .route(
             "/assistant/chat",
-            post(handlers::zeroclaw::zeroclaw_chat_handler),
+            post(handlers::openclaw::openclaw_chat_handler),
+        )
+        .route(
+            "/assistant/models",
+            get(handlers::openclaw::openclaw_models_handler),
         )
         // MCP server management endpoints
         .route("/mcp/servers", get(handlers::mcp::list_servers_handler))
