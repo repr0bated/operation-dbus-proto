@@ -22,3 +22,4 @@
 - One pre-existing op-web test fails: `privacy_container::tests::desired_instance_publishes_route_without_bridged_nic_by_default`. Not introduced by this work.
 - End-to-end WG client → cognitive-mcp/netmaker test still pending per handoff verification gates.
 - Zeroclaw refactor files are present in the working tree (untracked) and should be integrated in a follow-up session.
+- The `crates/op-plugins/src/state_plugins/zeroclaw.rs` refactor changes from d536c74b were reverted back to d6b182b3 per user request.
