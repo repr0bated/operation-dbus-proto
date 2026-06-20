@@ -37,6 +37,8 @@ This folder is now organized by topic so architecture, schema, plugins, and oper
   Canonical mutation ingress and strict flow path.
 - `docs/SNAPSHOT_AUTOMATION.md`  
   Snapshot automation details.
+- `docs/kiro-spec-workflow.md`  
+  How to generate and compare Kiro spec folders in this repository.
 - `docs/operations/op-dbus-dinit.md`  
   dinit service setup for standalone `op-dbus` + `op-mcp-proxy` runtime.
 - `docs/mcp-vscode-bridge.md`  

@@ -24,8 +24,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "proto/registration.proto",
                 "proto/registry.proto",
                 "../op-cache/proto/op_cache.proto",
+                "src/grpc/zeroclaw.proto",
             ],
-            &["proto", "../op-cache/proto"],
+            &["proto", "../op-cache/proto", "src/grpc"],
         )?;
 
     println!("cargo:rerun-if-changed=proto/operation.proto");
@@ -34,6 +35,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=proto/registration.proto");
     println!("cargo:rerun-if-changed=proto/registry.proto");
     println!("cargo:rerun-if-changed=../op-cache/proto/op_cache.proto");
+    println!("cargo:rerun-if-changed=src/grpc/zeroclaw.proto");
     println!("cargo:rerun-if-changed=build.rs");
 
     Ok(())

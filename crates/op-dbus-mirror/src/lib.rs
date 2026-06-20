@@ -89,8 +89,8 @@ impl DbusMirror {
         schema_engine: Option<Arc<SchemaEngine>>,
     ) -> std::result::Result<Self, MirrorError> {
         let connection = match bus_type {
-            BusType::System => Builder::system()?.name("org.opdbus.v1")?.build().await?,
-            BusType::Session => Builder::session()?.name("org.opdbus.v1")?.build().await?,
+            BusType::System => Builder::system()?.build().await?,
+            BusType::Session => Builder::session()?.build().await?,
         };
 
         Ok(Self {
@@ -126,11 +126,6 @@ impl DbusMirror {
     /// loop to publish deltas from all data sources.
     pub async fn start(self: Arc<Self>) -> std::result::Result<(), MirrorError> {
         tracing::info!("Starting D-Bus mirror publication service...");
-
-        // Initial full sync
-        if let Err(e) = self.refresh_full_tree().await {
-            tracing::error!("Initial D-Bus mirror sync failed: {}", e);
-        }
 
         // Register ObjectManager at the root to manage EVERYTHING.
         let om = ObjectManagerInterface::new(self.plugin_registry.clone());
@@ -171,6 +166,13 @@ impl DbusMirror {
             .object_server()
             .at("/org/opdbus/v1/nonnet", nonnet_interface)
             .await?;
+
+        self.connection.request_name("org.opdbus.v1").await?;
+
+        // Initial full sync
+        if let Err(e) = self.refresh_full_tree().await {
+            tracing::error!("Initial D-Bus mirror sync failed: {}", e);
+        }
 
         // Create event dispatcher
         let dispatcher = crate::event_dispatcher::EventDispatcher::new(
