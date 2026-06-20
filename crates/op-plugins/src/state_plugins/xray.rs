@@ -1,15 +1,25 @@
-use super::plugin_schema_defs::schema_from_state;
 use anyhow::Result;
 use async_trait::async_trait;
 use op_state::{ApplyResult, PluginCapabilities, StateDiff, StatePlugin};
 use op_state_store::PluginSchema;
 use serde::{Deserialize, Serialize};
-use simd_json::{json, OwnedValue as Value};
+use simd_json::OwnedValue as Value;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Xray proxy configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "sch.software.plugin.xray.config.schema@v1"))]
 pub struct XrayConfig {
+    /// Whether the xray proxy is enabled.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "mut.software.plugin.xray.config.enabled@v1"))]
     pub enabled: bool,
+    /// Xray socket tag/port name.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "mut.software.plugin.xray.config.socket-port@v1"))]
     pub socket_port: String,
+    /// Path to the xray JSON config.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "mut.software.plugin.xray.config.config-path@v1"))]
     pub config_path: String,
 }
 
@@ -23,16 +33,67 @@ impl Default for XrayConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Runtime state of the xray plugin.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "sch.software.plugin.xray.schema@v1"))]
 pub struct XrayState {
+    /// Software identifier.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "obs.software.plugin.xray.software@v1"))]
     pub software: String,
+    /// Software version.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "obs.software.plugin.xray.version@v1"))]
     pub version: String,
+    /// Runtime dependencies.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "obs.software.plugin.xray.dependencies@v1"))]
     pub dependencies: Vec<String>,
+    /// OSCAL subid registry source path.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "src.software.plugin.xray.oscal-source@v1"))]
     pub oscal_source: Option<String>,
+    /// Xray configuration.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "sch.software.plugin.xray.config@v1"))]
     pub config: XrayConfig,
     /// Whether an xray process is currently running (host-native).
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "obs.software.plugin.xray.running@v1"))]
     pub running: bool,
-    pub tools: Value,
+    /// MCP tool definitions exposed by this plugin.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "exp.software.plugin.xray.tools@v1"))]
+    pub tools: serde_json::Value,
+}
+
+impl Default for XrayState {
+    fn default() -> Self {
+        Self {
+            software: "xray-core".to_string(),
+            version: "1.0.0".to_string(),
+            dependencies: vec!["incus".to_string()],
+            oscal_source: Some("/org/opdbus/v1/plugins/oscal_subid_registry".to_string()),
+            config: XrayConfig::default(),
+            running: false,
+            tools: serde_json::json!([
+                {
+                    "name": "xray.run",
+                    "description": "Run the Xray daemon",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "config": {
+                                "type": "string",
+                                "description": "The path to the config file"
+                            }
+                        },
+                        "required": ["config"]
+                    }
+                }
+            ]),
+        }
+    }
 }
 
 /// Is an xray process currently running on the host? (`pgrep -x xray`)
@@ -60,7 +121,7 @@ impl XrayPlugin {
             oscal_source: Some("/org/opdbus/v1/plugins/oscal_subid_registry".to_string()),
             config: XrayConfig::default(),
             running: false,
-            tools: json!([
+            tools: serde_json::json!([
                 {
                     "name": "xray.run",
                     "description": "Run the Xray daemon",
@@ -91,7 +152,9 @@ impl StatePlugin for XrayPlugin {
     }
 
     fn schema(&self) -> Option<op_state_store::PluginSchema> {
-        Some(xray_schema())
+        let mut schema = xray_schema();
+        super::common::oscal::ensure_category_metadata_fields(&mut schema);
+        Some(schema)
     }
 
     fn capabilities(&self) -> PluginCapabilities {
@@ -175,14 +238,265 @@ impl StatePlugin for XrayPlugin {
     }
 }
 
+/// Derived `xray` schema from the typed [`XrayState`] struct via schemars.
 pub(crate) fn xray_schema() -> PluginSchema {
-    let state = simd_json::serde::to_owned_value(super::xray::XrayPlugin::current_state())
-        .unwrap_or_else(|_| json!({}));
-    schema_from_state(
+    let root = serde_json::to_value(schemars::schema_for!(XrayState))
+        .expect("schemars schema serializes to JSON");
+    let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "xray",
-        "net",
         "1.0.0",
         "Xray proxy state and execution schema",
-        &state,
-    )
+        &root,
+    );
+    let state = simd_json::serde::to_owned_value(&XrayState::default())
+        .expect("XrayState default serializes");
+    super::schemars_adapter::apply_state_defaults(&mut schema, &state);
+    schema
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state_plugins::common::oscal::validate_subid;
+    use crate::state_plugins::schemars_adapter::schema_diffs;
+    use serde_json::Value as JVal;
+
+    fn collect_subids(value: &JVal, out: &mut Vec<String>) {
+        if let Some(obj) = value.as_object() {
+            if let Some(JVal::String(subid)) = obj.get("x-oscal-subid") {
+                out.push(subid.clone());
+            }
+            for v in obj.values() {
+                collect_subids(v, out);
+            }
+        }
+        if let Some(arr) = value.as_array() {
+            for v in arr {
+                collect_subids(v, out);
+            }
+        }
+    }
+
+    #[test]
+    fn derived_schema_matches_hand_rolled() {
+        let golden = super::xray_schema_golden();
+        let derived = super::xray_schema();
+        let diffs = schema_diffs(&golden, &derived);
+        assert!(diffs.is_empty(), "schema_diffs: {:#?}", diffs);
+    }
+
+    #[test]
+    fn all_subids_are_valid() {
+        let root = serde_json::to_value(schemars::schema_for!(XrayState))
+            .expect("schemars schema serializes to JSON");
+        let mut subids = Vec::new();
+        collect_subids(&root, &mut subids);
+        assert!(!subids.is_empty(), "expected at least one subid");
+        for subid in subids {
+            assert!(validate_subid(&subid).is_ok(), "invalid subid: {subid}");
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn xray_schema_golden() -> PluginSchema {
+    use op_state_store::{FieldSchema, FieldType};
+    use simd_json::json;
+
+    let mut config_fields = std::collections::HashMap::new();
+    config_fields.insert(
+        "enabled".to_string(),
+        FieldSchema {
+            field_type: FieldType::Boolean,
+            required: false,
+            description: "Whether the xray proxy is enabled.".to_string(),
+            default: Some(json!(true)),
+            example: None,
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        },
+    );
+    config_fields.insert(
+        "socket_port".to_string(),
+        FieldSchema {
+            field_type: FieldType::String,
+            required: false,
+            description: "Xray socket tag/port name.".to_string(),
+            default: Some(json!("gbr_xray")),
+            example: None,
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        },
+    );
+    config_fields.insert(
+        "config_path".to_string(),
+        FieldSchema {
+            field_type: FieldType::String,
+            required: false,
+            description: "Path to the xray JSON config.".to_string(),
+            default: Some(json!("/etc/xray/config.json")),
+            example: None,
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        },
+    );
+
+    let mut fields = std::collections::HashMap::new();
+    fields.insert(
+        "software".to_string(),
+        FieldSchema {
+            field_type: FieldType::String,
+            required: false,
+            description: "Software identifier.".to_string(),
+            default: Some(json!("xray-core")),
+            example: None,
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        },
+    );
+    fields.insert(
+        "version".to_string(),
+        FieldSchema {
+            field_type: FieldType::String,
+            required: false,
+            description: "Software version.".to_string(),
+            default: Some(json!("1.0.0")),
+            example: None,
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        },
+    );
+    fields.insert(
+        "dependencies".to_string(),
+        FieldSchema {
+            field_type: FieldType::Array(Box::new(FieldType::String)),
+            required: false,
+            description: "Runtime dependencies.".to_string(),
+            default: Some(json!(["incus"])),
+            example: None,
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        },
+    );
+    fields.insert(
+        "oscal_source".to_string(),
+        FieldSchema {
+            field_type: FieldType::String,
+            required: false,
+            description: "OSCAL subid registry source path.".to_string(),
+            default: Some(json!("/org/opdbus/v1/plugins/oscal_subid_registry")),
+            example: None,
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        },
+    );
+    fields.insert(
+        "config".to_string(),
+        FieldSchema {
+            field_type: FieldType::Object(config_fields),
+            required: false,
+            description: "Xray configuration.".to_string(),
+            default: Some(json!({
+                "config_path": "/etc/xray/config.json",
+                "enabled": true,
+                "socket_port": "gbr_xray"
+            })),
+            example: None,
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        },
+    );
+    fields.insert(
+        "running".to_string(),
+        FieldSchema {
+            field_type: FieldType::Boolean,
+            required: false,
+            description: "Whether an xray process is currently running (host-native).".to_string(),
+            default: Some(json!(false)),
+            example: None,
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        },
+    );
+    fields.insert(
+        "tools".to_string(),
+        FieldSchema {
+            field_type: FieldType::Any,
+            required: false,
+            description: "MCP tool definitions exposed by this plugin.".to_string(),
+            default: Some(json!([
+                {
+                    "name": "xray.run",
+                    "description": "Run the Xray daemon",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "config": {
+                                "type": "string",
+                                "description": "The path to the config file"
+                            }
+                        },
+                        "required": ["config"]
+                    }
+                }
+            ])),
+            example: None,
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        },
+    );
+
+    let mut schema = PluginSchema::builder("xray")
+        .version("1.0.0")
+        .description("Xray proxy state and execution schema")
+        .build();
+    schema.fields = fields;
+    schema.subids = std::collections::HashMap::from([
+        (
+            "__schema__".to_string(),
+            "sch.software.plugin.xray.schema@v1".to_string(),
+        ),
+        (
+            "software".to_string(),
+            "obs.software.plugin.xray.software@v1".to_string(),
+        ),
+        (
+            "version".to_string(),
+            "obs.software.plugin.xray.version@v1".to_string(),
+        ),
+        (
+            "dependencies".to_string(),
+            "obs.software.plugin.xray.dependencies@v1".to_string(),
+        ),
+        (
+            "oscal_source".to_string(),
+            "src.software.plugin.xray.oscal-source@v1".to_string(),
+        ),
+        (
+            "config".to_string(),
+            "sch.software.plugin.xray.config@v1".to_string(),
+        ),
+        (
+            "running".to_string(),
+            "obs.software.plugin.xray.running@v1".to_string(),
+        ),
+        (
+            "tools".to_string(),
+            "exp.software.plugin.xray.tools@v1".to_string(),
+        ),
+    ]);
+    let state = simd_json::serde::to_owned_value(&XrayState::default())
+        .expect("XrayState default serializes");
+    super::schemars_adapter::apply_state_defaults(&mut schema, &state);
+    schema
 }

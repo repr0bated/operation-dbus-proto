@@ -6,10 +6,11 @@ use async_trait::async_trait;
 use op_state::{
     ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
 };
-use op_state_store::{
-    ExecutionJob, ExecutionStatus, FieldSchema, FieldType, PluginSchema, StateStore,
-};
+use op_state_store::{ExecutionJob, ExecutionStatus, PluginSchema, StateStore};
+#[cfg(test)]
+use op_state_store::{FieldSchema, FieldType};
 use serde::{Deserialize, Serialize};
+#[cfg(test)]
 use simd_json::json;
 use simd_json::OwnedValue as Value;
 use std::collections::HashMap;
@@ -306,11 +307,84 @@ impl McpStatePlugin {
     }
 }
 
-fn mcp_plugin_schema() -> PluginSchema {
+// ── Schema-only state (opaque Value fields preserve the hand-rolled contract) ──
+
+fn default_empty_object() -> serde_json::Value {
+    serde_json::json!({})
+}
+
+fn example_servers() -> serde_json::Value {
+    serde_json::json!({
+        "rust-pro": {
+            "command": "dbus-agent",
+            "args": ["rust-pro"],
+            "enabled": true,
+            "transport": "stdio"
+        }
+    })
+}
+
+fn example_tool_groups() -> serde_json::Value {
+    serde_json::json!({
+        "enabled": ["default"],
+        "max_tools": 40,
+        "access_zone": "local"
+    })
+}
+
+fn example_compact_mode() -> serde_json::Value {
+    serde_json::json!({
+        "enabled": true,
+        "meta_tools": ["list_tools", "search_tools", "get_tool_schema", "execute_tool", "respond"]
+    })
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "sch.software.plugin.mcp.schema@v1"))]
+pub struct McpState {
+    #[serde(default = "default_empty_object")]
+    #[schemars(
+        description = "MCP server map",
+        example = example_servers(),
+        extend("x-oscal-subid" = "exp.software.plugin.mcp.servers@v1")
+    )]
+    servers: serde_json::Value,
+    #[serde(default = "default_empty_object")]
+    #[schemars(
+        description = "Tool group config",
+        example = example_tool_groups(),
+        extend("x-oscal-subid" = "exp.software.plugin.mcp.tool-groups@v1")
+    )]
+    tool_groups: serde_json::Value,
+    #[serde(default = "default_empty_object")]
+    #[schemars(
+        description = "Compact mode config",
+        example = example_compact_mode(),
+        extend("x-oscal-subid" = "exp.software.plugin.mcp.compact-mode@v1")
+    )]
+    compact_mode: serde_json::Value,
+}
+
+pub(crate) fn mcp_schema() -> PluginSchema {
+    let root = serde_json::to_value(schemars::schema_for!(McpState))
+        .expect("schemars schema serializes to JSON");
+    let mut schema = super::schemars_adapter::plugin_schema_from_json(
+        "mcp",
+        "1.0.0",
+        "MCP server and tool-group configuration",
+        &root,
+    );
+    schema.dependencies = vec!["agent_config".to_string()];
+    schema
+}
+
+#[cfg(test)]
+pub(crate) fn mcp_schema_golden() -> PluginSchema {
     PluginSchema::builder("mcp")
         .version("1.0.0")
         .description("MCP server and tool-group configuration")
         .dependency("agent_config")
+        .subid("__schema__", "sch.software.plugin.mcp.schema@v1")
         .field(
             "servers",
             FieldSchema {
@@ -320,8 +394,8 @@ fn mcp_plugin_schema() -> PluginSchema {
                 default: Some(json!({})),
                 example: Some(json!({
                     "rust-pro": {
-                        "command": "dbus-agent",
                         "args": ["rust-pro"],
+                        "command": "dbus-agent",
                         "enabled": true,
                         "transport": "stdio"
                     }
@@ -331,6 +405,7 @@ fn mcp_plugin_schema() -> PluginSchema {
                 read_only_when: None,
             },
         )
+        .subid("servers", "exp.software.plugin.mcp.servers@v1")
         .field(
             "tool_groups",
             FieldSchema {
@@ -339,15 +414,16 @@ fn mcp_plugin_schema() -> PluginSchema {
                 description: "Tool group config".to_string(),
                 default: Some(json!({})),
                 example: Some(json!({
+                    "access_zone": "local",
                     "enabled": ["default"],
-                    "max_tools": 40,
-                    "access_zone": "local"
+                    "max_tools": 40
                 })),
                 constraints: Vec::new(),
                 read_only: false,
                 read_only_when: None,
             },
         )
+        .subid("tool_groups", "exp.software.plugin.mcp.tool-groups@v1")
         .field(
             "compact_mode",
             FieldSchema {
@@ -364,6 +440,7 @@ fn mcp_plugin_schema() -> PluginSchema {
                 read_only_when: None,
             },
         )
+        .subid("compact_mode", "exp.software.plugin.mcp.compact-mode@v1")
         .build()
 }
 
@@ -378,7 +455,7 @@ impl StatePlugin for McpStatePlugin {
     }
 
     fn schema(&self) -> Option<op_state_store::PluginSchema> {
-        Some(mcp_plugin_schema())
+        Some(mcp_schema())
     }
 
     async fn query_current_state(&self) -> Result<Value> {
@@ -525,7 +602,42 @@ impl StatePlugin for McpStatePlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state_plugins::common::oscal::validate_subid;
+    use crate::state_plugins::schemars_adapter::schema_diffs;
     use op_state_store::SqliteStore;
+    use serde_json::Value as JVal;
+
+    fn collect_subids(node: &JVal, out: &mut Vec<String>) {
+        if let Some(subid) = node.get("x-oscal-subid").and_then(JVal::as_str) {
+            out.push(subid.to_string());
+        }
+        if let Some(props) = node.get("properties").and_then(JVal::as_object) {
+            for v in props.values() {
+                collect_subids(v, out);
+            }
+        }
+        if let Some(defs) = node
+            .get("$defs")
+            .or_else(|| node.get("definitions"))
+            .and_then(JVal::as_object)
+        {
+            for v in defs.values() {
+                collect_subids(v, out);
+            }
+        }
+        if let Some(items) = node.get("items") {
+            collect_subids(items, out);
+        }
+        if let Some(alternatives) = node
+            .get("anyOf")
+            .or_else(|| node.get("oneOf"))
+            .and_then(JVal::as_array)
+        {
+            for v in alternatives {
+                collect_subids(v, out);
+            }
+        }
+    }
 
     #[test]
     fn should_publish_plugin_owned_mcp_schema() {
@@ -589,5 +701,25 @@ mod tests {
 
         // Clean up
         let _ = tokio::fs::remove_file(&config_path).await;
+    }
+
+    #[test]
+    fn derived_schema_matches_hand_rolled() {
+        let diffs = schema_diffs(&mcp_schema_golden(), &mcp_schema());
+        assert!(diffs.is_empty(), "schema drift: {:#?}", diffs);
+    }
+
+    #[test]
+    fn all_subids_are_valid() {
+        let raw = serde_json::to_value(schemars::schema_for!(McpState)).unwrap();
+        let mut subids = Vec::new();
+        collect_subids(&raw, &mut subids);
+        assert!(
+            !subids.is_empty(),
+            "expected at least one x-oscal-subid in the derived schema"
+        );
+        for subid in subids {
+            validate_subid(&subid).expect("invalid subid: {subid}");
+        }
     }
 }

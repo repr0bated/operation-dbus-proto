@@ -63,8 +63,8 @@ pub const PLUGIN_BASE_INTERFACE: &str = "org.opdbus.v1.Plugin";
 /// Interface for the plugins collection/manager
 pub const PLUGINS_INTERFACE: &str = "org.opdbus.v1.Plugin.Plugins";
 
-/// Base service name (bus name)
-pub const BASE_SERVICE_NAME: &str = "org.opdbus.v1";
+/// Canonical plugin-host service name (bus name)
+pub const BASE_SERVICE_NAME: &str = "org.opdbus.v1.plugins";
 
 /// Schema file directory for plugins
 pub const PLUGIN_SCHEMA_DIR: &str = "schemas/plugin";
@@ -385,6 +385,6 @@ mod tests {
         assert_eq!(DBUS_ROOT_PATH, "/org/opdbus/v1");
         assert_eq!(PLUGIN_BASE_PATH, "/org/opdbus/v1/plugins");
         assert_eq!(PLUGINS_INTERFACE, "org.opdbus.v1.Plugin.Plugins");
-        assert_eq!(BASE_SERVICE_NAME, "org.opdbus.v1");
+        assert_eq!(BASE_SERVICE_NAME, "org.opdbus.v1.plugins");
     }
 }

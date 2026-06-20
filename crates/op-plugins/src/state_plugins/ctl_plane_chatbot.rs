@@ -14,10 +14,15 @@ use async_trait::async_trait;
 use op_state::{
     ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
 };
-use op_state_store::{Constraint, FieldSchema, FieldType, PluginSchema};
+use op_state_store::PluginSchema;
+#[cfg(test)]
+use op_state_store::{Constraint, FieldSchema, FieldType};
 use serde::{Deserialize, Serialize};
+#[cfg(test)]
+use simd_json::json;
 use simd_json::prelude::*;
-use simd_json::{json, OwnedValue as Value};
+use simd_json::OwnedValue as Value;
+#[cfg(test)]
 use std::collections::HashMap;
 
 const DEFAULT_VOYAGE_MODEL: &str = "voyage-4-lite";
@@ -74,6 +79,334 @@ impl Default for CtlPlaneChatbotConfig {
     }
 }
 
+// ── Schema state (schemars-derived) ─────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum VoyageModel {
+    #[serde(rename = "voyage-4-lite")]
+    Voyage4Lite,
+    #[serde(rename = "voyage-4")]
+    Voyage4,
+}
+
+impl Default for VoyageModel {
+    fn default() -> Self {
+        VoyageModel::Voyage4Lite
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum NestingPolicy {
+    Flat,
+    Nested,
+}
+
+impl Default for NestingPolicy {
+    fn default() -> Self {
+        NestingPolicy::Flat
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum Trigger {
+    Goal,
+    ToolResult,
+    Interrupt,
+    Replan,
+    SystemEvent,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ExitReason {
+    ToolCall,
+    ResponseEmitted,
+    DirectionChange,
+    GoalAchieved,
+    ConfigSet,
+    TaskScheduled,
+    Interrupt,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum OutcomeClass {
+    GoalAchieved,
+    ConfigSet,
+    TaskScheduled,
+    Delegated,
+    Interrupted,
+    DirectionChanged,
+    Inconclusive,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, PartialEq)]
+pub enum SignificanceLevel {
+    Contextual,
+    Signal,
+}
+
+impl Default for SignificanceLevel {
+    fn default() -> Self {
+        SignificanceLevel::Contextual
+    }
+}
+
+fn default_vector_dims() -> u32 {
+    DEFAULT_VECTOR_DIMS
+}
+fn default_dedup_window_hrs() -> u32 {
+    DEFAULT_DEDUP_WINDOW_HRS
+}
+fn default_queue_alert_threshold() -> u32 {
+    DEFAULT_QUEUE_ALERT_THRESHOLD
+}
+fn default_running() -> bool {
+    true
+}
+fn default_reasoning_active() -> bool {
+    false
+}
+fn default_embedding_queue_depth() -> u32 {
+    0
+}
+fn default_false() -> bool {
+    false
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ReasoningEpisode {
+    #[schemars(
+        description = "Unique ID (UUID v7 for time-ordering)",
+        example = &"01912abc-def0-7abc-8def-0123456789ab",
+        extend("readOnly" = true),
+        extend("x-oscal-subid" = "obs.software.plugin.ctl-plane-chatbot.episode-id@v1")
+    )]
+    pub episode_id: String,
+    #[schemars(
+        description = "ISO-8601 timestamp of reasoning entry",
+        example = &"2025-05-29T14:30:00Z",
+        extend("readOnly" = true),
+        extend("x-oscal-subid" = "obs.software.plugin.ctl-plane-chatbot.started-at@v1")
+    )]
+    pub started_at: String,
+    #[schemars(
+        description = "ISO-8601 timestamp of reasoning exit",
+        example = &"2025-05-29T14:30:05Z",
+        extend("readOnly" = true),
+        extend("x-oscal-subid" = "obs.software.plugin.ctl-plane-chatbot.ended-at@v1")
+    )]
+    pub ended_at: String,
+    #[schemars(
+        description = "Wall-clock duration in milliseconds",
+        example = 5000,
+        extend("readOnly" = true),
+        extend("x-oscal-subid" = "obs.software.plugin.ctl-plane-chatbot.duration-ms@v1")
+    )]
+    pub duration_ms: u64,
+    #[schemars(
+        description = "What caused reasoning to start",
+        example = &"goal",
+        extend("readOnly" = true),
+        extend("x-oscal-subid" = "obs.software.plugin.ctl-plane-chatbot.trigger@v1")
+    )]
+    pub trigger: Trigger,
+    #[schemars(
+        description = "What ended reasoning",
+        example = &"tool_call",
+        extend("readOnly" = true),
+        extend("x-oscal-subid" = "obs.software.plugin.ctl-plane-chatbot.exit-reason@v1")
+    )]
+    pub exit_reason: ExitReason,
+    #[schemars(
+        description = "High-level goal or prompt active at episode start [PII]",
+        example = &"Configure VLAN isolation for tenant-3",
+        extend("readOnly" = true),
+        extend("x-oscal-subid" = "obs.software.plugin.ctl-plane-chatbot.goal-text@v1")
+    )]
+    pub goal_text: Option<String>,
+    #[schemars(
+        description = "Compact natural-language summary of reasoning — primary embedding input [PII]",
+        example = &"Evaluated 3 bridge configs, chose br-tenant3 for isolation",
+        extend("readOnly" = true),
+        extend("x-oscal-subid" = "obs.software.plugin.ctl-plane-chatbot.reasoning-summary@v1")
+    )]
+    pub reasoning_summary: String,
+    #[serde(default)]
+    #[schemars(
+        description = "Ordered list of tools/plugins/MCP calls made during the episode",
+        example = &["ovs_list_bridges", "ovs_create_bridge"],
+        extend("readOnly" = true),
+        extend("x-oscal-subid" = "obs.software.plugin.ctl-plane-chatbot.tools-consulted@v1")
+    )]
+    pub tools_consulted: Vec<String>,
+    #[schemars(
+        description = "The decision, plan, or action the episode produced [PII]",
+        example = &"Create br-tenant3 with VLAN 103 tagged ports",
+        extend("readOnly" = true),
+        extend("x-oscal-subid" = "obs.software.plugin.ctl-plane-chatbot.decision-output@v1")
+    )]
+    pub decision_output: Option<String>,
+    #[schemars(
+        description = "Classification of episode outcome. goal_achieved/config_set/task_scheduled => Signal significance",
+        example = &"config_set",
+        extend("readOnly" = true),
+        extend("x-oscal-subid" = "obs.software.plugin.ctl-plane-chatbot.outcome-class@v1")
+    )]
+    pub outcome_class: OutcomeClass,
+    #[schemars(
+        range(min = 0.0, max = 1.0),
+        description = "Optional confidence 0.0-1.0 if the model emits one",
+        example = 0.87,
+        extend("readOnly" = true),
+        extend("x-oscal-subid" = "obs.software.plugin.ctl-plane-chatbot.confidence@v1")
+    )]
+    pub confidence: Option<f64>,
+    #[schemars(
+        description = "Plugin that owns the context being reasoned about",
+        example = &"ovsdb_bridge",
+        extend("readOnly" = true),
+        extend("x-oscal-subid" = "obs.software.plugin.ctl-plane-chatbot.plugin-id@v1")
+    )]
+    pub plugin_id: Option<String>,
+    #[schemars(
+        description = "Groups episodes belonging to the same high-level task chain",
+        example = &"vlan-isolation-task-3",
+        extend("readOnly" = true),
+        extend("x-oscal-subid" = "obs.software.plugin.ctl-plane-chatbot.conversation-id@v1")
+    )]
+    pub conversation_id: Option<String>,
+    #[schemars(
+        description = "SHA-256 of canonical serialized record — for exact dedup before upsert (REQ-7)",
+        extend("readOnly" = true),
+        extend("x-oscal-subid" = "obs.software.plugin.ctl-plane-chatbot.content-hash@v1")
+    )]
+    pub content_hash: String,
+    #[serde(default = "default_false")]
+    #[schemars(
+        description = "If true, reasoning_summary and decision_output are redacted before vectorization (REQ-8)",
+        extend("readOnly" = true),
+        extend("x-oscal-subid" = "obs.software.plugin.ctl-plane-chatbot.pii-flagged@v1")
+    )]
+    pub pii_flagged: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Significance {
+    #[schemars(
+        description = "Reasoning episodes are always at least Contextual. goal_achieved/config_set/task_scheduled => Signal",
+        example = &"Signal",
+        extend("readOnly" = true),
+        extend("default" = &"Contextual"),
+        extend("x-oscal-subid" = "obs.software.plugin.ctl-plane-chatbot.significance-level@v1")
+    )]
+    pub level: SignificanceLevel,
+    #[schemars(
+        description = "Significance rule that was evaluated",
+        example = &"outcome_class in [goal_achieved, config_set, task_scheduled]",
+        extend("readOnly" = true),
+        extend("x-oscal-subid" = "obs.software.plugin.ctl-plane-chatbot.significance-rule@v1")
+    )]
+    pub rule: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "sch.software.plugin.ctl-plane-chatbot.schema@v1"))]
+pub struct CtlPlaneChatbotState {
+    #[serde(default)]
+    #[schemars(
+        description = "Voyage embedding model for reasoning episodes (REQ-4). POC target: voyage-4-lite",
+        example = &"voyage-4",
+        extend("x-oscal-subid" = "mut.software.plugin.ctl-plane-chatbot.voyage-model@v1")
+    )]
+    pub voyage_model: VoyageModel,
+    #[serde(default = "default_collection")]
+    #[schemars(
+        description = "Qdrant collection name (REQ-5). Separate from mutation/schema footprints",
+        extend("x-oscal-subid" = "mut.software.plugin.ctl-plane-chatbot.qdrant-collection@v1")
+    )]
+    pub qdrant_collection: String,
+    #[serde(default = "default_vector_dims")]
+    #[schemars(
+        description = "Vector dimensions (1024 for voyage-4-lite, flexible post-POC)",
+        extend("x-oscal-subid" = "mut.software.plugin.ctl-plane-chatbot.vector-dims@v1")
+    )]
+    pub vector_dims: u32,
+    #[serde(default = "default_dedup_window_hrs")]
+    #[schemars(
+        description = "Content-hash dedup collision window in hours (REQ-7, default 24)",
+        extend("x-oscal-subid" = "mut.software.plugin.ctl-plane-chatbot.dedup-window-hrs@v1")
+    )]
+    pub dedup_window_hrs: u32,
+    #[serde(default = "default_queue_alert_threshold")]
+    #[schemars(
+        description = "Alert if embedding queue depth exceeds this (REQ-10, default 50)",
+        extend("x-oscal-subid" = "mut.software.plugin.ctl-plane-chatbot.queue-alert-threshold@v1")
+    )]
+    pub queue_alert_threshold: u32,
+    #[serde(default)]
+    #[schemars(
+        description = "REQ-1: flat = new trigger extends current episode; nested = opens new episode",
+        extend("x-oscal-subid" = "mut.software.plugin.ctl-plane-chatbot.nesting-policy@v1")
+    )]
+    pub nesting_policy: NestingPolicy,
+    #[serde(default = "default_true")]
+    #[schemars(
+        description = "Enable Voyage embedding pipeline for reasoning episodes",
+        extend("x-oscal-subid" = "mut.software.plugin.ctl-plane-chatbot.vectorization-enabled@v1")
+    )]
+    pub vectorization_enabled: bool,
+    #[serde(default = "default_running")]
+    #[schemars(
+        description = "Whether the chatbot is currently active",
+        extend("readOnly" = true),
+        extend("x-oscal-subid" = "obs.software.plugin.ctl-plane-chatbot.running@v1")
+    )]
+    pub running: bool,
+    #[serde(default = "default_reasoning_active")]
+    #[schemars(
+        description = "Whether the chatbot is currently in reasoning state (REQ-1)",
+        extend("readOnly" = true),
+        extend("x-oscal-subid" = "obs.software.plugin.ctl-plane-chatbot.reasoning-active@v1")
+    )]
+    pub reasoning_active: bool,
+    #[serde(default = "default_embedding_queue_depth")]
+    #[schemars(
+        description = "Current Voyage embedding queue depth (alert at queue_alert_threshold)",
+        extend("readOnly" = true),
+        extend("x-oscal-subid" = "obs.software.plugin.ctl-plane-chatbot.embedding-queue-depth@v1")
+    )]
+    pub embedding_queue_depth: u32,
+    #[schemars(
+        description = "ISO-8601 timestamp of last successful Qdrant upsert",
+        extend("readOnly" = true),
+        extend("x-oscal-subid" = "obs.software.plugin.ctl-plane-chatbot.last-vectorized-at@v1")
+    )]
+    pub last_vectorized_at: Option<String>,
+    #[schemars(
+        description = "Qdrant vector UUID on the identity sled — binds every vectorized episode to this identity",
+        example = &"a1b2c3d4-e5f6-7890-abcd-ef0123456789",
+        extend("readOnly" = true),
+        extend("x-oscal-subid" = "obs.software.plugin.ctl-plane-chatbot.vector-id@v1")
+    )]
+    pub vector_id: Option<String>,
+    #[schemars(
+        description = "REQ-2: Structured record produced at reasoning exit. Primary unit of vectorization.",
+        extend("readOnly" = true),
+        extend("x-oscal-subid" = "obs.software.plugin.ctl-plane-chatbot.reasoning-episode@v1")
+    )]
+    pub reasoning_episode: Option<ReasoningEpisode>,
+    #[schemars(
+        description = "REQ-3: Always at least Contextual. goal_achieved/config_set/task_scheduled => Signal",
+        extend("readOnly" = true),
+        extend("x-oscal-subid" = "obs.software.plugin.ctl-plane-chatbot.significance@v1")
+    )]
+    pub significance: Option<Significance>,
+}
+
 // ── Plugin struct ────────────────────────────────────────────────────────────
 
 pub struct CtlPlaneChatbotPlugin;
@@ -102,7 +435,9 @@ impl StatePlugin for CtlPlaneChatbotPlugin {
     }
 
     fn schema(&self) -> Option<PluginSchema> {
-        Some(ctl_plane_chatbot_schema())
+        let mut schema = ctl_plane_chatbot_schema();
+        super::common::oscal::ensure_category_metadata_fields(&mut schema);
+        Some(schema)
     }
 
     fn is_available(&self) -> bool {
@@ -212,6 +547,89 @@ impl StatePlugin for CtlPlaneChatbotPlugin {
 }
 
 pub(crate) fn ctl_plane_chatbot_schema() -> PluginSchema {
+    let root = serde_json::to_value(schemars::schema_for!(CtlPlaneChatbotState))
+        .expect("schemars schema serializes to JSON");
+    super::schemars_adapter::plugin_schema_from_json(
+        "ctl_plane_chatbot",
+        "1.0.0",
+        "Control-plane chatbot reasoning episodes — THE PLUGIN IS THE SCHEMA. Declares every episode field (REQ-2), PII tagging (REQ-8), significance classification (REQ-3), and vectorization pipeline config (REQ-4/5/6/7). Downstream (Qdrant, CozoDB, Accountability UI, EventChainService) inherits.",
+        &root,
+    )
+}
+
+/// Frozen golden reference for the `ctl_plane_chatbot` schema.
+#[cfg(test)]
+pub(crate) fn ctl_plane_chatbot_schema_golden() -> PluginSchema {
+    let mut schema = ctl_plane_chatbot_schema_inner();
+    schema.subids.insert(
+        "__schema__".to_string(),
+        "sch.software.plugin.ctl-plane-chatbot.schema@v1".to_string(),
+    );
+    for (field, subid) in [
+        (
+            "voyage_model",
+            "mut.software.plugin.ctl-plane-chatbot.voyage-model@v1",
+        ),
+        (
+            "qdrant_collection",
+            "mut.software.plugin.ctl-plane-chatbot.qdrant-collection@v1",
+        ),
+        (
+            "vector_dims",
+            "mut.software.plugin.ctl-plane-chatbot.vector-dims@v1",
+        ),
+        (
+            "dedup_window_hrs",
+            "mut.software.plugin.ctl-plane-chatbot.dedup-window-hrs@v1",
+        ),
+        (
+            "queue_alert_threshold",
+            "mut.software.plugin.ctl-plane-chatbot.queue-alert-threshold@v1",
+        ),
+        (
+            "nesting_policy",
+            "mut.software.plugin.ctl-plane-chatbot.nesting-policy@v1",
+        ),
+        (
+            "vectorization_enabled",
+            "mut.software.plugin.ctl-plane-chatbot.vectorization-enabled@v1",
+        ),
+        (
+            "running",
+            "obs.software.plugin.ctl-plane-chatbot.running@v1",
+        ),
+        (
+            "reasoning_active",
+            "obs.software.plugin.ctl-plane-chatbot.reasoning-active@v1",
+        ),
+        (
+            "embedding_queue_depth",
+            "obs.software.plugin.ctl-plane-chatbot.embedding-queue-depth@v1",
+        ),
+        (
+            "last_vectorized_at",
+            "obs.software.plugin.ctl-plane-chatbot.last-vectorized-at@v1",
+        ),
+        (
+            "vector_id",
+            "obs.software.plugin.ctl-plane-chatbot.vector-id@v1",
+        ),
+        (
+            "reasoning_episode",
+            "obs.software.plugin.ctl-plane-chatbot.reasoning-episode@v1",
+        ),
+        (
+            "significance",
+            "obs.software.plugin.ctl-plane-chatbot.significance@v1",
+        ),
+    ] {
+        schema.subids.insert(field.to_string(), subid.to_string());
+    }
+    schema
+}
+
+#[cfg(test)]
+fn ctl_plane_chatbot_schema_inner() -> PluginSchema {
     // ── REQ-2: Reasoning Episode Record sub-object ──────────────────────────
     let reasoning_episode_fields = {
         let mut fields = HashMap::new();
@@ -263,7 +681,7 @@ pub(crate) fn ctl_plane_chatbot_schema() -> PluginSchema {
                 description: "Wall-clock duration in milliseconds".to_string(),
                 default: None,
                 example: Some(json!(5000)),
-                constraints: Vec::new(),
+                constraints: vec![Constraint::Min { value: 0.0 }],
                 read_only: true,
                 read_only_when: None,
             },
@@ -477,7 +895,7 @@ pub(crate) fn ctl_plane_chatbot_schema() -> PluginSchema {
         fields
     };
 
-    PluginSchema::builder("ctl_plane_chatbot")
+    let schema = PluginSchema::builder("ctl_plane_chatbot")
         .version("1.0.0")
         .description("Control-plane chatbot reasoning episodes — THE PLUGIN IS THE SCHEMA. Declares every episode field (REQ-2), PII tagging (REQ-8), significance classification (REQ-3), and vectorization pipeline config (REQ-4/5/6/7). Downstream (Qdrant, CozoDB, Accountability UI, EventChainService) inherits.")
         // ── Pipeline config (tunable) ──────────────────────────────────────
@@ -500,19 +918,19 @@ pub(crate) fn ctl_plane_chatbot_schema() -> PluginSchema {
             field_type: FieldType::Integer, required: false,
             description: "Vector dimensions (1024 for voyage-4-lite, flexible post-POC)".to_string(),
             default: Some(json!(1024)), example: None,
-            constraints: Vec::new(), read_only: false, read_only_when: None,
+            constraints: vec![Constraint::Min { value: 0.0 }], read_only: false, read_only_when: None,
         })
         .field("dedup_window_hrs", FieldSchema {
             field_type: FieldType::Integer, required: false,
             description: "Content-hash dedup collision window in hours (REQ-7, default 24)".to_string(),
             default: Some(json!(24)), example: None,
-            constraints: Vec::new(), read_only: false, read_only_when: None,
+            constraints: vec![Constraint::Min { value: 0.0 }], read_only: false, read_only_when: None,
         })
         .field("queue_alert_threshold", FieldSchema {
             field_type: FieldType::Integer, required: false,
             description: "Alert if embedding queue depth exceeds this (REQ-10, default 50)".to_string(),
             default: Some(json!(50)), example: None,
-            constraints: Vec::new(), read_only: false, read_only_when: None,
+            constraints: vec![Constraint::Min { value: 0.0 }], read_only: false, read_only_when: None,
         })
         .field("nesting_policy", FieldSchema {
             field_type: FieldType::Enum(vec!["flat".to_string(), "nested".to_string()]),
@@ -544,7 +962,7 @@ pub(crate) fn ctl_plane_chatbot_schema() -> PluginSchema {
             field_type: FieldType::Integer, required: false,
             description: "Current Voyage embedding queue depth (alert at queue_alert_threshold)".to_string(),
             default: Some(json!(0)), example: None,
-            constraints: Vec::new(), read_only: true, read_only_when: None,
+            constraints: vec![Constraint::Min { value: 0.0 }], read_only: true, read_only_when: None,
         })
         .field("last_vectorized_at", FieldSchema {
             field_type: FieldType::String, required: false,
@@ -573,5 +991,49 @@ pub(crate) fn ctl_plane_chatbot_schema() -> PluginSchema {
             default: None, example: None,
             constraints: Vec::new(), read_only: true, read_only_when: None,
         })
-        .build()
+        .build();
+    schema
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn derived_schema_matches_hand_rolled() {
+        let diffs = crate::state_plugins::schemars_adapter::schema_diffs(
+            &ctl_plane_chatbot_schema_golden(),
+            &ctl_plane_chatbot_schema(),
+        );
+        assert!(diffs.is_empty(), "schema drift: {:#?}", diffs);
+    }
+
+    #[test]
+    fn all_subids_are_valid() {
+        let raw = serde_json::to_value(schemars::schema_for!(CtlPlaneChatbotState)).unwrap();
+        let mut subids = Vec::new();
+        collect_subids(&raw, &mut subids);
+        for subid in subids {
+            assert!(
+                crate::state_plugins::common::oscal::validate_subid(&subid).is_ok(),
+                "invalid subid: {subid}"
+            );
+        }
+    }
+
+    fn collect_subids(value: &serde_json::Value, out: &mut Vec<String>) {
+        if let Some(obj) = value.as_object() {
+            if let Some(subid) = obj.get("x-oscal-subid").and_then(|v| v.as_str()) {
+                out.push(subid.to_string());
+            }
+            for v in obj.values() {
+                collect_subids(v, out);
+            }
+        }
+        if let Some(arr) = value.as_array() {
+            for v in arr {
+                collect_subids(v, out);
+            }
+        }
+    }
 }

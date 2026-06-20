@@ -13,9 +13,14 @@ use async_trait::async_trait;
 use op_state::{
     ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
 };
-use op_state_store::{Constraint, FieldSchema, FieldType, PluginSchema};
+use op_state_store::PluginSchema;
+#[cfg(test)]
+use op_state_store::{Constraint, FieldSchema, FieldType};
 use serde::{Deserialize, Serialize};
-use simd_json::{json, prelude::*, OwnedValue as Value};
+#[cfg(test)]
+use simd_json::json;
+use simd_json::{prelude::*, OwnedValue as Value};
+#[cfg(test)]
 use std::collections::HashMap;
 
 const S6_SV_PATH: &str = "/run/service/op-cognitive-mcp";
@@ -174,7 +179,9 @@ impl StatePlugin for CognitiveMcpPlugin {
     }
 
     fn schema(&self) -> Option<PluginSchema> {
-        Some(cognitive_mcp_schema())
+        let mut schema = cognitive_mcp_schema();
+        super::common::oscal::ensure_category_metadata_fields(&mut schema);
+        Some(schema)
     }
 
     fn is_available(&self) -> bool {
@@ -375,7 +382,458 @@ impl StatePlugin for CognitiveMcpPlugin {
     }
 }
 
+// ── Schema-derived state for cognitive_mcp ─────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthStatus {
+    None,
+    ChromeProfile,
+    Cookie,
+    ApiKey,
+}
+
+impl Default for AuthStatus {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
+fn default_auth_status() -> AuthStatus {
+    AuthStatus::default()
+}
+
+fn example_auth_status() -> AuthStatus {
+    AuthStatus::ChromeProfile
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum GeminiMode {
+    Query,
+    DeepResearch,
+}
+
+impl Default for GeminiMode {
+    fn default() -> Self {
+        Self::Query
+    }
+}
+
+fn default_gemini_mode() -> GeminiMode {
+    GeminiMode::default()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryOperation {
+    Store,
+    Retrieve,
+    Query,
+    Delete,
+    ListNamespaces,
+    Stats,
+}
+
+fn example_memory_operation() -> MemoryOperation {
+    MemoryOperation::Store
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum NamespaceKind {
+    Project,
+    Session,
+    Database,
+    Workflow,
+    Agent,
+    Cron,
+    Custom,
+}
+
+fn example_memory_namespace_kind() -> Option<NamespaceKind> {
+    Some(NamespaceKind::Project)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceType {
+    Url,
+    Text,
+    File,
+}
+
+fn example_source_type() -> SourceType {
+    SourceType::Url
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum FileType {
+    Source,
+    Test,
+    Config,
+    Docs,
+    Build,
+    Other,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ActivityType {
+    ToolCall,
+    Query,
+    ContextSwitch,
+    Error,
+    Idle,
+    ReturnFromIdle,
+    FileOpened,
+    EditApplied,
+    BuildError,
+    TestFailure,
+    DiffViewed,
+    SymbolNavigated,
+}
+
+impl Default for ActivityType {
+    fn default() -> Self {
+        Self::Query
+    }
+}
+
+fn default_activity_type() -> ActivityType {
+    ActivityType::default()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum CodeIndexMode {
+    Source,
+    RepomixZip,
+}
+
+impl Default for CodeIndexMode {
+    fn default() -> Self {
+        Self::Source
+    }
+}
+
+fn default_code_index_mode() -> CodeIndexMode {
+    CodeIndexMode::default()
+}
+
+// Defaults matching the hand-rolled schema contract
+fn default_cognitive_http() -> String {
+    "0.0.0.0:3003".to_string()
+}
+
+fn default_cognitive_grpc() -> String {
+    "0.0.0.0:50052".to_string()
+}
+
+fn default_running() -> bool {
+    false
+}
+
+fn default_healthy() -> bool {
+    false
+}
+
+fn default_queries_remaining() -> i64 {
+    0
+}
+
+fn default_queries_limit() -> i64 {
+    50
+}
+
+fn default_notebook_count() -> i64 {
+    0
+}
+
+fn default_depth() -> u8 {
+    3
+}
+
+fn default_memory_limit() -> i64 {
+    50
+}
+
+fn default_code_search_limit() -> u8 {
+    8
+}
+
+fn default_code_context_limit() -> u8 {
+    6
+}
+
+fn default_session_id() -> String {
+    "default".to_string()
+}
+
+// Examples
+fn example_cognitive_http() -> String {
+    "100.90.37.254:3003".to_string()
+}
+
+fn example_cognitive_grpc() -> String {
+    "100.90.37.254:50052".to_string()
+}
+
+fn default_cognitive_db_path() -> String {
+    "/var/lib/op-dbus/cognitive.db".to_string()
+}
+
+fn example_db_path() -> String {
+    "/var/lib/op-dbus/cognitive.db".to_string()
+}
+
+fn example_wg_interface() -> String {
+    "netmaker".to_string()
+}
+
+fn example_memory_namespace() -> Option<String> {
+    Some("project:op-dbus".to_string())
+}
+
+fn example_code_search_query() -> String {
+    "how is wireguard identity verified".to_string()
+}
+
+fn example_code_search_language() -> Option<String> {
+    Some("rust".to_string())
+}
+
+fn example_collection() -> Option<String> {
+    Some("repomix_rag".to_string())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Citation {
+    #[schemars(description = "Cited text passage")]
+    pub text: Option<String>,
+    #[schemars(description = "Source document identifier")]
+    pub source: Option<String>,
+    #[schemars(description = "Page or location within source")]
+    pub page: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SourceInfo {
+    #[schemars(description = "Unique source identifier", extend("readOnly" = true))]
+    pub id: String,
+    #[schemars(description = "Source title")]
+    pub title: Option<String>,
+    #[schemars(description = "Source transport type", example = example_source_type())]
+    pub source_type: SourceType,
+    #[serde(default)]
+    #[schemars(description = "Tags attached to this source")]
+    pub tags: Vec<String>,
+    #[schemars(description = "ISO-8601 creation timestamp", extend("readOnly" = true))]
+    pub created_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct GeminiQueryRequest {
+    #[schemars(description = "Natural-language query")]
+    pub query: String,
+    #[schemars(description = "Optional grounding context")]
+    pub context: Option<String>,
+    #[serde(default = "default_gemini_mode")]
+    #[schemars(description = "Query mode")]
+    pub mode: GeminiMode,
+    #[serde(default = "default_depth")]
+    #[schemars(
+        range(min = 1, max = 5),
+        description = "Deep-research depth (1-5, default 3)"
+    )]
+    pub depth: u8,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct MemoryToolInput {
+    #[schemars(
+        description = "Memory operation to perform",
+        example = example_memory_operation()
+    )]
+    pub operation: MemoryOperation,
+    #[schemars(
+        description = "Namespace name (e.g. project:op-dbus, session:abc)",
+        example = example_memory_namespace()
+    )]
+    pub namespace: Option<String>,
+    #[schemars(
+        description = "Kind of namespace (used when creating)",
+        example = example_memory_namespace_kind()
+    )]
+    pub namespace_kind: Option<NamespaceKind>,
+    #[schemars(description = "Entry key within namespace")]
+    pub key: Option<String>,
+    #[schemars(description = "Value to store (any JSON)")]
+    pub value: Option<serde_json::Value>,
+    #[serde(default)]
+    #[schemars(description = "Tags for the entry")]
+    pub tags: Vec<String>,
+    #[schemars(description = "Substring pattern for key search (used in query)")]
+    pub key_pattern: Option<String>,
+    #[serde(default = "default_memory_limit")]
+    #[schemars(description = "Max results (default 50)")]
+    pub limit: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct CodeSearchInput {
+    #[schemars(
+        description = "Natural-language or code query",
+        example = example_code_search_query()
+    )]
+    pub query: String,
+    #[schemars(description = "Restrict to a repo name")]
+    pub repo: Option<String>,
+    #[schemars(
+        description = "Restrict to a language (e.g. rust, typescript)",
+        example = example_code_search_language()
+    )]
+    pub language: Option<String>,
+    #[schemars(description = "Restrict to a file classification")]
+    pub file_type: Option<FileType>,
+    #[schemars(description = "Only files whose path contains this substring")]
+    pub path_contains: Option<String>,
+    #[schemars(description = "Only chunks whose symbols/path contain this substring")]
+    pub symbol_contains: Option<String>,
+    #[serde(default)]
+    #[schemars(description = "Drop test files from results")]
+    pub exclude_tests: bool,
+    #[serde(default = "default_true")]
+    #[schemars(description = "Fuse semantic+lexical scoring and dedup to one chunk per file")]
+    pub fused: bool,
+    #[schemars(
+        description = "Override the Qdrant repomix/RAG collection for this search",
+        example = example_collection()
+    )]
+    pub collection: Option<String>,
+    #[serde(default = "default_code_search_limit")]
+    #[schemars(range(min = 1, max = 50), description = "Max results (default 8)")]
+    pub limit: u8,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct CodeContextInput {
+    #[schemars(description = "Current query / what the agent is working on")]
+    pub query: String,
+    #[serde(default = "default_session_id")]
+    #[schemars(description = "Session identifier (default 'default')")]
+    pub session_id: String,
+    #[serde(default = "default_activity_type")]
+    #[schemars(description = "Kind of activity being recorded (default 'query')")]
+    pub activity_type: ActivityType,
+    #[schemars(description = "Restrict retrieval to a repo")]
+    pub repo: Option<String>,
+    #[schemars(description = "Restrict retrieval to a language")]
+    pub language: Option<String>,
+    #[serde(default)]
+    #[schemars(description = "Drop test files from results")]
+    pub exclude_tests: bool,
+    #[schemars(
+        description = "Override the Qdrant repomix/RAG collection for this context request",
+        example = example_collection()
+    )]
+    pub collection: Option<String>,
+    #[serde(default = "default_code_context_limit")]
+    #[schemars(range(min = 1, max = 50), description = "Max results (default 6)")]
+    pub limit: u8,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct CodeIndexInput {
+    #[serde(default = "default_code_index_mode")]
+    #[schemars(description = "Indexing mode (default 'source')")]
+    pub mode: CodeIndexMode,
+    #[schemars(description = "Repo name (source mode)")]
+    pub repo: Option<String>,
+    #[schemars(description = "File path within the repo (source mode)")]
+    pub file_path: Option<String>,
+    #[schemars(description = "Raw file content (source mode)")]
+    pub content: Option<String>,
+    #[schemars(description = "Path to repomix zip (repomix_zip mode)")]
+    pub zip_path: Option<String>,
+    #[schemars(description = "Entry name within the zip (repomix_zip mode)")]
+    pub entry: Option<String>,
+    #[schemars(description = "Override target collection")]
+    pub collection: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "sch.software.plugin.cognitive-mcp.schema@v1"))]
+pub struct CognitiveMcpState {
+    #[serde(default = "default_cognitive_http")]
+    #[schemars(description = "HTTP/SSE bind address for the MCP protocol endpoint", example = example_cognitive_http(), extend("x-oscal-subid" = "mut.software.plugin.cognitive-mcp.http@v1"))]
+    pub http: String,
+    #[serde(default = "default_cognitive_grpc")]
+    #[schemars(description = "gRPC bind address for the CognitiveToolService endpoint", example = example_cognitive_grpc(), extend("x-oscal-subid" = "mut.software.plugin.cognitive-mcp.grpc@v1"))]
+    pub grpc: String,
+    #[serde(default = "default_cognitive_db_path")]
+    #[schemars(description = "CozoDB database path for persistent memory storage", example = example_db_path(), extend("x-oscal-subid" = "mut.software.plugin.cognitive-mcp.db-path@v1"))]
+    pub db_path: String,
+    #[serde(default = "default_wg")]
+    #[schemars(description = "WireGuard interface to read identity from", example = example_wg_interface(), extend("x-oscal-subid" = "mut.software.plugin.cognitive-mcp.wg-interface@v1"))]
+    pub wg_interface: String,
+    #[serde(default = "default_true")]
+    #[schemars(description = "Enable the HTTP/SSE MCP transport", extend("x-oscal-subid" = "mut.software.plugin.cognitive-mcp.http-enabled@v1"))]
+    pub http_enabled: bool,
+    #[serde(default = "default_true")]
+    #[schemars(description = "Enable the gRPC CognitiveToolService transport", extend("x-oscal-subid" = "mut.software.plugin.cognitive-mcp.grpc-enabled@v1"))]
+    pub grpc_enabled: bool,
+    #[serde(default = "default_true")]
+    #[schemars(description = "Register on D-Bus as org.opdbus.CognitiveMcp", extend("x-oscal-subid" = "mut.software.plugin.cognitive-mcp.dbus-enabled@v1"))]
+    pub dbus_enabled: bool,
+    #[serde(default = "default_running")]
+    #[schemars(description = "Whether the s6 service is currently running", extend("readOnly" = true), extend("x-oscal-subid" = "obs.software.plugin.cognitive-mcp.running@v1"))]
+    pub running: bool,
+    #[serde(default = "default_healthy")]
+    #[schemars(description = "Last known health status from GetHealth", extend("readOnly" = true), extend("x-oscal-subid" = "obs.software.plugin.cognitive-mcp.healthy@v1"))]
+    pub healthy: bool,
+    #[serde(default = "default_auth_status")]
+    #[schemars(description = "Current authentication method", example = example_auth_status(), extend("readOnly" = true), extend("x-oscal-subid" = "obs.software.plugin.cognitive-mcp.auth-status@v1"))]
+    pub auth_status: AuthStatus,
+    #[serde(default = "default_queries_remaining")]
+    #[schemars(description = "Queries remaining in current quota period", extend("readOnly" = true), extend("x-oscal-subid" = "obs.software.plugin.cognitive-mcp.queries-remaining@v1"))]
+    pub queries_remaining: i64,
+    #[serde(default = "default_queries_limit")]
+    #[schemars(description = "Total queries allowed per quota period", extend("readOnly" = true), extend("x-oscal-subid" = "obs.software.plugin.cognitive-mcp.queries-limit@v1"))]
+    pub queries_limit: i64,
+    #[serde(default = "default_notebook_count")]
+    #[schemars(description = "Number of notebooks in the library", extend("readOnly" = true), extend("x-oscal-subid" = "obs.software.plugin.cognitive-mcp.notebook-count@v1"))]
+    pub notebook_count: i64,
+    #[schemars(description = "R12: Gemini fallback query (requires GEMINI_API_KEY)", extend("readOnly" = true), extend("x-oscal-subid" = "exp.software.plugin.cognitive-mcp.gemini-query-request@v1"))]
+    pub gemini_query_request: Option<GeminiQueryRequest>,
+    #[schemars(description = "MCP MemoryTool: key-value memory store with operations store/retrieve/query/delete/list_namespaces/stats", extend("readOnly" = true), extend("x-oscal-subid" = "exp.software.plugin.cognitive-mcp.memory-tool@v1"))]
+    pub memory_tool: Option<MemoryToolInput>,
+    #[schemars(description = "Citation sub-object: text, source, page. Inherited by grounded query responses.", extend("readOnly" = true), extend("x-oscal-subid" = "exp.software.plugin.cognitive-mcp.citation@v1"))]
+    pub citation: Option<Citation>,
+    #[schemars(description = "SourceInfo sub-object: id, title, source_type, tags, created_at. Inherited by source CRUD responses.", extend("readOnly" = true), extend("x-oscal-subid" = "exp.software.plugin.cognitive-mcp.source-info@v1"))]
+    pub source_info: Option<SourceInfo>,
+    #[schemars(description = "CodeSearchTool input: semantic+lexical search over the indexed code corpus.", extend("readOnly" = true), extend("x-oscal-subid" = "obs.service.code-rag.search@v1"))]
+    pub code_search: Option<CodeSearchInput>,
+    #[schemars(description = "CodeContextTool input: activity-aware context retrieval for the current session.", extend("readOnly" = true), extend("x-oscal-subid" = "exp.service.code-context.render@v1"))]
+    pub code_context: Option<CodeContextInput>,
+    #[schemars(description = "CodeIndexTool input: live single-file or repomix-zip indexing into the code corpus.", extend("readOnly" = true), extend("x-oscal-subid" = "src.software.workspace.index@v1"))]
+    pub code_index: Option<CodeIndexInput>,
+}
+
 pub(crate) fn cognitive_mcp_schema() -> PluginSchema {
+    let root = serde_json::to_value(schemars::schema_for!(CognitiveMcpState))
+        .expect("schemars schema serializes to JSON");
+    super::schemars_adapter::plugin_schema_from_json(
+        "cognitive_mcp",
+        "2.0.0",
+        "Cognitive MCP server — memory, gRPC CognitiveToolService. THE PLUGIN IS THE SCHEMA: every method, tool, property, and field is declared here. Downstream inherits.",
+        &root,
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn cognitive_mcp_schema_golden() -> PluginSchema {
     let citation_fields = {
         let mut fields = HashMap::new();
         fields.insert(
@@ -1053,60 +1511,70 @@ pub(crate) fn cognitive_mcp_schema() -> PluginSchema {
     PluginSchema::builder("cognitive_mcp")
         .version("2.0.0")
         .description("Cognitive MCP server — memory, gRPC CognitiveToolService. THE PLUGIN IS THE SCHEMA: every method, tool, property, and field is declared here. Downstream inherits.")
+        .subid("__schema__", "sch.software.plugin.cognitive-mcp.schema@v1")
         .field("http", FieldSchema {
             field_type: FieldType::String, required: false,
             description: "HTTP/SSE bind address for the MCP protocol endpoint".to_string(),
             default: Some(json!("0.0.0.0:3003")), example: Some(json!("100.90.37.254:3003")),
             constraints: Vec::new(), read_only: false, read_only_when: None,
         })
+        .subid("http", "mut.software.plugin.cognitive-mcp.http@v1")
         .field("grpc", FieldSchema {
             field_type: FieldType::String, required: false,
             description: "gRPC bind address for the CognitiveToolService endpoint".to_string(),
             default: Some(json!("0.0.0.0:50052")), example: Some(json!("100.90.37.254:50052")),
             constraints: Vec::new(), read_only: false, read_only_when: None,
         })
+        .subid("grpc", "mut.software.plugin.cognitive-mcp.grpc@v1")
         .field("db_path", FieldSchema {
             field_type: FieldType::String, required: false,
             description: "CozoDB database path for persistent memory storage".to_string(),
             default: Some(json!("/var/lib/op-dbus/cognitive.db")), example: Some(json!("/var/lib/op-dbus/cognitive.db")),
             constraints: Vec::new(), read_only: false, read_only_when: None,
         })
+        .subid("db_path", "mut.software.plugin.cognitive-mcp.db-path@v1")
         .field("wg_interface", FieldSchema {
             field_type: FieldType::String, required: false,
             description: "WireGuard interface to read identity from".to_string(),
             default: Some(json!("netmaker")), example: Some(json!("netmaker")),
             constraints: Vec::new(), read_only: false, read_only_when: None,
         })
+        .subid("wg_interface", "mut.software.plugin.cognitive-mcp.wg-interface@v1")
         .field("http_enabled", FieldSchema {
             field_type: FieldType::Boolean, required: false,
             description: "Enable the HTTP/SSE MCP transport".to_string(),
             default: Some(json!(true)), example: None, constraints: Vec::new(),
             read_only: false, read_only_when: None,
         })
+        .subid("http_enabled", "mut.software.plugin.cognitive-mcp.http-enabled@v1")
         .field("grpc_enabled", FieldSchema {
             field_type: FieldType::Boolean, required: false,
             description: "Enable the gRPC CognitiveToolService transport".to_string(),
             default: Some(json!(true)), example: None, constraints: Vec::new(),
             read_only: false, read_only_when: None,
         })
+        .subid("grpc_enabled", "mut.software.plugin.cognitive-mcp.grpc-enabled@v1")
         .field("dbus_enabled", FieldSchema {
             field_type: FieldType::Boolean, required: false,
             description: "Register on D-Bus as org.opdbus.CognitiveMcp".to_string(),
             default: Some(json!(true)), example: None, constraints: Vec::new(),
             read_only: false, read_only_when: None,
         })
+        .subid("dbus_enabled", "mut.software.plugin.cognitive-mcp.dbus-enabled@v1")
         .field("running", FieldSchema {
             field_type: FieldType::Boolean, required: false,
             description: "Whether the s6 service is currently running".to_string(),
             default: Some(json!(false)), example: None, constraints: Vec::new(),
             read_only: true, read_only_when: None,
         })
+        .subid("running", "obs.software.plugin.cognitive-mcp.running@v1")
         .field("healthy", FieldSchema {
             field_type: FieldType::Boolean, required: false,
             description: "Last known health status from GetHealth".to_string(),
             default: Some(json!(false)), example: None, constraints: Vec::new(),
             read_only: true, read_only_when: None,
         })
+        .subid("healthy", "obs.software.plugin.cognitive-mcp.healthy@v1")
         .field("auth_status", FieldSchema {
             field_type: FieldType::Enum(vec![
                 "none".to_string(), "chrome_profile".to_string(),
@@ -1117,48 +1585,56 @@ pub(crate) fn cognitive_mcp_schema() -> PluginSchema {
             default: Some(json!("none")), example: Some(json!("chrome_profile")),
             constraints: Vec::new(), read_only: true, read_only_when: None,
         })
+        .subid("auth_status", "obs.software.plugin.cognitive-mcp.auth-status@v1")
         .field("queries_remaining", FieldSchema {
             field_type: FieldType::Integer, required: false,
             description: "Queries remaining in current quota period".to_string(),
             default: Some(json!(0)), example: None, constraints: Vec::new(),
             read_only: true, read_only_when: None,
         })
+        .subid("queries_remaining", "obs.software.plugin.cognitive-mcp.queries-remaining@v1")
         .field("queries_limit", FieldSchema {
             field_type: FieldType::Integer, required: false,
             description: "Total queries allowed per quota period".to_string(),
             default: Some(json!(50)), example: None, constraints: Vec::new(),
             read_only: true, read_only_when: None,
         })
+        .subid("queries_limit", "obs.software.plugin.cognitive-mcp.queries-limit@v1")
         .field("notebook_count", FieldSchema {
             field_type: FieldType::Integer, required: false,
             description: "Number of notebooks in the library".to_string(),
             default: Some(json!(0)), example: None, constraints: Vec::new(),
             read_only: true, read_only_when: None,
         })
+        .subid("notebook_count", "obs.software.plugin.cognitive-mcp.notebook-count@v1")
         .field("gemini_query_request", FieldSchema {
             field_type: FieldType::Object(gemini_query_request_fields), required: false,
             description: "R12: Gemini fallback query (requires GEMINI_API_KEY)".to_string(),
             default: None, example: None, constraints: Vec::new(),
             read_only: true, read_only_when: None,
         })
+        .subid("gemini_query_request", "exp.software.plugin.cognitive-mcp.gemini-query-request@v1")
         .field("memory_tool", FieldSchema {
             field_type: FieldType::Object(memory_tool_input_fields), required: false,
             description: "MCP MemoryTool: key-value memory store with operations store/retrieve/query/delete/list_namespaces/stats".to_string(),
             default: None, example: None, constraints: Vec::new(),
             read_only: true, read_only_when: None,
         })
+        .subid("memory_tool", "exp.software.plugin.cognitive-mcp.memory-tool@v1")
         .field("citation", FieldSchema {
             field_type: FieldType::Object(citation_fields), required: false,
             description: "Citation sub-object: text, source, page. Inherited by grounded query responses.".to_string(),
             default: None, example: None, constraints: Vec::new(),
             read_only: true, read_only_when: None,
         })
+        .subid("citation", "exp.software.plugin.cognitive-mcp.citation@v1")
         .field("source_info", FieldSchema {
             field_type: FieldType::Object(source_info_fields), required: false,
             description: "SourceInfo sub-object: id, title, source_type, tags, created_at. Inherited by source CRUD responses.".to_string(),
             default: None, example: None, constraints: Vec::new(),
             read_only: true, read_only_when: None,
         })
+        .subid("source_info", "exp.software.plugin.cognitive-mcp.source-info@v1")
         .field("code_search", FieldSchema {
             field_type: FieldType::Object(code_search_input_fields), required: false,
             description: "CodeSearchTool input: semantic+lexical search over the indexed code corpus.".to_string(),
@@ -1181,4 +1657,64 @@ pub(crate) fn cognitive_mcp_schema() -> PluginSchema {
         })
         .subid("code_index", "src.software.workspace.index@v1")
         .build()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state_plugins::common::oscal::validate_subid;
+    use crate::state_plugins::schemars_adapter::schema_diffs;
+    use serde_json::Value as JVal;
+
+    fn collect_subids(node: &JVal, out: &mut Vec<String>) {
+        if let Some(subid) = node.get("x-oscal-subid").and_then(JVal::as_str) {
+            out.push(subid.to_string());
+        }
+        if let Some(props) = node.get("properties").and_then(JVal::as_object) {
+            for v in props.values() {
+                collect_subids(v, out);
+            }
+        }
+        if let Some(defs) = node
+            .get("$defs")
+            .or_else(|| node.get("definitions"))
+            .and_then(JVal::as_object)
+        {
+            for v in defs.values() {
+                collect_subids(v, out);
+            }
+        }
+        if let Some(items) = node.get("items") {
+            collect_subids(items, out);
+        }
+        if let Some(alternatives) = node
+            .get("anyOf")
+            .or_else(|| node.get("oneOf"))
+            .and_then(JVal::as_array)
+        {
+            for v in alternatives {
+                collect_subids(v, out);
+            }
+        }
+    }
+
+    #[test]
+    fn derived_schema_matches_hand_rolled() {
+        let diffs = schema_diffs(&cognitive_mcp_schema_golden(), &cognitive_mcp_schema());
+        assert!(diffs.is_empty(), "schema drift: {:#?}", diffs);
+    }
+
+    #[test]
+    fn all_subids_are_valid() {
+        let raw = serde_json::to_value(schemars::schema_for!(CognitiveMcpState)).unwrap();
+        let mut subids = Vec::new();
+        collect_subids(&raw, &mut subids);
+        assert!(
+            !subids.is_empty(),
+            "expected at least one x-oscal-subid in the derived schema"
+        );
+        for subid in subids {
+            validate_subid(&subid).expect("invalid subid: {subid}");
+        }
+    }
 }

@@ -573,4 +573,87 @@ mod tests {
             "unknown plugin drafts must require human review"
         );
     }
+
+    #[tokio::test]
+    async fn all_plugin_subids_are_valid_and_unique() {
+        use crate::state_plugins::common::oscal::{category_required_fields, validate_subid};
+        use std::collections::HashMap;
+
+        let store = Arc::new(SqliteStore::new(":memory:").await.unwrap());
+        let registry = DefaultPluginRegistry::new(store);
+        let plugins = registry.load_all_plugins().await.unwrap();
+
+        let mut all_subids: Vec<(String, String, String)> = Vec::new(); // plugin, key, subid
+        let mut errors: Vec<String> = Vec::new();
+
+        for plugin in &plugins {
+            let name = plugin.name().to_string();
+            let Some(schema) = plugin.schema() else {
+                continue;
+            };
+            for (key, subid) in &schema.subids {
+                all_subids.push((name.clone(), key.clone(), subid.clone()));
+            }
+        }
+
+        // 1. Every subid must match the canonical OSCAL subid regex.
+        for (plugin_name, key, subid) in &all_subids {
+            if let Err(e) = validate_subid(subid) {
+                errors.push(format!(
+                    "plugin '{plugin_name}' key '{key}' has invalid subid '{subid}': {e}"
+                ));
+            }
+        }
+
+        // 2. No subid value may appear more than once across all plugins.
+        let mut seen: HashMap<String, (String, String)> = HashMap::new();
+        for (plugin_name, key, subid) in &all_subids {
+            if let Some((prev_plugin, prev_key)) = seen.get(subid) {
+                errors.push(format!(
+                    "duplicate subid '{subid}' in plugin '{plugin_name}' key '{key}' (first seen in plugin '{prev_plugin}' key '{prev_key}')"
+                ));
+            } else {
+                seen.insert(subid.clone(), (plugin_name.clone(), key.clone()));
+            }
+        }
+
+        // 3. Category-specific required metadata fields must be present in the plugin schema.
+        for (plugin_name, key, subid) in &all_subids {
+            let Some(schema) = plugins
+                .iter()
+                .find(|p| p.name() == plugin_name)
+                .and_then(|p| p.schema())
+            else {
+                continue;
+            };
+            let category = subid.split('.').next().unwrap_or("");
+            let required_fields = category_required_fields(category);
+            if category == "evt" {
+                // evt.* requires at least one of event_id or event_hash.
+                if !required_fields
+                    .iter()
+                    .any(|field| schema.fields.contains_key(*field))
+                {
+                    errors.push(format!(
+                        "plugin '{plugin_name}' subid '{subid}' (key '{key}') is evt.* and requires one of {:?} fields, but none found in schema fields",
+                        required_fields
+                    ));
+                }
+            } else if !required_fields.is_empty() {
+                for field in required_fields {
+                    if !schema.fields.contains_key(*field) {
+                        errors.push(format!(
+                            "plugin '{plugin_name}' subid '{subid}' (key '{key}') is {category}.* and requires field '{field}', but it is not present in schema fields"
+                        ));
+                    }
+                }
+            }
+        }
+
+        assert!(
+            errors.is_empty(),
+            "OSCAL subid gate failures:\n{}",
+            errors.join("\n")
+        );
+    }
 }

@@ -22,25 +22,66 @@ fn default_protocol() -> String {
 }
 
 /// A configured unix-domain socket endpoint.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SocketEndpoint {
-    /// Filesystem path to the socket (e.g. `/run/qdrant.sock`).
+    /// Filesystem path to the socket.
+    #[schemars(
+        description = "Filesystem path of the unix domain socket",
+        example = &"/run/qdrant.sock",
+        extend("x-oscal-subid" = "mut.service.unix-socket.bind-path@v1")
+    )]
     pub path: String,
     /// Local TCP port xray listens on and proxies into this socket.
+    #[schemars(
+        range(min = 1, max = 65535),
+        description = "Local TCP port xray listens on and proxies into this socket",
+        example = 6334,
+        extend("x-oscal-subid" = "mut.service.unix-socket.bind-port@v1")
+    )]
     pub port: u16,
-    /// Transport protocol carried over the socket (`"grpc"`, `"jsonrpc"`, …).
+    /// Transport protocol carried over the socket.
     #[serde(default = "default_protocol")]
+    #[schemars(
+        description = "Transport protocol carried over the socket (grpc, jsonrpc, …)",
+        extend("x-oscal-subid" = "mut.service.unix-socket.bind-protocol@v1")
+    )]
     pub protocol: String,
-    /// Human-readable service label used as the xray outbound tag.
+    /// Human-readable service label.
     #[serde(default)]
+    #[schemars(
+        description = "Human-readable service label used as the xray outbound tag",
+        example = &"qdrant-grpc",
+        extend("x-oscal-subid" = "mut.service.unix-socket.bind-label@v1")
+    )]
     pub label: String,
 }
 
 /// Runtime state: all declared socket endpoints.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "sch.software.plugin.unix-socket.schema@v1"))]
 pub struct UnixSocketState {
-    /// Declared unix socket endpoints visible to internal services.
+    /// Declared unix socket endpoints.
+    #[schemars(
+        description = "Declared unix socket endpoints",
+        extend("x-oscal-subid" = "mut.service.unix-socket.bind@v1")
+    )]
     pub sockets: Vec<SocketEndpoint>,
+}
+
+/// Canonical `unix_socket` schema, **derived** from the structs via schemars
+/// (see [`super::schemars_adapter`]). `port` bounds, field descriptions (from
+/// doc comments) and `required` flags all come from the type — the struct is
+/// the single source of truth. The frozen hand-rolled `unix_socket_schema()`
+/// (test-only) guards this against drift via `derived_schema_matches_hand_rolled`.
+pub fn unix_socket_schema_derived() -> PluginSchema {
+    let root = serde_json::to_value(schemars::schema_for!(UnixSocketState))
+        .expect("schemars schema serializes to JSON");
+    super::schemars_adapter::plugin_schema_from_json(
+        "unix_socket",
+        "1.0.0",
+        "Unix domain socket endpoints proxied into xray outbounds",
+        &root,
+    )
 }
 
 pub struct UnixSocketPlugin {
@@ -175,7 +216,9 @@ impl StatePlugin for UnixSocketPlugin {
     }
 
     fn schema(&self) -> Option<op_state_store::PluginSchema> {
-        Some(unix_socket_schema())
+        let mut schema = unix_socket_schema_derived();
+        super::common::oscal::ensure_category_metadata_fields(&mut schema);
+        Some(schema)
     }
 
     async fn query_current_state(&self) -> Result<Value> {
@@ -268,6 +311,96 @@ mod tests {
         }
     }
 
+    fn sockets_object(s: &PluginSchema) -> &HashMap<String, FieldSchema> {
+        match &s.fields.get("sockets").expect("sockets field").field_type {
+            FieldType::Array(inner) => match inner.as_ref() {
+                FieldType::Object(m) => m,
+                other => panic!("items not object: {other:?}"),
+            },
+            other => panic!("sockets not array: {other:?}"),
+        }
+    }
+
+    /// The schemars-derived schema must match the hand-rolled one field-for-field.
+    #[test]
+    fn derived_schema_matches_hand_rolled() {
+        let hand = unix_socket_schema();
+        let derived = unix_socket_schema_derived();
+
+        assert_eq!(derived.name, hand.name);
+        assert_eq!(derived.version, hand.version);
+
+        let hp = sockets_object(&hand);
+        let dp = sockets_object(&derived);
+
+        let mut hk: Vec<_> = hp.keys().cloned().collect();
+        let mut dk: Vec<_> = dp.keys().cloned().collect();
+        hk.sort();
+        dk.sort();
+        assert_eq!(dk, hk, "derived inner fields must match hand-rolled");
+
+        // port: Integer with Min+Max bounds, derived from `u16` + range attr
+        assert!(matches!(dp["port"].field_type, FieldType::Integer));
+        assert_eq!(dp["port"].constraints.len(), 2, "port should carry Min+Max");
+
+        // doc comments survive as descriptions
+        assert!(!dp["path"].description.is_empty());
+        // required set: path + port (protocol/label have serde defaults)
+        assert!(dp["path"].required && dp["port"].required);
+        assert!(!dp["protocol"].required && !dp["label"].required);
+
+        // OSCAL subids are preserved at the schema and field level.
+        assert_eq!(
+            derived.subids.get("__schema__"),
+            Some(&"sch.software.plugin.unix-socket.schema@v1".to_string())
+        );
+        assert_eq!(
+            derived.subids.get("sockets"),
+            Some(&"mut.service.unix-socket.bind@v1".to_string())
+        );
+    }
+
+    #[test]
+    fn schema_carries_oscal_subids() {
+        let raw = serde_json::to_value(schemars::schema_for!(UnixSocketState)).unwrap();
+        assert_eq!(
+            raw.get("x-oscal-subid").and_then(|v| v.as_str()),
+            Some("sch.software.plugin.unix-socket.schema@v1")
+        );
+
+        let sockets = raw
+            .get("properties")
+            .and_then(|p| p.get("sockets"))
+            .expect("sockets property");
+        assert_eq!(
+            sockets.get("x-oscal-subid").and_then(|v| v.as_str()),
+            Some("mut.service.unix-socket.bind@v1")
+        );
+
+        let endpoint_def = raw
+            .get("$defs")
+            .or_else(|| raw.get("definitions"))
+            .and_then(|d| d.get("SocketEndpoint"))
+            .expect("SocketEndpoint $def");
+        let props = endpoint_def
+            .get("properties")
+            .expect("SocketEndpoint properties");
+
+        let expected = [
+            ("path", "mut.service.unix-socket.bind-path@v1"),
+            ("port", "mut.service.unix-socket.bind-port@v1"),
+            ("protocol", "mut.service.unix-socket.bind-protocol@v1"),
+            ("label", "mut.service.unix-socket.bind-label@v1"),
+        ];
+        for (field, subid) in expected {
+            let actual = props
+                .get(field)
+                .and_then(|f| f.get("x-oscal-subid"))
+                .and_then(|v| v.as_str());
+            assert_eq!(actual, Some(subid), "subid mismatch for {field}");
+        }
+    }
+
     #[test]
     fn should_bind_and_unbind_declared_sockets() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -311,6 +444,11 @@ mod tests {
     }
 }
 
+/// Frozen golden reference: the original hand-rolled schema, kept **test-only**
+/// so `derived_schema_matches_hand_rolled` can prove the derived schema still
+/// matches the contract this plugin shipped with. Production uses
+/// [`unix_socket_schema_derived`].
+#[cfg(test)]
 pub(crate) fn unix_socket_schema() -> PluginSchema {
     let mut socket_fields = HashMap::new();
     socket_fields.insert(
@@ -362,7 +500,7 @@ pub(crate) fn unix_socket_schema() -> PluginSchema {
             field_type: FieldType::String,
             required: false,
             description: "Human-readable service label used as the xray outbound tag".to_string(),
-            default: None,
+            default: Some(json!("")),
             example: Some(json!("qdrant-grpc")),
             constraints: Vec::new(),
             read_only: false,
@@ -373,12 +511,14 @@ pub(crate) fn unix_socket_schema() -> PluginSchema {
     PluginSchema::builder("unix_socket")
         .version("1.0.0")
         .description("Unix domain socket endpoints proxied into xray outbounds")
+        .subid("__schema__", "sch.software.plugin.unix-socket.schema@v1")
         .array_field(
             "sockets",
             FieldType::Object(socket_fields),
             true,
             "Declared unix socket endpoints",
         )
+        .subid("sockets", "mut.service.unix-socket.bind@v1")
         .example(json!({
             "sockets": [
                 {

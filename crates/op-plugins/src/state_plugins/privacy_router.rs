@@ -1259,6 +1259,7 @@ mod tests {
                 profiles: Vec::new(),
                 config: None,
                 devices: None,
+                ..Default::default()
             },
             IncusInstance {
                 name: "privacy-xray-egress".to_string(),
@@ -1269,6 +1270,7 @@ mod tests {
                 profiles: Vec::new(),
                 config: None,
                 devices: None,
+                ..Default::default()
             },
         ];
 
