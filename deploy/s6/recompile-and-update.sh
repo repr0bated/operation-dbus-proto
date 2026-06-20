@@ -1,18 +1,45 @@
 #!/bin/sh
-# 🟢 🛷 Safely commit and activate the canonical Artix s6 service set.
+# 🟢 🛷 Safely build, commit and activate the canonical Artix s6 service set.
 #
 # The s6 frontend generates the boot bundle during `s6 set commit`. Compiling
 # /etc/s6/sv directly bypasses that step and can produce a database without the
 # `default` runlevel, which makes the next boot fail in rc.init.
 set -eu
 
+PROJECT_ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 S6_COMPILED_LINK=${S6_COMPILED_LINK:-/etc/s6/rc/compiled}
 DEFAULT_BUNDLE=${DEFAULT_BUNDLE:-default}
+
+# Build the Rust workspace as the unprivileged user who owns the source tree,
+# then install every binary target to /usr/local/bin. This keeps the cargo
+# cache and target directory owned by the developer while allowing the final
+# install and s6 activation to run as root.
+BUILD_USER=${BUILD_USER:-$(logname 2>/dev/null || printf '%s' "${SUDO_USER:-$USER}")}
+
+build_workspace() {
+    echo "Building workspace binaries as $BUILD_USER..."
+    cd "$PROJECT_ROOT"
+    sudo -u "$BUILD_USER" cargo build --workspace --release
+}
+
+install_binaries() {
+    echo "Installing built binaries to /usr/local/bin..."
+    cd "$PROJECT_ROOT"
+    find target/release -maxdepth 1 -type f -executable -print0 |
+        while IFS= read -r -d '' bin; do
+            install -Dm755 "$bin" "/usr/local/bin/$(basename "$bin")"
+        done
+}
 
 if ! command -v s6 >/dev/null 2>&1 || ! command -v s6-rc-db >/dev/null 2>&1; then
     echo "s6 frontend or s6-rc-db not found" >&2
     exit 127
 fi
+
+if [ "${SKIP_BUILD:-}" != "1" ]; then
+    build_workspace
+fi
+install_binaries
 
 old_db="$(readlink -f "$S6_COMPILED_LINK" 2>/dev/null || true)"
 
