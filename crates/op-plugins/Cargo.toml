@@ -7,6 +7,8 @@ license.workspace = true
 description = "Plugin system with state management, domain plugins, and blockchain footprints"
 
 [dependencies]
+# PROTOTYPE: derive plugin schemas from structs (see state_plugins/schemars_adapter.rs)
+schemars = "1"
 op-core = { path = "../op-core" }
 op-dbus-model = { workspace = true }
 op-state = { path = "../op-state" }
@@ -29,6 +31,7 @@ zbus = { workspace = true }
 chrono = { workspace = true }
 log = { workspace = true }
 reqwest = { workspace = true }
+regex = { workspace = true }
 sha2 = { workspace = true }
 md5 = { workspace = true }
 uuid = { workspace = true }

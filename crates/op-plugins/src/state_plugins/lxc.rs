@@ -12,7 +12,9 @@ use op_state::plugtree::PlugTree;
 use op_state::{
     ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
 };
-use op_state_store::{Constraint, FieldSchema, FieldType, PluginSchema, ReadOnlyCondition};
+use op_state_store::PluginSchema;
+#[cfg(test)]
+use op_state_store::{Constraint, FieldSchema, FieldType};
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
@@ -20,20 +22,77 @@ use std::collections::HashMap;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+fn default_bridge() -> String {
+    "ovs-br0".to_string()
+}
+
+fn default_false() -> Option<bool> {
+    Some(false)
+}
+
+fn default_properties() -> Option<HashMap<String, Value>> {
+    Some(HashMap::new())
+}
+
+/// Runtime state of the LXC plugin.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "sch.software.plugin.lxc.schema@v1"))]
 pub struct LxcState {
+    /// List of LXC containers.
+    #[schemars(
+        description = "List of LXC containers",
+        extend("x-oscal-subid" = "exp.service.lxc.containers.render@v1")
+    )]
     pub containers: Vec<ContainerInfo>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// Information about a single LXC container.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "sch.software.lxc.container-info.schema@v1"))]
 pub struct ContainerInfo {
+    /// Container VMID.
+    #[schemars(
+        description = "Container VMID",
+        pattern(r"^\d+$"),
+        example = &"100",
+        extend("readOnly" = true),
+        extend("x-oscal-subid" = "obs.hardware.lxc.container-id@v1")
+    )]
     pub id: String,
+    /// Veth interface name.
+    #[serde(default)]
+    #[schemars(
+        description = "Veth interface name",
+        example = &"vi100",
+        extend("x-oscal-subid" = "obs.network.lxc.veth-interface@v1")
+    )]
     pub veth: String,
+    /// OVS bridge name.
+    #[serde(default = "default_bridge")]
+    #[schemars(
+        description = "OVS bridge name",
+        default = "default_bridge",
+        example = &"ovs-br0",
+        extend("x-oscal-subid" = "obs.network.lxc.bridge@v1")
+    )]
     pub bridge: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Whether container is running.
+    #[serde(default = "default_false")]
+    #[schemars(
+        description = "Whether container is running",
+        default = "default_false",
+        extend("x-oscal-subid" = "obs.service.lxc.running-status@v1")
+    )]
     pub running: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub properties: Option<HashMap<String, Value>>, // extensible (includes network_type, template, etc.)
+    /// Container properties (hostname, memory, cores, etc.).
+    #[serde(default = "default_properties")]
+    #[schemars(
+        description = "Container properties (hostname, memory, cores, etc.)",
+        default = "default_properties",
+        with = "serde_json::Value",
+        extend("x-oscal-subid" = "exp.service.lxc.properties.render@v1")
+    )]
+    pub properties: Option<HashMap<String, Value>>,
 }
 
 pub struct LxcPlugin;
@@ -951,111 +1010,7 @@ impl StatePlugin for LxcPlugin {
     }
 
     fn schema(&self) -> Option<PluginSchema> {
-        let mut container_fields = HashMap::new();
-        container_fields.insert(
-            "id".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: true,
-                description: "Container VMID".to_string(),
-                default: None,
-                example: Some(json!("100")),
-                constraints: vec![Constraint::Pattern {
-                    regex: r"^\d+$".to_string(),
-                }],
-                read_only: true,
-                read_only_when: None,
-            },
-        );
-        container_fields.insert(
-            "veth".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: false,
-                description: "Veth interface name".to_string(),
-                default: None,
-                example: Some(json!("vi100")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: Some(ReadOnlyCondition {
-                    property: "running".to_string(),
-                    value: "true".to_string(),
-                }),
-            },
-        );
-        container_fields.insert(
-            "bridge".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: false,
-                description: "OVS bridge name".to_string(),
-                default: Some(json!("ovs-br0")),
-                example: Some(json!("ovs-br0")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        container_fields.insert(
-            "running".to_string(),
-            FieldSchema {
-                field_type: FieldType::Boolean,
-                required: false,
-                description: "Whether container is running".to_string(),
-                default: Some(json!(false)),
-                example: Some(json!(true)),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        container_fields.insert(
-            "properties".to_string(),
-            FieldSchema {
-                field_type: FieldType::Any,
-                required: false,
-                description: "Container properties (hostname, memory, cores, etc.)".to_string(),
-                default: Some(json!({})),
-                example: Some(json!({
-                    "hostname": "my-container",
-                    "memory": 512,
-                    "cores": 2,
-                    "template": "local:vztmpl/debian-13.tar.zst"
-                })),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-
-        Some(
-            PluginSchema::builder("lxc")
-                .version("2.0.0")
-                .description("LXC container management via native Proxmox API")
-                .array_field(
-                    "containers",
-                    FieldType::Object(container_fields),
-                    true,
-                    "List of containers",
-                )
-                .example(json!({
-                    "containers": [
-                        {
-                            "id": "100",
-                            "veth": "vi100",
-                            "bridge": "ovs-br0",
-                            "running": true,
-                            "properties": {
-                                "hostname": "wireguard-gateway",
-                                "memory": 512,
-                                "cores": 1,
-                                "network_type": "bridge"
-                            }
-                        }
-                    ]
-                }))
-                .build(),
-        )
+        Some(lxc_schema())
     }
 
     fn is_available(&self) -> bool {
@@ -1296,6 +1251,159 @@ impl StatePlugin for LxcPlugin {
             supports_checkpoints: false,
             supports_verification: false,
             atomic_operations: false,
+        }
+    }
+}
+
+/// LXC schema derived from the typed [`LxcState`] struct via schemars.
+pub(crate) fn lxc_schema() -> PluginSchema {
+    let root = serde_json::to_value(schemars::schema_for!(LxcState))
+        .expect("schemars schema serializes to JSON");
+    super::schemars_adapter::plugin_schema_from_json(
+        "lxc",
+        "2.0.0",
+        "LXC container management via native Proxmox API",
+        &root,
+    )
+}
+
+/// Hand-rolled golden reference for the LXC schema. Kept test-only so the
+/// derived schema can be proven field-for-field equivalent to the original
+/// hand-rolled contract.
+#[cfg(test)]
+pub(crate) fn lxc_schema_golden() -> PluginSchema {
+    let mut container_fields = HashMap::new();
+    container_fields.insert(
+        "id".to_string(),
+        FieldSchema {
+            field_type: FieldType::String,
+            required: true,
+            description: "Container VMID".to_string(),
+            default: None,
+            example: Some(json!("100")),
+            constraints: vec![Constraint::Pattern {
+                regex: r"^\d+$".to_string(),
+            }],
+            read_only: true,
+            read_only_when: None,
+        },
+    );
+    container_fields.insert(
+        "veth".to_string(),
+        FieldSchema {
+            field_type: FieldType::String,
+            required: false,
+            description: "Veth interface name".to_string(),
+            default: Some(json!("")),
+            example: Some(json!("vi100")),
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        },
+    );
+    container_fields.insert(
+        "bridge".to_string(),
+        FieldSchema {
+            field_type: FieldType::String,
+            required: false,
+            description: "OVS bridge name".to_string(),
+            default: Some(json!("ovs-br0")),
+            example: Some(json!("ovs-br0")),
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        },
+    );
+    container_fields.insert(
+        "running".to_string(),
+        FieldSchema {
+            field_type: FieldType::Boolean,
+            required: false,
+            description: "Whether container is running".to_string(),
+            default: Some(json!(false)),
+            example: None,
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        },
+    );
+    container_fields.insert(
+        "properties".to_string(),
+        FieldSchema {
+            field_type: FieldType::Any,
+            required: false,
+            description: "Container properties (hostname, memory, cores, etc.)".to_string(),
+            default: Some(json!({})),
+            example: None,
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        },
+    );
+
+    let mut schema = PluginSchema::builder("lxc")
+        .version("2.0.0")
+        .description("LXC container management via native Proxmox API")
+        .array_field(
+            "containers",
+            FieldType::Object(container_fields),
+            true,
+            "List of LXC containers",
+        )
+        .build();
+    schema.subids = HashMap::from([
+        (
+            "__schema__".to_string(),
+            "sch.software.plugin.lxc.schema@v1".to_string(),
+        ),
+        (
+            "containers".to_string(),
+            "exp.service.lxc.containers.render@v1".to_string(),
+        ),
+    ]);
+    schema
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state_plugins::common::oscal::validate_subid;
+    use crate::state_plugins::schemars_adapter::schema_diffs;
+    use serde_json::Value as JVal;
+
+    fn collect_subids(value: &JVal, out: &mut Vec<String>) {
+        if let Some(obj) = value.as_object() {
+            if let Some(JVal::String(subid)) = obj.get("x-oscal-subid") {
+                out.push(subid.clone());
+            }
+            for v in obj.values() {
+                collect_subids(v, out);
+            }
+        }
+        if let Some(arr) = value.as_array() {
+            for v in arr {
+                collect_subids(v, out);
+            }
+        }
+    }
+
+    #[test]
+    fn derived_schema_matches_hand_rolled() {
+        let hand = lxc_schema_golden();
+        let derived = lxc_schema();
+        let diffs = schema_diffs(&hand, &derived);
+        assert!(diffs.is_empty(), "schema_diffs: {:#?}", diffs);
+    }
+
+    #[test]
+    fn all_subids_are_valid() {
+        let root = serde_json::to_value(schemars::schema_for!(LxcState))
+            .expect("schemars schema serializes to JSON");
+        let mut subids = Vec::new();
+        collect_subids(&root, &mut subids);
+        assert!(!subids.is_empty(), "expected at least one subid");
+        for subid in subids {
+            assert!(validate_subid(&subid).is_ok(), "invalid subid: {subid}");
         }
     }
 }

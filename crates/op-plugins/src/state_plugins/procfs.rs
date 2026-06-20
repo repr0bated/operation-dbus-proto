@@ -9,10 +9,123 @@ use async_trait::async_trait;
 use op_state::{
     ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
 };
-use op_state_store::{FieldSchema, FieldType, PluginSchema};
-use simd_json::OwnedValue as Value;
+use op_state_store::PluginSchema;
+#[cfg(test)]
+use op_state_store::{FieldSchema, FieldType};
+use serde::{Deserialize, Serialize};
+use simd_json::{json, OwnedValue as Value};
 use std::path::Path;
 use tokio::fs;
+
+/// Runtime procfs state, derived from `/proc` files.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(
+    extend("x-oscal-subid" = "sch.software.plugin.procfs.schema@v1"),
+    extend("x-immutable-paths" = [
+        "/memory",
+        "/loadavg",
+        "/uptime",
+        "/cpuinfo",
+        "/stat",
+        "/net_dev",
+        "/mounts",
+        "/kernel",
+        "/vmstat",
+        "/diskstats"
+    ])
+)]
+pub struct ProcfsState {
+    /// Parsed /proc/meminfo values.
+    #[serde(default)]
+    #[schemars(
+        description = "Parsed /proc/meminfo values.",
+        with = "serde_json::Value",
+        extend("readOnly" = true),
+        extend("x-oscal-subid" = "obs.service.procfs.memory.query@v1")
+    )]
+    pub memory: Value,
+    /// Parsed /proc/loadavg values.
+    #[serde(default)]
+    #[schemars(
+        description = "Parsed /proc/loadavg values.",
+        with = "serde_json::Value",
+        extend("readOnly" = true),
+        extend("x-oscal-subid" = "obs.service.procfs.loadavg.query@v1")
+    )]
+    pub loadavg: Value,
+    /// Parsed /proc/uptime values.
+    #[serde(default)]
+    #[schemars(
+        description = "Parsed /proc/uptime values.",
+        with = "serde_json::Value",
+        extend("readOnly" = true),
+        extend("x-oscal-subid" = "obs.service.procfs.uptime.query@v1")
+    )]
+    pub uptime: Value,
+    /// Parsed CPU inventory from /proc/cpuinfo.
+    #[serde(default)]
+    #[schemars(
+        description = "Parsed CPU inventory from /proc/cpuinfo.",
+        with = "serde_json::Value",
+        extend("readOnly" = true),
+        extend("x-oscal-subid" = "obs.service.procfs.cpuinfo.query@v1")
+    )]
+    pub cpuinfo: Value,
+    /// Parsed /proc/stat values.
+    #[serde(default)]
+    #[schemars(
+        description = "Parsed /proc/stat values.",
+        with = "serde_json::Value",
+        extend("readOnly" = true),
+        extend("x-oscal-subid" = "obs.service.procfs.stat.query@v1")
+    )]
+    pub stat: Value,
+    /// Parsed /proc/net/dev counters.
+    #[serde(default)]
+    #[schemars(
+        description = "Parsed /proc/net/dev counters.",
+        with = "serde_json::Value",
+        extend("readOnly" = true),
+        extend("x-oscal-subid" = "obs.service.procfs.net-dev.query@v1")
+    )]
+    pub net_dev: Value,
+    /// Parsed /proc/mounts entries.
+    #[serde(default)]
+    #[schemars(
+        description = "Parsed /proc/mounts entries.",
+        with = "serde_json::Value",
+        extend("readOnly" = true),
+        extend("x-oscal-subid" = "obs.service.procfs.mounts.query@v1")
+    )]
+    pub mounts: Value,
+    /// Kernel version from /proc/version.
+    #[serde(default)]
+    #[schemars(
+        description = "Kernel version from /proc/version.",
+        with = "serde_json::Value",
+        extend("readOnly" = true),
+        extend("x-oscal-subid" = "obs.service.procfs.kernel.query@v1")
+    )]
+    pub kernel: Value,
+    /// Parsed /proc/vmstat values.
+    #[serde(default)]
+    #[schemars(
+        description = "Parsed /proc/vmstat values.",
+        with = "serde_json::Value",
+        extend("readOnly" = true),
+        extend("x-oscal-subid" = "obs.service.procfs.vmstat.query@v1")
+    )]
+    pub vmstat: Value,
+    /// Parsed /proc/diskstats rows.
+    #[serde(default)]
+    #[schemars(
+        description = "Parsed /proc/diskstats rows.",
+        with = "serde_json::Value",
+        extend("readOnly" = true),
+        extend("x-oscal-subid" = "obs.service.procfs.diskstats.query@v1")
+    )]
+    pub diskstats: Value,
+}
 
 pub struct ProcfsPlugin;
 
@@ -51,7 +164,9 @@ impl StatePlugin for ProcfsPlugin {
     }
 
     async fn query_current_state(&self) -> Result<Value> {
-        Ok(gather_procfs_state().await)
+        Ok(simd_json::serde::to_owned_value(
+            gather_procfs_state().await,
+        )?)
     }
 
     async fn calculate_diff(&self, current: &Value, desired: &Value) -> Result<StateDiff> {
@@ -105,7 +220,23 @@ impl StatePlugin for ProcfsPlugin {
     }
 }
 
-fn procfs_schema() -> PluginSchema {
+/// Procfs schema derived from the typed [`ProcfsState`] struct via schemars.
+pub(crate) fn procfs_schema() -> PluginSchema {
+    let root = serde_json::to_value(schemars::schema_for!(ProcfsState))
+        .expect("schemars schema serializes to JSON");
+    super::schemars_adapter::plugin_schema_from_json(
+        "procfs",
+        "1.0.0",
+        "Read-only procfs host state projected through PluginSchema.",
+        &root,
+    )
+}
+
+/// Hand-rolled golden reference for the procfs schema. Kept test-only so the
+/// derived schema can be proven field-for-field equivalent to the original
+/// hand-rolled contract.
+#[cfg(test)]
+pub(crate) fn procfs_schema_golden() -> PluginSchema {
     PluginSchema::builder("procfs")
         .version("1.0.0")
         .category("host")
@@ -136,15 +267,27 @@ fn procfs_schema() -> PluginSchema {
             "/diskstats",
         ])
         .tag("read_only")
+        .subid("__schema__", "sch.software.plugin.procfs.schema@v1")
+        .subid("memory", "obs.service.procfs.memory.query@v1")
+        .subid("loadavg", "obs.service.procfs.loadavg.query@v1")
+        .subid("uptime", "obs.service.procfs.uptime.query@v1")
+        .subid("cpuinfo", "obs.service.procfs.cpuinfo.query@v1")
+        .subid("stat", "obs.service.procfs.stat.query@v1")
+        .subid("net_dev", "obs.service.procfs.net-dev.query@v1")
+        .subid("mounts", "obs.service.procfs.mounts.query@v1")
+        .subid("kernel", "obs.service.procfs.kernel.query@v1")
+        .subid("vmstat", "obs.service.procfs.vmstat.query@v1")
+        .subid("diskstats", "obs.service.procfs.diskstats.query@v1")
         .build()
 }
 
+#[cfg(test)]
 fn readonly_any(description: &str) -> FieldSchema {
     FieldSchema {
         field_type: FieldType::Any,
         required: false,
         description: description.to_string(),
-        default: None,
+        default: Some(json!(null)),
         example: None,
         constraints: Vec::new(),
         read_only: true,
@@ -152,7 +295,7 @@ fn readonly_any(description: &str) -> FieldSchema {
     }
 }
 
-async fn gather_procfs_state() -> Value {
+async fn gather_procfs_state() -> ProcfsState {
     let (memory, loadavg, uptime, cpuinfo, stat, net_dev, mounts, kernel, vmstat, diskstats) = tokio::join!(
         gather_memory(),
         gather_loadavg(),
@@ -166,18 +309,18 @@ async fn gather_procfs_state() -> Value {
         gather_diskstats(),
     );
 
-    let mut map = simd_json::owned::Object::new();
-    map.insert("memory".into(), memory);
-    map.insert("loadavg".into(), loadavg);
-    map.insert("uptime".into(), uptime);
-    map.insert("cpuinfo".into(), cpuinfo);
-    map.insert("stat".into(), stat);
-    map.insert("net_dev".into(), net_dev);
-    map.insert("mounts".into(), mounts);
-    map.insert("kernel".into(), kernel);
-    map.insert("vmstat".into(), vmstat);
-    map.insert("diskstats".into(), diskstats);
-    Value::Object(Box::new(map))
+    ProcfsState {
+        memory,
+        loadavg,
+        uptime,
+        cpuinfo,
+        stat,
+        net_dev,
+        mounts,
+        kernel,
+        vmstat,
+        diskstats,
+    }
 }
 
 async fn read_proc(path: &str) -> String {
@@ -369,4 +512,48 @@ async fn gather_diskstats() -> Value {
         .map(|line| Value::from(line.to_string()))
         .collect::<Vec<_>>();
     Value::Array(rows)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state_plugins::common::oscal::validate_subid;
+    use crate::state_plugins::schemars_adapter::schema_diffs;
+    use serde_json::Value as JVal;
+
+    fn collect_subids(value: &JVal, out: &mut Vec<String>) {
+        if let Some(obj) = value.as_object() {
+            if let Some(JVal::String(subid)) = obj.get("x-oscal-subid") {
+                out.push(subid.clone());
+            }
+            for v in obj.values() {
+                collect_subids(v, out);
+            }
+        }
+        if let Some(arr) = value.as_array() {
+            for v in arr {
+                collect_subids(v, out);
+            }
+        }
+    }
+
+    #[test]
+    fn derived_schema_matches_hand_rolled() {
+        let hand = procfs_schema_golden();
+        let derived = procfs_schema();
+        let diffs = schema_diffs(&hand, &derived);
+        assert!(diffs.is_empty(), "schema_diffs: {:#?}", diffs);
+    }
+
+    #[test]
+    fn all_subids_are_valid() {
+        let root = serde_json::to_value(schemars::schema_for!(ProcfsState))
+            .expect("schemars schema serializes to JSON");
+        let mut subids = Vec::new();
+        collect_subids(&root, &mut subids);
+        assert!(!subids.is_empty(), "expected at least one subid");
+        for subid in subids {
+            assert!(validate_subid(&subid).is_ok(), "invalid subid: {subid}");
+        }
+    }
 }

@@ -2,6 +2,7 @@
 //!
 //! These plugins implement the StatePlugin trait from op-state
 
+pub mod common;
 pub mod dnsresolver;
 pub mod full_system;
 pub mod keyring;
@@ -18,6 +19,7 @@ pub mod openflow_obfuscation;
 pub mod oscal_subid_registry;
 pub mod packagekit;
 pub mod pcidecl;
+pub mod schemars_adapter;
 // pub mod privacy;
 pub mod adc;
 pub mod config;

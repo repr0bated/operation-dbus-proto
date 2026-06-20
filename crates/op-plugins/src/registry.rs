@@ -92,7 +92,7 @@ impl PluginRegistry {
                 let document = CatalogDocument {
                     schema: schema.clone(),
                     dbus_path: dbus_path.clone(),
-                    service_name: "org.opdbus.v1".to_string(),
+                    service_name: crate::canonical::BASE_SERVICE_NAME.to_string(),
                     storage_path: storage_path.to_string_lossy().into_owned(),
                     source: "plugin".to_string(),
                 };
@@ -164,7 +164,7 @@ impl PluginRegistry {
     }
 
     fn plugin_dbus_path(name: &str) -> String {
-        format!("/opdbus/v1/plugins/{}", Self::sanitize_path_segment(name))
+        crate::canonical::plugin_path(name)
     }
 
     fn sanitize_path_segment(segment: &str) -> String {
@@ -188,5 +188,18 @@ impl PluginRegistry {
 impl Default for PluginRegistry {
     fn default() -> Self {
         Self::new("/var/lib/op-dbus/plugins")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PluginRegistry;
+
+    #[test]
+    fn should_generate_only_canonical_plugin_paths() {
+        assert_eq!(
+            PluginRegistry::plugin_dbus_path("cognitive-mcp"),
+            "/org/opdbus/v1/plugins/cognitive_mcp"
+        );
     }
 }

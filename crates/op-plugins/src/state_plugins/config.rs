@@ -5,10 +5,33 @@ use op_state::{
 };
 use op_state_store::{FieldSchema, FieldType, PluginSchema};
 use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
 use simd_json::json;
 use simd_json::OwnedValue as Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
+
+/// Schema-only view of the `config` plugin. The runtime store uses a typed
+/// `HashMap<String, Value>`; the published schema preserves the original opaque
+/// `configs` value so the contract stays unchanged.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "sch.software.plugin.config.schema@v1"))]
+pub struct ConfigSchemaState {
+    #[schemars(
+        description = "Configuration map",
+        example = example_configs(),
+        extend("default" = serde_json::json!({}), "x-oscal-subid" = "mut.software.plugin.config.configs@v1")
+    )]
+    pub configs: JsonValue,
+}
+
+fn example_configs() -> JsonValue {
+    serde_json::json!({
+        "anna_scribe": {
+            "snowball_path": "/var/lib/op-dbus/snowball"
+        }
+    })
+}
 
 const DEFAULT_CONFIG_STORE_PATH: &str = "/etc/op-dbus/config-store.json";
 
@@ -63,10 +86,24 @@ impl ConfigPlugin {
     }
 }
 
-fn config_plugin_schema() -> PluginSchema {
+pub(crate) fn config_plugin_schema() -> PluginSchema {
+    let root = serde_json::to_value(schemars::schema_for!(ConfigSchemaState))
+        .expect("schemars schema serializes to JSON");
+    super::schemars_adapter::plugin_schema_from_json(
+        "config",
+        "1.0.0",
+        "Global key/value config store",
+        &root,
+    )
+}
+
+/// Frozen golden reference for the `config` schema.
+#[cfg(test)]
+pub(crate) fn config_plugin_schema_golden() -> PluginSchema {
     PluginSchema::builder("config")
         .version("1.0.0")
         .description("Global key/value config store")
+        .subid("__schema__", "sch.software.plugin.config.schema@v1")
         .field(
             "configs",
             FieldSchema {
@@ -84,6 +121,7 @@ fn config_plugin_schema() -> PluginSchema {
                 read_only_when: None,
             },
         )
+        .subid("configs", "mut.software.plugin.config.configs@v1")
         .build()
 }
 
@@ -98,7 +136,9 @@ impl StatePlugin for ConfigPlugin {
     }
 
     fn schema(&self) -> Option<op_state_store::PluginSchema> {
-        Some(config_plugin_schema())
+        let mut schema = config_plugin_schema();
+        super::common::oscal::ensure_category_metadata_fields(&mut schema);
+        Some(schema)
     }
 
     async fn query_current_state(&self) -> Result<Value> {
@@ -215,6 +255,7 @@ impl StatePlugin for ConfigPlugin {
 }
 
 #[cfg(test)]
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -228,5 +269,43 @@ mod tests {
         assert_eq!(schema.description, "Global key/value config store");
         assert!(matches!(field.field_type, FieldType::Any));
         assert_eq!(field.default, Some(json!({})));
+    }
+
+    #[test]
+    fn derived_schema_matches_hand_rolled() {
+        let diffs = crate::state_plugins::schemars_adapter::schema_diffs(
+            &config_plugin_schema_golden(),
+            &config_plugin_schema(),
+        );
+        assert!(diffs.is_empty(), "schema drift: {:#?}", diffs);
+    }
+
+    #[test]
+    fn all_subids_are_valid() {
+        let raw = serde_json::to_value(schemars::schema_for!(ConfigSchemaState)).unwrap();
+        let mut subids = Vec::new();
+        collect_subids(&raw, &mut subids);
+        for subid in subids {
+            assert!(
+                crate::state_plugins::common::oscal::validate_subid(&subid).is_ok(),
+                "invalid subid: {subid}"
+            );
+        }
+    }
+
+    fn collect_subids(value: &serde_json::Value, out: &mut Vec<String>) {
+        if let Some(obj) = value.as_object() {
+            if let Some(subid) = obj.get("x-oscal-subid").and_then(|v| v.as_str()) {
+                out.push(subid.to_string());
+            }
+            for v in obj.values() {
+                collect_subids(v, out);
+            }
+        }
+        if let Some(arr) = value.as_array() {
+            for v in arr {
+                collect_subids(v, out);
+            }
+        }
     }
 }

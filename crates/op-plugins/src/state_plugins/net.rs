@@ -10,76 +10,127 @@ use log;
 use op_state::{ApplyResult, Checkpoint, PluginCapabilities, StateAction, StateDiff, StatePlugin};
 use op_state_store::{FieldSchema, FieldType, PluginSchema};
 use serde::{Deserialize, Serialize};
+use serde_json;
 use simd_json::{json, prelude::*, OwnedValue as Value};
 use std::collections::HashMap;
 // use std::net::Ipv4Addr; // not needed currently
 
-/// Network configuration schema
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Network interface management via rtnetlink.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "sch.software.plugin.net.schema@v1"))]
 pub struct NetworkConfig {
+    /// List of network interfaces.
+    #[serde(default)]
+    #[schemars(
+        description = "List of network interfaces",
+        extend("x-oscal-subid" = "exp.service.net.interfaces.render@v1")
+    )]
     pub interfaces: Vec<InterfaceConfig>,
 }
 
-/// Interface configuration with immutable identity and tunable config
-/// Pattern matches LXC plugin: immutable core + tunable properties
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Interface configuration with immutable identity and tunable config.
+/// Pattern matches LXC plugin: immutable core + tunable properties.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct InterfaceConfig {
-    // IMMUTABLE - Core identity (set once, never changes)
-    /// Interface name (e.g., "ovsbr0", "mesh")
+    /// Interface name (e.g., "ovsbr0", "mesh").
+    #[schemars(
+        description = "Interface name",
+        example = &"eth0",
+        extend("readOnly" = true),
+        extend("x-oscal-subid" = "exp.service.net.interface.name.declare@v1")
+    )]
     pub name: String,
 
-    /// Interface type (e.g., "ovs-bridge", "ethernet")
+    /// Interface type (e.g., "ovs-bridge", "ethernet").
     #[serde(rename = "type")]
+    #[schemars(
+        description = "Interface type",
+        example = &"ethernet",
+        extend("readOnly" = true),
+        extend("x-oscal-subid" = "exp.service.net.interface.type.declare@v1")
+    )]
     pub if_type: InterfaceType,
 
-    /// L2 driver to use (e.g., "openvswitch", "linux-bridge")
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// L2 driver to use (e.g., "openvswitch", "linux-bridge").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "L2 driver to use",
+        extend("x-oscal-subid" = "exp.service.net.interface.driver.declare@v1")
+    )]
     pub driver: Option<String>,
 
-    // TUNABLE - Configuration that can change (blockchain tracks all changes)
-    /// All tunable configuration in a single object
+    /// All tunable configuration in a single object.
     #[serde(flatten)]
     pub tunable: TunableConfig,
 }
 
-/// Tunable configuration - can be changed, each change tracked in blockchain
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Tunable configuration - can be changed, each change tracked in blockchain.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
 pub struct TunableConfig {
-    /// Ports attached to this interface
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Ports attached to this interface.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Ports attached to this interface",
+        extend("x-oscal-subid" = "exp.service.net.interface.ports.declare@v1")
+    )]
     pub ports: Option<Vec<String>>,
 
-    /// L3 driver for IP configuration (e.g., "rtnetlink", "ovs-rpc", "systemd-networkd")
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// L3 driver for IP configuration (e.g., "rtnetlink", "ovs-rpc", "systemd-networkd").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "L3 driver for IP configuration",
+        extend("x-oscal-subid" = "exp.service.net.interface.l3-driver.declare@v1")
+    )]
     pub l3_driver: Option<String>,
 
-    /// IPv4 configuration
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// IPv4 configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "IPv4 configuration",
+        extend("x-oscal-subid" = "exp.service.net.interface.ipv4.configure@v1")
+    )]
     pub ipv4: Option<Ipv4Config>,
 
-    /// IPv6 configuration
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// IPv6 configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "IPv6 configuration",
+        extend("x-oscal-subid" = "exp.service.net.interface.ipv6.configure@v1")
+    )]
     pub ipv6: Option<Ipv6Config>,
 
-    /// SDN controller (for OpenFlow)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// SDN controller (for OpenFlow).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "SDN controller (for OpenFlow)",
+        extend("x-oscal-subid" = "exp.service.net.interface.controller.declare@v1")
+    )]
     pub controller: Option<String>,
 
-    /// Dynamic properties - introspection captures ALL hardware properties here
+    /// Dynamic properties - introspection captures ALL hardware properties here.
     /// Examples: mtu, mac_addresses (array), speed, duplex, txqueuelen, etc.
     ///
-    /// APPEND-ONLY: Field names are permanent once added (by introspection or user)
-    /// Values are mutable (ledger tracks all changes)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// APPEND-ONLY: Field names are permanent once added (by introspection or user).
+    /// Values are mutable (ledger tracks all changes).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        with = "serde_json::Value",
+        description = "Dynamic properties captured by introspection",
+        extend("x-oscal-subid" = "exp.service.net.interface.properties.collect@v1")
+    )]
     pub properties: Option<HashMap<String, Value>>,
 
-    /// Property schema - tracks which fields exist (append-only set)
-    /// Used for validation: new fields can be added, existing fields cannot be removed
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Property schema - tracks which fields exist (append-only set).
+    /// Used for validation: new fields can be added, existing fields cannot be removed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Property schema - tracks which fields exist",
+        extend("x-oscal-subid" = "exp.service.net.interface.property-schema.declare@v1")
+    )]
     pub property_schema: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum InterfaceType {
     Ethernet,
@@ -88,29 +139,80 @@ pub enum InterfaceType {
     Bridge,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
 pub struct Ipv4Config {
+    /// Whether IPv4 is enabled.
+    #[serde(default)]
+    #[schemars(
+        description = "Whether IPv4 is enabled",
+        extend("x-oscal-subid" = "exp.service.net.ipv4.enabled.declare@v1")
+    )]
     pub enabled: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Whether DHCP is enabled for IPv4.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Whether DHCP is enabled for IPv4",
+        extend("x-oscal-subid" = "exp.service.net.ipv4.dhcp.declare@v1")
+    )]
     pub dhcp: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Static IPv4 addresses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Static IPv4 addresses",
+        extend("x-oscal-subid" = "exp.service.net.ipv4.address.declare@v1")
+    )]
     pub address: Option<Vec<AddressConfig>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// IPv4 default gateway.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "IPv4 default gateway",
+        example = &"192.168.1.1",
+        extend("x-oscal-subid" = "exp.service.net.ipv4.gateway.declare@v1")
+    )]
     pub gateway: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// IPv4 DNS servers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "IPv4 DNS servers",
+        example = &["1.1.1.1", "8.8.8.8"],
+        extend("x-oscal-subid" = "exp.service.net.ipv4.dns.declare@v1")
+    )]
     pub dns: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
 pub struct Ipv6Config {
+    /// Whether IPv6 is enabled.
+    #[serde(default)]
+    #[schemars(
+        description = "Whether IPv6 is enabled",
+        extend("x-oscal-subid" = "exp.service.net.ipv6.enabled.declare@v1")
+    )]
     pub enabled: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Whether DHCP is enabled for IPv6.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Whether DHCP is enabled for IPv6",
+        extend("x-oscal-subid" = "exp.service.net.ipv6.dhcp.declare@v1")
+    )]
     pub dhcp: Option<bool>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AddressConfig {
+    /// IP address.
+    #[schemars(
+        description = "IP address",
+        example = &"192.168.1.100",
+        extend("x-oscal-subid" = "exp.service.net.address.ip.declare@v1")
+    )]
     pub ip: String,
+    /// CIDR prefix length.
+    #[schemars(
+        description = "CIDR prefix length",
+        example = 24,
+        extend("x-oscal-subid" = "exp.service.net.address.prefix.declare@v1")
+    )]
     pub prefix: u8,
 }
 
@@ -872,87 +974,368 @@ impl StatePlugin for NetStatePlugin {
 // }
 
 pub(crate) fn net_schema() -> PluginSchema {
-    let interface_fields = {
-        let mut fields = HashMap::new();
-        fields.insert(
-            "name".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: true,
-                description: "Interface name".to_string(),
-                default: None,
-                example: Some(json!("eth0")),
-                constraints: Vec::new(),
-                read_only: true,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "type".to_string(),
-            FieldSchema {
-                field_type: FieldType::Enum(vec![
-                    "ethernet".to_string(),
-                    "bridge".to_string(),
-                    "veth".to_string(),
-                    "vlan".to_string(),
-                    "bond".to_string(),
-                ]),
-                required: true,
-                description: "Interface type".to_string(),
-                default: Some(json!("ethernet")),
-                example: Some(json!("ethernet")),
-                constraints: Vec::new(),
-                read_only: true,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "state".to_string(),
-            FieldSchema {
-                field_type: FieldType::Enum(vec!["up".to_string(), "down".to_string()]),
-                required: false,
-                description: "Interface state".to_string(),
-                default: Some(json!("up")),
-                example: Some(json!("up")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "addresses".to_string(),
-            FieldSchema {
-                field_type: FieldType::Array(Box::new(FieldType::String)),
-                required: false,
-                description: "IP addresses".to_string(),
-                default: Some(json!([])),
-                example: Some(json!(["192.168.1.100/24"])),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields
-    };
+    let root = serde_json::to_value(schemars::schema_for!(NetworkConfig))
+        .expect("schemars schema serializes to JSON");
+    super::schemars_adapter::plugin_schema_from_json(
+        "net",
+        "1.0.0",
+        "Network interface management via rtnetlink",
+        &root,
+    )
+}
 
-    PluginSchema::builder("net")
+/// Frozen golden reference: the original hand-rolled schema, kept **test-only**
+/// so `derived_schema_matches_hand_rolled` can prove the derived schema still
+/// matches the contract this plugin shipped with. Production uses
+/// [`net_schema`].
+#[cfg(test)]
+pub(crate) fn net_schema_golden() -> PluginSchema {
+    let mut address_fields = HashMap::new();
+    address_fields.insert(
+        "ip".to_string(),
+        FieldSchema {
+            field_type: FieldType::String,
+            required: true,
+            description: "IP address".to_string(),
+            default: None,
+            example: Some(json!("192.168.1.100")),
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        },
+    );
+    address_fields.insert(
+        "prefix".to_string(),
+        FieldSchema {
+            field_type: FieldType::Integer,
+            required: true,
+            description: "CIDR prefix length".to_string(),
+            default: None,
+            example: Some(json!(24)),
+            constraints: vec![
+                op_state_store::Constraint::Min { value: 0.0 },
+                op_state_store::Constraint::Max { value: 255.0 },
+            ],
+            read_only: false,
+            read_only_when: None,
+        },
+    );
+
+    let mut ipv4_fields = HashMap::new();
+    ipv4_fields.insert(
+        "enabled".to_string(),
+        FieldSchema {
+            field_type: FieldType::Boolean,
+            required: false,
+            description: "Whether IPv4 is enabled".to_string(),
+            default: Some(json!(false)),
+            example: None,
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        },
+    );
+    ipv4_fields.insert(
+        "dhcp".to_string(),
+        FieldSchema {
+            field_type: FieldType::Boolean,
+            required: false,
+            description: "Whether DHCP is enabled for IPv4".to_string(),
+            default: None,
+            example: None,
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        },
+    );
+    ipv4_fields.insert(
+        "address".to_string(),
+        FieldSchema {
+            field_type: FieldType::Array(Box::new(FieldType::Object(address_fields.clone()))),
+            required: false,
+            description: "Static IPv4 addresses".to_string(),
+            default: None,
+            example: None,
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        },
+    );
+    ipv4_fields.insert(
+        "gateway".to_string(),
+        FieldSchema {
+            field_type: FieldType::String,
+            required: false,
+            description: "IPv4 default gateway".to_string(),
+            default: None,
+            example: Some(json!("192.168.1.1")),
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        },
+    );
+    ipv4_fields.insert(
+        "dns".to_string(),
+        FieldSchema {
+            field_type: FieldType::Array(Box::new(FieldType::String)),
+            required: false,
+            description: "IPv4 DNS servers".to_string(),
+            default: None,
+            example: Some(json!(["1.1.1.1", "8.8.8.8"])),
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        },
+    );
+
+    let mut ipv6_fields = HashMap::new();
+    ipv6_fields.insert(
+        "enabled".to_string(),
+        FieldSchema {
+            field_type: FieldType::Boolean,
+            required: false,
+            description: "Whether IPv6 is enabled".to_string(),
+            default: Some(json!(false)),
+            example: None,
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        },
+    );
+    ipv6_fields.insert(
+        "dhcp".to_string(),
+        FieldSchema {
+            field_type: FieldType::Boolean,
+            required: false,
+            description: "Whether DHCP is enabled for IPv6".to_string(),
+            default: None,
+            example: None,
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        },
+    );
+
+    let mut interface_fields = HashMap::new();
+    interface_fields.insert(
+        "name".to_string(),
+        FieldSchema {
+            field_type: FieldType::String,
+            required: true,
+            description: "Interface name".to_string(),
+            default: None,
+            example: Some(json!("eth0")),
+            constraints: Vec::new(),
+            read_only: true,
+            read_only_when: None,
+        },
+    );
+    interface_fields.insert(
+        "type".to_string(),
+        FieldSchema {
+            field_type: FieldType::Enum(vec![
+                "ethernet".to_string(),
+                "ovs-bridge".to_string(),
+                "ovs-port".to_string(),
+                "bridge".to_string(),
+            ]),
+            required: true,
+            description: "Interface type".to_string(),
+            default: None,
+            example: Some(json!("ethernet")),
+            constraints: Vec::new(),
+            read_only: true,
+            read_only_when: None,
+        },
+    );
+    interface_fields.insert(
+        "driver".to_string(),
+        FieldSchema {
+            field_type: FieldType::String,
+            required: false,
+            description: "L2 driver to use".to_string(),
+            default: None,
+            example: None,
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        },
+    );
+    interface_fields.insert(
+        "ports".to_string(),
+        FieldSchema {
+            field_type: FieldType::Array(Box::new(FieldType::String)),
+            required: false,
+            description: "Ports attached to this interface".to_string(),
+            default: None,
+            example: None,
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        },
+    );
+    interface_fields.insert(
+        "l3_driver".to_string(),
+        FieldSchema {
+            field_type: FieldType::String,
+            required: false,
+            description: "L3 driver for IP configuration".to_string(),
+            default: None,
+            example: None,
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        },
+    );
+    interface_fields.insert(
+        "ipv4".to_string(),
+        FieldSchema {
+            field_type: FieldType::Object(ipv4_fields),
+            required: false,
+            description: "IPv4 configuration".to_string(),
+            default: None,
+            example: None,
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        },
+    );
+    interface_fields.insert(
+        "ipv6".to_string(),
+        FieldSchema {
+            field_type: FieldType::Object(ipv6_fields),
+            required: false,
+            description: "IPv6 configuration".to_string(),
+            default: None,
+            example: None,
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        },
+    );
+    interface_fields.insert(
+        "controller".to_string(),
+        FieldSchema {
+            field_type: FieldType::String,
+            required: false,
+            description: "SDN controller (for OpenFlow)".to_string(),
+            default: None,
+            example: None,
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        },
+    );
+    interface_fields.insert(
+        "properties".to_string(),
+        FieldSchema {
+            field_type: FieldType::Any,
+            required: false,
+            description: "Dynamic properties captured by introspection".to_string(),
+            default: None,
+            example: None,
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        },
+    );
+    interface_fields.insert(
+        "property_schema".to_string(),
+        FieldSchema {
+            field_type: FieldType::Array(Box::new(FieldType::String)),
+            required: false,
+            description: "Property schema - tracks which fields exist".to_string(),
+            default: None,
+            example: None,
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        },
+    );
+
+    let mut schema = PluginSchema::builder("net")
         .version("1.0.0")
         .description("Network interface management via rtnetlink")
-        .array_field(
+        .field(
             "interfaces",
-            FieldType::Object(interface_fields),
-            true,
-            "List of network interfaces",
+            FieldSchema {
+                field_type: FieldType::Array(Box::new(FieldType::Object(interface_fields))),
+                required: false,
+                description: "List of network interfaces".to_string(),
+                default: Some(json!([])),
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
         )
         .example(json!({
             "interfaces": [
                 {
                     "name": "eth0",
                     "type": "ethernet",
-                    "state": "up",
-                    "addresses": ["192.168.1.100/24"]
+                    "driver": "linux-bridge",
+                    "ipv4": {
+                        "enabled": true,
+                        "dhcp": false,
+                        "address": [{ "ip": "192.168.1.100", "prefix": 24 }],
+                        "gateway": "192.168.1.1",
+                        "dns": ["1.1.1.1", "8.8.8.8"]
+                    }
                 }
             ]
         }))
-        .build()
+        .build();
+    schema.subids.insert(
+        "__schema__".to_string(),
+        "sch.software.plugin.net.schema@v1".to_string(),
+    );
+    schema.subids.insert(
+        "interfaces".to_string(),
+        "exp.service.net.interfaces.render@v1".to_string(),
+    );
+    schema
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The schemars-derived schema must match the hand-rolled golden reference.
+    #[test]
+    fn derived_schema_matches_hand_rolled() {
+        let golden = net_schema_golden();
+        let derived = net_schema();
+        let diffs = crate::state_plugins::schemars_adapter::schema_diffs(&golden, &derived);
+        assert!(diffs.is_empty(), "schema_diffs: {:#?}", diffs);
+    }
+
+    /// Every `x-oscal-subid` annotation in the derived schema must be a valid
+    /// OSCAL subid according to the canonical taxonomy.
+    #[test]
+    fn all_subids_are_valid() {
+        let raw = serde_json::to_value(schemars::schema_for!(NetworkConfig)).unwrap();
+        let mut subids = Vec::new();
+        collect_subids(&raw, &mut subids);
+        assert!(!subids.is_empty(), "expected at least one subid");
+        for subid in subids {
+            crate::state_plugins::common::oscal::validate_subid(&subid)
+                .unwrap_or_else(|e| panic!("invalid subid {subid}: {e}"));
+        }
+    }
+
+    fn collect_subids(value: &serde_json::Value, out: &mut Vec<String>) {
+        if let serde_json::Value::Object(map) = value {
+            if let Some(subid) = map.get("x-oscal-subid").and_then(|v| v.as_str()) {
+                out.push(subid.to_string());
+            }
+            for v in map.values() {
+                collect_subids(v, out);
+            }
+        } else if let serde_json::Value::Array(arr) = value {
+            for v in arr {
+                collect_subids(v, out);
+            }
+        }
+    }
 }

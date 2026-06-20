@@ -1,4 +1,3 @@
-use super::plugin_schema_defs::simple_schema;
 use anyhow::Result;
 use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
@@ -8,8 +7,17 @@ use simd_json::json;
 use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Endpoint declaration state.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "sch.software.plugin.endpoint.schema@v1"))]
 pub struct EndpointState {
+    /// Declared endpoints.
+    #[serde(default)]
+    #[schemars(
+        description = "Declared endpoints",
+        example = &["192.168.1.100:8080"],
+        extend("x-oscal-subid" = "exp.service.endpoint.endpoints.render@v1")
+    )]
     pub endpoints: Vec<String>,
 }
 
@@ -96,23 +104,87 @@ impl StatePlugin for EndpointPlugin {
     }
 }
 
-pub(crate) fn endpoint_schema() -> PluginSchema {
-    simple_schema(
+/// Derived `endpoint` schema from the `EndpointState` struct.
+pub fn endpoint_schema() -> PluginSchema {
+    let root = serde_json::to_value(schemars::schema_for!(EndpointState))
+        .expect("schemars schema serializes to JSON");
+    super::schemars_adapter::plugin_schema_from_json(
         "endpoint",
+        "1.0.0",
         "Endpoint configuration",
-        &["net"],
-        vec![(
+        &root,
+    )
+}
+
+/// Frozen golden reference: the original hand-rolled schema, kept **test-only**
+/// so `derived_schema_matches_hand_rolled` can prove the derived schema still
+/// matches the contract this plugin shipped with. Production uses
+/// [`endpoint_schema`].
+#[cfg(test)]
+pub(crate) fn endpoint_schema_golden() -> PluginSchema {
+    PluginSchema::builder("endpoint")
+        .version("1.0.0")
+        .description("Endpoint configuration")
+        .subid("__schema__", "sch.software.plugin.endpoint.schema@v1")
+        .field(
             "endpoints",
             FieldSchema {
                 field_type: FieldType::Array(Box::new(FieldType::String)),
-                required: true,
+                required: false,
                 description: "Declared endpoints".to_string(),
                 default: Some(json!([])),
-                example: None,
+                example: Some(json!(["192.168.1.100:8080"])),
                 constraints: Vec::new(),
                 read_only: false,
                 read_only_when: None,
             },
-        )],
-    )
+        )
+        .subid("endpoints", "exp.service.endpoint.endpoints.render@v1")
+        .example(json!({
+            "endpoints": ["192.168.1.100:8080"]
+        }))
+        .build()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The schemars-derived schema must match the hand-rolled golden reference.
+    #[test]
+    fn derived_schema_matches_hand_rolled() {
+        let golden = endpoint_schema_golden();
+        let derived = endpoint_schema();
+        let diffs = crate::state_plugins::schemars_adapter::schema_diffs(&golden, &derived);
+        assert!(diffs.is_empty(), "schema_diffs: {:#?}", diffs);
+    }
+
+    /// Every `x-oscal-subid` annotation in the derived schema must be a valid
+    /// OSCAL subid according to the canonical taxonomy.
+    #[test]
+    fn all_subids_are_valid() {
+        let raw = serde_json::to_value(schemars::schema_for!(EndpointState)).unwrap();
+        let mut subids = Vec::new();
+        collect_subids(&raw, &mut subids);
+        assert!(!subids.is_empty(), "expected at least one subid");
+        for subid in subids {
+            crate::state_plugins::common::oscal::validate_subid(&subid)
+                .unwrap_or_else(|e| panic!("invalid subid {subid}: {e}"));
+        }
+    }
+
+    fn collect_subids(value: &serde_json::Value, out: &mut Vec<String>) {
+        if let serde_json::Value::Object(map) = value {
+            if let Some(subid) = map.get("x-oscal-subid").and_then(|v| v.as_str()) {
+                out.push(subid.to_string());
+            }
+            for v in map.values() {
+                collect_subids(v, out);
+            }
+        } else if let serde_json::Value::Array(arr) = value {
+            for v in arr {
+                collect_subids(v, out);
+            }
+        }
+    }
 }

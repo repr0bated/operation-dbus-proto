@@ -7,7 +7,7 @@
 //! - org.freedesktop.DBus.Peer
 //!
 //! This plugin follows the canonical path convention:
-//! - D-Bus Path: /org/opdbus/v1/plugin/plugins/freedesktop
+//! - D-Bus Path: /org/opdbus/v1/plugins/freedesktop
 //! - Interface: org.opdbus.v1.Plugin.Plugins.FreeDesktop
 //! - Schema: schemas/plugin/freedesktop.json
 //!
@@ -20,10 +20,11 @@
 //! ## Canonical Path Compliance
 //!
 //! This plugin uses the canonical paths as defined in `crate::canonical`:
-//! - Object path prefix: `/org/opdbus/v1/plugin/plugins/`
+//! - Object path prefix: `/org/opdbus/v1/plugins/`
 //! - Interface prefix: `org.opdbus.v1.Plugin.Plugins`
 //!
-//! Legacy paths like `/opdbus/v1/plugins/` are NOT supported.
+//! Legacy paths like `/opdbus/v1/plugins/` or `/org/opdbus/v1/plugin/plugins/`
+//! are normalized to the canonical prefix by `crate::canonical::normalize_plugin_path`.
 
 use crate::canonical;
 use anyhow::Result;
@@ -417,13 +418,10 @@ mod tests {
         let plugin = FreeDesktopPlugin::new();
 
         // Verify canonical paths
-        assert_eq!(
-            plugin.dbus_path(),
-            "/org/opdbus/v1/plugin/plugins/freedesktop"
-        );
+        assert_eq!(plugin.dbus_path(), "/org/opdbus/v1/plugins/freedesktop");
         assert_eq!(
             plugin.dbus_interface(),
-            "org.opdbus.v1.Plugin.Plugins.FreeDesktop"
+            "org.opdbus.v1.Plugin.Plugins.Freedesktop"
         );
     }
 
@@ -450,10 +448,10 @@ mod tests {
 
         // Valid canonical path
         assert!(plugin
-            .validate_canonical_path("/org/opdbus/v1/plugin/plugins/test")
+            .validate_canonical_path("/org/opdbus/v1/plugins/test")
             .is_ok());
 
-        // Invalid legacy path
+        // Invalid legacy path (missing /org prefix)
         assert!(plugin
             .validate_canonical_path("/opdbus/v1/plugins/test")
             .is_err());
@@ -463,19 +461,13 @@ mod tests {
     fn test_path_normalization() {
         let plugin = FreeDesktopPlugin::new();
 
-        // Legacy path should be normalized
+        // Legacy path should be normalized to canonical
         let normalized = plugin.normalize_path("/opdbus/v1/plugins/test");
-        assert_eq!(
-            normalized,
-            Some("/org/opdbus/v1/plugin/plugins/test".to_string())
-        );
+        assert_eq!(normalized, Some("/org/opdbus/v1/plugins/test".to_string()));
 
-        // Canonical path stays the same
+        // Legacy alias also normalizes to canonical
         let canonical = plugin.normalize_path("/org/opdbus/v1/plugin/plugins/test");
-        assert_eq!(
-            canonical,
-            Some("/org/opdbus/v1/plugin/plugins/test".to_string())
-        );
+        assert_eq!(canonical, Some("/org/opdbus/v1/plugins/test".to_string()));
     }
 
     #[tokio::test]

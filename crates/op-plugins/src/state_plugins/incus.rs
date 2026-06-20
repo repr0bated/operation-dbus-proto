@@ -43,7 +43,7 @@ pub struct IncusProxySocket {
 }
 
 /// A single Incus instance (container or virtual-machine).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct IncusInstance {
     pub name: String,
     /// Instance status: "Running", "Stopped", "Frozen"
@@ -1143,6 +1143,7 @@ mod tests {
                     ("parent".to_string(), "ovsbr0".to_string()),
                 ]),
             )])),
+            ..Default::default()
         };
         let mut desired = current.clone();
         assert!(IncusPlugin::instances_equivalent(&current, &desired));
