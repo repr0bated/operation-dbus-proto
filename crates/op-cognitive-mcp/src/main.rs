@@ -3,7 +3,8 @@
 //! Transports started in parallel:
 //! - HTTP/SSE  (MCP protocol, port 3003)
 //! - gRPC      (CognitiveToolService, port 50052)
-//! - D-Bus     (org.opdbus.CognitiveMcp / /org/opdbus/v1/cognitive)
+//! - D-Bus state is owned by the canonical plugin projection at
+//!   org.opdbus.v1.plugins / /org/opdbus/v1/plugins/cognitive_mcp
 //!
 //! On startup the server reads the local WireGuard public key (from the
 //! interface named by $WG_INTERFACE, defaulting to "netmaker") and writes the
@@ -24,7 +25,7 @@ use tracing_subscriber::FmtSubscriber;
 
 #[derive(Parser)]
 #[command(name = "cognitive-mcp-server")]
-#[command(about = "Cognitive MCP Server with memory, NotebookLM bridge, gRPC, and D-Bus")]
+#[command(about = "Cognitive MCP Server with memory, NotebookLM bridge, HTTP, and gRPC")]
 struct Cli {
     /// HTTP/SSE server address (MCP protocol).
     /// If left at 0.0.0.0 the WireGuard interface IP is used when available.
@@ -61,10 +62,6 @@ struct Cli {
     /// Disable HTTP/SSE server
     #[arg(long, env = "COGNITIVE_MCP_HTTP_DISABLED")]
     no_http: bool,
-
-    /// Disable D-Bus registration
-    #[arg(long, env = "COGNITIVE_MCP_DBUS_DISABLED")]
-    no_dbus: bool,
 }
 
 /// Promote an `0.0.0.0:PORT` default address to `<wg_ip>:PORT` when the WG
@@ -141,22 +138,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let server = CognitiveMcpServer::new(&cli.db).await?;
-
-    // D-Bus: start first, keep connection alive for the process lifetime.
-    let _dbus_conn = if !cli.no_dbus {
-        match server.start_dbus().await {
-            Ok(conn) => {
-                info!("D-Bus registered: org.opdbus.CognitiveMcp");
-                Some(conn)
-            }
-            Err(e) => {
-                warn!("D-Bus registration failed (continuing without it): {e}");
-                None
-            }
-        }
-    } else {
-        None
-    };
 
     match (cli.no_grpc, cli.no_http) {
         (true, true) => {

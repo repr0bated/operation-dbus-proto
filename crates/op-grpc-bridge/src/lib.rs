@@ -21,11 +21,15 @@
 //!     └─────────────────┘            └─────────────────┘
 //! ```
 
+pub mod dbus_object;
 pub mod grpc_client;
 pub mod grpc_server;
 pub mod interceptor;
 pub mod proto_gen;
 pub mod schema_engine;
+pub mod schema_loader;
+pub mod server;
+pub mod tracing;
 
 // Re-export main types
 pub use grpc_client::{GrpcClientPool, RemoteEndpoint, RemoteOperationClient};
@@ -33,6 +37,7 @@ pub use grpc_server::{run_grpc_server, OperationGrpcServer, PluginSchemaProvider
 pub use interceptor::ghostbridge_interceptor;
 pub use proto_gen::{ProtoGenConfig, ProtoGenerator};
 pub use schema_engine::{ChangeSource, ChangeType, SchemaEngine, StateChange};
+pub use server::{run_zeroclaw_server, ServerConfig};
 
 /// Generated protobuf types — one sub-module per domain proto.
 /// All are compiled into the combined operation_descriptor.bin for reflection.
@@ -51,6 +56,11 @@ pub mod proto {
     }
     pub mod registry {
         tonic::include_proto!("operation.registry.v1");
+    }
+
+    /// Zeroclaw plugin schema gRPC service (GetSchema / WatchSchema).
+    pub mod zeroclaw {
+        tonic::include_proto!("zeroclaw");
     }
 
     /// Combined FileDescriptorSet covering all domain protos.

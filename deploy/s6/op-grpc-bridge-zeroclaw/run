@@ -1,0 +1,22 @@
+#!/bin/sh
+# 🟢 🛷 Zeroclaw Axum Host — gRPC / gRPC-Web schema bridge
+#
+# Serves the plugin-owned zeroclaw schema from /dev/shm/opdbus/schemas/zeroclaw.json.
+# Depends on op-plugins having started first and written the schema file.
+
+set -eu
+exec 2>&1
+
+if [ -r /etc/op-dbus/environment ]; then
+  set -a
+  . /etc/op-dbus/environment
+  set +a
+fi
+
+export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/op-dbus/session-bus.sock}"
+export ZEROCLAW_BIND_ADDR="${ZEROCLAW_BIND_ADDR:-0.0.0.0:8090}"
+export ZEROCLAW_SCHEMA_PATH="${ZEROCLAW_SCHEMA_PATH:-/dev/shm/opdbus/schemas/zeroclaw.json}"
+export ZEROCLAW_UNIX_SOCKET="${ZEROCLAW_UNIX_SOCKET:-/run/opdbus/zeroclaw-grpc.sock}"
+export RUST_LOG="${RUST_LOG:-op_grpc_bridge=info,info}"
+
+exec /usr/local/bin/op-grpc-bridge-zeroclaw

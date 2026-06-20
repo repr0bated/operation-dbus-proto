@@ -174,7 +174,12 @@ impl CognitiveMcpServer {
         let cors = tower_http::cors::CorsLayer::new()
             .allow_origin(tower_http::cors::Any)
             .allow_methods(tower_http::cors::Any)
-            .allow_headers(tower_http::cors::Any);
+            .allow_headers(tower_http::cors::Any)
+            .expose_headers([
+                "grpc-status".parse().unwrap(),
+                "grpc-message".parse().unwrap(),
+                "grpc-status-details-bin".parse().unwrap(),
+            ]);
 
         tonic::transport::Server::builder()
             .accept_http1(true)
@@ -226,7 +231,12 @@ impl CognitiveMcpServer {
             let cors = tower_http::cors::CorsLayer::new()
                 .allow_origin(tower_http::cors::Any)
                 .allow_methods(tower_http::cors::Any)
-                .allow_headers(tower_http::cors::Any);
+                .allow_headers(tower_http::cors::Any)
+                .expose_headers([
+                    "grpc-status".parse().unwrap(),
+                    "grpc-message".parse().unwrap(),
+                    "grpc-status-details-bin".parse().unwrap(),
+                ]);
 
             tonic::transport::Server::builder()
                 .accept_http1(true)
@@ -259,25 +269,6 @@ impl CognitiveMcpServer {
 
     pub fn tool_registry(&self) -> Arc<ToolRegistry> {
         self.tool_registry.clone()
-    }
-
-    /// Register on the session D-Bus and serve until the connection drops.
-    /// Runs in the background — call this before start_http_server / start_dual.
-    pub async fn start_dbus(&self) -> Result<zbus::Connection, Box<dyn std::error::Error>> {
-        use crate::dbus_interface::CognitiveMcpInterface;
-
-        let conn = zbus::Connection::session().await?;
-        conn.request_name("org.opdbus.CognitiveMcp").await?;
-
-        let iface = CognitiveMcpInterface::new(self.tool_registry.clone());
-        conn.object_server()
-            .at("/org/opdbus/v1/plugins/cognitive_mcp", iface)
-            .await?;
-
-        tracing::info!(
-            "Cognitive MCP D-Bus interface registered at /org/opdbus/v1/plugins/cognitive_mcp"
-        );
-        Ok(conn)
     }
 
     pub fn qdrant_shuttle(&self) -> Option<Arc<QdrantSemanticShuttle>> {

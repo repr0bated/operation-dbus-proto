@@ -1,0 +1,32 @@
+{
+  "spec": {
+    "id": "zeroclaw-host-axum-schema-kiro",
+    "title": "Zeroclaw Host — Axum Schema Server",
+    "version": "1",
+    "status": "ready",
+    "primaryCrate": "crates/op-grpc-bridge",
+    "relatedCrates": [
+      "crates/op-plugins"
+    ],
+    "entryPoints": [
+      "crates/op-grpc-bridge/src/server.rs",
+      "crates/op-grpc-bridge/src/schema_loader.rs",
+      "crates/op-grpc-bridge/src/dbus_object.rs",
+      "crates/op-plugins/src/state_plugins/plugin_schema_defs.rs"
+    ],
+    "schemaFile": "/dev/shm/opdbus/schemas/zeroclaw.json",
+    "dbusPaths": [
+      "/org/opdbus/v1/services/zeroclaw_axum_host"
+    ],
+    "sockets": {
+      "nativeGrpc": "/run/opdbus/zeroclaw-grpc.sock",
+      "grpcWeb": "0.0.0.0:8090"
+    },
+    "btrfsSubvolume": {
+      "name": "@zeroclaw",
+      "scope": "install/cache/rollback only — no projection or OSCAL artefacts"
+    },
+    "subidRegistryCrate": "crates/op-plugins",
+    "taskOrder": ["T-01", "T-02", "T-03", "T-04", "T-05", "T-06", "T-07", "T-08", "T-09"]
+  }
+}

@@ -1,6 +1,6 @@
 //! D-Bus object server for projections.
 //!
-//! Serves every Projection as a D-Bus object under org.opdbus.projection at
+//! Serves every Projection through org.opdbus.v1.plugins at
 //! /org/opdbus/v1/plugins/<plugin>. Nothing mounts outside the plugins root:
 //! no plugin means no schema means no object.
 
@@ -22,7 +22,7 @@ pub struct ProjectedObject {
     pub state: Arc<RwLock<String>>,
 }
 
-#[interface(name = "org.opdbus.projection.v1.Object")]
+#[interface(name = "org.opdbus.v1.plugins.ProjectedObject")]
 impl ProjectedObject {
     /// The schema/entity type for this object (e.g. "system.memory")
     #[zbus(property)]
@@ -128,19 +128,22 @@ impl ProjectionDbusServer {
         {
             "session" => {
                 Builder::session()?
-                    .name("org.opdbus.projection")?
+                    .name(op_plugins::canonical::BASE_SERVICE_NAME)?
                     .build()
                     .await?
             }
             _ => {
                 Builder::system()?
-                    .name("org.opdbus.projection")?
+                    .name(op_plugins::canonical::BASE_SERVICE_NAME)?
                     .build()
                     .await?
             }
         };
 
-        info!("D-Bus connection established for org.opdbus.projection");
+        info!(
+            service = op_plugins::canonical::BASE_SERVICE_NAME,
+            "D-Bus plugin projection connection established"
+        );
 
         Ok(Self {
             conn,
@@ -150,11 +153,14 @@ impl ProjectionDbusServer {
 
     pub async fn new_session() -> Result<Self> {
         let conn = Builder::session()?
-            .name("org.opdbus.projection")?
+            .name(op_plugins::canonical::BASE_SERVICE_NAME)?
             .build()
             .await?;
 
-        info!("D-Bus session bus connection established for org.opdbus.projection");
+        info!(
+            service = op_plugins::canonical::BASE_SERVICE_NAME,
+            "D-Bus session plugin projection connection established"
+        );
 
         Ok(Self {
             conn,

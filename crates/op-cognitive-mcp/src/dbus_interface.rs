@@ -1,8 +1,8 @@
 //! D-Bus interface for the Cognitive MCP tool registry.
 //!
-//! service:   org.opdbus.CognitiveMcp
+//! service:   org.opdbus.v1.plugins
 //! object:    /org/opdbus/v1/plugins/cognitive_mcp
-//! interface: org.opdbus.CognitiveMcpV1
+//! interface: org.opdbus.v1.plugins.CognitiveMcp
 //!
 //! Methods:
 //!   ListTools() -> s                  JSON array [{name, description, category}]
@@ -24,7 +24,7 @@ impl CognitiveMcpInterface {
     }
 }
 
-#[interface(name = "org.opdbus.CognitiveMcpV1")]
+#[interface(name = "org.opdbus.v1.plugins.CognitiveMcp")]
 impl CognitiveMcpInterface {
     async fn list_tools(&self) -> zbus::fdo::Result<String> {
         let defs = self.registry.list(0, usize::MAX, None).await;
