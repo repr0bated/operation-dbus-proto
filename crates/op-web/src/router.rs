@@ -1,14 +1,11 @@
 //! Router configuration for op-web
 
 use axum::{
-    http::Uri,
     routing::{get, post},
     Router,
 };
 use std::sync::Arc;
-use tower_http::services::ServeDir;
 
-use crate::embedded_ui::serve_embedded_ui;
 use crate::routes;
 use crate::state::AppState;
 use crate::websocket::handle_websocket;
@@ -21,11 +18,6 @@ impl WebServiceRouter {
     pub fn new() -> Self {
         Self
     }
-}
-
-/// Embedded UI fallback handler - serves SPA for all non-API routes
-async fn ui_fallback(uri: Uri) -> impl axum::response::IntoResponse {
-    serve_embedded_ui(uri).await
 }
 
 /// Create the main application router
@@ -57,12 +49,9 @@ pub fn create_router(state: Arc<AppState>, static_dir: Option<String>) -> Router
         .route("/ws", get(handle_websocket))
         .with_state(state);
 
-    // Fallback: serve static dir if provided, otherwise embedded UI
-    if let Some(dir) = static_dir {
-        router.fallback_service(ServeDir::new(dir).fallback(get(ui_fallback)))
-    } else {
-        router.fallback(ui_fallback)
-    }
+    // No SPA fallback: API/WebSocket only. Unmatched routes return 404.
+    let _ = static_dir;
+    router
 }
 
 /// Create WebSocket-only router (for composition)
