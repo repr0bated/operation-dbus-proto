@@ -288,24 +288,27 @@ impl OperationGrpcServer {
     }
 }
 
-/// Run gRPC server for all Operation services.
+/// Mount the COMPLETE Operation gRPC service surface onto a `tonic::service::Routes`.
 ///
-/// Includes:
-///   - StateSync, PluginService, EventChainService, OvsdbMirror, RuntimeMirror
-///   - ComponentRegistry, MailService, PrivacyNetworkService, RegistrationService
-///   - gRPC server reflection (all protos in combined descriptor)
-///   - gRPC health protocol (liveness for deploy verification and load balancers)
+/// This is the SINGLE source of the backplane's service set. Every endpoint that
+/// serves the backplane — the op-dbus bridge (`run_grpc_server`, TCP `:50051`) and
+/// the zeroclaw bridge (`run_zeroclaw_server`, `:8090` + `container.sock`) — builds
+/// its routes from here, so reflection can never advertise a service that isn't
+/// actually mounted (the bug the gRPC-Web probe surfaced).
 ///
-/// Adding a new domain service:
-///   1. Add the generated server import below
-///   2. Add `.add_service(...)` to the builder chain
-///   3. Mark it serving via health_reporter
-pub async fn run_grpc_server(
-    addr: std::net::SocketAddr,
-    mutation_engine: Arc<MutationEngine>,
-    plugin_provider: Option<Arc<dyn PluginSchemaProvider>>,
-    tls_identity: Option<Identity>,
-) -> Result<(), tonic::transport::Error> {
+/// Services (all behind the Ghostbridge interceptor, all gRPC-Web enabled):
+///   StateSync, PluginService, EventChainService, OvsdbMirror, RuntimeMirror,
+///   ComponentRegistry, MailService, PrivacyNetworkService, RegistrationService,
+///   DbusPassthrough, McpService, ChatService, plus gRPC server reflection.
+///
+/// The caller supplies a fully-configured `OperationGrpcServer` (plugin provider /
+/// semantic shuttle already attached) and adds endpoint-specific extras
+/// afterward (e.g. the zeroclaw bridge adds `ZeroclawService`; `run_grpc_server`
+/// adds the gRPC health service).
+///
+/// Adding a new domain service: add one `.add_service(...)` here and it appears on
+/// BOTH endpoints at once.
+pub fn build_operation_routes(server: OperationGrpcServer) -> tonic::service::Routes {
     use crate::proto::dbus_passthrough_server::DbusPassthroughServer;
     use crate::proto::event_chain_service_server::EventChainServiceServer;
     use crate::proto::mail::mail_service_server::MailServiceServer;
@@ -319,7 +322,7 @@ pub async fn run_grpc_server(
     use op_cache::grpc::{AgentServiceImpl, McpServiceImpl, OrchestratorServiceImpl};
     use op_cache::proto::mcp_service_server::McpServiceServer;
 
-    // Build MCP service backed by agent registry.
+    // MCP service backed by agent registry.
     let agent_svc = std::sync::Arc::new(AgentServiceImpl::new());
     let cache_svc = std::sync::Arc::new(op_cache::grpc::CacheServiceImpl::with_ttl(3600));
     let orch_svc = std::sync::Arc::new(OrchestratorServiceImpl::with_config(
@@ -330,6 +333,86 @@ pub async fn run_grpc_server(
         3,    // promotion_threshold
     ));
     let mcp_svc = std::sync::Arc::new(McpServiceImpl::new(agent_svc, orch_svc));
+
+    // Reflection — exposes combined FileDescriptorSet covering all domain protos.
+    // Enables grpcurl discovery and drives MCP tool auto-registration in op-chat.
+    let reflection = tonic_reflection::server::Builder::configure()
+        .register_encoded_file_descriptor_set(crate::proto::FILE_DESCRIPTOR_SET)
+        .build_v1()
+        .expect("failed to build reflection service");
+
+    let intercept = interceptor::ghostbridge_interceptor;
+
+    tonic::service::Routes::new(tonic_web::enable(StateSyncServer::with_interceptor(
+        server.clone(),
+        intercept,
+    )))
+    .add_service(tonic_web::enable(PluginServiceServer::with_interceptor(
+        server.clone(),
+        intercept,
+    )))
+    .add_service(tonic_web::enable(
+        EventChainServiceServer::with_interceptor(server.clone(), intercept),
+    ))
+    .add_service(tonic_web::enable(OvsdbMirrorServer::with_interceptor(
+        server.clone(),
+        intercept,
+    )))
+    .add_service(tonic_web::enable(RuntimeMirrorServer::with_interceptor(
+        server.clone(),
+        intercept,
+    )))
+    .add_service(tonic_web::enable(
+        ComponentRegistryServer::with_interceptor(server.clone(), intercept),
+    ))
+    .add_service(tonic_web::enable(MailServiceServer::with_interceptor(
+        server.clone(),
+        intercept,
+    )))
+    .add_service(tonic_web::enable(
+        PrivacyNetworkServiceServer::with_interceptor(server.clone(), intercept),
+    ))
+    .add_service(tonic_web::enable(
+        RegistrationServiceServer::with_interceptor(server.clone(), intercept),
+    ))
+    .add_service(tonic_web::enable(DbusPassthroughServer::with_interceptor(
+        server.clone(),
+        intercept,
+    )))
+    .add_service(tonic_web::enable(tonic::codegen::InterceptedService::new(
+        McpServiceServer::from_arc(mcp_svc),
+        intercept,
+    )))
+    .add_service(tonic_web::enable(
+        crate::proto::chat::chat_service_server::ChatServiceServer::new(
+            crate::chat_service::ChatServiceImpl::new(),
+        ),
+    ))
+    .add_service(tonic_web::enable(reflection))
+}
+
+/// Run gRPC server for all Operation services.
+///
+/// Mounts the shared [`build_operation_routes`] surface plus the gRPC health
+/// protocol (liveness for deploy verification and load balancers), with optional
+/// TLS. Adding a domain service is done in [`build_operation_routes`], not here.
+pub async fn run_grpc_server(
+    addr: std::net::SocketAddr,
+    mutation_engine: Arc<MutationEngine>,
+    plugin_provider: Option<Arc<dyn PluginSchemaProvider>>,
+    tls_identity: Option<Identity>,
+) -> Result<(), tonic::transport::Error> {
+    // Imports here back only the `health_reporter.set_serving::<T>()` type args;
+    // the service *instances* are mounted in `build_operation_routes`.
+    use crate::proto::event_chain_service_server::EventChainServiceServer;
+    use crate::proto::mail::mail_service_server::MailServiceServer;
+    use crate::proto::ovsdb_mirror_server::OvsdbMirrorServer;
+    use crate::proto::plugin_service_server::PluginServiceServer;
+    use crate::proto::privacy::privacy_network_service_server::PrivacyNetworkServiceServer;
+    use crate::proto::registration::registration_service_server::RegistrationServiceServer;
+    use crate::proto::registry::component_registry_server::ComponentRegistryServer;
+    use crate::proto::runtime_mirror_server::RuntimeMirrorServer;
+    use crate::proto::state_sync_server::StateSyncServer;
 
     let server = if let Some(provider) = plugin_provider {
         OperationGrpcServer::with_plugin_provider(mutation_engine, provider)
@@ -343,13 +426,6 @@ pub async fn run_grpc_server(
             server
         }
     };
-
-    // Reflection — exposes combined FileDescriptorSet covering all domain protos.
-    // Enables grpcurl discovery and drives MCP tool auto-registration in op-chat.
-    let reflection = tonic_reflection::server::Builder::configure()
-        .register_encoded_file_descriptor_set(crate::proto::FILE_DESCRIPTOR_SET)
-        .build_v1()
-        .expect("failed to build reflection service");
 
     // Health — standard gRPC health protocol for deploy verification and LB probes.
     let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
@@ -380,6 +456,9 @@ pub async fn run_grpc_server(
     health_reporter
         .set_serving::<RegistrationServiceServer<OperationGrpcServer>>()
         .await;
+    health_reporter
+        .set_serving::<crate::proto::chat::chat_service_server::ChatServiceServer<crate::chat_service::ChatServiceImpl>>()
+        .await;
 
     info!(addr = %addr, "gRPC bridge listening");
 
@@ -399,63 +478,14 @@ pub async fn run_grpc_server(
         builder = builder.tls_config(ServerTlsConfig::new().identity(identity))?;
     }
 
-    let server = builder
-        .add_service(tonic_web::enable(StateSyncServer::with_interceptor(
-            server.clone(),
-            interceptor::ghostbridge_interceptor,
-        )))
-        .add_service(tonic_web::enable(PluginServiceServer::with_interceptor(
-            server.clone(),
-            interceptor::ghostbridge_interceptor,
-        )))
-        .add_service(tonic_web::enable(
-            EventChainServiceServer::with_interceptor(
-                server.clone(),
-                interceptor::ghostbridge_interceptor,
-            ),
-        ))
-        .add_service(tonic_web::enable(OvsdbMirrorServer::with_interceptor(
-            server.clone(),
-            interceptor::ghostbridge_interceptor,
-        )))
-        .add_service(tonic_web::enable(RuntimeMirrorServer::with_interceptor(
-            server.clone(),
-            interceptor::ghostbridge_interceptor,
-        )))
-        .add_service(tonic_web::enable(
-            ComponentRegistryServer::with_interceptor(
-                server.clone(),
-                interceptor::ghostbridge_interceptor,
-            ),
-        ))
-        .add_service(tonic_web::enable(MailServiceServer::with_interceptor(
-            server.clone(),
-            interceptor::ghostbridge_interceptor,
-        )))
-        .add_service(tonic_web::enable(
-            PrivacyNetworkServiceServer::with_interceptor(
-                server.clone(),
-                interceptor::ghostbridge_interceptor,
-            ),
-        ))
-        .add_service(tonic_web::enable(
-            RegistrationServiceServer::with_interceptor(
-                server.clone(),
-                interceptor::ghostbridge_interceptor,
-            ),
-        ))
-        .add_service(tonic_web::enable(DbusPassthroughServer::with_interceptor(
-            server.clone(),
-            interceptor::ghostbridge_interceptor,
-        )))
-        .add_service(tonic_web::enable(tonic::codegen::InterceptedService::new(
-            McpServiceServer::from_arc(mcp_svc),
-            interceptor::ghostbridge_interceptor,
-        )))
-        .add_service(tonic_web::enable(reflection))
-        .add_service(tonic_web::enable(health_service));
-
-    server.serve(addr).await
+    // The complete service surface comes from the shared builder; the health
+    // service is the only extra mounted here (it is endpoint-local, not part of
+    // the reflected descriptor).
+    builder
+        .add_routes(build_operation_routes(server))
+        .add_service(tonic_web::enable(health_service))
+        .serve(addr)
+        .await
 }
 
 // =============================================================================

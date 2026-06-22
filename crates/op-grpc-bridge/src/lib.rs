@@ -22,6 +22,7 @@
 //! ```
 
 pub mod dbus_object;
+pub mod chat_service;
 pub mod grpc_client;
 pub mod grpc_server;
 pub mod interceptor;
@@ -63,7 +64,12 @@ pub mod proto {
         tonic::include_proto!("zeroclaw");
     }
 
-    /// Combined FileDescriptorSet covering all domain protos.
+    /// ChatService — operator-to-system chat interface (delegator, forced tool calling).
+    pub mod chat {
+        tonic::include_proto!("op_chat.chat");
+    }
+
+    /// Combined FileDescriptorSet covering all domain protos (including chat).
     /// Served by tonic-reflection so clients can discover every service.
     pub const FILE_DESCRIPTOR_SET: &[u8] =
         tonic::include_file_descriptor_set!("operation_descriptor");

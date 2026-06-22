@@ -25,12 +25,11 @@ use crate::mutation_engine::MutationEngine;
 use crate::schema_loader::{SchemaLoader, SchemaReloadEvent};
 use crate::tracing::{GhostbridgeTraceLayer, TraceContext};
 
-use crate::proto::plugin_service_server::PluginServiceServer;
+use crate::grpc_server::build_operation_routes;
 use crate::proto::zeroclaw::{
     zeroclaw_service_server::{ZeroclawService, ZeroclawServiceServer},
     GetSchemaRequest, SchemaEvent, SchemaResponse, WatchSchemaRequest,
 };
-use tonic::codegen::InterceptedService;
 
 const DEFAULT_UNIX_SOCKET: &str = "/run/opdbus/zeroclaw-grpc.sock";
 const DEFAULT_BIND_ADDR: &str = "0.0.0.0:8090";
@@ -141,24 +140,33 @@ fn inject_trace_metadata<T>(response: &mut TonicResponse<T>, context: &TraceCont
     }
 }
 
-type PluginSvcIntercepted = InterceptedService<
-    PluginServiceServer<OperationGrpcServer>,
-    crate::interceptor::GhostbridgeInterceptor,
->;
+/// Assemble the gRPC service set for the zeroclaw bridge.
+///
+/// The full backplane surface (StateSync, PluginService, DbusPassthrough,
+/// OvsdbMirror, RuntimeMirror, EventChainService, ComponentRegistry, Mail,
+/// Privacy, Registration, McpService, ChatService, reflection) comes from the
+/// shared [`build_operation_routes`] — identical to what `run_grpc_server` mounts
+/// on op-dbus :50051, so reflection never advertises an unmounted service. On top
+/// of that the zeroclaw bridge adds its endpoint-specific `ZeroclawService`
+/// (plugin-owned schema get/watch).
+///
+/// Every container shares this one surface over `container.sock`; the assistant
+/// container is provisioned exactly like the others (its socket created via the
+/// unix-socket plugin's createsocket through PluginService, not a raw Incus proxy
+/// device).
+fn build_routes(loader: Arc<SchemaLoader>, server: OperationGrpcServer) -> tonic::service::Routes {
+    let zeroclaw_svc = tonic_web::enable(ZeroclawServiceServer::new(ZeroclawGrpcService { loader }));
+    build_operation_routes(server).add_service(zeroclaw_svc)
+}
 
 /// Build the axum `Router` that serves the gRPC service over HTTP/gRPC-Web.
-pub fn build_axum_app(loader: Arc<SchemaLoader>, plugin_service: PluginSvcIntercepted) -> Router {
-    let service = ZeroclawGrpcService { loader };
-    let zeroclaw_svc = tonic_web::enable(ZeroclawServiceServer::new(service));
-    let plugin_svc = tonic_web::enable(plugin_service);
-    let routes = tonic::service::Routes::new(zeroclaw_svc).add_service(plugin_svc);
-
+pub fn build_axum_app(loader: Arc<SchemaLoader>, server: OperationGrpcServer) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
         .allow_headers(Any);
 
-    routes
+    build_routes(loader, server)
         .into_axum_router()
         .layer(cors)
         .layer(GhostbridgeTraceLayer::new())
@@ -167,12 +175,9 @@ pub fn build_axum_app(loader: Arc<SchemaLoader>, plugin_service: PluginSvcInterc
 /// Build the tonic `Routes` used for the native-gRPC Unix socket side.
 fn build_tonic_routes(
     loader: Arc<SchemaLoader>,
-    plugin_service: PluginSvcIntercepted,
+    server: OperationGrpcServer,
 ) -> tonic::service::Routes {
-    let service = ZeroclawGrpcService { loader };
-    let zeroclaw_svc = tonic_web::enable(ZeroclawServiceServer::new(service));
-    let plugin_svc = tonic_web::enable(plugin_service);
-    tonic::service::Routes::new(zeroclaw_svc).add_service(plugin_svc)
+    build_routes(loader, server)
 }
 
 /// Run the zeroclaw Axum host.
@@ -206,10 +211,16 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
     let nonnet = Arc::new(op_jsonrpc::nonnet::NonNetDb::new());
     let mutation_engine = Arc::new(MutationEngine::new(event_chain, ovsdb, nonnet));
     let operation_server = OperationGrpcServer::new(mutation_engine);
-    let plugin_service = PluginServiceServer::with_interceptor(
-        operation_server,
-        crate::interceptor::GhostbridgeInterceptor,
-    );
+    // Attach the semantic shuttle for parity with run_grpc_server so
+    // SearchSemanticTrace behaves identically on both endpoints (best-effort:
+    // if Qdrant is unavailable the method returns failed_precondition).
+    let operation_server = match op_cognitive_mcp::QdrantSemanticShuttle::new().await {
+        Ok(shuttle) => operation_server.with_semantic_shuttle(Arc::new(shuttle)),
+        Err(error) => {
+            tracing::warn!(%error, "semantic shuttle unavailable; SearchSemanticTrace will return failed_precondition");
+            operation_server
+        }
+    };
 
     // Unix socket listener for native gRPC.
     let unix_socket = config.unix_socket.clone();
@@ -222,8 +233,12 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
 
     let unix_incoming = tokio_stream::wrappers::UnixListenerStream::new(unix_listener);
 
+    // accept_http1(true): tonic-web serves gRPC-Web over HTTP/1.1, which is what
+    // browsers (and xray's tls-h1 fallback forwarding to this socket) speak. Without
+    // it the socket is h2-only and rejects browser gRPC-Web. Matches the TCP/axum side.
     let tonic_server = tonic::transport::Server::builder()
-        .add_routes(build_tonic_routes(loader.clone(), plugin_service.clone()))
+        .accept_http1(true)
+        .add_routes(build_tonic_routes(loader.clone(), operation_server.clone()))
         .serve_with_incoming(unix_incoming);
 
     // TCP listener for HTTP + gRPC-Web.
@@ -231,7 +246,7 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
     let tcp_listener = tokio::net::TcpListener::bind(bind_addr).await?;
     info!(addr = %bind_addr, "zeroclaw HTTP/gRPC-Web listening on TCP");
 
-    let axum_app = build_axum_app(loader.clone(), plugin_service);
+    let axum_app = build_axum_app(loader.clone(), operation_server);
     let tcp_server = axum::serve(tcp_listener, axum_app);
 
     // Rebind task: when a new bind address is requested, restart the TCP server.
