@@ -2,12 +2,8 @@
   "servers": {
     "cognitive-mcp": {
       "type": "stdio",
-      "command": "/usr/local/bin/op-mcp-shim",
-      "args": ["--endpoint", "http://10.220.35.1:50052"],
-      "env": {
-        "GHOSTBRIDGE_FOOTPRINT": "vscode",
-        "GHOSTBRIDGE_TRACE_ID": "vscode"
-      }
+      "command": "cognitive-mcp-server",
+      "args": ["--stdio"]
     }
   }
 }

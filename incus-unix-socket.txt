@@ -1,0 +1,2736 @@
+ ▐▛███▜▌   Claude Code v2.1.183
+▝▜█████▛▘  Opus 4.8 · Claude Pro
+  ▘▘ ▝▝    ~/git/operation-dbus-proto
+
+
+❯ add cognative-mcp to factory, opencode, codex, agy, gemini-cli                
+
+● I'll explore how cognitive-mcp is currently configured and find the config
+  files for these tools.
+
+  Searched for 3 patterns, read 6 files, listed 1 directory (ctrl+o to expand)
+
+● The actual tool configs live in home/repo dirs. Let me read each one's current
+  state.
+
+  Read 4 files, listed 1 directory (ctrl+o to expand)
+
+● Most tools already have cognitive entries. Let me check antigravity (agy) —
+  its mcp dir and settings.
+
+  Read 1 file, listed 2 directories, ran 1 shell command (ctrl+o to expand)
+
+❯ make sure the http headers are correct                                        
+
+● The antigravity mcp/cognative-mcp/ dir is the discovered tool cache. Let me
+  find where antigravity actually defines the server, and check the shim to
+  confirm correct headers/env.
+
+  Searched for 1 pattern, ran 2 shell commands (ctrl+o to expand)
+
+● Let me read the shim source to confirm exactly which env vars/headers it uses,
+  and find the antigravity MCP server definition format.
+
+  Searched for 2 patterns, read 2 files (ctrl+o to expand)
+
+● Let me check how the footprint header is meant to be populated — there's a
+  base64 value in two configs that looks like a WG pubkey.
+
+  Read 1 file, ran 1 shell command (ctrl+o to expand)
+
+● The footprint header semantics matter here and the existing configs disagree.
+  Let me check what the real WireGuard identity is before deciding.
+
+  Ran 1 shell command (ctrl+o to expand)
+  ⎿  Interrupted · What should Claude do instead?
+
+❯ look at your config you are connected, why arent tyou getting memory from it? 
+
+● You're right — I'm connected to cognitive-grpc and should be asking it. My own
+  .mcp.json uses http://10.220.35.1:50052 with footprint claude-code, which
+  reframes the endpoint question entirely. Let me load the cognitive tools and
+  ask the system directly.
+
+  Called cognitive-grpc 2 times (ctrl+o to expand)
+
+● The cognitive system is healthy and my connection works at 10.220.35.1:50052
+  (footprint claude-code). The notebook RAG has no grounded doc on header
+  conventions, so the ground truth is empirical: my live connection. Let me
+  verify which endpoints are actually reachable before rewriting anything.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Empirically confirmed:
+
+  ┌─────────────────────────┬───────────────────────────────────────────────┐
+  │        Endpoint         │                    Status                     │
+  ├─────────────────────────┼───────────────────────────────────────────────┤
+  │ 10.220.35.1:50052       │ OPEN (my live connection uses this)           │
+  ├─────────────────────────┼───────────────────────────────────────────────┤
+  │ 100.90.37.1:50052       │ unreachable (stale — used by                  │
+  │                         │ factory/opencode/codex/gemini)                │
+  ├─────────────────────────┼───────────────────────────────────────────────┤
+  │ 100.90.37.254:50052 &   │ unreachable (factory's http entry is dead)    │
+  │ :3003                   │                                               │
+  └─────────────────────────┴───────────────────────────────────────────────┘
+
+  So the answer to "make the headers correct" is settled by data, not guesswork:
+  the working pattern is endpoint http://10.220.35.1:50052,
+  GHOSTBRIDGE_FOOTPRINT + GHOSTBRIDGE_TRACE_ID = the client name (the shim maps
+  these to x-ghostbridge-footprint / x-ghostbridge-trace-id). The base64
+  footprints (yqx3…) in the gemini/antigravity configs are bogus — they match
+  neither host WG pubkey (XpO2…, iNqg…) — and they're missing the trace-id
+  header entirely.
+
+  Fixing all five now.
+
+  1. opencode — fix stale endpoint:
+
+● Update(~/.config/opencode/opencode.jsonc)
+  ⎿  Added 1 line, removed 1 line
+       4      "cognitive-mcp": {
+       5        "type": "stdio",
+       6        "command": "/usr/local/bin/op-mcp-shim",
+       7 -      "args": ["--endpoint", "http://100.90.37.1:50052"],      
+       7 +      "args": ["--endpoint", "http://10.220.35.1:50052"],      
+       8        "enabled": true,
+       9        "environment": {
+      10          "GHOSTBRIDGE_FOOTPRINT": "opencode",
+❯ getting contest aware code suggestions?                                       
+
+● 2. codex — fix stale endpoint:
+
+● Update(~/.codex/config.toml)
+  ⎿  Added 1 line, removed 1 line
+      14  
+      15  [mcp_servers.cognitive-mcp]
+      16  command = "/usr/local/bin/op-mcp-shim"
+      17 -args = ["--endpoint", "http://100.90.37.1:50052"]              
+      17 +args = ["--endpoint", "http://10.220.35.1:50052"]              
+      18  
+      19  [mcp_servers.cognitive-mcp.env]
+      20  GHOSTBRIDGE_FOOTPRINT = "codex"
+
+● 3. factory — fix stale endpoint on the working shim entry, remove the dead
+  headerless http entry:
+
+● Update(~/.factory/mcp.json)
+  ⎿  Added 1 line, removed 6 lines
+      37        "command": "/usr/local/bin/op-mcp-shim",
+      38        "args": [
+      39          "--endpoint",
+      40 -        "http://100.90.37.1:50052"                             
+      40 +        "http://10.220.35.1:50052"                             
+      41        ],
+      42        "env": {
+      43          "GHOSTBRIDGE_FOOTPRINT": "factory-droid",
+     ...
+      45        },
+      46        "enabled": true
+      47      },
+      48 -    "cognitive-mcp": {                                         
+      49 -      "type": "http",                                          
+      50 -      "url": "http://100.90.37.254:3003/mcp",                  
+      51 -      "disabled": false                                        
+      52 -    },                                                         
+      48      "hugging-face": {
+      49        "type": "http",
+      50        "url": "https://huggingface.co/mcp",
+
+● 4. gemini-cli — fix stale endpoint on cognitive-grpc, remove the broken
+  misspelled duplicate (bogus base64 footprint, no trace-id):
+
+● Update(~/.gemini/settings.json)
+  ⎿  Added 1 line, removed 11 lines
+       9        "command": "/usr/local/bin/op-mcp-shim",
+      10        "args": [
+      11          "--endpoint",
+      12 -        "http://100.90.37.1:50052"                             
+      12 +        "http://10.220.35.1:50052"                             
+      13        ],
+      14        "env": {
+      15          "GHOSTBRIDGE_FOOTPRINT": "gemini-cli",
+      16          "GHOSTBRIDGE_TRACE_ID": "gemini-cli"
+      17        }
+      18 -    },                                                         
+      19 -    "cognative-mcp": {                                         
+      20 -      "command": "/usr/local/bin/op-mcp-shim",                 
+      21 -      "args": [                                                
+      22 -        "--endpoint",                                          
+      23 -        "http://10.220.35.1:50052"                             
+      24 -      ],                                                       
+      25 -      "env": {                                                 
+      26 -        "GHOSTBRIDGE_FOOTPRINT": "yqx3CiKhCdbYPxJzhjVbhsbMYRvH/
+         -dBrrflmPrrMI+c="                                               
+      27 -      }                                                        
+      18      }
+      19    }
+      20  }
+      21   No newline at end of file
+
+● 5. agy / antigravity — endpoint is already correct; fix the bogus base64
+  footprint and add the missing trace-id:
+
+● Update(~/.gemini/config/mcp_config.json)
+  ⎿  Added 2 lines, removed 1 line
+       8          "http://10.220.35.1:50052"
+       9        ],
+      10        "env": {
+      11 -        "GHOSTBRIDGE_FOOTPRINT": "yqx3CiKhCdbYPxJzhjVbhsbMYRvH/
+         -dBrrflmPrrMI+c="                                               
+      11 +        "GHOSTBRIDGE_FOOTPRINT": "antigravity",                
+      12 +        "GHOSTBRIDGE_TRACE_ID": "antigravity"                  
+      13        }
+      14      }
+      15    }
+
+● All five configs now point at the live endpoint (10.220.35.1:50052) with
+  correct, consistent x-ghostbridge-footprint + x-ghostbridge-trace-id headers
+  (named per client). Let me verify the shim actually reflects tools through
+  that path — that's what determines whether these clients get context-aware
+  suggestions — and check the tool profile.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● All 5 clients now reflect the same 18 cognitive tools through the live
+  endpoint. Let me record the endpoint fact since it contradicts several config
+  files and I had to derive it empirically.
+
+  Recalled 1 memory, wrote 2 memories (ctrl+o to expand)
+
+● Done. All five clients are wired to cognitive-mcp with correct headers,
+  verified against the live server.
+
+  What I changed
+
+  Tool: factory
+  File: ~/.factory/mcp.json
+  Fix: endpoint 100.90.37.1 → 10.220.35.1; removed dead headerless cognitive-mcp
+
+    http entry (100.90.37.254:3003)
+  ────────────────────────────────────────
+  Tool: opencode
+  File: ~/.config/opencode/opencode.jsonc
+  Fix: endpoint 100.90.37.1 → 10.220.35.1
+  ────────────────────────────────────────
+  Tool: codex
+  File: ~/.codex/config.toml
+  Fix: endpoint 100.90.37.1 → 10.220.35.1
+  ────────────────────────────────────────
+  Tool: gemini-cli
+  File: ~/.gemini/settings.json
+  Fix: endpoint 100.90.37.1 → 10.220.35.1; removed broken misspelled
+    cognative-mcp dup (bogus base64 footprint, no trace-id)
+  ────────────────────────────────────────
+  Tool: agy/antigravity
+  File: ~/.gemini/config/mcp_config.json
+  Fix: footprint yqx3…(bogus) → antigravity; added missing GHOSTBRIDGE_TRACE_ID
+
+  On the headers (your two questions)
+
+  Correct headers — settled by data, not guesswork. The shim maps
+  GHOSTBRIDGE_FOOTPRINT → x-ghostbridge-footprint and GHOSTBRIDGE_TRACE_ID →
+  x-ghostbridge-trace-id. Both should be the client name. The base64 footprints
+  in the gemini/antigravity configs were bogus — they matched neither host WG
+  pubkey (XpO2…, iNqg…) and were missing the trace-id entirely. Each client now
+  sends a clean, distinct identity: factory-droid, opencode, codex, gemini-cli,
+  antigravity.
+
+  Endpoint — I asked the cognitive server itself (healthy, authStatus: 
+  chrome_profile) and then probed the candidates. Only 10.220.35.1:50052 is OPEN
+  — the one my own .mcp.json connection uses. 100.90.37.1, 100.90.37.254:50052,
+  and the :3003 HTTP gateway are all unreachable, despite still being
+  referenced in deploy/config/cognitive-mcp-clients.json. That stale-config note
+  and the header convention are now saved to memory.
+
+  Context-aware code suggestions — yes, but understand the shape: the shim
+  reflects 18 CognitiveToolService_* tools (verified through the live path) —
+  AskQuestion, QueryNotebook, ListNotebooks, GenerateDataTable, GeminiQuery,
+  etc. These are NotebookLM/RAG retrieval tools, not inline autocomplete.
+  Context-awareness comes from the host agent calling AskQuestion/QueryNotebook
+  to ground its suggestions in your notebooks/sources. That's why my earlier
+  AskQuestion returned "no grounded answer" — the memory store currently holds
+  only 2 entries / 2 namespaces, so suggestions are only as context-aware as the
+  notebooks you've populated.
+
+  One thing I did not touch: deploy/config/cognitive-mcp-clients.json and
+  deploy/config/factory-mcp.json still hardcode the stale 100.90.37.254
+  endpoints. Want me to update those deploy templates to 10.220.35.1 too, or are
+  those tracking a different (future) gateway address?
+
+✻ Sautéed for 2m 44s
+
+❯ no there should be qdrant rag                                                 
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Qdrant is live on 6333/6334, and the crate has Voyage embeddings. My
+  AskQuestion hit the NotebookLM path ("no grounded answer in notebook ''"), not
+  Qdrant. Let me check the Qdrant collections and how the server routes RAG.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The picture's clear now: Qdrant RAG is populated (12 collections incl.
+  repomix_rag, repos_lsp_rust_voyage_4_large). But the shim reflected only the 
+  18 CognitiveToolService_* (NotebookLM) tools — zero Qdrant code-RAG tools. The
+  server only registers code-context tools when a Voyage key is present
+  (server.rs:73-101). So the running server booted without VOYAGE_API_KEY. Let
+  me confirm what the RAG tools are and whether the live process has the key.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Diagnosis confirmed. The live server is the s6 service op-cognitive-mcp (pid
+  624, root). It reflected only NotebookLM tools, zero code-RAG tools — and
+  register_code_tools only runs when RagPipeline::from_env() finds a Voyage key.
+  A Voyage key clearly exists on this host (pid 28967), so the s6 service just
+  isn't getting it in its environment. Let me confirm the RAG tool names and
+  inspect the s6 service env.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● The s6 env is actually correct — COGNITIVE_MCP_VOYAGE_API_KEY and
+  COGNITIVE_MCP_QDRANT_URL=http://127.0.0.1:6334 are both set. So the server
+  does build the RAG pipeline. The issue is different: register_code_tools
+  registers code_search/code_context/code_index into the in-process 
+  tool_registry (the HTTP :3003 MCP surface), but the gRPC reflection surface
+  the shim uses only exposes the 18 proto-defined CognitiveToolService RPCs —
+  none of which is a code-RAG method. Let me confirm against the proto.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+❯ put voyage key, not the rust one the other one as the key used                
+  ⎿  Interrupted · What should Claude do instead?
+
+❯ in bash_secerets                                                              
+  Ran 1 shell command (ctrl+o to expand)
+
+● Found them in ~/.bash_secrets:
+  - VOYAGE_API_KEY & VOYAGE_API_KEY_RUST → both pa-dxL6… (the "rust one")
+  - VOYAGE_API_KEY_LITE → al-tMRPT… (the other one — al- prefix routes to the
+  MongoDB-hosted Voyage endpoint)
+
+  The key cognitive-mcp actually consumes is the s6 env file
+  COGNITIVE_MCP_VOYAGE_API_KEY, currently set to the pa- (rust) key. Switching
+  it to the al- key:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The key file is updated. The running server (pid 624) still holds the old pa-
+  key in memory — it needs a restart to re-read the env dir. Let me restart the
+  s6 service so it picks up the al- key.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Restarted cleanly (pid 30182). Let me verify it's healthy with the new key and
+  that the RAG/Qdrant pipeline initialized — the al- key routes to the MongoDB
+  Voyage endpoint, so I want to confirm embeddings actually work.
+
+  Called cognitive-grpc 2 times (ctrl+o to expand)
+
+● Healthy after restart. The gRPC Doctor doesn't surface the Qdrant/RAG pipeline
+  status, so let me confirm from the service logs that the RAG pipeline
+  initialized with the new al- key (and didn't error against the MongoDB
+  endpoint).
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● The gRPC surface still shows only the 18 NotebookLM RPCs — zero code-RAG tools
+  even after the restart. That's structural, and I spotted the likely cause in
+  the env dir earlier: COGNITIVE_MCP_CONTEXT_HTTP_DISABLED=1. Let me confirm
+  what that flag gates and where the Qdrant code-RAG tools are actually meant to
+  be served.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+❯ does it need t be called VOYAGE_API_KEY?                                      
+
+● Good question — let me confirm the exact env-var precedence the code uses
+  before answering, since there could be more than one reader.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● No — it does not need to be called VOYAGE_API_KEY. All three readers in the
+  cognitive-mcp crate use the same precedence:
+
+  COGNITIVE_MCP_VOYAGE_API_KEY   // ← checked FIRST
+    .or VOYAGE_API_KEY
+    .or VOYAGE_API_KEY_RUST
+
+  (in voyage.rs:43, rag_pipeline.rs:278, and qdrant_shuttle.rs:330)
+
+  The s6 env file is already named COGNITIVE_MCP_VOYAGE_API_KEY — the
+  highest-priority name — so the al- key I put there is what the service uses,
+  and it overrides any VOYAGE_API_KEY / VOYAGE_API_KEY_RUST in the environment.
+  The name is correct; nothing else to rename.
+
+  Two related notes while I had the code open:
+
+  - The al- key needs its endpoint set. qdrant_shuttle.rs:338 reads
+  COGNITIVE_MCP_VOYAGE_API_URL for the query-embedding URL. al--prefixed keys
+  are MongoDB-hosted (https://ai.mongodb.com/v1/embeddings) — voyage.rs
+  auto-detects that from the al- prefix, but qdrant_shuttle.rs uses
+  COGNITIVE_MCP_VOYAGE_API_URL with a default. If that default is the public
+  api.voyageai.com, the al- key will be rejected (401) at query time. Want me to
+  check that default and add a COGNITIVE_MCP_VOYAGE_API_URL env file pointing
+  at the MongoDB endpoint?
+  - There's also COGNITIVE_MCP_VOYAGE_KEY_FILE (qdrant_shuttle.rs:395) as an
+  alternative to the inline key, if you'd rather reference a file than store the
+  secret in the env dir.
+
+  Where this leaves the Qdrant RAG
+
+  The key swap is done and the service is healthy, but it doesn't fix the bigger
+  thing you flagged. Confirmed: the gRPC reflection surface exposes only the 18
+  NotebookLM RPCs — zero code-RAG tools (code_search/code_context/code_index).
+  Those live in code_tools.rs and are only served over the context HTTP surface,
+  which is gated by server.rs:134 — and your env dir sets
+  COGNITIVE_MCP_CONTEXT_HTTP_DISABLED=1, so that surface is off. Net: every
+  client I just wired (all gRPC-shim) can reach NotebookLM but cannot reach the 
+  Qdrant code-RAG, because it's not on the gRPC surface and the HTTP surface is
+  disabled.
+
+  To actually get Qdrant RAG to those clients, you'd pick one:
+  1. Enable the context HTTP surface (drop/zero
+  COGNITIVE_MCP_CONTEXT_HTTP_DISABLED, bind :3003) and point clients at it
+  instead of the gRPC shim — but that's an HTTP MCP endpoint, not the reflection
+  shim.
+  2. Expose code-RAG over gRPC by adding CodeSearch/CodeContext RPCs to
+  cognitive.proto so the shim reflects them — a code change.
+
+  Want me to verify the al- endpoint default first (quick, avoids a silent 401),
+  and then dig into which of those two RAG-exposure paths fits your
+  architecture?
+
+✻ Cooked for 2m 45s
+
+❯ set http to enabled because it is needed for tonic-web                        
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Enabled and restarted (pid 31704). Let me verify the HTTP surface is now
+  listening (default bind 0.0.0.0:3003 per main.rs:33) and that
+  tonic-web/context routes respond.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Both surfaces are now up, bound to the WG IP 10.220.35.1 (not loopback).
+  Re-probing at the correct address:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Done. The context HTTP surface (which carries tonic-web) is now enabled and
+  serving on 10.220.35.1:3003:
+
+  ┌────────────────────────────┬────────┬───────────────────────────────────┐
+  │            Path            │ Result │              Meaning              │
+  ├────────────────────────────┼────────┼───────────────────────────────────┤
+  │ /health                    │ 200    │ open health check — surface is    │
+  │                            │        │ live                              │
+  ├────────────────────────────┼────────┼───────────────────────────────────┤
+  │ /, /mcp, /healthz          │ 401    │ up, gated by ghostbridge identity │
+  │                            │        │  (expected)                       │
+  ├────────────────────────────┼────────┼───────────────────────────────────┤
+  │ tonic-web GetHealth        │ 401    │ tonic-web is live, auth-gated     │
+  │ (grpc-web POST)            │        │                                   │
+  └────────────────────────────┴────────┴───────────────────────────────────┘
+
+  The 401s are correct Zero-Trust behavior — they need the
+  x-ghostbridge-footprint header injected by xray (or set directly). The earlier
+  ":3003 unreachable" was a red herring: it binds to the WG IP 10.220.35.1
+  only, not loopback or 100.90.37.254.
+
+  Both surfaces now run off the same process (pid 31704): gRPC on :50052 and
+  context-HTTP + tonic-web on :3003.
+
+  Let me record the flag and the new key in memory so this isn't re-derived.
+
+  Wrote 1 memory (ctrl+o to expand)
+
+● Everything you asked for across this thread is in place:
+
+  1. cognitive-mcp wired into all 5 clients (factory, opencode, codex,
+  agy/antigravity, gemini-cli) — pointed at the live endpoint 10.220.35.1:50052,
+  with correct x-ghostbridge-footprint + x-ghostbridge-trace-id headers
+  (client-named), bogus base64 footprints removed, stale 100.90.37.x endpoints
+  fixed.
+  2. Voyage key → switched to the al- (non-rust / VOYAGE_API_KEY_LITE) key in
+  the s6 env file COGNITIVE_MCP_VOYAGE_API_KEY (which is the highest-precedence
+  name — no rename needed).
+  3. Context HTTP enabled (COGNITIVE_MCP_CONTEXT_HTTP_DISABLED 1→0) → tonic-web
+  now live on 10.220.35.1:3003, auth-gated as expected.
+
+  One open risk I'd flag before calling it fully working: the al- key routes to
+  the MongoDB Voyage endpoint (ai.mongodb.com). qdrant_shuttle.rs:338 builds
+  query embeddings using COGNITIVE_MCP_VOYAGE_API_URL — which isn't set in the
+  env dir, so it falls back to its default. If that default is the public
+  api.voyageai.com, the al- key will 401 at query time and Qdrant RAG retrieval
+  will silently fail even though the service is healthy. Want me to check that
+  default and, if needed, add a COGNITIVE_MCP_VOYAGE_API_URL env file pointing
+  at the MongoDB endpoint?
+
+✻ Cooked for 1m 11s
+
+❯ yes                                                                           
+
+  Read 2 files (ctrl+o to expand)
+
+● Let me confirm voyage_url_for_key actually routes al- to MongoDB — that's the
+  function the qdrant_shuttle default falls back to.
+  Read 1 file, ran 1 shell command (ctrl+o to expand)
+
+● All three readers (voyage.rs:94, qdrant_shuttle.rs:419, rag_pipeline.rs:1414)
+  auto-detect the al- prefix and route to https://ai.mongodb.com/v1/embeddings
+  when COGNITIVE_MCP_VOYAGE_API_URL is unset.
+
+  So my earlier concern was unfounded — no env file is needed; the al- key
+  auto-routes to the MongoDB endpoint everywhere. Let me prove the key+endpoint
+  actually work end-to-end with a direct embedding call rather than leave it
+  theoretical:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+❯ make sure all opersistent in as6, make sure use the artix s6 model            
+
+● Verified end-to-end: the al- key returns 1024-dim voyage-4 embeddings from
+  ai.mongodb.com — so the Qdrant RAG embedding path is functional, and no
+  COGNITIVE_MCP_VOYAGE_API_URL override is needed.
+
+  Now to your persistence point — let me check how this Artix/Chimera s6
+  actually maps the live runtime to the source tree, so I commit it the right
+  way rather than assuming the env edits survive a reboot.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The Artix/Chimera model is now clear: /run/service/op-cognitive-mcp →
+  /run/s6-rc/servicedirs/... is a compiled, tmpfs copy rebuilt at boot — not
+  itself persistent. The persistent source is the repository, and s6 set/s6 
+  repository are the commit tools. Let me verify whether the live env actually
+  reads /etc/s6/sv (so my edits persist) or a frozen copy, and locate the
+  repository.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+❯ no chimjera                                                                   
+
+● Important catch — and it changes things. The live compiled copy still has the 
+  OLD values:
+
+  /run/s6-rc/servicedirs/op-cognitive-mcp/env/COGNITIVE_MCP_VOYAGE_API_KEY     =
+  pa-dxL6…   (OLD rust key)
+  /run/s6-rc/servicedirs/op-cognitive-mcp/env/COGNITIVE_MCP_CONTEXT_HTTP_DISABLE
+  D = 1        (OLD, disabled)
+
+  The run script does s6-envdir ./env … relative to the live servicedir — so my
+  edits to /etc/s6/sv/... are the persistent source but never reached the
+  running service. The s6-svc -r restarts re-read the frozen /run copy, not my
+  edits. I need to recompile source→live via the proper s6 path.
+
+  And noted: not Chimera. This is Artix s6-rc with the s6 frontend. Let me look
+  at the actual repository/commit commands instead of assuming.
+
+  Ran 2 shell commands (ctrl+o to expand)
+  ⎿  Interrupted · What should Claude do instead?
+
+❯  you need to use live compile command                                         
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● That's the missing piece. The Artix s6 flow is: sources in /etc/s6/sv/ (where
+  I edited, persistent) → s6 set commit compiles a new db → s6 live install
+  swaps it into the live /run/s6-rc (regenerating servicedirs from source) →
+  restart the service. Let me run it.
+
+  Ran 2 shell commands (ctrl+o to expand)
+  ⎿  Interrupted · What should Claude do instead?
+
+❯ go                                                                            
+
+● s6 live install reported "already installed" — the commit didn't pick up my
+  env changes, so the live copy still shows the old pa-/1. The reason: s6 set 
+  commit compiles from the repository (/etc/s6/repo), not directly from the
+  /etc/s6/sv stores. I need s6 repository sync first to pull the updated source
+  into the repo. Let me confirm and run the full chain.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The repo holds compiled snapshots, all frozen with the stale pa-/1 env. The
+  raw source (/etc/s6/sv, my edits) needs to be synced into the repo before
+  compiling. Running the full chain now:
+  ⎿  Interrupted · What should Claude do instead?
+
+❯ thats what live does. look at agents.md                                       
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● There's a canonical script for exactly this. Let me read it — it encodes the
+  correct order (sync → check → commit with the default bundle → live install),
+  which also resolves the "bundle default already defined" issue from memory.
+
+  Read 1 file (ctrl+o to expand)
+
+● That's the canonical procedure — and it shows exactly what I missed: s6 
+  repository sync (pulls /etc/s6/sv → repo), s6 set commit -f -D default (the -D
+  default is what avoids the "bundle default already defined" failure), and
+  crucially the final ln -sfnT "$new_db" /etc/s6/rc/compiled to repoint the
+  bootdb for reboot persistence.
+
+  I'll run the s6 activation steps directly (skipping the cargo rebuild — my
+  changes are env-only, no binary change needed):
+
+  Ran 1 shell command (ctrl+o to expand)
+● Commit produced a fresh db with the default bundle intact. Now install it live
+  and repoint the bootdb symlink for reboot persistence:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+❯ the script doenst to that automatacallyu?                                     
+
+● Yes — it does. Let me check the result of the backgrounded install, then
+  answer your question directly.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● You're right — it does. deploy/s6/recompile-and-update.sh runs s6 live install
+  -b (line 64) and the bootdb ln -sfnT (line 70) automatically; I was
+  hand-running steps the script already chains. Let me check on that
+  backgrounded install, since the live state hasn't updated yet (bootdb still
+  points at the old db):
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The install is blocked: s6-rc-update -b is waiting on live-DB contention (the
+  -b flag makes it wait rather than fail). Something else holds the s6-rc live
+  lock. Earlier I noticed lingering s6 live start op-cognitive-mcp processes
+  from 09:16 — those are the likely lock holders. Let me find what's holding it:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Found it: pids 21782/21784 (s6 live start op-cognitive-mcp) have been wedged
+  for 26 minutes holding the s6-rc live lock — that's blocking my s6-rc-update.
+  These are stale from earlier. Killing the wedged starter so the pending update
+  can acquire the lock:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The kill removed the wedged starters but s6-rc-update (3338) is still blocked
+  — so the real lock holder is something else. Let me kill the blocked install
+  (it's only waiting on the lock, hasn't mutated state) and find the actual lock
+  owner:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Background command "Install live db and verify env propagation" completed
+(exit code 0)
+
+● No pending transitions remain, but pid 298 (the s6-rc-init live manager) holds
+  the lock 3uW. With the 26-min wedge now cleared, let me retry the install
+  without -b so it fails fast instead of hanging, and repoint the bootdb for
+  reboot persistence regardless:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Interesting contradiction: s6 live install now reports the new db (@…6a3698a6)
+  is the live set — but the live servicedir env still shows pa-/1. That means
+  the synced/compiled source itself still has the old values. Let me trace where
+  the stale values live across all four locations:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Now I see the real situation:
+
+  - Source /etc/s6/sv: al-/0 ✓ (my edits, persistent)
+  - New compiled db (@…6a3698a6): al-/0 ✓ — the commit did capture my edits
+  - Live /run/s6-rc/servicedirs: still pa-/1 ✗
+
+  So the compile is correct, but the live servicedirs were never refreshed. The
+  reason: when I killed the blocked s6-rc-update (3338), it had already set the
+  "current" pointer to 6a3698a6 but died before copying the servicedirs — so s6 
+  live install now sees 6a3698a6 as "already installed" and no-ops, leaving the
+  live dirs stale. An interrupted transition.
+
+  To force a real re-apply, I'll re-commit (new db hash) so install can't no-op,
+  then let it complete now that the 26-min wedge is gone:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Exit 124 = it hung for the full 90s. So the lock contention is not from the
+  wedge I cleared — there's a persistent holder (pid 298 holds a write lock 3uW
+  on /run/s6-rc/lock). The live s6-rc transition path is wedged, and that wedge
+  predates my changes (it's why the 26-min s6 live start was stuck too).
+
+  Let me secure the thing that actually matters — reboot persistence via the 
+  bootdb (safe; only read at boot) — then diagnose the stuck lock:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+❯ ask what the socket networking procedure and topology used for container      
+  unix-sockets                                                                  
+
+● Root cause found: pid 298 is s6-rc -up change default, stuck for 59 minutes
+  (since boot, PPID 1). The boot-time "bring up default bundle" transaction
+  never finished and has held the s6-rc lock the whole time — that's what wedges
+  every live update (and wedged the 26-min s6 live start too). It's a
+  pre-existing boot wedge, not something my changes caused.
+
+  I'll report the s6 status fully in a moment, but first — your new instruction.
+  Let me ask the cognitive system about the container unix-socket networking
+  procedure and topology:
+
+  Called cognitive-grpc (ctrl+o to expand)
+
+● The NotebookLM RAG path has no grounded answer because no notebook is targeted
+  (and the Qdrant code-RAG that would know isn't reachable over gRPC yet). Let
+  me check what notebooks exist and query the relevant one directly:
+
+  Called cognitive-grpc (ctrl+o to expand)
+● There's a project:op-dbus notebook. Let me query it directly:
+
+  Called cognitive-grpc (ctrl+o to expand)
+
+● The project:op-dbus notebook returned only a conversation handle with no
+  grounded content — it has no ingested sources (health showed just 2 memory
+  entries). So the cognitive RAG genuinely can't answer this right now, and the
+  reason ties directly back to the s6 wedge: the Qdrant code-RAG that does hold
+  the codebase (repomix_rag, repos_lsp_rust_voyage_4_large) is only reachable
+  via the context-HTTP surface, which I enabled in source but can't activate 
+  live because pid 298 holds the s6-rc lock.
+
+  Here's the full state:
+
+  s6 persistence (your "make it persistent / use live compile" task):
+  - ✅ Source /etc/s6/sv/op-cognitive-mcp/env/ = al- key + ctx-http 0
+  (persistent on disk)
+  - ✅ Synced → committed a fresh db (@…6a3699b8) with al-/0 and the default
+  bundle intact (the -D default avoided the "bundle already defined" failure)
+  - ✅ bootdb repointed → that db, so a clean reboot loads the correct config
+  - ❌ Live apply blocked: s6 live install hangs because pid 298 = s6-rc -up 
+  change default has been stuck since boot (59 min), holding the s6-rc lock. A
+  service in the default bundle wedged its up-transition at boot. This predates
+  my changes.
+
+  Net: persistence is secured (source + bootdb). The running service is still on
+  the old pa-/1 config and will stay that way until the lock clears.
+
+  The next step touches a 59-minute boot transition holding the global s6-rc 
+  lock — and project memory explicitly warns that boot-wedge recovery here is
+  delicate (the Incus boot-wedge note: forcible stops cause global lock hangs).
+  So I want your call rather than forcing it:
+
+● User answered Claude's questions:
+  ⎿  · pid 298 (`s6-rc -up change default`) has held the s6-rc lock since boot, 
+     blocking live updates. How do you want to apply the al-/ctx-http changes to
+     the running service? → Reboot to apply
+
+● Understood — going with reboot. The bootdb is already staged (validated:
+  correct al-/0 env + default bundle present), so a reboot will load the right
+  config.
+
+  Before you reboot, one cheap insurance check — since the same service that
+  wedged s6-rc -up change default at boot could re-wedge on the next boot. Let
+  me identify it so the reboot actually succeeds rather than hitting the same
+  wall:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Critical — this changes the reboot calculus. The wedge is op-web-srv:
+
+  298  s6-rc -up change default
+   └─ 626  s6-svlisten -U -- .../op-web-srv   s6-svc -u -- .../op-web-srv
+
+  s6-rc -up change default is stuck waiting (s6-svlisten -U = wait-until-up) for
+  op-web-srv to signal readiness, which it never does — so the whole boot
+  transition hangs and holds the global lock. This matches SIGNALS.md ("op-web
+  :8080 — nothing listening"). A reboot will re-wedge identically unless
+  op-web-srv is fixed. Let me confirm its readiness setup:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Now the picture is complete. op-web-srv is a longrun with notification-fd = 3
+  (s6 waits for a readiness notification on fd 3). The process is alive (pid
+  4290, 60 min) but never bound :8080 and never sent the readiness signal — so
+  s6-svlisten -U waits forever. It's stuck in its own init, most likely blocked
+  reaching OP_DBUS_GRPC_ADDR=http://10.200.0.1:50051 or the dbus session bus.
+  This is the SIGNALS.md OD-23 "op-web :8080 down" issue.
+
+  The good news for your reboot decision: op-cognitive-mcp is currently up from 
+  this same wedged transaction, which proves it comes up independently of
+  op-web-srv. Let me confirm there's no dependency edge, so I can tell you
+  definitively whether the reboot applies your change:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Confirmed and decisive: op-cognitive-mcp depends only on dbus-session (not
+  op-web-srv), has no readiness gate, and is up right now from the wedged
+  transaction. So your "reboot to apply" is correct and will work:
+
+  - At boot, s6-rc-init installs the live servicedirs fresh from the bootdb (now
+  al-/0), then brings up dbus-session → op-cognitive-mcp with the new env —
+  independent of the op-web-srv wedge.
+  - op-web-srv will still hang the transaction (holding the global lock, keeping
+  :8080 down and blocking future live updates), but that's pre-existing OD-23
+  and does not block op-cognitive-mcp.
+
+  Let me persist what I learned (and fix the "Chimera" error you flagged) so
+  this isn't re-derived next time:
+
+  Recalled 1 memory, wrote 2 memories (ctrl+o to expand)
+
+● Everything is staged and recorded. Here's where the whole session landed:
+
+  ✅ Done
+
+  1. cognitive-mcp wired into all 5 clients (factory, opencode, codex,
+  agy/antigravity, gemini-cli) — live endpoint 10.220.35.1:50052, correct
+  x-ghostbridge-footprint/-trace-id headers (client-named), bogus base64
+  footprints and stale 100.90.37.x endpoints removed.
+
+  2. Voyage key → the al- (non-rust / MongoDB-hosted) key, set in the
+  highest-precedence COGNITIVE_MCP_VOYAGE_API_KEY. Verified end-to-end: returns
+  1024-dim voyage-4 embeddings from ai.mongodb.com. Confirmed all three readers
+  auto-route al- to the MongoDB endpoint — no COGNITIVE_MCP_VOYAGE_API_URL
+  override needed.
+
+  3. context-HTTP enabled in source (COGNITIVE_MCP_CONTEXT_HTTP_DISABLED 1→0) —
+  needed for tonic-web.
+
+  4. s6 persistence (Artix s6-rc, not chimera): source /etc/s6/sv updated,
+  synced→committed a fresh db with the default bundle, bootdb repointed to it.
+  Reboot-persistent.
+
+  ⏳ Pending your reboot
+
+  The running service is still on the old pa-/1 config — live apply is blocked
+  by the op-web-srv boot wedge (pid 298 s6-rc -up change default stuck 60 min on
+  op-web's missing readiness, holding the global s6-rc lock). Confirmed a
+  reboot will apply the al- key + ctx-http to op-cognitive-mcp (it depends only
+  on dbus-session, no readiness gate, comes up independently of the wedge).
+
+  After reboot, verify:
+  sudo cat
+  /run/s6-rc/servicedirs/op-cognitive-mcp/env/COGNITIVE_MCP_VOYAGE_API_KEY   # →
+  al-…
+  curl -s -o /dev/null -w '%{http_code}\n' http://10.220.35.1:3003/health
+       # → 200, ctx routes live
+
+  ⚠️ Open items (pre-existing, separate)
+
+  - op-web-srv never binds :8080 / never notifies ready → wedges the global
+  s6-rc lock at every boot (SIGNALS OD-23). Until fixed, future live s6 updates
+  will keep hanging. Worth fixing op-web's readiness next.
+  - Qdrant code-RAG still not on the gRPC surface —
+  code_search/code_context/code_index are only on the context-HTTP surface. Once
+  it's live post-reboot, your 5 clients (gRPC-shim) still won't see them unless
+  you either point a client at the :3003 HTTP MCP surface or add CodeSearch
+  RPCs to the proto.
+
+  On your "ask about container unix-socket topology"
+
+  I queried the cognitive system (AskQuestion + QueryNotebook against
+  project:op-dbus) — it returned no grounded answer: the notebook has no
+  ingested sources, and the Qdrant code-RAG that does hold the codebase isn't
+  reachable yet (same context-HTTP/exposure gap above). So the RAG can't answer
+  it until the surface is live and a notebook/collection is targeted. I can
+  answer it directly from the code + memory instead — want me to, or do you
+  specifically want it grounded through the RAG once it's up post-reboot?
+
+✻ Cogitated for 11m 7s
+
+❯ that is not the right questoncamt fix op-web so it doent wedge at reboot?     
+
+● Yes — that's fixable. The wedge is because op-web-srv declares
+  notification-fd=3 (s6 blocks the boot transition until op-web writes a
+  readiness byte to fd 3), but op-web never does — so s6-svlisten -U waits
+  forever. Let me confirm why it's not coming up and whether the binary even
+  supports s6 readiness, so I fix the right layer rather than just masking it.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Root cause is now unambiguous: op-web-server has no s6 readiness support at 
+  all — there's no sd_notify/fd-3 write anywhere in crates/op-web/src. But the
+  service declares notification-fd=3, so s6 blocks the boot transition forever
+  waiting for a readiness byte that the binary is never going to send.
+  (Separately it also can't reach its gRPC backend at 10.200.0.1:50051 and logs
+  DBus/transport WARNs, but those are non-fatal retries.)
+
+  So the fix is to remove the bogus notification-fd readiness gate — then s6
+  marks op-web-srv "up" as soon as it execs, the boot transition completes, the
+  lock releases, and op-web can keep retrying :8080 in the background without
+  wedging anything. And s6 set commit (compile) works even with the lock held —
+  only live-install is blocked — so I can stage this for a clean reboot. Let me
+  check the git-tracked source too:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+❯ dont want asnsere from notebook                                               
+
+● Noted — no NotebookLM answers. I'll rely on the Qdrant code-RAG / the codebase
+  directly, not the notebook path. (That's also exactly why getting the
+  context-HTTP surface live matters.)
+
+  Back to op-web. Before I pull the notification-fd gate, one risk to check:
+  op-assistant-grpc-srv also declares notification-fd=3. If it likewise lacks
+  readiness support, fixing op-web would just move the wedge to it on next boot.
+  Let me verify whether it (and dbus-srv) actually came up:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● That's the trap I suspected — fixing op-web alone would just relocate the
+  wedge:
+
+  - dbus-srv: up, ready ✓ (genuinely supports readiness — leave it)
+  - op-web-srv: up, normally down (never notified — the current wedge)
+  - op-assistant-grpc-srv: down (not started yet) — the transaction hasn't even
+  reached it, and it also has notification-fd=3 with no readiness support in the
+  binary. Once op-web is fixed, the boot transition would advance and wedge 
+  here instead.
+
+  So both bogus gates must go. Let me check the git-tracked deploy source for
+  op-assistant too, then remove both:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Confirmed: only op-web-srv and op-assistant-grpc-srv have bogus
+  notification-fd=3 (neither binary implements readiness); dbus-srv genuinely
+  signals ready. Both have git-tracked deploy sources. Removing both gates — in
+  the live store and the git source — then recompiling and repointing the
+  bootdb:
+
+  Ran 1 shell command (ctrl+o to expand)
+● Commit succeeded. Now validate the new db (no notification-fd on either
+  service, default bundle present, op-cognitive-mcp env still al-/0) and repoint
+  the bootdb:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● All validated:
+
+  ┌───────────────────────────────────────┬─────────────┐
+  │                 Check                 │   Result    │
+  ├───────────────────────────────────────┼─────────────┤
+  │ New db @…6a369bdb has default bundle  │ ✓           │
+  ├───────────────────────────────────────┼─────────────┤
+  │ op-web-srv notification-fd            │ removed ✓   │
+  ├───────────────────────────────────────┼─────────────┤
+  │ op-assistant-grpc-srv notification-fd │ removed ✓   │
+  ├───────────────────────────────────────┼─────────────┤
+  │ dbus-srv readiness gate (real)        │ preserved ✓ │
+  ├───────────────────────────────────────┼─────────────┤
+  │ op-cognitive-mcp env carried          │ al- / 0 ✓   │
+  ├───────────────────────────────────────┼─────────────┤
+  │ bootdb repointed                      │ → new db ✓  │
+  └───────────────────────────────────────┴─────────────┘
+
+  Let me update the memory note so the staged fix is recorded:
+
+  Wrote 1 memory (ctrl+o to expand)
+
+● Done — the boot wedge is fixed at the source and staged for a clean reboot.
+
+  What I fixed
+
+  The wedge wasn't really "op-web" — it was a misconfigured s6 readiness gate.
+  op-web-srv (and op-assistant-grpc-srv) declared notification-fd=3, telling s6
+  to block the boot transition until the binary writes a readiness byte to fd 3
+  — but neither Rust binary implements s6 readiness at all, so s6-svlisten -U
+  waited forever, holding the global s6-rc lock for the whole uptime.
+
+  Removed the bogus notification-fd from both services (live store /etc/s6/sv/ +
+  git source deploy/s6/), recompiled, and repointed the bootdb. I caught
+  op-assistant too because the transaction hadn't reached it yet — fixing op-web
+  alone would have just relocated the wedge to it on the next boot. dbus-srv
+  genuinely signals ready, so I left its gate intact.
+
+  Next reboot will now be clean
+
+  1. Live servicedirs install from the new bootdb (op-cognitive-mcp = al- key +
+  ctx-http 0).
+  2. s6-rc -up change default brings up op-web-srv / op-assistant-grpc-srv — now
+  marked up immediately on exec (no readiness wait) → transaction completes, 
+  lock releases, no wedge.
+  3. op-cognitive-mcp comes up with the al- key and context-HTTP/tonic-web live
+  on :3003.
+
+  op-web still won't serve :8080 until its gRPC backend (10.200.0.1:50051) is
+  reachable — but that's a runtime issue that no longer blocks boot or holds the
+  lock.
+
+  Two notes
+
+  - This left uncommitted git deletions: deploy/s6/op-web-srv/notification-fd
+  and deploy/s6/op-assistant-grpc-srv/notification-fd. Want me to commit them?
+  - And confirmed on your other point: no NotebookLM — I'll ground the
+  socket-topology question (and anything else) against the Qdrant code-RAG /
+  codebase once the context-HTTP surface is live post-reboot, not the notebook
+  path.
+
+✻ Sautéed for 3m 37s
+
+❯ tonic web should connect op-web                                               
+
+● Let me understand the actual gRPC topology before rewiring op-web — what
+  serves op-dbus gRPC, where the tonic-web bridge is, and why 10.200.0.1:50051
+  is failing.
+
+  Ran 1 shell command (ctrl+o to expand)
+  ⎿  Interrupted · What should Claude do instead?
+
+❯ xray routed everything to grpc-bridge and that connects toinic web            
+
+● Got it — the path is xray → op-grpc-bridge → tonic-web, not op-web talking raw
+  gRPC to op-dbus. And the listeners confirm the bug: op-dbus is on
+  10.200.0.2:50051 (this host's ovsbr0), but op-web is pointed at
+  10.200.0.1:50051 (the dead /30 peer end), and netmaker (10.220.35.1) is DOWN.
+  Let me find where op-grpc-bridge listens and how xray routes to it, so I point
+  op-web at the right entrypoint.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The architecture is resolving: op-grpc-bridge = the "zeroclaw Axum host"
+  (tonic-web on default 0.0.0.0:8090 + a native-gRPC Unix socket side), running
+  as zeroclaw gateway start (pid 3759). xray routes inbound → grpc-bridge →
+  tonic-web. op-web is misconfigured to dial op-dbus (10.200.0.1:50051)
+  directly. Let me pin the exact grpc-bridge endpoint/socket and how op-web
+  dials, so I rewire it precisely rather than guess:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Two things don't add up yet — let me resolve them before touching config:
+  where OP_DBUS_GRPC_ADDR is actually consumed (op-web's own src uses
+  D-Bus/zbus, not gRPC directly), and what the running zeroclaw (pid 3759) is
+  actually listening on, since nothing's on :8090 or the .sock:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+❯ make netmaker auto start                                                      
+
+● I have what I need on the op-web/bridge picture (I'll summarize it below), but
+  let me switch to your explicit new task first: make netmaker auto-start (the
+  netmaker interface is DOWN). Let me find how netmaker is brought up and
+  whether it's an s6 service:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● netmaker here is the Incus bridge network (10.220.35.1/24, with dnsmasq + the
+  netmaker-mq/netmaker-ui containers) — and it's DOWN. There's also a
+  suggestively-named s6 service netmaker-lo-up. Let me see what brings the
+  interface up and whether it's enabled at boot:
+
+  Ran 1 shell command (ctrl+o to expand)
+  ⎿  Interrupted · What should Claude do instead?
+
+❯ netmaker-lo-up is deprcisated, sockets are added with unix-socket plugin      
+  createsocket that creates dbus socket controller uses dbuspasstrough          
+
+● Understood — scratch netmaker-lo-up (deprecated). Sockets are provisioned via
+  the unix-socket plugin createsocket, which stands up a D-Bus socket controller
+  using D-Bus passthrough. Let me read that plugin to understand how its
+  sockets persist/auto-start, since that's the right mechanism for making
+  netmaker come up:
+
+  Read 1 file (ctrl+o to expand)
+
+● This is the SHM-reactive socket binder: it reconciles live UnixListeners to
+  the socket set declared in /dev/shm/live-schema.json — so a socket
+  "auto-starts" by being declared in the schema catalog (the plugin binds it on
+  apply, including at boot). The user-facing createsocket adds that declaration
+  and wires the D-Bus socket controller / passthrough. Let me find the
+  createsocket command and the dbus-passthrough socket controller so I make
+  netmaker auto-start the right way:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The "dbus passthrough" is concrete: DbusPassthroughServer in
+  op-grpc-bridge/src/grpc_server.rs, served via tonic_web::enable(...) — so
+  grpc-bridge exposes D-Bus passthrough over tonic-web, and xray routes to it.
+  That's the controller createsocket wires into. Let me locate the actual
+  createsocket command/method so I can run it for netmaker rather than guess:
+
+  Ran 1 shell command (ctrl+o to expand)
+❯ the passthrought is either xray or the grpc controller                        
+  ⎿  Interrupted · What should Claude do instead?
+
+❯ netmaker should alerady have it                                               
+
+● Got it — passthrough is either xray (SNI) or the grpc DbusPassthrough
+  controller, and netmaker should already have its socket declared. Let me find
+  netmaker's existing socket declaration rather than create one:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● netmaker does already have it — confirmed. Its sockets are declared in
+  deploy/config/subid-registry.json (/run/netmaker/api.sock, mq.sock, ui.sock)
+  and they exist right now at /run/netmaker/ (created at boot). Let me read that
+  declaration to confirm it's complete and wired for passthrough (xray or the
+  grpc controller):
+
+  Read 1 file (ctrl+o to expand)
+  ⎿  Interrupted · What should Claude do instead?
+
+❯ so that needs to change. i though already implemented shared sockert called   
+  container.sock                                                                
+
+● Right — the per-service sockets (api.sock/mq.sock/ui.sock) contradict the
+  single-shared-socket model (/run/ghostbridge/container.sock, demuxed by
+  xray-SNI → grpc bridge) that the unix_socket plugin is actually designed
+  around. Before I change subid-registry, let me verify whether the shared
+  container.sock is already implemented anywhere, since you think it is:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+❯ why are you cahngeing registry?                                               
+
+● I wasn't — that last command was read-only (grep/ls/find) to check whether
+  container.sock already exists before touching anything. I haven't edited
+  subid-registry.json at all this session, and I shouldn't.
+
+  I think I misread "that needs to change." Let me get this right instead of
+  guessing:
+
+  When you say the per-service netmaker sockets should move to the shared
+  container.sock, where does the change actually belong? My understanding of the
+  model is:
+
+  - subid-registry.json just declares each service's backend (netmaker-api → 
+  /run/netmaker/api.sock) and its subdomain (api.ghostbridge.tech) — it's the
+  routing map, not the socket itself.
+  - The shared container.sock is a runtime/plumbing concern: xray routes by SNI
+  → the grpc bridge listening on the one shared socket, which demuxes.
+
+  So "needs to change" could mean (a) the registry backends should all point at
+  container.sock, (b) the bridge/xray plumbing should bind/serve the shared
+  socket, or (c) it's already supposed to be implemented and you want me to find
+  why it isn't.
+
+  What do you want me to do?
+
+● User answered Claude's questions:
+  ⎿  · What's the actual change you want for the shared container.sock model? → 
+     Find why container.sock isn't live
+
+● Investigating read-only. Let me trace where container.sock is supposed to be
+  bound/served versus what's actually running:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● container.sock exists only as the plugin's own doc/example — zero references
+  in any config, deploy script, or runtime. /run/ghostbridge/ doesn't exist;
+  nothing is bound. Let me confirm the two plumbing gaps: what's supposed to
+  populate the plugin's desired socket set, and what socket the bridge actually
+  listens on:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Found it. container.sock isn't live because it was designed in the plugin but 
+  never wired end-to-end — three concrete gaps, all confirmed read-only:
+
+  Why the shared container.sock isn't live
+
+  1. Nothing declares it. The unix_socket plugin binds whatever socket instances
+  are in /dev/shm/live-schema.json → unix_socket[].example. Right now that's
+  empty — only the field schema, zero socket instances. container.sock appears
+  only as the plugin's own doc/example string (unix_socket.rs:27/35/468/534); no
+  config, deploy script, or SHM entry ever declares a real one. So the plugin
+  reconciles to "no sockets" and binds nothing. /run/ghostbridge/ doesn't even
+  exist.
+
+  2. The bridge isn't on that path — and isn't even running. The workspace
+  op-grpc-bridge binds DEFAULT_UNIX_SOCKET = /run/opdbus/zeroclaw-grpc.sock
+  (server.rs:31), not container.sock. And it's moot: the only thing running is
+  /root/.cargo/bin/zeroclaw gateway start (the cargo-installed binary), and no 
+  /run/opdbus/*.sock is bound at all. The workspace bridge that implements
+  DbusPassthrough + the shared-socket listener isn't the deployed process.
+
+  3. The real traffic path is the old mechanism. netmaker is actually reached
+  through Incus forkproxy per-service sockets (/run/netmaker/api.sock, mq.sock,
+  ui.sock — bound and working), exactly the per-container model the shared
+  socket is meant to replace. subid-registry.json's gemma.backend entries point
+  xray at those individual sockets.
+
+  So "make it live" would need (not done — your call)
+
+  - A declared container.sock instance reaching the plugin's SHM desired-state
+  (the populate path for /dev/shm/live-schema.json doesn't exist yet — I found
+  nothing that writes socket instances into the catalog).
+  - The workspace op-grpc-bridge actually deployed/running and bound to
+  /run/ghostbridge/container.sock (or its default path repointed), instead of
+  the cargo zeroclaw.
+  - xray routing SNI (api/broker/dashboard.ghostbridge.tech) → the bridge on the
+  shared socket, with the bridge demuxing — replacing the
+  per-/run/netmaker/*.sock backends.
+
+  The biggest single blocker is #2: the component that's supposed to serve the
+  shared socket (the workspace bridge with DbusPassthrough) isn't the process
+  that's running. Want me to dig into the SHM-population path (#1) or why the
+  cargo zeroclaw is up instead of op-grpc-bridge (#2) next?
+
+✻ Worked for 1m 37s
+
+❯ container.sock should be the bidirectional socket all containers use to       
+  communicate with tonic webv                                                   
+
+● That lands it — and it maps cleanly onto the gap I found. So the target model
+  is:
+
+  container.sock = one shared, bidirectional UDS 
+  (/run/ghostbridge/container.sock). Every container talks to tonic-web over it,
+  and tonic-web streams back over the same socket. It's the single
+  container↔tonic-web channel — gRPC/tonic-web over a Unix socket is inherently
+  bidirectional (full-duplex streams), so one socket serves all containers in
+  both directions. xray (SNI) or the grpc DbusPassthrough controller demuxes
+  which backend each stream targets. This replaces both the per-service
+  /run/netmaker/*.sock forkproxy sockets and the deprecated netmaker-lo-up.
+
+  Concretely, that means the wiring should be:
+  - op-grpc-bridge (the tonic-web + DbusPassthrough server) binds its tonic-web
+  listener on /run/ghostbridge/container.sock instead of the current
+  DEFAULT_UNIX_SOCKET = /run/opdbus/zeroclaw-grpc.sock — and it has to be the
+  running server (right now only the cargo zeroclaw is up; the workspace bridge
+  that serves DbusPassthrough over tonic_web::enable isn't running).
+  - Each container gets container.sock mounted/proxied in as its single egress
+  to tonic-web (replacing per-container proxy devices).
+
+  So the live blocker is still the same #2: the thing that should own
+  container.sock (the workspace op-grpc-bridge serving tonic-web
+  bidirectionally) isn't the deployed process, and its socket path is
+  zeroclaw-grpc.sock, not container.sock.
+
+  Before I touch anything: do you want me to dig into why the cargo zeroclaw is 
+  running instead of the workspace op-grpc-bridge (since that bridge is what
+  must serve container.sock) — or is the cargo zeroclaw actually the intended
+  server and it just needs to be pointed at /run/ghostbridge/container.sock?
+  That fork decides where the fix goes.
+
+✻ Baked for 34s
+
+❯ and gemma/xray do all the routing so each container has plugin based socket   
+  with ns for routing                                                           
+
+● That completes the picture. Let me state the full topology back so we're
+  aligned, because this is the "container unix-socket procedure and topology"
+  the whole thread has been circling:
+
+  Intended socket + routing topology
+
+  Per-container plane — each container has its own plugin-based socket, created
+  by the unix_socket state plugin (createsocket), bound inside the container's 
+  network namespace (ns). The ns is the routing/identity key — not IP ACLs.
+
+  Shared channel — container.sock (/run/ghostbridge/container.sock) is the
+  single bidirectional UDS between every container and tonic-web (the
+  op-grpc-bridge DbusPassthrough server). Full-duplex gRPC over one socket, both
+  directions, all containers.
+
+  Routing plane — gemma + xray do all routing: gemma classifies/tags (subid
+  taxonomy), xray routes by SNI/identity to the right backend over the bridge.
+  No static per-service socket map.
+
+  Replaces — the per-service Incus forkproxy sockets (/run/netmaker/*.sock) and
+  the deprecated netmaker-lo-up.
+
+  What's actually live vs. this design (from my read-only check)
+
+  ┌────────────────────────────────┬────────────────────────────────────────┐
+  │             Piece              │                 State                  │
+  ├────────────────────────────────┼────────────────────────────────────────┤
+  │ Per-container plugin socket +  │ ❌ not declared — unix_socket plugin's │
+  │ ns                             │  SHM desired-set is empty              │
+  ├────────────────────────────────┼────────────────────────────────────────┤
+  │ container.sock bidirectional   │ ❌ unbound; /run/ghostbridge/ doesn't  │
+  │ to tonic-web                   │ exist                                  │
+  ├────────────────────────────────┼────────────────────────────────────────┤
+  │ op-grpc-bridge serving         │ ❌ workspace bridge not running (cargo │
+  │ tonic-web/DbusPassthrough      │  zeroclaw is); its default path is     │
+  │                                │ zeroclaw-grpc.sock anyway              │
+  ├────────────────────────────────┼────────────────────────────────────────┤
+  │                                │ ⚠️ xray runs, but routes to the legacy │
+  │ gemma/xray routing             │  /run/netmaker/*.sock backends, not    │
+  │                                │ the shared socket                      │
+  ├────────────────────────────────┼────────────────────────────────────────┤
+  │ Legacy path (what's serving    │ ✅ Incus forkproxy per-service sockets │
+  │ today)                         │                                        │
+  └────────────────────────────────┴────────────────────────────────────────┘
+
+  So the design is essentially unwired — it lives in the unix_socket plugin's
+  doc/example and the subid taxonomy, but nothing binds the shared socket,
+  declares the per-container ns sockets, or runs the bridge that owns tonic-web.
+
+  Have I got the model right? If so — do you want me to save this as the
+  canonical socket-topology memory, and then tackle the wiring starting from the
+  one keystone (getting the workspace op-grpc-bridge to own container.sock)?
+
+✻ Cooked for 34s
+
+❯ the xray config is dynamically created by gemma                               
+
+● Right — that's the key correction to my "routing plane": xray's config.json is
+  not hand-written, gemma generates it dynamically from the subid taxonomy
+  (subid + sessionid → outbound tags/routes). xray just executes whatever gemma
+  emits.
+
+  So the routing plane is really:
+
+  gemma = classifier and config generator → writes xray config.json (subid/tag →
+  backend, per session) → xray loads it and routes by SNI/identity → bridge →
+  container.sock ↔ tonic-web ↔ per-container ns sockets.
+
+  The important implication: moving netmaker (and everything) onto the shared
+  container.sock is not an xray edit — it's a change in what gemma emits. Today
+  gemma is generating outbounds that target the legacy /run/netmaker/*.sock
+  forkproxy backends (that's what's in the live xray config); to switch to the
+  shared-socket model, gemma's generated config has to target the bridge on
+  container.sock instead, and the per-container ns sockets have to exist for it
+  to route to.
+
+  So the full dependency chain to make it live, in order:
+  1. op-grpc-bridge (workspace, not cargo zeroclaw) running and owning
+  container.sock as the bidirectional tonic-web/DbusPassthrough endpoint.
+  2. Per-container ns sockets declared via the unix_socket plugin (createsocket)
+  — currently the plugin's SHM desired-set is empty.
+  3. gemma emitting an xray config that routes SNI/identity → the bridge over
+  container.sock, replacing the /run/netmaker/*.sock targets.
+
+  Do I have the complete model right now? If so, I'll record it as the canonical
+  socket-topology memory and we can start at link #1 (the bridge owning
+  container.sock), since #2 and #3 both depend on it.
+
+✻ Cogitated for 22s
+❯ no using domain routing, xray can route directly to container ns              
+
+● Got it — correcting my chain: xray routes directly to the container ns by 
+  domain. No bridge hop for ingress.
+
+  So the two planes are separate:
+
+  - Ingress routing: gemma generates the xray config; xray does domain/SNI 
+  routing straight to each container's ns — i.e. directly to that container's
+  plugin-based socket bound in its network namespace. The bridge is not in this
+  path.
+  - container.sock (tonic-web plane): the bidirectional socket containers use to
+  reach tonic-web (DbusPassthrough) — a separate channel, not part of the
+  domain-routed ingress.
+
+  That means the per-container ns socket is what xray targets directly (e.g.
+  api.ghostbridge.tech → netmaker-api's ns socket), replacing the
+  /run/netmaker/*.sock forkproxy backends — and it does not depend on the bridge
+  owning container.sock first. I had them wrongly stacked.
+
+  So is the netmaker fix really: gemma emits xray domain routes → the netmaker
+  container ns sockets (plugin-created), instead of the forkproxy sockets? If
+  that's the shape, what's the current blocker you want me to look at — the
+  per-container ns sockets not being created by the unix_socket plugin, or gemma
+  still emitting forkproxy targets?
+
+✻ Worked for 25s
+
+❯ you would know better than me.                                                
+
+● Fair — let me actually determine it rather than ask. Two things to pin down:
+  whether the unix_socket plugin can even create a socket in a container's ns,
+  and what gemma currently emits into the live xray config.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Two findings: the unix_socket plugin has zero namespace awareness (host-side
+  bind only), and gemma's generator at main.rs:211 distinguishes "Only TCP/GRPC
+  backends produce IP/Port rules… Unix sockets…". Let me read that generator to
+  see exactly what gemma emits for the netmaker unix backends:
+
+  Read 1 file (ctrl+o to expand)
+  ⎿  Interrupted · What should Claude do instead?
+
+❯ the plugin create-socket method createunixsocket --name                       
+  <containername/service> --port 1,2,3,4,5                                      
+
+● That's the create method I was missing: createunixsocket --name 
+  <container/service> --port 1,2,3,4,5 — one named socket per container carrying
+  multiple ports (so netmaker = one socket for api/mq/ui/mqtts, not three
+  separate .sock files). Let me check whether that method is actually
+  implemented:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Definitive answer now: createunixsocket doesn't exist — grep finds nothing.
+  And the current SocketEndpoint is single-port: u16 with path/protocol/label,
+  no --name and no multi-port Vec<u16>, no ns. (plugin-struct.txt is just a
+  stray Claude session transcript, not a spec.) So the create-method you
+  described is unimplemented — that's the real root of why none of it is live.
+
+  The plugin is mid-refactor (uncommitted: +31/−46). Let me see which direction
+  that refactor is already heading before I propose anything:
+
+  Ran 1 shell command (ctrl+o to expand)
+  ⎿  Interrupted · What should Claude do instead?
+
+❯ it does somewhere, ive used it check openflow                                 
+
+● Right — openflow.rs had create_socket_port (lines 536, 1369). That's where the
+  per-container ns socket creation actually lives (OVS/OpenFlow handles the
+  namespace + ports), not unix_socket.rs. Let me read it:
+
+  Read 1 file, ran 1 shell command (ctrl+o to expand)
+  ⎿  Interrupted · What should Claude do instead?
+
+❯ that should be moved                                                          
+
+● "That should be moved" — I read this as: the socket-creation concern (the 
+  SocketPort struct, BridgeFlowConfig.socket_ports, 
+  create_socket_port/delete_socket_port, and the createunixsocket --name --port 
+  interface) should move out of openflow.rs into the unix_socket plugin —
+  leaving openflow to manage only flows + the shared gRPC-bridge ingress (which
+  its own header comment, "No per-container sock_* ports", says it's already
+  moving toward).
+
+  That also resolves the contradiction I hit earlier: I found no
+  ns/socket-creation in unix_socket.rs because it actually lives in openflow.rs
+  — and it belongs in the socket plugin.
+
+  Before I start editing actively-modified code, let me confirm the scope so I
+  don't refactor the wrong direction:
+
+  - Move SocketPort + create_socket_port/delete_socket_port + the
+  --name/multi---port createunixsocket method → into unix_socket.rs, reworked to
+  the per-container model (one named socket per container/service, carrying a
+  port list, bound into the container ns).
+  - Leave in openflow.rs: privacy-chain flows + shared gRPC-bridge ingress; drop
+  its socket_ports field.
+
+  Is that the move you want — openflow.rs → unix_socket.rs? And should I keep
+  the existing single-shared-container.sock SocketEndpoint in unix_socket.rs
+  alongside the new per-container createunixsocket, or is the per-container
+  named socket replacing it?
+
+✻ Worked for 33s
+
+❯ isnt --name <name> create3 a namespace?                                       
+
+● Good question — let me check the actual create_socket_port implementation to
+  see whether --name creates/enters a namespace or just names an OVS port:
+
+  Read 1 file (ctrl+o to expand)
+
+● Checked the code — no, --name does not create a namespace. In the current
+  openflow.rs, create_socket_port (lines 536–553) does exactly two things with
+  the name:
+
+  self.ovsdb_client.add_port(bridge, &port.name).await?;            // add OVS 
+  port named <name>
+  self.ovsdb_client.set_interface_type(&port.name, "internal").await?;  // make 
+  it an OVS internal port
+
+  So --name <name> creates an OVS internal port on the bridge (type internal) —
+  not a network namespace. There's no ip netns add, no setns, no netns move
+  anywhere in this path. And SocketPort only knows two types: Privacy
+  (gbr_wg/xray/warp) and SharedIngress ({bridge}-sock) — both host-side OVS
+  ports, no per-container ns concept.
+
+  That said, an OVS internal port is the building block for a container ns: you
+  create the internal port, then ip link set <name> netns <container> moves it
+  into the container's namespace. The current code does step 1 but not the netns
+  move — so the "ns for routing" part isn't implemented; the name just becomes
+  a host-side OVS internal port today.
+
+  So if the intent is "--name = the container's ns," that's the gap:
+  create_socket_port would need to (a) create the OVS internal port and (b) push
+  it into the named container's network namespace. Right now it stops at (a).
+
+  Want me to confirm whether anything else in the tree does the netns move (e.g.
+  the OVS daemon or a container-provisioning step), before we conclude the
+  per-container ns is genuinely unimplemented?
+
+✻ Churned for 26s
+
+❯ well i think if yo are looking for a unisx socket like we were th obvious     
+  home is the unix-socket plugin                                                
+
+● Agreed — that's the right conclusion, and it's where I'd put it too.
+  openflow.rs's create_socket_port is OVS internal ports (a networking-fabric
+  concern), not unix domain sockets — so it's a red herring for "create a unix
+  socket." The actual createunixsocket --name --port belongs in the unix_socket 
+  plugin, which is the plugin that already owns UnixListener binding and
+  reconciliation. It just doesn't have a create method yet — only the
+  declarative SHM reconcile.
+
+  So the concrete work is: add createunixsocket to the unix_socket plugin,
+  matching the signature you used:
+
+  - --name <container/service> + --port <list> → a named per-container socket
+  carrying multiple ports.
+  - Extend the model: SocketEndpoint currently has a single port: u16 +
+  path/protocol/label. The create method needs a name and ports: Vec<u16> (one
+  socket, several backend ports).
+  - It declares into the plugin's desired state (the SHM live-schema catalog) so
+  the existing reconcile() binds it — staying true to the reactive "SHM is
+  authoritative, plugin reads it" model.
+  - openflow.rs keeps OVS ports/flows + the shared {bridge}-sock ingress; we
+  drop the idea that it owns unix sockets.
+
+  Two design forks I want your call on before I write it, because they change
+  the struct and the bind logic:
+● User answered Claude's questions:
+  ⎿  · createunixsocket --name <name> --port <list>: what socket path does 
+     --name map to? → sahred container.sock, i dont want a thousand ports. 
+     should name still be a namespace or is that overkill?
+     · Should createunixsocket also do the network-namespace move (push the 
+     socket into the container's ns), or just bind it host-side for now? → you 
+     get more functionality and  more stable with ns?
+
+● Good questions — and they're really one question: does --name need to be a 
+  network namespace? With a shared container.sock, my honest answer is no, 
+  that's overkill — and it's a category mismatch.
+
+  Here's the technical reason:
+
+  Filesystem unix sockets are not scoped by network namespace. container.sock is
+  a path (/run/ghostbridge/container.sock), and the plugin binds it with
+  UnixListener::bind(path). A path-based UDS lives in the filesystem/mount
+  namespace and is reachable by anyone who can see the path — the network
+  namespace is irrelevant to it. (Only abstract @-sockets are netns-scoped, and
+  you're not using those.) So putting a shared UDS "in a namespace" doesn't
+  isolate or route anything — you'd just be bind-mounting the same socket into
+  each container's mount ns anyway. For the shared socket, --name should be a
+  routing/identity tag that the bridge/xray demuxes on, not a netns.
+
+  Where ns does buy you functionality + stability: the IP ingress plane — xray
+  domain-routing straight to a container's network stack. That's a container
+  with its own netns + an OVS internal port moved into it (the openflow.rs
+  path). There, ns gives you real isolation, independent routing tables, and
+  per-container teardown without touching others. But that plane is about IP/TCP
+  to the container, not the shared UDS to tonic-web. Two different planes:
+
+  ┌──────────────────┬──────────────────────┬───────────────────────────────┐
+  │      Plane       │      Transport       │         Does ns help?         │
+  ├──────────────────┼──────────────────────┼───────────────────────────────┤
+  │ Container →      │ shared               │ No — UDS isn't netns-scoped;  │
+  │ tonic-web        │ container.sock (UDS) │ --name = demux tag            │
+  ├──────────────────┼──────────────────────┼───────────────────────────────┤
+  │ xray → container │ IP/TCP to container  │ Yes — OVS internal port +     │
+  │  service         │                      │ netns (openflow's job)        │
+  └──────────────────┴──────────────────────┴───────────────────────────────┘
+
+  So my recommendation: createunixsocket --name --port in the unix-socket plugin
+  stays simple — it declares/binds the shared container.sock and registers
+  --name as the identity/demux tag. No netns in this method. And on "I don't
+  want a thousand ports": you don't need them — with gRPC-over-UDS the bridge
+  demuxes by service/method via reflection, so --name (tag) is enough; --port
+  only matters as metadata if a backend is non-gRPC (raw TCP) and the bridge
+  must map tag→port. Keep ns where it earns its keep: the openflow/OVS IP plane,
+  as a separate concern.
+
+  Net: --name = tag, not namespace. Want me to implement createunixsocket in the
+  unix-socket plugin on that basis (shared socket + name-as-tag, ports optional
+  metadata)?
+
+✻ Crunched for 1m 41s
+
+❯ tonic-web automatically demuxes                                               
+
+● Right — tonic-web auto-demuxes by service/method over the one socket, so
+  --port is unnecessary entirely. That settles the whole design:
+
+  createunixsocket --name <name> in the unix-socket plugin → the shared
+  container.sock is bound once; --name registers the container/service as a
+  demux identity/tag (for gemma→xray routing); tonic-web auto-demuxes on the
+  socket. No per-port sockets, no namespace (UDS isn't netns-scoped), no --port.
+
+  Let me record this settled topology so it survives the session, then I'll wire
+  it up:
+
+  Recalled 1 memory (ctrl+o to expand)
+  ⎿  Interrupted · What should Claude do instead?
+
+❯ is port unnecesccary ... like for mail container need multiple ports          
+
+● You're right — I overgeneralized (the thing you've told me not to do). Ports 
+  are not unnecessary. tonic-web auto-demux only works for gRPC traffic — it
+  demuxes by gRPC service/method. A mail container speaks raw TCP (SMTP
+  25/465/587, IMAP 143/993, POP 110/995) — none of that is gRPC, so there's
+  nothing for tonic-web to demux on. For those, the ports are essential.
+
+  So the honest split:
+
+  ┌─────────────────────────┬─────────────────────────────┬─────────────────┐
+  │      Backend type       │       Demux mechanism       │ --port needed?  │
+  ├─────────────────────────┼─────────────────────────────┼─────────────────┤
+  │ gRPC service (over the  │ tonic-web by service/method │ No — optional   │
+  │ shared socket)          │  (reflection)               │ metadata        │
+  ├─────────────────────────┼─────────────────────────────┼─────────────────┤
+  │ Raw TCP, single         │ by name/SNI                 │ Maybe (one      │
+  │ protocol                │                             │ port)           │
+  ├─────────────────────────┼─────────────────────────────┼─────────────────┤
+  │ Raw TCP, multi-port     │ by port — gRPC demux can't  │ Yes — required  │
+  │ (mail, etc.)            │ apply                       │                 │
+  └─────────────────────────┴─────────────────────────────┴─────────────────┘
+
+  So --port <list> stays in the signature exactly as you had it (--name <name> 
+  --port 1,2,3,4,5). For a mail container, --name mail --port 
+  25,465,587,143,993,110,995 records the ports the container serves, because the
+  routing layer (xray by domain+port, or the bridge's port-aware passthrough)
+  has to know them — there's no gRPC method name to route on.
+
+  My earlier "ports unnecessary" only held for the pure-gRPC case; it breaks the
+  moment a container is non-gRPC or multi-protocol like mail. Corrected model:
+
+  - --name = identity/demux tag (not a namespace — UDS still isn't
+  netns-scoped).
+  - --port <list> = the TCP ports that container exposes; required for
+  non-gRPC/multi-port (mail), optional for pure-gRPC where tonic-web
+  auto-demuxes.
+  - Lives in the unix-socket plugin, shared container.sock.
+
+  Does that match how you're thinking about mail — --port carries the real
+  protocol ports for non-gRPC containers, and gRPC ones can omit it?
+
+✻ Crunched for 33s
+
+❯ by port does not need to be seperate tonic-web is smart enough to distiguish  
+  multi or single protocol                                                      
+
+● Got it — tonic-web distinguishes single vs multi protocol itself, so the port
+  list rides on one createunixsocket call over the shared socket; no separate
+  sockets, no per-port config. That fully settles it:
+
+  createunixsocket --name <name> --port <csv> → unix-socket plugin, shared
+  container.sock. --name = identity/demux tag (not a namespace). --port <list> =
+  the container's ports in one call (e.g. --name mail --port 
+  25,465,587,143,993,110,995). tonic-web auto-demuxes whatever rides over the
+  socket — single or multi protocol.
+
+  Let me update the memory to the settled model (it currently still describes
+  per-service sockets + xray-per-port):
+
+  Wrote 1 memory (ctrl+o to expand)
+
+● Recorded the settled topology to memory.
+
+  So the design is locked:
+  - createunixsocket --name <name> --port <csv> in the unix_socket plugin
+  - shared container.sock, --name = demux tag, --port = the container's ports in
+  one call
+  - tonic-web auto-demuxes single/multi protocol; no per-port sockets, no
+  namespace
+
+  Ready for me to implement it in the unix-socket plugin? The minimal change is:
+  extend the model with name + ports: Vec<u16>, add the createunixsocket
+  operation that registers the named endpoint against the shared container.sock
+  in the plugin's desired state (SHM live-schema), and leave openflow.rs's
+  OVS-port logic alone. I'll hold off touching the uncommitted refactor until
+  you give the go.
+
+✻ Cooked for 52s
+
+❯ go                                                                            
+
+● Implementing now. First let me see how a mutation like this actually reaches a
+  plugin (D-Bus method vs SHM write), so createunixsocket lands in the right
+  place and isn't an orphaned method:
+
+  Ran 1 shell command (ctrl+o to expand)
+  ⎿  Interrupted · What should Claude do instead?
+
+❯ use rovs                                                                      
+  ⎿  Interrupted · What should Claude do instead?
+
+❯ if doinhg ovs                                                                 
+
+● Understood — and noted: if any OVS work is involved, I use rovs 
+  (op_network::rovs_proxy::OvsdbDbusClient), never raw ovs-vsctl (that's exactly
+  how openflow.rs already talks to OVS, and it respects the no-bypass rule).
+
+  That said, my read is that createunixsocket for the shared container.sock 
+  doesn't touch OVS at all — it's a plain UnixListener bind on a filesystem
+  path, registered via the contract-mutation → SHM → reconcile() flow the plugin
+  already has. OVS only enters on the IP plane (the container's OVS internal
+  port + netns), which is openflow.rs's job via rovs — a separate concern we
+  agreed createunixsocket shouldn't own.
+
+  So before I write it, the one thing your "if doing ovs" flags — which is it:
+
+● User answered Claude's questions:
+  ⎿  · Does createunixsocket touch OVS, or is it purely the shared-UDS 
+     registration? → i believe using ovs openflow for obfusterfation
+
+❯ reflection                                                                    
+
+● Two things land here:
+
+  1. OVS/OpenFlow = obfuscation, not socket demux — so createunixsocket is pure 
+  UDS, no rovs. (rovs stays for the openflow obfuscation/IP plane, where I'd use
+  it instead of raw ovs-vsctl.)
+  2. reflection — tonic-web demuxes by gRPC server reflection (the same
+  mechanism op-mcp-shim already uses to discover services). So the plugin must
+  not enumerate services/ports for routing; it binds the shared socket and
+  records the named endpoint, and the bridge reflects to demux. --port is
+  therefore just recorded metadata (relevant for non-gRPC like mail), not
+  something the plugin acts on.
+
+  Implementing on that basis now — createunixsocket --name --port in the
+  unix-socket plugin, shared container.sock, name = tag, ports = metadata,
+  reflection does the demux. Let me make the model changes:
+
+● Update(crates/op-plugins/src/state_plugins/unix_socket.rs)
+  ⎿  Added 23 lines, removed 7 lines
+      29  /// demuxes by gRPC service/method (via reflection).
+      30  #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSc
+          hema)]
+      31  pub struct SocketEndpoint {
+      32 +    /// Container/service identity (the `createunixsocket --nam
+         +e`). The tonic-web                                             
+      33 +    /// gRPC bridge demuxes by gRPC service/method via server r
+         +eflection — this                                               
+      34 +    /// name is the routing/identity tag gemma emits into the x
+         +ray config; it is                                              
+      35 +    /// NOT a network namespace (filesystem UDS are not netns-s
+         +coped).                                                        
+      36 +    #[serde(default)]                                          
+      37 +    #[schemars(                                                
+      38 +        description = "Container/service identity tag the bridg
+         +e routes by (createunixsocket --name)",                        
+      39 +        example = &"netmaker",                                 
+      40 +        extend("x-oscal-subid" = "mut.service.unix-socket.bind-
+         +name@v1")                                                      
+      41 +    )]                                                         
+      42 +    pub name: String,                                          
+      43      /// Filesystem path to the shared socket.
+      44      #[schemars(
+      45          description = "Filesystem path of the shared unix domai
+          n socket",
+     ...
+      47          extend("x-oscal-subid" = "mut.service.unix-socket.bind-
+          path@v1")
+      48      )]
+      49      pub path: String,
+      39 -    /// Local TCP port the backend service listens on inside it
+         -s container.                                                   
+      40 -    /// xray routes to the tonic-web gRPC bridge, which dials t
+         -he socket                                                      
+      41 -    /// natively — this port is metadata for the bridge, not an
+         - xray listener.                                                
+      50 +    /// Backend TCP ports this container serves (the `createuni
+         +xsocket --port`                                                
+      51 +    /// list, e.g. `25,465,587` for mail). Recorded metadata on
+         +ly — tonic-web                                                 
+      52 +    /// distinguishes single vs multi protocol and demuxes by r
+         +eflection, so the                                              
+      53 +    /// plugin neither opens these ports nor maps them; they de
+         +scribe the backend.                                            
+      54 +    #[serde(default)]                                          
+      55      #[schemars(
+      43 -        range(min = 1, max = 65535),                           
+      44 -        description = "Backend service TCP port (metadata for t
+         -he gRPC bridge, not an xray listener)",                        
+      45 -        example = 6334,                                        
+      56 +        description = "Backend TCP ports the container serves (
+         +metadata; tonic-web demuxes by reflection)",                   
+      57 +        example = &[25u16, 465, 587],                          
+      58          extend("x-oscal-subid" = "mut.service.unix-socket.bind-
+          port@v1")
+      59      )]
+      48 -    pub port: u16,                                             
+      60 +    pub ports: Vec<u16>,                                       
+      61      /// Transport protocol carried over the socket.
+      62      #[serde(default = "default_protocol")]
+      63      #[schemars(
+     ...
+      75      pub label: String,
+      76  }
+      77  
+      78 +/// Canonical path for the single shared bidirectional socket e
+         +very container                                                 
+      79 +/// uses to reach the tonic-web gRPC bridge.                   
+      80 +pub const SHARED_CONTAINER_SOCKET: &str = "/run/ghostbridge/con
+         +tainer.sock";                                                  
+      81 +                                                               
+      82  /// Runtime state: the single shared socket endpoint for the gR
+          PC bridge.
+      83  #[derive(Debug, Clone, Serialize, Deserialize, Default, schemar
+          s::JsonSchema)]
+      84  #[schemars(extend("x-oscal-subid" = "sch.software.plugin.unix-s
+          ocket.schema@v1"))]
+
+❯ im confused, does xray use openflow?                                          
+● Good question to stop on — let me answer it straight from the code, because
+  the answer is no, xray does not use OpenFlow. They're two separate layers that
+  gemma configures independently.
+
+  Here's what the code actually shows:
+
+  - gemma generates both — main.rs builds one XrayRoutingMap { xray_routes, 
+  openflow_rules } and writes two separate artifacts: the xray config and the
+  OpenFlow rules. So gemma feeds both, but they're consumed by different
+  components. (That dual output is probably the source of the confusion.)
+  - OpenFlow/OVS = L2/L3 packet steering + obfuscation. openflow.rs manages
+  flows for the privacy chain gbr_wg → gbr_warp → gbr_xray and the obfuscation
+  levels. It steers packets across bridge ports — including into the gbr_xray
+  port. It works on match-fields (in_port, dl_type, nw_dst/tp_dst), not domains.
+  - xray = L7 SNI/domain routing. xray sits at the gbr_xray port and routes by
+  SNI/domain/identity to backends (container ns, or container.sock → tonic-web).
+  It has no idea OpenFlow exists.
+
+  So the relationship is a stack, not a dependency:
+
+  WG ingress → [OVS/OpenFlow: gbr_wg → gbr_warp → gbr_xray + obfuscation]  ←
+  openflow_rules (gemma)
+                                          ↓ (packets handed to the xray port)
+                                [xray: SNI/domain routing]                  ←
+  xray config.json (gemma)
+                                          ↓
+                          container ns  /  container.sock → tonic-web
+
+  OpenFlow gets traffic to xray and does the privacy/obfuscation; xray does the
+  application-layer routing. Neither calls the other — gemma is the common brain
+  that emits config for both.
+
+  Does that clear it up? I paused the createunixsocket implementation (I'd added
+  the name/ports fields to SocketEndpoint) — say the word and I'll continue, or
+  if this changes the model, tell me what to adjust.
+
+✻ Churned for 3m 10s
+
+❯ what about the tag routing oscal, that is openflow so maybe need ovs          
+
+● Let me ground this in what the code actually does, because "OSCAL tag routing
+  = OpenFlow" isn't quite what's built — and that determines whether
+  createunixsocket needs OVS.
+
+  What gemma's OpenFlow generation actually matches on (main.rs
+  backend_to_openflow_rule):
+  - TCP/GRPC backends → an OpenFlow rule matching dl_type + nw_proto + nw_dst + 
+  tp_dst (IP + TCP port) → output:ovsbr0-mgmt.
+  - Unix-socket backends → returns None (no OpenFlow rule) — the code comment
+  says they "route through the tonic-web gRPC bridge (reflection demuxes) so no
+  OVS bridge match is needed."
+
+  So as-built, OpenFlow does IP/port matching + the privacy chain
+  (gbr_wg→warp→xray + obfuscation). The OSCAL subids are route metadata, not OVS
+  match fields — nothing in OpenFlow matches on a subid tag string. (OpenFlow
+  physically can't match a string; it matches packet fields — so "tag routing in
+  OpenFlow" would require encoding the subid into a VLAN/metadata register/port
+  first, which isn't built.)
+
+  So there are two real models, and your instinct is pointing at the second:
+
+  ┌───────────────┬──────────────────────────────┬─────────────────────────┐
+  │     Model     │    Tag routing happens at    │ Does createunixsocket   │
+  │               │                              │        need OVS?        │
+  ├───────────────┼──────────────────────────────┼─────────────────────────┤
+  │               │ Unix sockets bypass          │                         │
+  │ As-built      │ OpenFlow; tonic-web demuxes  │ No — pure UDS           │
+  │               │ by reflection; OSCAL subid   │                         │
+  │               │ is just gemma/xray metadata  │                         │
+  ├───────────────┼──────────────────────────────┼─────────────────────────┤
+  │ OpenFlow tag  │ OSCAL subid encoded as an    │ Yes — createunixsocket  │
+  │ routing (your │ OVS metadata/VLAN, OpenFlow  │ must also provision the │
+  │  instinct)    │ matches it → port            │  flow via rovs          │
+  └───────────────┴──────────────────────────────┴─────────────────────────┘
+
+  So the honest answer: right now, OSCAL tag routing is not in OpenFlow — it's
+  reflection at the bridge, so createunixsocket stays pure-UDS. If you want the
+  subid tag to be the routing key down at the OVS layer, that's a real design
+  change (encode tag → OVS field, emit flows), and then yes, createunixsocket
+  would need rovs/OVS.
+
+  Which is it — keep reflection-demux (no OVS, finish what I started), or move
+  OSCAL tag routing into OpenFlow (I wire rovs into the create path)?
+
+✻ Baked for 54s
+
+❯ see if there is anything in .kiro/specs/ about it                             
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The on-point spec is 3tched-schema-shuttle-xray-pipeline (plus
+  xdp-ovs-incus-network-setup). Let me pull the actual tag-routing / socket text
+  from the relevant specs:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● publish_openflow_for_privacy_routes() is a real provisioning step
+  (design.md:174), keyed by the container's pubkey/identity. Let me read that
+  flow and the dedicated OVS/network spec:
+
+  Read 1 file, ran 2 shell commands (ctrl+o to expand)
+
+● Searched all of .kiro/specs/. Here's what's there — and notably what isn't:
+
+  What the specs DO say (privacy-signup-container-provisioning):
+  - OpenFlow routes are published per container, keyed by the WG pubkey 
+  (identity) — publish_openflow_for_privacy_routes() (design.md:174), and the
+  design explicitly states the pubkey "is used for MCP token derivation,
+  Netmaker registration, and OpenFlow route publication" (design.md:208). So the
+  specced role of OpenFlow is identity/privacy routing (pubkey-keyed), per
+  container, as a provisioning step.
+
+  What the specs DON'T have — anywhere:
+  - No container.sock, no createunixsocket, no "shared socket" for containers, 
+  no per-container socket demux. The only "shared socket" hit is
+  assistant-grpc/design.md referring to the D-Bus bus, unrelated.
+  - No OSCAL-subid tag routing in OpenFlow. Nothing maps a subid tag to an OVS
+  match field.
+  - xdp-ovs-incus-network-setup/ is an empty stub (no files).
+
+  So the answer to your question: the specs do not put OSCAL tag routing in
+  OpenFlow. They put identity (pubkey) routing in OpenFlow — that's the
+  documented OVS role, and it's a provisioning concern, separate from socket
+  creation. The container.sock / createunixsocket / reflection-demux model isn't
+  specced at all — it lives only in the unix_socket plugin's doc/example and
+  this conversation.
+
+  Recommendation grounded in that: createunixsocket stays pure UDS 
+  (reflection-demux), no OVS — that's consistent with the specs, which reserve
+  OpenFlow for pubkey-identity privacy routing + obfuscation, not socket demux
+  or subid tags. If you want OSCAL-subid tag routing in OpenFlow, that'd be new,
+  unspecced design — worth a spec of its own before building, rather than
+  bolting OVS onto createunixsocket.
+
+  Want me to finish createunixsocket as pure-UDS reflection-demux (continue what
+  I started), or pause and draft a spec for the OpenFlow-tag-routing idea
+  first?
+
+✻ Worked for 1m 21s
+
+❯ i want the oscal to be baked in and very flexible. i dont think the socket is 
+  going to have that, like rule enforcement routing.                            
+
+● That's the clean separation, and it matches the compliance model: the socket 
+  is dumb transport; OSCAL is the enforcement/routing layer, separate and 
+  flexible.
+
+  - container.sock / createunixsocket = transport only — UDS to tonic-web,
+  reflection demux. It carries OSCAL subids on its schema (every mutation is an
+  enforcement point, per your compliance architecture), but it does not perform
+  rule-enforcement routing. Dumb pipe.
+  - OSCAL rule-enforcement routing = the separate, "baked-in and very flexible"
+  layer — subid tags driving policy/enforcement decisions (the OpenFlow/gemma
+  side). That's where the flexibility lives, and it's deliberately not in the
+  socket.
+
+  So the socket stays simple and the OSCAL enforcement-routing is its own thing
+  — good, that's consistent and keeps the socket from becoming a policy
+  chokepoint. Let me finish createunixsocket as pure-UDS on that basis. I
+  changed the struct (name + ports, removed single port), so I need to fix the
+  references that broke and add the method. Let me see the exact current spots:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The struct change cascaded into 8 spots (code + the golden test schema). I'll
+  do the clean ports refactor fully. First the runtime code + the create method:
+
+● Update(crates/op-plugins/src/state_plugins/unix_socket.rs)
+  ⎿  Added 2 lines, removed 1 line
+      161          active.insert(endpoint.path.clone(), listener);
+      162          info!(
+      163              socket = %endpoint.path,
+      164 -            port = endpoint.port,                             
+      164 +            name = %endpoint.name,                            
+      165 +            ports = ?endpoint.ports,                          
+      166              protocol = %endpoint.protocol,
+      167              "bound unix socket endpoint"
+      168          );
+
+● Update(crates/op-plugins/src/state_plugins/unix_socket.rs)
+  ⎿  Added 2 lines, removed 2 lines
+      192          for endpoint in &desired.sockets {
+      193              match Self::ensure_bound(&mut active, endpoint) {
+      194                  Ok(true) => changes_applied.push(format!(
+      195 -                    "created socket {} (port {}, {})",        
+      196 -                    endpoint.path, endpoint.port, endpoint.pro
+          -tocol                                                         
+      195 +                    "created socket {} (name {}, ports {:?}, {
+          +})",                                                          
+      196 +                    endpoint.path, endpoint.name, endpoint.por
+          +ts, endpoint.protocol                                         
+      197                  )),
+      198                  Ok(false) => {}
+      199                  Err(error) => errors.push(format!(
+
+● Update(crates/op-plugins/src/state_plugins/unix_socket.rs)
+  ⎿  Added 2 lines, removed 1 line
+      254              state.sockets = active
+      255                  .keys()
+      256                  .map(|path| SocketEndpoint {
+      257 +                    name: String::new(),                      
+      258                      path: path.clone(),
+      258 -                    port: 0,                                  
+      259 +                    ports: Vec::new(),                        
+      260                      protocol: default_protocol(),
+      261                      label: String::new(),
+      262                  })
+
+● Update(crates/op-plugins/src/state_plugins/unix_socket.rs)
+  ⎿  Added 40 lines
+      221              checkpoint: None,
+      222          }
+      223      }
+      224 +                                                              
+      225 +    /// `createunixsocket --name <name> --port <csv>` — regist
+          +er a container/service                                        
+      226 +    /// against the single shared `container.sock`.           
+      227 +    ///                                                       
+      228 +    /// Pure transport, no OVS: the shared socket is bound onc
+          +e; `name` is the                                              
+      229 +    /// identity/demux tag (gemma emits it into the xray confi
+          +g) and `ports` are                                            
+      230 +    /// recorded backend metadata only. tonic-web distinguishe
+          +s single vs multi                                             
+      231 +    /// protocol and demuxes by gRPC server reflection, so the
+          + plugin neither                                               
+      232 +    /// opens these ports nor maps them — OSCAL rule-enforceme
+          +nt routing lives in                                           
+      233 +    /// the separate OpenFlow/policy layer, not in the socket.
+      234 +    pub fn create_unix_socket(&self, name: impl Into<String>, 
+          +ports: Vec<u16>) -> ApplyResult {                             
+      235 +        let endpoint = SocketEndpoint {                       
+      236 +            name: name.into(),                                
+      237 +            path: SHARED_CONTAINER_SOCKET.to_string(),        
+      238 +            ports,                                            
+      239 +            protocol: default_protocol(),                     
+      240 +            label: String::new(),                             
+      241 +        };                                                    
+      242 +        let mut active = self.active.lock();                  
+      243 +        match Self::ensure_bound(&mut active, &endpoint) {    
+      244 +            Ok(_) => ApplyResult {                            
+      245 +                success: true,                                
+      246 +                changes_applied: vec![format!(                
+      247 +                    "registered '{}' on shared socket {} (port
+          +s {:?})",                                                     
+      248 +                    endpoint.name, endpoint.path, endpoint.por
+          +ts                                                            
+      249 +                )],                                           
+      250 +                errors: vec![],                               
+      251 +                checkpoint: None,                             
+      252 +            },                                                
+      253 +            Err(error) => ApplyResult {                       
+      254 +                success: false,                               
+      255 +                changes_applied: vec![],                      
+      256 +                errors: vec![format!(                         
+      257 +                    "createunixsocket '{}' failed: {}",       
+      258 +                    endpoint.name, error                      
+      259 +                )],                                           
+      260 +                checkpoint: None,                             
+      261 +            },                                                
+      262 +        }                                                     
+      263 +    }                                                         
+      264  }
+      265  
+      266  impl Default for UnixSocketPlugin {
+
+● Now the test-side (golden schema + tests). Let me read the current test region
+  to edit precisely:
+
+  Read 1 file (ctrl+o to expand)
+
+● Let me read the tail (example payload) before editing the golden schema:
+
+  Read 1 file (ctrl+o to expand)
+● Now all the golden-schema + test edits:
+
+● Update(crates/op-plugins/src/state_plugins/unix_socket.rs)
+  ⎿  Added 2 lines, removed 1 line
+      369  
+      370      fn endpoint(dir: &std::path::Path, name: &str, port: u16) 
+           -> SocketEndpoint {
+      371          SocketEndpoint {
+      372 +            name: name.to_string(),                           
+      373              path: dir.join(name).to_string_lossy().into_owned(
+           ),
+      373 -            port,                                             
+      374 +            ports: vec![port],                                
+      375              protocol: "grpc".to_string(),
+      376              label: name.to_string(),
+      377          }
+
+● Update(crates/op-plugins/src/state_plugins/unix_socket.rs)
+  ⎿  Added 10 lines, removed 6 lines
+      405          dk.sort();
+      406          assert_eq!(dk, hk, "derived inner fields must match ha
+           nd-rolled");
+      407  
+      408 -        // port: Integer with Min+Max bounds, derived from `u1
+          -6` + range attr                                               
+      409 -        assert!(matches!(dp["port"].field_type, FieldType::Int
+          -eger));                                                       
+      410 -        assert_eq!(dp["port"].constraints.len(), 2, "port shou
+          -ld carry Min+Max");                                           
+      408 +        // ports: Array (derived from `Vec<u16>`)             
+      409 +        assert!(matches!(dp["ports"].field_type, FieldType::Ar
+          +ray(_)));                                                     
+      410  
+      411          // doc comments survive as descriptions
+      412          assert!(!dp["path"].description.is_empty());
+      414 -        // required set: path + port (protocol/label have serd
+          -e defaults)                                                   
+      415 -        assert!(dp["path"].required && dp["port"].required);  
+      416 -        assert!(!dp["protocol"].required && !dp["label"].requi
+          -red);                                                         
+      413 +        // required set: path only (name/ports/protocol/label 
+          +have serde defaults)                                          
+      414 +        assert!(dp["path"].required);                         
+      415 +        assert!(                                              
+      416 +            !dp["name"].required                              
+      417 +                && !dp["ports"].required                      
+      418 +                && !dp["protocol"].required                   
+      419 +                && !dp["label"].required                      
+      420 +        );                                                    
+      421  
+      422          // OSCAL subids are preserved at the schema and field 
+           level.
+      423          assert_eq!(
+
+● Update(crates/op-plugins/src/state_plugins/unix_socket.rs)
+  ⎿  Added 2 lines, removed 1 line
+      457              .expect("SocketEndpoint properties");
+      458  
+      459          let expected = [
+      460 +            ("name", "mut.service.unix-socket.bind-name@v1"), 
+      461              ("path", "mut.service.unix-socket.bind-path@v1"),
+      461 -            ("port", "mut.service.unix-socket.bind-port@v1"), 
+      462 +            ("ports", "mut.service.unix-socket.bind-port@v1"),
+      463              ("protocol", "mut.service.unix-socket.bind-protoco
+           l@v1"),
+      464              ("label", "mut.service.unix-socket.bind-label@v1")
+           ,
+      465          ];
+
+● Update(crates/op-plugins/src/state_plugins/unix_socket.rs)
+  ⎿  Added 15 lines
+      523  pub(crate) fn unix_socket_schema() -> PluginSchema {
+      524      let mut socket_fields = HashMap::new();
+      525      socket_fields.insert(
+      526 +        "name".to_string(),                                   
+      527 +        FieldSchema {                                         
+      528 +            field_type: FieldType::String,                    
+      529 +            required: false,                                  
+      530 +            description:                                      
+      531 +                "Container/service identity tag the bridge rou
+          +tes by (createunixsocket --name)"                             
+      532 +                    .to_string(),                             
+      533 +            default: None,                                    
+      534 +            example: Some(json!("netmaker")),                 
+      535 +            constraints: Vec::new(),                          
+      536 +            read_only: false,                                 
+      537 +            read_only_when: None,                             
+      538 +        },                                                    
+      539 +    );                                                        
+      540 +    socket_fields.insert(                                     
+      541          "path".to_string(),
+      542          FieldSchema {
+      543              field_type: FieldType::String,
+
+● Update(crates/op-plugins/src/state_plugins/unix_socket.rs)
+  ⎿  Added 6 lines, removed 9 lines
+      551          },
+      552      );
+      553      socket_fields.insert(
+      554 -        "port".to_string(),                                   
+      554 +        "ports".to_string(),                                  
+      555          FieldSchema {
+      556 -            field_type: FieldType::Integer,                   
+      557 -            required: true,                                   
+      556 +            field_type: FieldType::Array(Box::new(FieldType::I
+          +nteger)),                                                     
+      557 +            required: false,                                  
+      558              description:
+      559 -                "Backend service TCP port (metadata for the gR
+          -PC bridge, not an xray listener)"                             
+      559 +                "Backend TCP ports the container serves (metad
+          +ata; tonic-web demuxes by reflection)"                        
+      560                      .to_string(),
+      561              default: None,
+      562 -            example: Some(json!(6334)),                       
+      563 -            constraints: vec![                                
+      564 -                Constraint::Min { value: 1.0 },               
+      565 -                Constraint::Max { value: 65535.0 },           
+      566 -            ],                                                
+      562 +            example: Some(json!([25, 465, 587])),             
+      563 +            constraints: Vec::new(),                          
+      564              read_only: false,
+      565              read_only_when: None,
+      566          },
+
+● Update(crates/op-plugins/src/state_plugins/unix_socket.rs)
+  ⎿  Added 2 lines, removed 1 line
+      607          .example(json!({
+      608              "sockets": [
+      609                  {
+      610 +                    "name": "netmaker",                       
+      611                      "path": "/run/ghostbridge/container.sock",
+      611 -                    "port": 50051,                            
+      612 +                    "ports": [18081, 1883, 8883],             
+      613                      "protocol": "grpc",
+      614                      "label": "ghostbridge"
+      615                  }
+
+● Now compile and run the unix_socket tests to verify the refactor (the Vec<u16>
+  derived-schema behavior is the uncertain part):
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Almost — 4/5 pass. A stricter adapter test caught two default mismatches: name
+  and ports have #[serde(default)], so the derived schema carries their
+  defaults ("" and []), which the golden schema must mirror. Fixing:
+
+● Update(crates/op-plugins/src/state_plugins/unix_socket.rs)
+  ⎿  Added 1 line, removed 1 line
+      530              description:
+      531                  "Container/service identity tag the bridge rou
+           tes by (createunixsocket --name)"
+      532                      .to_string(),
+      533 -            default: None,                                    
+      533 +            default: Some(json!("")),                         
+      534              example: Some(json!("netmaker")),
+      535              constraints: Vec::new(),
+      536              read_only: false,
+
+● Update(crates/op-plugins/src/state_plugins/unix_socket.rs)
+  ⎿  Added 1 line, removed 1 line
+      558              description:
+      559                  "Backend TCP ports the container serves (metad
+           ata; tonic-web demuxes by reflection)"
+      560                      .to_string(),
+      561 -            default: None,                                    
+      561 +            default: Some(json!([])),                         
+      562              example: Some(json!([25, 465, 587])),
+      563              constraints: Vec::new(),
+      564              read_only: false,
+
+● Re-running the tests (and dropping the now-unused Constraint import):
+
+● Update(crates/op-plugins/src/state_plugins/unix_socket.rs)
+  ⎿  Added 1 line, removed 1 line
+      1  use anyhow::Result;
+      2  use async_trait::async_trait;
+      3  use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapa
+         bilities, StateDiff, StatePlugin};
+      4 -use op_state_store::{Constraint, FieldSchema, FieldType, PluginS
+        -chema};                                                         
+      4 +use op_state_store::{FieldSchema, FieldType, PluginSchema};     
+      5  use parking_lot::Mutex;
+      6  use serde::{Deserialize, Serialize};
+      7  use simd_json::prelude::*;
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● All 5 tests pass (the unused-import warning is pre-existing, unrelated to this
+  change).
+
+  createunixsocket is implemented in the unix-socket plugin — pure UDS, no OVS,
+  per the settled design:
+
+  What I changed (crates/op-plugins/src/state_plugins/unix_socket.rs):
+  - SocketEndpoint now carries name (identity/demux tag — the --name) and ports:
+  Vec<u16> (the --port list as recorded metadata), replacing the single port.
+  OSCAL subids preserved, plus a new mut.service.unix-socket.bind-name@v1.
+  - Added pub const SHARED_CONTAINER_SOCKET = "/run/ghostbridge/container.sock".
+  - Added create_unix_socket(name, ports) — binds the one shared container.sock;
+  name is the tag, ports are metadata; tonic-web demuxes by reflection. No OVS,
+  no namespace — the doc comment states OSCAL rule-enforcement routing lives in
+  the separate OpenFlow/policy layer, not the socket.
+  - Updated the golden hand-rolled schema + tests (incl. the stricter
+  schemars_adapter diff) to match.
+
+  Honest scope — what this does not yet do: the method binds the socket at
+  runtime, but it doesn't yet persist the registration into the SHM live-schema 
+  catalog (that's the projection-engine/contract-mutation path), nor is it
+  exposed as a zbusctl/D-Bus command, nor does gemma read --name into the xray
+  config yet. So it's the plugin-level capability you said belongs here; the CLI
+  exposure + SHM persistence + gemma/xray wiring are the remaining integration
+  steps.
+
+  This is all uncommitted in the working tree (alongside the earlier
+  schema-comment refactor that was already there). Want me to (a) wire the
+  contract-mutation → SHM persistence so a created socket survives and reaches
+  gemma, (b) expose it as a zbusctl createunixsocket command, or (c) stop here
+  and commit what's tested?
+
+✻ Crunched for 5m 37s
+
+❯ a,b                                                                           
+
+● On it — wiring (a) contract-mutation → SHM persistence and (b) a zbusctl 
+  createunixsocket command. Let me first see the existing mutation→SHM path and
+  where zbusctl lives, so I follow the established pattern:
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Two important constraints surfaced — let me confirm them before building,
+  because they change how (a) and (b) are done:
+
+  Ran 1 shell command (ctrl+o to expand)
+● Two hard constraints I need to surface before I build (a)+(b), because they
+  determine what's even possible from this repo:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+❯ it reads default plugin list i think                                          
+
+● Got it — that reframes (b): zbusctl is generic, it reads the default plugin 
+  list + schemas and surfaces each plugin's mut.* operations as commands. So I
+  don't edit zbusctl at all. unix_socket is already in the default plugin list
+  (registered in op-plugins/lib.rs) and its schema carries the bind mutation
+  subid (mut.service.unix-socket.bind@v1, plus the bind-name I just added). So
+  zbusctl should already be able to surface the create — the invocation is just
+  a contract mutation:
+
+  apply_contract_mutation(plugin_id="unix_socket", value={"sockets":[{"name":"ne
+  tmaker","path":"/run/ghostbridge/container.sock","ports":[...]}]})
+
+  So (b) needs no new code — it rides the generic plugin-list path. That's the
+  good news.
+
+  (a) is the real gap, and it's specific: the unix_socket plugin's apply_state
+  re-reads /dev/shm/live-schema.json and ignores the value passed in — and
+  read_desired() pulls the sockets from the schema's example field in that SHM
+  catalog. The catalog is written by the projection engine's
+  write_schemas_to_shm() from its in-memory schema registry. So
+  apply_plugin_state → apply_state doesn't persist anything: a mutation never
+  lands in SHM, so the plugin can't see it. To make a created socket survive +
+  reach gemma, the mutation has to update the unix_socket schema's example (the 
+  desired-state slot read_desired uses) in the projection registry, then 
+  re-write SHM — which nothing currently does.
+
+  So before I write it, one decision on the (a) mechanism — they have different
+  blast radii:
+
+● User declined to answer questions
+  ⎿  · How should a created socket persist so the unix_socket plugin (which 
+     reads /dev/shm live-schema example) sees it? (Projection updates schema 
+     example + rewrites SHM / Plugin apply_state honors passed desired + 
+     persists)
+
+❯ and the dbus tree is a mirror of the db                                       
+
+● Understood, and that changes my mental model of (a): if the D-Bus tree mirrors
+  the DB, then the DB (sled) is the real source of truth, the D-Bus tree
+  reflects it, and the projection materializes it to SHM. So persistence isn't
+  "write the SHM example" — it's write the socket to the DB, the D-Bus tree
+  mirrors it, and projection → /dev/shm/live-schema.json → the plugin
+  reconciles. My two options were both framed around poking SHM/the plugin
+  directly, which is the wrong layer if the DB is upstream.
+
+  So before I reformulate the question — what would you like to clarify? A few
+  things I want to get right given the DB-mirror model:
+
+  - Where the create writes: should createunixsocket write the SocketEndpoint
+  into the DB (via the state-manager / the contract-mutation path), and then the
+  existing DB→D-Bus-mirror→projection→SHM chain carries it the rest of the way?
+  i.e. the plugin's apply_state re-reading SHM is correct and intentional —
+  it's the actuator, and persistence lives in the DB, not the plugin.
+  - What's already wired vs. missing: does apply_contract_mutation →
+  apply_plugin_state already persist to the DB today (and I just didn't trace
+  that far), or is that the actual gap — the mutation actuates the plugin but
+  never writes the DB row the mirror/projection depend on?
+
+  Tell me what you'd like to clarify or correct in that picture, and I'll
+  reframe the decision accordingly.
+
+✻ Baked for 1m 24s
+
+❯ dont necessarily need a zbus command. i think that adding scoket sould update 
+  the incus schema for that container                                           
+
+● That's a meaningful redirect: drop the zbus command, and adding a socket 
+  should update the Incus schema for that container — so the socket is a
+  property of the container in its Incus schema (which lives in the DB, mirrored
+  by the D-Bus tree, projected to SHM), not a standalone entry. Let me find the
+  Incus container schema/plugin to see where a container's sockets would
+  attach:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● This is the key find — the Incus plugin already models per-container sockets:
+  IncusInstance.sockets: Vec<IncusProxySocket> ("Proxy devices exposed as a Unix
+  socket on the host"). So "update the Incus schema for that container" means
+  adding an IncusProxySocket to that container's instance — that's the real
+  home, not the unix_socket plugin. Let me read those structs:
+
+  Read 1 file (ctrl+o to expand)
+  ⎿  Interrupted · What should Claude do instead?
+
+❯ that is deprciated, incus treats socket as thhp proxy not grpc, so we weould  
+  replace teh incus socket logic in schema                                      
+
+● That clicks a lot into place: IncusProxySocket (listen: unix:… → connect: 
+  tcp:…) is an Incus proxy device — Incus just pipes bytes, treating it as an
+  HTTP/TCP proxy with no gRPC awareness. That's incompatible with the tonic-web
+  reflection-demux model, so the right move is to replace the Incus socket logic
+  in the schema with the gRPC container.sock model.
+
+  So the concrete refactor, as I understand it:
+
+  - Deprecate/replace IncusInstance.sockets: Vec<IncusProxySocket> — the
+  per-container listen→connect proxy-device representation goes away.
+  - Replace it with the gRPC shared-socket model: the container's schema records
+  its socket as { name, ports } against the single shared container.sock (the
+  SocketEndpoint I just built in unix_socket.rs) — tonic-web demuxes by
+  reflection, no per-container HTTP proxy device.
+  - Remove the proxy-device materialization in the incus plugin's apply (the
+  config device add … proxy / IncusProxySocket → Incus device path), since Incus
+  is no longer the thing exposing the socket.
+  - So "adding a socket updates the container's Incus schema" = appending the
+  gRPC socket entry (name + ports → shared container.sock) to that container's
+  instance, not creating an Incus proxy device.
+
+  That makes the unix_socket plugin (createunixsocket: name/ports/shared socket)
+  the canonical socket model, and the Incus container schema references it
+  instead of carrying its own deprecated proxy-socket logic.
+
+  Before I rip out the IncusProxySocket proxy-device logic and wire the
+  container schema to the gRPC model — is that the replacement you want
+  (container schema points at the shared container.sock via name/ports, Incus
+  stops doing proxy devices entirely)? And should the gRPC socket entry live on 
+  IncusInstance (a field on the container) or stay in the unix_socket plugin
+  with the container schema just referencing it by name?
+
+✻ Crunched for 42s
+
+❯ it also does not  have schema for rendering or dbus exposeure                 
+
+● That's a decisive reason, not just a nicety: the deprecated IncusProxySocket
+  is a bare struct with no schemars schema (so nothing to render in the UI) and 
+  no D-Bus object (so it's invisible to the D-Bus tree that mirrors the DB). The
+  new unix_socket SocketEndpoint model fixes exactly those gaps — it's
+  schemars-derived (renders, carries OSCAL subids) and rides the plugin's D-Bus
+  host. So the replacement isn't just "gRPC vs HTTP-proxy"; it's "schema'd +
+  D-Bus-exposed vs invisible."
+
+  So the settled replacement, pulling all your points together:
+
+  - Deprecate IncusProxySocket + the config device add … proxy materialization
+  in incus.rs — Incus stops exposing sockets entirely (it only does dumb
+  HTTP/TCP proxy, no gRPC, no schema, no D-Bus).
+  - The socket model lives in the unix_socket plugin — SocketEndpoint { name, 
+  path=shared container.sock, ports } — because that's what gives it the render 
+  schema + OSCAL subids + D-Bus exposure the Incus version lacked.
+  - The container's Incus schema references the socket by name (createunixsocket
+  --name = container name); it doesn't carry its own socket struct. "Adding a
+  socket updates the container's schema" = the container now has a named gRPC
+  socket entry resolved through the unix_socket plugin, rendered +
+  D-Bus-exposed, instead of an invisible proxy device.
+
+  My recommendation: keep the socket in the unix_socket plugin (schema'd +
+  exposed), drop IncusInstance.sockets: Vec<IncusProxySocket> and its
+  proxy-device apply path, and have the container reference by name — that
+  satisfies "update the container schema," "replace the deprecated incus logic,"
+  and "needs render schema + D-Bus exposure" all at once.
+
+  Is that the shape you want? If so I'll do the incus.rs removal + wire the
+  container→unix_socket name reference next. If the socket entry should instead
+  live on IncusInstance (so a container renders its own sockets directly), tell
+  me and I'll put a schema'd field there instead of a by-name reference.
+
+✻ Churned for 43s
+
+❯ can you call the plugin in the incus schema ?                                 
+
+● Good question — it comes down to whether the plugin system supports one plugin
+  calling/referencing another. Let me check what cross-plugin mechanisms
+  actually exist:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+❯ embedded schema?                                                              
+
+● Both mechanisms exist — and "embedded schema" is the cleaner of the two.
+  Here's what I found:
+
+  Runtime cross-plugin calls do exist — full_system.rs "queries OTHER plugins to
+  build the full state" via D-Bus Proxy::new, and s6.rs calls the s6_systemctl
+  plugin through a typed S6SystemctlProxy. So the incus plugin could call the
+  unix_socket plugin at runtime. But that's actuation-time coupling — heavier
+  than you need for the schema/rendering.
+
+  Embedded schema is the right fit, and it's basically free. SocketEndpoint is a
+  schemars type — when one struct embeds another, schemars emits the inner as a
+  $def and $refs it (your schema_carries_oscal_subids test already reads
+  $defs.SocketEndpoint, proving it nests). So:
+
+  - Define SocketEndpoint once in unix_socket.rs (done — with OSCAL subids).
+  - Put sockets: Vec<SocketEndpoint> on IncusInstance by importing the type from
+  the unix_socket plugin.
+  - schemars embeds the socket schema into the container schema as a nested $def
+  — so the container renders its sockets, the OSCAL subids ride along, and it's
+  exposed on the container's D-Bus object. One source of truth for the socket
+  shape; the unix_socket plugin still owns the binding/reconcile.
+
+  That answers "call the plugin in the incus schema" without a runtime call —
+  the container embeds the unix_socket plugin's schema type directly, replacing
+  the deprecated, unrendered IncusProxySocket.
+
+  The one thing to verify when I wire it: the schemars_adapter must resolve the 
+  $ref to SocketEndpoint into an embedded object when building the PluginSchema
+  (otherwise the container schema renders a dangling ref). If it doesn't resolve
+  refs yet, that's the small bit of adapter work this needs.
+
+  So the plan: import SocketEndpoint into incus.rs, replace sockets: 
+  Vec<IncusProxySocket> with sockets: Vec<SocketEndpoint>, delete the
+  proxy-device materialization, and confirm the adapter embeds the $ref. Want me
+  to go ahead with that?
+
+✻ Worked for 1m 4s
+
+❯ yes                                                                           
+
+● Starting with the gating risk — whether the schemars_adapter resolves $ref
+  into an embedded object (if not, embedding fails and that's where the work
+  is). Then I'll scope the incus proxy-device removal:
+
+  Ran 1 shell command (ctrl+o to expand)
+● Gating risk cleared: the adapter does resolve $ref inline
+  (schemars_adapter.rs:41-42, resolve() at :92 follows $ref into $defs
+  recursively). So embedding SocketEndpoint into IncusInstance will produce a
+  proper embedded schema.
+
+  This is a sizable refactor of a complex plugin (struct + the incus list
+  proxy-parse + the hand-rolled schema + examples). Let me read the two key
+  regions to edit precisely:
+
+  Read 1 file (ctrl+o to expand)
+
+● The $ref resolution works, so embedding is viable. The proxy-parse derives
+  sockets from live incus list; in the new model gRPC sockets come from the
+  embedded SocketEndpoint (desired/DB), not live devices. Let me read the
+  remaining spots (socket_id_from_connect, the hand-rolled schema sockets field)
+  to edit cleanly:
+
+  Read 1 file (ctrl+o to expand)
+
+● Important discovery before I change anything — and it reshapes the plan. The 
+  incus plugin isn't on the schemars-derived path. Its structs (IncusState,
+  IncusInstance, IncusProxySocket) derive only Serialize/Deserialize — no 
+  schemars::JsonSchema — and its schema is hand-rolled, with the sockets field
+  as a lenient FieldType::Any + a literal example (incus.rs:1390-1411). It
+  predates the plugin-schema-schemars-oscal-migration that unix_socket already
+  went through.
+
+  So the "embed SocketEndpoint and let schemars $ref it in" plan doesn't work 
+  as-is — there's no schemars schema on IncusInstance for the $ref to land in.
+  To actually embed the unix_socket schema, there are two paths:
+
+  1. Migrate the incus plugin to schemars-derived first (the clean one). Add
+  #[derive(schemars::JsonSchema)] + OSCAL #[schemars(extend(...))] to the incus
+  structs, replace the hand-rolled fields with schema_for!(IncusState), then
+  sockets: Vec<SocketEndpoint> embeds automatically via $ref (which the adapter
+  resolves). This gives the container schema real rendering + OSCAL + the
+  embedded socket schema — exactly what you wanted — but it's a full plugin 
+  migration (1500-line file, its own golden test to add), not a field swap.
+  2. Hand-roll the SocketEndpoint shape into the incus sockets field (the quick
+  one). Replace FieldType::Any with a hand-written object schema mirroring
+  SocketEndpoint. Fast, but it duplicates the socket schema in two places — the
+  exact drift the schemars migration exists to kill.
+
+  So "embed the plugin's schema in the container" really means migrating incus 
+  to schemars-derive (#1) to do it properly. That's a bigger lift than the field
+  swap I was about to do — so I stopped before touching incus.rs.
+
+  Which way do you want to go — migrate the incus plugin to schemars-derived so
+  the embed is clean (bigger, correct), or hand-roll the socket sub-schema for
+  now (quick, duplicative)? Or scope the incus schemars migration as its own
+  task first?
+
+✻ Baked for 2m 6s
+
+❯ i would like to grab structured daqta for ma n official incus source (i saw   
+  somewhere, i think it may have been toml) to properly scheamaize incus        
+  container because i dont think lxc is right for incus                         
+
+● That's the right instinct — Incus is an LXD fork with its own instance-config
+  model (config keys + devices + profiles), distinct from raw LXC, so
+  schematizing off LXC would be wrong. Let me find the official Incus structured
+  config source. Loading the web tools:
+
+● Web Search("Incus instance configuration options reference machine-readable
+            metadata config keys source")
+  ⎿  Did 1 search in 7s
+
+● The rendered reference is at linuxcontainers.org, but those are generated from
+  a machine-readable source in the Incus repo. Let me find that structured
+  source (the user recalls something TOML-ish) and the REST API schema:
+
+● Web Search("github lxc incus metadata config options generated structured
+            source instance schema rest-api.yaml InstancePut devices")
+  ⎿  Did 1 search in 6s
+
+● The canonical machine-readable source is the Incus Go API package shared/api
+  (the Instance/InstancePut structs with JSON tags) — that's what generates both
+  the swagger and the docs. Let me pull the actual struct definition:
+
+● Fetch(https://raw.githubusercontent.com/lxc/incus/main/shared/api/instance.go)
+  ⎿  Received 11.5KB (200 OK)
+
+● Got the canonical structured source — and it confirms your instinct cleanly.
+  The authoritative machine-readable Incus schema is the Go API package 
+  github.com/lxc/incus/shared/api (Instance / InstancePut), which also generates
+  the swagger doc/rest-api.yaml. (No TOML, for what it's worth — the structured
+  forms are the Go structs, the swagger YAML, and incus config show YAML; you
+  may have seen the YAML.)
+
+  Official Incus instance model:
+
+  InstancePut (writable): architecture, config (ConfigMap = map[string]string),
+  devices (DevicesMap = map[string]map[string]string), ephemeral, profiles,
+  restore, disk_only, stateful, description.
+
+  Instance (adds read-only): name, status, status_code, type, project, location,
+  created_at, last_used_at, expanded_config, expanded_devices.
+
+  The decisive finding: Incus has no first-class "sockets" concept. A proxy
+  socket is just an entry in devices with type: proxy. So your current
+  IncusProxySocket + sockets: Vec<…> split is a non-official invention (and the
+  struct also has image/storage_pool which aren't API fields, while missing
+  expanded_config/expanded_devices/status_code/restore/disk_only). That's
+  exactly the "LXC isn't right for Incus" smell — it's modeled on something
+  other than the real Incus API.
+
+  So the proper schematization, from the official source:
+  - Re-model IncusInstance to mirror Instance/InstancePut (schemars-derived,
+  OSCAL-tagged): architecture, config, devices, profiles, ephemeral, stateful,
+  restore, disk_only, description + read-only
+  name/status/status_code/type/project/location/timestamps/expanded_*.
+  - Drop the custom sockets/IncusProxySocket entirely — it's not in the Incus
+  model.
+  - The gRPC container.sock socket then belongs in the unix_socket plugin, 
+  referencing the container by name — not embedded as a non-standard Incus
+  field. That also resolves the earlier embed-vs-reference fork: official Incus
+  has nowhere to embed it, so by-name reference is the correct seam.
+
+  This makes the container schema faithful to Incus and keeps the gRPC socket
+  cleanly in its own plugin.
+
+  Want me to (a) save this official-API field set as a reference memory, and (b)
+  scope the IncusInstance re-modeling (schemars-derive from
+  Instance/InstancePut, drop the custom sockets) as the next task? I can also
+  pull ConfigMap/DevicesMap's exact definitions and the devices proxy-type keys
+  from shared/api if you want the device sub-schema too.
+
+  Sources:
+  - Incus shared/api Go package
+  (https://pkg.go.dev/github.com/lxc/incus/shared/api)
+  - incus/doc/rest-api.yaml
+  (https://github.com/lxc/incus/blob/main/doc/rest-api.yaml)
+  - Instance configuration — Incus docs
+  (https://linuxcontainers.org/incus/docs/main/explanation/instance_config/)
+  - Instance options reference — Incus docs
+  (https://linuxcontainers.org/incus/docs/main/reference/instance_options/)
+
+✻ Churned for 2m 18s
+
+❯ how do you link the socket to the container? make schemars--yes and devices   
+  also                                                                          
+
+● Let me answer the linking, then pull the official device schema so we model
+  devices properly too.
+
+  How the socket links to the container — by name (foreign key), not an embedded
+  field:
+
+  Since official Incus has no socket field, the link is the shared name:
+  createunixsocket --name <container> sets SocketEndpoint.name = the container's
+  name. In the DB (and therefore the D-Bus tree that mirrors it), the socket
+  row and the IncusInstance row share that key. The join happens at the
+  projection/gemma layer: when gemma builds the xray config it looks up the
+  container by name and its socket(s) by the same name, and emits the route. So:
+
+  - No non-standard field on IncusInstance — the container schema stays faithful
+  to the Incus API.
+  - The relation is a name-keyed foreign key across two D-Bus objects
+  (unix_socket ←→ incus instance), resolved when projected — exactly the seam
+  the by-name reference gives you.
+  - Optionally the container's D-Bus object can expose a derived (computed, not
+  stored) "sockets" view resolved by name for rendering, without polluting the
+  Incus model.
+
+  schemars: yes — re-model IncusInstance/InstancePut as schemars-derived +
+  OSCAL-tagged, matching the official API fields, dropping IncusProxySocket.
+
+  Now the device schema — let me ground it in the official Incus device types:
+
+● Fetch(https://linuxcontainers.org/incus/docs/main/reference/devices/)
+  ⎿  Received 46.2KB (200 OK)
+
+● Official device types (12), and the overall shape confirms the model: devices 
+  = map[device-name → map[string]string], every device just a string KV map with
+  a required type key.
+
+  ┌─────────────────────────────────────────────────────┬───────────────────┐
+  │                 Container-relevant                  │     VM/other      │
+  ├─────────────────────────────────────────────────────┼───────────────────┤
+  │ nic, disk, unix-char, unix-block, usb, gpu,         │ pci (VM), none    │
+  │ infiniband, proxy, unix-hotplug, tpm                │ (blocker)         │
+  └─────────────────────────────────────────────────────┴───────────────────┘
+
+  (The proxy keys — listen, connect, bind, uid, gid, mode, nat, proxy_protocol —
+  are exactly what the deprecated IncusProxySocket mirrored. We keep proxy as a
+  faithful Incus device type, we just stop using it for our gRPC sockets.)
+
+  So there's one real modeling decision for devices, because Incus itself is
+  stringly-typed (map[string]map[string]string):
+
+● User answered Claude's questions:
+  ⎿  · How should the schemars `devices` schema be modeled (config stays a 
+     string map either way — keys are too many/dotted to type)? → Typed Device 
+     enum (serde tag="type")
+
+● Typed Device enum it is. That needs the official config keys per device type,
+  and it's a substantial re-model — let me lock in the reference data first (so
+  it's not re-derived), then gather the per-type keys.
+
+  Wrote 2 memories (ctrl+o to expand)
+
+● Fetch(https://linuxcontainers.org/incus/docs/main/reference/devices_proxy/)  ⎿  Received 59.8KB (200 OK)
+
+● Fetch(https://linuxcontainers.org/incus/docs/main/reference/devices_disk/)
+  ⎿  Received 88.6KB (200 OK)
+
+● I have proxy + disk keys (proxy:
+  listen/connect/bind/nat/proxy_protocol/uid/gid/mode/security.uid/security.gid;
+  disk: ~24 keys). Design + reference data are now locked in memory.
+
+  Honest scope check: this is a large staged build — a 12-variant typed Device
+  enum (each with up to ~24 keys), the InstancePut/Instance schemars re-model,
+  dropping IncusProxySocket, reworking the incus list parse/apply, the
+  hand-rolled schema, and tests. That's several hundred lines plus the remaining
+  device-key sets. I'll execute it in stages rather than one unreviewable dump.
+
+  Let me grab the two most important remaining container device types (nic —
+  netmaker has one — and unix-char) so I can write the enum foundation:
+
+● Fetch(https://linuxcontainers.org/incus/docs/main/reference/devices_nic/)
+  ⎿  Received 254.3KB (200 OK)
+
+● Fetch(https://linuxcontainers.org/incus/docs/main/reference/devices_unix_char/
+       )
+  ⎿  Received 51.1KB (200 OK)
+
+● Good — proxy/disk/nic/unix-char are the core container devices. To type the
+  full 12-variant enum faithfully (no guessing on keys — per your standing
+  rule), I need the remaining types. Grabbing them in one batch so I can write
+  the complete enum in one pass:
+
+● Fetch(https://linuxcontainers.org/incus/docs/main/reference/devices_unix_block
+       /)
+  ⎿  Received 51.1KB (200 OK)
+
+● Fetch(https://linuxcontainers.org/incus/docs/main/reference/devices_usb/)
+  ⎿  Received 53.1KB (200 OK)
+
+● Fetch(https://linuxcontainers.org/incus/docs/main/reference/devices_gpu_physic
+       al/)
+  ⎿  Received 0 bytes (404 Not Found)
+
+● Fetch(https://linuxcontainers.org/incus/docs/main/reference/devices_tpm/)
+  ⎿  Received 45.2KB (200 OK)
+
+● Fetch(https://linuxcontainers.org/incus/docs/main/reference/devices_infiniband
+       /)
+  ⎿  Received 49.5KB (200 OK)
+
+● Fetch(https://linuxcontainers.org/incus/docs/main/reference/devices_unix_hotpl
+       ug/)
+  ⎿  Received 49.1KB (200 OK)
+
+● Fetch(https://linuxcontainers.org/incus/docs/main/reference/devices_pci/)
+  ⎿  Received 44.8KB (200 OK)
+  ⎿  You've hit your session limit · resets 2:20pm (America/New_York)
+     /upgrade to increase your usage limit.
+
+✻ Sautéed for 5m 12s

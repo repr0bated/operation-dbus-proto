@@ -2,12 +2,8 @@
   "mcpServers": {
     "cognitive-grpc": {
       "type": "stdio",
-      "command": "/usr/local/bin/op-mcp-shim",
-      "args": ["--endpoint", "http://10.220.35.1:50052"],
-      "env": {
-        "GHOSTBRIDGE_FOOTPRINT": "claude-code",
-        "GHOSTBRIDGE_TRACE_ID": "claude-code"
-      }
+      "command": "cognitive-mcp-server",
+      "args": ["--stdio"]
     }
   }
 }

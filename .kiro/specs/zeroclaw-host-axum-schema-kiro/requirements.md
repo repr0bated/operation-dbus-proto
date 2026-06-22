@@ -32,9 +32,13 @@ architectural boundary intact.
 - NVMe I/O to Btrfs is only for vectorised footprint transport (blockchain
   chain-of-custody). All live state lives in `/dev/shm`.
 
-### FR-04 — Native gRPC on a host Unix socket
-- The Axum server exposes a native gRPC endpoint via a Unix domain socket at
-  `/run/opdbus/zeroclaw-grpc.sock`.
+### FR-04 — Native gRPC on the shared host Unix socket
+- The Axum server binds the single shared Unix domain socket at
+  `/run/ghostbridge/container.sock` (`ZEROCLAW_UNIX_SOCKET`).
+- This is the one socket every container/service routes through; the zeroclaw
+  Axum host owns the listener and `tonic_web::enable` + gRPC server reflection
+  demuxes each service by gRPC service/method. No per-service socket files
+  (e.g. the retired `/run/opdbus/zeroclaw-grpc.sock`) are created.
 - No TCP port is opened for native gRPC.
 
 ### FR-05 — HTTP and gRPC-Web via tonic-web
