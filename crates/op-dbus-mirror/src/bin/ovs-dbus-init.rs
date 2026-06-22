@@ -1,7 +1,6 @@
 use anyhow::{Context, Result};
 use op_core::types::BusType;
 use op_dbus_mirror::DbusMirror;
-use op_jsonrpc::nonnet::NonNetDb;
 use op_network::rovs_proxy::OvsdbDbusClient;
 use op_plugins::default_registry::DefaultPluginRegistry;
 use op_state::manager::StateManager;
@@ -28,7 +27,6 @@ async fn main() -> Result<()> {
     tracing::info!(bus = %bus_type, "starting op-dbus-mirror (event-driven)");
 
     let ovsdb = Arc::new(OvsdbDbusClient::new());
-    let nonnet = Arc::new(NonNetDb::new());
     let state_manager = Arc::new(StateManager::new());
 
     let state_store = Arc::new(
@@ -46,13 +44,7 @@ async fn main() -> Result<()> {
         state_manager.register_plugin(plugin.name().to_string(), plugin);
     }
 
-    let plugin_state = state_manager
-        .query_current_state()
-        .await
-        .context("failed to query PluginSchema-backed state for NonNet")?;
-    nonnet.load_from_plugins(&plugin_state).await;
-
-    let mirror = DbusMirror::new(bus_type, ovsdb, nonnet, None)
+    let mirror = DbusMirror::new(bus_type, ovsdb, None)
         .await
         .context("failed to create DbusMirror")?
         .with_state_manager(state_manager);

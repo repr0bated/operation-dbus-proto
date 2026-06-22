@@ -231,7 +231,15 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route(
             "/privacy/google/callback",
             get(handlers::privacy::google_callback),
-        );
+        )
+        // Gemma UI gallery
+        .route("/gemma/specs", get(handlers::gemma::specs_handler))
+        .route(
+            "/gemma/specs/:id",
+            delete(handlers::gemma::delete_spec_handler),
+        )
+        .route("/gemma/regenerate", post(handlers::gemma::regenerate_handler))
+        .route("/gemma/catalog", get(handlers::gemma::catalog_handler));
 
     // MCP JSON-RPC endpoints (profile-based and legacy)
     let mcp_route = mcp::create_mcp_router();

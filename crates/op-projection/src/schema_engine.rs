@@ -15,12 +15,40 @@ use std::collections::HashMap;
 use std::io::Write;
 use tracing::{debug, error, info, warn};
 
-/// Shared-memory path for the canonical PluginSchema catalog.
-/// This is the single source of truth for UI, blockchain, and all components.
+/// Derived "all-together" monolith cache of the PluginSchema catalog. Kept for
+/// whole-catalog readers; NO LONGER the hash source (the manifest root is).
 const SHM_SCHEMA_PATH: &str = "/dev/shm/live-schema.json";
+
+/// Directory of bare per-plugin schema objects (`<plugin>.json`) for individual
+/// consumption — emitted alongside the monolith from the same single producer.
+const SHM_SCHEMA_DIR: &str = "/dev/shm/opdbus/schemas";
+
+/// Manifest carrying the single folded `catalog_hash` + per-plugin leaf hashes +
+/// `generation`. Written LAST as the atomic commit point; the one place the
+/// catalog hash is published — consumers read it, never re-hash.
+const SHM_MANIFEST_PATH: &str = "/dev/shm/opdbus/schemas/.manifest.json";
 
 /// Schema version identifier
 pub type SchemaVersion = u64;
+
+/// Lightweight shape check used to test whether a value satisfies one branch
+/// of a `FieldType::OneOf` discriminated union.
+fn value_matches_field_type(field_type: &FieldType, value: &Value) -> bool {
+    match (field_type, value) {
+        (FieldType::String, Value::String(_)) => true,
+        (FieldType::Integer, Value::Static(StaticNode::I64(_) | StaticNode::U64(_))) => true,
+        (FieldType::Float, Value::Static(StaticNode::F64(_))) => true,
+        (FieldType::Boolean, Value::Static(StaticNode::Bool(_))) => true,
+        (FieldType::Object(_), Value::Object(_)) => true,
+        (FieldType::Array(_), Value::Array(_)) => true,
+        (FieldType::Enum(values), Value::String(s)) => values.contains(&s.to_string()),
+        (FieldType::OneOf(branches), v) => branches
+            .iter()
+            .any(|branch| value_matches_field_type(branch, v)),
+        (FieldType::Any, _) => true,
+        _ => false,
+    }
+}
 
 /// Returns the comparable magnitude of a value for `Min`/`Max` constraints:
 /// numeric value for numbers, element/char count for arrays/strings.
@@ -33,6 +61,23 @@ fn numeric_or_length(value: &Value) -> Option<f64> {
         Value::Array(a) => Some(a.len() as f64),
         _ => None,
     }
+}
+
+/// Atomically publish `bytes` to a `/dev/shm` path via a sibling temp file +
+/// rename, so readers see either the old or new content, never a torn write.
+fn atomic_write_shm(path: &str, bytes: &[u8]) -> Result<()> {
+    let tmp = format!("{}.tmp", path);
+    {
+        let mut file = std::fs::File::create(&tmp)
+            .map_err(|e| anyhow::anyhow!("Cannot create {}: {}", tmp, e))?;
+        file.write_all(bytes)
+            .map_err(|e| anyhow::anyhow!("Failed to write {}: {}", tmp, e))?;
+        file.sync_all()
+            .map_err(|e| anyhow::anyhow!("Failed to sync {}: {}", tmp, e))?;
+    }
+    std::fs::rename(&tmp, path)
+        .map_err(|e| anyhow::anyhow!("Failed to rename {} -> {}: {}", tmp, path, e))?;
+    Ok(())
 }
 
 /// The authoritative schema registry that validates and manages all PluginSchema definitions.
@@ -136,20 +181,72 @@ impl SchemaEngine {
             .map(|(k, v)| (k.clone(), v.iter().collect()))
             .collect();
 
+        // 1. Derived "all-together" monolith cache (atomic). Kept for
+        //    whole-catalog readers; no longer the hash source.
         let json_bytes = serde_json::to_vec_pretty(&catalog)
             .map_err(|e| anyhow::anyhow!("Failed to serialize schema catalog: {}", e))?;
+        atomic_write_shm(SHM_SCHEMA_PATH, &json_bytes)?;
 
-        let mut file = std::fs::File::create(SHM_SCHEMA_PATH)
-            .map_err(|e| anyhow::anyhow!("Cannot write schema SHM: {}", e))?;
-        file.write_all(&json_bytes)
-            .map_err(|e| anyhow::anyhow!("Failed to write schema SHM: {}", e))?;
-        file.sync_all()
-            .map_err(|e| anyhow::anyhow!("Failed to sync schema SHM: {}", e))?;
+        // 2. Folder of bare per-plugin schema objects + per-plugin leaf hashes.
+        std::fs::create_dir_all(SHM_SCHEMA_DIR)
+            .map_err(|e| anyhow::anyhow!("Cannot create schema dir {}: {}", SHM_SCHEMA_DIR, e))?;
+        let mut leaves: std::collections::BTreeMap<String, String> =
+            std::collections::BTreeMap::new();
+        for (id, schemas) in &catalog {
+            // Bare PluginSchema object (canonical one if a plugin declares
+            // several) — "the schema is the plugin"; consumers read this directly.
+            let Some(schema) = schemas.first() else {
+                continue;
+            };
+            let bytes = serde_json::to_vec_pretty(schema)
+                .map_err(|e| anyhow::anyhow!("Failed to serialize schema '{}': {}", id, e))?;
+            atomic_write_shm(&format!("{}/{}.json", SHM_SCHEMA_DIR, id), &bytes)?;
+            leaves.insert(id.clone(), blake3::hash(&bytes).to_hex().to_string());
+        }
 
-        let hash = blake3::hash(&json_bytes);
-        let hex = hash.to_hex().to_string();
-        info!(path = SHM_SCHEMA_PATH, footprint = %hex, "Schema catalog written to shared memory");
-        Ok(hex)
+        // 3. Canonical catalog hash = blake3 of the monolith bytes — the EXACT
+        //    value the identity derivation already uses, kept stable so the
+        //    WG/ghostbridge verifier needs no change. Per-plugin `leaves` are
+        //    published alongside for per-file integrity / future incremental use.
+        let catalog_hash = blake3::hash(&json_bytes).to_hex().to_string();
+
+        // 4. Manifest, written LAST as the atomic commit point — the one place
+        //    `catalog_hash` is published; consumers read it, never re-hash.
+        let generation = Self::read_manifest_generation().wrapping_add(1);
+        let mut manifest = serde_json::Map::new();
+        manifest.insert(
+            "catalog_hash".to_string(),
+            serde_json::Value::String(catalog_hash.clone()),
+        );
+        manifest.insert("generation".to_string(), serde_json::Value::from(generation));
+        manifest.insert(
+            "plugins".to_string(),
+            serde_json::to_value(&leaves)
+                .map_err(|e| anyhow::anyhow!("Failed to serialize leaf hashes: {}", e))?,
+        );
+        let manifest_bytes = serde_json::to_vec_pretty(&serde_json::Value::Object(manifest))
+            .map_err(|e| anyhow::anyhow!("Failed to serialize schema manifest: {}", e))?;
+        atomic_write_shm(SHM_MANIFEST_PATH, &manifest_bytes)?;
+
+        info!(
+            dir = SHM_SCHEMA_DIR,
+            catalog_hash = %catalog_hash,
+            generation,
+            plugins = leaves.len(),
+            "Schema catalog written to shared memory (folder + monolith + manifest)"
+        );
+        Ok(catalog_hash)
+    }
+
+    /// Read the current manifest `generation`, or 0 if no manifest exists yet.
+    /// The next write uses `generation + 1`, giving readers a monotonic marker
+    /// to detect a stale catalog snapshot.
+    fn read_manifest_generation() -> u64 {
+        std::fs::read(SHM_MANIFEST_PATH)
+            .ok()
+            .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+            .and_then(|v| v.get("generation").and_then(serde_json::Value::as_u64))
+            .unwrap_or(0)
     }
 
     /// Read the Blake3 footprint of the current schema catalog on disk.
@@ -431,6 +528,21 @@ impl SchemaValidator {
                             s, values
                         ),
                         code: "FIELD_VALUE_NOT_IN_ENUM".to_string(),
+                    });
+                }
+            }
+            (FieldType::OneOf(branches), value) => {
+                if !branches
+                    .iter()
+                    .any(|branch| value_matches_field_type(branch, value))
+                {
+                    errors.push(ValidationError {
+                        path: field_name.to_string(),
+                        message: format!(
+                            "Field value does not match any allowed variant: {:?}",
+                            value
+                        ),
+                        code: "FIELD_TYPE_MISMATCH".to_string(),
                     });
                 }
             }

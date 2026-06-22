@@ -1,6 +1,6 @@
-//! Schema Engine - The Authoritative Source for State and Schema DNA
+//! Mutation Engine - The Authoritative Source for State and Schema DNA
 //!
-//! The Schema Engine is the central coordinator that:
+//! The Mutation Engine is the central coordinator that:
 //! - Authoritatively routes all mutations (gRPC and D-Bus)
 //! - Ensures all state changes are strictly recorded in the Event Chain (Audit Log)
 //! - Broadcasts authoritative state changes to gRPC subscribers
@@ -57,7 +57,7 @@ pub enum ChangeSource {
     Internal,
 }
 
-pub struct SchemaEngine {
+pub struct MutationEngine {
     /// Authoritative Event Chain
     pub event_chain: Arc<RwLock<EventChain>>,
     /// Real-time change projection channel
@@ -73,16 +73,18 @@ pub struct SchemaEngine {
     /// Authoritative RCP stores
     pub ovsdb: Arc<OvsdbDbusClient>,
     pub nonnet: Arc<NonNetDb>,
+    /// In-process plugin handles for MethodCall dispatch (e.g. createunixsocket).
+    pub unix_socket: Arc<op_plugins::state_plugins::UnixSocketPlugin>,
 }
 
-impl std::fmt::Debug for SchemaEngine {
+impl std::fmt::Debug for MutationEngine {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SchemaEngine").finish()
+        f.debug_struct("MutationEngine").finish()
     }
 }
 
 #[async_trait]
-impl op_core::state_publisher::StatePublisher for SchemaEngine {
+impl op_core::state_publisher::StatePublisher for MutationEngine {
     async fn publish_change(
         &self,
         plugin_id: String,
@@ -117,8 +119,8 @@ impl op_core::state_publisher::StatePublisher for SchemaEngine {
     }
 }
 
-impl SchemaEngine {
-    /// Create a new authoritative Schema Engine
+impl MutationEngine {
+    /// Create a new authoritative Mutation Engine
     pub fn new(
         event_chain: Arc<RwLock<EventChain>>,
         ovsdb: Arc<OvsdbDbusClient>,
@@ -133,6 +135,7 @@ impl SchemaEngine {
             dbus_call_limiter: Arc::new(Semaphore::new(32)),
             ovsdb,
             nonnet,
+            unix_socket: Arc::new(op_plugins::state_plugins::UnixSocketPlugin::new()),
         }
     }
 
@@ -228,7 +231,7 @@ impl SchemaEngine {
         Ok(change)
     }
 
-    /// Start the Schema Engine background tasks.
+    /// Start the Mutation Engine background tasks.
     /// Subscribes to authoritative RCP stores and broadcasts changes.
     pub async fn start(self: Arc<Self>) -> anyhow::Result<()> {
         let me = self.clone();
@@ -342,6 +345,15 @@ impl SchemaEngine {
     ) -> anyhow::Result<MutationResult> {
         let mut old_value = None;
 
+        // Resolve the acting identity from the Sled (/dev/shm/plugin_schema.dat)
+        // when the caller omitted it. The Sled carries the WireGuard footprint +
+        // trace_id — that identity is authoritative for every mutation.
+        let actor_id = if actor_id.is_empty() {
+            sled_footprint().unwrap_or_else(|| "anonymous".to_string())
+        } else {
+            actor_id
+        };
+
         // 1. Write to authoritative RCP store
         if plugin_id == "net" || object_path.contains("/ovsdb/") {
             // OVSDB Authoritative Path
@@ -392,6 +404,19 @@ impl SchemaEngine {
                                 .set_bridge_property(&br_name, prop, val_str)
                                 .await?;
                         }
+                    }
+                }
+            }
+        } else if plugin_id == "unix_socket" && change_type == ChangeType::MethodCall {
+            // unix_socket plugin dispatch: createunixsocket <name> <ports csv/vec>.
+            // The plugin binds the single shared container.sock and records the
+            // name+ports routing tag; gemma/xray demux by reflection downstream.
+            if let Some(method) = &member_name {
+                if method == "createunixsocket" {
+                    let (name, ports) = parse_socket_args(&value);
+                    let result = self.unix_socket.create_unix_socket(name, ports);
+                    if !result.success {
+                        anyhow::bail!(result.errors.join("; "));
                     }
                 }
             }
@@ -581,4 +606,69 @@ pub enum ErrorCode {
     ValidationFailed,
     ReadOnly,
     Internal,
+}
+
+/// Read the WireGuard footprint from the Sled (1:1 shared memory identity at
+/// `/dev/shm/plugin_schema.dat`). Returns the hex footprint used as the default
+/// `actor_id` when a caller omits identity.
+fn sled_footprint() -> Option<String> {
+    // SAFETY: read_sled returns a valid pointer to IdentitySled in shared memory
+    // for the lifetime of the process; we copy the footprint out and drop the ptr.
+    let (ptr, _mmap) = read_sled().ok()?;
+    unsafe {
+        let sled = &*ptr;
+        if sled.hashed_footprint != [0u8; 32] {
+            Some(hex::encode(sled.hashed_footprint))
+        } else {
+            None
+        }
+    }
+}
+
+/// Parse createunixsocket arguments. Accepts either a JSON array
+/// `[name, [ports...]]` or an object `{ "name": "...", "ports": [...] }`.
+/// `ports` may be a JSON array of numbers or a CSV string ("6334" / "6334,8080").
+fn parse_socket_args(value: &simd_json::OwnedValue) -> (String, Vec<u16>) {
+    if let Some(obj) = value.as_object() {
+        let name = obj
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let ports = parse_ports_value(obj.get("ports"));
+        return (name, ports);
+    }
+    if let Some(arr) = value.as_array() {
+        let name = arr
+            .first()
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let ports = parse_ports_value(arr.get(1));
+        return (name, ports);
+    }
+    (String::new(), Vec::new())
+}
+
+fn parse_ports_value(value: Option<&simd_json::OwnedValue>) -> Vec<u16> {
+    let Some(v) = value else {
+        return Vec::new();
+    };
+    if let Some(arr) = v.as_array() {
+        return arr
+            .iter()
+            .filter_map(|p| p.as_u64().or_else(|| p.as_i64().map(|i| i as u64)))
+            .map(|n| n as u16)
+            .collect();
+    }
+    if let Some(s) = v.as_str() {
+        return s
+            .split(',')
+            .filter_map(|p| p.trim().parse::<u16>().ok())
+            .collect();
+    }
+    if let Some(n) = v.as_u64().or_else(|| v.as_i64().map(|i| i as u64)) {
+        return vec![n as u16];
+    }
+    Vec::new()
 }

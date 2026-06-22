@@ -9,13 +9,15 @@
 //! produces structured state, not a CLI bypass. It never shells out to network
 //! tools. OpenFlow rules may be applied via D-Bus by a separate controller.
 
+mod ui_gallery;
+
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
-use tracing::info;
+use tracing::{info, warn};
 
 const SUBID_REGISTRY: &str = "/etc/ghostbridge/subid-registry.json";
 const XRAY_ROUTES: &str = "/dev/shm/xray-routes.json";
@@ -67,6 +69,15 @@ enum BackendSpec {
     Unix { path: String },
     #[serde(rename = "dns")]
     Dns { host: String, port: u16 },
+    /// Internal metadata entry — not xray-routable, produces no outbound.
+    #[serde(rename = "file")]
+    File {
+        #[allow(dead_code)]
+        path: String,
+    },
+    /// Internal service — not xray-routable, produces no outbound.
+    #[serde(rename = "internal")]
+    Internal,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -110,6 +121,12 @@ fn main() -> Result<()> {
         openflow_rules = routes.openflow_rules.len(),
         "Gemma wrote routing artifacts"
     );
+
+    // Generate the json-render.dev UI spec gallery (200 unique specs)
+    if let Err(e) = ui_gallery::generate_gallery() {
+        warn!("Gemma UI gallery generation failed: {e}");
+    }
+
     Ok(())
 }
 
@@ -127,11 +144,26 @@ fn derive_routes(registry: &SubidRegistry) -> XrayRoutingMap {
 
     for entry in &registry.entries {
         let Some(gemma) = &entry.gemma else { continue };
+
+        // Skip non-routable backends — they are metadata (schema files,
+        // internal services) that should not produce xray outbounds.
+        if matches!(
+            gemma.backend,
+            BackendSpec::File { .. } | BackendSpec::Internal
+        ) {
+            continue;
+        }
+
         let tag = entry
             .tags
             .first()
             .cloned()
             .unwrap_or_else(|| entry.subject.clone());
+
+        // Skip duplicate tags — first declaration wins.
+        if xray_routes.iter().any(|r: &XrayRoute| r.tag == tag) {
+            continue;
+        }
 
         let route = XrayRoute {
             tag: tag.clone(),
@@ -185,12 +217,17 @@ fn default_privacy_chain() -> Vec<OpenFlowRule> {
 
 /// Translate a Gemma backend into an OpenFlow rule for the bridge.
 /// Only TCP/GRPC backends produce IP/Port matchable rules here; Unix sockets
-/// are terminated by xray's freedom/ds transport so no bridge match is needed.
+/// route through the tonic-web gRPC bridge (reflection demuxes) so no OVS
+/// bridge match is needed.
 fn backend_to_openflow_rule(tag: &str, backend: &BackendSpec) -> Option<OpenFlowRule> {
     let (host, port) = match backend {
         BackendSpec::Tcp { host, port } => (host.clone(), *port),
         BackendSpec::Grpc { host, port, .. } => (host.clone(), *port),
-        BackendSpec::Ingress | BackendSpec::Unix { .. } | BackendSpec::Dns { .. } => return None,
+        BackendSpec::Ingress
+        | BackendSpec::Unix { .. }
+        | BackendSpec::Dns { .. }
+        | BackendSpec::File { .. }
+        | BackendSpec::Internal => return None,
     };
 
     let mut match_fields = HashMap::new();

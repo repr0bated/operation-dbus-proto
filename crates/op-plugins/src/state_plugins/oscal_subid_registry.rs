@@ -94,7 +94,7 @@ fn example_dbus_path() -> Option<String> {
 }
 
 fn example_service_name() -> Option<String> {
-    Some("org.opdbus.v1".to_string())
+    Some(op_core::config::OPDBUS_BUS_NAME.to_string())
 }
 
 fn example_source_subid() -> Option<String> {
@@ -756,7 +756,7 @@ pub(crate) fn oscal_subid_registry_schema_golden() -> PluginSchema {
             required: false,
             description: "Required for prj.* entries. D-Bus service name hosting the object.".to_string(),
             default: None,
-            example: Some(json!("org.opdbus.v1")),
+            example: Some(json!(op_core::config::OPDBUS_BUS_NAME)),
             constraints: Vec::new(),
             read_only: false,
             read_only_when: None,

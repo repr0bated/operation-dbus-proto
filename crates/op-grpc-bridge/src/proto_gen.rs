@@ -339,6 +339,7 @@ impl ProtoGenerator {
             FieldType::Array(inner) => format!("repeated {}", self.field_type_to_proto(inner)),
             FieldType::Object(_) => "google.protobuf.Struct".to_string(),
             FieldType::Enum(_) => "string".to_string(),
+            FieldType::OneOf(_) => "google.protobuf.Value".to_string(),
             FieldType::Any => "google.protobuf.Value".to_string(),
         }
     }

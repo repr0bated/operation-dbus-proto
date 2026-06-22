@@ -16,7 +16,7 @@ fi
 export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/op-dbus/session-bus.sock}"
 export ZEROCLAW_BIND_ADDR="${ZEROCLAW_BIND_ADDR:-0.0.0.0:8090}"
 export ZEROCLAW_SCHEMA_PATH="${ZEROCLAW_SCHEMA_PATH:-/dev/shm/opdbus/schemas/zeroclaw.json}"
-export ZEROCLAW_UNIX_SOCKET="${ZEROCLAW_UNIX_SOCKET:-/run/opdbus/zeroclaw-grpc.sock}"
+export ZEROCLAW_UNIX_SOCKET="${ZEROCLAW_UNIX_SOCKET:-/run/ghostbridge/container.sock}"
 export RUST_LOG="${RUST_LOG:-op_grpc_bridge=info,info}"
 
 exec /usr/local/bin/op-grpc-bridge-zeroclaw

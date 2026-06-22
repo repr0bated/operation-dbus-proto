@@ -33,7 +33,11 @@ pub struct LlmTransport {
     #[serde(default)]
     #[schemars(extend("x-oscal-subid" = "mut.service.zeroclaw-transport.grpc-target@v1"))]
     pub grpc_target: String,
-    /// Incus / WireGuard container target for xray routing.
+    /// Incus / WireGuard container target for xray routing. Kept as a
+    /// published-schema field for backward compatibility, but zeroclaw's LLM
+    /// transport now runs on the host (xray via the `gbr-xray` s6 service and
+    /// the gRPC-bridge via `op-grpc-bridge-zeroclaw`); there is no per-service
+    /// incus container. Defaults to the `"host"` sentinel.
     #[serde(default)]
     #[schemars(extend("x-oscal-subid" = "mut.service.zeroclaw-transport.incus-container@v1"))]
     pub incus_container: String,
@@ -136,8 +140,11 @@ impl ZeroclawPlugin {
         let selected_provider = Self::env_or("LLM_PROVIDER", "ollama");
         let selected_model = Self::env_or("LLM_MODEL", "gemma4");
         let router_endpoint = Self::env_or("ZEROCLAW_ROUTER_ENDPOINT", "http://localhost:11434");
-        let wg_xray_target = Self::env_or("ZEROCLAW_WG_XRAY_TARGET", "wg-xray");
-        let grpc_target = Self::env_or("ZEROCLAW_GRPC_TARGET", "http://10.200.0.1:50051");
+        // The operation.v1 gRPC server (StateSync, etc.) is now served on the
+        // host by `op-dbus` at the grpc-uplink veth IP `10.200.0.2:50051`.
+        // The old `10.200.0.1:50051` lived inside the deprecated wg-xray
+        // container and is dead.
+        let grpc_target = Self::env_or("ZEROCLAW_GRPC_TARGET", "http://10.200.0.2:50051");
 
         let grpc_target_for_provider = grpc_target.clone();
 
@@ -148,7 +155,11 @@ impl ZeroclawPlugin {
             transport: LlmTransport {
                 dbus_object: "/opdbus/v1/plugins/zeroclaw".to_string(),
                 grpc_target: grpc_target_for_provider,
-                incus_container: wg_xray_target,
+                // No per-service incus container: zeroclaw's LLM transport and
+                // the gRPC-bridge run on the host. The published schema field
+                // is kept (cannot be deleted without breaking the contract) but
+                // the value is the `"host"` sentinel instead of a container name.
+                incus_container: "host".to_string(),
                 browser_surface: "gRPC-Web through op-web".to_string(),
                 rest_aliases: vec![
                     "/api/zeroclaw/chat".to_string(),

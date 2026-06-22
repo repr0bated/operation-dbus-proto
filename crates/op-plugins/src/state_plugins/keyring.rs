@@ -57,7 +57,7 @@ impl KeyringPlugin {
         let conn = Connection::session().await?;
         let proxy = Proxy::new(
             &conn,
-            "org.opdbus.v1",
+            op_core::config::OPDBUS_BUS_NAME,
             "/org/opdbus/v1/plugin/plugins/freedesktop",
             "org.opdbus.v1.Plugin.Plugins.FreeDesktop",
         )

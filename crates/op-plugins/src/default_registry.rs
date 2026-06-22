@@ -29,7 +29,8 @@ use crate::state_plugins::{
     CognitiveMcpPlugin, CompactMcpPlugin, ConfigPlugin, CronPlugin, CtlPlaneChatbotPlugin,
     DnsResolverPlugin, EndpointPlugin, FactoryPlugin, Fail2banPlugin, FreeDesktopPlugin,
     FullSystemPlugin, GcloudAdcPlugin, HardwarePlugin, IncusPlugin, KeypairPlugin, KeyringPlugin,
-    KnowledgePlugin, Login1Plugin, LxcPlugin, MailServerPlugin, McpStatePlugin, MemoryPlugin,
+    GemmaBrainPlugin, KnowledgePlugin, LargeLanguageModelPlugin, Login1Plugin, LxcPlugin,
+    MailServerPlugin, McpStatePlugin, MemoryPlugin,
     NetStatePlugin, NetmakerConfig, NetmakerPlugin, NotebookLmPlugin, OciPlugin,
     OpenFlowObfuscationPlugin, OpenFlowPlugin, OscalSubidRegistryPlugin, OvsBridgePlugin,
     OvsdbDaemonPlugin, PackageKitPlugin, PciDeclPlugin, PrivacyRouterPlugin, PrivacyRoutesPlugin,
@@ -255,6 +256,8 @@ impl DefaultPluginRegistry {
                 Arc::new(McpStatePlugin::new(self.state_store.clone(), config_path))
             }
             "zeroclaw" => Arc::new(ZeroclawPlugin::new()),
+            "large_language_model" => Arc::new(LargeLanguageModelPlugin::new()),
+            "gemma_brain" => Arc::new(GemmaBrainPlugin::new()),
             "factory" => Arc::new(FactoryPlugin::new()),
             "fail2ban" => Arc::new(Fail2banPlugin::new()),
             "cron" => Arc::new(CronPlugin::new()),

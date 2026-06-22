@@ -114,16 +114,27 @@ fn required_set(node: &JVal) -> HashSet<String> {
 fn field_type(node: &JVal, defs: Option<&Map<String, JVal>>) -> FieldType {
     let node = resolve(node, defs);
 
-    // For `Option<T>` where T is a non-primitive schema, schemars emits an
-    // `anyOf`/`oneOf` with the referenced schema and a `null` alternative. Walk
-    // the first non-null alternative so we still produce a concrete type.
+    // `anyOf`/`oneOf` covers two distinct schemars patterns:
+    //   * `Option<T>` (and other single-real-branch unions) emit one non-null
+    //     alternative plus a `null` alternative -> collapse to the concrete type.
+    //   * A `#[serde(tag = "...")]` enum emits one object alternative per
+    //     variant -> build a real `FieldType::OneOf` discriminated union so all
+    //     variants render instead of silently dropping all but the first.
     if let Some(alternatives) = node
         .get("anyOf")
         .or_else(|| node.get("oneOf"))
         .and_then(JVal::as_array)
     {
-        if let Some(non_null) = alternatives.iter().find(|a| type_str(a) != Some("null")) {
-            return field_type(non_null, defs);
+        let non_null: Vec<&JVal> = alternatives
+            .iter()
+            .filter(|a| type_str(a) != Some("null"))
+            .collect();
+        match non_null.as_slice() {
+            [] => {}
+            [single] => return field_type(single, defs),
+            many => {
+                return FieldType::OneOf(many.iter().map(|a| field_type(a, defs)).collect());
+            }
         }
     }
 
@@ -386,6 +397,18 @@ fn field_type_diffs(d: &mut Vec<String>, prefix: &str, r: &FieldType, v: &FieldT
                 }
             }
         }
+        (FieldType::OneOf(r_branches), FieldType::OneOf(v_branches)) => {
+            if r_branches.len() != v_branches.len() {
+                d.push(format!(
+                    "{prefix}: one_of branch count differs ({} vs {})",
+                    r_branches.len(),
+                    v_branches.len()
+                ));
+            }
+            for (i, (rb, vb)) in r_branches.iter().zip(v_branches.iter()).enumerate() {
+                field_type_diffs(d, &format!("{prefix}|{i}"), rb, vb);
+            }
+        }
         _ => {}
     }
 }
@@ -407,6 +430,11 @@ fn type_tag(t: &FieldType) -> String {
         FieldType::Boolean => "boolean".into(),
         FieldType::Any => "any".into(),
         FieldType::Enum(_) => "enum".into(),
+        FieldType::OneOf(branches) => {
+            let mut tags: Vec<String> = branches.iter().map(type_tag).collect();
+            tags.sort();
+            format!("one_of<{}>", tags.join("|"))
+        }
         FieldType::Array(i) => format!("array<{}>", type_tag(i)),
         FieldType::Object(m) => {
             let mut entries: Vec<String> = m

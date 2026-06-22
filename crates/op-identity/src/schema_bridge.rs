@@ -21,6 +21,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 pub const SHM_SLED_PATH: &str = "/dev/shm/plugin_schema.dat";
 pub const SHM_XRAY_CONFIG: &str = "/dev/shm/xray-ghostbridge.json";
 
+/// The tonic-web gRPC bridge (op-grpc-adapters) — the single endpoint xray
+/// routes to.  The bridge uses gRPC reflection to demux by service/method and
+/// dials backend unix sockets natively (Rust `UnixStream`).  xray never dials
+/// sockets directly; it just does TLS + SNI routing to this address.
+const GRPC_BRIDGE_HOST: &str = "127.0.0.1";
+const GRPC_BRIDGE_PORT: u16 = 50051;
+
 // ── Subid taxonomy ────────────────────────────────────────────────────────────
 
 /// Seven operational categories for the subid taxonomy.
@@ -319,8 +326,10 @@ pub fn read_sled() -> std::io::Result<(*const IdentitySled, memmap2::Mmap)> {
 ///   `qdrant:/run/qdrant.sock:qdrant.ghostbridge.tech`
 ///
 /// Traffic enters through the shared REALITY/TLS ingress; xray sniffs the SNI
-/// and a domain routing rule sends it to the `to-<label>` freedom/ds outbound,
-/// which dials the container's socket. No per-socket TCP inbound, no NIC.
+/// and a domain routing rule sends it to the `to-<label>` gRPC outbound, which
+/// redirects to the tonic-web bridge.  The bridge uses gRPC reflection to
+/// demux by service/method and dials the container's unix socket natively.
+/// No per-socket TCP inbound, no NIC, no xray domainsocket.
 #[derive(Debug, Clone)]
 pub struct SocketEntry {
     /// Xray tag suffix (e.g. `"qdrant"`) — becomes the `"to-<label>"` outbound.
@@ -381,9 +390,24 @@ enum GemmaBackend {
         service_name: String,
     },
     #[serde(rename = "unix")]
-    Unix { path: String },
+    Unix {
+        /// Socket path is retained for deserialization compatibility but no
+        /// longer used by xray — the tonic-web bridge dials the socket
+        /// natively via gRPC reflection.
+        #[allow(dead_code)]
+        path: String,
+    },
     #[serde(rename = "dns")]
     Dns { host: String, port: u16 },
+    /// Internal metadata entry — not xray-routable, produces no outbound.
+    #[serde(rename = "file")]
+    File {
+        #[allow(dead_code)]
+        path: String,
+    },
+    /// Internal service — not xray-routable, produces no outbound.
+    #[serde(rename = "internal")]
+    Internal,
 }
 
 /// Load the Gemma routing map from `/dev/shm/xray-routes.json` if present.
@@ -532,7 +556,7 @@ fn build_xray_config(
     {{
       "tag": "to-grpc-bridge",
       "protocol": "freedom",
-      "settings": {{ "redirect": "127.0.0.1:18789" }},
+      "settings": {{ "redirect": "{host}:{port}" }},
       "streamSettings": {{
         "network": "grpc",
         "sockopt": {{ "tcpNoDelay": true, "mark": 255 }},
@@ -545,7 +569,11 @@ fn build_xray_config(
           }}
         }}
       }}
-    }}"#
+    }}"#,
+            host = GRPC_BRIDGE_HOST,
+            port = GRPC_BRIDGE_PORT,
+            footprint = footprint,
+            trace_id = trace_id,
         )
     };
 
@@ -593,7 +621,7 @@ fn build_xray_config(
       "settings": {{
         "clients": [{{ "id": "{uuid}" }}],
         "decryption": "none",
-        "fallbacks": [{{ "dest": 18789 }}]
+        "fallbacks": [{{ "dest": {bridge_port} }}]
       }},
       "streamSettings": {{
         "network": "tcp",
@@ -657,6 +685,7 @@ fn build_xray_config(
         route_rules = route_rules,
         fallback_rule = fallback_rule,
         tls_certs = tls_certs,
+        bridge_port = GRPC_BRIDGE_PORT,
     );
 
     config
@@ -705,18 +734,30 @@ fn route_to_outbound(footprint: &str, trace_id: &str, route: &XrayRoute) -> Opti
             footprint = footprint,
             trace_id = trace_id,
         )),
-        GemmaBackend::Unix { path } => Some(format!(
+        GemmaBackend::Unix { path: _ } => Some(format!(
             r#",
     {{
       "tag": "to-{tag}",
       "protocol": "freedom",
+      "settings": {{ "redirect": "{host}:{port}" }},
       "streamSettings": {{
-        "network": "domainsocket",
-        "dsSettings": {{ "path": "{path}", "abstract": false, "padding": false }}
+        "network": "grpc",
+        "sockopt": {{ "tcpNoDelay": true, "mark": 255 }},
+        "grpcSettings": {{
+          "serviceName": "Ghostbridge.{tag}",
+          "multiMode": true,
+          "metadata": {{
+            "X-Ghostbridge-Footprint": "{footprint}",
+            "X-Ghostbridge-Trace-ID": "{trace_id}"
+          }}
+        }}
       }}
     }}"#,
             tag = tag,
-            path = path,
+            host = GRPC_BRIDGE_HOST,
+            port = GRPC_BRIDGE_PORT,
+            footprint = footprint,
+            trace_id = trace_id,
         )),
         GemmaBackend::Dns { host, port } => Some(format!(
             r#",
@@ -729,6 +770,7 @@ fn route_to_outbound(footprint: &str, trace_id: &str, route: &XrayRoute) -> Opti
             host = host,
             port = port,
         )),
+        GemmaBackend::File { .. } | GemmaBackend::Internal => None,
     }
 }
 
@@ -754,18 +796,44 @@ fn decode_wg_pubkey(b64: &str) -> [u8; 32] {
 /// source_port is the per-session WireGuard-observed source port (0 when none). It binds the
 /// footprint to the session network context for the accountability loop -- it is NOT an auth
 /// factor (WireGuard is the authenticator; see op-grpc-bridge GhostbridgeInterceptor).
+/// Manifest published by op-projection — the ONE place the canonical
+/// `catalog_hash` lives.
+const SHM_SCHEMA_MANIFEST_PATH: &str = "/dev/shm/opdbus/schemas/.manifest.json";
+/// Derived monolith catalog; fallback source for the hash before the manifest
+/// exists (deploy ordering). Same bytes → identical hash value.
+const SHM_LIVE_SCHEMA_PATH: &str = "/dev/shm/live-schema.json";
+
+/// The single canonical schema-catalog hash (32 bytes), computed ONCE by
+/// op-projection and read here — never re-hashed per call site. Reads the
+/// manifest's `catalog_hash`; falls back to hashing the monolith directly when
+/// the manifest isn't present yet. `None` if neither artifact exists.
+pub fn schema_catalog_hash() -> Option<[u8; 32]> {
+    if let Ok(bytes) = std::fs::read(SHM_SCHEMA_MANIFEST_PATH) {
+        if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+            if let Some(hex_str) = v.get("catalog_hash").and_then(|h| h.as_str()) {
+                if let Ok(raw) = hex::decode(hex_str) {
+                    if let Ok(arr) = <[u8; 32]>::try_from(raw.as_slice()) {
+                        return Some(arr);
+                    }
+                }
+            }
+        }
+    }
+    std::fs::read(SHM_LIVE_SCHEMA_PATH)
+        .ok()
+        .map(|bytes| *blake3::hash(&bytes).as_bytes())
+}
+
 pub fn etch_footprint(
     wireguard_pubkey: &[u8; 32],
     mutation_index: u64,
     source_port: u16,
 ) -> [u8; 32] {
-    let schema_catalog_hash = std::fs::read("/dev/shm/live-schema.json")
-        .map(|bytes| blake3::hash(&bytes))
-        .unwrap_or_else(|_| blake3::Hash::from([0u8; 32]));
+    let schema_catalog_hash = schema_catalog_hash().unwrap_or([0u8; 32]);
 
     let mut hasher = blake3::Hasher::new();
     hasher.update(wireguard_pubkey);
-    hasher.update(schema_catalog_hash.as_bytes());
+    hasher.update(&schema_catalog_hash);
     hasher.update(&mutation_index.to_le_bytes());
     hasher.update(&source_port.to_le_bytes());
     hasher.finalize().into()
@@ -883,18 +951,20 @@ pub fn write_sled_full(
 pub fn watch_wireguard_handshakes(iface: &str) {
     let iface = iface.to_string();
 
-    // `ip monitor route` inside wg-xray fires the instant a WireGuard peer
-    // route appears — no polling delay. wg0 lives in the container namespace.
+    // `ip monitor route` on the host fires the instant a WireGuard peer route
+    // appears — no polling delay. WireGuard (wg0) now runs on the host, so we
+    // invoke `ip` directly instead of `incus exec wg-xray -- ip ...` (the
+    // wg-xray container is deprecated and stopped).
     let mut monitor = loop {
-        match Command::new("incus")
-            .args(["exec", "wg-xray", "--", "ip", "monitor", "route"])
+        match Command::new("ip")
+            .args(["monitor", "route"])
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
             .spawn()
         {
             Ok(child) => break child,
             Err(e) => {
-                tracing::warn!("incus exec ip monitor spawn failed: {} — retrying in 5s", e);
+                tracing::warn!("ip monitor route spawn failed: {} — retrying in 5s", e);
                 std::thread::sleep(std::time::Duration::from_secs(5));
             }
         }
@@ -917,17 +987,10 @@ pub fn watch_wireguard_handshakes(iface: &str) {
             continue;
         }
 
-        // Read current peers from inside wg-xray immediately.
-        let Ok(out) = Command::new("incus")
-            .args([
-                "exec",
-                "wg-xray",
-                "--",
-                "wg",
-                "show",
-                &iface,
-                "latest-handshakes",
-            ])
+        // Read current peers from the host WireGuard interface immediately
+        // (wg0 now runs on the host; the deprecated wg-xray container is gone).
+        let Ok(out) = Command::new("wg")
+            .args(["show", &iface, "latest-handshakes"])
             .output()
         else {
             continue;
@@ -1108,16 +1171,20 @@ mod xray_config_tests {
         let inbounds = v["inbounds"].as_array().unwrap();
         assert_eq!(inbounds.len(), 2, "no dokodemo socket inbounds expected");
 
-        // Each socket has a freedom/domainsocket outbound dialing its path.
+        // Each socket routes to the gRPC bridge (tonic-web) — xray does NOT
+        // dial unix sockets directly (domainsocket transport was removed in
+        // xray 26.x).  The bridge uses reflection to demux and dials the
+        // backend socket natively.
         let outbounds = v["outbounds"].as_array().unwrap();
         let qdrant = outbounds
             .iter()
             .find(|o| o["tag"] == "to-qdrant")
             .expect("to-qdrant outbound");
-        assert_eq!(qdrant["streamSettings"]["network"], "domainsocket");
+        assert_eq!(qdrant["streamSettings"]["network"], "grpc");
+        assert_eq!(qdrant["settings"]["redirect"], "127.0.0.1:50051");
         assert_eq!(
-            qdrant["streamSettings"]["dsSettings"]["path"],
-            "/run/qdrant.sock"
+            qdrant["streamSettings"]["grpcSettings"]["serviceName"],
+            "Ghostbridge.qdrant"
         );
 
         // Each subdomain routes to its socket outbound off the shared ingress.

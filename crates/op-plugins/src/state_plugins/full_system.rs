@@ -385,6 +385,27 @@ impl FullSystemPlugin {
         let conn = Connection::system()
             .await
             .context("Failed to connect to system D-Bus")?;
+
+        // On non-systemd hosts (e.g. Artix s6-rc), org.freedesktop.systemd1 is
+        // not owned. Skip silently instead of hanging on a method call that
+        // will never be answered.
+        let dbus_proxy = Proxy::new(
+            &conn,
+            "org.freedesktop.DBus",
+            "/org/freedesktop/DBus",
+            "org.freedesktop.DBus",
+        )
+        .await
+        .context("Failed to create D-Bus proxy")?;
+        let names: Vec<String> = dbus_proxy
+            .call("ListActivatableNames", &())
+            .await
+            .unwrap_or_default();
+        if !names.iter().any(|n| n == "org.freedesktop.systemd1") {
+            debug!("org.freedesktop.systemd1 not available — skipping service capture (non-systemd host)");
+            return Ok(services);
+        }
+
         let proxy = Proxy::new(
             &conn,
             "org.freedesktop.systemd1",

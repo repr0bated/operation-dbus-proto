@@ -12,9 +12,11 @@ use op_state::{
 use op_state_store::{FieldSchema, FieldType, PluginSchema};
 use serde::{Deserialize, Serialize};
 use simd_json::{json, prelude::*, OwnedValue as Value};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+use super::incus_device::{Device, NamedDevice};
 
 /// Top-level state representing all Incus instances on the system.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -22,27 +24,14 @@ pub struct IncusState {
     pub instances: Vec<IncusInstance>,
 }
 
-/// A proxy device exposed as a Unix socket on the host.
-/// The `id` field is the Incus device name — used as the D-Bus object path segment.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct IncusProxySocket {
-    /// Incus device name (e.g. "grpc-socket", "mail-imap") — D-Bus path segment.
-    pub id: String,
-    /// Host-side listen address (e.g. "unix:/run/assistant.sock")
-    pub listen: String,
-    /// Container-side connect address (e.g. "tcp:127.0.0.1:50051")
-    pub connect: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub bind: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub uid: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub gid: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mode: Option<String>,
-}
-
-/// A single Incus instance (container or virtual-machine).
+/// A single Incus instance, modeled on the official Incus API (`shared/api`
+/// `Instance`/`InstancePut`).
+///
+/// Devices (including proxy sockets) are the typed [`NamedDevice`] union — Incus
+/// has no first-class "socket" concept, a proxy is simply a `devices` entry with
+/// `type: proxy`. The previous non-standard `sockets`/`IncusProxySocket` field is
+/// gone; a container's relationship to the shared `container.sock` is resolved
+/// by name at the projection/gemma layer, not embedded here.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct IncusInstance {
     pub name: String,
@@ -51,10 +40,14 @@ pub struct IncusInstance {
     /// Instance type: "container" or "virtual-machine"
     #[serde(rename = "type")]
     pub instance_type: String,
-    /// Image description (extracted from config)
+    /// Numeric status code from the Incus API (read-only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_code: Option<i64>,
+    /// Source image reference, used only at creation time (`incus init <image>`).
+    /// Not part of the official `InstancePut`; derived from config on read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image: Option<String>,
-    /// Preferred storage pool used during initial creation.
+    /// Preferred storage pool used during initial creation (creation hint only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub storage_pool: Option<String>,
     /// Applied profiles (e.g. ["default"])
@@ -84,16 +77,19 @@ pub struct IncusInstance {
     /// Incus project name
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
-    /// Instance configuration key-value pairs
+    /// Instance configuration key-value pairs (`InstancePut.config`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<HashMap<String, String>>,
-    /// Non-proxy device definitions (NICs, disks, etc.)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub devices: Option<HashMap<String, HashMap<String, String>>>,
-    /// Proxy devices exposed as Unix sockets on the host.
-    /// Each entry has an `id` field (the device name) for named D-Bus paths.
+    /// Typed device definitions (`InstancePut.devices`). Proxy sockets, NICs,
+    /// disks, GPUs, etc. are all variants of [`Device`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub sockets: Vec<IncusProxySocket>,
+    pub devices: Vec<NamedDevice>,
+    /// Expanded (profile-merged) config, read-only (`Instance.expanded_config`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expanded_config: Option<HashMap<String, String>>,
+    /// Expanded (profile-merged) devices, read-only (`Instance.expanded_devices`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub expanded_devices: Vec<NamedDevice>,
 }
 
 /// Intermediate struct for deserializing raw `incus list --format=json` output.
@@ -104,11 +100,17 @@ struct RawIncusInstance {
     #[serde(rename = "type")]
     instance_type: String,
     #[serde(default)]
+    status_code: i64,
+    #[serde(default)]
     profiles: Vec<String>,
     #[serde(default)]
     config: HashMap<String, String>,
     #[serde(default)]
-    devices: HashMap<String, HashMap<String, String>>,
+    devices: BTreeMap<String, BTreeMap<String, String>>,
+    #[serde(default)]
+    expanded_config: HashMap<String, String>,
+    #[serde(default)]
+    expanded_devices: BTreeMap<String, BTreeMap<String, String>>,
     #[serde(default)]
     description: String,
     #[serde(default)]
@@ -127,40 +129,25 @@ struct RawIncusInstance {
     project: String,
 }
 
-/// Derive a human-readable socket id from a connect address.
-/// "tcp:127.0.0.1:50051" → "grpc", "tcp:127.0.0.1:143" → "imap", etc.
-/// Falls back to the port number string, then None if unparseable.
-fn socket_id_from_connect(connect: &str) -> Option<String> {
-    let port_str = connect.rsplit(':').next()?;
-    let port: u16 = port_str.trim().parse().ok()?;
-    let name = match port {
-        21 => "ftp",
-        22 => "ssh",
-        25 => "smtp",
-        53 => "dns",
-        80 => "http",
-        110 => "pop3",
-        143 => "imap",
-        443 => "https",
-        465 => "smtps",
-        587 => "submission",
-        993 => "imaps",
-        995 => "pop3s",
-        1883 => "mqtt",
-        3306 => "mysql",
-        5432 => "postgres",
-        5672 => "amqp",
-        6333 => "qdrant-http",
-        6334 => "qdrant-grpc",
-        8080 | 8081 | 8443 => "http-alt",
-        8883 => "mqtt-tls",
-        18789 => "ghostbridge",
-        50051 => "grpc",
-        50052 => "grpc-mcp",
-        50053 => "grpc-services",
-        _ => return Some(port_str.to_string()),
-    };
-    Some(name.to_string())
+/// Convert an Incus device map (`name -> {type, …}` all-string) into the typed
+/// [`NamedDevice`] list, sorted by name for determinism. Devices that fail to
+/// parse (unknown `type`, missing keys) are skipped with a warning.
+fn named_devices_from_map(map: &BTreeMap<String, BTreeMap<String, String>>) -> Vec<NamedDevice> {
+    let mut out: Vec<NamedDevice> = map
+        .iter()
+        .filter_map(|(name, cfg)| match Device::from_incus_map(cfg) {
+            Ok(device) => Some(NamedDevice {
+                name: name.clone(),
+                device,
+            }),
+            Err(error) => {
+                log::warn!("Skipping unparseable device '{}': {}", name, error);
+                None
+            }
+        })
+        .collect();
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
 }
 
 pub struct IncusPlugin;
@@ -491,50 +478,24 @@ impl IncusPlugin {
                 } else {
                     Some(raw.config)
                 };
-
-                // Extract proxy devices as named sockets; leave rest in devices.
-                let mut sockets = Vec::new();
-                let mut non_proxy_devices: HashMap<String, HashMap<String, String>> =
-                    HashMap::new();
-
-                for (device_name, device_config) in raw.devices {
-                    if device_config
-                        .get("type")
-                        .map(|t| t == "proxy")
-                        .unwrap_or(false)
-                    {
-                        if let (Some(listen), Some(connect)) = (
-                            device_config.get("listen").cloned(),
-                            device_config.get("connect").cloned(),
-                        ) {
-                            let id = socket_id_from_connect(&connect).unwrap_or(device_name);
-                            sockets.push(IncusProxySocket {
-                                id,
-                                listen,
-                                connect,
-                                bind: device_config.get("bind").cloned(),
-                                uid: device_config.get("uid").cloned(),
-                                gid: device_config.get("gid").cloned(),
-                                mode: device_config.get("mode").cloned(),
-                            });
-                        }
-                    } else {
-                        non_proxy_devices.insert(device_name, device_config);
-                    }
-                }
-
-                sockets.sort_by(|a, b| a.id.cmp(&b.id));
-
-                let devices = if non_proxy_devices.is_empty() {
+                let expanded_config = if raw.expanded_config.is_empty() {
                     None
                 } else {
-                    Some(non_proxy_devices)
+                    Some(raw.expanded_config)
                 };
+
+                let devices = named_devices_from_map(&raw.devices);
+                let expanded_devices = named_devices_from_map(&raw.expanded_devices);
 
                 IncusInstance {
                     name: raw.name,
                     status: raw.status,
                     instance_type: raw.instance_type,
+                    status_code: if raw.status_code == 0 {
+                        None
+                    } else {
+                        Some(raw.status_code)
+                    },
                     image,
                     storage_pool,
                     profiles: raw.profiles,
@@ -572,7 +533,8 @@ impl IncusPlugin {
                     },
                     config,
                     devices,
-                    sockets,
+                    expanded_config,
+                    expanded_devices,
                 }
             })
             .collect();
@@ -655,13 +617,14 @@ impl IncusPlugin {
             .collect()
     }
 
-    fn managed_devices(instance: &IncusInstance) -> HashMap<String, HashMap<String, String>> {
+    /// Managed devices keyed by name, each as an Incus string map, excluding the
+    /// `root` disk (managed implicitly via `storage_pool` at creation).
+    fn managed_devices(instance: &IncusInstance) -> HashMap<String, BTreeMap<String, String>> {
         instance
             .devices
-            .clone()
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|(name, _)| name != "root")
+            .iter()
+            .filter(|nd| nd.name != "root")
+            .map(|nd| (nd.name.clone(), nd.device.to_incus_map()))
             .collect()
     }
 
@@ -1122,6 +1085,19 @@ impl StatePlugin for IncusPlugin {
 mod tests {
     use super::*;
 
+    use super::super::incus_device::NicDevice;
+
+    fn nic(parent: &str) -> NamedDevice {
+        NamedDevice {
+            name: "privacy0".to_string(),
+            device: Device::Nic(NicDevice {
+                nictype: Some("bridged".to_string()),
+                parent: Some(parent.to_string()),
+                ..Default::default()
+            }),
+        }
+    }
+
     #[test]
     fn test_instances_equivalent_detects_config_and_device_changes() {
         let current = IncusInstance {
@@ -1135,14 +1111,7 @@ mod tests {
                 "user.opdbus.route_id".to_string(),
                 "route-a".to_string(),
             )])),
-            devices: Some(HashMap::from([(
-                "privacy0".to_string(),
-                HashMap::from([
-                    ("type".to_string(), "nic".to_string()),
-                    ("nictype".to_string(), "bridged".to_string()),
-                    ("parent".to_string(), "ovsbr0".to_string()),
-                ]),
-            )])),
+            devices: vec![nic("ovsbr0")],
             ..Default::default()
         };
         let mut desired = current.clone();
@@ -1155,16 +1124,55 @@ mod tests {
         assert!(!IncusPlugin::instances_equivalent(&current, &desired));
 
         desired = current.clone();
-        desired.devices = Some(HashMap::from([(
-            "privacy0".to_string(),
-            HashMap::from([
-                ("type".to_string(), "nic".to_string()),
-                ("nictype".to_string(), "bridged".to_string()),
-                ("parent".to_string(), "ovsbr1".to_string()),
-            ]),
-        )]));
+        desired.devices = vec![nic("ovsbr1")];
         assert!(!IncusPlugin::instances_equivalent(&current, &desired));
     }
+
+    #[test]
+    fn parse_instance_list_builds_typed_devices() {
+        let raw = br#"[
+            {
+                "name": "netmaker",
+                "status": "Running",
+                "type": "container",
+                "profiles": ["default"],
+                "config": {"boot.autostart": "true"},
+                "devices": {
+                    "api-sock": {
+                        "type": "proxy",
+                        "listen": "unix:/run/netmaker/api.sock",
+                        "connect": "tcp:127.0.0.1:8081",
+                        "uid": "0"
+                    },
+                    "eth0": {"type": "nic", "nictype": "bridged", "parent": "ovsbr0"}
+                }
+            }
+        ]"#
+        .to_vec();
+        let instances = IncusPlugin::parse_instance_list(raw).expect("parse");
+        assert_eq!(instances.len(), 1);
+        let devices = &instances[0].devices;
+        assert_eq!(devices.len(), 2);
+        // Sorted by name: api-sock then eth0.
+        assert_eq!(devices[0].name, "api-sock");
+        assert!(matches!(devices[0].device, Device::Proxy(_)));
+        assert!(matches!(devices[1].device, Device::Nic(_)));
+    }
+}
+
+/// The `Object` field type for a [`NamedDevice`] (`{ name, device: oneOf<…> }`),
+/// derived from the schemars schema so the `device` member renders as the
+/// `FieldType::OneOf` discriminated union of all Incus device types.
+fn named_device_object() -> FieldType {
+    let root = serde_json::to_value(schemars::schema_for!(NamedDevice))
+        .expect("NamedDevice schema serializes to JSON");
+    let schema = super::schemars_adapter::plugin_schema_from_json(
+        "incus_device",
+        "1.0.0",
+        "Typed Incus device",
+        &root,
+    );
+    FieldType::Object(schema.fields)
 }
 
 pub(crate) fn incus_schema() -> PluginSchema {
@@ -1271,13 +1279,27 @@ pub(crate) fn incus_schema() -> PluginSchema {
         fields.insert(
             "devices".to_string(),
             FieldSchema {
-                field_type: FieldType::Any,
+                field_type: FieldType::Array(Box::new(named_device_object())),
                 required: false,
-                description: "Non-proxy device definitions (NICs, disks, etc.)".to_string(),
-                default: Some(json!({})),
-                example: Some(json!({
-                    "eth0": { "type": "nic", "nictype": "bridged", "parent": "ovsbr0" }
-                })),
+                description: "Typed device definitions. Each entry is a named device whose `device` is the discriminated Incus device union (nic, disk, proxy, gpu, …).".to_string(),
+                default: Some(json!([])),
+                example: Some(json!([
+                    {
+                        "name": "eth0",
+                        "device": { "type": "nic", "nictype": "bridged", "parent": "ovsbr0" }
+                    },
+                    {
+                        "name": "api-sock",
+                        "device": {
+                            "type": "proxy",
+                            "listen": "unix:/run/netmaker/api.sock",
+                            "connect": "tcp:127.0.0.1:8081",
+                            "uid": "0",
+                            "gid": "0",
+                            "mode": "0660"
+                        }
+                    }
+                ])),
                 constraints: Vec::new(),
                 read_only: false,
                 read_only_when: None,
@@ -1388,25 +1410,15 @@ pub(crate) fn incus_schema() -> PluginSchema {
             },
         );
         fields.insert(
-            "sockets".to_string(),
+            "status_code".to_string(),
             FieldSchema {
-                field_type: FieldType::Any,
+                field_type: FieldType::Integer,
                 required: false,
-                description: "Proxy devices exposed as Unix sockets on the host. Each entry has an id field (device name) for named D-Bus paths.".to_string(),
-                default: Some(json!([])),
-                example: Some(json!([
-                    {
-                        "id": "grpc-socket",
-                        "listen": "unix:/run/assistant.sock",
-                        "connect": "tcp:127.0.0.1:50051",
-                        "bind": "host",
-                        "uid": "0",
-                        "gid": "0",
-                        "mode": "0660"
-                    }
-                ])),
+                description: "Numeric Incus status code (read-only)".to_string(),
+                default: None,
+                example: Some(json!(103)),
                 constraints: Vec::new(),
-                read_only: false,
+                read_only: true,
                 read_only_when: None,
             },
         );
@@ -1431,16 +1443,17 @@ pub(crate) fn incus_schema() -> PluginSchema {
                     "image": "images:debian/13",
                     "storage_pool": "registration",
                     "profiles": ["default"],
-                    "config": {
-                        "limits.cpu": "2"
-                    },
-                    "devices": {
-                        "eth0": {
-                            "type": "nic",
-                            "nictype": "bridged",
-                            "parent": "ovsbr0"
+                    "config": { "limits.cpu": "2" },
+                    "devices": [
+                        {
+                            "name": "eth0",
+                            "device": {
+                                "type": "nic",
+                                "nictype": "bridged",
+                                "parent": "ovsbr0"
+                            }
                         }
-                    }
+                    ]
                 },
                 {
                     "name": "netmaker",
@@ -1448,150 +1461,28 @@ pub(crate) fn incus_schema() -> PluginSchema {
                     "type": "container",
                     "image": "docker.io/gravitl/netmaker:v1.5.1",
                     "profiles": ["default"],
-                    "config": {
-                        "boot.autostart": "true",
-                        "security.privileged": "false"
-                    },
-                    "devices": {
-                        "api-sock": {
-                            "type": "proxy",
-                            "listen": "unix:/run/netmaker/api.sock",
-                            "connect": "tcp:127.0.0.1:8081",
-                            "uid": "0",
-                            "gid": "0",
-                            "mode": "0660"
+                    "config": { "boot.autostart": "true" },
+                    "devices": [
+                        {
+                            "name": "api-sock",
+                            "device": {
+                                "type": "proxy",
+                                "listen": "unix:/run/netmaker/api.sock",
+                                "connect": "tcp:127.0.0.1:8081",
+                                "uid": "0",
+                                "gid": "0",
+                                "mode": "0660"
+                            }
                         },
-                        "sqldata": {
-                            "type": "disk",
-                            "path": "/root/data",
-                            "source": "nm-sqldata"
-                        },
-                        "dnsconfig": {
-                            "type": "disk",
-                            "path": "/root/config/dnsconfig",
-                            "source": "nm-dnsconfig"
+                        {
+                            "name": "sqldata",
+                            "device": {
+                                "type": "disk",
+                                "path": "/root/data",
+                                "source": "nm-sqldata"
+                            }
                         }
-                    }
-                },
-                {
-                    "name": "netmaker-mq",
-                    "status": "Running",
-                    "type": "container",
-                    "image": "docker.io/eclipse-mosquitto:2.0.15-openssl",
-                    "profiles": ["default"],
-                    "config": {
-                        "boot.autostart": "true"
-                    },
-                    "devices": {
-                        "mqtt-sock": {
-                            "type": "proxy",
-                            "listen": "unix:/run/netmaker/mq.sock",
-                            "connect": "tcp:127.0.0.1:1883",
-                            "uid": "0",
-                            "gid": "0",
-                            "mode": "0660"
-                        },
-                        "mqtts-sock": {
-                            "type": "proxy",
-                            "listen": "unix:/run/netmaker/mqtts.sock",
-                            "connect": "tcp:127.0.0.1:8883",
-                            "uid": "0",
-                            "gid": "0",
-                            "mode": "0660"
-                        },
-                        "mq-data": {
-                            "type": "disk",
-                            "path": "/mosquitto/data",
-                            "source": "nm-mosquitto-data"
-                        },
-                        "mq-config": {
-                            "type": "disk",
-                            "path": "/mosquitto/config/mosquitto.conf",
-                            "source": "/etc/netmaker/mosquitto.conf",
-                            "readonly": "true"
-                        }
-                    }
-                },
-                {
-                    "name": "netmaker-ui",
-                    "status": "Running",
-                    "type": "container",
-                    "image": "docker.io/gravitl/netmaker-ui:v1.5.1",
-                    "profiles": ["default"],
-                    "config": {
-                        "boot.autostart": "true"
-                    },
-                    "devices": {
-                        "ui-sock": {
-                            "type": "proxy",
-                            "listen": "unix:/run/netmaker/ui.sock",
-                            "connect": "tcp:127.0.0.1:80",
-                            "uid": "0",
-                            "gid": "0",
-                            "mode": "0660"
-                        }
-                    }
-                },
-                {
-                    "name": "wg-xray",
-                    "status": "Running",
-                    "type": "container",
-                    "profiles": ["default"],
-                    "config": {
-                        "boot.autostart": "true",
-                        "security.privileged": "true"
-                    },
-                    "devices": {
-                        "eth0": {
-                            "type": "nic",
-                            "nictype": "physical",
-                            "parent": "wg-xray-net0"
-                        },
-                        "ovs-socks": {
-                            "type": "disk",
-                            "path": "/var/lib/ovs",
-                            "source": "/run/openvswitch"
-                        },
-                        "xray-config": {
-                            "type": "disk",
-                            "path": "/etc/xray",
-                            "source": "/etc/xray"
-                        },
-                        "netmaker-socks": {
-                            "type": "disk",
-                            "path": "/run/netmaker",
-                            "source": "/run/netmaker"
-                        },
-                        "xray-mcp": {
-                            "type": "proxy",
-                            "listen": "tcp:127.0.0.1:1081",
-                            "connect": "tcp:10.200.0.1:1081"
-                        },
-                        "netmaker-api-tcp": {
-                            "type": "proxy",
-                            "bind": "container",
-                            "listen": "tcp:127.0.0.1:18081",
-                            "connect": "unix:/run/netmaker/api.sock"
-                        },
-                        "netmaker-mqtt-tcp": {
-                            "type": "proxy",
-                            "bind": "container",
-                            "listen": "tcp:127.0.0.1:11883",
-                            "connect": "unix:/run/netmaker/mq.sock"
-                        },
-                        "netmaker-mqtts-tcp": {
-                            "type": "proxy",
-                            "bind": "container",
-                            "listen": "tcp:127.0.0.1:18883",
-                            "connect": "unix:/run/netmaker/mqtts.sock"
-                        },
-                        "netmaker-ui-tcp": {
-                            "type": "proxy",
-                            "bind": "container",
-                            "listen": "tcp:127.0.0.1:18082",
-                            "connect": "unix:/run/netmaker/ui.sock"
-                        }
-                    }
+                    ]
                 }
             ]
         }))

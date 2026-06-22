@@ -20,6 +20,12 @@ use std::fs;
 use std::path::Path;
 use tracing::{debug, info, warn};
 
+/// Canonical D-Bus well-known bus name for the op-dbus system.
+///
+/// All components (op-dbus-mirror, projection_server, rovs_proxy, etc.)
+/// must use this constant instead of hardcoding the string.
+pub const OPDBUS_BUS_NAME: &str = "org.opdbus.v1.plugins";
+
 /// Default path for the environment file
 pub const DEFAULT_ENV_FILE: &str = "/etc/op-dbus/environment";
 

@@ -563,6 +563,14 @@ fn render_field_type(field_type: &FieldType) -> String {
             format!("object<{}>", names.join("|"))
         }
         FieldType::Enum(values) => format!("enum<{}>", values.join("|")),
+        FieldType::OneOf(branches) => format!(
+            "one_of<{}>",
+            branches
+                .iter()
+                .map(render_field_type)
+                .collect::<Vec<_>>()
+                .join("|")
+        ),
         FieldType::Any => "any".to_string(),
     }
 }

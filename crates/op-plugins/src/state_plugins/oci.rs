@@ -198,18 +198,6 @@ pub(crate) fn oci_schema() -> PluginSchema {
                     "sockets": [
                         {"id": "ui-sock", "listen": "unix:/run/netmaker/ui.sock", "connect": "tcp:127.0.0.1:80"}
                     ]
-                },
-                {
-                    "name": "wg-xray",
-                    "image": "images:debian/13",
-                    "loopback_required": false,
-                    "port_attach": {
-                        "bridge": "ovsbr0",
-                        "iface_name": "gbr_xray",
-                        "ip_addrs": ["10.200.0.1/30", "10.0.0.2/24"],
-                        "gateway": "10.200.0.2",
-                        "routes": ["10.0.0.1 via 10.200.0.2"]
-                    }
                 }
             ]
         }))

@@ -27,9 +27,9 @@ pub async fn identity_sled_handler(Extension(_state): Extension<Arc<AppState>>) 
             // written with a canonical `IdentitySled` layout.
             let sled: &IdentitySled = unsafe { &*ptr };
 
-            let schema_catalog_hash = std::fs::read("/dev/shm/live-schema.json")
-                .map(|bytes| hex::encode(blake3::hash(&bytes).as_bytes()))
-                .unwrap_or_else(|_| "(missing)".to_string());
+            let schema_catalog_hash = op_identity::schema_bridge::schema_catalog_hash()
+                .map(hex::encode)
+                .unwrap_or_else(|| "(missing)".to_string());
 
             let is_valid = sled.hashed_footprint != [0u8; 32] && sled.trace_id != [0u8; 16];
 

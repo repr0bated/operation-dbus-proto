@@ -6,14 +6,14 @@
 //! does not match the current Strike/Etch.
 //!
 //! Design:
-//!   - Does NOT write the sled; the SchemaEngine or A.N.N.A. Scribe does.
+//!   - Does NOT write the sled; the MutationEngine or A.N.N.A. Scribe does.
 //!   - If no valid sled exists, all inbound requests are rejected.
 //!   - Bind address defaults to 127.0.0.1:18789 (Xray redirect target).
 
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use op_grpc_bridge::{grpc_server::run_grpc_server, schema_engine::SchemaEngine};
+use op_grpc_bridge::{grpc_server::run_grpc_server, mutation_engine::MutationEngine};
 use op_jsonrpc::nonnet::NonNetDb;
 use op_network::rovs_proxy::OvsdbDbusClient;
 use op_state_store::{ChainConfig, EventChain};
@@ -56,11 +56,11 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    // ── Build SchemaEngine (authoritative mutation pipeline) ─────────────────
+    // ── Build MutationEngine (authoritative mutation pipeline) ─────────────────
     let event_chain = Arc::new(RwLock::new(EventChain::new(ChainConfig::default())));
     let ovsdb = Arc::new(OvsdbDbusClient::new());
     let nonnet = Arc::new(NonNetDb::new());
-    let schema_engine = Arc::new(SchemaEngine::new(event_chain, ovsdb, nonnet));
+    let mutation_engine = Arc::new(MutationEngine::new(event_chain, ovsdb, nonnet));
 
     // ── Bind address ─────────────────────────────────────────────────────────
     // Per spec: Xray redirects gRPC traffic to 127.0.0.1:18789.
@@ -77,6 +77,6 @@ async fn main() -> anyhow::Result<()> {
         "GhostbridgeInterceptor active — requests require X-Ghostbridge-Footprint + X-Ghostbridge-Trace-ID"
     );
 
-    run_grpc_server(addr, schema_engine, None, tls_identity).await?;
+    run_grpc_server(addr, mutation_engine, None, tls_identity).await?;
     Ok(())
 }

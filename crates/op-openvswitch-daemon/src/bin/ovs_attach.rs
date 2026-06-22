@@ -16,7 +16,7 @@ use std::time::Duration;
 use zbus::connection::Builder;
 
 const DBUS_SOCKET: &str = "/run/op-dbus.sock";
-const PLUGIN_BUS: &str = "org.opdbus.v1";
+const PLUGIN_BUS: &str = op_core::config::OPDBUS_BUS_NAME;
 const PRIVACY_ROUTER_BASE: &str = "/org/opdbus/v1/plugin/plugins/privacy_router";
 const OCI_BASE: &str = "/org/opdbus/v1/plugin/plugins/oci";
 
@@ -189,7 +189,8 @@ async fn main() -> Result<()> {
         });
         (p, bridge.clone(), iface_name)
     } else {
-        // Fallback: read from privacy_router schema (for the wg-xray container)
+        // Fallback: read from privacy_router schema (for the host xray path;
+        // the deprecated wg-xray container is no longer referenced)
         eprintln!("reading privacy_router schema from D-Bus tree...");
         let schema = get_json_property(&conn, PRIVACY_ROUTER_BASE, "JsonData").await?;
 

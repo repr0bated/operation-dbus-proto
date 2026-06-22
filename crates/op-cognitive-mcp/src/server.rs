@@ -117,6 +117,27 @@ impl CognitiveMcpServer {
         })
     }
 
+    /// Run the cognitive MCP server over stdio (stdin/stdout JSON-RPC).
+    /// This is the preferred transport for local MCP clients — no network
+    /// overhead, direct pipe communication.
+    pub async fn start_stdio(self) -> Result<(), Box<dyn std::error::Error>> {
+        use op_mcp::{McpServer, McpServerConfig, StdioTransport, Transport};
+
+        let config = McpServerConfig {
+            name: Some("cognitive-mcp".to_string()),
+            compact_mode: false,
+            ..Default::default()
+        };
+
+        let executor = Arc::new(RegistryExecutor::new(self.tool_registry.clone()));
+        let mcp_server = Arc::new(McpServer::with_executor(config, executor));
+
+        tracing::info!("Cognitive MCP Server starting (stdio transport)");
+
+        StdioTransport::new().serve(mcp_server).await?;
+        Ok(())
+    }
+
     pub async fn start_http_server(self, addr: &str) -> Result<(), Box<dyn std::error::Error>> {
         use crate::context_server::build_context_router;
         use op_mcp::{HttpSseTransport, McpServer, McpServerConfig, Transport};

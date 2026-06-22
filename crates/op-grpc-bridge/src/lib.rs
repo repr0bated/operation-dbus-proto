@@ -26,7 +26,7 @@ pub mod grpc_client;
 pub mod grpc_server;
 pub mod interceptor;
 pub mod proto_gen;
-pub mod schema_engine;
+pub mod mutation_engine;
 pub mod schema_loader;
 pub mod server;
 pub mod tracing;
@@ -36,7 +36,7 @@ pub use grpc_client::{GrpcClientPool, RemoteEndpoint, RemoteOperationClient};
 pub use grpc_server::{run_grpc_server, OperationGrpcServer, PluginSchemaProvider};
 pub use interceptor::ghostbridge_interceptor;
 pub use proto_gen::{ProtoGenConfig, ProtoGenerator};
-pub use schema_engine::{ChangeSource, ChangeType, SchemaEngine, StateChange};
+pub use mutation_engine::{ChangeSource, ChangeType, MutationEngine, StateChange};
 pub use server::{run_zeroclaw_server, ServerConfig};
 
 /// Generated protobuf types — one sub-module per domain proto.

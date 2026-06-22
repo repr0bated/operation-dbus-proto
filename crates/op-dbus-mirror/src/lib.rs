@@ -1,6 +1,6 @@
 //! op-dbus-mirror: 1:1 D-Bus publication of internal databases
 //!
-//! This crate publishes the internal OVSDB and NonNet database structures as a
+//! This crate publishes the internal OVSDB database structure as a
 //! D-Bus object hierarchy without introducing a second source of truth.
 
 use anyhow::Result;
@@ -32,8 +32,7 @@ use managed_objects::{
     PROJECTED_IFACE,
 };
 use op_core::types::BusType;
-use op_grpc_bridge::{OperationGrpcServer, SchemaEngine};
-use op_jsonrpc::nonnet::NonNetDb;
+use op_grpc_bridge::{OperationGrpcServer, MutationEngine};
 use op_network::rovs_proxy::OvsdbDbusClient;
 use op_state::manager::StateManager;
 use procfs::Current as _;
@@ -61,8 +60,7 @@ pub mod tree;
 /// internal databases.
 pub struct DbusMirror {
     ovsdb: Arc<OvsdbDbusClient>,
-    nonnet: Arc<NonNetDb>,
-    schema_engine: Option<Arc<SchemaEngine>>,
+    schema_engine: Option<Arc<MutationEngine>>,
     connection: Connection,
     /// Published D-Bus object paths managed by this service.
     published_objects: DashMap<String, ()>,
@@ -85,8 +83,7 @@ impl DbusMirror {
     pub async fn new(
         bus_type: BusType,
         ovsdb: Arc<OvsdbDbusClient>,
-        nonnet: Arc<NonNetDb>,
-        schema_engine: Option<Arc<SchemaEngine>>,
+        schema_engine: Option<Arc<MutationEngine>>,
     ) -> std::result::Result<Self, MirrorError> {
         let connection = match bus_type {
             BusType::System => Builder::system()?.build().await?,
@@ -95,7 +92,6 @@ impl DbusMirror {
 
         Ok(Self {
             ovsdb,
-            nonnet,
             schema_engine,
             connection,
             published_objects: DashMap::new(),
@@ -157,17 +153,9 @@ impl DbusMirror {
             .at("/org/opdbus/v1/ovsdb", ovsdb_interface)
             .await?;
 
-        // Register NonNet JSON-RPC interface at /org/opdbus/v1/nonnet
-        let nonnet_interface = jsonrpc_interface::NonNetInterface::new(
-            self.nonnet.clone(),
-            self.schema_engine.clone(),
-        );
         self.connection
-            .object_server()
-            .at("/org/opdbus/v1/nonnet", nonnet_interface)
+            .request_name(op_core::config::OPDBUS_BUS_NAME)
             .await?;
-
-        self.connection.request_name("org.opdbus.v1").await?;
 
         // Initial full sync
         if let Err(e) = self.refresh_full_tree().await {
@@ -178,7 +166,6 @@ impl DbusMirror {
         let dispatcher = crate::event_dispatcher::EventDispatcher::new(
             self.clone(),
             self.ovsdb.clone(),
-            self.nonnet.clone(),
             self.state_manager.clone(),
             self.grpc_server.clone(),
         );
@@ -260,12 +247,6 @@ impl DbusMirror {
         tracing::info!("DEBUG: Publishing host snapshot");
         if let Err(e) = self.publish_host_snapshot(&mut active_paths).await {
             tracing::warn!("Procfs snapshot failed: {}", e);
-        }
-
-        // 3. Scan NonNet (Authoritative for Plugins not in Enterprise DB)
-        tracing::info!("DEBUG: Publishing NonNet snapshot");
-        if let Err(e) = self.publish_nonnet_snapshot(&mut active_paths).await {
-            tracing::warn!("NonNet snapshot failed: {}", e);
         }
 
         // 4. gRPC ComponentRegistry snapshot (host/plugin now use fixed objects)
@@ -443,123 +424,6 @@ impl DbusMirror {
                         )
                         .await?;
                         active_paths.insert(ovs_path);
-                    }
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    async fn publish_nonnet_snapshot(&self, active_paths: &mut HashSet<String>) -> Result<()> {
-        tracing::info!("DEBUG: NonNet snapshot started");
-        self.publish_object(
-            "/org/opdbus/v1/nonnet",
-            serde_json::json!({
-                "kind": "database_root",
-                "source": "nonnet",
-            }),
-        )
-        .await?;
-        active_paths.insert("/org/opdbus/v1/nonnet".to_string());
-
-        let request = op_jsonrpc::protocol::JsonRpcRequest::new("list_dbs", simd_json::json!([]));
-        let response = self.nonnet.handle_request(request).await;
-
-        let dbs: Vec<Value> = response
-            .result
-            .and_then(|v| serde_json::to_value(&v).ok())
-            .and_then(|v| v.as_array().map(|a| a.to_vec()))
-            .unwrap_or_default();
-
-        tracing::info!("DEBUG: NonNet has {} databases", dbs.len());
-
-        for db_name_val in dbs {
-            if let Some(db_name) = db_name_val.as_str() {
-                tracing::info!("DEBUG: Scanning NonNet DB: {}", db_name);
-                let db_path = format!(
-                    "/org/opdbus/v1/nonnet/{}",
-                    Self::sanitize_dbus_path_segment(db_name)
-                );
-                self.publish_object(
-                    &db_path,
-                    serde_json::json!({
-                        "kind": "database",
-                        "database": db_name,
-                        "source": "nonnet",
-                    }),
-                )
-                .await?;
-                active_paths.insert(db_path.clone());
-
-                let schema_req = op_jsonrpc::protocol::JsonRpcRequest::new(
-                    "get_schema",
-                    simd_json::json!([db_name]),
-                );
-                let schema_resp = self.nonnet.handle_request(schema_req).await;
-
-                let schema_serde: Option<Value> = schema_resp
-                    .result
-                    .and_then(|v| serde_json::to_value(&v).ok());
-                if let Some(tables) =
-                    schema_serde.and_then(|s| s.get("tables").and_then(|v| v.as_object().cloned()))
-                {
-                    tracing::info!("DEBUG: NonNet DB {} has {} tables", db_name, tables.len());
-                    let table_names: Vec<String> = tables.keys().map(|k| k.to_string()).collect();
-                    for table_name in table_names {
-                        let table_path = format!(
-                            "{}/{}",
-                            db_path,
-                            Self::sanitize_dbus_path_segment(&table_name)
-                        );
-                        let dump_req = op_jsonrpc::protocol::JsonRpcRequest::new(
-                            "transact",
-                            simd_json::json!([
-                                db_name,
-                                {
-                                    "op": "select",
-                                    "table": table_name,
-                                    "where": []
-                                }
-                            ]),
-                        );
-                        let dump_resp = self.nonnet.handle_request(dump_req).await;
-
-                        let rows = dump_resp.result.and_then(|v| serde_json::to_value(&v).ok());
-                        let rows = rows
-                            .as_ref()
-                            .and_then(|r| r.as_array())
-                            .and_then(|results| results.first())
-                            .and_then(|result| result.get("rows"))
-                            .and_then(|v| v.as_array().map(|a| a.to_vec()))
-                            .unwrap_or_default();
-
-                        self.publish_object(
-                            &table_path,
-                            serde_json::json!({
-                                "kind": "table",
-                                "database": db_name,
-                                "table": table_name,
-                                "row_count": rows.len(),
-                            }),
-                        )
-                        .await?;
-                        active_paths.insert(table_path.clone());
-
-                        tracing::info!(
-                            "DEBUG: NonNet DB {} table {} has {} rows",
-                            db_name,
-                            table_name,
-                            rows.len()
-                        );
-                        for (idx, row) in rows.into_iter().enumerate() {
-                            let id = Self::extract_uuid(&row);
-                            let id = if id == "unknown" { idx.to_string() } else { id };
-                            let path =
-                                format!("{}/{}", table_path, Self::sanitize_dbus_path_segment(&id));
-                            self.publish_object(&path, row).await?;
-                            active_paths.insert(path);
-                        }
                     }
                 }
             }

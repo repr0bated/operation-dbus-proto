@@ -70,10 +70,8 @@
       "statement_refs": [],
       "gemma": {
         "backend": {
-          "type": "grpc",
-          "host": "127.0.0.1",
-          "port": 3003,
-          "service_name": "operation.cognitive.v1.CognitiveToolService"
+          "type": "unix",
+          "path": "/run/ghostbridge/container.sock"
         }
       }
     },
@@ -96,9 +94,8 @@
       "statement_refs": [],
       "gemma": {
         "backend": {
-          "type": "tcp",
-          "host": "127.0.0.1",
-          "port": 6334
+          "type": "unix",
+          "path": "/run/ghostbridge/container.sock"
         }
       }
     },
@@ -121,9 +118,8 @@
       "statement_refs": [],
       "gemma": {
         "backend": {
-          "type": "tcp",
-          "host": "127.0.0.1",
-          "port": 28081
+          "type": "unix",
+          "path": "/run/ghostbridge/container.sock"
         }
       }
     },
@@ -146,9 +142,8 @@
       "statement_refs": [],
       "gemma": {
         "backend": {
-          "type": "tcp",
-          "host": "127.0.0.1",
-          "port": 21883
+          "type": "unix",
+          "path": "/run/ghostbridge/container.sock"
         }
       }
     },
@@ -171,9 +166,8 @@
       "statement_refs": [],
       "gemma": {
         "backend": {
-          "type": "tcp",
-          "host": "127.0.0.1",
-          "port": 28082
+          "type": "unix",
+          "path": "/run/ghostbridge/container.sock"
         }
       }
     },
@@ -370,6 +364,35 @@
           "host": "0.0.0.0",
           "port": 8090,
           "service_name": "zeroclaw.ZeroclawService"
+        }
+      }
+    },
+    {
+      "uuid": "7a3c1d20-9e8b-4f2a-a6d1-0c5e8f4b7a91",
+      "subid": "mut.service.unix-socket.create-socket@v1",
+      "category": "mut",
+      "component_type": "service",
+      "subject": "unix-socket",
+      "verb": "create-socket",
+      "version": 1,
+      "tags": [
+        "unix-socket",
+        "grpc-bridge",
+        "createunixsocket"
+      ],
+      "subdomains": [],
+      "control_source": "NIST_SP_800_53_R5",
+      "control_refs": [],
+      "statement_refs": [],
+      "gemma": {
+        "backend": {
+          "type": "grpc",
+          "host": "127.0.0.1",
+          "port": 8090,
+          "service_name": "operation.v1.PluginService",
+          "method": "CallMethod",
+          "plugin_id": "unix_socket",
+          "method_name": "createunixsocket"
         }
       }
     }

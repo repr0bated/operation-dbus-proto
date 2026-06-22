@@ -3,7 +3,6 @@
 //! Per AGENTS.md: The Sled is the Absolute Base — no valid schema = no entity.
 
 use anyhow::{Context, Result};
-use blake3;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
     execute,
@@ -57,9 +56,9 @@ impl App {
             self.sled = Some(sled.clone());
             self.layout = "canonical".into();
             self.trace_id = sled.trace_id_hex();
-            self.schema_catalog_hash = std::fs::read("/dev/shm/live-schema.json")
-                .map(|b| hex::encode(blake3::hash(&b).as_bytes()))
-                .unwrap_or_else(|_| "(missing)".into());
+            self.schema_catalog_hash = op_identity::schema_bridge::schema_catalog_hash()
+                .map(hex::encode)
+                .unwrap_or_else(|| "(missing)".into());
         } else {
             self.sled = None;
             self.layout = "missing".into();

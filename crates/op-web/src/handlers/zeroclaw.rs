@@ -23,7 +23,8 @@ fn antigravity_base() -> String {
 fn wireguard_identity_headers() -> Vec<(&'static str, String)> {
     let mut headers = Vec::new();
 
-    // X-WireGuard-Pubkey from environment (set by wg-xray container or host)
+    // X-WireGuard-Pubkey from environment (set by the host WireGuard
+    // interface; the deprecated wg-xray container is no longer involved)
     if let Ok(pubkey) = std::env::var("WG_PUBKEY") {
         headers.push(("X-WireGuard-Pubkey", pubkey));
     }
@@ -33,7 +34,8 @@ fn wireguard_identity_headers() -> Vec<(&'static str, String)> {
         headers.push(("X-Ghostbridge-Trace-ID", trace_id));
     }
 
-    // Container-scoped identity for wg-xray
+    // Host-scoped identity (was container-scoped for the deprecated wg-xray
+    // container; xray + gRPC-bridge now run on the host)
     if let Ok(container_id) = std::env::var("CONTAINER_ID") {
         headers.push(("X-Container-ID", container_id));
     }
