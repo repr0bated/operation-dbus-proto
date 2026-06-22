@@ -15,7 +15,7 @@ tasks.
 | C-01 | `zeroclaw_schema()` in `plugin_schema_defs.rs` is the only schema definition. | AGENTS.md §2, FR-01 |
 | C-02 | The Axum host reads schema from a plugin-owned file; it never generates or writes schema. | FR-02 |
 | C-03 | Btrfs `@zeroclaw` subvolume is install/cache/rollback only; no D-Bus, projection, or OSCAL artefacts there. | FR-03 |
-| C-04 | Native gRPC on Unix socket `/run/opdbus/zeroclaw-grpc.sock`. | FR-04 |
+| C-04 | Native gRPC on the shared Unix socket `/run/ghostbridge/container.sock`; tonic-web + gRPC server reflection demuxes every service on this one socket. | FR-04 |
 | C-05 | gRPC-Web + HTTP/1.1 on TCP via `tonic_web::enable`. | FR-05 |
 | C-06 | D-Bus object `/org/opdbus/v1/services/zeroclaw_axum_host` is the config authority. | FR-06, AGENTS.md §4 |
 | C-07 | All `subid` props registered in `op-plugins`; none defined in `op-grpc-bridge`. | FR-07, AGENTS.md §4a |

@@ -130,7 +130,10 @@ spec/requirement IDs it satisfies.
    - CORS layer (`tower_http::cors::CorsLayer`).
    - Tracing middleware (T-05).
 2. Spawn two `tokio` tasks via `tokio::join!`:
-   - Unix socket listener at `/run/opdbus/zeroclaw-grpc.sock`.
+   - Shared Unix socket listener at `/run/ghostbridge/container.sock`
+     (`ZEROCLAW_UNIX_SOCKET`). This host owns the single shared socket; every
+     other service registers against it and `tonic_web::enable` + gRPC server
+     reflection demuxes by service/method.
    - TCP listener at configured `BindAddr`.
 3. Implement `ZeroclawService` using `SchemaLoader`:
    - `get_schema`: returns current schema JSON + trace headers.

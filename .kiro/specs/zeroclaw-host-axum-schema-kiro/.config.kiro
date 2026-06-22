@@ -19,7 +19,9 @@
       "/org/opdbus/v1/services/zeroclaw_axum_host"
     ],
     "sockets": {
-      "nativeGrpc": "/run/opdbus/zeroclaw-grpc.sock",
+      "nativeGrpc": "/run/ghostbridge/container.sock",
+      "nativeGrpcShared": true,
+      "nativeGrpcEnv": "ZEROCLAW_UNIX_SOCKET",
       "grpcWeb": "0.0.0.0:8090"
     },
     "btrfsSubvolume": {

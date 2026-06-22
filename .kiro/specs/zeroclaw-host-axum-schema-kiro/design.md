@@ -45,7 +45,7 @@ No `src/` at the workspace root. No schema definitions duplicated outside
  │  Arc<RwLock<Schema>> │
  └──────┬──────────────┘
         │
-        ├──── Unix socket /run/opdbus/zeroclaw-grpc.sock  (native gRPC)
+        ├──── Shared Unix socket /run/ghostbridge/container.sock  (native gRPC; tonic-web + reflection demuxes every service)
         └──── TCP 0.0.0.0:8090  (HTTP + gRPC-Web via tonic-web)
 ```
 
@@ -90,7 +90,9 @@ has no Btrfs dependency.
   4. Runs `tracing` middleware that stamps every response with
      `X-Ghostbridge-Footprint` and `X-Ghostbridge-Trace-ID`.
 - Binds two listeners concurrently via `tokio::join!`:
-  - Unix socket (native gRPC)
+  - Shared Unix socket `/run/ghostbridge/container.sock` (from `ZEROCLAW_UNIX_SOCKET`;
+    native gRPC, demuxed by `tonic_web::enable` + gRPC server reflection). This
+    host owns the single shared socket every service routes through.
   - TCP address (HTTP + gRPC-Web)
 
 ### 3e. `op-grpc-bridge` — `tracing` middleware
