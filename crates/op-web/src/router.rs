@@ -34,8 +34,6 @@ pub fn create_router(state: Arc<AppState>, static_dir: Option<String>) -> Router
             get(crate::handlers::llm::list_providers_handler),
         )
         .route("/api/llm/models", get(routes::llm::get_models))
-        .route("/api/llm/provider", post(routes::llm::switch_provider))
-        .route("/api/llm/model", post(routes::llm::switch_model))
         // Chat routes
         .route("/api/chat", post(routes::chat::chat_message))
         // Tool routes

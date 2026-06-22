@@ -146,11 +146,6 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             "/llm/models/:provider",
             get(handlers::llm::list_models_for_provider_handler),
         )
-        .route(
-            "/llm/provider",
-            post(handlers::llm::switch_provider_handler),
-        )
-        .route("/llm/model", post(handlers::llm::switch_model_handler))
         .route("/llm/chat", post(handlers::chat::send_message_handler))
         // OpenClaw endpoints (internal/base layer)
         .route(
