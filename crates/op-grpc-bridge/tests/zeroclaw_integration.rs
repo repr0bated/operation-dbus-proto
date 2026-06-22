@@ -41,7 +41,23 @@ async fn start_test_server() -> (SocketAddr, Arc<SchemaLoader>, PathBuf) {
     write_schema(&path, &schema);
 
     let loader = Arc::new(SchemaLoader::new(&path).unwrap());
-    let app = build_axum_app(loader.clone());
+
+    // Build the intercepted plugin service exactly as `run_zeroclaw_server`
+    // does, so the Axum app mounts both the zeroclaw service and the plugin
+    // service behind the Ghostbridge interceptor.
+    let event_chain = Arc::new(tokio::sync::RwLock::new(op_state_store::EventChain::new(
+        op_state_store::ChainConfig::default(),
+    )));
+    let ovsdb = Arc::new(op_network::rovs_proxy::OvsdbDbusClient::new());
+    let nonnet = Arc::new(op_jsonrpc::nonnet::NonNetDb::new());
+    let mutation_engine = Arc::new(op_grpc_bridge::MutationEngine::new(event_chain, ovsdb, nonnet));
+    let operation_server = op_grpc_bridge::grpc_server::OperationGrpcServer::new(mutation_engine);
+    let plugin_service =
+        op_grpc_bridge::proto::plugin_service_server::PluginServiceServer::with_interceptor(
+            operation_server,
+            op_grpc_bridge::interceptor::GhostbridgeInterceptor,
+        );
+    let app = build_axum_app(loader.clone(), plugin_service);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

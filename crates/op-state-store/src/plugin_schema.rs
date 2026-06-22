@@ -41,6 +41,11 @@ pub enum FieldType {
     Array(Box<FieldType>),
     Object(HashMap<String, FieldSchema>),
     Enum(Vec<String>),
+    /// Discriminated union (tagged enum): the value must match exactly one of
+    /// the inner branch types. Serializes as `{"one_of": [<FieldType>, ...]}`
+    /// and renders to JSON Schema `{"oneOf": [...]}`. Distinct from
+    /// `Constraint::OneOf` (a value-membership constraint).
+    OneOf(Vec<FieldType>),
     Any,
 }
 
@@ -4791,6 +4796,17 @@ fn validate_value_against_type(
                 return Err(format!("Field '{}' must be a string enum value", name));
             }
         }
+        FieldType::OneOf(branches) => {
+            if !branches
+                .iter()
+                .any(|branch| validate_value_against_type(name, value, branch).is_ok())
+            {
+                return Err(format!(
+                    "Field '{}' must match one of the allowed variants",
+                    name
+                ));
+            }
+        }
         FieldType::Any => {}
     }
 
@@ -4834,6 +4850,10 @@ fn default_for_type(field_type: &FieldType) -> Value {
         FieldType::Array(_) => json!([]),
         FieldType::Object(_) => json!({}),
         FieldType::Enum(values) => values.first().map(|s| json!(s)).unwrap_or(json!("")),
+        FieldType::OneOf(branches) => branches
+            .first()
+            .map(default_for_type)
+            .unwrap_or(json!(null)),
         FieldType::Any => json!(null),
     }
 }
@@ -4861,6 +4881,12 @@ fn field_type_to_json_schema(field_type: &FieldType) -> Value {
         FieldType::Enum(values) => json!({
             "type": "string",
             "enum": values
+        }),
+        FieldType::OneOf(branches) => json!({
+            "oneOf": branches
+                .iter()
+                .map(field_type_to_json_schema)
+                .collect::<Vec<_>>()
         }),
         FieldType::Any => json!({}),
     }
@@ -4911,6 +4937,12 @@ fn field_type_to_json_schema_2026(field_type: &FieldType) -> Value {
         FieldType::Enum(values) => json!({
             "type": "string",
             "enum": values
+        }),
+        FieldType::OneOf(branches) => json!({
+            "oneOf": branches
+                .iter()
+                .map(field_type_to_json_schema_2026)
+                .collect::<Vec<_>>()
         }),
         FieldType::Any => json!({}),
     }

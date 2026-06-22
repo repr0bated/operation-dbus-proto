@@ -44,9 +44,9 @@ pub fn ghostbridge_interceptor(mut req: Request<()>) -> Result<Request<()>, Stat
         ));
     }
 
-    // 2. 1:1 Direct Read from the SchemaEngine's shared memory (No SQL, No Polling)
+    // 2. 1:1 Direct Read from the MutationEngine's shared memory (No SQL, No Polling)
     let (sled_ptr, _mmap) = op_identity::read_sled()
-        .map_err(|_| Status::internal("SchemaEngine Memory Unreachable"))?;
+        .map_err(|_| Status::internal("MutationEngine Memory Unreachable"))?;
     let sled = unsafe { &*sled_ptr };
 
     // The Absolute Base: No valid schema, it does not exist.
@@ -151,7 +151,7 @@ mod tests {
     }
 
     #[test]
-    fn test_schema_engine_unreachable_returns_internal() {
+    fn test_mutation_engine_unreachable_returns_internal() {
         let mut req = Request::new(());
         req.metadata_mut().insert(
             "x-ghostbridge-footprint",
@@ -165,7 +165,7 @@ mod tests {
         assert!(result.is_err());
         let status = result.unwrap_err();
         assert_eq!(status.code(), tonic::Code::Internal);
-        assert!(status.message().contains("SchemaEngine Memory Unreachable"));
+        assert!(status.message().contains("MutationEngine Memory Unreachable"));
     }
 
     #[test]

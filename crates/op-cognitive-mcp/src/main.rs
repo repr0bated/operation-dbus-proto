@@ -62,6 +62,10 @@ struct Cli {
     /// Disable HTTP/SSE server
     #[arg(long, env = "COGNITIVE_MCP_HTTP_DISABLED")]
     no_http: bool,
+
+    /// Run stdio transport only (for local MCP clients — direct, no network)
+    #[arg(long, env = "COGNITIVE_MCP_STDIO")]
+    stdio: bool,
 }
 
 /// Promote an `0.0.0.0:PORT` default address to `<wg_ip>:PORT` when the WG
@@ -138,6 +142,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let server = CognitiveMcpServer::new(&cli.db).await?;
+
+    if cli.stdio {
+        info!("Running stdio only (local MCP transport)");
+        server.start_stdio().await?;
+        return Ok(());
+    }
 
     match (cli.no_grpc, cli.no_http) {
         (true, true) => {

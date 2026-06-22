@@ -3,9 +3,9 @@
 //! Exposes OVSDB and NonNet JSON-RPC methods as D-Bus interfaces
 //! for a true 1:1 mirror of the JSON-RPC API.
 //!
-//! Authoritative Path: D-Bus method → SchemaEngine.mutate → RCP Database → EventChain
+//! Authoritative Path: D-Bus method → MutationEngine.mutate → RCP Database → EventChain
 
-use op_grpc_bridge::{ChangeType, SchemaEngine};
+use op_grpc_bridge::{ChangeType, MutationEngine};
 use op_jsonrpc::nonnet::NonNetDb;
 use op_jsonrpc::protocol::JsonRpcRequest;
 use op_network::rovs_proxy::OvsdbDbusClient;
@@ -21,11 +21,11 @@ fn str_to_simd(s: &str) -> Result<simd_json::OwnedValue, zbus::fdo::Error> {
 /// OVSDB D-Bus interface - mirrors JSON-RPC methods
 pub struct OvsdbInterface {
     pub client: Arc<OvsdbDbusClient>,
-    pub schema_engine: Option<Arc<SchemaEngine>>,
+    pub schema_engine: Option<Arc<MutationEngine>>,
 }
 
 impl OvsdbInterface {
-    pub fn new(client: Arc<OvsdbDbusClient>, schema_engine: Option<Arc<SchemaEngine>>) -> Self {
+    pub fn new(client: Arc<OvsdbDbusClient>, schema_engine: Option<Arc<MutationEngine>>) -> Self {
         Self {
             client,
             schema_engine,
@@ -39,7 +39,7 @@ impl OvsdbInterface {
     async fn transact(&self, operations: String) -> zbus::fdo::Result<String> {
         let operations_val = str_to_simd(&operations)?;
 
-        // Route through SchemaEngine for authoritative recording if available
+        // Route through MutationEngine for authoritative recording if available
         if let Some(engine) = &self.schema_engine {
             match engine
                 .mutate(
@@ -164,11 +164,11 @@ impl OvsdbInterface {
 /// NonNet D-Bus interface - mirrors JSON-RPC methods
 pub struct NonNetInterface {
     pub nonnet: Arc<NonNetDb>,
-    pub schema_engine: Option<Arc<SchemaEngine>>,
+    pub schema_engine: Option<Arc<MutationEngine>>,
 }
 
 impl NonNetInterface {
-    pub fn new(nonnet: Arc<NonNetDb>, schema_engine: Option<Arc<SchemaEngine>>) -> Self {
+    pub fn new(nonnet: Arc<NonNetDb>, schema_engine: Option<Arc<MutationEngine>>) -> Self {
         Self {
             nonnet,
             schema_engine,

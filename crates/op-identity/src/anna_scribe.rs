@@ -66,16 +66,14 @@ impl AnnaScribe {
         // The Strike/Etch: Bind the WireGuard Key to the Blake3 hash of the
         // canonical schema catalog in shared memory. This makes the sled footprint
         // a direct function of the single source of truth (/dev/shm/live-schema.json).
-        let schema_catalog_hash = match std::fs::read("/dev/shm/live-schema.json") {
-            Ok(bytes) => blake3::hash(&bytes),
-            Err(_) => {
-                return Err("A.N.N.A. Scribe: Schema catalog missing from shared memory. Connection Rejected.".to_string());
-            }
-        };
+        let schema_catalog_hash = crate::schema_bridge::schema_catalog_hash().ok_or_else(|| {
+            "A.N.N.A. Scribe: Schema catalog missing from shared memory. Connection Rejected."
+                .to_string()
+        })?;
 
         let mut hasher = blake3::Hasher::new();
         hasher.update(wg_pubkey.as_bytes());
-        hasher.update(schema_catalog_hash.as_bytes());
+        hasher.update(&schema_catalog_hash);
         hasher.update(&sled.mutation_index.to_le_bytes());
         let genesis_hash = hex::encode(hasher.finalize().as_bytes());
 

@@ -13,7 +13,7 @@ struct QueryStateResponse {
 async fn proxy(connection: &Connection) -> Result<Proxy<'_>> {
     let proxy = Proxy::new(
         connection,
-        "org.opdbus.v1",
+        op_core::config::OPDBUS_BUS_NAME,
         "/org/opdbus/v1/state",
         "org.opdbus.StateManager",
     )

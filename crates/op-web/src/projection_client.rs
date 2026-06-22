@@ -14,7 +14,7 @@ use zbus::Connection;
 
 pub type ProjectionCache = Arc<RwLock<HashMap<String, Value>>>;
 
-const DBUS_SERVICE: &str = "org.opdbus.v1";
+const DBUS_SERVICE: &str = op_core::config::OPDBUS_BUS_NAME;
 const PLUGIN_ROOT: &str = "/opdbus/v1/plugins";
 const PROJECTED_OBJECT_IFACE: &str = "org.opdbus.ProjectedObjectV1";
 const SHM_SCHEMA_PATH: &str = "/dev/shm/live-schema.json";

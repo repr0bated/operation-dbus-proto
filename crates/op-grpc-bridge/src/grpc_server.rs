@@ -52,7 +52,7 @@ use crate::proto::{
     SubscribeEventsRequest, SubscribeRequest, SubscribeSignalsRequest, TagLock as ProtoTagLock,
     VerifyChainRequest, VerifyChainResponse,
 };
-use crate::schema_engine::{ChangeType, SchemaEngine};
+use crate::mutation_engine::{ChangeType, MutationEngine};
 use op_state_store::{Decision, DenyReason, MerkleProof};
 use zbus::zvariant::{Array as ZArray, OwnedValue as ZOwnedValue, Str as ZStr, Value as ZValue};
 use zbus::{Connection, Proxy};
@@ -228,7 +228,7 @@ impl RegistryInner {
 
 #[derive(Clone)]
 pub struct OperationGrpcServer {
-    schema_engine: Arc<SchemaEngine>,
+    mutation_engine: Arc<MutationEngine>,
     plugin_provider: Arc<dyn PluginSchemaProvider>,
     semantic_shuttle: Option<Arc<QdrantSemanticShuttle>>,
     /// Broadcast channel for chain events
@@ -238,11 +238,11 @@ pub struct OperationGrpcServer {
 }
 
 impl OperationGrpcServer {
-    pub fn new(schema_engine: Arc<SchemaEngine>) -> Self {
+    pub fn new(mutation_engine: Arc<MutationEngine>) -> Self {
         let (chain_tx, _) = broadcast::channel(1024);
         let (registry, _) = RegistryInner::new();
         Self {
-            schema_engine,
+            mutation_engine,
             plugin_provider: Arc::new(SchemaCatalogPluginProvider),
             semantic_shuttle: None,
             chain_events: chain_tx,
@@ -251,13 +251,13 @@ impl OperationGrpcServer {
     }
 
     pub fn with_plugin_provider(
-        schema_engine: Arc<SchemaEngine>,
+        mutation_engine: Arc<MutationEngine>,
         plugin_provider: Arc<dyn PluginSchemaProvider>,
     ) -> Self {
         let (chain_tx, _) = broadcast::channel(1024);
         let (registry, _) = RegistryInner::new();
         Self {
-            schema_engine,
+            mutation_engine,
             plugin_provider,
             semantic_shuttle: None,
             chain_events: chain_tx,
@@ -302,7 +302,7 @@ impl OperationGrpcServer {
 ///   3. Mark it serving via health_reporter
 pub async fn run_grpc_server(
     addr: std::net::SocketAddr,
-    schema_engine: Arc<SchemaEngine>,
+    mutation_engine: Arc<MutationEngine>,
     plugin_provider: Option<Arc<dyn PluginSchemaProvider>>,
     tls_identity: Option<Identity>,
 ) -> Result<(), tonic::transport::Error> {
@@ -332,9 +332,9 @@ pub async fn run_grpc_server(
     let mcp_svc = std::sync::Arc::new(McpServiceImpl::new(agent_svc, orch_svc));
 
     let server = if let Some(provider) = plugin_provider {
-        OperationGrpcServer::with_plugin_provider(schema_engine, provider)
+        OperationGrpcServer::with_plugin_provider(mutation_engine, provider)
     } else {
-        OperationGrpcServer::new(schema_engine)
+        OperationGrpcServer::new(mutation_engine)
     };
     let server = match QdrantSemanticShuttle::new().await {
         Ok(shuttle) => server.with_semantic_shuttle(Arc::new(shuttle)),
@@ -473,7 +473,7 @@ impl StateSync for OperationGrpcServer {
         let req = request.into_inner();
         info!("gRPC Subscribe: plugins={:?}", req.plugin_ids);
 
-        let mut rx = self.schema_engine.change_tx().subscribe();
+        let mut rx = self.mutation_engine.change_tx().subscribe();
         let plugin_filters = req.plugin_ids;
         let path_filters = req.path_patterns;
         let tag_filters = req.tags;
@@ -519,7 +519,7 @@ impl StateSync for OperationGrpcServer {
         };
 
         let result = self
-            .schema_engine
+            .mutation_engine
             .mutate(
                 req.plugin_id.clone(),
                 req.object_path.clone(),
@@ -568,7 +568,7 @@ impl StateSync for OperationGrpcServer {
         request: Request<GetStateRequest>,
     ) -> Result<Response<GetStateResponse>, Status> {
         let req = request.into_inner();
-        let state = self.schema_engine.get_state(&req.plugin_id).await;
+        let state = self.mutation_engine.get_state(&req.plugin_id).await;
 
         let state_struct = state
             .map(|v| simd_to_prost_struct(&v))
@@ -657,9 +657,9 @@ impl PluginService for OperationGrpcServer {
             .map(|v| prost_value_to_simd(&v))
             .collect();
 
-        // New pipeline: Route through SchemaEngine.mutate for authoritative recording.
+        // New pipeline: Route through MutationEngine.mutate for authoritative recording.
         let result = self
-            .schema_engine
+            .mutation_engine
             .mutate(
                 req.plugin_id.clone(),
                 req.object_path.clone(),
@@ -776,7 +776,7 @@ impl PluginService for OperationGrpcServer {
         let path_filter = req.object_path;
 
         // Subscribe to the schema engine's change broadcast and filter for signals
-        let mut rx = self.schema_engine.change_tx().subscribe();
+        let mut rx = self.mutation_engine.change_tx().subscribe();
 
         let stream = stream! {
             loop {
@@ -838,7 +838,7 @@ impl EventChainService for OperationGrpcServer {
         request: Request<GetEventsRequest>,
     ) -> Result<Response<GetEventsResponse>, Status> {
         let req = request.into_inner();
-        let chain = self.schema_engine.event_chain.clone();
+        let chain = self.mutation_engine.event_chain.clone();
         let chain = chain.read().await;
 
         let events: Vec<ProtoChainEvent> = chain
@@ -897,7 +897,7 @@ impl EventChainService for OperationGrpcServer {
         &self,
         _request: Request<VerifyChainRequest>,
     ) -> Result<Response<VerifyChainResponse>, Status> {
-        let chain = self.schema_engine.event_chain.clone();
+        let chain = self.mutation_engine.event_chain.clone();
         let chain = chain.read().await;
         let result = chain.verify_chain();
         Ok(Response::new(VerifyChainResponse {
@@ -913,7 +913,7 @@ impl EventChainService for OperationGrpcServer {
         request: Request<GetProofRequest>,
     ) -> Result<Response<GetProofResponse>, Status> {
         let req = request.into_inner();
-        let chain = self.schema_engine.event_chain.clone();
+        let chain = self.mutation_engine.event_chain.clone();
         let chain = chain.read().await;
         let proof: Option<MerkleProof> =
             op_state_store::EventBatch::generate_proof(chain.events(), req.event_id);
@@ -941,7 +941,7 @@ impl EventChainService for OperationGrpcServer {
         request: Request<ProveTagImmutabilityRequest>,
     ) -> Result<Response<ProveTagImmutabilityResponse>, Status> {
         let req = request.into_inner();
-        let chain = self.schema_engine.event_chain.clone();
+        let chain = self.mutation_engine.event_chain.clone();
         let chain = chain.read().await;
         let proof = chain.prove_tag_immutability(&req.tag);
         Ok(Response::new(ProveTagImmutabilityResponse {
@@ -957,7 +957,7 @@ impl EventChainService for OperationGrpcServer {
         request: Request<GetSnapshotRequest>,
     ) -> Result<Response<GetSnapshotResponse>, Status> {
         let req = request.into_inner();
-        let chain = self.schema_engine.event_chain.clone();
+        let chain = self.mutation_engine.event_chain.clone();
         let chain = chain.read().await;
         if let Some(snapshot) = chain.get_snapshot(&req.snapshot_id) {
             Ok(Response::new(GetSnapshotResponse {
@@ -974,11 +974,11 @@ impl EventChainService for OperationGrpcServer {
     ) -> Result<Response<CreateSnapshotResponse>, Status> {
         let req = request.into_inner();
         let state = self
-            .schema_engine
+            .mutation_engine
             .get_state(&req.plugin_id)
             .await
             .unwrap_or_else(|| simd_json::json!({}));
-        let chain = self.schema_engine.event_chain.clone();
+        let chain = self.mutation_engine.event_chain.clone();
         let mut chain = chain.write().await;
         let snapshot = chain.create_snapshot(req.plugin_id, "1.0.0".to_string(), state);
         Ok(Response::new(CreateSnapshotResponse {
@@ -1018,7 +1018,7 @@ impl EventChainService for OperationGrpcServer {
 // Helpers
 // =============================================================================
 
-fn proto_state_change(change: &crate::schema_engine::StateChange) -> ProtoStateChange {
+fn proto_state_change(change: &crate::mutation_engine::StateChange) -> ProtoStateChange {
     ProtoStateChange {
         change_id: change.change_id.clone(),
         event_id: change.event_id,
@@ -1438,7 +1438,7 @@ impl OvsdbMirror for OperationGrpcServer {
         };
 
         // Subscribe to the schema engine's change broadcast and filter for OVSDB paths
-        let mut rx = self.schema_engine.change_tx().subscribe();
+        let mut rx = self.mutation_engine.change_tx().subscribe();
 
         let stream = stream! {
             loop {
@@ -1526,14 +1526,14 @@ impl OperationGrpcServer {
     /// Call an OVSDB method via the D-Bus mirror interface
     async fn ovsdb_call(&self, method: &str, args: &str) -> Result<String, Status> {
         let conn = self
-            .schema_engine
+            .mutation_engine
             .dbus_connection()
             .await
             .map_err(|e| Status::unavailable(format!("D-Bus not available: {}", e)))?;
 
         let proxy = Proxy::new(
             &conn,
-            "org.opdbus.v1",
+            op_core::config::OPDBUS_BUS_NAME,
             "/org/opdbus/v1/ovsdb",
             "org.opdbus.OvsdbV1",
         )
@@ -2355,17 +2355,17 @@ use crate::proto::mail::{
 
 impl OperationGrpcServer {
     /// Call a MailService method via the D-Bus mail interface.
-    /// Falls back to SchemaEngine state if the D-Bus service is unavailable.
+    /// Falls back to MutationEngine state if the D-Bus service is unavailable.
     async fn mail_dbus_call(&self, method: &str, args: &str) -> Result<String, Status> {
         let conn = self
-            .schema_engine
+            .mutation_engine
             .dbus_connection()
             .await
             .map_err(|e| Status::unavailable(format!("D-Bus not available: {}", e)))?;
 
         let proxy = Proxy::new(
             &conn,
-            "org.opdbus.v1",
+            op_core::config::OPDBUS_BUS_NAME,
             "/org/opdbus/v1/mail",
             "org.opdbus.MailV1",
         )
@@ -2433,7 +2433,7 @@ impl MailService for OperationGrpcServer {
                 }))
             }
             Err(_dbus_err) => {
-                // Record the send attempt in SchemaEngine state
+                // Record the send attempt in MutationEngine state
                 let mutation_value = simd_json::json!({
                     "from": req.from_email,
                     "to": req.to_email,
@@ -2442,7 +2442,7 @@ impl MailService for OperationGrpcServer {
                 });
                 let message_id = Uuid::new_v4().to_string();
                 let _ = self
-                    .schema_engine
+                    .mutation_engine
                     .process_grpc_mutation(
                         "mail".to_string(),
                         format!("/org/opdbus/v1/mail/outbox/{}", message_id),
@@ -2614,8 +2614,8 @@ impl MailService for OperationGrpcServer {
     ) -> Result<Response<GetMailStatusResponse>, Status> {
         let req = request.into_inner();
 
-        // Try reading status from SchemaEngine state first
-        let state = self.schema_engine.get_state("mail").await;
+        // Try reading status from MutationEngine state first
+        let state = self.mutation_engine.get_state("mail").await;
         if let Some(ref st) = state {
             if let Some(status_obj) = st.as_object().and_then(|o| o.get("status")) {
                 return Ok(Response::new(GetMailStatusResponse {
@@ -2827,7 +2827,7 @@ impl MailService for OperationGrpcServer {
                 });
                 let action_id = Uuid::new_v4().to_string();
                 let _ = self
-                    .schema_engine
+                    .mutation_engine
                     .process_grpc_mutation(
                         "mail".to_string(),
                         format!("/org/opdbus/v1/mail/admin_actions/{}", action_id),
@@ -2943,14 +2943,14 @@ impl OperationGrpcServer {
     /// Call a PrivacyNetwork method via the D-Bus privacy interface.
     async fn privacy_dbus_call(&self, method: &str, args: &str) -> Result<String, Status> {
         let conn = self
-            .schema_engine
+            .mutation_engine
             .dbus_connection()
             .await
             .map_err(|e| Status::unavailable(format!("D-Bus not available: {}", e)))?;
 
         let proxy = Proxy::new(
             &conn,
-            "org.opdbus.v1",
+            op_core::config::OPDBUS_BUS_NAME,
             "/org/opdbus/v1/privacy",
             "org.opdbus.PrivacyV1",
         )
@@ -3045,7 +3045,7 @@ impl PrivacyNetworkService for OperationGrpcServer {
                     "force_reprovision": req.force_reprovision
                 });
                 let _ = self
-                    .schema_engine
+                    .mutation_engine
                     .process_grpc_mutation(
                         "privacy".to_string(),
                         "/org/opdbus/v1/privacy/network".to_string(),
@@ -3079,8 +3079,8 @@ impl PrivacyNetworkService for OperationGrpcServer {
     ) -> Result<Response<GetNetworkStatusResponse>, Status> {
         let req = request.into_inner();
 
-        // Check SchemaEngine state first
-        let state = self.schema_engine.get_state("privacy").await;
+        // Check MutationEngine state first
+        let state = self.mutation_engine.get_state("privacy").await;
         if let Some(ref st) = state {
             if let Some(net_status) = st.as_object().and_then(|o| o.get("network_status")) {
                 let components: Vec<_> = net_status
@@ -3272,7 +3272,7 @@ impl PrivacyNetworkService for OperationGrpcServer {
                     "status": "pending_no_backend"
                 });
                 let _ = self
-                    .schema_engine
+                    .mutation_engine
                     .process_grpc_mutation(
                         "privacy".to_string(),
                         format!("/org/opdbus/v1/privacy/users/{}", user_id),
@@ -3408,7 +3408,7 @@ impl PrivacyNetworkService for OperationGrpcServer {
                     "status": "pending_no_backend"
                 });
                 let _ = self
-                    .schema_engine
+                    .mutation_engine
                     .process_grpc_mutation(
                         "privacy".to_string(),
                         format!("/org/opdbus/v1/privacy/components/{}", req.component),
@@ -3721,7 +3721,7 @@ impl PrivacyNetworkService for OperationGrpcServer {
                     "status": "pending_no_backend"
                 });
                 let _ = self
-                    .schema_engine
+                    .mutation_engine
                     .process_grpc_mutation(
                         "privacy".to_string(),
                         format!("/org/opdbus/v1/privacy/routing/{}", req.container_name),
@@ -3822,14 +3822,14 @@ impl OperationGrpcServer {
     /// Call a RegistrationService method via the D-Bus registration interface.
     async fn registration_dbus_call(&self, method: &str, args: &str) -> Result<String, Status> {
         let conn = self
-            .schema_engine
+            .mutation_engine
             .dbus_connection()
             .await
             .map_err(|e| Status::unavailable(format!("D-Bus not available: {}", e)))?;
 
         let proxy = Proxy::new(
             &conn,
-            "org.opdbus.v1",
+            op_core::config::OPDBUS_BUS_NAME,
             "/org/opdbus/v1/registration",
             "org.opdbus.RegistrationV1",
         )
@@ -3908,7 +3908,7 @@ impl RegistrationService for OperationGrpcServer {
                     "created_at": chrono::Utc::now().to_rfc3339()
                 });
                 let _ = self
-                    .schema_engine
+                    .mutation_engine
                     .process_grpc_mutation(
                         "registration".to_string(),
                         format!("/org/opdbus/v1/registration/magic_links/{}", token),
@@ -3995,7 +3995,7 @@ impl RegistrationService for OperationGrpcServer {
             }
             Err(_) => {
                 // Check state store for magic link token
-                let state = self.schema_engine.get_state("registration").await;
+                let state = self.mutation_engine.get_state("registration").await;
                 if let Some(ref st) = state {
                     if let Some(link_data) = st
                         .as_object()
@@ -4099,7 +4099,7 @@ impl RegistrationService for OperationGrpcServer {
                     "status": "pending_no_backend"
                 });
                 let _ = self
-                    .schema_engine
+                    .mutation_engine
                     .process_grpc_mutation(
                         "registration".to_string(),
                         format!("/org/opdbus/v1/registration/users/{}", user_id),
@@ -4131,7 +4131,7 @@ impl RegistrationService for OperationGrpcServer {
         let req = request.into_inner();
 
         // Check state store first
-        let state = self.schema_engine.get_state("registration").await;
+        let state = self.mutation_engine.get_state("registration").await;
         if let Some(ref st) = state {
             if let Some(users) = st.as_object().and_then(|o| o.get("users")) {
                 // Search by email or user_id
@@ -4436,7 +4436,7 @@ impl RegistrationService for OperationGrpcServer {
                     "status": "pending_no_backend"
                 });
                 let _ = self
-                    .schema_engine
+                    .mutation_engine
                     .process_grpc_mutation(
                         "registration".to_string(),
                         format!(
@@ -4479,7 +4479,7 @@ impl crate::proto::dbus_passthrough_server::DbusPassthrough for OperationGrpcSer
     ) -> Result<Response<crate::proto::DbusCallResponse>, Status> {
         let req = request.into_inner();
         let conn = self
-            .schema_engine
+            .mutation_engine
             .dbus_connection()
             .await
             .map_err(|e| Status::unavailable(format!("D-Bus not available: {e}")))?;

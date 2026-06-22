@@ -4,6 +4,7 @@
 //! bridge/OpenFlow policy, separate from per-user privacy containers.
 
 use crate::state_plugins::incus::{IncusInstance, IncusPlugin, IncusState};
+use crate::state_plugins::incus_device::{Device, NamedDevice, NicDevice};
 use crate::state_plugins::openflow::{
     BridgeFlowConfig, FlowAction, FlowEntry, OpenFlowConfig, OpenFlowPlugin,
 };
@@ -704,16 +705,16 @@ impl PrivacyRouterPlugin {
         config: &PrivacyRouterConfig,
         spec: &SystemContainerSpec<'_>,
     ) -> IncusInstance {
-        let devices = HashMap::from([(
-            "fabric0".to_string(),
-            HashMap::from([
-                ("type".to_string(), "nic".to_string()),
-                ("nictype".to_string(), "bridged".to_string()),
-                ("parent".to_string(), config.bridge_name.clone()),
-                ("name".to_string(), "eth0".to_string()),
-                ("host_name".to_string(), spec.socket_port.to_string()),
-            ]),
-        )]);
+        let devices = vec![NamedDevice {
+            name: "fabric0".to_string(),
+            device: Device::Nic(NicDevice {
+                nictype: Some("bridged".to_string()),
+                parent: Some(config.bridge_name.clone()),
+                name: Some("eth0".to_string()),
+                host_name: Some(spec.socket_port.to_string()),
+                ..Default::default()
+            }),
+        }];
 
         IncusInstance {
             name: spec.name.to_string(),
@@ -744,7 +745,7 @@ impl PrivacyRouterPlugin {
                     spec.socket_port.to_string(),
                 ),
             ])),
-            devices: Some(devices),
+            devices,
             description: None,
             architecture: None,
             ephemeral: Some(false),
@@ -753,7 +754,9 @@ impl PrivacyRouterPlugin {
             last_used_at: None,
             location: None,
             project: None,
-            sockets: Vec::new(),
+            status_code: None,
+            expanded_config: None,
+            expanded_devices: Vec::new(),
         }
     }
 
@@ -1258,7 +1261,6 @@ mod tests {
                 storage_pool: None,
                 profiles: Vec::new(),
                 config: None,
-                devices: None,
                 ..Default::default()
             },
             IncusInstance {
@@ -1269,7 +1271,6 @@ mod tests {
                 storage_pool: None,
                 profiles: Vec::new(),
                 config: None,
-                devices: None,
                 ..Default::default()
             },
         ];
