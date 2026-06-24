@@ -172,7 +172,11 @@ fn sanitize_path_segment(segment: &str) -> String {
 
 /// Build the D-Bus object path from a plugin id and path segments.
 fn build_projected_path(plugin_id: &str, path_segments: &[String]) -> String {
-    let mut path = op_plugins::canonical::plugin_path(plugin_id);
+    let mut path = format!(
+        "{}/{}",
+        op_plugins::canonical::PLUGIN_BASE_PATH,
+        sanitize_path_segment(plugin_id)
+    );
     for seg in path_segments {
         path.push('/');
         path.push_str(&sanitize_path_segment(seg));
@@ -448,6 +452,32 @@ impl ProjectionDbusServer {
     pub async fn sync_from_shm(&self) -> Result<()> {
         let mut objects = self.objects.lock().await;
         sync_all_from_shm(&self.conn, &mut objects).await
+    }
+
+    /// Ensure all known plugins have at least a root object mounted, even if
+    /// no shm data exists yet (no mutations). Plugins with shm data get their
+    /// full derived tree; plugins without shm get just the root (data returns `{}`).
+    pub async fn seed_plugin_roots(&self, plugin_ids: &[String]) -> Result<()> {
+        let mut objects = self.objects.lock().await;
+        for plugin_id in plugin_ids {
+            // If shm has data, sync the full derived tree.
+            if let Some(paths) = read_and_derive_paths(plugin_id) {
+                sync_plugin_paths(&self.conn, &mut objects, plugin_id, &paths).await?;
+            } else {
+                // No shm data — mount just the root so the plugin appears in the tree.
+                let root_path = build_projected_path(plugin_id, &[]);
+                if !objects.contains(&root_path) {
+                    let obj = ProjectedObject {
+                        plugin_id: plugin_id.to_string(),
+                        path_segments: Vec::new(),
+                    };
+                    self.conn.object_server().at(root_path.as_str(), obj).await?;
+                    objects.insert(root_path.clone());
+                    debug!(path = root_path, "Seeded plugin root (no shm data yet)");
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Sync a single plugin's D-Bus objects to match the derived paths.
