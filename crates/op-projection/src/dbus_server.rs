@@ -8,9 +8,16 @@
 //! (`/dev/shm/opdbus/projections/<plugin>.json`) on every property access.
 //! No held cache — the projected tree is a pure read-through of the mutation
 //! fold written by the MutationEngine (the single write door).
+//!
+//! Tree structure is derived on-demand: the `ProjectionRoot` interface at
+//! `/org/opdbus/v1/plugins` exposes a `refresh()` D-Bus method that re-reads
+//! shm and mounts/unmounts objects to match. No gRPC subscription, no polling,
+//! no inotify — the tree syncs when asked.
 
 use anyhow::Result;
 use std::collections::HashSet;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use tracing::{debug, info};
 use zbus::{connection::Builder, interface, object_server::SignalEmitter, Connection};
 
@@ -173,6 +180,203 @@ fn build_projected_path(plugin_id: &str, path_segments: &[String]) -> String {
     path
 }
 
+/// Root interface at `/org/opdbus/v1/plugins`.
+///
+/// Always present so D-Bus introspection works even with zero plugins mounted.
+/// The `plugins` property reads shm live. The `refresh()` method re-reads shm
+/// and syncs the D-Bus tree (mount/unmount objects to match). This is the
+/// dynamic-mount mechanism: no gRPC, no polling, no inotify — the tree is
+/// derived on demand.
+pub struct ProjectionRoot {
+    objects: Arc<Mutex<HashSet<String>>>,
+}
+
+#[interface(name = "org.opdbus.v1.plugins.ProjectionRoot")]
+impl ProjectionRoot {
+    /// List of plugin IDs currently projected in shm (live read).
+    #[zbus(property)]
+    async fn plugins(&self) -> Vec<String> {
+        op_core::projection_shm::list_projected_plugins()
+    }
+
+    /// Number of D-Bus objects currently mounted.
+    #[zbus(property)]
+    async fn object_count(&self) -> u64 {
+        self.objects.lock().await.len() as u64
+    }
+
+    /// Re-read shm and sync the D-Bus tree. Mounts new objects, unmounts stale
+    /// ones. Returns the total object count after refresh.
+    ///
+    /// Call this after a mutation has written new state to shm. The
+    /// MutationEngine can call this via D-Bus after writing to shm, or any
+    /// client can call it to force a tree refresh.
+    async fn refresh(&self, #[zbus(connection)] conn: &Connection) -> u64 {
+        let mut objects = self.objects.lock().await;
+        match sync_all_from_shm(conn, &mut objects).await {
+            Ok(()) => objects.len() as u64,
+            Err(e) => {
+                tracing::warn!(error = %e, "refresh() failed");
+                objects.len() as u64
+            }
+        }
+    }
+}
+
+/// Read all plugins from shm, derive paths, and sync the D-Bus tree.
+///
+/// For each plugin in shm, derives all nested object paths from the JSON
+/// structure and mounts/unmounts `ProjectedObject` instances to match.
+/// Plugins that are in shm but not yet mounted are added; objects that are
+/// mounted but no longer in shm are removed.
+async fn sync_all_from_shm(
+    conn: &Connection,
+    objects: &mut HashSet<String>,
+) -> Result<()> {
+    let plugins = op_core::projection_shm::list_projected_plugins();
+
+    // Unmount plugins that are no longer in shm.
+    let plugin_root_base = op_plugins::canonical::plugin_path("");
+    let _ = plugin_root_base; // path prefix helper
+
+    let to_remove: Vec<String> = objects
+        .iter()
+        .filter(|p| {
+            // Keep only paths whose plugin is still in shm
+            let parts: Vec<&str> = p.trim_start_matches('/').split('/').collect();
+            if parts.len() >= 5 && parts[0] == "org" && parts[1] == "opdbus" && parts[2] == "v1" && parts[3] == "plugins" {
+                let plugin_id = parts[4];
+                !plugins.iter().any(|p| p.as_str() == plugin_id)
+            } else {
+                false
+            }
+        })
+        .cloned()
+        .collect();
+
+    for path in to_remove {
+        if objects.remove(&path) {
+            conn.object_server()
+                .remove::<ProjectedObject, _>(path.as_str())
+                .await?;
+            debug!(path, "Unmounted stale D-Bus projection object (plugin gone from shm)");
+        }
+    }
+
+    // Mount/sync all plugins currently in shm.
+    for plugin_id in &plugins {
+        if let Some(paths) = read_and_derive_paths(plugin_id) {
+            sync_plugin_paths(conn, objects, plugin_id, &paths).await?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Sync a single plugin's D-Bus objects to match the derived paths.
+async fn sync_plugin_paths(
+    conn: &Connection,
+    objects: &mut HashSet<String>,
+    plugin_id: &str,
+    paths: &[Vec<String>],
+) -> Result<()> {
+    let new_paths: HashSet<String> = paths
+        .iter()
+        .map(|segs| build_projected_path(plugin_id, segs))
+        .collect();
+
+    let plugin_root = op_plugins::canonical::plugin_path(plugin_id);
+    let plugin_prefix = format!("{}/", plugin_root);
+
+    // Unmount paths that no longer exist in the derived set.
+    let to_remove: Vec<String> = objects
+        .iter()
+        .filter(|p| {
+            (**p == plugin_root || p.starts_with(&plugin_prefix))
+                && !new_paths.contains(*p)
+        })
+        .cloned()
+        .collect();
+
+    for path in to_remove {
+        if objects.remove(&path) {
+            conn.object_server()
+                .remove::<ProjectedObject, _>(path.as_str())
+                .await?;
+            debug!(path, "Unmounted stale D-Bus projection object");
+        }
+    }
+
+    // Mount all current paths.
+    for segs in paths {
+        let path = build_projected_path(plugin_id, segs);
+        if !objects.contains(&path) {
+            let obj = ProjectedObject {
+                plugin_id: plugin_id.to_string(),
+                path_segments: segs.to_vec(),
+            };
+            conn.object_server().at(path.as_str(), obj).await?;
+            objects.insert(path.clone());
+            debug!(path, "Mounted D-Bus projection object");
+        }
+    }
+
+    Ok(())
+}
+
+/// Read a plugin's projection from shm and derive all D-Bus object paths.
+fn read_and_derive_paths(plugin_id: &str) -> Option<Vec<Vec<String>>> {
+    let bytes = op_core::projection_shm::read_projection_bytes(plugin_id)?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    Some(derive_paths_from_state(&value))
+}
+
+/// Derive all D-Bus object paths from a plugin's state JSON.
+fn derive_paths_from_state(value: &serde_json::Value) -> Vec<Vec<String>> {
+    let mut paths = vec![Vec::new()]; // root (plugin root)
+    derive_paths_recursive(value, &mut Vec::new(), &mut paths);
+    paths
+}
+
+fn derive_paths_recursive(
+    value: &serde_json::Value,
+    current: &mut Vec<String>,
+    paths: &mut Vec<Vec<String>>,
+) {
+    match value {
+        serde_json::Value::Object(map) => {
+            if !current.is_empty() {
+                paths.push(current.clone());
+            }
+            for (key, child) in map {
+                if child.is_object() || child.is_array() {
+                    current.push(key.clone());
+                    derive_paths_recursive(child, current, paths);
+                    current.pop();
+                }
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            if !current.is_empty() {
+                paths.push(current.clone());
+            }
+            for (idx, child) in arr.iter().enumerate() {
+                if child.is_object() || child.is_array() {
+                    let segment = ["id", "name", "label", "key", "path", "domain", "host"]
+                        .iter()
+                        .find_map(|&field| child.get(field).and_then(|v| v.as_str()))
+                        .map(|s| s.replace(['/', ' ', ':'], "_"))
+                        .unwrap_or_else(|| idx.to_string());
+                    current.push(segment);
+                    derive_paths_recursive(child, current, paths);
+                    current.pop();
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Manages the set of D-Bus objects served for all projections.
 ///
 /// Each object reads its data 1:1 from the shm projection layer on every
@@ -180,24 +384,31 @@ fn build_projected_path(plugin_id: &str, path_segments: &[String]) -> String {
 /// mount/unmount lifecycle); it holds no data copies.
 pub struct ProjectionDbusServer {
     conn: Connection,
-    /// Mounted object paths (for mount/unmount tracking only)
-    objects: HashSet<String>,
+    /// Mounted object paths (shared with ProjectionRoot for refresh())
+    objects: Arc<Mutex<HashSet<String>>>,
 }
 
 impl ProjectionDbusServer {
     pub async fn new() -> Result<Self> {
+        let objects = Arc::new(Mutex::new(HashSet::new()));
+        let root = ProjectionRoot {
+            objects: objects.clone(),
+        };
+
         let conn = match std::env::var("OP_DBUS_PROJECTION_BUS")
             .unwrap_or_else(|_| "system".to_string())
             .as_str()
         {
             "session" => {
                 Builder::session()?
+                    .serve_at("/org/opdbus/v1/plugins", root)?
                     .name(op_plugins::canonical::BASE_SERVICE_NAME)?
                     .build()
                     .await?
             }
             _ => {
                 Builder::system()?
+                    .serve_at("/org/opdbus/v1/plugins", root)?
                     .name(op_plugins::canonical::BASE_SERVICE_NAME)?
                     .build()
                     .await?
@@ -209,14 +420,17 @@ impl ProjectionDbusServer {
             "D-Bus plugin projection connection established"
         );
 
-        Ok(Self {
-            conn,
-            objects: HashSet::new(),
-        })
+        Ok(Self { conn, objects })
     }
 
     pub async fn new_session() -> Result<Self> {
+        let objects = Arc::new(Mutex::new(HashSet::new()));
+        let root = ProjectionRoot {
+            objects: objects.clone(),
+        };
+
         let conn = Builder::session()?
+            .serve_at("/org/opdbus/v1/plugins", root)?
             .name(op_plugins::canonical::BASE_SERVICE_NAME)?
             .build()
             .await?;
@@ -226,28 +440,41 @@ impl ProjectionDbusServer {
             "D-Bus session plugin projection connection established"
         );
 
-        Ok(Self {
-            conn,
-            objects: HashSet::new(),
-        })
+        Ok(Self { conn, objects })
+    }
+
+    /// Sync the D-Bus tree from shm. Mounts new objects, unmounts stale ones.
+    /// Called on startup. At runtime, the `refresh()` D-Bus method does the same.
+    pub async fn sync_from_shm(&self) -> Result<()> {
+        let mut objects = self.objects.lock().await;
+        sync_all_from_shm(&self.conn, &mut objects).await
+    }
+
+    /// Sync a single plugin's D-Bus objects to match the derived paths.
+    pub async fn sync_plugin(&mut self, plugin_id: &str, paths: &[Vec<String>]) -> Result<()> {
+        let mut objects = self.objects.lock().await;
+        sync_plugin_paths(&self.conn, &mut objects, plugin_id, paths).await
+    }
+
+    pub async fn object_count(&self) -> usize {
+        self.objects.lock().await.len()
     }
 
     /// Mount a projection as a D-Bus object (or emit `updated` if already mounted).
-    ///
-    /// The object's `data` property reads 1:1 from shm on every access, so
-    /// there is no data to update in place — only the mount/unmount lifecycle
-    /// is tracked here, plus the `updated` signal for push consumers.
     pub async fn upsert(&mut self, plugin_id: &str, path_segments: &[String]) -> Result<()> {
         let path = build_projected_path(plugin_id, path_segments);
 
-        if !self.objects.contains(&path) {
-            let obj = ProjectedObject {
-                plugin_id: plugin_id.to_string(),
-                path_segments: path_segments.to_vec(),
-            };
-            self.conn.object_server().at(path.as_str(), obj).await?;
-            self.objects.insert(path.clone());
-            debug!(path, "Mounted D-Bus projection object");
+        {
+            let mut objects = self.objects.lock().await;
+            if !objects.contains(&path) {
+                let obj = ProjectedObject {
+                    plugin_id: plugin_id.to_string(),
+                    path_segments: path_segments.to_vec(),
+                };
+                self.conn.object_server().at(path.as_str(), obj).await?;
+                objects.insert(path.clone());
+                debug!(path, "Mounted D-Bus projection object");
+            }
         }
 
         // Emit updated signal with current shm data (push notification).
@@ -266,7 +493,8 @@ impl ProjectionDbusServer {
     /// Remove a projection's D-Bus object.
     pub async fn remove(&mut self, plugin_id: &str, path_segments: &[String]) -> Result<()> {
         let path = build_projected_path(plugin_id, path_segments);
-        if self.objects.remove(&path) {
+        let mut objects = self.objects.lock().await;
+        if objects.remove(&path) {
             self.conn
                 .object_server()
                 .remove::<ProjectedObject, _>(path.as_str())
@@ -276,51 +504,8 @@ impl ProjectionDbusServer {
         Ok(())
     }
 
-    /// Sync a plugin's full set of D-Bus objects to match the derived paths.
-    ///
-    /// Mounts new paths, unmounts paths that no longer exist, and emits
-    /// `updated` on all current paths. Called on startup (initial mount from
-    /// shm) and on every StateChange (mutation-driven push).
-    pub async fn sync_plugin(&mut self, plugin_id: &str, paths: &[Vec<String>]) -> Result<()> {
-        let new_paths: HashSet<String> = paths
-            .iter()
-            .map(|segs| build_projected_path(plugin_id, segs))
-            .collect();
-
-        let plugin_root = op_plugins::canonical::plugin_path(plugin_id);
-        let plugin_prefix = format!("{}/", plugin_root);
-
-        // Unmount paths that no longer exist in the derived set.
-        let to_remove: Vec<String> = self
-            .objects
-            .iter()
-            .filter(|p| {
-                (**p == plugin_root || p.starts_with(&plugin_prefix))
-                    && !new_paths.contains(*p)
-            })
-            .cloned()
-            .collect();
-
-        for path in to_remove {
-            if self.objects.remove(&path) {
-                self.conn
-                    .object_server()
-                    .remove::<ProjectedObject, _>(path.as_str())
-                    .await?;
-                debug!(path, "Unmounted stale D-Bus projection object");
-            }
-        }
-
-        // Mount/upsert all current paths.
-        for segs in paths {
-            self.upsert(plugin_id, segs).await?;
-        }
-
-        Ok(())
-    }
-
-    pub fn object_count(&self) -> usize {
-        self.objects.len()
+    pub fn connection(&self) -> &Connection {
+        &self.conn
     }
 }
 

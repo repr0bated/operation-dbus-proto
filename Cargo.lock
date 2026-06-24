@@ -4945,7 +4945,6 @@ dependencies = [
  "op-blockchain",
  "op-core",
  "op-dbus-mirror",
- "op-grpc-bridge",
  "op-identity",
  "op-plugins",
  "op-state",
