@@ -12,7 +12,8 @@ use op_cognitive_mcp::rag_pipeline::RagPipeline;
 use std::path::PathBuf;
 use tracing::{error, info};
 
-// voyage-code-3 pricing: $0.18 per million tokens (charged after free tier exhausted)
+// Voyage embedding pricing estimate: per million tokens, charged after free tier
+// exhausted. Rough figure for budgeting; adjust to the current voyage-4 tier.
 const VOYAGE_COST_PER_MILLION: f64 = 0.18;
 // Free tier per model per month (tokens) — overage is billed at VOYAGE_COST_PER_MILLION
 const VOYAGE_FREE_TIER_TOKENS: usize = 200_000_000;
@@ -142,7 +143,7 @@ async fn main() -> Result<()> {
     println!("  Repos          : {}", targets.len());
     println!("  Est. chunks    : ~{estimated_chunks}");
     println!("  Est. tokens    : ~{}M", estimated_tokens / 1_000_000);
-    println!("  Est. cost      : ~${estimated_cost:.2}  (voyage-code-3 @ ${VOYAGE_COST_PER_MILLION}/M tokens)");
+    println!("  Est. cost      : ~${estimated_cost:.2}  (Voyage @ ${VOYAGE_COST_PER_MILLION}/M tokens)");
     println!(
         "  Token cap      : {}M  (--max-tokens)",
         cli.max_tokens / 1_000_000

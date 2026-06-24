@@ -31,7 +31,6 @@ use tracing::{info, warn};
 // ─── constants ───────────────────────────────────────────────────────────────
 
 pub const DEFAULT_COLLECTION: &str = "repomix_rag";
-pub const DEFAULT_RUST_SOLO_COLLECTION: &str = "rust_lang_rust_lsp_voyage_code_3";
 pub const DEFAULT_VOYAGE4_LITE_COLLECTIONS: &[&str] = &[
     "repos_lsp_c_cpp_voyage_4_lite",
     "repos_lsp_go_voyage_4_lite",
@@ -184,7 +183,6 @@ pub struct RetrievalProfile {
     pub fetch_limit: u64,
     pub rerank_enabled: bool,
     pub kiro_lsp_state_dir: String,
-    pub rust_collection: String,
 }
 
 impl RetrievalProfile {
@@ -218,7 +216,6 @@ impl RetrievalProfile {
             rerank_enabled,
             kiro_lsp_state_dir: std::env::var("COGNITIVE_MCP_KIRO_LSP_STATE_DIR")
                 .unwrap_or_else(|_| "/home/jeremy/git/logs/kiro-lsp-state".into()),
-            rust_collection: default_rust_collection_from_env(),
         }
     }
 }
@@ -289,15 +286,14 @@ impl RagPipeline {
         // Default: voyage-4 (balanced quality/cost in the 4-series).
         // Override with COGNITIVE_MCP_VOYAGE_MODEL env var.
         //
-        // Model selection guide (all 4-series are cross-compatible):
+        // Model selection guide (the 4-series trio is one shared embedding space —
+        // index with one, query with another, no re-vectorize):
         //   • voyage-4-lite        – lowest cost, good general quality
         //   • voyage-4             – balanced cost/quality (DEFAULT)
         //   • voyage-4-large       – highest quality, highest cost
-        //   • voyage-code-3        – best for code retrieval, premium price
         //
-        // Voyage 4-series embeddings are cross-compatible with each other.
-        // Keep voyage-code-3 Rust indexes in a separate retrieval profile unless
-        // both indexing and querying use voyage-code-3.
+        // Domain models (voyage-code-3/law-2/finance-2) are NOT used: code was
+        // re-vectorized into the voyage-4 space, so everything fuses in one space.
         let voyage_model = std::env::var("COGNITIVE_MCP_VOYAGE_MODEL")
             .or_else(|_| std::env::var("VOYAGE_MODEL"))
             .unwrap_or_else(|_| "voyage-4".into());
@@ -798,11 +794,6 @@ pub fn default_collection_from_env() -> String {
     std::env::var("COGNITIVE_MCP_RAG_COLLECTION")
         .or_else(|_| std::env::var("COGNITIVE_MCP_REPOMIX_COLLECTION"))
         .unwrap_or_else(|_| DEFAULT_COLLECTION.to_string())
-}
-
-pub fn default_rust_collection_from_env() -> String {
-    std::env::var("COGNITIVE_MCP_RUST_COLLECTION")
-        .unwrap_or_else(|_| DEFAULT_RUST_SOLO_COLLECTION.to_string())
 }
 
 pub fn default_collections_for_mode(mode: RetrievalMode) -> Vec<String> {

@@ -212,7 +212,6 @@ impl Tool for CodeContextTool {
             "retrieval_mode": profile.mode.as_str(),
             "rerank_enabled": profile.rerank_enabled,
             "kiro_lsp_state_dir": profile.kiro_lsp_state_dir,
-            "rust_collection": profile.rust_collection,
             "session_id": session_id,
             "signals": serde_to_simd(&signals),
             "results": results_to_simd(&results),
