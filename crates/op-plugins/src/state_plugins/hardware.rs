@@ -240,17 +240,6 @@ impl StatePlugin for HardwarePlugin {
         Some(hardware_schema())
     }
 
-    async fn query_current_state(&self) -> Result<Value> {
-        let cpu = Self::get_cpu_info().await;
-        let memory = Self::get_memory_info().await;
-        let disks = Self::get_disk_info().await;
-
-        Ok(simd_json::serde::to_owned_value(HardwareState {
-            cpu,
-            memory,
-            disks,
-        })?)
-    }
 
     async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {
         Ok(StateDiff {

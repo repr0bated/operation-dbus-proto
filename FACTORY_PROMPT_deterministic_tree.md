@@ -124,3 +124,37 @@ RUN AS A MISSION (so the validation droids auto-engage):
 SKIP (irrelevant here): skill `init`, `session-navigation`; droid-control TUI/desktop skills
 (`agent-browser`, `capture`, `compose`, `desktop-control`, `pty-capture`, `showcase`, `true-input`,
 `tuistory`); MCP `hugging-face`.
+
+## PRIORITY FIX — OD-32: MethodCall mutations don't materialize plugin state into the projection
+**Do this first; it blocks "read state through D-Bus" entirely.** The redone projection is a pure
+read-through of the shm mutation fold (`/dev/shm/opdbus/projections/`), written only by
+`MutationEngine` when `get_state(plugin_id)` is `Some`. But `update_cached_plugin_state`
+(`crates/op-grpc-bridge/src/mutation_engine.rs` ~line 548) only populates `state_cache` for
+`ChangeType::PropertySet` (+ `ObjectRemoved`); **`MethodCall` falls into the `_ => {}` no-op arm.**
+So a `CallMethod` updates nothing the projection reads → `get_state` → `None` → `write_projection`
+silently skipped (the `if let Some(state)` guard at ~line 219; no warn, no fold file). With
+`StateManager` excised (commit 0aea28ea), `state_cache` is the ONLY projected-state source and is
+fed solely by PropertySet deltas — so query-only plugins (`knowledge`/qdrant, etc., whose state
+comes from `query_current_state()`) can never project, no matter how many methods are called.
+
+**Verified live:** `grpcurl CallMethod{plugin_id=knowledge}` on `10.200.0.1:50051` with live-sled
+headers returned `success/event#1`, yet `/dev/shm/opdbus/projections/` was never created and
+`ProjectionRoot.{ObjectCount,Plugins}` stayed `0/[]`.
+
+**Corrected model (per maintainer):** there is NO state-store and NO `state_cache` — the projections
+folder `/dev/shm/opdbus/projections/<plugin>.json` IS the state, written directly, and the D-Bus
+objects are *derived from those files*. The bug is that on a mutation the producer persists the
+`CallMethod` **return value** into `<plugin>.json` instead of the plugin's **derived state**.
+Verified: `/dev/shm/opdbus/projections/` contains only `knowledge.json = []` (gen 2 = two CallMethods
+that each wrote their empty result). A query-only plugin's real state (e.g. `knowledge`'s `stores`
+array with qdrant) is never *returned* by a method, so it never lands.
+
+**Fix:** on any mutation touching a plugin, the producer must derive that plugin's full current state
+from the plugin itself (`StatePlugin::query_current_state()` via the plugin provider/registry) and
+write THAT to `/dev/shm/opdbus/projections/<plugin>.json` — never the method's return value. Then a
+`CallMethod` on `knowledge` materializes its real stores/embedding/config into the fold.
+
+**Acceptance:** `CallMethod` on a query-only plugin (e.g. `knowledge`) creates
+`/dev/shm/opdbus/projections/knowledge.json`; `ProjectionRoot.Refresh()` then mounts it; reading
+`/org/opdbus/v1/plugins/knowledge` over D-Bus returns live qdrant status/collections. Add a
+regression test that a MethodCall on a query-only plugin produces a non-empty projection fold entry.

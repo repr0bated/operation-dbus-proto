@@ -79,26 +79,6 @@ impl StatePlugin for KnowledgePlugin {
     fn schema(&self) -> Option<PluginSchema> {
         Some(knowledge_schema())
     }
-    async fn query_current_state(&self) -> Result<Value> {
-        let mut state = Self::current_state();
-        let qdrant_endpoint = Self::qdrant_endpoint();
-        let reachable = Self::qdrant_reachable(&qdrant_endpoint);
-        if let Some(stores) = state.stores.as_array_mut() {
-            if let Some(qdrant) = stores.get_mut(0).and_then(|v| v.as_object_mut()) {
-                qdrant.insert(
-                    "status".into(),
-                    simd_json::OwnedValue::from(if reachable { "active" } else { "unavailable" }),
-                );
-            }
-        }
-        if let Some(config) = state.config.as_object_mut() {
-            config.insert(
-                "qdrant_endpoint".into(),
-                simd_json::OwnedValue::from(qdrant_endpoint),
-            );
-        }
-        Ok(simd_json::serde::to_owned_value(state)?)
-    }
     async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {
         Ok(StateDiff {
             plugin: self.name().to_string(),

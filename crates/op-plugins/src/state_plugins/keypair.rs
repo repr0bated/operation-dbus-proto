@@ -85,39 +85,6 @@ impl StatePlugin for KeypairPlugin {
         Some(keypair_schema())
     }
 
-    async fn query_current_state(&self) -> Result<Value> {
-        let mut keypairs = Vec::new();
-        if let Some(home) = dirs::home_dir() {
-            let ssh_dir = home.join(".ssh");
-            if let Ok(mut entries) = tokio::fs::read_dir(ssh_dir).await {
-                while let Ok(Some(entry)) = entries.next_entry().await {
-                    let path = entry.path();
-                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                        if name.starts_with("id_") && name.ends_with(".pub") {
-                            let key_name = name.trim_end_matches(".pub").to_string();
-                            let content =
-                                tokio::fs::read_to_string(&path).await.unwrap_or_default();
-                            let parts: Vec<&str> = content.split_whitespace().collect();
-                            let algorithm = if !parts.is_empty() {
-                                parts[0].to_string()
-                            } else {
-                                "unknown".to_string()
-                            };
-
-                            keypairs.push(Keypair {
-                                name: key_name,
-                                algorithm,
-                                public_key: Some(content.trim().to_string()),
-                                present: true,
-                            });
-                        }
-                    }
-                }
-            }
-        }
-
-        Ok(simd_json::serde::to_owned_value(KeypairState { keypairs })?)
-    }
 
     async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {
         Ok(StateDiff {

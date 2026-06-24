@@ -430,9 +430,6 @@ impl StatePlugin for OscalSubidRegistryPlugin {
         Some(oscal_subid_registry_schema())
     }
 
-    async fn query_current_state(&self) -> Result<Value> {
-        Ok(simd_json::json!({"entries": []}))
-    }
 
     async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {
         Ok(StateDiff {
@@ -460,7 +457,7 @@ impl StatePlugin for OscalSubidRegistryPlugin {
     }
 
     async fn create_checkpoint(&self) -> Result<Checkpoint> {
-        let state = self.query_current_state().await?;
+        let state = simd_json::json!(null);
         Ok(Checkpoint {
             id: uuid::Uuid::new_v4().to_string(),
             plugin: self.name().to_string(),

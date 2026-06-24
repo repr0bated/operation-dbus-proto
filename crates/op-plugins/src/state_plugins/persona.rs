@@ -6,7 +6,7 @@
 //! there is no such proto and there must not be one. New backend capabilities
 //! register here as plugins (see OD-30 / [`crate::default_registry`]).
 //!
-//! The catalog is **live, not mocked**: `query_current_state` enumerates the
+//! The catalog is **live, not mocked**: the plugin's live state enumerates the
 //! real built-in agent personas via `op_agents::builtin_agent_descriptors()`,
 //! so the projection can never drift from the actual agent implementations. The
 //! persona set is defined in code (op-agents), so it is read-only: mutating a
@@ -52,7 +52,7 @@ impl PersonaPlugin {
     }
 
     /// Enumerate the live persona catalog from the real agent implementations.
-    /// Pure (no I/O) and deterministic, so it backs both `query_current_state`
+    /// Pure (no I/O) and deterministic, so it backs both the live state query
     /// and the schema exemplar.
     fn live() -> PersonaState {
         let personas: Vec<Persona> = builtin_agent_descriptors()
@@ -86,9 +86,6 @@ impl StatePlugin for PersonaPlugin {
         Some(persona_schema())
     }
 
-    async fn query_current_state(&self) -> Result<Value> {
-        Ok(simd_json::serde::to_owned_value(Self::live())?)
-    }
 
     async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {
         // The persona catalog is defined in code (op-agents); it is not runtime

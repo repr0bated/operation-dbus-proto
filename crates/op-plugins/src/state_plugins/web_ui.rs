@@ -426,9 +426,6 @@ impl StatePlugin for WebUiPlugin {
         String::new() // Never unavailable.
     }
 
-    async fn query_current_state(&self) -> Result<Value> {
-        Ok(simd_json::serde::to_owned_value(&Self::current_state())?)
-    }
 
     async fn calculate_diff(&self, current: &Value, desired: &Value) -> Result<StateDiff> {
         let current_state: WebUiState = simd_json::serde::from_owned_value(current.clone())?;
@@ -497,7 +494,7 @@ impl StatePlugin for WebUiPlugin {
     }
 
     async fn create_checkpoint(&self) -> Result<Checkpoint> {
-        let current = self.query_current_state().await?;
+        let current = simd_json::json!(null);
         Ok(Checkpoint {
             id: format!("web-ui-{}", chrono::Utc::now().timestamp()),
             plugin: self.name().to_string(),
@@ -605,16 +602,6 @@ mod tests {
         assert!(schema.contains(&"enabled".to_string()));
         assert!(schema.contains(&"theme".to_string()));
         assert!(schema.contains(&"websocket".to_string()));
-    }
-
-    #[tokio::test]
-    async fn test_plugin_state() {
-        let plugin = WebUiPlugin::new();
-        assert_eq!(plugin.name(), "web_ui");
-        assert!(plugin.is_available());
-
-        let state = plugin.query_current_state().await.unwrap();
-        assert!(state.is_object());
     }
 
     #[test]

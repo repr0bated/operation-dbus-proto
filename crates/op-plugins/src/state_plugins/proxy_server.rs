@@ -42,12 +42,6 @@ impl StatePlugin for ProxyServerPlugin {
         Some(proxy_server_schema())
     }
 
-    async fn query_current_state(&self) -> Result<Value> {
-        Ok(simd_json::serde::to_owned_value(ProxyServerState {
-            enabled: false,
-            port: 8080,
-        })?)
-    }
 
     async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {
         Ok(StateDiff {

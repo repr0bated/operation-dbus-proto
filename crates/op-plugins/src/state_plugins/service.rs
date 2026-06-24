@@ -337,22 +337,6 @@ impl StatePlugin for ServicePlugin {
         Some(service_schema())
     }
 
-    async fn query_current_state(&self) -> Result<Value> {
-        let mut services = HashMap::new();
-
-        let service_list = match self.backend {
-            ServiceBackend::Systemd => self.list_systemd_services().await.unwrap_or_default(),
-            ServiceBackend::S6 => self.list_s6_services().await?,
-        };
-
-        for svc_name in service_list {
-            if let Ok(lifecycle) = self.check_lifecycle(&svc_name).await {
-                services.insert(svc_name, json!({ "lifecycle": lifecycle }));
-            }
-        }
-
-        Ok(json!({ "services": services }))
-    }
 
     async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {
         Ok(StateDiff {

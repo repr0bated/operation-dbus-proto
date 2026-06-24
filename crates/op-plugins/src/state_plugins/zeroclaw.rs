@@ -492,10 +492,6 @@ impl StatePlugin for ZeroclawPlugin {
         Some(schema)
     }
 
-    async fn query_current_state(&self) -> Result<Value> {
-        Self::write_schema_file()?;
-        Ok(simd_json::serde::to_owned_value(Self::current_state())?)
-    }
 
     async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {
         Ok(StateDiff {

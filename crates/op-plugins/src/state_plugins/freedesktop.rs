@@ -282,41 +282,6 @@ impl StatePlugin for FreeDesktopPlugin {
         self.schema.clone()
     }
 
-    async fn query_current_state(&self) -> anyhow::Result<Value> {
-        // Return the current state of FreeDesktop interfaces
-        let interfaces: Vec<Value> = self
-            .dbus_interfaces
-            .values()
-            .map(|iface| {
-                simd_json::json!({
-                    "name": iface.name.clone(),
-                    "description": iface.description.clone(),
-                    "methods_count": iface.methods.len(),
-                    "signals_count": iface.signals.len(),
-                    "properties_count": iface.properties.len(),
-                })
-            })
-            .collect();
-
-        let state = simd_json::json!({
-            "name": "freedesktop",
-            "version": "1.0.0",
-            "plugin_type": "system",
-            "dbus_path": self.dbus_path(),
-            "dbus_interface": self.dbus_interface(),
-            "interfaces": interfaces,
-            "canonical_path_verified": true,
-            "freedesktop_standards": {
-                "object_manager": true,
-                "properties_interface": true,
-                "introspection_interface": true,
-                "peer_interface": true,
-            }
-        });
-
-        Ok(state)
-    }
-
     async fn calculate_diff(&self, _current: &Value, desired: &Value) -> anyhow::Result<StateDiff> {
         // FreeDesktop plugin is informational - we only check if desired state is valid
         let actions = vec![];
@@ -345,22 +310,16 @@ impl StatePlugin for FreeDesktopPlugin {
 
     async fn verify_state(&self, desired: &Value) -> anyhow::Result<bool> {
         // Verify the desired state has the correct structure
-        let current = self.query_current_state().await?;
-
-        // Check critical fields match
-        let current_name = current.get("name").and_then(|v| v.as_str());
-        let desired_name = desired.get("name").and_then(|v| v.as_str());
-
-        Ok(current_name == desired_name && current_name == Some("freedesktop"))
+        let current_name = desired.get("name").and_then(|v| v.as_str());
+        Ok(current_name == Some("freedesktop"))
     }
 
     async fn create_checkpoint(&self) -> anyhow::Result<Checkpoint> {
-        let current = self.query_current_state().await?;
         Ok(Checkpoint {
             id: format!("freedesktop-{}", chrono::Utc::now().timestamp()),
             plugin: self.name().to_string(),
             timestamp: chrono::Utc::now().timestamp(),
-            state_snapshot: current,
+            state_snapshot: simd_json::json!(null),
             backend_checkpoint: None,
         })
     }
@@ -468,16 +427,6 @@ mod tests {
         // Legacy alias also normalizes to canonical
         let canonical = plugin.normalize_path("/org/opdbus/v1/plugin/plugins/test");
         assert_eq!(canonical, Some("/org/opdbus/v1/plugins/test".to_string()));
-    }
-
-    #[tokio::test]
-    async fn test_state_query() {
-        let plugin = FreeDesktopPlugin::new();
-        let state = plugin.query_current_state().await.unwrap();
-
-        assert_eq!(state.get("name").unwrap().as_str().unwrap(), "freedesktop");
-        assert_eq!(state.get("version").unwrap().as_str().unwrap(), "1.0.0");
-        assert!(state.get("interfaces").unwrap().is_array());
     }
 }
 

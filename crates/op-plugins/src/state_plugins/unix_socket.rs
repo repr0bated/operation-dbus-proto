@@ -302,25 +302,6 @@ impl StatePlugin for UnixSocketPlugin {
         Some(schema)
     }
 
-    async fn query_current_state(&self) -> Result<Value> {
-        // The schema-declared desired state in the active-schema catalog is the
-        // current state (1:1, zero-copy). Fall back to whatever is live-bound.
-        let mut state = Self::read_desired();
-        if state.sockets.is_empty() {
-            let active = self.active.lock();
-            state.sockets = active
-                .keys()
-                .map(|path| SocketEndpoint {
-                    name: String::new(),
-                    path: path.clone(),
-                    ports: Vec::new(),
-                    protocol: default_protocol(),
-                    label: String::new(),
-                })
-                .collect();
-        }
-        Ok(simd_json::serde::to_owned_value(state)?)
-    }
 
     async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {
         // No diff loop: the schema-declared state is authoritative and applied

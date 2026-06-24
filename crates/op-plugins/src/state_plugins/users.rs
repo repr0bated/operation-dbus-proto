@@ -53,28 +53,6 @@ impl StatePlugin for UsersPlugin {
         Some(users_schema())
     }
 
-    async fn query_current_state(&self) -> Result<Value> {
-        let content = tokio::fs::read_to_string("/etc/passwd")
-            .await
-            .unwrap_or_default();
-        let mut users = Vec::new();
-
-        for line in content.lines() {
-            let parts: Vec<&str> = line.split(':').collect();
-            if parts.len() >= 7 {
-                users.push(UserConfig {
-                    username: parts[0].to_string(),
-                    uid: parts[2].parse().ok(),
-                    gid: parts[3].parse().ok(),
-                    groups: vec![],
-                    shell: Some(parts[6].to_string()),
-                    present: true,
-                });
-            }
-        }
-
-        Ok(simd_json::serde::to_owned_value(UsersState { users })?)
-    }
 
     async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {
         Ok(StateDiff {

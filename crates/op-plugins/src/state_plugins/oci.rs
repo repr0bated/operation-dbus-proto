@@ -238,12 +238,6 @@ impl StatePlugin for OciPlugin {
         Some(oci_schema())
     }
 
-    async fn query_current_state(&self) -> Result<Value> {
-        Ok(simd_json::json!({
-            "containers": [],
-            "daemon_status": "unknown"
-        }))
-    }
 
     async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {
         Ok(StateDiff {
@@ -271,7 +265,7 @@ impl StatePlugin for OciPlugin {
     }
 
     async fn create_checkpoint(&self) -> Result<Checkpoint> {
-        let state = self.query_current_state().await?;
+        let state = simd_json::json!(null);
         Ok(Checkpoint {
             id: uuid::Uuid::new_v4().to_string(),
             plugin: self.name().to_string(),

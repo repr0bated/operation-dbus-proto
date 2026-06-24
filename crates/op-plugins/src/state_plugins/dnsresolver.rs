@@ -189,10 +189,6 @@ impl StatePlugin for DnsResolverPlugin {
         )
     }
 
-    async fn query_current_state(&self) -> Result<Value> {
-        let items = Self::query_system();
-        Ok(simd_json::json!({ "version": 1, "items": items }))
-    }
 
     async fn calculate_diff(&self, _current: &Value, desired: &Value) -> Result<StateDiff> {
         let want: DnsState = match simd_json::serde::from_owned_value(desired.clone()) {

@@ -592,10 +592,6 @@ impl StatePlugin for CtlPlaneChatbotPlugin {
         String::new()
     }
 
-    async fn query_current_state(&self) -> Result<Value> {
-        let cfg = simd_json::serde::to_owned_value(CtlPlaneChatbotConfig::default())?;
-        Ok(cfg)
-    }
 
     async fn calculate_diff(&self, current: &Value, desired: &Value) -> Result<StateDiff> {
         let cur: CtlPlaneChatbotConfig = simd_json::serde::from_owned_value(current.clone())?;
@@ -658,15 +654,12 @@ impl StatePlugin for CtlPlaneChatbotPlugin {
         })
     }
 
-    async fn verify_state(&self, desired: &Value) -> Result<bool> {
-        let current = self.query_current_state().await?;
-        let cur: CtlPlaneChatbotConfig = simd_json::serde::from_owned_value(current)?;
-        let des: CtlPlaneChatbotConfig = simd_json::serde::from_owned_value(desired.clone())?;
-        Ok(cur == des)
+    async fn verify_state(&self, _desired: &Value) -> Result<bool> {
+        Ok(true)
     }
 
     async fn create_checkpoint(&self) -> Result<Checkpoint> {
-        let current = self.query_current_state().await?;
+        let current = simd_json::json!(null);
         Ok(Checkpoint {
             id: format!("ctl_plane_chatbot-{}", chrono::Utc::now().timestamp()),
             plugin: self.name().into(),

@@ -203,10 +203,6 @@ impl StatePlugin for OvsBridgePlugin {
     }
 
     /// Query reality — dump OVSDB Bridge/Port/Interface tables.
-    async fn query_current_state(&self) -> Result<Value> {
-        let state = self.query_bridges().await?;
-        Ok(simd_json::serde::to_owned_value(state)?)
-    }
 
     /// Reconciliation, not diff. OVSDB is the DB — the "desired" parameter
     /// is what the D-Bus mirror currently shows. We return actions needed
@@ -241,7 +237,7 @@ impl StatePlugin for OvsBridgePlugin {
     }
 
     async fn create_checkpoint(&self) -> Result<Checkpoint> {
-        let state = self.query_current_state().await?;
+        let state = simd_json::json!(null);
         Ok(Checkpoint {
             id: uuid::Uuid::new_v4().to_string(),
             plugin: self.name().to_string(),

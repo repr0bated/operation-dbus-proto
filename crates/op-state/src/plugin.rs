@@ -143,9 +143,6 @@ pub trait StatePlugin: Send + Sync {
         format!("Plugin '{}' is not available", self.name())
     }
 
-    /// Query current system state in this domain
-    async fn query_current_state(&self) -> Result<Value>;
-
     /// Calculate difference between current and desired state
     async fn calculate_diff(&self, current: &Value, desired: &Value) -> Result<StateDiff>;
 

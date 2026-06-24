@@ -279,9 +279,6 @@ impl StatePlugin for FactoryPlugin {
     fn schema(&self) -> Option<PluginSchema> {
         Some(factory_schema())
     }
-    async fn query_current_state(&self) -> Result<Value> {
-        Ok(simd_json::serde::to_owned_value(Self::current_state())?)
-    }
     async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {
         Ok(StateDiff {
             plugin: self.name().to_string(),

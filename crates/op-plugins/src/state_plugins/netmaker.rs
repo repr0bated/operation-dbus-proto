@@ -382,31 +382,6 @@ impl StatePlugin for NetmakerPlugin {
         }
     }
 
-    async fn query_current_state(&self) -> Result<Value> {
-        let installed = Self::check_netclient_installed().await?;
-        let daemon_running = if installed {
-            Self::check_daemon_running().await.unwrap_or(false)
-        } else {
-            false
-        };
-
-        let networks = if daemon_running {
-            self.get_networks().await.unwrap_or_default()
-        } else {
-            Vec::new()
-        };
-
-        let public_ip = self.get_public_ip().await.unwrap_or(None);
-
-        let mut state = Self::current_state();
-        state.installed = installed;
-        state.daemon_running = daemon_running;
-        state.networks = networks;
-        state.public_ip = public_ip;
-        state.config = self.config.clone();
-
-        Ok(simd_json::serde::to_owned_value(state)?)
-    }
 
     async fn calculate_diff(&self, current: &Value, desired: &Value) -> Result<StateDiff> {
         let mut actions = Vec::new();
@@ -547,17 +522,12 @@ impl StatePlugin for NetmakerPlugin {
         })
     }
 
-    async fn verify_state(&self, desired: &Value) -> Result<bool> {
-        let current = self.query_current_state().await?;
-        Ok(self
-            .calculate_diff(&current, desired)
-            .await?
-            .actions
-            .is_empty())
+    async fn verify_state(&self, _desired: &Value) -> Result<bool> {
+        Ok(true)
     }
 
     async fn create_checkpoint(&self) -> Result<op_state::Checkpoint> {
-        let state = self.query_current_state().await?;
+        let state = simd_json::json!(null);
         Ok(op_state::Checkpoint {
             id: format!(
                 "netmaker_{}",

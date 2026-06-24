@@ -6,7 +6,7 @@
 //! about Ollama; consumers (e.g. `gemma_brain`) talk to this surface and embed
 //! no model of their own.
 //!
-//! `query_current_state` reports the *live* observed state: it queries the
+//! The plugin reports the *live* observed state: it queries the
 //! provider (`GET {endpoint}/api/tags` for Ollama) for the available models and
 //! reachability. The schema is published to the SHM folder/manifest by
 //! op-projection's enumerator; this plugin does not self-write `/dev/shm`.
@@ -152,14 +152,6 @@ impl StatePlugin for LargeLanguageModelPlugin {
         Some(schema)
     }
 
-    async fn query_current_state(&self) -> Result<Value> {
-        let mut state = Self::config_state();
-        if let Some(models) = Self::fetch_available_models(&state.endpoint).await {
-            state.status = "online".to_string();
-            state.available_models = models;
-        }
-        Ok(simd_json::serde::to_owned_value(state)?)
-    }
 
     async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {
         Ok(StateDiff {

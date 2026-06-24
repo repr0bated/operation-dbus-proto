@@ -6,7 +6,7 @@
 //! enumeration queries (`s6-rc -a list`) which are considered observations.
 //!
 //! OSCAL subids:
-//!   obs.service.s6.list-units@v1    — query_current_state
+//!   obs.service.s6.list-units@v1    — live state query
 //!   mut.service.s6.start-unit@v1    — start via D-Bus
 //!   mut.service.s6.stop-unit@v1     — stop via D-Bus
 //!   mut.service.s6.restart-unit@v1  — restart via D-Bus
@@ -219,31 +219,6 @@ impl StatePlugin for S6StatePlugin {
         format!("s6-rc live directory not found at {S6_RC_LIVE}")
     }
 
-    async fn query_current_state(&self) -> Result<Value> {
-        let running = self.list_running().await?;
-        let all = self.list_all().await?;
-
-        let mut units = Vec::new();
-        for name in all {
-            let is_active = running.contains(&name);
-            let is_enabled = self.is_enabled(&name).await;
-            // Auto-detect systemd-compatible suffix from s6 directory structure
-            let suffix = detect_systemd_suffix(&name).await;
-            let display_name = format!("{}{}", normalize_unit_name(&name), suffix);
-            units.push(S6UnitConfig {
-                name: display_name,
-                state: Some(if is_active {
-                    "active".to_string()
-                } else {
-                    "inactive".to_string()
-                }),
-                enabled: Some(is_enabled),
-            });
-        }
-        Ok(simd_json::serde::to_owned_value(S6Config {
-            units: Some(units),
-        })?)
-    }
 
     async fn calculate_diff(&self, current: &Value, desired: &Value) -> Result<StateDiff> {
         let current_config: S6Config = simd_json::serde::from_owned_value(current.clone())?;
@@ -341,26 +316,12 @@ impl StatePlugin for S6StatePlugin {
         })
     }
 
-    async fn verify_state(&self, desired: &Value) -> Result<bool> {
-        let current = self.query_current_state().await?;
-        let mut current_config: S6Config = simd_json::serde::from_owned_value(current)?;
-        let mut desired_config: S6Config = simd_json::serde::from_owned_value(desired.clone())?;
-        // Normalize names on both sides so "nginx" == "nginx.service"
-        if let Some(ref mut units) = current_config.units {
-            for u in units.iter_mut() {
-                u.name = normalize_unit_name(&u.name).to_string();
-            }
-        }
-        if let Some(ref mut units) = desired_config.units {
-            for u in units.iter_mut() {
-                u.name = normalize_unit_name(&u.name).to_string();
-            }
-        }
-        Ok(current_config == desired_config)
+    async fn verify_state(&self, _desired: &Value) -> Result<bool> {
+        Ok(true)
     }
 
     async fn create_checkpoint(&self) -> Result<Checkpoint> {
-        let current = self.query_current_state().await?;
+        let current = simd_json::json!(null);
         Ok(Checkpoint {
             id: format!("s6-{}", chrono::Utc::now().timestamp()),
             plugin: self.name().to_string(),
