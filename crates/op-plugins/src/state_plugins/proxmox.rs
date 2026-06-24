@@ -114,3 +114,9 @@ pub(crate) fn proxmox_schema() -> PluginSchema {
         )],
     )
 }
+
+// Self-registration: the plugin registry discovers this via inventory
+// (single source of the catalog; no central dispatch list).
+inventory::submit! {
+    crate::default_registry::PluginReg::new("proxmox", |_ctx| std::sync::Arc::new(ProxmoxPlugin::new()))
+}

@@ -273,3 +273,9 @@ pub(crate) fn gemma_brain_schema() -> PluginSchema {
         &root,
     )
 }
+
+// Self-registration: the plugin registry discovers this via inventory
+// (single source of the catalog; no central dispatch list).
+inventory::submit! {
+    crate::default_registry::PluginReg::new("gemma_brain", |_ctx| std::sync::Arc::new(GemmaBrainPlugin::new()))
+}

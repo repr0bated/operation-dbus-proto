@@ -120,3 +120,9 @@ pub(crate) fn fail2ban_schema() -> PluginSchema {
         &state,
     )
 }
+
+// Self-registration: the plugin registry discovers this via inventory
+// (single source of the catalog; no central dispatch list).
+inventory::submit! {
+    crate::default_registry::PluginReg::new("fail2ban", |_ctx| std::sync::Arc::new(Fail2banPlugin::new()))
+}

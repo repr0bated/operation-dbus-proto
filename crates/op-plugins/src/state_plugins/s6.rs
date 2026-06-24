@@ -663,3 +663,9 @@ pub(crate) fn s6_schema() -> PluginSchema {
         }))
         .build()
 }
+
+// Self-registration: the plugin registry discovers this via inventory
+// (single source of the catalog; no central dispatch list).
+inventory::submit! {
+    crate::default_registry::PluginReg::new("s6", |_ctx| std::sync::Arc::new(S6StatePlugin::new()))
+}

@@ -222,3 +222,9 @@ pub(crate) fn large_language_model_schema() -> PluginSchema {
         &root,
     )
 }
+
+// Self-registration: the plugin registry discovers this via inventory
+// (single source of the catalog; no central dispatch list).
+inventory::submit! {
+    crate::default_registry::PluginReg::new("large_language_model", |_ctx| std::sync::Arc::new(LargeLanguageModelPlugin::new()))
+}

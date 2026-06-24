@@ -640,3 +640,9 @@ mod tests {
         assert!(cmd.contains("actions=output:1"));
     }
 }
+
+// Self-registration: the plugin registry discovers this via inventory
+// (single source of the catalog; no central dispatch list).
+inventory::submit! {
+    crate::default_registry::PluginReg::new("openflow_obfuscation", |_ctx| std::sync::Arc::new(OpenFlowObfuscationPlugin::new(Default::default())))
+}

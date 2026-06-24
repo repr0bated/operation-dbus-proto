@@ -543,3 +543,9 @@ mod tests {
         }
     }
 }
+
+// Self-registration: the plugin registry discovers this via inventory
+// (single source of the catalog; no central dispatch list).
+inventory::submit! {
+    crate::default_registry::PluginReg::new("hardware", |_ctx| std::sync::Arc::new(HardwarePlugin::new()))
+}

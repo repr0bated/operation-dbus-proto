@@ -156,3 +156,9 @@ impl StatePlugin for Login1Plugin {
         }
     }
 }
+
+// Self-registration: the plugin registry discovers this via inventory
+// (single source of the catalog; no central dispatch list).
+inventory::submit! {
+    crate::default_registry::PluginReg::new("login1", |_ctx| std::sync::Arc::new(Login1Plugin::new()))
+}

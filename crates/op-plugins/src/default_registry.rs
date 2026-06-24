@@ -24,22 +24,50 @@ use std::sync::Arc;
 
 use crate::schema_loader::SchemaLoader;
 
-use crate::state_plugins::{
-    AdcPlugin, AgentConfigPlugin, AntigravityChatPlugin, AntigravityPlugin, BtrfsPlugin,
-    CognitiveMcpPlugin, CompactMcpPlugin, ConfigPlugin, CronPlugin, CtlPlaneChatbotPlugin,
-    DnsResolverPlugin, EndpointPlugin, FactoryPlugin, Fail2banPlugin, FreeDesktopPlugin,
-    FullSystemPlugin, GcloudAdcPlugin, HardwarePlugin, IncusPlugin, KeypairPlugin, KeyringPlugin,
-    GemmaBrainPlugin, KnowledgePlugin, LargeLanguageModelPlugin, Login1Plugin, LxcPlugin,
-    MailServerPlugin, McpStatePlugin, MemoryPlugin,
-    NetStatePlugin, NetmakerConfig, NetmakerPlugin, NotebookLmPlugin, OciPlugin,
-    OpenFlowObfuscationPlugin, OpenFlowPlugin, OscalSubidRegistryPlugin, OvsBridgePlugin,
-    OvsdbDaemonPlugin, PackageKitPlugin, PciDeclPlugin, PrivacyRouterPlugin, PrivacyRoutesPlugin,
-    ProcfsPlugin, ProxmoxPlugin, ProxyServerPlugin, RovsCommandsPlugin, RtnetlinkPlugin,
-    S6StatePlugin, S6SystemctlPlugin, SchemaRendererPlugin, ServicePlugin, SessDeclPlugin,
-    SoftwarePlugin, UnixSocketPlugin, UsersPlugin, WebUiPlugin, WgcfPlugin, WireGuardPlugin,
-    WorkflowsPlugin, XrayPlugin, ZeroclawPlugin,
-};
 use crate::AutoPlugin;
+
+/// Context handed to a plugin's registered constructor at load time. Wraps the
+/// registry so co-located registrations can reach the few inputs a constructor
+/// needs (state store, config-path resolution) without exposing private fields.
+pub struct PluginCtx<'a> {
+    reg: &'a DefaultPluginRegistry,
+}
+
+impl PluginCtx<'_> {
+    /// Shared state store (used by e.g. the `mcp` plugin).
+    pub fn state_store(&self) -> Arc<dyn StateStore> {
+        self.reg.state_store.clone()
+    }
+
+    /// Resolve a plugin's configured `config_path`, falling back to `default`.
+    pub fn config_path(&self, plugin_name: &str, default: &str) -> String {
+        self.reg.get_plugin_config_path(plugin_name, default)
+    }
+}
+
+/// A single plugin's self-registration: its canonical name plus a constructor.
+///
+/// Each plugin module emits one of these via [`inventory::submit!`], co-located
+/// with the plugin's own definition. The registry iterates the collected set —
+/// this is the **only** plugin catalog; there is no central dispatch list.
+pub struct PluginReg {
+    /// Canonical loader name (what `load_plugin` / `available_plugins` expose).
+    pub name: &'static str,
+    /// Constructor. `build` (not `ctor`/`actor`) to avoid any confusion with the
+    /// MutationEngine `actor_id` identity concept.
+    pub build: fn(&PluginCtx) -> Arc<dyn op_state::StatePlugin>,
+}
+
+impl PluginReg {
+    pub const fn new(
+        name: &'static str,
+        build: fn(&PluginCtx) -> Arc<dyn op_state::StatePlugin>,
+    ) -> Self {
+        Self { name, build }
+    }
+}
+
+inventory::collect!(PluginReg);
 
 /// Default plugin loader configuration
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -57,23 +85,6 @@ fn default_auto_load() -> Vec<String> {
     Vec::new()
 }
 
-fn discover_pub_mod_name(line: &str) -> Option<String> {
-    let trimmed = line.trim();
-    let rest = trimmed.strip_prefix("pub mod ")?;
-    let name = rest.strip_suffix(';')?.trim();
-    if name.is_empty() {
-        return None;
-    }
-    Some(module_name_to_plugin_name(name))
-}
-
-fn is_state_plugin_helper_module(name: &str) -> bool {
-    matches!(name, "plugin_schema_defs" | "schema_contract")
-}
-
-fn module_name_to_plugin_name(name: &str) -> String {
-    name.strip_suffix("_plugin").unwrap_or(name).to_string()
-}
 
 impl Default for PluginRegistryConfig {
     fn default() -> Self {
@@ -246,101 +257,30 @@ impl DefaultPluginRegistry {
         Ok(plugins)
     }
 
-    /// Load a specific plugin by name
+    /// Load a specific plugin by name.
+    ///
+    /// Resolves the request to a canonical name, then looks it up in the
+    /// inventory of plugin self-registrations (each plugin module emits a
+    /// [`PluginReg`] via `inventory::submit!`). Unknown names fall through to the
+    /// auto-create review-required draft. There is no central dispatch list.
     pub async fn load_plugin(&self, name: &str) -> Result<Arc<dyn op_state::StatePlugin>> {
         let resolved_name = Self::resolve_requested_plugin_name(name)?;
-        let plugin: Arc<dyn op_state::StatePlugin> = match resolved_name.as_str() {
-            "mcp" => {
-                let config_path =
-                    self.get_plugin_config_path("mcp", "/etc/op-dbus/mcp-config.json");
-                Arc::new(McpStatePlugin::new(self.state_store.clone(), config_path))
-            }
-            "zeroclaw" => Arc::new(ZeroclawPlugin::new()),
-            "large_language_model" => Arc::new(LargeLanguageModelPlugin::new()),
-            "gemma_brain" => Arc::new(GemmaBrainPlugin::new()),
-            "factory" => Arc::new(FactoryPlugin::new()),
-            "fail2ban" => Arc::new(Fail2banPlugin::new()),
-            "cron" => Arc::new(CronPlugin::new()),
-            "memory" => Arc::new(MemoryPlugin::new()),
-            "workflows" => Arc::new(WorkflowsPlugin::new()),
-            "btrfs" => Arc::new(BtrfsPlugin::new()),
-            "knowledge" => Arc::new(KnowledgePlugin::new()),
-            "notebooklm" => Arc::new(NotebookLmPlugin::new()),
-            "antigravity_chat" => Arc::new(AntigravityChatPlugin::new()),
-            "antigravity" => Arc::new(AntigravityPlugin::new()),
-            "schema_renderer" => Arc::new(SchemaRendererPlugin::new()),
-            "full_system" => Arc::new(FullSystemPlugin::new()),
-            "login1" => Arc::new(Login1Plugin::new()),
-            "dnsresolver" => Arc::new(DnsResolverPlugin::new()),
-            "keyring" => Arc::new(KeyringPlugin::new()),
-            "packagekit" => Arc::new(PackageKitPlugin::new()),
-            "pcidecl" => Arc::new(PciDeclPlugin::new()),
-            "config" => {
-                let config_path =
-                    self.get_plugin_config_path("config", "/etc/op-dbus/config-store.json");
-                Arc::new(ConfigPlugin::new(config_path))
-            }
-            "freedesktop" => Arc::new(FreeDesktopPlugin::new()),
-            "cognitive_mcp" => Arc::new(CognitiveMcpPlugin::new()),
-            "compact_mcp" => Arc::new(CompactMcpPlugin::new()),
-            "ctl_plane_chatbot" => Arc::new(CtlPlaneChatbotPlugin::new()),
-            "s6" => Arc::new(S6StatePlugin::new()),
-            "s6_systemctl" => Arc::new(S6SystemctlPlugin::new()),
-            "incus" => Arc::new(IncusPlugin::new()),
-            "mail_server" => Arc::new(MailServerPlugin::new()),
-            "unix_socket" => Arc::new(UnixSocketPlugin::new()),
-            "wgcf" => Arc::new(WgcfPlugin::new(
-                crate::state_plugins::wgcf::WgcfConfig::default(),
-            )),
-            "xray" => Arc::new(XrayPlugin::new(
-                crate::state_plugins::xray::XrayConfig::default(),
-            )),
-            "net" => Arc::new(NetStatePlugin::new()),
-            "openflow" => Arc::new(OpenFlowPlugin::new()),
-            "openflow_obfuscation" => Arc::new(OpenFlowObfuscationPlugin::new(Default::default())),
-            "privacy_router" => {
-                let _config_path = self
-                    .get_plugin_config_path("privacy_router", "/etc/op-dbus/privacy-config.json");
-                use crate::state_plugins::privacy_router::PrivacyRouterConfig;
-                Arc::new(PrivacyRouterPlugin::new(PrivacyRouterConfig::default()))
-            }
-            "proxmox" => Arc::new(ProxmoxPlugin::new()),
-            "hardware" => Arc::new(HardwarePlugin::new()),
-            "software" => Arc::new(SoftwarePlugin::new()),
-            "users" => Arc::new(UsersPlugin::new()),
-            "gcloud_adc" => Arc::new(GcloudAdcPlugin::new()),
-            "keypair" => Arc::new(KeypairPlugin::new()),
-            "service" => Arc::new(ServicePlugin::new()),
-            "wireguard" => Arc::new(WireGuardPlugin::new()),
-            "agent_config" => Arc::new(AgentConfigPlugin::new()),
-            "ovsdb_bridge" => Arc::new(OvsBridgePlugin::new()),
-            "ovsdb_daemon" => Arc::new(OvsdbDaemonPlugin::new()),
-            "privacy_routes" => Arc::new(PrivacyRoutesPlugin::default()),
-            "procfs" => Arc::new(ProcfsPlugin::new()),
-            "rovs_commands" => Arc::new(RovsCommandsPlugin::new()),
-            "rtnetlink" => Arc::new(RtnetlinkPlugin::new()),
-            "sess_decl" => Arc::new(SessDeclPlugin::new()),
-            "lxc" => Arc::new(LxcPlugin::new()),
-            "netmaker" => Arc::new(NetmakerPlugin::new(NetmakerConfig::default())),
-            "oci" => Arc::new(OciPlugin::new()),
-            "oscal_subid_registry" => Arc::new(OscalSubidRegistryPlugin::new()),
-            "adc" => Arc::new(AdcPlugin::new()),
-            "endpoint" => Arc::new(EndpointPlugin::new()),
-            "proxy_server" => Arc::new(ProxyServerPlugin::new()),
-            "web_ui" => Arc::new(WebUiPlugin::new()),
-            _ => {
-                let requested_info = format!("requested='{}' resolved='{}'", name, resolved_name);
-                tracing::warn!(
-                    "Unknown plugin '{}'; auto-creating review-required draft from requested info",
-                    name
-                );
-                Arc::new(
-                    AutoPlugin::create_from_requested_info(&resolved_name, &requested_info).await,
-                )
-            }
-        };
 
-        Ok(plugin)
+        let ctx = PluginCtx { reg: self };
+        for registration in inventory::iter::<PluginReg> {
+            if registration.name == resolved_name {
+                return Ok((registration.build)(&ctx));
+            }
+        }
+
+        let requested_info = format!("requested='{}' resolved='{}'", name, resolved_name);
+        tracing::warn!(
+            "Unknown plugin '{}'; auto-creating review-required draft from requested info",
+            name
+        );
+        Ok(Arc::new(
+            AutoPlugin::create_from_requested_info(&resolved_name, &requested_info).await,
+        ))
     }
 
     /// Get plugin-specific config value or default
@@ -354,19 +294,17 @@ impl DefaultPluginRegistry {
             .to_string()
     }
 
-    /// Discover plugins from the state-plugin module tree.
+    /// The plugin catalog: every name self-registered via `inventory::submit!`.
     ///
-    /// This is intentionally not a hand-maintained plugin catalog. The module
-    /// tree is the source of discoverable plugin subjects; unknown subjects
-    /// still flow through `load_plugin()` and the auto-create fallback.
+    /// This is intentionally not a hand-maintained list. Each plugin module is
+    /// the single source of its own registration; this just collects them.
+    /// Unknown subjects still flow through `load_plugin()` and the auto-create
+    /// fallback.
     pub fn available_plugins() -> Vec<String> {
-        const STATE_PLUGIN_MODS: &str = include_str!("state_plugins/mod.rs");
-
-        let mut plugins = STATE_PLUGIN_MODS
-            .lines()
-            .filter_map(discover_pub_mod_name)
-            .filter(|name| !is_state_plugin_helper_module(name))
-            .collect::<Vec<_>>();
+        let mut plugins: Vec<String> = inventory::iter::<PluginReg>
+            .into_iter()
+            .map(|registration| registration.name.to_string())
+            .collect();
 
         plugins.sort();
         plugins.dedup();

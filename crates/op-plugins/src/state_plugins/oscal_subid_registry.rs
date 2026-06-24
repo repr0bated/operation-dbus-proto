@@ -845,3 +845,9 @@ mod tests {
         assert!(diffs.is_empty(), "schema drift: {:#?}", diffs);
     }
 }
+
+// Self-registration: the plugin registry discovers this via inventory
+// (single source of the catalog; no central dispatch list).
+inventory::submit! {
+    crate::default_registry::PluginReg::new("oscal_subid_registry", |_ctx| std::sync::Arc::new(OscalSubidRegistryPlugin::new()))
+}

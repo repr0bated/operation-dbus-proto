@@ -348,3 +348,9 @@ pub(crate) fn factory_schema() -> PluginSchema {
 
     builder.example(state.clone()).build()
 }
+
+// Self-registration: the plugin registry discovers this via inventory
+// (single source of the catalog; no central dispatch list).
+inventory::submit! {
+    crate::default_registry::PluginReg::new("factory", |_ctx| std::sync::Arc::new(FactoryPlugin::new()))
+}

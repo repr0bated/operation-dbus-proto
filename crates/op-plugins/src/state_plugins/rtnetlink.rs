@@ -402,3 +402,9 @@ pub(crate) fn rtnetlink_schema() -> PluginSchema {
         }))
         .build()
 }
+
+// Self-registration: the plugin registry discovers this via inventory
+// (single source of the catalog; no central dispatch list).
+inventory::submit! {
+    crate::default_registry::PluginReg::new("rtnetlink", |_ctx| std::sync::Arc::new(RtnetlinkPlugin::new()))
+}

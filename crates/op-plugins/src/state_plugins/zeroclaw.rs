@@ -662,3 +662,9 @@ mod tests {
         assert_eq!(round_tripped.version, "1.0.0");
     }
 }
+
+// Self-registration: the plugin registry discovers this via inventory
+// (single source of the catalog; no central dispatch list).
+inventory::submit! {
+    crate::default_registry::PluginReg::new("zeroclaw", |_ctx| std::sync::Arc::new(ZeroclawPlugin::new()))
+}
