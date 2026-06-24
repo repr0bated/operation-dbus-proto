@@ -100,7 +100,7 @@ impl KeyringPlugin {
     fn check_service_available(&self) -> bool {
         // Check if the op-dbus session bus socket exists, which means the
         // daemon is running and the freedesktop plugin will be available.
-        std::path::Path::new("/run/op-dbus/session-bus.sock").exists()
+        std::path::Path::new(op_core::config::SESSION_BUS_SOCKET_PATH).exists()
     }
 }
 

@@ -156,7 +156,7 @@ impl MutationEngine {
         self.session_bus
             .get_or_try_init(|| async {
                 let addr = std::env::var("DBUS_SESSION_BUS_ADDRESS")
-                    .unwrap_or_else(|_| "unix:path=/run/op-dbus/session-bus.sock".to_string());
+                    .unwrap_or_else(|_| op_core::config::SESSION_BUS_ADDRESS.to_string());
                 zbus::connection::Builder::address(addr.as_str())
                     .map_err(|e| anyhow::anyhow!("Builder::address: {}", e))?
                     .build()
@@ -545,6 +545,7 @@ impl MutationEngine {
         _capability_id: Option<String>,
     ) -> anyhow::Result<MutationResult> {
         let mut old_value = None;
+        let mut authoritative_value = value.clone();
 
         // Resolve the acting identity from the Sled (/dev/shm/plugin_schema.dat)
         // when the caller omitted it. The Sled carries the WireGuard footprint +
@@ -610,15 +611,19 @@ impl MutationEngine {
             }
         } else if plugin_id == "unix_socket" && change_type == ChangeType::MethodCall {
             // unix_socket plugin dispatch: createunixsocket <name> <ports csv/vec>.
-            // The plugin binds the single shared container.sock and records the
-            // name+ports routing tag; gemma/xray demux by reflection downstream.
+            // The method registers the name+ports routing tag against the
+            // shared container.sock transport; the transport owner is not
+            // replaced during registration.
             if let Some(method) = &member_name {
                 if method == "createunixsocket" {
                     let (name, ports) = parse_socket_args(&value);
-                    let result = self.unix_socket.create_unix_socket(name, ports);
+                    let result = self
+                        .unix_socket
+                        .create_unix_socket(name.clone(), ports.clone());
                     if !result.success {
                         anyhow::bail!(result.errors.join("; "));
                     }
+                    authoritative_value = unix_socket_state_after_registration(&name, &ports);
                 }
             }
         } else {
@@ -649,7 +654,7 @@ impl MutationEngine {
                 change_type,
                 member_name,
                 old_value,
-                value.clone(),
+                authoritative_value.clone(),
                 vec![], // Automatically computed in process_authoritative_change
                 actor_id,
                 ChangeSource::Grpc,
@@ -681,7 +686,7 @@ impl MutationEngine {
             success: true,
             event_id: change.event_id,
             event_hash: change.event_hash,
-            result: Some(value),
+            result: Some(authoritative_value),
             error: None,
         })
     }
@@ -826,20 +831,80 @@ fn sled_footprint() -> Option<String> {
     }
 }
 
+/// Build the authoritative `unix_socket` projection state after a successful
+/// `createunixsocket` mutation. The mutation argument is not state; the state is
+/// the registered service list under the single shared container socket.
+fn unix_socket_state_after_registration(name: &str, ports: &[u16]) -> simd_json::OwnedValue {
+    let mut sockets = existing_unix_socket_sockets();
+    sockets.retain(|socket| {
+        socket
+            .get("name")
+            .and_then(|value| value.as_str())
+            .map(|existing_name| existing_name != name)
+            .unwrap_or(true)
+    });
+
+    sockets.push(simd_json::json!({
+        "name": name,
+        "path": op_plugins::state_plugins::unix_socket::SHARED_CONTAINER_SOCKET,
+        "ports": ports,
+        "protocol": "grpc",
+        "label": "",
+    }));
+
+    simd_json::json!({ "sockets": sockets })
+}
+
+fn existing_unix_socket_sockets() -> Vec<simd_json::OwnedValue> {
+    let Some(mut bytes) = op_core::projection_shm::read_projection_bytes("unix_socket") else {
+        return Vec::new();
+    };
+    let Ok(state) = simd_json::to_owned_value(&mut bytes) else {
+        return Vec::new();
+    };
+
+    let sockets = state
+        .get("sockets")
+        .and_then(|value| value.as_array())
+        .or_else(|| {
+            state
+                .get("data")
+                .and_then(|data| data.get("sockets"))
+                .and_then(|value| value.as_array())
+        });
+
+    sockets
+        .into_iter()
+        .flatten()
+        .filter(|socket| {
+            let has_name = socket
+                .get("name")
+                .and_then(|value| value.as_str())
+                .map(|name| !name.is_empty())
+                .unwrap_or(false);
+            let has_path = socket
+                .get("path")
+                .and_then(|value| value.as_str())
+                .is_some();
+            has_name && has_path
+        })
+        .cloned()
+        .collect()
+}
+
 /// Parse createunixsocket arguments. Accepts either a JSON array
 /// `[name, [ports...]]` or an object `{ "name": "...", "ports": [...] }`.
 /// `ports` may be a JSON array of numbers or a CSV string ("6334" / "6334,8080").
 fn parse_socket_args(value: &simd_json::OwnedValue) -> (String, Vec<u16>) {
     if let Some(obj) = value.as_object() {
-        let name = obj
-            .get("name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let ports = parse_ports_value(obj.get("ports"));
-        return (name, ports);
+        return parse_socket_arg_object(obj);
     }
     if let Some(arr) = value.as_array() {
+        if arr.len() == 1 {
+            if let Some(obj) = arr.first().and_then(|v| v.as_object()) {
+                return parse_socket_arg_object(obj);
+            }
+        }
         let name = arr
             .first()
             .and_then(|v| v.as_str())
@@ -851,6 +916,18 @@ fn parse_socket_args(value: &simd_json::OwnedValue) -> (String, Vec<u16>) {
     (String::new(), Vec::new())
 }
 
+fn parse_socket_arg_object(
+    obj: &simd_json::value::owned::Object,
+) -> (String, Vec<u16>) {
+    let name = obj
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let ports = parse_ports_value(obj.get("ports"));
+    (name, ports)
+}
+
 fn parse_ports_value(value: Option<&simd_json::OwnedValue>) -> Vec<u16> {
     let Some(v) = value else {
         return Vec::new();
@@ -858,7 +935,7 @@ fn parse_ports_value(value: Option<&simd_json::OwnedValue>) -> Vec<u16> {
     if let Some(arr) = v.as_array() {
         return arr
             .iter()
-            .filter_map(|p| p.as_u64().or_else(|| p.as_i64().map(|i| i as u64)))
+            .filter_map(parse_port_number)
             .map(|n| n as u16)
             .collect();
     }
@@ -868,8 +945,19 @@ fn parse_ports_value(value: Option<&simd_json::OwnedValue>) -> Vec<u16> {
             .filter_map(|p| p.trim().parse::<u16>().ok())
             .collect();
     }
-    if let Some(n) = v.as_u64().or_else(|| v.as_i64().map(|i| i as u64)) {
+    if let Some(n) = parse_port_number(v) {
         return vec![n as u16];
     }
     Vec::new()
+}
+
+fn parse_port_number(value: &simd_json::OwnedValue) -> Option<u64> {
+    value
+        .as_u64()
+        .or_else(|| value.as_i64().and_then(|n| (n >= 0).then_some(n as u64)))
+        .or_else(|| {
+            value.as_f64().and_then(|n| {
+                (n.is_finite() && n >= 0.0 && n <= u16::MAX as f64).then_some(n as u64)
+            })
+        })
 }

@@ -101,8 +101,8 @@ install_repo_binaries() {
         install -m 755 "$OVS_SRC_DIR/vswitchd/ovs-vswitchd" /usr/local/sbin/ovs-vswitchd
         log "installed patched ovs-vswitchd with libxdp AF_XDP chaining"
     fi
-    if [ -x "$REPO_DIR/target/release/op-dbus" ]; then
-        install -m 755 "$REPO_DIR/target/release/op-dbus" /usr/local/bin/op-dbus
+    if [ -x "$REPO_DIR/target/release/opdbus" ]; then
+        install -m 755 "$REPO_DIR/target/release/opdbus" /usr/local/bin/op-dbus
         log "installed repo op-dbus release binary"
     fi
 }

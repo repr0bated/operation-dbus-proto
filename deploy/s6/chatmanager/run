@@ -3,9 +3,11 @@ exec 2>&1
 # chatmanager — Standalone op-chat MCP server and actor daemon.
 #
 # Listens on OP_CHAT_LISTEN (defaults to 0.0.0.0:50053).
-# Connects to the dbus-session bus at unix:path=/run/op-dbus/session-bus.sock.
+# Connects to the dbus-session bus at unix:path=/run/opdbus/session-bus.sock.
 
-export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/op-dbus/session-bus.sock}"
+[ -r /etc/op-dbus/environment ] && . /etc/op-dbus/environment
+export DBUS_SESSION_BUS_ADDRESS
+: "${DBUS_SESSION_BUS_ADDRESS:?DBUS_SESSION_BUS_ADDRESS must be set in /etc/op-dbus/environment}"
 export WG_INTERFACE="${WG_INTERFACE:-wg-chatbot}"
 if [ -z "${WG_PUBKEY:-}" ] && command -v wg >/dev/null 2>&1; then
     WG_PUBKEY="$(wg show "$WG_INTERFACE" public-key 2>/dev/null || true)"

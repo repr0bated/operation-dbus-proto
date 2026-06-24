@@ -1,7 +1,9 @@
 #!/bin/sh
 # op-web-server — unified HTTP API + embedded UI for op-dbus
 export PORT="${PORT:-8080}"
-export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/op-dbus/session-bus.sock}"
+[ -r /etc/op-dbus/environment ] && . /etc/op-dbus/environment
+export DBUS_SESSION_BUS_ADDRESS
+: "${DBUS_SESSION_BUS_ADDRESS:?DBUS_SESSION_BUS_ADDRESS must be set in /etc/op-dbus/environment}"
 export OP_DBUS_GRPC_ADDR="${OP_DBUS_GRPC_ADDR:-http://10.200.0.1:50051}"
 export OP_DBUS_ADDR="${OP_DBUS_ADDR:-$OP_DBUS_GRPC_ADDR}"
 export OP_MEMORY_DB="${OP_MEMORY_DB:-/var/lib/op-dbus/cognitive.db}"
