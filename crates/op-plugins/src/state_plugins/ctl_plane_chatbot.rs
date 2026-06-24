@@ -32,6 +32,7 @@ const DEFAULT_DEDUP_WINDOW_HRS: u32 = 24;
 const DEFAULT_QUEUE_ALERT_THRESHOLD: u32 = 50;
 const DEFAULT_NESTING_POLICY: &str = "flat";
 const DEFAULT_OUTPUT_DTYPE: &str = "float";
+const DEFAULT_INPUT_TYPE: &str = "document";
 
 // ── Config (vectorization pipeline tuning) ──────────────────────────────────
 
@@ -45,6 +46,8 @@ pub struct CtlPlaneChatbotConfig {
     pub vector_dims: u32,
     #[serde(default = "default_output_dtype")]
     pub output_dtype: String,
+    #[serde(default = "default_input_type")]
+    pub input_type: String,
     #[serde(default)]
     pub dedup_window_hrs: u32,
     #[serde(default)]
@@ -67,6 +70,9 @@ fn default_nesting_policy() -> String {
 fn default_output_dtype() -> String {
     DEFAULT_OUTPUT_DTYPE.into()
 }
+fn default_input_type() -> String {
+    DEFAULT_INPUT_TYPE.into()
+}
 fn default_true() -> bool {
     true
 }
@@ -78,6 +84,7 @@ impl Default for CtlPlaneChatbotConfig {
             qdrant_collection: default_collection(),
             vector_dims: DEFAULT_VECTOR_DIMS,
             output_dtype: default_output_dtype(),
+            input_type: default_input_type(),
             dedup_window_hrs: DEFAULT_DEDUP_WINDOW_HRS,
             queue_alert_threshold: DEFAULT_QUEUE_ALERT_THRESHOLD,
             nesting_policy: default_nesting_policy(),
@@ -201,6 +208,25 @@ pub enum OutputDtype {
 impl Default for OutputDtype {
     fn default() -> Self {
         OutputDtype::Float
+    }
+}
+
+/// Retrieval `input_type` (Voyage input_type). Voyage prepends a retrieval prompt
+/// based on this: documents embed as `document`, queries as `query`. The Voyage
+/// FAQ says **not** to omit it / use `None` for retrieval, so `None` is
+/// intentionally not offered here. Stored reasoning episodes are documents →
+/// default `document`; the search side uses `query`. Embeddings with and without
+/// input_type stay compatible, so this is a quality knob, not a space knob.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum InputType {
+    Query,
+    Document,
+}
+
+impl Default for InputType {
+    fn default() -> Self {
+        InputType::Document
     }
 }
 
@@ -446,6 +472,12 @@ pub struct CtlPlaneChatbotState {
         extend("x-oscal-subid" = "mut.software.plugin.ctl-plane-chatbot.output-dtype@v1")
     )]
     pub output_dtype: OutputDtype,
+    #[serde(default)]
+    #[schemars(
+        description = "Retrieval input_type (Voyage). Documents embed as 'document', queries as 'query' — Voyage prepends a retrieval prompt. None/omitted is discouraged for retrieval so it is not offered. Stored episodes default to document.",
+        extend("x-oscal-subid" = "mut.software.plugin.ctl-plane-chatbot.input-type@v1")
+    )]
+    pub input_type: InputType,
     #[serde(default = "default_dedup_window_hrs")]
     #[schemars(
         description = "Content-hash dedup collision window in hours (REQ-7, default 24)",
@@ -584,6 +616,7 @@ impl StatePlugin for CtlPlaneChatbotPlugin {
         field_diff!(qdrant_collection, "qdrant_collection");
         field_diff!(vector_dims, "vector_dims");
         field_diff!(output_dtype, "output_dtype");
+        field_diff!(input_type, "input_type");
         field_diff!(dedup_window_hrs, "dedup_window_hrs");
         field_diff!(queue_alert_threshold, "queue_alert_threshold");
         field_diff!(nesting_policy, "nesting_policy");
@@ -693,6 +726,10 @@ pub(crate) fn ctl_plane_chatbot_schema_golden() -> PluginSchema {
         (
             "output_dtype",
             "mut.software.plugin.ctl-plane-chatbot.output-dtype@v1",
+        ),
+        (
+            "input_type",
+            "mut.software.plugin.ctl-plane-chatbot.input-type@v1",
         ),
         (
             "dedup_window_hrs",
@@ -1047,6 +1084,13 @@ fn ctl_plane_chatbot_schema_inner() -> PluginSchema {
             required: false,
             description: "Output precision / quantization (Voyage output_dtype): float (default) → int8/uint8 (4x smaller) → binary/ubinary (32x). Qdrant stores all natively. Changing dtype is a precision change, not a re-vectorize.".to_string(),
             default: Some(json!("float")), example: None,
+            constraints: Vec::new(), read_only: false, read_only_when: None,
+        })
+        .field("input_type", FieldSchema {
+            field_type: FieldType::Enum(vec!["query".to_string(), "document".to_string()]),
+            required: false,
+            description: "Retrieval input_type (Voyage). Documents embed as 'document', queries as 'query' — Voyage prepends a retrieval prompt. None/omitted is discouraged for retrieval so it is not offered. Stored episodes default to document.".to_string(),
+            default: Some(json!("document")), example: None,
             constraints: Vec::new(), read_only: false, read_only_when: None,
         })
         .field("dedup_window_hrs", FieldSchema {
