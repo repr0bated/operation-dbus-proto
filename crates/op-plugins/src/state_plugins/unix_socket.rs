@@ -150,8 +150,9 @@ impl UnixSocketPlugin {
         simd_json::serde::from_owned_value::<UnixSocketState>(state.clone()).unwrap_or_default()
     }
 
-    /// Bind a single endpoint, replacing any stale socket file. Returns `true`
-    /// when a new listener was created.
+    /// Bind a single endpoint when no shared transport exists. If the shared
+    /// socket is already present, it is owned by the gRPC bridge and this plugin
+    /// only registers the endpoint metadata.
     fn ensure_bound(
         active: &mut HashMap<String, UnixListener>,
         endpoint: &SocketEndpoint,
@@ -163,7 +164,14 @@ impl UnixSocketPlugin {
             std::fs::create_dir_all(parent)?;
         }
         if Path::new(&endpoint.path).exists() {
-            std::fs::remove_file(&endpoint.path)?;
+            info!(
+                socket = %endpoint.path,
+                name = %endpoint.name,
+                ports = ?endpoint.ports,
+                protocol = %endpoint.protocol,
+                "registered unix socket endpoint on existing shared transport"
+            );
+            return Ok(false);
         }
         let listener = UnixListener::bind(&endpoint.path)?;
         listener.set_nonblocking(true)?;

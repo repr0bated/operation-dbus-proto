@@ -1,6 +1,8 @@
 #!/bin/sh
 exec 2>&1
-export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/op-dbus/session-bus.sock}"
+[ -r /etc/op-dbus/environment ] && . /etc/op-dbus/environment
+export DBUS_SESSION_BUS_ADDRESS
+: "${DBUS_SESSION_BUS_ADDRESS:?DBUS_SESSION_BUS_ADDRESS must be set in /etc/op-dbus/environment}"
 export OP_DBUS_MIRROR_BUS="${OP_DBUS_MIRROR_BUS:-system}"
 export OVSDB_SOCK="${OVSDB_SOCK:-/run/openvswitch/db.sock}"
 export OP_DBUS_OVS_BRIDGE_DEST="${OP_DBUS_OVS_BRIDGE_DEST:-org.opdbus.bridge}"

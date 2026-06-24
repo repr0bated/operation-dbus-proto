@@ -43,6 +43,13 @@ pub const PLUGIN_BASE_PATH: &str = "/org/opdbus/v1/plugins";
 /// ObjectManager) dial this name instead.
 pub const MIRROR_BUS_NAME: &str = "org.opdbus.v1.mirror";
 
+/// Canonical session bus socket path.  No dash — consistent with `opdbus`
+/// used in D-Bus names, object paths, and shm directories.
+pub const SESSION_BUS_SOCKET_PATH: &str = "/run/opdbus/session-bus.sock";
+
+/// Canonical session bus address string (for `DBUS_SESSION_BUS_ADDRESS`).
+pub const SESSION_BUS_ADDRESS: &str = "unix:path=/run/opdbus/session-bus.sock";
+
 /// Default path for the environment file
 pub const DEFAULT_ENV_FILE: &str = "/etc/op-dbus/environment";
 
