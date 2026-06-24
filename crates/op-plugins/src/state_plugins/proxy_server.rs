@@ -136,3 +136,9 @@ pub(crate) fn proxy_server_schema() -> PluginSchema {
         ],
     )
 }
+
+// Self-registration: the plugin registry discovers this via inventory
+// (single source of the catalog; no central dispatch list).
+inventory::submit! {
+    crate::default_registry::PluginReg::new("proxy_server", |_ctx| std::sync::Arc::new(ProxyServerPlugin::new()))
+}

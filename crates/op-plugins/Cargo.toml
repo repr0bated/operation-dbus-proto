@@ -9,6 +9,10 @@ description = "Plugin system with state management, domain plugins, and blockcha
 [dependencies]
 # PROTOTYPE: derive plugin schemas from structs (see state_plugins/schemars_adapter.rs)
 schemars = "1"
+# Distributed plugin self-registration: each plugin module submits its
+# name+constructor via inventory::submit!; the registry iterates them. This is
+# the single source of the plugin catalog — no central dispatch list.
+inventory = "0.3"
 op-core = { path = "../op-core" }
 op-dbus-model = { workspace = true }
 op-state = { path = "../op-state" }

@@ -723,3 +723,9 @@ mod tests {
         }
     }
 }
+
+// Self-registration: the plugin registry discovers this via inventory
+// (single source of the catalog; no central dispatch list).
+inventory::submit! {
+    crate::default_registry::PluginReg::new("mcp", |ctx| std::sync::Arc::new(McpStatePlugin::new(ctx.state_store(), ctx.config_path("mcp", "/etc/op-dbus/mcp-config.json"))))
+}

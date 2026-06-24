@@ -213,3 +213,9 @@ pub(crate) fn rovs_commands_schema() -> PluginSchema {
         )
         .build()
 }
+
+// Self-registration: the plugin registry discovers this via inventory
+// (single source of the catalog; no central dispatch list).
+inventory::submit! {
+    crate::default_registry::PluginReg::new("rovs_commands", |_ctx| std::sync::Arc::new(RovsCommandsPlugin::new()))
+}

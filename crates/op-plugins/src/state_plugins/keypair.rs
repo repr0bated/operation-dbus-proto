@@ -313,3 +313,9 @@ mod tests {
         }
     }
 }
+
+// Self-registration: the plugin registry discovers this via inventory
+// (single source of the catalog; no central dispatch list).
+inventory::submit! {
+    crate::default_registry::PluginReg::new("keypair", |_ctx| std::sync::Arc::new(KeypairPlugin::new()))
+}

@@ -411,3 +411,9 @@ pub(crate) fn service_schema() -> PluginSchema {
         vec![("services", any_field(true, "Service map", Some(json!({}))))],
     )
 }
+
+// Self-registration: the plugin registry discovers this via inventory
+// (single source of the catalog; no central dispatch list).
+inventory::submit! {
+    crate::default_registry::PluginReg::new("service", |_ctx| std::sync::Arc::new(ServicePlugin::new()))
+}

@@ -133,3 +133,9 @@ pub(crate) fn users_schema() -> PluginSchema {
         vec![("users", any_field(true, "Users list", Some(json!([]))))],
     )
 }
+
+// Self-registration: the plugin registry discovers this via inventory
+// (single source of the catalog; no central dispatch list).
+inventory::submit! {
+    crate::default_registry::PluginReg::new("users", |_ctx| std::sync::Arc::new(UsersPlugin::new()))
+}

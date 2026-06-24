@@ -250,3 +250,9 @@ mod tests {
         assert!(!caps.atomic_operations);
     }
 }
+
+// Self-registration: the plugin registry discovers this via inventory
+// (single source of the catalog; no central dispatch list).
+inventory::submit! {
+    crate::default_registry::PluginReg::new("keyring", |_ctx| std::sync::Arc::new(KeyringPlugin::new()))
+}

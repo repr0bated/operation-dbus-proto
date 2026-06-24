@@ -940,3 +940,9 @@ mod tests {
         assert!(!info.kernel_version.is_empty());
     }
 }
+
+// Self-registration: the plugin registry discovers this via inventory
+// (single source of the catalog; no central dispatch list).
+inventory::submit! {
+    crate::default_registry::PluginReg::new("full_system", |_ctx| std::sync::Arc::new(FullSystemPlugin::new()))
+}

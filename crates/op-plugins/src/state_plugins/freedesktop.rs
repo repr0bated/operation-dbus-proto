@@ -480,3 +480,9 @@ mod tests {
         assert!(state.get("interfaces").unwrap().is_array());
     }
 }
+
+// Self-registration: the plugin registry discovers this via inventory
+// (single source of the catalog; no central dispatch list).
+inventory::submit! {
+    crate::default_registry::PluginReg::new("freedesktop", |_ctx| std::sync::Arc::new(FreeDesktopPlugin::new()))
+}

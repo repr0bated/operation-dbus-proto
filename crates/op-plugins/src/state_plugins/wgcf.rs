@@ -476,3 +476,9 @@ pub(crate) fn wgcf_schema_golden() -> PluginSchema {
     super::schemars_adapter::apply_state_defaults(&mut schema, &state);
     schema
 }
+
+// Self-registration: the plugin registry discovers this via inventory
+// (single source of the catalog; no central dispatch list).
+inventory::submit! {
+    crate::default_registry::PluginReg::new("wgcf", |_ctx| std::sync::Arc::new(WgcfPlugin::new(WgcfConfig::default())))
+}
