@@ -31,11 +31,17 @@ use tracing::{info, warn};
 // ─── constants ───────────────────────────────────────────────────────────────
 
 pub const DEFAULT_COLLECTION: &str = "repomix_rag";
-pub const DEFAULT_VOYAGE4_LITE_COLLECTIONS: &[&str] = &[
+/// The fused voyage-4 retrieval set — one shared embedding space, so `_large`
+/// and `_lite` collections compare directly. Best available tier per language:
+/// go/python/rust were re-vectorized to voyage-4-large (see ../logs
+/// vectorize_lsp_4large_*), the rest remain voyage-4-lite. Rust replaced its old
+/// voyage-code-3 solo collection here.
+pub const DEFAULT_VOYAGE4_COLLECTIONS: &[&str] = &[
     "repos_lsp_c_cpp_voyage_4_lite",
-    "repos_lsp_go_voyage_4_lite",
+    "repos_lsp_go_voyage_4_large",
     "repos_lsp_java_voyage_4_lite",
-    "repos_lsp_python_voyage_4_lite",
+    "repos_lsp_python_voyage_4_large",
+    "repos_lsp_rust_voyage_4_large",
     "repos_lsp_typescript_voyage_4_lite",
     "repos_specs_docs_voyage_4_lite",
 ];
@@ -818,7 +824,7 @@ pub fn default_collections_for_mode(mode: RetrievalMode) -> Vec<String> {
     }
 
     match mode {
-        RetrievalMode::Completion | RetrievalMode::Search => DEFAULT_VOYAGE4_LITE_COLLECTIONS
+        RetrievalMode::Completion | RetrievalMode::Search => DEFAULT_VOYAGE4_COLLECTIONS
             .iter()
             .map(|s| (*s).to_string())
             .collect(),
