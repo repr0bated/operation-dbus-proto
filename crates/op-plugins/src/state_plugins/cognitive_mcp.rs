@@ -28,7 +28,6 @@ const ENV_DIR: &str = "/etc/s6/sv/op-cognitive-mcp/env";
 const RUNTIME_ENV_DIR: &str = "/run/service/op-cognitive-mcp/env";
 const DEFAULT_HTTP: &str = "100.90.37.254:3003";
 const DEFAULT_GRPC: &str = "100.90.37.254:50052";
-const DEFAULT_DB: &str = "/var/lib/op-dbus/cognitive.db";
 const DEFAULT_WG: &str = "netmaker";
 
 // ── Deployment config (tunable via env-dir / apply_state) ──────────────────
@@ -39,8 +38,6 @@ pub struct CognitiveMcpConfig {
     pub http: String,
     #[serde(default = "default_grpc")]
     pub grpc: String,
-    #[serde(default = "default_db")]
-    pub db_path: String,
     #[serde(default = "default_wg")]
     pub wg_interface: String,
     #[serde(default = "default_true")]
@@ -57,9 +54,6 @@ fn default_http() -> String {
 fn default_grpc() -> String {
     DEFAULT_GRPC.into()
 }
-fn default_db() -> String {
-    DEFAULT_DB.into()
-}
 fn default_wg() -> String {
     DEFAULT_WG.into()
 }
@@ -72,7 +66,6 @@ impl Default for CognitiveMcpConfig {
         Self {
             http: default_http(),
             grpc: default_grpc(),
-            db_path: default_db(),
             wg_interface: default_wg(),
             http_enabled: true,
             grpc_enabled: true,
@@ -106,7 +99,6 @@ impl CognitiveMcpPlugin {
         CognitiveMcpConfig {
             http: Self::read_env("COGNITIVE_MCP_BIND").unwrap_or_else(default_http),
             grpc: Self::read_env("COGNITIVE_MCP_GRPC_BIND").unwrap_or_else(default_grpc),
-            db_path: Self::read_env("COGNITIVE_MCP_DB_PATH").unwrap_or_else(default_db),
             wg_interface: Self::read_env("WG_INTERFACE").unwrap_or_else(default_wg),
             http_enabled: Self::read_env("COGNITIVE_MCP_HTTP_DISABLED").is_none(),
             grpc_enabled: Self::read_env("COGNITIVE_MCP_GRPC_DISABLED").is_none(),
@@ -210,7 +202,6 @@ impl StatePlugin for CognitiveMcpPlugin {
         }
         field_diff!(http, "http");
         field_diff!(grpc, "grpc");
-        field_diff!(db_path, "db_path");
         field_diff!(wg_interface, "wg_interface");
         field_diff!(http_enabled, "http_enabled");
         field_diff!(grpc_enabled, "grpc_enabled");
@@ -255,15 +246,6 @@ impl StatePlugin for CognitiveMcpPlugin {
                             Ok(())
                         } else {
                             Err(anyhow::anyhow!("grpc must be a string"))
-                        }
-                    }
-                    "db_path" => {
-                        if let Some(s) = val.as_str() {
-                            Self::write_env("COGNITIVE_MCP_DB_PATH", s).await?;
-                            needs_reload = true;
-                            Ok(())
-                        } else {
-                            Err(anyhow::anyhow!("db_path must be a string"))
                         }
                     }
                     "wg_interface" => {
@@ -567,14 +549,6 @@ fn example_cognitive_grpc() -> String {
     "100.90.37.254:50052".to_string()
 }
 
-fn default_cognitive_db_path() -> String {
-    "/var/lib/op-dbus/cognitive.db".to_string()
-}
-
-fn example_db_path() -> String {
-    "/var/lib/op-dbus/cognitive.db".to_string()
-}
-
 fn example_wg_interface() -> String {
     "netmaker".to_string()
 }
@@ -695,7 +669,7 @@ pub struct CodeSearchInput {
     #[schemars(description = "Fuse semantic+lexical scoring and dedup to one chunk per file")]
     pub fused: bool,
     #[schemars(
-        description = "Override the Qdrant repomix/RAG collection for this search",
+        description = "Override the Qdrant collection (see qdrant plugin collections) for this search",
         example = example_collection()
     )]
     pub collection: Option<String>,
@@ -722,7 +696,7 @@ pub struct CodeContextInput {
     #[schemars(description = "Drop test files from results")]
     pub exclude_tests: bool,
     #[schemars(
-        description = "Override the Qdrant repomix/RAG collection for this context request",
+        description = "Override the Qdrant collection (see qdrant plugin collections) for this context request",
         example = example_collection()
     )]
     pub collection: Option<String>,
@@ -759,9 +733,6 @@ pub struct CognitiveMcpState {
     #[serde(default = "default_cognitive_grpc")]
     #[schemars(description = "gRPC bind address for the CognitiveToolService endpoint", example = example_cognitive_grpc(), extend("x-oscal-subid" = "mut.software.plugin.cognitive-mcp.grpc@v1"))]
     pub grpc: String,
-    #[serde(default = "default_cognitive_db_path")]
-    #[schemars(description = "CozoDB database path for persistent memory storage", example = example_db_path(), extend("x-oscal-subid" = "mut.software.plugin.cognitive-mcp.db-path@v1"))]
-    pub db_path: String,
     #[serde(default = "default_wg")]
     #[schemars(description = "WireGuard interface to read identity from", example = example_wg_interface(), extend("x-oscal-subid" = "mut.software.plugin.cognitive-mcp.wg-interface@v1"))]
     pub wg_interface: String,
@@ -1243,7 +1214,7 @@ pub(crate) fn cognitive_mcp_schema_golden() -> PluginSchema {
             FieldSchema {
                 field_type: FieldType::String,
                 required: false,
-                description: "Override the Qdrant repomix/RAG collection for this search"
+                description: "Override the Qdrant collection (see qdrant plugin collections) for this search"
                     .to_string(),
                 default: None,
                 example: Some(json!("repomix_rag")),
@@ -1370,7 +1341,7 @@ pub(crate) fn cognitive_mcp_schema_golden() -> PluginSchema {
             FieldSchema {
                 field_type: FieldType::String,
                 required: false,
-                description: "Override the Qdrant repomix/RAG collection for this context request"
+                description: "Override the Qdrant collection (see qdrant plugin collections) for this context request"
                     .to_string(),
                 default: None,
                 example: Some(json!("repomix_rag")),
@@ -1513,13 +1484,8 @@ pub(crate) fn cognitive_mcp_schema_golden() -> PluginSchema {
             constraints: Vec::new(), read_only: false, read_only_when: None,
         })
         .subid("grpc", "mut.software.plugin.cognitive-mcp.grpc@v1")
-        .field("db_path", FieldSchema {
-            field_type: FieldType::String, required: false,
-            description: "CozoDB database path for persistent memory storage".to_string(),
-            default: Some(json!("/var/lib/op-dbus/cognitive.db")), example: Some(json!("/var/lib/op-dbus/cognitive.db")),
-            constraints: Vec::new(), read_only: false, read_only_when: None,
-        })
-        .subid("db_path", "mut.software.plugin.cognitive-mcp.db-path@v1")
+        .dependency("qdrant")
+        .dependency("cozo")
         .field("wg_interface", FieldSchema {
             field_type: FieldType::String, required: false,
             description: "WireGuard interface to read identity from".to_string(),
