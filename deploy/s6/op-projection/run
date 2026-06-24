@@ -1,6 +1,6 @@
 #!/bin/sh
 exec 2>&1
 export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/op-dbus/session-bus.sock}"
-export OP_DBUS_PROJECTION_BUS="${OP_DBUS_PROJECTION_BUS:-system}"
+export OP_DBUS_PROJECTION_BUS="${OP_DBUS_PROJECTION_BUS:-session}"
 export RUST_LOG="${RUST_LOG:-op_projection=info,info}"
 exec /usr/local/bin/projection_server
