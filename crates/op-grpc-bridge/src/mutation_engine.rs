@@ -66,6 +66,8 @@ pub struct MutationEngine {
     state_cache: Arc<RwLock<HashMap<String, simd_json::OwnedValue>>>,
     /// System D-Bus connection authority
     pub dbus_connection: Arc<OnceCell<Connection>>,
+    /// Session bus connection for projection tree introspection
+    session_bus: Arc<OnceCell<Connection>>,
     /// Resource limiter for D-Bus operations
     #[allow(dead_code)]
     dbus_call_limiter: Arc<Semaphore>,
@@ -132,6 +134,7 @@ impl MutationEngine {
             change_tx,
             state_cache: Arc::new(RwLock::new(HashMap::new())),
             dbus_connection: Arc::new(OnceCell::new()),
+            session_bus: Arc::new(OnceCell::new()),
             dbus_call_limiter: Arc::new(Semaphore::new(32)),
             ovsdb,
             nonnet,
@@ -146,6 +149,164 @@ impl MutationEngine {
             .await
             .cloned()
             .map_err(|e| anyhow::anyhow!(e))
+    }
+
+    /// Get or create the session bus connection (for projection tree introspection)
+    async fn session_bus(&self) -> anyhow::Result<Connection> {
+        self.session_bus
+            .get_or_try_init(|| async {
+                let addr = std::env::var("DBUS_SESSION_BUS_ADDRESS")
+                    .unwrap_or_else(|_| "unix:path=/run/op-dbus/session-bus.sock".to_string());
+                zbus::connection::Builder::address(addr.as_str())
+                    .map_err(|e| anyhow::anyhow!("Builder::address: {}", e))?
+                    .build()
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Session bus connect: {}", e))
+            })
+            .await
+            .cloned()
+            .map_err(|e| anyhow::anyhow!(e))
+    }
+
+    /// Crawl the D-Bus projection tree for a plugin and return its full state
+    /// as JSON. Introspects `/org/opdbus/v1/plugins/<plugin_id>`, recursively
+    /// descends child nodes, and reads all properties from all interfaces.
+    async fn crawl_plugin_dbus_tree(
+        &self,
+        plugin_id: &str,
+    ) -> Option<simd_json::OwnedValue> {
+        let conn = match self.session_bus().await {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::debug!(error = %e, "session bus unavailable for crawl");
+                return None;
+            }
+        };
+
+        let root_path = format!("/org/opdbus/v1/plugins/{}", plugin_id);
+        let bus_name = "org.opdbus.v1.plugins";
+
+        let mut result = simd_json::value::owned::Object::new();
+        Self::crawl_path(&conn, bus_name, &root_path, &mut result).await;
+        if result.is_empty() {
+            None
+        } else {
+            Some(simd_json::OwnedValue::Object(Box::new(result)))
+        }
+    }
+
+    /// Recursively introspect a D-Bus path, reading properties and descending
+    /// into child nodes.
+    async fn crawl_path(
+        conn: &Connection,
+        bus_name: &str,
+        path: &str,
+        out: &mut simd_json::value::owned::Object,
+    ) {
+        // Introspect to discover interfaces and child nodes
+        let introspect_xml: String = match conn
+            .call_method(
+                Some(bus_name),
+                path,
+                Some("org.freedesktop.DBus.Introspectable"),
+                "Introspect",
+                &(),
+            )
+            .await
+        {
+            Ok(msg) => msg.body().deserialize::<String>().unwrap_or_default(),
+            Err(e) => {
+                tracing::debug!(path = %path, error = %e, "introspect failed");
+                return;
+            }
+        };
+
+        // Parse the introspection XML for interfaces and child nodes
+        let interfaces = Self::parse_interfaces(&introspect_xml);
+        let child_nodes = Self::parse_child_nodes(&introspect_xml);
+
+        // Read properties from each non-standard interface
+        for iface in &interfaces {
+            // Skip standard D-Bus interfaces
+            if iface.starts_with("org.freedesktop.DBus.") {
+                continue;
+            }
+
+            let props: std::collections::HashMap<String, zbus::zvariant::OwnedValue> =
+                match conn
+                    .call_method(
+                        Some(bus_name),
+                        path,
+                        Some("org.freedesktop.DBus.Properties"),
+                        "GetAll",
+                        &iface,
+                    )
+                    .await
+                {
+                    Ok(msg) => msg
+                        .body()
+                        .deserialize::<std::collections::HashMap<String, zbus::zvariant::OwnedValue>>()
+                        .unwrap_or_default(),
+                    Err(_) => std::collections::HashMap::new(),
+                };
+
+            let mut iface_obj = simd_json::value::owned::Object::new();
+            for (prop_name, prop_val) in &props {
+                // zvariant::OwnedValue serializes as {"signature":"s","value":"..."}
+                // Extract just the value field for a clean JSON projection.
+                let json_val: serde_json::Value =
+                    serde_json::to_value(&prop_val).unwrap_or(serde_json::Value::Null);
+                let extracted = json_val.get("value").unwrap_or(&json_val);
+                let json_str = serde_json::to_string(extracted)
+                    .unwrap_or_else(|_| "null".to_string());
+                let mut bytes = json_str.into_bytes();
+                if let Ok(v) = simd_json::to_owned_value(&mut bytes) {
+                    iface_obj.insert(prop_name.clone(), v);
+                }
+            }
+            if !iface_obj.is_empty() {
+                out.insert(iface.clone(), simd_json::OwnedValue::Object(Box::new(iface_obj)));
+            }
+        }
+
+        // Recurse into child nodes
+        for child in &child_nodes {
+            let child_path = format!("{}/{}", path.trim_end_matches('/'), child);
+            let mut child_obj = simd_json::value::owned::Object::new();
+            Box::pin(Self::crawl_path(conn, bus_name, &child_path, &mut child_obj))
+                .await;
+            if !child_obj.is_empty() {
+                out.insert(child.clone(), simd_json::OwnedValue::Object(Box::new(child_obj)));
+            }
+        }
+    }
+
+    /// Parse interface names from D-Bus introspection XML
+    fn parse_interfaces(xml: &str) -> Vec<String> {
+        let mut interfaces = Vec::new();
+        for line in xml.lines() {
+            let trimmed = line.trim();
+            if let Some(rest) = trimmed.strip_prefix("<interface name=\"") {
+                if let Some(end) = rest.find("\">") {
+                    interfaces.push(rest[..end].to_string());
+                }
+            }
+        }
+        interfaces
+    }
+
+    /// Parse child node names from D-Bus introspection XML
+    fn parse_child_nodes(xml: &str) -> Vec<String> {
+        let mut nodes = Vec::new();
+        for line in xml.lines() {
+            let trimmed = line.trim();
+            if let Some(rest) = trimmed.strip_prefix("<node name=\"") {
+                if let Some(end) = rest.find("\"") {
+                    nodes.push(rest[..end].to_string());
+                }
+            }
+        }
+        nodes
     }
 
     fn compute_tags(&self, plugin_id: &str, object_path: &str) -> Vec<String> {
@@ -211,12 +372,29 @@ impl MutationEngine {
         )
         .await;
 
-        // Write the mutation value directly to the shm projection layer.
-        // No state_cache dependency — zero held state. The mutation IS the
-        // event; the value IS the state. Written BEFORE the StateChange is
-        // broadcast so the projection tree reflects post-mutation state.
+        // Write the plugin's state to the shm projection layer.
+        //
+        // The projection IS the state — `/dev/shm/opdbus/projections/<plugin>.json`
+        // is the single source of truth that the D-Bus tree derives from.
+        // We write a composite object: `data` holds the mutation value, and
+        // `_introspection` holds the D-Bus tree crawl result. The projection
+        // server reads `data` for the `ProjectedObject.Data` property and
+        // derives child paths from it. The `_introspection` field (underscore-
+        // prefixed) is skipped by path derivation so it doesn't create child
+        // objects (no recursive echo).
         if change_type != ChangeType::ObjectRemoved {
-            match simd_json::to_string(&new_value) {
+            let crawl_result = self.crawl_plugin_dbus_tree(&plugin_id).await;
+
+            let projection_value = if let Some(crawl) = crawl_result {
+                simd_json::json!({
+                    "data": new_value,
+                    "_introspection": crawl,
+                })
+            } else {
+                new_value.clone()
+            };
+
+            match simd_json::to_string(&projection_value) {
                 Ok(json) => {
                     if let Err(e) =
                         op_core::projection_shm::write_projection(&plugin_id, json.as_bytes())
