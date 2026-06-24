@@ -24,6 +24,7 @@ pub mod compact_mcp;
 pub mod config;
 pub mod cron;
 pub mod ctl_plane_chatbot;
+pub mod datastore;
 pub mod dnsresolver;
 pub mod endpoint;
 pub mod factory;
