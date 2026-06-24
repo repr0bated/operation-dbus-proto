@@ -803,10 +803,6 @@ impl StatePlugin for FullSystemPlugin {
         )
     }
 
-    async fn query_current_state(&self) -> Result<Value> {
-        let state = self.capture_full_state().await?;
-        Ok(simd_json::serde::to_owned_value(state)?)
-    }
 
     async fn calculate_diff(&self, current: &Value, desired: &Value) -> Result<StateDiff> {
         use op_state::DiffMetadata;

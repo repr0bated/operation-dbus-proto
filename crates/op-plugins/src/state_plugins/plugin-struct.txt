@@ -4462,7 +4462,7 @@
       194 +        Some(unix_socket_schema_derived())                    
       195      }
       196  
-      197      async fn query_current_state(&self) -> Result<Value> {
+      197      // query_current_state removed from trait
 
 ● Update(unix_socket.rs)
   ⎿  Added 5 lines, removed 4 lines

@@ -61,11 +61,6 @@ impl StatePlugin for SessDeclPlugin {
         Some(sess_decl_schema())
     }
 
-    async fn query_current_state(&self) -> Result<Value> {
-        Ok(simd_json::serde::to_owned_value(SessDeclState {
-            sessions: vec![],
-        })?)
-    }
 
     async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {
         Ok(StateDiff {

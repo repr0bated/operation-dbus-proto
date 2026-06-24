@@ -251,12 +251,6 @@ impl StatePlugin for PackageKitPlugin {
         )
     }
 
-    async fn query_current_state(&self) -> Result<Value> {
-        Ok(simd_json::json!({
-            "version": 1,
-            "packages": {}
-        }))
-    }
 
     async fn calculate_diff(&self, _current: &Value, desired: &Value) -> Result<StateDiff> {
         println!("PackageKit calculate_diff called with: {}", desired);

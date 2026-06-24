@@ -163,11 +163,6 @@ impl StatePlugin for ProcfsPlugin {
         Some(procfs_schema())
     }
 
-    async fn query_current_state(&self) -> Result<Value> {
-        Ok(simd_json::serde::to_owned_value(
-            gather_procfs_state().await,
-        )?)
-    }
 
     async fn calculate_diff(&self, current: &Value, desired: &Value) -> Result<StateDiff> {
         Ok(StateDiff {
@@ -201,7 +196,7 @@ impl StatePlugin for ProcfsPlugin {
             id: format!("procfs-{}", chrono::Utc::now().timestamp()),
             plugin: self.name().to_string(),
             timestamp: chrono::Utc::now().timestamp(),
-            state_snapshot: self.query_current_state().await?,
+            state_snapshot: simd_json::json!(null),
             backend_checkpoint: None,
         })
     }

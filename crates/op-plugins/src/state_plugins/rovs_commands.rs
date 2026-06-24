@@ -106,10 +106,6 @@ impl op_state::StatePlugin for RovsCommandsPlugin {
         Self::schema()
     }
 
-    async fn query_current_state(&self) -> anyhow::Result<Value> {
-        Ok(Self::current_state())
-    }
-
     async fn calculate_diff(
         &self,
         _current: &Value,
@@ -149,7 +145,7 @@ impl op_state::StatePlugin for RovsCommandsPlugin {
             id: uuid::Uuid::new_v4().to_string(),
             plugin: self.name().to_string(),
             timestamp: chrono::Utc::now().timestamp(),
-            state_snapshot: Self::current_state(),
+            state_snapshot: simd_json::json!(null),
             backend_checkpoint: None,
         })
     }

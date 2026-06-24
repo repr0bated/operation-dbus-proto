@@ -261,45 +261,6 @@ impl StatePlugin for MailServerPlugin {
         Some(mail_server_schema())
     }
 
-    async fn query_current_state(&self) -> Result<Value> {
-        let mut state = Self::default_state();
-
-        match self.query_container_status(&state.container_name).await {
-            Ok((status, ip)) => {
-                state.container_status = status;
-                state.container_ip = ip;
-            }
-            Err(e) => {
-                state.container_status = "Error".to_string();
-                state.last_error = Some(e.to_string());
-            }
-        }
-
-        if state.container_status == "Running" {
-            let (healthy, err) = self.check_mail_health(&state.container_name).await;
-            state.healthy = healthy;
-            state.last_error = err;
-        }
-
-        // Query container devices from Incus REST API (AGENTS.md §4: no subprocess bypasses)
-        if let Ok(config) = Self::incus_api_get(&format!(
-            "/1.0/instances/{}?recursion=1",
-            state.container_name
-        ))
-        .await
-        {
-            if let Some(devices) = config.get("devices") {
-                if let Ok(dev_map) = simd_json::serde::from_owned_value::<
-                    HashMap<String, HashMap<String, String>>,
-                >(devices.clone())
-                {
-                    state.devices = Some(dev_map);
-                }
-            }
-        }
-
-        Ok(simd_json::serde::to_owned_value(state)?)
-    }
 
     async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {
         Ok(StateDiff {

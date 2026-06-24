@@ -170,11 +170,6 @@ impl StatePlugin for PciDeclPlugin {
         )
     }
 
-    async fn query_current_state(&self) -> Result<Value> {
-        // Not listing all PCI devices; caller provides address. Return empty.
-        let empty_items: Vec<Value> = Vec::new();
-        Ok(simd_json::json!({"version": 1, "items": empty_items}))
-    }
 
     async fn calculate_diff(&self, _current: &Value, desired: &Value) -> Result<StateDiff> {
         let want: PciDecl = simd_json::serde::from_owned_value(desired.clone())

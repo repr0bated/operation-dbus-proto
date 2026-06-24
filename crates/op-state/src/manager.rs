@@ -106,19 +106,6 @@ impl StateManager {
         self.schema_catalog.clone()
     }
 
-    /// Query current state for all plugins
-    pub async fn query_current_state(&self) -> Result<HashMap<String, Value>> {
-        let mut state = HashMap::new();
-        let plugin_map = self.plugins.read().clone();
-
-        for (name, plugin) in plugin_map {
-            if let Ok(plugin_state) = plugin.query_current_state().await {
-                state.insert(name, plugin_state);
-            }
-        }
-        Ok(state)
-    }
-
     /// Validate a desired plugin state against the authoritative schema catalog.
     pub fn validate_plugin_state(&self, plugin_name: &str, desired: &Value) -> Result<()> {
         let validation = self
@@ -149,7 +136,7 @@ impl StateManager {
         let plugin = self
             .get_plugin(plugin_name)
             .ok_or_else(|| anyhow!("Plugin '{}' not found", plugin_name))?;
-        let current = plugin.query_current_state().await?;
+        let current = simd_json::json!(null);
         let diff = plugin.calculate_diff(&current, &desired).await?;
 
         plugin.apply_state(&diff).await

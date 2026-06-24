@@ -178,9 +178,6 @@ impl StatePlugin for AntigravityChatPlugin {
         super::common::oscal::ensure_category_metadata_fields(&mut schema);
         Some(schema)
     }
-    async fn query_current_state(&self) -> Result<Value> {
-        Ok(simd_json::serde::to_owned_value(Self::current_state())?)
-    }
     async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {
         Ok(StateDiff {
             plugin: self.name().to_string(),

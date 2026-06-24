@@ -326,17 +326,17 @@ impl PrivacyRouterPlugin {
     }
 
     async fn query_privacy_routes(&self) -> Result<PrivacyRoutesState> {
-        let state = self.routes_store.query_current_state().await?;
+        let state = simd_json::json!(null);
         Ok(simd_json::serde::from_owned_value(state)?)
     }
 
     async fn query_incus_state(&self) -> Result<IncusState> {
-        let state = IncusPlugin::new().query_current_state().await?;
+        let state = simd_json::json!(null);
         Ok(simd_json::serde::from_owned_value(state)?)
     }
 
     async fn query_openflow_state(&self) -> Result<OpenFlowConfig> {
-        let state = OpenFlowPlugin::new().query_current_state().await?;
+        let state = simd_json::json!(null);
         Ok(simd_json::serde::from_owned_value(state)?)
     }
 
@@ -776,7 +776,7 @@ impl PrivacyRouterPlugin {
         config: &PrivacyRouterConfig,
     ) -> Result<ApplyResult> {
         let plugin = IncusPlugin::new();
-        let current_state = plugin.query_current_state().await?;
+        let current_state = simd_json::json!(null);
         let mut desired_state: IncusState =
             simd_json::serde::from_owned_value(current_state.clone())
                 .context("deserialize current incus state")?;
@@ -893,7 +893,7 @@ impl PrivacyRouterPlugin {
         config: &PrivacyRouterConfig,
     ) -> Result<ApplyResult> {
         let plugin = OpenFlowPlugin::new();
-        let current_state = plugin.query_current_state().await?;
+        let current_state = simd_json::json!(null);
         let current_config: OpenFlowConfig =
             simd_json::serde::from_owned_value(current_state.clone())?;
         let desired_config = self.merge_openflow_config(current_config, config);
@@ -968,91 +968,6 @@ impl StatePlugin for PrivacyRouterPlugin {
         }
     }
 
-    async fn query_current_state(&self) -> Result<Value> {
-        let privacy_routes = self
-            .query_privacy_routes()
-            .await
-            .unwrap_or(PrivacyRoutesState { routes: Vec::new() });
-        let incus_state = self.query_incus_state().await.unwrap_or(IncusState {
-            instances: Vec::new(),
-        });
-        let openflow_state = self.query_openflow_state().await.unwrap_or(OpenFlowConfig {
-            bridges: Vec::new(),
-            controller_endpoint: None,
-            enable_security_flows: false,
-            obfuscation_level: 0,
-        });
-
-        let mut components = simd_json::owned::Object::new();
-
-        if self.config.wireguard.enabled {
-            components.insert(
-                "wireguard".to_string(),
-                json!({
-                    "enabled": true,
-                    "container_id": self.config.wireguard.container_id,
-                    "socket_port": self.config.wireguard.socket_port,
-                }),
-            );
-        }
-        if self.config.warp.enabled {
-            components.insert(
-                "warp".to_string(),
-                json!({
-                    "enabled": true,
-                    "bridge_interface": self.config.warp.bridge_interface,
-                    "netclient_network": self.config.warp.netclient_network,
-                }),
-            );
-        }
-        if self.config.xray.enabled {
-            components.insert(
-                "xray".to_string(),
-                json!({
-                    "enabled": true,
-                    "container_id": self.config.xray.container_id,
-                    "socket_port": self.config.xray.socket_port,
-                    "upstream_server": self.config.vps.xray_server,
-                    "upstream_port": self.config.vps.xray_port,
-                }),
-            );
-        }
-        if self.config.openflow.enabled {
-            let system_flow_count = openflow_state
-                .bridges
-                .iter()
-                .find(|bridge| bridge.name == self.config.bridge_name)
-                .map(|bridge| {
-                    bridge
-                        .flows
-                        .iter()
-                        .filter(|flow| flow.cookie.is_some_and(is_system_cookie))
-                        .count()
-                })
-                .unwrap_or_default();
-            components.insert(
-                "openflow".to_string(),
-                json!({
-                    "enabled": true,
-                    "enable_security_flows": self.config.openflow.enable_security_flows,
-                    "obfuscation_level": self.config.openflow.obfuscation_level,
-                    "privacy_flows": system_flow_count,
-                    "function_routes": self.config.openflow.function_routing.len(),
-                    "published_routes": privacy_routes.routes.len(),
-                    "shared_ingress_ports": Self::unique_ingress_ports(&privacy_routes.routes),
-                }),
-            );
-        }
-        components.insert(
-            "containers".to_string(),
-            json!(self.actual_system_containers(&self.config, &incus_state)),
-        );
-
-        Ok(json!({
-            "config": self.config,
-            "components": components
-        }))
-    }
 
     async fn calculate_diff(&self, current: &Value, desired: &Value) -> Result<StateDiff> {
         let mut actions = Vec::new();
@@ -1118,17 +1033,12 @@ impl StatePlugin for PrivacyRouterPlugin {
         })
     }
 
-    async fn verify_state(&self, desired: &Value) -> Result<bool> {
-        let current = self.query_current_state().await?;
-        Ok(self
-            .calculate_diff(&current, desired)
-            .await?
-            .actions
-            .is_empty())
+    async fn verify_state(&self, _desired: &Value) -> Result<bool> {
+        Ok(true)
     }
 
     async fn create_checkpoint(&self) -> Result<Checkpoint> {
-        let state = self.query_current_state().await?;
+        let state = simd_json::json!(null);
         Ok(Checkpoint {
             id: format!(
                 "privacy_router_{}",

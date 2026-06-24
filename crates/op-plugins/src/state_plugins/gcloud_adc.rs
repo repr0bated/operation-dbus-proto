@@ -117,10 +117,6 @@ impl StatePlugin for GcloudAdcPlugin {
         Some(gcloud_adc_schema())
     }
 
-    async fn query_current_state(&self) -> Result<Value> {
-        let state = Self::check_auth_status().await?;
-        Ok(simd_json::serde::to_owned_value(state)?)
-    }
 
     async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {
         // For now, no-op diff calculation

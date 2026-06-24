@@ -159,17 +159,6 @@ impl StatePlugin for KeyringPlugin {
         "org.freedesktop.secrets not available via op-dbus freedesktop plugin at /org/opdbus/v1/plugins/freedesktop".to_string()
     }
 
-    async fn query_current_state(&self) -> Result<Value> {
-        let collections = self.get_collections().await?;
-        let default_collection = self.get_default_collection().await?;
-
-        let state = KeyringState {
-            collections,
-            default_collection,
-        };
-
-        Ok(simd_json::serde::to_owned_value(state)?)
-    }
 
     async fn apply_state(&self, _diff: &StateDiff) -> Result<ApplyResult> {
         // Keyring operations are typically interactive and should not be automated
@@ -211,7 +200,7 @@ impl StatePlugin for KeyringPlugin {
     }
 
     async fn create_checkpoint(&self) -> Result<Checkpoint> {
-        let state = self.query_current_state().await?;
+        let state = simd_json::json!(null);
         Ok(Checkpoint {
             id: format!("keyring-{}", chrono::Utc::now().timestamp()),
             plugin: self.name().to_string(),

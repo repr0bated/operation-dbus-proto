@@ -229,45 +229,10 @@ impl SystemPluginReader {
     }
 
     async fn read_loaded_plugin(&self, plugin: &LoadedPlugin) -> Result<Vec<RawEntity>> {
-        // Per-plugin timeout: a hanging query_current_state (e.g. a D-Bus call
-        // to a service that doesn't exist on this init system) must not block
-        // the entire projection tree. Skip the plugin after the deadline.
-        const QUERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
-
-        let state = match tokio::time::timeout(QUERY_TIMEOUT, plugin.plugin.query_current_state()).await {
-            Ok(Ok(state)) => state,
-            Ok(Err(error)) => {
-                warn!(
-                    plugin_id = %plugin.name,
-                    error = %error,
-                    "Skipping plugin projection because state query failed"
-                );
-                return Ok(Vec::new());
-            }
-            Err(_) => {
-                warn!(
-                    plugin_id = %plugin.name,
-                    timeout_secs = QUERY_TIMEOUT.as_secs(),
-                    "Skipping plugin projection because state query timed out"
-                );
-                return Ok(Vec::new());
-            }
-        };
-
-        let mut entities = vec![RawEntity {
-            entity_type: plugin.name.clone(),
-            entity_id: plugin.name.clone(),
-            data: state.clone(),
-            source: self.source.clone(),
-        }];
-
-        entities.extend(Self::collect_nested_entities(
-            &plugin.name,
-            &state,
-            &self.source,
-        ));
-
-        Ok(entities)
+        // Schema is the source of truth — no query_current_state to call.
+        // Plugin state comes from shm (written by mutations), not from
+        // querying the plugin instance.
+        Ok(Vec::new())
     }
 
     fn collect_nested_entities(plugin_id: &str, state: &Value, source: &str) -> Vec<RawEntity> {

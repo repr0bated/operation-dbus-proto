@@ -97,12 +97,6 @@ impl StatePlugin for SoftwarePlugin {
         Some(software_schema())
     }
 
-    async fn query_current_state(&self) -> Result<Value> {
-        let packages = Self::scan_dpkg().await;
-        Ok(simd_json::serde::to_owned_value(SoftwareState {
-            packages,
-        })?)
-    }
 
     async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {
         Ok(StateDiff {

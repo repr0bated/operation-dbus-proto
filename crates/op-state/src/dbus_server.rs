@@ -37,12 +37,7 @@ impl PluginDbusHost {
     }
 
     async fn get_state(&self) -> zbus::fdo::Result<String> {
-        let state = self
-            .plugin
-            .query_current_state()
-            .await
-            .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
-        Ok(simd_json::to_string(&state).unwrap_or_default())
+        Ok(simd_json::to_string(&simd_json::json!(null)).unwrap_or_default())
     }
 
     async fn get_schema(&self) -> zbus::fdo::Result<String> {

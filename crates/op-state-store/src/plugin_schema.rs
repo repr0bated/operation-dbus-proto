@@ -19,12 +19,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 /// Default JSON Schema dialect (can be overridden per-schema)
-pub const DEFAULT_SCHEMA_DIALECT: &str = "https://json-schema.org/v1/2026";
+pub const DEFAULT_SCHEMA_DIALECT: &str = "https://json-schema.org/draft/2020-12/schema";
 
 /// Known dialect identifiers
 pub mod dialects {
     pub const DRAFT_07: &str = "http://json-schema.org/draft-07/schema#";
-    pub const V2026: &str = "https://json-schema.org/v1/2026";
+    pub const DRAFT_2019_09: &str = "https://json-schema.org/draft/2019-09/schema";
+    pub const DRAFT_2020_12: &str = "https://json-schema.org/draft/2020-12/schema";
 }
 
 /// Path to the json-schema-spec repository relative to workspace root
@@ -782,7 +783,7 @@ impl PluginSchemaBuilder {
         self.tag("immutable")
     }
 
-    /// Set the JSON Schema dialect (e.g., dialects::V2026)
+    /// Set the JSON Schema dialect (e.g., dialects::DRAFT_2020_12)
     pub fn dialect(mut self, dialect: &str) -> Self {
         self.dialect = dialect.to_string();
         self

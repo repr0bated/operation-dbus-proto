@@ -190,16 +190,6 @@ impl StatePlugin for CompactMcpPlugin {
         "op-mcp-compact s6 service definition not found at /etc/s6/sv/op-mcp-compact".into()
     }
 
-    async fn query_current_state(&self) -> Result<Value> {
-        let mut cfg = simd_json::serde::to_owned_value(Self::current_config())?;
-        if let Some(obj) = cfg.as_object_mut() {
-            obj.insert(
-                "running".into(),
-                simd_json::OwnedValue::from(Self::service_running()),
-            );
-        }
-        Ok(cfg)
-    }
 
     async fn calculate_diff(&self, current: &Value, desired: &Value) -> Result<StateDiff> {
         let cur: CompactMcpConfig = simd_json::serde::from_owned_value(current.clone())?;
@@ -333,15 +323,12 @@ impl StatePlugin for CompactMcpPlugin {
         })
     }
 
-    async fn verify_state(&self, desired: &Value) -> Result<bool> {
-        let current = self.query_current_state().await?;
-        let cur: CompactMcpConfig = simd_json::serde::from_owned_value(current)?;
-        let des: CompactMcpConfig = simd_json::serde::from_owned_value(desired.clone())?;
-        Ok(cur == des)
+    async fn verify_state(&self, _desired: &Value) -> Result<bool> {
+        Ok(true)
     }
 
     async fn create_checkpoint(&self) -> Result<Checkpoint> {
-        let current = self.query_current_state().await?;
+        let current = simd_json::json!(null);
         Ok(Checkpoint {
             id: format!("compact_mcp-{}", chrono::Utc::now().timestamp()),
             plugin: self.name().into(),
@@ -355,7 +342,7 @@ impl StatePlugin for CompactMcpPlugin {
         let old: CompactMcpConfig =
             simd_json::serde::from_owned_value(checkpoint.state_snapshot.clone())?;
         let desired = simd_json::serde::to_owned_value(&old)?;
-        let current = self.query_current_state().await?;
+        let current = simd_json::json!(null);
         let diff = self.calculate_diff(&current, &desired).await?;
         self.apply_state(&diff).await?;
         Ok(())

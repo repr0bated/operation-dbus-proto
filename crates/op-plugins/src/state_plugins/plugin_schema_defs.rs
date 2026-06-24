@@ -60,7 +60,7 @@ use simd_json::OwnedValue as Value;
 /// Format a plugin's live state into a `PluginSchema`.
 ///
 /// This is a *formatter*, not a schema authority — nothing here is indexed. The
-/// plugin's `query_current_state()` (its `*State` struct) is the single source
+/// plugin's live state (its `*State` struct) is the single source
 /// of truth; field types are inferred from that state, so the schema can never
 /// drift from what the plugin actually reports. To add a field, add it to the
 /// plugin state — never hand-write a field definition.

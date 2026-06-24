@@ -1023,10 +1023,6 @@ impl StatePlugin for LxcPlugin {
         "Proxmox VE not detected (/etc/pve not found) - this plugin requires Proxmox VE".to_string()
     }
 
-    async fn query_current_state(&self) -> Result<Value> {
-        let containers = self.discover_from_proxmox().await?;
-        Ok(simd_json::serde::to_owned_value(LxcState { containers })?)
-    }
 
     async fn calculate_diff(&self, current: &Value, desired: &Value) -> Result<StateDiff> {
         // For now, emit a single modify if different; once lifecycle is defined, compute granular actions.

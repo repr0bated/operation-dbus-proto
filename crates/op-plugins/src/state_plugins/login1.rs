@@ -82,23 +82,6 @@ impl StatePlugin for Login1Plugin {
         )
     }
 
-    async fn query_current_state(&self) -> Result<Value> {
-        let proxy = self.connect_manager().await?;
-        // ListSessions -> a(sssso) per docs: (s, u, s, s, o)
-        let raw: Vec<(String, u32, String, String, OwnedObjectPath)> =
-            proxy.call("ListSessions", &()).await?;
-        let sessions: Vec<SessionInfo> = raw
-            .into_iter()
-            .map(|(id, uid, user, seat, path)| SessionInfo {
-                id,
-                uid,
-                user,
-                seat,
-                path: path.to_string(),
-            })
-            .collect();
-        Ok(simd_json::serde::to_owned_value(Login1State { sessions })?)
-    }
 
     async fn calculate_diff(&self, current: &Value, desired: &Value) -> Result<StateDiff> {
         let actions = if current != desired {

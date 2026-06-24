@@ -8,7 +8,7 @@
 //! capabilities register here as plugins; the served gRPC surface stays the one
 //! shared route-builder.
 //!
-//! Every read is live: [`query_current_state`](BlockchainPlugin::query_current_state)
+//! Every read is live: the plugin's live state
 //! opens the on-disk chain at `$OPDBUS_BLOCKCHAIN_PATH` and reports its real
 //! snapshots, DR `current_state`, snapshot interval and retention policy.
 //! [`create_checkpoint`](BlockchainPlugin::create_checkpoint) performs a real
@@ -143,7 +143,7 @@ impl BlockchainPlugin {
     }
 
     /// Synchronous shape exemplar used only to derive the [`PluginSchema`]. The
-    /// schema describes the *shape* of `query_current_state`'s output (field
+    /// schema describes the *shape* of the plugin's live state output (field
     /// names + types); the data path itself is always live.
     fn schema_exemplar() -> BlockchainState {
         BlockchainState {
@@ -180,9 +180,6 @@ impl StatePlugin for BlockchainPlugin {
         Some(blockchain_schema())
     }
 
-    async fn query_current_state(&self) -> Result<Value> {
-        Ok(simd_json::serde::to_owned_value(self.read_live().await?)?)
-    }
 
     async fn calculate_diff(&self, current: &Value, desired: &Value) -> Result<StateDiff> {
         // The only writable projection of an append-only audit chain is its DR

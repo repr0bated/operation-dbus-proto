@@ -163,12 +163,6 @@ impl StatePlugin for WgcfPlugin {
         }
     }
 
-    async fn query_current_state(&self) -> Result<Value> {
-        let mut state = Self::current_state();
-        state.config = self.config.clone();
-
-        Ok(simd_json::serde::to_owned_value(state)?)
-    }
 
     async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {
         Ok(StateDiff {

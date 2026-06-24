@@ -5,7 +5,7 @@
 //! called as a standalone `operation.stores.v1.DataStoreService` gRPC package —
 //! there is no such proto and there must not be one (see OD-30).
 //!
-//! The read is **live, not mocked**: `query_current_state` calls
+//! The read is **live, not mocked**: the plugin's live state calls
 //! `StateStore::export_canonical()` on the *same shared store handle* the rest
 //! of the process uses (injected at registration via `PluginCtx::state_store`),
 //! so there is no second DB open / lock contention. It reports the real object
@@ -128,9 +128,6 @@ impl StatePlugin for DataStorePlugin {
         Some(datastore_schema())
     }
 
-    async fn query_current_state(&self) -> Result<Value> {
-        Ok(simd_json::serde::to_owned_value(self.read_live().await?)?)
-    }
 
     async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {
         // Writes flow through the MutationEngine / owning plugins, not through a

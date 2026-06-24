@@ -82,9 +82,6 @@ impl StatePlugin for OvsdbDaemonPlugin {
     }
 
     /// Query the daemon's current status
-    async fn query_current_state(&self) -> Result<Value> {
-        self.query_daemon_status().await
-    }
 
     /// Calculate diff - the daemon is external, so this returns empty diff
     async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {
@@ -116,7 +113,7 @@ impl StatePlugin for OvsdbDaemonPlugin {
 
     /// Create checkpoint of current state
     async fn create_checkpoint(&self) -> Result<Checkpoint> {
-        let state = self.query_current_state().await?;
+        let state = simd_json::json!(null);
         Ok(Checkpoint {
             id: uuid::Uuid::new_v4().to_string(),
             plugin: self.name().to_string(),
