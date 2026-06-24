@@ -55,6 +55,7 @@ pub mod ovsdb_bridge;
 pub mod ovsdb_daemon;
 pub mod packagekit;
 pub mod pcidecl;
+pub mod persona;
 pub(crate) mod plugin_schema_defs;
 pub mod privacy_router;
 pub mod privacy_routes;
