@@ -1,7 +1,7 @@
-//! D-Bus Projection Client — reads live plugin projections from the /opdbus/v1/plugins tree.
+//! D-Bus Projection Client — reads live plugin projections from the /org/opdbus/v1/plugins tree.
 //!
 //! Plugin paths are derived at runtime from /dev/shm/live-schema.json.
-//! Every key in the schema catalog maps to /opdbus/v1/plugins/<plugin_id>.
+//! Every key in the schema catalog maps to /org/opdbus/v1/plugins/<plugin_id>.
 //! No hardcoded paths — if it's not in the schema, it doesn't exist.
 
 use anyhow::Result;
@@ -15,7 +15,7 @@ use zbus::Connection;
 pub type ProjectionCache = Arc<RwLock<HashMap<String, Value>>>;
 
 const DBUS_SERVICE: &str = op_core::config::OPDBUS_BUS_NAME;
-const PLUGIN_ROOT: &str = "/opdbus/v1/plugins";
+const PLUGIN_ROOT: &str = op_core::config::PLUGIN_BASE_PATH;
 const PROJECTED_OBJECT_IFACE: &str = "org.opdbus.ProjectedObjectV1";
 const SHM_SCHEMA_PATH: &str = "/dev/shm/live-schema.json";
 

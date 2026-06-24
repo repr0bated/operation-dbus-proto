@@ -108,15 +108,14 @@ async fn main() -> Result<()> {
         );
     }
 
-    // Connect to the op-dbus session bus (not the system bus).
-    // op-dbus-mirror owns org.opdbus.v1 on a private session bus;
-    // we must join that bus so our rovs/* objects are reachable.
-    let session_bus_addr = std::env::var("DBUS_SESSION_BUS_ADDRESS")
-        .unwrap_or_else(|_| "unix:path=/run/op-dbus/session-bus.sock".to_string());
-    let conn = Connection::session()
+    // Connect to the system D-Bus bus.
+    // The projection server owns org.opdbus.v1.plugins on the system bus;
+    // we request the distinct name org.opdbus.v1.plugins.ovsdb on the same
+    // bus so rovs/* objects are reachable by clients dialing that name.
+    let conn = Connection::system()
         .await
-        .context("Failed to connect to session D-Bus")?;
-    info!("Connected to session D-Bus ({})", session_bus_addr);
+        .context("Failed to connect to system D-Bus")?;
+    info!("Connected to system D-Bus");
 
     // Register TWO separate object paths (locked design).
     let grpc_state = state.clone();

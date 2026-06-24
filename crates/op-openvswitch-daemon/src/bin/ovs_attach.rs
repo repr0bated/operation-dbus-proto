@@ -2,8 +2,8 @@
 //! for container bootstrap.
 //!
 //! Discovers all config from the D-Bus tree under:
-//! - /org/opdbus/v1/plugin/plugins/oci (loopback_required, port_attach per container)
-//! - /org/opdbus/v1/plugin/plugins/privacy_router (bridge, port, IPs — fallback)
+//! - /org/opdbus/v1/plugins/oci (loopback_required, port_attach per container)
+//! - /org/opdbus/v1/plugins/privacy_router (bridge, port, IPs — fallback)
 //!
 //! No hardcoded bus names, paths, or IP addresses. The schema IS the config.
 
@@ -17,8 +17,8 @@ use zbus::connection::Builder;
 
 const DBUS_SOCKET: &str = "/run/op-dbus.sock";
 const PLUGIN_BUS: &str = op_core::config::OPDBUS_BUS_NAME;
-const PRIVACY_ROUTER_BASE: &str = "/org/opdbus/v1/plugin/plugins/privacy_router";
-const OCI_BASE: &str = "/org/opdbus/v1/plugin/plugins/oci";
+const PRIVACY_ROUTER_BASE: &str = "/org/opdbus/v1/plugins/privacy_router";
+const OCI_BASE: &str = "/org/opdbus/v1/plugins/oci";
 
 async fn get_json_property(conn: &zbus::Connection, path: &str, prop: &str) -> Result<Value> {
     let iface = "org.opdbus.ProjectedObjectV1".to_string();
@@ -138,7 +138,7 @@ async fn main() -> Result<()> {
 
         let daemon = get_json_property(
             &conn,
-            "/org/opdbus/v1/plugin/plugins/ovsdb_daemon",
+            "/org/opdbus/v1/plugins/ovsdb_daemon",
             "JsonData",
         )
         .await?;
@@ -233,7 +233,7 @@ async fn main() -> Result<()> {
     // Discover AttachPort method location
     let daemon = get_json_property(
         &conn,
-        "/org/opdbus/v1/plugin/plugins/ovsdb_daemon",
+        "/org/opdbus/v1/plugins/ovsdb_daemon",
         "JsonData",
     )
     .await?;

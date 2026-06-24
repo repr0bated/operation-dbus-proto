@@ -211,6 +211,30 @@ impl MutationEngine {
         )
         .await;
 
+        // Write the affected plugin's full state to the shm projection layer.
+        // This is the 1:1 read-through source for the projected D-Bus tree:
+        // the mutation fold (state_cache) is serialized to tmpfs so the
+        // projection server can read zero-copy. Written BEFORE the StateChange
+        // is broadcast so subscribers always see the post-mutation state.
+        if let Some(state) = self.get_state(&plugin_id).await {
+            match simd_json::to_string(&state) {
+                Ok(json) => {
+                    if let Err(e) =
+                        op_core::projection_shm::write_projection(&plugin_id, json.as_bytes())
+                    {
+                        tracing::warn!(plugin_id = %plugin_id, error = %e, "Failed to write shm projection");
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        plugin_id = %plugin_id,
+                        error = %e,
+                        "Failed to serialize plugin state for shm projection"
+                    );
+                }
+            }
+        }
+
         let change = StateChange {
             change_id: uuid::Uuid::new_v4().to_string(),
             event_id: event.event_id,

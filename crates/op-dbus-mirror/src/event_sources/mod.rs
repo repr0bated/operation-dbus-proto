@@ -4,4 +4,3 @@ pub mod component_registry;
 pub mod nonnet;
 pub mod ovsdb;
 pub mod procfs;
-pub mod state_manager;
