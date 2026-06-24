@@ -81,18 +81,61 @@ impl Default for CtlPlaneChatbotConfig {
 
 // ── Schema state (schemars-derived) ─────────────────────────────────────────
 
+/// Interchangeable Voyage-4 embedding models.
+///
+/// `voyage-4-large`, `voyage-4` and `voyage-4-lite` share **one** embedding
+/// space: vectors from any of the three are directly comparable, so all three
+/// write to the *same* Qdrant collection at the *same* dimensionality
+/// ([`VoyageModel::SHARED_EMBEDDING_DIMS`]). Switching models is a quality/cost
+/// tradeoff only — it never requires re-vectorizing existing data.
+///
+/// `voyage-4-nano` is **deliberately excluded**: it does not share this space
+/// (different dimensionality), so mixing it in would silently break cross-model
+/// comparison and force a re-index. If it is ever needed it must get its own
+/// collection, not this one.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum VoyageModel {
-    #[serde(rename = "voyage-4-lite")]
-    Voyage4Lite,
+    #[serde(rename = "voyage-4-large")]
+    Voyage4Large,
     #[serde(rename = "voyage-4")]
     Voyage4,
+    #[serde(rename = "voyage-4-lite")]
+    Voyage4Lite,
 }
 
 impl Default for VoyageModel {
     fn default() -> Self {
+        // POC target; cheapest of the shared-space trio.
         VoyageModel::Voyage4Lite
+    }
+}
+
+impl VoyageModel {
+    /// The single shared embedding dimensionality for the interchangeable
+    /// voyage-4 trio. One collection, no re-index across models.
+    pub const SHARED_EMBEDDING_DIMS: u32 = 1024;
+
+    /// The interchangeable models, all in the shared embedding space.
+    pub const SHARED_SPACE: [VoyageModel; 3] = [
+        VoyageModel::Voyage4Large,
+        VoyageModel::Voyage4,
+        VoyageModel::Voyage4Lite,
+    ];
+
+    /// Canonical Voyage API model id.
+    pub fn model_id(&self) -> &'static str {
+        match self {
+            VoyageModel::Voyage4Large => "voyage-4-large",
+            VoyageModel::Voyage4 => "voyage-4",
+            VoyageModel::Voyage4Lite => "voyage-4-lite",
+        }
+    }
+
+    /// Output dimensionality. Identical across the trio so their vectors fuse
+    /// and compare in the same Qdrant collection.
+    pub fn dimensions(&self) -> u32 {
+        Self::SHARED_EMBEDDING_DIMS
     }
 }
 
@@ -318,7 +361,7 @@ pub struct Significance {
 pub struct CtlPlaneChatbotState {
     #[serde(default)]
     #[schemars(
-        description = "Voyage embedding model for reasoning episodes (REQ-4). POC target: voyage-4-lite",
+        description = "Voyage embedding model for reasoning episodes (REQ-4). The three voyage-4 models share one embedding space (1024-dim, one Qdrant collection) — switching never requires re-vectorizing. voyage-4-nano is excluded (different dim). POC target: voyage-4-lite",
         example = &"voyage-4",
         extend("x-oscal-subid" = "mut.software.plugin.ctl-plane-chatbot.voyage-model@v1")
     )]
@@ -901,10 +944,10 @@ fn ctl_plane_chatbot_schema_inner() -> PluginSchema {
         // ── Pipeline config (tunable) ──────────────────────────────────────
         .field("voyage_model", FieldSchema {
             field_type: FieldType::Enum(vec![
-                "voyage-4-lite".to_string(), "voyage-4".to_string(),
+                "voyage-4-large".to_string(), "voyage-4".to_string(), "voyage-4-lite".to_string(),
             ]),
             required: false,
-            description: "Voyage embedding model for reasoning episodes (REQ-4). POC target: voyage-4-lite".to_string(),
+            description: "Voyage embedding model for reasoning episodes (REQ-4). The three voyage-4 models share one embedding space (1024-dim, one Qdrant collection) — switching never requires re-vectorizing. voyage-4-nano is excluded (different dim). POC target: voyage-4-lite".to_string(),
             default: Some(json!("voyage-4-lite")), example: Some(json!("voyage-4")),
             constraints: Vec::new(), read_only: false, read_only_when: None,
         })
