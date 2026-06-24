@@ -31,6 +31,7 @@ const DEFAULT_VECTOR_DIMS: u32 = 1024;
 const DEFAULT_DEDUP_WINDOW_HRS: u32 = 24;
 const DEFAULT_QUEUE_ALERT_THRESHOLD: u32 = 50;
 const DEFAULT_NESTING_POLICY: &str = "flat";
+const DEFAULT_OUTPUT_DTYPE: &str = "float";
 
 // ── Config (vectorization pipeline tuning) ──────────────────────────────────
 
@@ -42,6 +43,8 @@ pub struct CtlPlaneChatbotConfig {
     pub qdrant_collection: String,
     #[serde(default)]
     pub vector_dims: u32,
+    #[serde(default = "default_output_dtype")]
+    pub output_dtype: String,
     #[serde(default)]
     pub dedup_window_hrs: u32,
     #[serde(default)]
@@ -61,6 +64,9 @@ fn default_collection() -> String {
 fn default_nesting_policy() -> String {
     DEFAULT_NESTING_POLICY.into()
 }
+fn default_output_dtype() -> String {
+    DEFAULT_OUTPUT_DTYPE.into()
+}
 fn default_true() -> bool {
     true
 }
@@ -71,6 +77,7 @@ impl Default for CtlPlaneChatbotConfig {
             voyage_model: default_voyage_model(),
             qdrant_collection: default_collection(),
             vector_dims: DEFAULT_VECTOR_DIMS,
+            output_dtype: default_output_dtype(),
             dedup_window_hrs: DEFAULT_DEDUP_WINDOW_HRS,
             queue_alert_threshold: DEFAULT_QUEUE_ALERT_THRESHOLD,
             nesting_policy: default_nesting_policy(),
@@ -89,10 +96,13 @@ impl Default for CtlPlaneChatbotConfig {
 /// ([`VoyageModel::SHARED_EMBEDDING_DIMS`]). Switching models is a quality/cost
 /// tradeoff only — it never requires re-vectorizing existing data.
 ///
-/// `voyage-4-nano` is **deliberately excluded**: it does not share this space
-/// (different dimensionality), so mixing it in would silently break cross-model
-/// comparison and force a re-index. If it is ever needed it must get its own
-/// collection, not this one.
+/// `voyage-4-nano` is **deliberately excluded from this collection**, but for a
+/// different reason than the domain models: per Voyage, "all 4 series models are
+/// compatible with each other," so nano *is* in the same embedding space — it is
+/// just dimensionally **capped at ≤512** (128/256/512). Our collection is pinned
+/// at 1024, which nano cannot produce, so it can't join here. (It could join a
+/// 256/512 collection.) Adding it to the 1024 trio would force everything down to
+/// 512. Out for the 1024 setup — not out of the space.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum VoyageModel {
@@ -136,6 +146,61 @@ impl VoyageModel {
     /// and compare in the same Qdrant collection.
     pub fn dimensions(&self) -> u32 {
         Self::SHARED_EMBEDDING_DIMS
+    }
+}
+
+/// Matryoshka output dimensions. A 2048-dim voyage-4 vector's leading *k* entries
+/// (256/512/1024) are themselves a valid k-dim embedding, so a collection can be
+/// truncated to a shorter dim later **without re-vectorizing** (leading-k +
+/// re-normalize). Every vector in one Qdrant collection must still share one dim;
+/// 1024 is the trio default.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, PartialEq)]
+pub enum MatryoshkaDim {
+    #[serde(rename = "256")]
+    D256,
+    #[serde(rename = "512")]
+    D512,
+    #[serde(rename = "1024")]
+    D1024,
+    #[serde(rename = "2048")]
+    D2048,
+}
+
+impl Default for MatryoshkaDim {
+    fn default() -> Self {
+        MatryoshkaDim::D1024
+    }
+}
+
+impl MatryoshkaDim {
+    /// Numeric dimensionality.
+    pub fn dims(&self) -> u32 {
+        match self {
+            MatryoshkaDim::D256 => 256,
+            MatryoshkaDim::D512 => 512,
+            MatryoshkaDim::D1024 => 1024,
+            MatryoshkaDim::D2048 => 2048,
+        }
+    }
+}
+
+/// Output precision / quantization for stored vectors. `float` (default, highest
+/// accuracy) → `int8`/`uint8` (4× smaller) → `binary`/`ubinary` (32× smaller,
+/// bit-packed). Qdrant stores and searches all of these natively. Changing dtype
+/// is a precision change, **not** a re-vectorize.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum OutputDtype {
+    Float,
+    Int8,
+    Uint8,
+    Binary,
+    Ubinary,
+}
+
+impl Default for OutputDtype {
+    fn default() -> Self {
+        OutputDtype::Float
     }
 }
 
@@ -198,9 +263,6 @@ impl Default for SignificanceLevel {
     }
 }
 
-fn default_vector_dims() -> u32 {
-    DEFAULT_VECTOR_DIMS
-}
 fn default_dedup_window_hrs() -> u32 {
     DEFAULT_DEDUP_WINDOW_HRS
 }
@@ -372,12 +434,18 @@ pub struct CtlPlaneChatbotState {
         extend("x-oscal-subid" = "mut.software.plugin.ctl-plane-chatbot.qdrant-collection@v1")
     )]
     pub qdrant_collection: String,
-    #[serde(default = "default_vector_dims")]
+    #[serde(default)]
     #[schemars(
-        description = "Vector dimensions (1024 for voyage-4-lite, flexible post-POC)",
+        description = "Matryoshka output dimension (Voyage output_dimension). One per Qdrant collection; can be truncated to a shorter dim later (leading-k) without re-vectorizing. Default 1024.",
         extend("x-oscal-subid" = "mut.software.plugin.ctl-plane-chatbot.vector-dims@v1")
     )]
-    pub vector_dims: u32,
+    pub vector_dims: MatryoshkaDim,
+    #[serde(default)]
+    #[schemars(
+        description = "Output precision / quantization (Voyage output_dtype): float (default) → int8/uint8 (4x smaller) → binary/ubinary (32x). Qdrant stores all natively. Changing dtype is a precision change, not a re-vectorize.",
+        extend("x-oscal-subid" = "mut.software.plugin.ctl-plane-chatbot.output-dtype@v1")
+    )]
+    pub output_dtype: OutputDtype,
     #[serde(default = "default_dedup_window_hrs")]
     #[schemars(
         description = "Content-hash dedup collision window in hours (REQ-7, default 24)",
@@ -515,6 +583,7 @@ impl StatePlugin for CtlPlaneChatbotPlugin {
         field_diff!(voyage_model, "voyage_model");
         field_diff!(qdrant_collection, "qdrant_collection");
         field_diff!(vector_dims, "vector_dims");
+        field_diff!(output_dtype, "output_dtype");
         field_diff!(dedup_window_hrs, "dedup_window_hrs");
         field_diff!(queue_alert_threshold, "queue_alert_threshold");
         field_diff!(nesting_policy, "nesting_policy");
@@ -620,6 +689,10 @@ pub(crate) fn ctl_plane_chatbot_schema_golden() -> PluginSchema {
         (
             "vector_dims",
             "mut.software.plugin.ctl-plane-chatbot.vector-dims@v1",
+        ),
+        (
+            "output_dtype",
+            "mut.software.plugin.ctl-plane-chatbot.output-dtype@v1",
         ),
         (
             "dedup_window_hrs",
@@ -958,10 +1031,23 @@ fn ctl_plane_chatbot_schema_inner() -> PluginSchema {
             constraints: Vec::new(), read_only: false, read_only_when: None,
         })
         .field("vector_dims", FieldSchema {
-            field_type: FieldType::Integer, required: false,
-            description: "Vector dimensions (1024 for voyage-4-lite, flexible post-POC)".to_string(),
-            default: Some(json!(1024)), example: None,
-            constraints: vec![Constraint::Min { value: 0.0 }], read_only: false, read_only_when: None,
+            field_type: FieldType::Enum(vec![
+                "256".to_string(), "512".to_string(), "1024".to_string(), "2048".to_string(),
+            ]),
+            required: false,
+            description: "Matryoshka output dimension (Voyage output_dimension). One per Qdrant collection; can be truncated to a shorter dim later (leading-k) without re-vectorizing. Default 1024.".to_string(),
+            default: Some(json!("1024")), example: None,
+            constraints: Vec::new(), read_only: false, read_only_when: None,
+        })
+        .field("output_dtype", FieldSchema {
+            field_type: FieldType::Enum(vec![
+                "float".to_string(), "int8".to_string(), "uint8".to_string(),
+                "binary".to_string(), "ubinary".to_string(),
+            ]),
+            required: false,
+            description: "Output precision / quantization (Voyage output_dtype): float (default) → int8/uint8 (4x smaller) → binary/ubinary (32x). Qdrant stores all natively. Changing dtype is a precision change, not a re-vectorize.".to_string(),
+            default: Some(json!("float")), example: None,
+            constraints: Vec::new(), read_only: false, read_only_when: None,
         })
         .field("dedup_window_hrs", FieldSchema {
             field_type: FieldType::Integer, required: false,
