@@ -163,7 +163,7 @@ fn plugin_info_from_schema(id: &str, schema: &JsonValue) -> PluginInfo {
         name,
         version,
         description,
-        dbus_path: format!("/opdbus/v1/plugins/{}", id.replace('.', "/")),
+        dbus_path: format!("/org/opdbus/v1/plugins/{}", id.replace('.', "/")),
         interfaces: vec!["org.opdbus.v1.Plugin".to_string()],
         tags,
     }
@@ -175,7 +175,7 @@ fn zeroclaw_plugin_info() -> PluginInfo {
         name: "zeroclaw".to_string(),
         version: "1.0.0".to_string(),
         description: "Zeroclaw schema/RPC-native model router for Antigravity UI".to_string(),
-        dbus_path: "/opdbus/v1/plugins/zeroclaw".to_string(),
+        dbus_path: "/org/opdbus/v1/plugins/zeroclaw".to_string(),
         interfaces: vec!["org.opdbus.v1.Plugin".to_string()],
         tags: vec!["llm".to_string(), "antigravity".to_string()],
     }
@@ -1563,7 +1563,7 @@ impl OperationGrpcServer {
 
         let proxy = Proxy::new(
             &conn,
-            op_core::config::OPDBUS_BUS_NAME,
+            op_core::config::MIRROR_BUS_NAME,
             "/org/opdbus/v1/ovsdb",
             "org.opdbus.OvsdbV1",
         )
@@ -2395,7 +2395,7 @@ impl OperationGrpcServer {
 
         let proxy = Proxy::new(
             &conn,
-            op_core::config::OPDBUS_BUS_NAME,
+            op_core::config::MIRROR_BUS_NAME,
             "/org/opdbus/v1/mail",
             "org.opdbus.MailV1",
         )
@@ -2980,7 +2980,7 @@ impl OperationGrpcServer {
 
         let proxy = Proxy::new(
             &conn,
-            op_core::config::OPDBUS_BUS_NAME,
+            op_core::config::MIRROR_BUS_NAME,
             "/org/opdbus/v1/privacy",
             "org.opdbus.PrivacyV1",
         )
@@ -3859,7 +3859,7 @@ impl OperationGrpcServer {
 
         let proxy = Proxy::new(
             &conn,
-            op_core::config::OPDBUS_BUS_NAME,
+            op_core::config::MIRROR_BUS_NAME,
             "/org/opdbus/v1/registration",
             "org.opdbus.RegistrationV1",
         )

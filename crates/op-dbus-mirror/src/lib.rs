@@ -34,7 +34,6 @@ use managed_objects::{
 use op_core::types::BusType;
 use op_grpc_bridge::{OperationGrpcServer, MutationEngine};
 use op_network::rovs_proxy::OvsdbDbusClient;
-use op_state::manager::StateManager;
 use procfs::Current as _;
 use serde_json::{Map, Value};
 use std::collections::HashSet;
@@ -70,8 +69,6 @@ pub struct DbusMirror {
     /// Optional handle to the gRPC server so the ComponentRegistry can be
     /// mirrored into the D-Bus tree under /org/opdbus/v1/registry/.
     grpc_server: Option<Arc<OperationGrpcServer>>,
-    /// StateManager for enumerating all registered plugins (active or not).
-    state_manager: Option<Arc<StateManager>>,
     /// Current data and sequence numbers per object path
     current_data: DashMap<String, (Value, u64)>,
     /// Per-session state keyed by peer name
@@ -97,7 +94,6 @@ impl DbusMirror {
             published_objects: DashMap::new(),
             plugin_registry: Arc::new(DashMap::new()),
             grpc_server: None,
-            state_manager: None,
             current_data: DashMap::new(),
             sessions: DashMap::new(),
         })
@@ -106,13 +102,6 @@ impl DbusMirror {
     /// Attach a gRPC server so the ComponentRegistry is mirrored into D-Bus.
     pub fn with_grpc_server(mut self, grpc_server: Arc<OperationGrpcServer>) -> Self {
         self.grpc_server = Some(grpc_server);
-        self
-    }
-
-    /// Attach the StateManager so all registered plugins are always visible in
-    /// the managed objects tree (active or not).
-    pub fn with_state_manager(mut self, state_manager: Arc<StateManager>) -> Self {
-        self.state_manager = Some(state_manager);
         self
     }
 
@@ -130,14 +119,6 @@ impl DbusMirror {
             .at("/org/opdbus/v1", om)
             .await?;
 
-        // Register PluginsV1 at the canonical plugins path.
-        let plugin_iface = plugin_interface::PluginInterface::new();
-        let plugin_snap = plugin_iface.snapshot_handle();
-        self.connection
-            .object_server()
-            .at("/org/opdbus/v1/plugins", plugin_iface)
-            .await?;
-
         // Register mirror-management interface
         let interface = dbus_interface::DbusMirrorInterface::new(self.clone());
         self.connection
@@ -153,8 +134,10 @@ impl DbusMirror {
             .at("/org/opdbus/v1/ovsdb", ovsdb_interface)
             .await?;
 
+        // The mirror owns org.opdbus.v1.mirror (NOT org.opdbus.v1.plugins,
+        // which is the sole property of the projection server).
         self.connection
-            .request_name(op_core::config::OPDBUS_BUS_NAME)
+            .request_name(op_core::config::MIRROR_BUS_NAME)
             .await?;
 
         // Initial full sync
@@ -166,7 +149,6 @@ impl DbusMirror {
         let dispatcher = crate::event_dispatcher::EventDispatcher::new(
             self.clone(),
             self.ovsdb.clone(),
-            self.state_manager.clone(),
             self.grpc_server.clone(),
         );
 
@@ -187,9 +169,6 @@ impl DbusMirror {
         if let Err(e) = dispatcher.run_event_loop().await {
             tracing::error!("Event loop failed: {}", e);
         }
-
-        // Populate fixed objects immediately on startup.
-        self.refresh_plugin_snapshot(&plugin_snap).await;
 
         // Watch ComponentRegistry for live register/deregister events
         if let Some(grpc) = &self.grpc_server {
@@ -269,12 +248,7 @@ impl DbusMirror {
             tracing::warn!("Process snapshot failed: {}", e);
         }
 
-        // 8. Keep plugin objects published even when a plugin is currently inactive.
-        if let Err(e) = self.publish_plugin_snapshot(&mut active_paths).await {
-            tracing::warn!("Plugin snapshot failed: {}", e);
-        }
-
-        // 9. Remove any D-Bus objects that no longer exist in any authority
+        // 8. Remove any D-Bus objects that no longer exist in any authority
         self.remove_stale_publications(&active_paths).await?;
 
         Ok(())
@@ -763,89 +737,6 @@ impl DbusMirror {
         }
         map.insert("metadata".into(), Value::Object(meta));
         Value::Object(map)
-    }
-
-    /// Push current plugin state into the fixed PluginInterface object.
-    async fn refresh_plugin_snapshot(&self, handle: &plugin_interface::PluginSnapshot) {
-        let sm = match &self.state_manager {
-            Some(sm) => sm.clone(),
-            None => return,
-        };
-        let live_state_raw = sm.query_current_state().await.unwrap_or_default();
-        let live_state: std::collections::HashMap<String, Value> = live_state_raw
-            .into_iter()
-            .map(|(k, v)| (k, serde_json::to_value(&v).unwrap_or_default()))
-            .collect();
-        let mut map = std::collections::HashMap::new();
-        for name in sm.list_plugins() {
-            let json = match live_state.get(&name) {
-                Some(state) => {
-                    let mut obj = match state {
-                        Value::Object(o) => o.clone(),
-                        other => {
-                            let mut m = Map::new();
-                            m.insert("state".into(), other.clone());
-                            m
-                        }
-                    };
-                    obj.insert("active".into(), Value::from(true));
-                    serde_json::to_string(&Value::Object(obj)).unwrap_or_default()
-                }
-                None => format!("{{\"active\":false,\"name\":{:?}}}", name),
-            };
-            map.insert(name, json);
-        }
-        *handle.write().await = map;
-    }
-
-    /// Publish every registered plugin as a stable D-Bus object.
-    ///
-    /// If a plugin cannot currently provide state, it still appears in the tree
-    /// with `active: false`.
-    async fn publish_plugin_snapshot(&self, active_paths: &mut HashSet<String>) -> Result<()> {
-        let sm = match &self.state_manager {
-            Some(sm) => sm.clone(),
-            None => return Ok(()),
-        };
-
-        let live_state_raw = sm.query_current_state().await.unwrap_or_default();
-        let live_state: std::collections::HashMap<String, Value> = live_state_raw
-            .into_iter()
-            .map(|(k, v)| (k, serde_json::to_value(&v).unwrap_or_default()))
-            .collect();
-
-        for plugin_name in sm.list_plugins() {
-            let path = Self::plugin_dbus_path(&plugin_name);
-            let data = match live_state.get(&plugin_name) {
-                Some(state) => {
-                    let mut obj = match state {
-                        Value::Object(o) => o.clone(),
-                        other => {
-                            let mut m = Map::new();
-                            m.insert("state".into(), other.clone());
-                            m
-                        }
-                    };
-                    obj.insert("active".into(), Value::from(true));
-                    obj.insert("name".into(), Value::from(plugin_name.clone()));
-                    Value::Object(obj)
-                }
-                None => serde_json::json!({
-                    "active": false,
-                    "name": plugin_name.clone(),
-                }),
-            };
-
-            self.publish_object(&path, data.clone()).await?;
-            active_paths.insert(path.clone());
-
-            if live_state.contains_key(&plugin_name) {
-                self.publish_plugin_children(&path, &data, active_paths)
-                    .await?;
-            }
-        }
-
-        Ok(())
     }
 
     async fn publish_plugin_children(

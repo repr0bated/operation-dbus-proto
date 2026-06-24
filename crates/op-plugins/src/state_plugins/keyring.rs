@@ -51,14 +51,14 @@ impl KeyringPlugin {
     }
 
     /// Connect to the Secret Service via the op-dbus plugin system.
-    /// The freedesktop plugin at /org/opdbus/v1/plugin/plugins/freedesktop
+    /// The freedesktop plugin at /org/opdbus/v1/plugins/freedesktop
     /// owns the org.freedesktop.secrets name on the op-dbus session bus.
     async fn connect_service(&self) -> Result<Proxy<'static>> {
         let conn = Connection::session().await?;
         let proxy = Proxy::new(
             &conn,
             op_core::config::OPDBUS_BUS_NAME,
-            "/org/opdbus/v1/plugin/plugins/freedesktop",
+            crate::canonical::plugin_path("freedesktop"),
             "org.opdbus.v1.Plugin.Plugins.FreeDesktop",
         )
         .await?;
@@ -93,7 +93,7 @@ impl Default for KeyringPlugin {
 
 impl KeyringPlugin {
     /// Check if the Secret Service is available via the op-dbus freedesktop plugin.
-    /// The freedesktop plugin at /org/opdbus/v1/plugin/plugins/freedesktop
+    /// The freedesktop plugin at /org/opdbus/v1/plugins/freedesktop
     /// provides org.freedesktop.secrets through the plugin system.
     /// NOTE: is_available() must NOT spawn subprocesses or do blocking I/O
     /// because it runs during daemon initialization before the D-Bus name is claimed.
@@ -156,7 +156,7 @@ impl StatePlugin for KeyringPlugin {
     }
 
     fn unavailable_reason(&self) -> String {
-        "org.freedesktop.secrets not available via op-dbus freedesktop plugin at /org/opdbus/v1/plugin/plugins/freedesktop".to_string()
+        "org.freedesktop.secrets not available via op-dbus freedesktop plugin at /org/opdbus/v1/plugins/freedesktop".to_string()
     }
 
     async fn query_current_state(&self) -> Result<Value> {

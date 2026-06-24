@@ -62,8 +62,8 @@ impl KnowledgePlugin {
         let qdrant_endpoint = Self::qdrant_endpoint();
         KnowledgeState {
             status: "active".to_string(),
-            stores: json!([{"name": "qdrant", "type": "vector", "status": "unknown", "endpoint": qdrant_endpoint, "collections": [], "dimensions": 1536}, {"name": "cozo", "type": "graph", "status": "active", "relations": 0, "stored_procedure_count": 0}, {"name": "sled", "type": "kv", "status": "active", "path": "/dev/shm/plugin_schema.dat"}]),
-            embedding: json!({"pipeline": "default", "provider": "none", "model": null, "queue_size": 0, "worker_status": "idle", "chunk_size": 512, "chunk_overlap": 50}),
+            stores: json!([{"name": "qdrant", "type": "vector", "status": "unknown", "endpoint": qdrant_endpoint, "collections": [], "dimensions": 1024}, {"name": "cozo", "type": "graph", "status": "active", "relations": 0, "stored_procedure_count": 0}, {"name": "sled", "type": "kv", "status": "active", "path": "/dev/shm/plugin_schema.dat"}]),
+            embedding: json!({"pipeline": "default", "provider": "voyage", "model": "voyage-4", "queue_size": 0, "worker_status": "idle", "chunk_size": 512, "chunk_overlap": 50}),
             config: json!({"qdrant_endpoint": qdrant_endpoint, "cozo_db": "/var/lib/op-dbus/cognitive.db", "auto_capture": false, "suggest_on_query": true}),
         }
     }
