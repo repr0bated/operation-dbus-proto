@@ -53,10 +53,19 @@ async fn main() -> Result<()> {
         .await
         .context("failed to start projection D-Bus server")?;
 
-    // 3. Initial tree sync: read all shm projection files and mount objects.
+    // 3. Initial tree sync: mount from shm (mutations) then seed all known
+    //    plugin roots from the schema catalog so the tree is never empty.
     dbus_server.sync_from_shm().await?;
+
+    let known_plugins: Vec<String> = plugin_reader
+        .projection_schemas()
+        .iter()
+        .map(|s| s.name.clone())
+        .collect();
+    dbus_server.seed_plugin_roots(&known_plugins).await?;
+
     let count = dbus_server.object_count().await;
-    info!(objects = count, "Initial tree sync from shm complete");
+    info!(objects = count, plugins = known_plugins.len(), "Initial tree sync complete");
 
     // 4. Initialize JSON-stream server (for WebSocket clients).
     let mut stream_server = ProjectionStreamServer::new();
