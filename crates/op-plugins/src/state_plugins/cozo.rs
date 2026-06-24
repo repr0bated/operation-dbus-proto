@@ -161,7 +161,9 @@ impl StatePlugin for CozoPlugin {
     }
 
     fn schema(&self) -> Option<PluginSchema> {
-        Some(cozo_schema())
+        let mut schema = cozo_schema();
+        super::common::oscal::ensure_category_metadata_fields(&mut schema);
+        Some(schema)
     }
 
     async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {
@@ -216,13 +218,23 @@ impl StatePlugin for CozoPlugin {
 pub(crate) fn cozo_schema() -> PluginSchema {
     let state =
         simd_json::serde::to_owned_value(CozoPlugin::exemplar_state()).unwrap_or_else(|_| json!({}));
-    schema_from_state(
+    let mut schema = schema_from_state(
         "cozo",
         "data",
         "1.0.0",
         "CozoDB relational-graph-vector database — relations, indices, HNSW, triggers, Datalog",
         &state,
-    )
+    );
+    schema.subids.insert("__schema__".to_string(), "sch.software.plugin.cozo.schema@v1".to_string());
+    schema.subids.insert("engine".to_string(), "src.software.plugin.cozo.engine@v1".to_string());
+    schema.subids.insert("path".to_string(), "src.software.plugin.cozo.path@v1".to_string());
+    schema.subids.insert("version".to_string(), "obs.software.plugin.cozo.version@v1".to_string());
+    schema.subids.insert("relations".to_string(), "obs.software.plugin.cozo.relations@v1".to_string());
+    schema.subids.insert("indices".to_string(), "obs.software.plugin.cozo.indices@v1".to_string());
+    schema.subids.insert("hnsw_indices".to_string(), "obs.software.plugin.cozo.hnsw-indices@v1".to_string());
+    schema.subids.insert("triggers".to_string(), "obs.software.plugin.cozo.triggers@v1".to_string());
+    schema.subids.insert("running_queries".to_string(), "obs.software.plugin.cozo.running-queries@v1".to_string());
+    schema
 }
 
 inventory::submit! {
