@@ -76,21 +76,27 @@ impl ProjectedObject {
 
 /// Read projected data for a plugin/path from the shm layer (1:1, zero held cache).
 ///
-/// For the plugin root (empty `path_segments`), returns the raw file contents.
-/// For nested objects, parses the JSON, navigates to the path, and re-serializes.
+/// For the plugin root (empty `path_segments`), returns the `data` field from
+/// the composite shm object (or the raw file if not a composite).
+/// For nested objects, parses the JSON, navigates to the path within `data`,
+/// and re-serializes.
 fn read_projected_data(plugin_id: &str, path_segments: &[String]) -> String {
     let bytes = match op_core::projection_shm::read_projection_bytes(plugin_id) {
         Some(b) => b,
         None => return "{}".to_string(),
     };
+    let value: serde_json::Value = match serde_json::from_slice(&bytes) {
+        Ok(v) => v,
+        Err(_) => return "{}".to_string(),
+    };
+
+    // Navigate from the `data` field if present (composite shm format).
+    let root = value.get("data").unwrap_or(&value);
+
     if path_segments.is_empty() {
-        String::from_utf8(bytes).unwrap_or_else(|_| "{}".to_string())
+        serde_json::to_string(root).unwrap_or_else(|_| "{}".to_string())
     } else {
-        let value: serde_json::Value = match serde_json::from_slice(&bytes) {
-            Ok(v) => v,
-            Err(_) => return "{}".to_string(),
-        };
-        match navigate_json(&value, path_segments) {
+        match navigate_json(root, path_segments) {
             Some(v) => serde_json::to_string(v).unwrap_or_else(|_| "{}".to_string()),
             None => "{}".to_string(),
         }
@@ -332,7 +338,9 @@ async fn sync_plugin_paths(
 fn read_and_derive_paths(plugin_id: &str) -> Option<Vec<Vec<String>>> {
     let bytes = op_core::projection_shm::read_projection_bytes(plugin_id)?;
     let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
-    Some(derive_paths_from_state(&value))
+    // Derive paths from the `data` field if present (composite shm format).
+    let root = value.get("data").unwrap_or(&value);
+    Some(derive_paths_from_state(root))
 }
 
 /// Derive all D-Bus object paths from a plugin's state JSON.
@@ -353,6 +361,11 @@ fn derive_paths_recursive(
                 paths.push(current.clone());
             }
             for (key, child) in map {
+                // Skip underscore-prefixed keys (metadata fields like
+                // `_introspection`) — they don't create child D-Bus objects.
+                if key.starts_with('_') {
+                    continue;
+                }
                 if child.is_object() || child.is_array() {
                     current.push(key.clone());
                     derive_paths_recursive(child, current, paths);
