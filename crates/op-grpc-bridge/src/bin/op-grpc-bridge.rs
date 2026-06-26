@@ -1,26 +1,26 @@
-//! 🟢 🛷 The Shuttle — gRPC Bridge Binary
+//! The Shuttle — gRPC Bridge Binary
 //!
 //! Zero-trust gRPC gateway enforcing the Absolute Base rule via
 //! GhostbridgeInterceptor. Reads the IdentitySled from shared memory
 //! (/dev/shm/plugin_schema.dat) and rejects any request whose footprint
 //! does not match the current Strike/Etch.
 //!
-//! Design:
-//!   - Does NOT write the sled; the SchemaEngine or A.N.N.A. Scribe does.
-//!   - If no valid sled exists, all inbound requests are rejected.
-//!   - Bind address defaults to 127.0.0.1:18789 (Xray redirect target).
-//!   - Shared UDS at /run/ghostbridge/container.sock for container access.
-//!   - Schema-driven routing: every plugin in the live schema catalog is
-//!     automatically exposed as a gRPC-callable D-Bus object.
+//! Dual listener:
+//!   - TCP on GRPC_BIND (default 127.0.0.1:18789) — Xray redirect target.
+//!   - UDS on GHOSTBRIDGE_SOCKET_PATH (default /run/ghostbridge/container.sock)
+//!     — container access with full tonic stack and identity injection.
+//!
+//! SchemaRouter is wired into the live DbusPassthrough path: every plugin in
+//! the SHM catalog is automatically routable without hand-rolled services.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
 
 use op_grpc_bridge::{
-    grpc_server::run_grpc_server,
+    grpc_server::{run_grpc_server, OperationGrpcServer},
     schema_engine::SchemaEngine,
     schema_router::SchemaRouter,
-    shared_socket::{SharedSocketConfig, SharedSocketManager},
+    shared_socket,
 };
 use op_jsonrpc::nonnet::NonNetDb;
 use op_network::rovs_proxy::OvsdbDbusClient;
@@ -45,53 +45,45 @@ async fn main() -> anyhow::Result<()> {
 
     // ── Schema Router (dynamic D-Bus routing from live schema catalog) ───────
     let schema_router = Arc::new(SchemaRouter::new(schema_engine.dbus_connection.clone()));
-    tracing::info!("SchemaRouter initialized — plugins auto-exposed to gRPC from /dev/shm/live-schema.json");
+    let plugin_count = schema_router.list_plugin_ids().await.len();
+    tracing::info!(
+        plugin_count,
+        "SchemaRouter initialized — all plugins auto-exposed to gRPC"
+    );
 
-    // ── Shared Socket (container access via UDS) ─────────────────────────────
-    let socket_config = SharedSocketConfig::default();
-    let socket_manager = Arc::new(SharedSocketManager::new(socket_config.clone()));
-
-    // Spawn the shared socket listener in the background.
-    let sm = socket_manager.clone();
-    let sr = schema_router.clone();
+    // ── Shared UDS (container access — full tonic stack) ────────────────────
+    let se_uds = schema_engine.clone();
+    let sr_uds = schema_router.clone();
     tokio::spawn(async move {
-        match sm.bind().await {
-            Ok(listener) => {
-                tracing::info!(
-                    socket_path = %socket_config.socket_path.display(),
-                    "Shared container socket active — containers can connect"
-                );
-                // Refresh container PID map on startup.
-                sm.refresh_container_map().await;
+        match shared_socket::bind_shared_socket().await {
+            Ok(incoming) => {
+                tracing::info!("Shared container socket active — serving full gRPC stack over UDS");
 
-                // Accept connections and log peer identity.
-                // In a full implementation, this would feed into a tonic server
-                // running on the UDS, but for now we log and validate peers.
-                loop {
-                    match listener.accept().await {
-                        Ok((stream, _addr)) => {
-                            let peer_cred = stream.peer_cred();
-                            match peer_cred {
-                                Ok(cred) => {
-                                    let identity = sm.resolve_peer(cred).await;
-                                    tracing::debug!(
-                                        ?identity,
-                                        "Accepted connection on shared socket"
-                                    );
-                                }
-                                Err(e) => {
-                                    tracing::warn!(
-                                        error = %e,
-                                        "Failed to get peer credentials"
-                                    );
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            tracing::error!(error = %e, "Shared socket accept failed");
-                            break;
-                        }
-                    }
+                use op_grpc_bridge::proto::dbus_passthrough_server::DbusPassthroughServer;
+                use op_grpc_bridge::proto::plugin_service_server::PluginServiceServer;
+                use op_grpc_bridge::proto::state_sync_server::StateSyncServer;
+
+                let server = OperationGrpcServer::new(se_uds)
+                    .with_schema_router(sr_uds);
+
+                let result = tonic::transport::Server::builder()
+                    .add_service(DbusPassthroughServer::with_interceptor(
+                        server.clone(),
+                        shared_socket::uds_identity_interceptor,
+                    ))
+                    .add_service(PluginServiceServer::with_interceptor(
+                        server.clone(),
+                        shared_socket::uds_identity_interceptor,
+                    ))
+                    .add_service(StateSyncServer::with_interceptor(
+                        server.clone(),
+                        shared_socket::uds_identity_interceptor,
+                    ))
+                    .serve_with_incoming(incoming)
+                    .await;
+
+                if let Err(e) = result {
+                    tracing::error!(error = %e, "UDS gRPC server exited with error");
                 }
             }
             Err(e) => {
@@ -103,19 +95,17 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    // ── Bind address ─────────────────────────────────────────────────────────
-    // Per spec: Xray redirects gRPC traffic to 127.0.0.1:18789.
+    // ── TCP Bind address ────────────────────────────────────────────────────
     let addr: SocketAddr = std::env::var("GRPC_BIND")
         .unwrap_or_else(|_| "127.0.0.1:18789".to_string())
         .parse()
         .expect("GRPC_BIND must be a valid socket address");
 
-    tracing::info!(%addr, "The Shuttle gRPC bridge starting");
+    tracing::info!(%addr, "The Shuttle gRPC bridge starting (TCP)");
+    tracing::info!("GhostbridgeInterceptor active — all requests identity-gated");
     tracing::info!(
-        "GhostbridgeInterceptor active — requests require X-Ghostbridge-Footprint + X-Ghostbridge-Trace-ID"
-    );
-    tracing::info!(
-        "Schema-driven passthrough active — D-Bus objects exposed to gRPC automatically"
+        "SchemaRouter: {} plugins auto-exposed via DbusPassthrough",
+        plugin_count
     );
 
     run_grpc_server(addr, schema_engine, None).await?;

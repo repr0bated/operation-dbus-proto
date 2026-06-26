@@ -230,6 +230,8 @@ pub struct OperationGrpcServer {
     schema_engine: Arc<SchemaEngine>,
     plugin_provider: Arc<dyn PluginSchemaProvider>,
     semantic_shuttle: Option<Arc<QdrantSemanticShuttle>>,
+    /// Schema-driven dynamic router for D-Bus passthrough.
+    schema_router: Option<Arc<crate::schema_router::SchemaRouter>>,
     /// Broadcast channel for chain events
     chain_events: broadcast::Sender<ProtoChainEvent>,
     /// Component registry state (shared across clones)
@@ -244,6 +246,7 @@ impl OperationGrpcServer {
             schema_engine,
             plugin_provider: Arc::new(SchemaCatalogPluginProvider),
             semantic_shuttle: None,
+            schema_router: None,
             chain_events: chain_tx,
             registry: Arc::new(RwLock::new(registry)),
         }
@@ -259,9 +262,16 @@ impl OperationGrpcServer {
             schema_engine,
             plugin_provider,
             semantic_shuttle: None,
+            schema_router: None,
             chain_events: chain_tx,
             registry: Arc::new(RwLock::new(registry)),
         }
+    }
+
+    /// Attach the schema-driven dynamic router for D-Bus passthrough.
+    pub fn with_schema_router(mut self, router: Arc<crate::schema_router::SchemaRouter>) -> Self {
+        self.schema_router = Some(router);
+        self
     }
 
     pub fn with_semantic_shuttle(mut self, semantic_shuttle: Arc<QdrantSemanticShuttle>) -> Self {
@@ -4507,13 +4517,8 @@ impl crate::proto::dbus_passthrough_server::DbusPassthrough for OperationGrpcSer
                 plugin_id,
                 sub_path: _,
             } => {
-                // Auto-resolve from canonical naming.
                 let dest = op_plugins::canonical::BASE_SERVICE_NAME.to_string();
-                let path = format!(
-                    "{}/{}",
-                    op_plugins::canonical::PLUGIN_BASE_PATH,
-                    plugin_id
-                );
+                let path = op_plugins::canonical::plugin_path(&plugin_id);
                 let iface = op_plugins::canonical::plugin_interface(&plugin_id);
                 (dest, path, iface)
             }
@@ -4569,7 +4574,7 @@ impl crate::proto::dbus_passthrough_server::DbusPassthrough for OperationGrpcSer
                 plugin_id, sub_path: _,
             } => {
                 let dest = op_plugins::canonical::BASE_SERVICE_NAME.to_string();
-                let p = format!("{}/{}", op_plugins::canonical::PLUGIN_BASE_PATH, plugin_id);
+                let p = op_plugins::canonical::plugin_path(&plugin_id);
                 let iface = op_plugins::canonical::plugin_interface(&plugin_id);
                 (dest, p, iface)
             }
@@ -4629,7 +4634,7 @@ impl crate::proto::dbus_passthrough_server::DbusPassthrough for OperationGrpcSer
                 plugin_id, sub_path: _,
             } => {
                 let dest = op_plugins::canonical::BASE_SERVICE_NAME.to_string();
-                let p = format!("{}/{}", op_plugins::canonical::PLUGIN_BASE_PATH, plugin_id);
+                let p = op_plugins::canonical::plugin_path(&plugin_id);
                 let iface = op_plugins::canonical::plugin_interface(&plugin_id);
                 (dest, p, iface)
             }
@@ -4694,7 +4699,7 @@ impl crate::proto::dbus_passthrough_server::DbusPassthrough for OperationGrpcSer
                 plugin_id, sub_path: _,
             } => {
                 let dest = op_plugins::canonical::BASE_SERVICE_NAME.to_string();
-                let p = format!("{}/{}", op_plugins::canonical::PLUGIN_BASE_PATH, plugin_id);
+                let p = op_plugins::canonical::plugin_path(&plugin_id);
                 let iface = op_plugins::canonical::plugin_interface(&plugin_id);
                 (dest, p, iface)
             }

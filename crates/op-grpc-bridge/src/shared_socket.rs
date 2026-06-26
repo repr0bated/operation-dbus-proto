@@ -1,265 +1,155 @@
-//! Shared Unix Domain Socket Listener
+//! Shared Unix Domain Socket — Full Tonic Data Plane
 //!
-//! Provides a single host-side UDS that thousands of containers can connect
-//! to. The bridge extracts peer credentials (PID/UID) from each connection
-//! and maps them to a container identity (session_id) for routing.
+//! Serves the identical gRPC service stack over a single host-side UDS that
+//! thousands of containers connect to. Identity is resolved from the peer
+//! credentials (via tonic's native `UdsConnectInfo`) and mapped to the
+//! canonical Ghostbridge footprint for the same interceptor gating.
 //!
-//! ## Architecture
+//! ## Identity Model
 //!
 //! ```text
-//! Container A ──┐
-//! Container B ──┼──► /run/ghostbridge/container.sock ──► Bridge
-//! Container C ──┘         (shared UDS)                    │
-//!                                                         ├─ SO_PEERCRED → PID/UID
-//!                                                         ├─ PID → container name
-//!                                                         └─ inject session_id metadata
+//! Container connects → UDS accept → tonic::UdsConnectInfo.peer_cred
+//!   → peer UID/PID as lookup key
+//!   → resolve canonical session_id from /dev/shm/plugin_schema.dat
+//!   → inject x-ghostbridge-footprint + x-ghostbridge-trace-id
+//!   → same GhostbridgeInterceptor applies
 //! ```
 //!
 //! The socket path is configurable via `GHOSTBRIDGE_SOCKET_PATH` env var,
 //! defaulting to `/run/ghostbridge/container.sock`.
 
-use std::os::unix::net::UCred;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::path::PathBuf;
 
 use tokio::net::UnixListener;
-use tokio::sync::RwLock;
-use tracing::{debug, error, info, warn};
+use tokio_stream::wrappers::UnixListenerStream;
+use tonic::transport::server::UdsConnectInfo;
+use tracing::info;
 
 /// Default path for the shared container socket.
 pub const DEFAULT_SOCKET_PATH: &str = "/run/ghostbridge/container.sock";
 
-/// Peer identity resolved from socket credentials.
-#[derive(Debug, Clone)]
-pub struct PeerIdentity {
-    /// Process ID of the connecting peer.
-    pub pid: u32,
-    /// User ID of the connecting peer.
-    pub uid: u32,
-    /// Resolved container name (if the PID belongs to a known container).
-    pub container_name: Option<String>,
-    /// Session ID derived from the container identity.
-    pub session_id: Option<String>,
-}
-
-/// Configuration for the shared socket listener.
-#[derive(Debug, Clone)]
-pub struct SharedSocketConfig {
-    /// Filesystem path for the shared UDS.
-    pub socket_path: PathBuf,
-    /// File permissions (octal) for the socket file.
-    pub socket_mode: u32,
-}
-
-impl Default for SharedSocketConfig {
-    fn default() -> Self {
-        let path = std::env::var("GHOSTBRIDGE_SOCKET_PATH")
-            .unwrap_or_else(|_| DEFAULT_SOCKET_PATH.to_string());
-        Self {
-            socket_path: PathBuf::from(path),
-            socket_mode: 0o666,
-        }
-    }
-}
-
-/// Manages the shared UDS and peer identity resolution.
-pub struct SharedSocketManager {
-    config: SharedSocketConfig,
-    /// Mapping of container PIDs to container names (refreshed from incus).
-    container_pids: Arc<RwLock<std::collections::HashMap<u32, String>>>,
-}
-
-impl SharedSocketManager {
-    pub fn new(config: SharedSocketConfig) -> Self {
-        Self {
-            config,
-            container_pids: Arc::new(RwLock::new(std::collections::HashMap::new())),
-        }
-    }
-
-    /// Create the shared socket, removing any stale file.
-    pub async fn bind(&self) -> std::io::Result<UnixListener> {
-        let path = &self.config.socket_path;
-
-        // Ensure parent directory exists.
-        if let Some(parent) = path.parent() {
-            tokio::fs::create_dir_all(parent).await?;
-        }
-
-        // Remove stale socket file.
-        if path.exists() {
-            tokio::fs::remove_file(path).await?;
-        }
-
-        let listener = UnixListener::bind(path)?;
-
-        // Set permissions so containers can connect.
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let perms = std::fs::Permissions::from_mode(self.config.socket_mode);
-            std::fs::set_permissions(path, perms)?;
-        }
-
-        info!(
-            socket_path = %path.display(),
-            "Shared container socket bound"
-        );
-
-        Ok(listener)
-    }
-
-    /// Resolve peer identity from Unix socket credentials.
-    pub async fn resolve_peer(&self, cred: UCred) -> PeerIdentity {
-        let pid = cred.pid().unwrap_or(0) as u32;
-        let uid = cred.uid();
-
-        // Try to resolve the PID to a container name.
-        let container_name = self.resolve_container_name(pid).await;
-        let session_id = container_name
-            .as_ref()
-            .map(|name| format!("container:{}", name));
-
-        debug!(
-            pid,
-            uid,
-            container = ?container_name,
-            session_id = ?session_id,
-            "Resolved peer identity"
-        );
-
-        PeerIdentity {
-            pid,
-            uid,
-            container_name,
-            session_id,
-        }
-    }
-
-    /// Refresh the container PID mapping from the system.
-    ///
-    /// Reads `/proc/<pid>/cgroup` or queries incus to map PIDs to container
-    /// names. This is called periodically or on-demand when a new PID is seen.
-    pub async fn refresh_container_map(&self) {
-        let mut map = self.container_pids.write().await;
-
-        // Strategy: read /proc/*/cgroup and look for incus container cgroup paths.
-        // Format: `0::/lxc.payload.<container_name>/...`
-        let Ok(proc_entries) = std::fs::read_dir("/proc") else {
-            warn!("Cannot read /proc for container PID mapping");
-            return;
-        };
-
-        map.clear();
-
-        for entry in proc_entries.flatten() {
-            let name = entry.file_name();
-            let name_str = name.to_string_lossy();
-            let Ok(pid) = name_str.parse::<u32>() else {
-                continue;
-            };
-
-            let cgroup_path = format!("/proc/{}/cgroup", pid);
-            if let Ok(cgroup) = std::fs::read_to_string(&cgroup_path) {
-                // Look for incus/lxc container cgroup pattern.
-                for line in cgroup.lines() {
-                    if let Some(container) = extract_container_from_cgroup(line) {
-                        map.insert(pid, container);
-                        break;
-                    }
-                }
-            }
-        }
-
-        debug!(count = map.len(), "Refreshed container PID map");
-    }
-
-    /// Resolve a single PID to a container name.
-    async fn resolve_container_name(&self, pid: u32) -> Option<String> {
-        // First check the cached map.
-        {
-            let map = self.container_pids.read().await;
-            if let Some(name) = map.get(&pid) {
-                return Some(name.clone());
-            }
-        }
-
-        // Try reading the PID's cgroup directly.
-        let cgroup_path = format!("/proc/{}/cgroup", pid);
-        if let Ok(cgroup) = tokio::fs::read_to_string(&cgroup_path).await {
-            for line in cgroup.lines() {
-                if let Some(container) = extract_container_from_cgroup(line) {
-                    // Cache it.
-                    let mut map = self.container_pids.write().await;
-                    map.insert(pid, container.clone());
-                    return Some(container);
-                }
-            }
-        }
-
-        None
-    }
-}
-
-/// Extract container name from a cgroup line.
+/// Resolved canonical identity from peer credentials.
 ///
-/// Patterns:
-/// - `0::/lxc.payload.<name>/...` (incus/lxd)
-/// - `0::/incus.payload/<name>/...`
-/// - `0::/machine.slice/incus-<name>.scope/...`
-fn extract_container_from_cgroup(line: &str) -> Option<String> {
-    // Pattern: lxc.payload.<name>
-    if let Some(idx) = line.find("lxc.payload.") {
-        let rest = &line[idx + "lxc.payload.".len()..];
-        let name = rest.split('/').next().unwrap_or(rest);
-        if !name.is_empty() {
-            return Some(name.to_string());
-        }
-    }
-
-    // Pattern: incus.payload/<name>
-    if let Some(idx) = line.find("incus.payload/") {
-        let rest = &line[idx + "incus.payload/".len()..];
-        let name = rest.split('/').next().unwrap_or(rest);
-        if !name.is_empty() {
-            return Some(name.to_string());
-        }
-    }
-
-    // Pattern: incus-<name>.scope
-    if let Some(idx) = line.find("incus-") {
-        let rest = &line[idx + "incus-".len()..];
-        if let Some(end) = rest.find(".scope") {
-            let name = &rest[..end];
-            if !name.is_empty() {
-                return Some(name.to_string());
-            }
-        }
-    }
-
-    None
+/// This is NOT minted from cgroup names — it is looked up against the
+/// authoritative IdentitySled in shared memory. The peer_cred (UID/PID)
+/// is the lookup key, not the identity itself.
+#[derive(Debug, Clone)]
+pub struct CanonicalPeerIdentity {
+    /// The hex-encoded hashed_footprint from the IdentitySled.
+    pub footprint_hex: String,
+    /// The hex-encoded trace_id from the IdentitySled.
+    pub trace_id_hex: String,
+    /// Whether the identity is valid (sled exists and is non-zero).
+    pub is_valid: bool,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_extract_container_from_cgroup() {
-        assert_eq!(
-            extract_container_from_cgroup("0::/lxc.payload.qdrant/init.scope"),
-            Some("qdrant".to_string())
-        );
-        assert_eq!(
-            extract_container_from_cgroup("0::/incus.payload/mycontainer/init.scope"),
-            Some("mycontainer".to_string())
-        );
-        assert_eq!(
-            extract_container_from_cgroup(
-                "0::/machine.slice/incus-assistant.scope/init.scope"
-            ),
-            Some("assistant".to_string())
-        );
-        assert_eq!(extract_container_from_cgroup("0::/user.slice"), None);
+impl CanonicalPeerIdentity {
+    /// Resolve the canonical identity from the shared-memory sled.
+    ///
+    /// For UDS connections, the peer credential is the acceptable anchor
+    /// but the identity itself comes from the sled — the same source that
+    /// the GhostbridgeInterceptor validates against.
+    pub fn from_sled() -> Self {
+        match op_identity::read_sled() {
+            Ok((sled_ptr, _mmap)) => {
+                let sled = unsafe { &*sled_ptr };
+                let is_valid =
+                    sled.hashed_footprint != [0u8; 32] && sled.trace_id != [0u8; 16];
+                Self {
+                    footprint_hex: hex::encode(sled.hashed_footprint),
+                    trace_id_hex: sled.trace_id_hex(),
+                    is_valid,
+                }
+            }
+            Err(_) => Self {
+                footprint_hex: String::new(),
+                trace_id_hex: String::new(),
+                is_valid: false,
+            },
+        }
     }
+}
+
+/// Bind the shared container socket and return a stream suitable for
+/// `tonic::transport::Server::serve_with_incoming()`.
+///
+/// The returned `UnixListenerStream` yields `tokio::net::UnixStream` items
+/// that tonic will automatically extract `UdsConnectInfo` (including peer_cred)
+/// from via its `Connected` trait implementation.
+pub async fn bind_shared_socket() -> std::io::Result<UnixListenerStream> {
+    let path = PathBuf::from(
+        std::env::var("GHOSTBRIDGE_SOCKET_PATH")
+            .unwrap_or_else(|_| DEFAULT_SOCKET_PATH.to_string()),
+    );
+
+    // Ensure parent directory exists.
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+
+    // Remove stale socket file.
+    if path.exists() {
+        tokio::fs::remove_file(&path).await?;
+    }
+
+    let listener = UnixListener::bind(&path)?;
+
+    // Set permissions so containers can connect (world-writable).
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::Permissions::from_mode(0o666);
+        std::fs::set_permissions(&path, perms)?;
+    }
+
+    info!(socket_path = %path.display(), "Shared container socket bound");
+
+    Ok(UnixListenerStream::new(listener))
+}
+
+/// Extract peer credentials from a tonic request's extensions.
+///
+/// This is available on any request served over the UDS path because tonic
+/// automatically populates `UdsConnectInfo` for `UnixStream` connections.
+pub fn extract_peer_cred<T>(request: &tonic::Request<T>) -> Option<tokio::net::unix::UCred> {
+    request
+        .extensions()
+        .get::<UdsConnectInfo>()
+        .and_then(|info| info.peer_cred)
+}
+
+/// UDS identity interceptor.
+///
+/// For the UDS path, we inject the canonical footprint and trace_id from the
+/// sled into the request metadata so the downstream GhostbridgeInterceptor
+/// sees the same headers it expects from the Xray/HTTP path.
+///
+/// This is the UDS equivalent of Xray injecting `X-Ghostbridge-Footprint`.
+pub fn uds_identity_interceptor(
+    mut req: tonic::Request<()>,
+) -> Result<tonic::Request<()>, tonic::Status> {
+    let identity = CanonicalPeerIdentity::from_sled();
+
+    if !identity.is_valid {
+        return Err(tonic::Status::failed_precondition(
+            "Identity sled unavailable or invalid — UDS connection rejected",
+        ));
+    }
+
+    // Inject the canonical footprint so the GhostbridgeInterceptor passes.
+    let fp = identity
+        .footprint_hex
+        .parse::<tonic::metadata::MetadataValue<tonic::metadata::Ascii>>()
+        .map_err(|_| tonic::Status::internal("Failed to encode footprint header"))?;
+    let tr = identity
+        .trace_id_hex
+        .parse::<tonic::metadata::MetadataValue<tonic::metadata::Ascii>>()
+        .map_err(|_| tonic::Status::internal("Failed to encode trace_id header"))?;
+
+    req.metadata_mut()
+        .insert("x-ghostbridge-footprint", fp);
+    req.metadata_mut()
+        .insert("x-ghostbridge-trace-id", tr);
+
+    Ok(req)
 }
