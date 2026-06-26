@@ -4486,11 +4486,44 @@ impl crate::proto::dbus_passthrough_server::DbusPassthrough for OperationGrpcSer
             _ => conn,
         };
 
+        // ── Schema-driven routing ────────────────────────────────────────────
+        // If destination is empty, resolve from the schema catalog using the
+        // path. This allows callers to specify only the plugin path and method
+        // without knowing the D-Bus destination/interface.
+        use crate::schema_passthrough::resolve_from_schema_or_explicit;
+        let resolved = resolve_from_schema_or_explicit(
+            &req.destination,
+            &req.path,
+            &req.interface,
+        );
+
+        let (destination, path, interface) = match resolved {
+            crate::schema_passthrough::ResolvedRoute::Explicit {
+                destination,
+                path,
+                interface,
+            } => (destination, path, interface),
+            crate::schema_passthrough::ResolvedRoute::SchemaResolved {
+                plugin_id,
+                sub_path: _,
+            } => {
+                // Auto-resolve from canonical naming.
+                let dest = op_plugins::canonical::BASE_SERVICE_NAME.to_string();
+                let path = format!(
+                    "{}/{}",
+                    op_plugins::canonical::PLUGIN_BASE_PATH,
+                    plugin_id
+                );
+                let iface = op_plugins::canonical::plugin_interface(&plugin_id);
+                (dest, path, iface)
+            }
+        };
+
         let proxy = Proxy::new(
             &bus_conn,
-            req.destination.clone(),
-            req.path.clone(),
-            req.interface.clone(),
+            destination.as_str(),
+            path.as_str(),
+            interface.as_str(),
         )
         .await
         .map_err(|e| Status::internal(format!("proxy build failed: {e}")))?;
@@ -4521,16 +4554,37 @@ impl crate::proto::dbus_passthrough_server::DbusPassthrough for OperationGrpcSer
                 .map_err(|e| Status::unavailable(format!("system bus: {e}")))?,
         };
 
+        // Schema-driven resolution: if destination is empty, resolve from path.
+        use crate::schema_passthrough::resolve_from_schema_or_explicit;
+        let resolved = resolve_from_schema_or_explicit(
+            &req.destination,
+            &req.path,
+            &req.interface,
+        );
+        let (destination, path, interface) = match resolved {
+            crate::schema_passthrough::ResolvedRoute::Explicit {
+                destination, path, interface,
+            } => (destination, path, interface),
+            crate::schema_passthrough::ResolvedRoute::SchemaResolved {
+                plugin_id, sub_path: _,
+            } => {
+                let dest = op_plugins::canonical::BASE_SERVICE_NAME.to_string();
+                let p = format!("{}/{}", op_plugins::canonical::PLUGIN_BASE_PATH, plugin_id);
+                let iface = op_plugins::canonical::plugin_interface(&plugin_id);
+                (dest, p, iface)
+            }
+        };
+
         let props = zbus::fdo::PropertiesProxy::builder(&bus_conn)
-            .destination(req.destination.clone())
+            .destination(destination.as_str())
             .map_err(|e| Status::invalid_argument(e.to_string()))?
-            .path(req.path.as_str())
+            .path(path.as_str())
             .map_err(|e| Status::invalid_argument(e.to_string()))?
             .build()
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
-        let iface = zbus::names::InterfaceName::try_from(req.interface.as_str())
+        let iface = zbus::names::InterfaceName::try_from(interface.as_str())
             .map_err(|e| Status::invalid_argument(e.to_string()))?;
         let val: ZOwnedValue = props
             .get(iface, &req.property)
@@ -4560,16 +4614,37 @@ impl crate::proto::dbus_passthrough_server::DbusPassthrough for OperationGrpcSer
                 .map_err(|e| Status::unavailable(format!("system bus: {e}")))?,
         };
 
+        // Schema-driven resolution: if destination is empty, resolve from path.
+        use crate::schema_passthrough::resolve_from_schema_or_explicit;
+        let resolved = resolve_from_schema_or_explicit(
+            &req.destination,
+            &req.path,
+            &req.interface,
+        );
+        let (destination, path, interface) = match resolved {
+            crate::schema_passthrough::ResolvedRoute::Explicit {
+                destination, path, interface,
+            } => (destination, path, interface),
+            crate::schema_passthrough::ResolvedRoute::SchemaResolved {
+                plugin_id, sub_path: _,
+            } => {
+                let dest = op_plugins::canonical::BASE_SERVICE_NAME.to_string();
+                let p = format!("{}/{}", op_plugins::canonical::PLUGIN_BASE_PATH, plugin_id);
+                let iface = op_plugins::canonical::plugin_interface(&plugin_id);
+                (dest, p, iface)
+            }
+        };
+
         let props = zbus::fdo::PropertiesProxy::builder(&bus_conn)
-            .destination(req.destination.clone())
+            .destination(destination.as_str())
             .map_err(|e| Status::invalid_argument(e.to_string()))?
-            .path(req.path.as_str())
+            .path(path.as_str())
             .map_err(|e| Status::invalid_argument(e.to_string()))?
             .build()
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
-        let iface = zbus::names::InterfaceName::try_from(req.interface.as_str())
+        let iface = zbus::names::InterfaceName::try_from(interface.as_str())
             .map_err(|e| Status::invalid_argument(e.to_string()))?;
         let value: serde_json::Value = serde_json::from_str(&req.json_value)
             .map_err(|e| Status::invalid_argument(format!("bad JSON: {e}")))?;
@@ -4604,11 +4679,32 @@ impl crate::proto::dbus_passthrough_server::DbusPassthrough for OperationGrpcSer
                 .map_err(|e| Status::unavailable(format!("system bus: {e}")))?,
         };
 
+        // Schema-driven resolution: if destination is empty, resolve from path.
+        use crate::schema_passthrough::resolve_from_schema_or_explicit;
+        let resolved = resolve_from_schema_or_explicit(
+            &req.destination,
+            &req.path,
+            &req.interface,
+        );
+        let (destination, path, interface) = match resolved {
+            crate::schema_passthrough::ResolvedRoute::Explicit {
+                destination, path, interface,
+            } => (destination, path, interface),
+            crate::schema_passthrough::ResolvedRoute::SchemaResolved {
+                plugin_id, sub_path: _,
+            } => {
+                let dest = op_plugins::canonical::BASE_SERVICE_NAME.to_string();
+                let p = format!("{}/{}", op_plugins::canonical::PLUGIN_BASE_PATH, plugin_id);
+                let iface = op_plugins::canonical::plugin_interface(&plugin_id);
+                (dest, p, iface)
+            }
+        };
+
         let proxy = Proxy::new(
             &bus_conn,
-            req.destination.clone(),
-            req.path.clone(),
-            req.interface.clone(),
+            destination.as_str(),
+            path.as_str(),
+            interface.as_str(),
         )
         .await
         .map_err(|e| Status::internal(format!("proxy build failed: {e}")))?;

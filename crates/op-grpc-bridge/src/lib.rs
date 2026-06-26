@@ -26,6 +26,9 @@ pub mod grpc_server;
 pub mod interceptor;
 pub mod proto_gen;
 pub mod schema_engine;
+pub mod schema_passthrough;
+pub mod schema_router;
+pub mod shared_socket;
 
 // Re-export main types
 pub use grpc_client::{GrpcClientPool, RemoteEndpoint, RemoteOperationClient};
@@ -33,6 +36,9 @@ pub use grpc_server::{run_grpc_server, OperationGrpcServer, PluginSchemaProvider
 pub use interceptor::ghostbridge_interceptor;
 pub use proto_gen::{ProtoGenConfig, ProtoGenerator};
 pub use schema_engine::{ChangeSource, ChangeType, SchemaEngine, StateChange};
+pub use schema_passthrough::SchemaPassthrough;
+pub use schema_router::{PluginRoute, SchemaRouter, SchemaRouterError};
+pub use shared_socket::{PeerIdentity, SharedSocketConfig, SharedSocketManager};
 
 /// Generated protobuf types — one sub-module per domain proto.
 /// All are compiled into the combined operation_descriptor.bin for reflection.
