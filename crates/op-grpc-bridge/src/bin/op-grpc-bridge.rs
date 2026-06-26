@@ -45,6 +45,25 @@ async fn main() -> anyhow::Result<()> {
 
     // ── Schema Router (dynamic D-Bus routing from live schema catalog) ───────
     let schema_router = Arc::new(SchemaRouter::new(schema_engine.dbus_connection.clone()));
+
+    // Authoritative D-Bus object registration:
+    // The bridge brings the schema-defined objects into existence on the bus.
+    let sr_init = schema_router.clone();
+    let se_init = schema_engine.clone();
+    tokio::spawn(async move {
+        // Wait for D-Bus connection to be ready
+        if let Ok(conn) = se_init.dbus_connection().await {
+            if let Err(e) = sr_init.register_objects().await {
+                tracing::error!(error = %e, "Failed to register authoritative D-Bus objects");
+            } else {
+                // Request the canonical bus name for the bridge
+                if let Err(e) = conn.request_name(op_plugins::canonical::BASE_SERVICE_NAME).await {
+                    tracing::warn!(error = %e, "Failed to request D-Bus name (likely already owned)");
+                }
+            }
+        }
+    });
+
     let plugin_count = schema_router.list_plugin_ids().await.len();
     tracing::info!(
         plugin_count,

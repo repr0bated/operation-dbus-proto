@@ -354,8 +354,13 @@ pub async fn run_grpc_server(
 
     // Reflection — exposes combined FileDescriptorSet covering all domain protos.
     // Enables grpcurl discovery and drives MCP tool auto-registration in op-chat.
-    let reflection = tonic_reflection::server::Builder::configure()
-        .register_encoded_file_descriptor_set(crate::proto::FILE_DESCRIPTOR_SET)
+    let mut reflection_builder = tonic_reflection::server::Builder::configure()
+        .register_encoded_file_descriptor_set(crate::proto::FILE_DESCRIPTOR_SET);
+
+    // If a schema router is present, we should theoretically add the dynamic
+    // descriptors here. For now, we rely on the static DbusPassthrough which
+    // is already in the FILE_DESCRIPTOR_SET.
+    let reflection = reflection_builder
         .build_v1()
         .expect("failed to build reflection service");
 
