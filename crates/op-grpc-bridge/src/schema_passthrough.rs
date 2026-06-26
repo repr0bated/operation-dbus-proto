@@ -1,132 +1,53 @@
-//! Schema-Driven D-Bus Passthrough
+//! Schema-Driven D-Bus Passthrough Integration
 //!
-//! Replaces the hand-rolled `DbusPassthrough` service with a schema-aware
-//! version that automatically resolves D-Bus destinations from plugin IDs.
+//! Wires the `SchemaRouter` into the live `DbusPassthrough` gRPC service path.
+//! When a request arrives with an empty `destination` field, the schema router
+//! resolves the canonical D-Bus coordinates from the plugin_id extracted from
+//! the path. The schema router validates that the method/property exists before
+//! making the D-Bus call — unknown methods are rejected.
 //!
-//! ## Key Differences from the Original DbusPassthrough
-//!
-//! | Feature                | Old (Hand-Rolled)           | New (Schema-Driven)              |
-//! |------------------------|-----------------------------|----------------------------------|
-//! | Destination resolution | Caller must specify         | Auto-resolved from schema        |
-//! | Path resolution        | Caller must specify         | Auto-derived from plugin_id      |
-//! | Interface resolution   | Caller must specify         | Auto-derived from canonical.rs   |
-//! | Method validation      | None                        | Validated against schema fields  |
-//! | Identity injection     | None                        | Peer credentials → session_id    |
-//! | Shared socket support  | No                          | Yes (container.sock)             |
-//!
-//! ## Usage
-//!
-//! gRPC clients call `SchemaCall` with just `plugin_id` and `method_name`:
-//! ```protobuf
-//! message SchemaCallRequest {
-//!   string plugin_id = 1;    // e.g. "qdrant", "unix_socket"
-//!   string method_name = 2;  // e.g. "createunixsocket"
-//!   string json_args = 3;    // JSON-encoded arguments
-//! }
-//! ```
-//!
-//! The bridge resolves the rest from the live schema catalog.
+//! This module provides:
+//! 1. `resolve_from_schema_or_explicit()` — backward-compatible route resolution
+//! 2. `SchemaPassthroughService` — wraps SchemaRouter for direct plugin_id calls
 
 use std::sync::Arc;
 
-use crate::schema_router::{SchemaRouter, SchemaRouterError};
-use tonic::{Request, Response, Status};
-use tracing::{debug, info};
+use crate::schema_router::SchemaRouter;
+use tonic::Status;
+use tracing::debug;
 
-/// Schema-driven passthrough service implementation.
+/// Route resolution result.
 ///
-/// This wraps the `SchemaRouter` and exposes it as gRPC methods that
-/// can be called by the existing `DbusPassthrough` proto service, but
-/// with automatic schema resolution.
-pub struct SchemaPassthrough {
-    router: Arc<SchemaRouter>,
+/// Either the caller provided explicit D-Bus coordinates (legacy path),
+/// or the route was resolved from the schema catalog via plugin_id.
+#[derive(Debug, Clone)]
+pub enum ResolvedRoute {
+    /// Caller provided explicit D-Bus coordinates — use as-is.
+    Explicit {
+        destination: String,
+        path: String,
+        interface: String,
+    },
+    /// Route resolved from schema catalog via plugin_id extracted from path.
+    SchemaResolved {
+        plugin_id: String,
+        sub_path: String,
+    },
 }
 
-impl SchemaPassthrough {
-    pub fn new(router: Arc<SchemaRouter>) -> Self {
-        Self { router }
-    }
-
-    /// Schema-driven method call: resolves destination from plugin_id.
-    ///
-    /// This is the replacement for `DbusPassthrough::Call` when the caller
-    /// knows the plugin_id but not the D-Bus destination/path/interface.
-    pub async fn schema_call(
-        &self,
-        plugin_id: &str,
-        method_name: &str,
-        json_args: &str,
-    ) -> Result<String, Status> {
-        debug!(
-            plugin_id,
-            method_name, "SchemaPassthrough: routing call via schema"
-        );
-
-        self.router
-            .call_method(plugin_id, method_name, json_args)
-            .await
-            .map_err(Status::from)
-    }
-
-    /// Schema-driven property get: resolves destination from plugin_id.
-    pub async fn schema_get_property(
-        &self,
-        plugin_id: &str,
-        property_name: &str,
-    ) -> Result<String, Status> {
-        debug!(
-            plugin_id,
-            property_name, "SchemaPassthrough: getting property via schema"
-        );
-
-        self.router
-            .get_property(plugin_id, property_name)
-            .await
-            .map_err(Status::from)
-    }
-
-    /// Schema-driven property set: resolves destination from plugin_id.
-    pub async fn schema_set_property(
-        &self,
-        plugin_id: &str,
-        property_name: &str,
-        json_value: &str,
-    ) -> Result<(), Status> {
-        debug!(
-            plugin_id,
-            property_name, "SchemaPassthrough: setting property via schema"
-        );
-
-        self.router
-            .set_property(plugin_id, property_name, json_value)
-            .await
-            .map_err(Status::from)
-    }
-
-    /// List all plugins that are routable through the schema.
-    pub async fn list_routable_plugins(&self) -> Vec<String> {
-        self.router.list_plugin_ids().await
-    }
-
-    /// Reload the schema router (e.g. after a schema file update).
-    pub async fn reload_schema(&self) {
-        self.router.reload().await;
-        info!("SchemaPassthrough: schema routes reloaded");
-    }
-}
-
-/// Integration point: enhances the existing `DbusPassthrough` implementation
-/// to support schema-driven routing alongside explicit routing.
+/// Resolve D-Bus routing from either explicit coordinates or schema lookup.
 ///
-/// When a `DbusCallRequest` arrives with an empty `destination` field but a
-/// non-empty `path` that matches `/org/opdbus/v1/plugins/<plugin_id>`, the
-/// schema passthrough kicks in and auto-resolves the destination and interface.
+/// Rules:
+/// - If `destination` is non-empty → `Explicit` (backward compatible).
+/// - If `destination` is empty and `path` starts with the canonical plugin
+///   base path → extract plugin_id → `SchemaResolved`.
+/// - Otherwise → `Explicit` with whatever was provided (will likely fail
+///   downstream, which is correct behavior for invalid input).
 pub fn resolve_from_schema_or_explicit(
     destination: &str,
     path: &str,
     interface: &str,
 ) -> ResolvedRoute {
-    // If destination is already specified, use explicit routing (backward compat).
     if !destination.is_empty() {
         return ResolvedRoute::Explicit {
             destination: destination.to_string(),
@@ -135,18 +56,18 @@ pub fn resolve_from_schema_or_explicit(
         };
     }
 
-    // Try to extract plugin_id from the path.
-    let plugin_base = op_plugins::canonical::PLUGIN_BASE_PATH;
-    if path.starts_with(plugin_base) {
-        let rest = &path[plugin_base.len()..];
-        let rest = rest.trim_start_matches('/');
-        let plugin_id = rest.split('/').next().unwrap_or("");
-        if !plugin_id.is_empty() {
-            return ResolvedRoute::SchemaResolved {
-                plugin_id: plugin_id.to_string(),
-                sub_path: rest[plugin_id.len()..].to_string(),
-            };
-        }
+    // Try canonical path extraction using op_plugins::canonical
+    if let Some(plugin_id) = op_plugins::canonical::extract_plugin_name(path) {
+        let base = op_plugins::canonical::plugin_path(&plugin_id);
+        let sub_path = if path.len() > base.len() {
+            path[base.len()..].to_string()
+        } else {
+            String::new()
+        };
+        return ResolvedRoute::SchemaResolved {
+            plugin_id,
+            sub_path,
+        };
     }
 
     // Fallback: treat as explicit with whatever was provided.
@@ -157,18 +78,73 @@ pub fn resolve_from_schema_or_explicit(
     }
 }
 
-/// The result of route resolution.
-#[derive(Debug, Clone)]
-pub enum ResolvedRoute {
-    /// Caller provided explicit D-Bus coordinates.
-    Explicit {
-        destination: String,
-        path: String,
-        interface: String,
-    },
-    /// Route was resolved from the schema catalog via plugin_id.
-    SchemaResolved {
-        plugin_id: String,
-        sub_path: String,
-    },
+/// Schema-driven passthrough service.
+///
+/// Wraps the `SchemaRouter` and provides direct plugin_id-based calls that
+/// validate against the schema before hitting D-Bus.
+pub struct SchemaPassthroughService {
+    router: Arc<SchemaRouter>,
+}
+
+impl SchemaPassthroughService {
+    pub fn new(router: Arc<SchemaRouter>) -> Self {
+        Self { router }
+    }
+
+    /// Call a method on a plugin by plugin_id.
+    ///
+    /// The schema router validates the method exists before making the D-Bus call.
+    pub async fn call(
+        &self,
+        plugin_id: &str,
+        method_name: &str,
+        json_args: &str,
+    ) -> Result<String, Status> {
+        debug!(plugin_id, method_name, "schema passthrough: routing call");
+        self.router
+            .call_method(plugin_id, method_name, json_args)
+            .await
+            .map_err(Status::from)
+    }
+
+    /// Get a property from a plugin by plugin_id.
+    ///
+    /// The schema router validates the property exists before reading.
+    pub async fn get_property(
+        &self,
+        plugin_id: &str,
+        property_name: &str,
+    ) -> Result<String, Status> {
+        debug!(plugin_id, property_name, "schema passthrough: get property");
+        self.router
+            .get_property(plugin_id, property_name)
+            .await
+            .map_err(Status::from)
+    }
+
+    /// Set a property on a plugin by plugin_id.
+    ///
+    /// The schema router validates the property exists before writing.
+    pub async fn set_property(
+        &self,
+        plugin_id: &str,
+        property_name: &str,
+        json_value: &str,
+    ) -> Result<(), Status> {
+        debug!(plugin_id, property_name, "schema passthrough: set property");
+        self.router
+            .set_property(plugin_id, property_name, json_value)
+            .await
+            .map_err(Status::from)
+    }
+
+    /// List all routable plugins from the schema catalog.
+    pub async fn list_plugins(&self) -> Vec<String> {
+        self.router.list_plugin_ids().await
+    }
+
+    /// Trigger a schema reload (called reactively on mutation, not polled).
+    pub async fn reload(&self) {
+        self.router.reload().await;
+    }
 }
