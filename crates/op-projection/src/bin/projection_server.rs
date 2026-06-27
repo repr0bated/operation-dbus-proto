@@ -29,8 +29,8 @@ async fn main() -> Result<()> {
 
     // Register some initial schemas (in production, load from files).
     // Built with the canonical PluginSchema builder — the plugin is the schema.
-    let ro_field = |field_type: FieldType, description: &str, constraints: Vec<Constraint>| {
-        FieldSchema {
+    let ro_field =
+        |field_type: FieldType, description: &str, constraints: Vec<Constraint>| FieldSchema {
             field_type,
             required: true,
             description: description.to_string(),
@@ -39,8 +39,7 @@ async fn main() -> Result<()> {
             constraints,
             read_only: true,
             read_only_when: None,
-        }
-    };
+        };
 
     let memory_schema = PluginSchema::builder("system.memory")
         .version("1.0.0")
@@ -71,7 +70,10 @@ async fn main() -> Result<()> {
             "cores",
             ro_field(FieldType::Integer, "Number of CPU cores", vec![]),
         )
-        .field("model", ro_field(FieldType::String, "CPU model name", vec![]))
+        .field(
+            "model",
+            ro_field(FieldType::String, "CPU model name", vec![]),
+        )
         .build();
     schema_engine.register_schema(cpu_schema)?;
 

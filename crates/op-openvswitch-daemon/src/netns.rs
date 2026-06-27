@@ -12,20 +12,19 @@ use tracing::{info, warn};
 ///
 /// This is equivalent to `ip link set dev <ifname> netns <pid>`.
 pub fn move_interface_to_netns(ifname: &str, target_pid: u32) -> Result<()> {
-    info!(
-        "netns: moving {} into netns of PID {}",
-        ifname, target_pid
-    );
+    info!("netns: moving {} into netns of PID {}", ifname, target_pid);
 
     let rt = tokio::runtime::Handle::current();
     rt.block_on(async {
-        let (connection, handle, _) = rtnetlink::new_connection()
-            .context("connect to rtnetlink")?;
+        let (connection, handle, _) =
+            rtnetlink::new_connection().context("connect to rtnetlink")?;
         tokio::spawn(connection);
 
         let index = find_link_index(&handle, ifname).await?;
 
-        handle.link().set(index)
+        handle
+            .link()
+            .set(index)
             .setns_by_pid(target_pid)
             .execute()
             .await
@@ -164,13 +163,15 @@ async fn find_link_index(handle: &rtnetlink::Handle, ifname: &str) -> Result<u32
 fn rename_link_rtnetlink(old_name: &str, new_name: &str) -> Result<()> {
     let rt = tokio::runtime::Handle::current();
     rt.block_on(async {
-        let (connection, handle, _) = rtnetlink::new_connection()
-            .context("connect to rtnetlink")?;
+        let (connection, handle, _) =
+            rtnetlink::new_connection().context("connect to rtnetlink")?;
         tokio::spawn(connection);
 
         let index = find_link_index(&handle, old_name).await?;
 
-        handle.link().set(index)
+        handle
+            .link()
+            .set(index)
             .name(new_name.to_string())
             .execute()
             .await
@@ -183,13 +184,15 @@ fn rename_link_rtnetlink(old_name: &str, new_name: &str) -> Result<()> {
 pub fn set_link_up_rtnetlink(ifname: &str) -> Result<()> {
     let rt = tokio::runtime::Handle::current();
     rt.block_on(async {
-        let (connection, handle, _) = rtnetlink::new_connection()
-            .context("connect to rtnetlink")?;
+        let (connection, handle, _) =
+            rtnetlink::new_connection().context("connect to rtnetlink")?;
         tokio::spawn(connection);
 
         let index = find_link_index(&handle, ifname).await?;
 
-        handle.link().set(index)
+        handle
+            .link()
+            .set(index)
             .up()
             .execute()
             .await
@@ -202,16 +205,20 @@ pub fn set_link_up_rtnetlink(ifname: &str) -> Result<()> {
 fn add_addr_rtnetlink(ifname: &str, addr: &str) -> Result<()> {
     let rt = tokio::runtime::Handle::current();
     rt.block_on(async {
-        let (connection, handle, _) = rtnetlink::new_connection()
-            .context("connect to rtnetlink")?;
+        let (connection, handle, _) =
+            rtnetlink::new_connection().context("connect to rtnetlink")?;
         tokio::spawn(connection);
 
         let index = find_link_index(&handle, ifname).await?;
 
-        let addr_val: std::net::IpAddr = addr.parse()
+        let addr_val: std::net::IpAddr = addr
+            .parse()
             .with_context(|| format!("parse IP address {}", addr))?;
 
-        handle.address().add(index, addr_val, 0).execute()
+        handle
+            .address()
+            .add(index, addr_val, 0)
+            .execute()
             .await
             .with_context(|| format!("add addr {} to {}", addr, ifname))?;
 
@@ -246,7 +253,10 @@ pub fn attach_port_to_container(
     for addr in ip_addrs {
         match add_addr_in_netns(iface_name, addr, target_pid) {
             Ok(_) => info!("attach: added addr {} to {}", addr, iface_name),
-            Err(e) => warn!("attach: failed to add addr {} to {}: {}", addr, iface_name, e),
+            Err(e) => warn!(
+                "attach: failed to add addr {} to {}: {}",
+                addr, iface_name, e
+            ),
         }
     }
 

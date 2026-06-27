@@ -38,9 +38,7 @@ pub use proto_gen::{ProtoGenConfig, ProtoGenerator};
 pub use schema_engine::{ChangeSource, ChangeType, SchemaEngine, StateChange};
 pub use schema_passthrough::{ResolvedRoute, SchemaPassthroughService};
 pub use schema_router::{PluginRoute, SchemaRouter, SchemaRouterError};
-pub use shared_socket::{
-    bind_shared_socket, uds_identity_interceptor, CanonicalPeerIdentity,
-};
+pub use shared_socket::{bind_shared_socket, uds_identity_interceptor, CanonicalPeerIdentity};
 
 /// Generated protobuf types — one sub-module per domain proto.
 /// All are compiled into the combined operation_descriptor.bin for reflection.

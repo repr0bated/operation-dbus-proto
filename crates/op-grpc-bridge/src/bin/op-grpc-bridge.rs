@@ -57,7 +57,10 @@ async fn main() -> anyhow::Result<()> {
                 tracing::error!(error = %e, "Failed to register authoritative D-Bus objects");
             } else {
                 // Request the canonical bus name for the bridge
-                if let Err(e) = conn.request_name(op_plugins::canonical::BASE_SERVICE_NAME).await {
+                if let Err(e) = conn
+                    .request_name(op_plugins::canonical::BASE_SERVICE_NAME)
+                    .await
+                {
                     tracing::warn!(error = %e, "Failed to request D-Bus name (likely already owned)");
                 }
             }
@@ -82,8 +85,7 @@ async fn main() -> anyhow::Result<()> {
                 use op_grpc_bridge::proto::plugin_service_server::PluginServiceServer;
                 use op_grpc_bridge::proto::state_sync_server::StateSyncServer;
 
-                let server = OperationGrpcServer::new(se_uds)
-                    .with_schema_router(sr_uds);
+                let server = OperationGrpcServer::new(se_uds).with_schema_router(sr_uds);
 
                 let result = tonic::transport::Server::builder()
                     .add_service(DbusPassthroughServer::with_interceptor(

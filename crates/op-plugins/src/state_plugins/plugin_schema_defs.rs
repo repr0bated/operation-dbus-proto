@@ -1328,8 +1328,7 @@ pub(crate) fn privacy_router_plugin_schema() -> PluginSchema {
             FieldSchema {
                 field_type: FieldType::String,
                 required: false,
-                description: "Netclient network name for the WARP egress interface"
-                    .to_string(),
+                description: "Netclient network name for the WARP egress interface".to_string(),
                 default: Some(json!("gbr_warp")),
                 example: Some(json!("gbr_warp")),
                 constraints: Vec::new(),
@@ -2374,169 +2373,344 @@ pub(crate) fn cognitive_mcp_plugin_schema() -> PluginSchema {
     // ── code_search tool input (subid obs.service.code-rag.search@v1) ──────
     let code_search_input_fields = {
         let mut fields = HashMap::new();
-        fields.insert("query".to_string(), FieldSchema {
-            field_type: FieldType::String, required: true,
-            description: "Natural-language or code query".to_string(),
-            default: None, example: Some(json!("how is wireguard identity verified")),
-            constraints: Vec::new(), read_only: false, read_only_when: None,
-        });
-        fields.insert("repo".to_string(), FieldSchema {
-            field_type: FieldType::String, required: false,
-            description: "Restrict to a repo name".to_string(),
-            default: None, example: None, constraints: Vec::new(),
-            read_only: false, read_only_when: None,
-        });
-        fields.insert("language".to_string(), FieldSchema {
-            field_type: FieldType::String, required: false,
-            description: "Restrict to a language (e.g. rust, typescript)".to_string(),
-            default: None, example: Some(json!("rust")), constraints: Vec::new(),
-            read_only: false, read_only_when: None,
-        });
-        fields.insert("file_type".to_string(), FieldSchema {
-            field_type: FieldType::Enum(vec![
-                "source".to_string(), "test".to_string(), "config".to_string(),
-                "docs".to_string(), "build".to_string(), "other".to_string(),
-            ]),
-            required: false,
-            description: "Restrict to a file classification".to_string(),
-            default: None, example: None, constraints: Vec::new(),
-            read_only: false, read_only_when: None,
-        });
-        fields.insert("path_contains".to_string(), FieldSchema {
-            field_type: FieldType::String, required: false,
-            description: "Only files whose path contains this substring".to_string(),
-            default: None, example: None, constraints: Vec::new(),
-            read_only: false, read_only_when: None,
-        });
-        fields.insert("symbol_contains".to_string(), FieldSchema {
-            field_type: FieldType::String, required: false,
-            description: "Only chunks whose symbols/path contain this substring".to_string(),
-            default: None, example: None, constraints: Vec::new(),
-            read_only: false, read_only_when: None,
-        });
-        fields.insert("exclude_tests".to_string(), FieldSchema {
-            field_type: FieldType::Boolean, required: false,
-            description: "Drop test files from results".to_string(),
-            default: Some(json!(false)), example: None, constraints: Vec::new(),
-            read_only: false, read_only_when: None,
-        });
-        fields.insert("fused".to_string(), FieldSchema {
-            field_type: FieldType::Boolean, required: false,
-            description: "Fuse semantic+lexical scoring and dedup to one chunk per file".to_string(),
-            default: Some(json!(true)), example: None, constraints: Vec::new(),
-            read_only: false, read_only_when: None,
-        });
-        fields.insert("limit".to_string(), FieldSchema {
-            field_type: FieldType::Integer, required: false,
-            description: "Max results (default 8)".to_string(),
-            default: Some(json!(8)), example: None,
-            constraints: vec![Constraint::Min { value: 1.0 }, Constraint::Max { value: 50.0 }],
-            read_only: false, read_only_when: None,
-        });
+        fields.insert(
+            "query".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "Natural-language or code query".to_string(),
+                default: None,
+                example: Some(json!("how is wireguard identity verified")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "repo".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Restrict to a repo name".to_string(),
+                default: None,
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "language".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Restrict to a language (e.g. rust, typescript)".to_string(),
+                default: None,
+                example: Some(json!("rust")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "file_type".to_string(),
+            FieldSchema {
+                field_type: FieldType::Enum(vec![
+                    "source".to_string(),
+                    "test".to_string(),
+                    "config".to_string(),
+                    "docs".to_string(),
+                    "build".to_string(),
+                    "other".to_string(),
+                ]),
+                required: false,
+                description: "Restrict to a file classification".to_string(),
+                default: None,
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "path_contains".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Only files whose path contains this substring".to_string(),
+                default: None,
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "symbol_contains".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Only chunks whose symbols/path contain this substring".to_string(),
+                default: None,
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "exclude_tests".to_string(),
+            FieldSchema {
+                field_type: FieldType::Boolean,
+                required: false,
+                description: "Drop test files from results".to_string(),
+                default: Some(json!(false)),
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "fused".to_string(),
+            FieldSchema {
+                field_type: FieldType::Boolean,
+                required: false,
+                description: "Fuse semantic+lexical scoring and dedup to one chunk per file"
+                    .to_string(),
+                default: Some(json!(true)),
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "limit".to_string(),
+            FieldSchema {
+                field_type: FieldType::Integer,
+                required: false,
+                description: "Max results (default 8)".to_string(),
+                default: Some(json!(8)),
+                example: None,
+                constraints: vec![
+                    Constraint::Min { value: 1.0 },
+                    Constraint::Max { value: 50.0 },
+                ],
+                read_only: false,
+                read_only_when: None,
+            },
+        );
         fields
     };
 
     // ── code_context tool input (subid exp.service.code-context.render@v1) ─
     let code_context_input_fields = {
         let mut fields = HashMap::new();
-        fields.insert("query".to_string(), FieldSchema {
-            field_type: FieldType::String, required: true,
-            description: "Current query / what the agent is working on".to_string(),
-            default: None, example: None, constraints: Vec::new(),
-            read_only: false, read_only_when: None,
-        });
-        fields.insert("session_id".to_string(), FieldSchema {
-            field_type: FieldType::String, required: false,
-            description: "Session identifier (default 'default')".to_string(),
-            default: Some(json!("default")), example: None, constraints: Vec::new(),
-            read_only: false, read_only_when: None,
-        });
-        fields.insert("activity_type".to_string(), FieldSchema {
-            field_type: FieldType::Enum(vec![
-                "tool_call".to_string(), "query".to_string(), "context_switch".to_string(),
-                "error".to_string(), "idle".to_string(), "return_from_idle".to_string(),
-                "file_opened".to_string(), "edit_applied".to_string(), "build_error".to_string(),
-                "test_failure".to_string(), "diff_viewed".to_string(), "symbol_navigated".to_string(),
-            ]),
-            required: false,
-            description: "Kind of activity being recorded (default 'query')".to_string(),
-            default: Some(json!("query")), example: None, constraints: Vec::new(),
-            read_only: false, read_only_when: None,
-        });
-        fields.insert("repo".to_string(), FieldSchema {
-            field_type: FieldType::String, required: false,
-            description: "Restrict retrieval to a repo".to_string(),
-            default: None, example: None, constraints: Vec::new(),
-            read_only: false, read_only_when: None,
-        });
-        fields.insert("language".to_string(), FieldSchema {
-            field_type: FieldType::String, required: false,
-            description: "Restrict retrieval to a language".to_string(),
-            default: None, example: None, constraints: Vec::new(),
-            read_only: false, read_only_when: None,
-        });
-        fields.insert("exclude_tests".to_string(), FieldSchema {
-            field_type: FieldType::Boolean, required: false,
-            description: "Drop test files from results".to_string(),
-            default: Some(json!(false)), example: None, constraints: Vec::new(),
-            read_only: false, read_only_when: None,
-        });
-        fields.insert("limit".to_string(), FieldSchema {
-            field_type: FieldType::Integer, required: false,
-            description: "Max results (default 6)".to_string(),
-            default: Some(json!(6)), example: None,
-            constraints: vec![Constraint::Min { value: 1.0 }, Constraint::Max { value: 50.0 }],
-            read_only: false, read_only_when: None,
-        });
+        fields.insert(
+            "query".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "Current query / what the agent is working on".to_string(),
+                default: None,
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "session_id".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Session identifier (default 'default')".to_string(),
+                default: Some(json!("default")),
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "activity_type".to_string(),
+            FieldSchema {
+                field_type: FieldType::Enum(vec![
+                    "tool_call".to_string(),
+                    "query".to_string(),
+                    "context_switch".to_string(),
+                    "error".to_string(),
+                    "idle".to_string(),
+                    "return_from_idle".to_string(),
+                    "file_opened".to_string(),
+                    "edit_applied".to_string(),
+                    "build_error".to_string(),
+                    "test_failure".to_string(),
+                    "diff_viewed".to_string(),
+                    "symbol_navigated".to_string(),
+                ]),
+                required: false,
+                description: "Kind of activity being recorded (default 'query')".to_string(),
+                default: Some(json!("query")),
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "repo".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Restrict retrieval to a repo".to_string(),
+                default: None,
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "language".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Restrict retrieval to a language".to_string(),
+                default: None,
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "exclude_tests".to_string(),
+            FieldSchema {
+                field_type: FieldType::Boolean,
+                required: false,
+                description: "Drop test files from results".to_string(),
+                default: Some(json!(false)),
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "limit".to_string(),
+            FieldSchema {
+                field_type: FieldType::Integer,
+                required: false,
+                description: "Max results (default 6)".to_string(),
+                default: Some(json!(6)),
+                example: None,
+                constraints: vec![
+                    Constraint::Min { value: 1.0 },
+                    Constraint::Max { value: 50.0 },
+                ],
+                read_only: false,
+                read_only_when: None,
+            },
+        );
         fields
     };
 
     // ── code_index tool input (subid src.software.workspace.index@v1) ──────
     let code_index_input_fields = {
         let mut fields = HashMap::new();
-        fields.insert("mode".to_string(), FieldSchema {
-            field_type: FieldType::Enum(vec!["source".to_string(), "repomix_zip".to_string()]),
-            required: false,
-            description: "Indexing mode (default 'source')".to_string(),
-            default: Some(json!("source")), example: None, constraints: Vec::new(),
-            read_only: false, read_only_when: None,
-        });
-        fields.insert("repo".to_string(), FieldSchema {
-            field_type: FieldType::String, required: false,
-            description: "Repo name (source mode)".to_string(),
-            default: None, example: None, constraints: Vec::new(),
-            read_only: false, read_only_when: None,
-        });
-        fields.insert("file_path".to_string(), FieldSchema {
-            field_type: FieldType::String, required: false,
-            description: "File path within the repo (source mode)".to_string(),
-            default: None, example: None, constraints: Vec::new(),
-            read_only: false, read_only_when: None,
-        });
-        fields.insert("content".to_string(), FieldSchema {
-            field_type: FieldType::String, required: false,
-            description: "Raw file content (source mode)".to_string(),
-            default: None, example: None, constraints: Vec::new(),
-            read_only: false, read_only_when: None,
-        });
-        fields.insert("zip_path".to_string(), FieldSchema {
-            field_type: FieldType::String, required: false,
-            description: "Path to repomix zip (repomix_zip mode)".to_string(),
-            default: None, example: None, constraints: Vec::new(),
-            read_only: false, read_only_when: None,
-        });
-        fields.insert("entry".to_string(), FieldSchema {
-            field_type: FieldType::String, required: false,
-            description: "Entry name within the zip (repomix_zip mode)".to_string(),
-            default: None, example: None, constraints: Vec::new(),
-            read_only: false, read_only_when: None,
-        });
-        fields.insert("collection".to_string(), FieldSchema {
-            field_type: FieldType::String, required: false,
-            description: "Override target collection".to_string(),
-            default: None, example: None, constraints: Vec::new(),
-            read_only: false, read_only_when: None,
-        });
+        fields.insert(
+            "mode".to_string(),
+            FieldSchema {
+                field_type: FieldType::Enum(vec!["source".to_string(), "repomix_zip".to_string()]),
+                required: false,
+                description: "Indexing mode (default 'source')".to_string(),
+                default: Some(json!("source")),
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "repo".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Repo name (source mode)".to_string(),
+                default: None,
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "file_path".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "File path within the repo (source mode)".to_string(),
+                default: None,
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "content".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Raw file content (source mode)".to_string(),
+                default: None,
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "zip_path".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Path to repomix zip (repomix_zip mode)".to_string(),
+                default: None,
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "entry".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Entry name within the zip (repomix_zip mode)".to_string(),
+                default: None,
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "collection".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Override target collection".to_string(),
+                default: None,
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
         fields
     };
 

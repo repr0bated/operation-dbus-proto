@@ -722,7 +722,10 @@ impl ProxyService {
         for addr in &ip_addrs {
             match crate::netns::add_addr_in_netns(&iface_name, addr, target_pid) {
                 Ok(_) => info!("proxy: added addr {} to {}", addr, iface_name),
-                Err(e) => warn!("proxy: failed to add addr {} to {}: {}", addr, iface_name, e),
+                Err(e) => warn!(
+                    "proxy: failed to add addr {} to {}: {}",
+                    addr, iface_name, e
+                ),
             }
         }
 

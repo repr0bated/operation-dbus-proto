@@ -29,10 +29,7 @@ pub enum ResolvedRoute {
         interface: String,
     },
     /// Route resolved from schema catalog via plugin_id extracted from path.
-    SchemaResolved {
-        plugin_id: String,
-        sub_path: String,
-    },
+    SchemaResolved { plugin_id: String, sub_path: String },
 }
 
 /// Resolve D-Bus routing from either explicit coordinates or schema lookup.
