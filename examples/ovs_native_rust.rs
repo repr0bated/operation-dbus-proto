@@ -6,7 +6,7 @@
 //! Run with: cargo run --example ovs_native_rust
 
 use anyhow::Result;
-use op_network::OvsdbClient;
+use op_network::OvsdbDbusClient;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -18,7 +18,7 @@ async fn main() -> Result<()> {
     println!("=== OVS Native Bridge Setup Example ===\n");
 
     // Create OVSDB client (connects to /var/run/openvswitch/db.sock)
-    let client = OvsdbClient::new();
+    let client = OvsdbDbusClient::new();
 
     // 1. Check connectivity
     println!("1. Checking OVSDB connectivity...");
@@ -68,7 +68,7 @@ async fn main() -> Result<()> {
     match client.get_bridge_info(bridge_name).await {
         Ok(info) => {
             println!("   Bridge info:");
-            println!("   {}\n", serde_json::to_string_pretty(&info)?);
+            println!("   {}\n", info);
         }
         Err(e) => {
             eprintln!("   Failed to get bridge info: {}", e);

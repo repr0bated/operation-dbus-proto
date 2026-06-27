@@ -257,13 +257,12 @@ impl SchemaRouter {
 
         let zval = json_to_zvariant_value(&value)?;
 
-        props
-            .set(iface, property_name, zval.into())
-            .await
-            .map_err(|e| SchemaRouterError::DbusCallFailed {
+        props.set(iface, property_name, zval).await.map_err(|e| {
+            SchemaRouterError::DbusCallFailed {
                 method: format!("Set({})", property_name),
                 error: e.to_string(),
-            })?;
+            }
+        })?;
 
         Ok(())
     }

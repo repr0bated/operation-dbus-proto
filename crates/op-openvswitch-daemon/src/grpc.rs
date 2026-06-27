@@ -10,7 +10,6 @@
 use anyhow::Result;
 use std::net::SocketAddr;
 use tonic::{Request, Response, Status};
-use tonic_web;
 use tracing::info;
 
 use crate::dbus::DaemonState;
@@ -587,6 +586,7 @@ impl OvsdbService for OvsdbServiceImpl {
 }
 
 /// Run the gRPC server
+#[allow(dead_code)]
 pub async fn run_grpc_server(addr: SocketAddr, state: DaemonState) -> Result<()> {
     info!("gRPC server starting on {}", addr);
 
