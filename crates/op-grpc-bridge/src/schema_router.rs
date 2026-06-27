@@ -38,6 +38,11 @@ const LIVE_SCHEMA_PATH: &str = "/dev/shm/live-schema.json";
 /// monolith is unavailable). Written by the producer (`op-projection`).
 const PER_PLUGIN_SCHEMA_DIR: &str = "/dev/shm/opdbus/schemas";
 
+/// The producer's catalog manifest in shared memory. Carries the Blake3
+/// `catalog_hash` of the schema catalog (`{ "catalog_hash": "<hex>" }`).
+/// The bridge reads this hash, never re-computes it.
+const MANIFEST_PATH: &str = "/dev/shm/opdbus/.manifest.json";
+
 /// A schema-derived route entry for a plugin.
 #[derive(Debug, Clone)]
 pub struct PluginRoute {
@@ -63,6 +68,16 @@ pub struct SchemaRouter {
     routes: Arc<RwLock<HashMap<String, PluginRoute>>>,
     /// D-Bus system connection (shared with SchemaEngine).
     dbus_connection: Arc<tokio::sync::OnceCell<Connection>>,
+    /// Combined monolith catalog path (default [`LIVE_SCHEMA_PATH`]).
+    monolith_path: PathBuf,
+    /// Per-plugin schema directory (default [`PER_PLUGIN_SCHEMA_DIR`]).
+    per_plugin_dir: PathBuf,
+    /// Producer manifest path (default [`MANIFEST_PATH`]).
+    manifest_path: PathBuf,
+    /// Last-seen `catalog_hash` read from the manifest. Compared on each
+    /// inbound connection; a change triggers a reload. `None` when no manifest
+    /// has been observed yet.
+    cached_hash: Arc<RwLock<Option<String>>>,
 }
 
 impl SchemaRouter {
@@ -70,8 +85,32 @@ impl SchemaRouter {
     ///
     /// Loads synchronously at startup — the schema in /dev/shm is authoritative
     /// present-state and is always available. No polling or watchers.
+    ///
+    /// The last-seen `catalog_hash` is read from the manifest at construction
+    /// so the first inbound connection only reloads if the catalog actually
+    /// changed since startup.
     pub fn new(dbus_connection: Arc<tokio::sync::OnceCell<Connection>>) -> Self {
-        let routes = Self::load_all_routes();
+        Self::with_paths(
+            dbus_connection,
+            PathBuf::from(LIVE_SCHEMA_PATH),
+            PathBuf::from(PER_PLUGIN_SCHEMA_DIR),
+            PathBuf::from(MANIFEST_PATH),
+        )
+    }
+
+    /// Create a SchemaRouter with explicit SHM paths.
+    ///
+    /// In production, use [`new`](Self::new) which targets the canonical
+    /// `/dev/shm` layout. Tests supply temporary paths to exercise the
+    /// manifest-hash change-detection path without touching live SHM.
+    pub fn with_paths(
+        dbus_connection: Arc<tokio::sync::OnceCell<Connection>>,
+        monolith_path: PathBuf,
+        per_plugin_dir: PathBuf,
+        manifest_path: PathBuf,
+    ) -> Self {
+        let routes = Self::load_routes_from(&monolith_path, &per_plugin_dir);
+        let cached_hash = Self::read_manifest_hash_at(&manifest_path);
         info!(
             count = routes.len(),
             "SchemaRouter initialized from schema catalog"
@@ -79,6 +118,10 @@ impl SchemaRouter {
         Self {
             routes: Arc::new(RwLock::new(routes)),
             dbus_connection,
+            monolith_path,
+            per_plugin_dir,
+            manifest_path,
+            cached_hash: Arc::new(RwLock::new(cached_hash)),
         }
     }
 
@@ -107,14 +150,75 @@ impl SchemaRouter {
 
     /// Reload routes and re-register objects.
     pub async fn reload(&self) -> anyhow::Result<()> {
-        let routes = Self::load_all_routes();
-        let count = routes.len();
-        {
-            let mut w = self.routes.write().await;
-            *w = routes;
-        }
+        let count = self.reload_routes_only().await;
         info!(count, "SchemaRouter reloaded plugin routes");
         self.register_objects().await
+    }
+
+    /// Reload routes from the SHM catalog into the in-memory route table
+    /// without touching the D-Bus object server. Returns the route count.
+    ///
+    /// This is a direct read of the schema files — no polling, no watchers.
+    async fn reload_routes_only(&self) -> usize {
+        let routes = Self::load_routes_from(&self.monolith_path, &self.per_plugin_dir);
+        let count = routes.len();
+        let mut w = self.routes.write().await;
+        *w = routes;
+        count
+    }
+
+    /// Reload the SHM catalog and re-register D-Bus objects **iff** the
+    /// producer's `catalog_hash` changed since the last observation.
+    ///
+    /// This is the no-polling change-detection hook: it is invoked on inbound
+    /// connection arrival (before dispatching a method call), never on a timer.
+    /// The current `catalog_hash` is read directly from `.manifest.json` and
+    /// compared to the cached value. On a change, routes are reloaded from SHM,
+    /// the cached hash is advanced, and changed objects are re-registered on the
+    /// bus without restarting the bridge. Returns `true` when a reload occurred.
+    ///
+    /// The hash is read, never re-computed — the producer is the sole authority
+    /// for `catalog_hash`.
+    pub async fn refresh_if_changed(&self) -> anyhow::Result<bool> {
+        let current = self.read_manifest_hash();
+        let changed = {
+            let cached = self.cached_hash.read().await;
+            match (cached.as_deref(), current.as_deref()) {
+                // No manifest present → no hash to compare against; do nothing.
+                (_, None) => false,
+                // First observed hash, or a differing hash → reload.
+                (None, Some(_)) => true,
+                (Some(cached_hash), Some(current_hash)) => cached_hash != current_hash,
+            }
+        };
+
+        if !changed {
+            return Ok(false);
+        }
+
+        let count = self.reload_routes_only().await;
+        {
+            let mut w = self.cached_hash.write().await;
+            *w = current;
+        }
+        info!(
+            count,
+            "manifest catalog_hash changed on inbound — reloaded SHM, re-registering objects"
+        );
+
+        // Re-register the (possibly changed) object set on the bus. Skipped when
+        // the D-Bus connection is not yet initialized (e.g. unit tests), so the
+        // route reload and hash advance remain observable without a live bus.
+        if self.dbus_connection.get().is_some() {
+            self.register_objects().await?;
+        }
+        Ok(true)
+    }
+
+    /// The currently cached `catalog_hash`, or `None` if no manifest has been
+    /// observed.
+    pub async fn cached_catalog_hash(&self) -> Option<String> {
+        self.cached_hash.read().await.clone()
     }
 
     /// List all currently routable plugin IDs.
@@ -276,11 +380,22 @@ impl SchemaRouter {
 
     // ── Private helpers ─────────────────────────────────────────────────────
 
-    fn load_all_routes() -> HashMap<String, PluginRoute> {
-        Self::load_routes_from(
-            Path::new(LIVE_SCHEMA_PATH),
-            Path::new(PER_PLUGIN_SCHEMA_DIR),
-        )
+    /// Reads the `catalog_hash` from this router's manifest path.
+    fn read_manifest_hash(&self) -> Option<String> {
+        Self::read_manifest_hash_at(&self.manifest_path)
+    }
+
+    /// Reads `{ "catalog_hash": "<hex>" }` from the manifest at `path`.
+    ///
+    /// Returns `None` if the file is absent, unparsable, or lacks a string
+    /// `catalog_hash`. This is a direct synchronous SHM read — no polling.
+    fn read_manifest_hash_at(path: &Path) -> Option<String> {
+        let text = std::fs::read_to_string(path).ok()?;
+        let value: JsonValue = serde_json::from_str(&text).ok()?;
+        value
+            .get("catalog_hash")
+            .and_then(|h| h.as_str())
+            .map(String::from)
     }
 
     /// Loads plugin routes from the combined monolith, falling back to the
@@ -1259,6 +1374,191 @@ mod tests {
             .collect();
         assert!(names.contains(&"KeyRotated"));
         assert!(names.contains(&"KeyExpired"));
+
+        cleanup(&base);
+    }
+
+    // ── R4.5 / NFR1.2 — Manifest hash change detection (no polling) ──────
+
+    /// Writes a combined monolith at `path` containing one plugin per id in
+    /// `plugin_ids`, each declaring a single read method. Mirrors the SHM
+    /// format the producer emits (`plugin_id → PluginSchema`).
+    fn write_monolith_plugins(path: &Path, plugin_ids: &[&str]) {
+        let mut catalog = serde_json::Map::new();
+        for id in plugin_ids {
+            catalog.insert(
+                (*id).to_string(),
+                json!({
+                    "name": id,
+                    "methods": {
+                        "Ping": {
+                            "name": "Ping",
+                            "args": { "type": "object" },
+                            "returns": null,
+                            "side_effect": "read",
+                            "idempotent": true,
+                            "required_capability": null,
+                            "subid": format!("obs.service.{}.ping@v1", id)
+                        }
+                    },
+                    "signals": [],
+                    "properties": {}
+                }),
+            );
+        }
+        if let Some(parent) = path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        fs::write(
+            path,
+            serde_json::to_vec_pretty(&JsonValue::Object(catalog)).unwrap(),
+        )
+        .unwrap();
+    }
+
+    /// Writes `{ "catalog_hash": "<hash>" }` to the manifest at `path`.
+    fn write_manifest(path: &Path, hash: &str) {
+        if let Some(parent) = path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        fs::write(
+            path,
+            serde_json::to_vec_pretty(&json!({ "catalog_hash": hash })).unwrap(),
+        )
+        .unwrap();
+    }
+
+    // ── VAL-BRIDGE-006: reload on manifest hash change, no restart ──
+
+    #[tokio::test]
+    async fn bridge_reloads_on_manifest_hash_change() {
+        let base = test_base_dir();
+        let monolith_path = base.join("live-schema.json");
+        let per_plugin_dir = base.join("opdbus/schemas");
+        let manifest_path = base.join(".manifest.json");
+
+        // Producer writes initial catalog (alpha only) + manifest hash-1.
+        write_monolith_plugins(&monolith_path, &["alpha"]);
+        write_manifest(&manifest_path, "hash-1");
+
+        // Bridge caches the last-seen catalog_hash from .manifest.json at startup.
+        let conn = Arc::new(tokio::sync::OnceCell::new());
+        let router = SchemaRouter::with_paths(
+            conn,
+            monolith_path.clone(),
+            per_plugin_dir.clone(),
+            manifest_path.clone(),
+        );
+        assert_eq!(
+            router.cached_catalog_hash().await.as_deref(),
+            Some("hash-1"),
+            "bridge caches the catalog_hash from .manifest.json at startup"
+        );
+        assert_eq!(router.list_plugin_ids().await.len(), 1);
+
+        // First inbound connection — cached hash equals current → no reload.
+        let reloaded = router.refresh_if_changed().await.unwrap();
+        assert!(!reloaded, "unchanged hash must not trigger a reload");
+        assert_eq!(router.list_plugin_ids().await.len(), 1);
+
+        // Producer changes the catalog: adds beta and writes a new hash.
+        write_monolith_plugins(&monolith_path, &["alpha", "beta"]);
+        write_manifest(&manifest_path, "hash-2");
+
+        // Second inbound connection — hash changed → reload SHM + re-register.
+        let reloaded = router.refresh_if_changed().await.unwrap();
+        assert!(
+            reloaded,
+            "a hash change between two inbound calls must trigger a reload"
+        );
+        let ids = router.list_plugin_ids().await;
+        assert_eq!(ids.len(), 2, "reload picks up the newly added plugin");
+        assert!(
+            ids.contains(&"beta".to_string()),
+            "newly added plugin is registered after reload, without restart"
+        );
+        assert_eq!(
+            router.cached_catalog_hash().await.as_deref(),
+            Some("hash-2"),
+            "cached hash advances to the new catalog_hash after reload"
+        );
+
+        cleanup(&base);
+    }
+
+    // ── VAL-NFR-002: hash compared on inbound arrival, not on a timer ──
+
+    #[tokio::test]
+    async fn hash_check_on_inbound_not_timer() {
+        let base = test_base_dir();
+        let monolith_path = base.join("live-schema.json");
+        let per_plugin_dir = base.join("opdbus/schemas");
+        let manifest_path = base.join(".manifest.json");
+
+        write_monolith_plugins(&monolith_path, &["alpha"]);
+        write_manifest(&manifest_path, "h1");
+
+        let conn = Arc::new(tokio::sync::OnceCell::new());
+        let router = SchemaRouter::with_paths(
+            conn,
+            monolith_path.clone(),
+            per_plugin_dir.clone(),
+            manifest_path.clone(),
+        );
+
+        // Producer changes the catalog AFTER the router is constructed.
+        write_monolith_plugins(&monolith_path, &["alpha", "beta"]);
+        write_manifest(&manifest_path, "h2");
+
+        // No inbound connection has arrived. There is NO background timer,
+        // interval, or polling loop: the router must not have reloaded on its
+        // own. The change is observable only when a connection arrives.
+        assert_eq!(
+            router.list_plugin_ids().await.len(),
+            1,
+            "no timer reloads the catalog; the change is picked up only on inbound arrival"
+        );
+        assert_eq!(router.cached_catalog_hash().await.as_deref(), Some("h1"));
+
+        // Inbound connection arrives → catalog hash compared on arrival →
+        // reload happens before dispatch.
+        let reloaded = router.refresh_if_changed().await.unwrap();
+        assert!(
+            reloaded,
+            "the catalog hash is compared on inbound connection arrival"
+        );
+        assert_eq!(router.list_plugin_ids().await.len(), 2);
+        assert_eq!(router.cached_catalog_hash().await.as_deref(), Some("h2"));
+
+        cleanup(&base);
+    }
+
+    // ── A missing manifest leaves the cache empty and does not reload ──
+
+    #[tokio::test]
+    async fn refresh_no_manifest_does_not_reload() {
+        let base = test_base_dir();
+        let monolith_path = base.join("live-schema.json");
+        let per_plugin_dir = base.join("opdbus/schemas");
+        let manifest_path = base.join(".manifest.json");
+
+        write_monolith_plugins(&monolith_path, &["alpha"]);
+        // No manifest written.
+
+        let conn = Arc::new(tokio::sync::OnceCell::new());
+        let router = SchemaRouter::with_paths(
+            conn,
+            monolith_path.clone(),
+            per_plugin_dir.clone(),
+            manifest_path.clone(),
+        );
+        assert_eq!(router.cached_catalog_hash().await, None);
+
+        let reloaded = router.refresh_if_changed().await.unwrap();
+        assert!(
+            !reloaded,
+            "with no manifest there is no hash to compare; no reload occurs"
+        );
 
         cleanup(&base);
     }
