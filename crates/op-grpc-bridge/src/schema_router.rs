@@ -11,8 +11,12 @@
 //!
 //! ## Schema Access Paths (both supported)
 //!
-//! 1. **Per-plugin files:** `schemas/plugin/<name>.json` — individual schema objects.
-//! 2. **Combined monolith:** `/dev/shm/live-schema.json` — derived catalog of all plugins.
+//! 1. **Combined monolith:** `/dev/shm/live-schema.json` — derived catalog of all plugins.
+//! 2. **Per-plugin files:** `/dev/shm/opdbus/schemas/<plugin_id>.json` — fallback
+//!    when the monolith is unavailable.
+//!
+//! The monolith is preferred; per-plugin files fill in any plugin the monolith
+//! does not cover (and provide a complete fallback when the monolith is absent).
 //!
 //! The manifest hash is read, never re-computed. Consumers trust the manifest.
 
@@ -30,8 +34,9 @@ use op_plugins::canonical::{self, BASE_SERVICE_NAME};
 /// The combined monolith catalog in shared memory.
 const LIVE_SCHEMA_PATH: &str = "/dev/shm/live-schema.json";
 
-/// Per-plugin schema directory (relative to project root, resolved at runtime).
-const PER_PLUGIN_SCHEMA_DIR: &str = "/etc/opdbus/schemas/plugin";
+/// Per-plugin schema directory in shared memory (fallback when the combined
+/// monolith is unavailable). Written by the producer (`op-projection`).
+const PER_PLUGIN_SCHEMA_DIR: &str = "/dev/shm/opdbus/schemas";
 
 /// A schema-derived route entry for a plugin.
 #[derive(Debug, Clone)]
@@ -44,8 +49,10 @@ pub struct PluginRoute {
     pub dbus_destination: String,
     /// Canonical D-Bus interface: `org.opdbus.v1.Plugin.<PluginName>`.
     pub dbus_interface: String,
-    /// Methods declared in the schema (name → argument JSON schema).
+    /// Methods declared in the schema (name → `MethodDecl` JSON).
     pub methods: HashMap<String, JsonValue>,
+    /// Signals declared in the schema (each entry a `SignalDecl` JSON object).
+    pub signals: Vec<JsonValue>,
     /// Properties declared in the schema (name → field schema).
     pub properties: HashMap<String, JsonValue>,
 }
@@ -270,13 +277,28 @@ impl SchemaRouter {
     // ── Private helpers ─────────────────────────────────────────────────────
 
     fn load_all_routes() -> HashMap<String, PluginRoute> {
+        Self::load_routes_from(
+            Path::new(LIVE_SCHEMA_PATH),
+            Path::new(PER_PLUGIN_SCHEMA_DIR),
+        )
+    }
+
+    /// Loads plugin routes from the combined monolith, falling back to the
+    /// per-plugin schema directory for any plugin the monolith does not cover.
+    ///
+    /// If the monolith is unavailable, routes are sourced entirely from the
+    /// per-plugin files. This is the testable core of [`load_all_routes`].
+    fn load_routes_from(
+        monolith_path: &Path,
+        per_plugin_dir: &Path,
+    ) -> HashMap<String, PluginRoute> {
         let mut routes = HashMap::new();
-        if let Some(monolith_routes) = Self::load_from_monolith() {
+        if let Some(monolith_routes) = Self::load_from_monolith(monolith_path) {
             for (id, route) in monolith_routes {
                 routes.insert(id, route);
             }
         }
-        if let Some(per_plugin_routes) = Self::load_from_per_plugin_dir() {
+        if let Some(per_plugin_routes) = Self::load_from_per_plugin_dir(per_plugin_dir) {
             for (id, route) in per_plugin_routes {
                 routes.entry(id).or_insert(route);
             }
@@ -284,8 +306,8 @@ impl SchemaRouter {
         routes
     }
 
-    fn load_from_monolith() -> Option<HashMap<String, PluginRoute>> {
-        let bytes = std::fs::read(LIVE_SCHEMA_PATH).ok()?;
+    fn load_from_monolith(path: &Path) -> Option<HashMap<String, PluginRoute>> {
+        let bytes = std::fs::read(path).ok()?;
         let root: JsonValue = serde_json::from_slice(&bytes).ok()?;
         let catalog = root.as_object()?;
 
@@ -302,8 +324,7 @@ impl SchemaRouter {
         Some(routes)
     }
 
-    fn load_from_per_plugin_dir() -> Option<HashMap<String, PluginRoute>> {
-        let dir = Path::new(PER_PLUGIN_SCHEMA_DIR);
+    fn load_from_per_plugin_dir(dir: &Path) -> Option<HashMap<String, PluginRoute>> {
         if !dir.is_dir() {
             return None;
         }
@@ -337,6 +358,7 @@ impl SchemaRouter {
         let dbus_destination = BASE_SERVICE_NAME.to_string();
         let dbus_interface = canonical::plugin_interface(plugin_id);
         let methods = Self::extract_methods(schema);
+        let signals = Self::extract_signals(schema);
         let properties = Self::extract_properties(schema);
         PluginRoute {
             plugin_id: plugin_id.to_string(),
@@ -344,6 +366,7 @@ impl SchemaRouter {
             dbus_destination,
             dbus_interface,
             methods,
+            signals,
             properties,
         }
     }
@@ -356,6 +379,17 @@ impl SchemaRouter {
             }
         }
         methods
+    }
+
+    /// Extracts the `signals` array from a plugin schema. Each entry is a
+    /// `SignalDecl` JSON object (`name`, `payload`, `subid`). Absent or
+    /// non-array `signals` yields an empty list.
+    fn extract_signals(schema: &JsonValue) -> Vec<JsonValue> {
+        schema
+            .get("signals")
+            .and_then(|s| s.as_array())
+            .cloned()
+            .unwrap_or_default()
     }
 
     fn extract_properties(schema: &JsonValue) -> HashMap<String, JsonValue> {
@@ -426,6 +460,83 @@ impl SchemaBackedInterface {
             }
             Err(_) => JsonValue::Object(serde_json::Map::new()),
         }
+    }
+
+    /// The canonical D-Bus object path this interface is registered at
+    /// (`/org/opdbus/v1/plugins/<plugin_id>`).
+    pub fn dbus_path(&self) -> &str {
+        &self.route.dbus_path
+    }
+
+    /// The canonical D-Bus interface name for this plugin
+    /// (`org.opdbus.v1.Plugin.<PluginName>`).
+    pub fn dbus_interface(&self) -> &str {
+        &self.route.dbus_interface
+    }
+
+    /// Names of every method declared in the plugin's capability surface.
+    ///
+    /// Every declared `MethodDecl` is exposed as a callable D-Bus method via
+    /// [`call`](Self::call).
+    pub fn declared_methods(&self) -> Vec<String> {
+        self.route.methods.keys().cloned().collect()
+    }
+
+    /// Returns `true` if `method` is declared in the plugin's capability
+    /// surface (and is therefore callable).
+    pub fn exposes_method(&self, method: &str) -> bool {
+        self.route.methods.contains_key(method)
+    }
+
+    /// Names of every signal declared in the plugin's capability surface.
+    ///
+    /// Every declared `SignalDecl` is exposed as an emittable D-Bus signal via
+    /// [`emit_signal`](Self::emit_signal).
+    pub fn declared_signals(&self) -> Vec<String> {
+        self.route
+            .signals
+            .iter()
+            .filter_map(|s| s.get("name").and_then(|n| n.as_str()).map(String::from))
+            .collect()
+    }
+
+    /// Returns `true` if `signal` is declared in the plugin's capability
+    /// surface (and is therefore emittable).
+    pub fn exposes_signal(&self, signal: &str) -> bool {
+        self.route
+            .signals
+            .iter()
+            .any(|s| s.get("name").and_then(|n| n.as_str()) == Some(signal))
+    }
+
+    /// Emits a declared D-Bus signal for this plugin on the canonical object
+    /// path and interface, carrying `payload_json` as the signal body.
+    ///
+    /// The signal name is validated against the plugin's capability surface;
+    /// emitting a signal that is not declared is rejected. This is the runtime
+    /// counterpart to [`declared_signals`](Self::declared_signals): every
+    /// `SignalDecl` in the schema is emittable, and nothing else is.
+    pub async fn emit_signal(
+        &self,
+        conn: &Connection,
+        signal: &str,
+        payload_json: &str,
+    ) -> zbus::fdo::Result<()> {
+        if !self.exposes_signal(signal) {
+            return Err(zbus::fdo::Error::UnknownMethod(format!(
+                "signal '{}' is not declared for plugin '{}'",
+                signal, self.plugin_id
+            )));
+        }
+        conn.emit_signal(
+            Option::<&str>::None,
+            self.route.dbus_path.as_str(),
+            self.route.dbus_interface.as_str(),
+            signal,
+            &(payload_json.to_string(),),
+        )
+        .await
+        .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
     }
 }
 
@@ -604,12 +715,18 @@ mod tests {
         let mut properties = HashMap::new();
         properties.insert("status".to_string(), json!({ "type": "string" }));
         properties.insert("uptime".to_string(), json!({ "type": "integer" }));
+        let signals = vec![json!({
+            "name": "StatusChanged",
+            "payload": { "type": "object" },
+            "subid": "evt.service.test.status-changed@v1"
+        })];
         PluginRoute {
             plugin_id: "test_plugin".to_string(),
             dbus_path: "/org/opdbus/v1/plugins/test_plugin".to_string(),
             dbus_destination: "org.opdbus.v1".to_string(),
             dbus_interface: "org.opdbus.v1.Plugin.TestPlugin".to_string(),
             methods,
+            signals,
             properties,
         }
     }
@@ -881,5 +998,268 @@ mod tests {
         assert_eq!(state3["status"], json!("down"));
 
         cleanup(&state_dir);
+    }
+
+    // ── R4.1-R4.4 / VAL-BRIDGE-003/004/005 — Bridge registration from SHM ──
+
+    /// Creates a unique temp base directory under `/dev/shm` for SHM files.
+    fn test_base_dir() -> PathBuf {
+        let id = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = PathBuf::from(format!("/dev/shm/opdbus-test-bridge-{}-{}", id, nanos));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("create test base dir");
+        dir
+    }
+
+    /// Writes a combined monolith `live-schema.json` under `base` with two
+    /// plugins ("alpha", "beta") each carrying methods and signals in the exact
+    /// SHM format the producer writes (a map of `plugin_id → PluginSchema`).
+    fn write_test_monolith(base: &Path) -> PathBuf {
+        let monolith = json!({
+            "alpha": {
+                "name": "alpha",
+                "methods": {
+                    "GetStatus": {
+                        "name": "GetStatus",
+                        "args": { "type": "object", "properties": {} },
+                        "returns": { "type": "object" },
+                        "side_effect": "read",
+                        "idempotent": true,
+                        "required_capability": null,
+                        "subid": "obs.service.alpha.get-status@v1"
+                    }
+                },
+                "signals": [
+                    {
+                        "name": "StatusChanged",
+                        "payload": { "type": "object" },
+                        "subid": "evt.service.alpha.status-changed@v1"
+                    }
+                ],
+                "properties": { "status": { "type": "string" } }
+            },
+            "beta": {
+                "name": "beta",
+                "methods": {
+                    "SetKey": {
+                        "name": "SetKey",
+                        "args": {
+                            "type": "object",
+                            "properties": { "key": { "type": "string" } },
+                            "required": ["key"]
+                        },
+                        "returns": null,
+                        "side_effect": "mutation",
+                        "idempotent": false,
+                        "required_capability": "beta.set_key",
+                        "subid": "mut.service.beta.set-key@v1"
+                    },
+                    "GetKey": {
+                        "name": "GetKey",
+                        "args": { "type": "object", "properties": {} },
+                        "returns": { "type": "string" },
+                        "side_effect": "read",
+                        "idempotent": true,
+                        "required_capability": null,
+                        "subid": "obs.service.beta.get-key@v1"
+                    }
+                },
+                "signals": [
+                    { "name": "KeyRotated", "payload": null, "subid": "evt.service.beta.key-rotated@v1" },
+                    { "name": "KeyExpired", "payload": null, "subid": "evt.service.beta.key-expired@v1" }
+                ],
+                "properties": {}
+            }
+        });
+        let path = base.join("live-schema.json");
+        fs::write(&path, serde_json::to_vec_pretty(&monolith).unwrap()).unwrap();
+        path
+    }
+
+    // ── VAL-BRIDGE-003: one SchemaBackedInterface per plugin from SHM ──
+
+    #[test]
+    fn bridge_registers_object_per_plugin_from_shm() {
+        let base = test_base_dir();
+        let monolith_path = write_test_monolith(&base);
+        // No per-plugin dir on disk → routes come purely from the monolith.
+        let per_plugin_dir = base.join("opdbus/schemas");
+
+        let routes = SchemaRouter::load_routes_from(&monolith_path, &per_plugin_dir);
+        assert_eq!(
+            routes.len(),
+            2,
+            "one route per plugin declared in the monolith"
+        );
+        assert!(routes.contains_key("alpha"));
+        assert!(routes.contains_key("beta"));
+
+        // Each plugin route mounts at the canonical per-plugin object path.
+        let alpha = &routes["alpha"];
+        assert_eq!(alpha.dbus_path, canonical::plugin_path("alpha"));
+        assert_eq!(alpha.dbus_path, "/org/opdbus/v1/plugins/alpha");
+        assert_eq!(alpha.dbus_destination, "org.opdbus.v1");
+        assert_eq!(alpha.dbus_interface, canonical::plugin_interface("alpha"));
+
+        // One SchemaBackedInterface is constructed per plugin route, mounted at
+        // the canonical path the bridge registers it on.
+        for (id, route) in routes.iter() {
+            let iface = SchemaBackedInterface::new(id.clone(), route.clone());
+            assert_eq!(iface.dbus_path(), canonical::plugin_path(id));
+        }
+
+        cleanup(&base);
+    }
+
+    // ── Fallback: per-plugin files when the monolith is unavailable ──
+
+    #[test]
+    fn bridge_falls_back_to_per_plugin_files_when_monolith_missing() {
+        let base = test_base_dir();
+        let schemas_dir = base.join("opdbus/schemas");
+        fs::create_dir_all(&schemas_dir).unwrap();
+
+        let alpha_schema = json!({
+            "name": "alpha",
+            "methods": {
+                "Ping": {
+                    "name": "Ping",
+                    "args": { "type": "object" },
+                    "returns": null,
+                    "side_effect": "read",
+                    "idempotent": true,
+                    "required_capability": null,
+                    "subid": "obs.service.alpha.ping@v1"
+                }
+            },
+            "signals": [],
+            "properties": {}
+        });
+        fs::write(
+            schemas_dir.join("alpha.json"),
+            serde_json::to_vec(&alpha_schema).unwrap(),
+        )
+        .unwrap();
+
+        // Point at a monolith path that does not exist.
+        let missing_monolith = base.join("nonexistent-live-schema.json");
+        let routes = SchemaRouter::load_routes_from(&missing_monolith, &schemas_dir);
+
+        assert_eq!(
+            routes.len(),
+            1,
+            "fallback must load per-plugin files when the monolith is unavailable"
+        );
+        assert!(routes.contains_key("alpha"));
+        assert!(routes["alpha"].methods.contains_key("Ping"));
+
+        cleanup(&base);
+    }
+
+    // ── VAL-BRIDGE-004: every MethodDecl exposed as a callable method ──
+
+    #[tokio::test]
+    async fn bridge_exposes_all_declared_methods() {
+        let base = test_base_dir();
+        let monolith_path = write_test_monolith(&base);
+        let per_plugin_dir = base.join("opdbus/schemas");
+        let routes = SchemaRouter::load_routes_from(&monolith_path, &per_plugin_dir);
+
+        // beta declares SetKey and GetKey — both must be exposed.
+        let beta = routes["beta"].clone();
+        let iface = SchemaBackedInterface::new("beta".to_string(), beta);
+
+        let declared = iface.declared_methods();
+        assert!(declared.contains(&"SetKey".to_string()));
+        assert!(declared.contains(&"GetKey".to_string()));
+        assert_eq!(declared.len(), 2, "every declared MethodDecl is exposed");
+
+        assert!(iface.exposes_method("SetKey"));
+        assert!(iface.exposes_method("GetKey"));
+        assert!(!iface.exposes_method("Nonexistent"));
+
+        // A declared method is callable (passes the method-existence gate);
+        // an undeclared method is rejected as UnknownMethod.
+        let unknown = iface
+            .call("Nonexistent".to_string(), "{}".to_string())
+            .await;
+        assert!(
+            matches!(unknown, Err(zbus::fdo::Error::UnknownMethod(_))),
+            "undeclared method must be rejected as UnknownMethod"
+        );
+        let known = iface.call("GetKey".to_string(), "{}".to_string()).await;
+        assert!(
+            !matches!(known, Err(zbus::fdo::Error::UnknownMethod(_))),
+            "a declared method must be exposed (not rejected as UnknownMethod)"
+        );
+
+        cleanup(&base);
+    }
+
+    // ── VAL-BRIDGE-005: every SignalDecl exposed as an emittable signal ──
+
+    #[test]
+    fn bridge_exposes_all_declared_signals() {
+        let base = test_base_dir();
+        let monolith_path = write_test_monolith(&base);
+        let per_plugin_dir = base.join("opdbus/schemas");
+        let routes = SchemaRouter::load_routes_from(&monolith_path, &per_plugin_dir);
+
+        // beta declares KeyRotated and KeyExpired signals.
+        let beta = routes["beta"].clone();
+        let iface = SchemaBackedInterface::new("beta".to_string(), beta);
+
+        let signals = iface.declared_signals();
+        assert!(signals.contains(&"KeyRotated".to_string()));
+        assert!(signals.contains(&"KeyExpired".to_string()));
+        assert_eq!(signals.len(), 2, "every declared SignalDecl is exposed");
+
+        assert!(iface.exposes_signal("KeyRotated"));
+        assert!(iface.exposes_signal("KeyExpired"));
+        assert!(!iface.exposes_signal("Nonexistent"));
+
+        // alpha declares exactly one signal: StatusChanged.
+        let alpha = routes["alpha"].clone();
+        let alpha_iface = SchemaBackedInterface::new("alpha".to_string(), alpha);
+        assert_eq!(
+            alpha_iface.declared_signals(),
+            vec!["StatusChanged".to_string()]
+        );
+
+        cleanup(&base);
+    }
+
+    // ── Route extraction preserves the full method + signal surface ──
+
+    #[test]
+    fn route_extracts_methods_and_signals_from_schema() {
+        let base = test_base_dir();
+        let monolith_path = write_test_monolith(&base);
+        let per_plugin_dir = base.join("opdbus/schemas");
+        let routes = SchemaRouter::load_routes_from(&monolith_path, &per_plugin_dir);
+
+        let beta = &routes["beta"];
+        // Methods preserved with full MethodDecl bodies.
+        assert_eq!(beta.methods.len(), 2);
+        assert_eq!(beta.methods["SetKey"]["side_effect"], json!("mutation"));
+        assert_eq!(
+            beta.methods["SetKey"]["required_capability"],
+            json!("beta.set_key")
+        );
+        // Signals preserved with full SignalDecl bodies.
+        assert_eq!(beta.signals.len(), 2);
+        let names: Vec<&str> = beta
+            .signals
+            .iter()
+            .filter_map(|s| s["name"].as_str())
+            .collect();
+        assert!(names.contains(&"KeyRotated"));
+        assert!(names.contains(&"KeyExpired"));
+
+        cleanup(&base);
     }
 }

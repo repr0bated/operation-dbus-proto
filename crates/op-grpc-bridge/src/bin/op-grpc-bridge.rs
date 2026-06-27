@@ -56,11 +56,9 @@ async fn main() -> anyhow::Result<()> {
             if let Err(e) = sr_init.register_objects().await {
                 tracing::error!(error = %e, "Failed to register authoritative D-Bus objects");
             } else {
-                // Request the canonical bus name for the bridge
-                if let Err(e) = conn
-                    .request_name(op_plugins::canonical::BASE_SERVICE_NAME)
-                    .await
-                {
+                // Request the canonical bus name for the bridge. The bridge is
+                // the sole owner of org.opdbus.v1 (see canonical::BASE_SERVICE_NAME).
+                if let Err(e) = conn.request_name("org.opdbus.v1").await {
                     tracing::warn!(error = %e, "Failed to request D-Bus name (likely already owned)");
                 }
             }
