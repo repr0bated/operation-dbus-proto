@@ -4506,11 +4506,7 @@ impl crate::proto::dbus_passthrough_server::DbusPassthrough for OperationGrpcSer
         // path. This allows callers to specify only the plugin path and method
         // without knowing the D-Bus destination/interface.
         use crate::schema_passthrough::resolve_from_schema_or_explicit;
-        let resolved = resolve_from_schema_or_explicit(
-            &req.destination,
-            &req.path,
-            &req.interface,
-        );
+        let resolved = resolve_from_schema_or_explicit(&req.destination, &req.path, &req.interface);
 
         let (destination, path, interface) = match resolved {
             crate::schema_passthrough::ResolvedRoute::Explicit {
@@ -4566,17 +4562,16 @@ impl crate::proto::dbus_passthrough_server::DbusPassthrough for OperationGrpcSer
 
         // Schema-driven resolution: if destination is empty, resolve from path.
         use crate::schema_passthrough::resolve_from_schema_or_explicit;
-        let resolved = resolve_from_schema_or_explicit(
-            &req.destination,
-            &req.path,
-            &req.interface,
-        );
+        let resolved = resolve_from_schema_or_explicit(&req.destination, &req.path, &req.interface);
         let (destination, path, interface) = match resolved {
             crate::schema_passthrough::ResolvedRoute::Explicit {
-                destination, path, interface,
+                destination,
+                path,
+                interface,
             } => (destination, path, interface),
             crate::schema_passthrough::ResolvedRoute::SchemaResolved {
-                plugin_id, sub_path: _,
+                plugin_id,
+                sub_path: _,
             } => {
                 let dest = op_plugins::canonical::BASE_SERVICE_NAME.to_string();
                 let p = op_plugins::canonical::plugin_path(&plugin_id);
@@ -4626,17 +4621,16 @@ impl crate::proto::dbus_passthrough_server::DbusPassthrough for OperationGrpcSer
 
         // Schema-driven resolution: if destination is empty, resolve from path.
         use crate::schema_passthrough::resolve_from_schema_or_explicit;
-        let resolved = resolve_from_schema_or_explicit(
-            &req.destination,
-            &req.path,
-            &req.interface,
-        );
+        let resolved = resolve_from_schema_or_explicit(&req.destination, &req.path, &req.interface);
         let (destination, path, interface) = match resolved {
             crate::schema_passthrough::ResolvedRoute::Explicit {
-                destination, path, interface,
+                destination,
+                path,
+                interface,
             } => (destination, path, interface),
             crate::schema_passthrough::ResolvedRoute::SchemaResolved {
-                plugin_id, sub_path: _,
+                plugin_id,
+                sub_path: _,
             } => {
                 let dest = op_plugins::canonical::BASE_SERVICE_NAME.to_string();
                 let p = op_plugins::canonical::plugin_path(&plugin_id);
@@ -4691,17 +4685,16 @@ impl crate::proto::dbus_passthrough_server::DbusPassthrough for OperationGrpcSer
 
         // Schema-driven resolution: if destination is empty, resolve from path.
         use crate::schema_passthrough::resolve_from_schema_or_explicit;
-        let resolved = resolve_from_schema_or_explicit(
-            &req.destination,
-            &req.path,
-            &req.interface,
-        );
+        let resolved = resolve_from_schema_or_explicit(&req.destination, &req.path, &req.interface);
         let (destination, path, interface) = match resolved {
             crate::schema_passthrough::ResolvedRoute::Explicit {
-                destination, path, interface,
+                destination,
+                path,
+                interface,
             } => (destination, path, interface),
             crate::schema_passthrough::ResolvedRoute::SchemaResolved {
-                plugin_id, sub_path: _,
+                plugin_id,
+                sub_path: _,
             } => {
                 let dest = op_plugins::canonical::BASE_SERVICE_NAME.to_string();
                 let p = op_plugins::canonical::plugin_path(&plugin_id);

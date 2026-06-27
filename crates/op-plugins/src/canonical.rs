@@ -290,10 +290,7 @@ mod tests {
     #[test]
     fn test_plugin_path() {
         assert_eq!(plugin_path("incus"), "/org/opdbus/v1/plugins/incus");
-        assert_eq!(
-            plugin_path("my-plugin"),
-            "/org/opdbus/v1/plugins/my_plugin"
-        );
+        assert_eq!(plugin_path("my-plugin"), "/org/opdbus/v1/plugins/my_plugin");
         assert_eq!(
             plugin_path("123invalid"),
             "/org/opdbus/v1/plugins/plugin_123invalid"
@@ -378,7 +375,9 @@ mod tests {
     fn test_is_canonical_plugin_path() {
         assert!(is_canonical_plugin_path("/org/opdbus/v1/plugins/net"));
         assert!(!is_canonical_plugin_path("/opdbus/v1/plugins/net"));
-        assert!(!is_canonical_plugin_path("/org/opdbus/v1/plugin/plugins/net"));
+        assert!(!is_canonical_plugin_path(
+            "/org/opdbus/v1/plugin/plugins/net"
+        ));
     }
 
     #[test]

@@ -4251,8 +4251,7 @@ fn create_privacy_router_schema() -> PluginSchema {
             FieldSchema {
                 field_type: FieldType::String,
                 required: false,
-                description: "Netclient network name for the WARP egress interface"
-                    .to_string(),
+                description: "Netclient network name for the WARP egress interface".to_string(),
                 default: Some(json!("gbr_warp")),
                 example: Some(json!("gbr_warp")),
                 constraints: Vec::new(),

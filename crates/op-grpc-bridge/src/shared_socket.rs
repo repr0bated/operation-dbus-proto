@@ -53,8 +53,7 @@ impl CanonicalPeerIdentity {
         match op_identity::read_sled() {
             Ok((sled_ptr, _mmap)) => {
                 let sled = unsafe { &*sled_ptr };
-                let is_valid =
-                    sled.hashed_footprint != [0u8; 32] && sled.trace_id != [0u8; 16];
+                let is_valid = sled.hashed_footprint != [0u8; 32] && sled.trace_id != [0u8; 16];
                 Self {
                     footprint_hex: hex::encode(sled.hashed_footprint),
                     trace_id_hex: sled.trace_id_hex(),
@@ -146,10 +145,8 @@ pub fn uds_identity_interceptor(
         .parse::<tonic::metadata::MetadataValue<tonic::metadata::Ascii>>()
         .map_err(|_| tonic::Status::internal("Failed to encode trace_id header"))?;
 
-    req.metadata_mut()
-        .insert("x-ghostbridge-footprint", fp);
-    req.metadata_mut()
-        .insert("x-ghostbridge-trace-id", tr);
+    req.metadata_mut().insert("x-ghostbridge-footprint", fp);
+    req.metadata_mut().insert("x-ghostbridge-trace-id", tr);
 
     Ok(req)
 }

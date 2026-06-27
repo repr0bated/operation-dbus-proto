@@ -203,12 +203,12 @@ impl SchemaRouter {
         let iface = zbus::names::InterfaceName::try_from(route.dbus_interface.as_str())
             .map_err(|e| SchemaRouterError::ProxyBuildFailed(e.to_string()))?;
 
-        let val: zbus::zvariant::OwnedValue = props
-            .get(iface, property_name)
-            .await
-            .map_err(|e| SchemaRouterError::DbusCallFailed {
-                method: format!("Get({})", property_name),
-                error: e.to_string(),
+        let val: zbus::zvariant::OwnedValue =
+            props.get(iface, property_name).await.map_err(|e| {
+                SchemaRouterError::DbusCallFailed {
+                    method: format!("Get({})", property_name),
+                    error: e.to_string(),
+                }
             })?;
 
         serde_json::to_string(&val)
@@ -315,8 +315,14 @@ impl SchemaRouter {
             if path.extension().and_then(|e| e.to_str()) != Some("json") {
                 continue;
             }
-            let plugin_id = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
-            if plugin_id.is_empty() { continue; }
+            let plugin_id = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_string();
+            if plugin_id.is_empty() {
+                continue;
+            }
             if let Ok(bytes) = std::fs::read(&path) {
                 if let Ok(schema) = serde_json::from_slice::<JsonValue>(&bytes) {
                     let route = Self::build_route(&plugin_id, &schema);
@@ -396,7 +402,7 @@ impl SchemaBackedInterface {
     ///
     /// All schema-defined methods are funneled through this call, allowing
     /// dynamic dispatch without compile-time traits for every plugin.
-    async fn call(&self, method: String, json_args: String) -> zbus::fdo::Result<String> {
+    async fn call(&self, method: String, _json_args: String) -> zbus::fdo::Result<String> {
         if !self.route.methods.contains_key(&method) {
             return Err(zbus::fdo::Error::UnknownMethod(method));
         }
@@ -404,17 +410,22 @@ impl SchemaBackedInterface {
         // a container is calling a host service. The bridge handles this by
         // either performing the action or proxying it.
         info!(plugin_id = %self.plugin_id, method, "D-Bus method call received");
-        
-        // This is where the authoritative bridge logic lives. 
+
+        // This is where the authoritative bridge logic lives.
         // For now, we return a successful response acknowledging the call.
         // In a full implementation, this would trigger the actual plugin action.
-        Ok(format!(r#"{{"success": true, "plugin": "{}", "method": "{}"}}"#, self.plugin_id, method))
+        Ok(format!(
+            r#"{{"success": true, "plugin": "{}", "method": "{}"}}"#,
+            self.plugin_id, method
+        ))
     }
 
     /// Get a property value.
     async fn get_property(&self, name: String) -> zbus::fdo::Result<String> {
         let state = self.state.read().await;
-        let val = state.get(&name).ok_or_else(|| zbus::fdo::Error::UnknownProperty(name))?;
+        let val = state
+            .get(&name)
+            .ok_or_else(|| zbus::fdo::Error::UnknownProperty(name))?;
         serde_json::to_string(val).map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
     }
 
@@ -455,6 +466,44 @@ pub enum SchemaRouterError {
     DbusCallFailed { method: String, error: String },
     #[error("Serialization failed: {0}")]
     SerializationFailed(String),
+}
+
+impl From<SchemaRouterError> for tonic::Status {
+    fn from(err: SchemaRouterError) -> Self {
+        match err {
+            SchemaRouterError::PluginNotFound(id) => {
+                tonic::Status::not_found(format!("Plugin not found: {}", id))
+            }
+            SchemaRouterError::MethodNotFound {
+                plugin_id,
+                method,
+                available,
+            } => tonic::Status::not_found(format!(
+                "Method {} not found for plugin {}. Available: {:?}",
+                method, plugin_id, available
+            )),
+            SchemaRouterError::PropertyNotFound {
+                plugin_id,
+                property,
+                available,
+            } => tonic::Status::not_found(format!(
+                "Property {} not found for plugin {}. Available: {:?}",
+                property, plugin_id, available
+            )),
+            SchemaRouterError::DbusUnavailable => {
+                tonic::Status::unavailable("D-Bus connection unavailable")
+            }
+            SchemaRouterError::ProxyBuildFailed(msg) => {
+                tonic::Status::internal(format!("D-Bus proxy build failed: {}", msg))
+            }
+            SchemaRouterError::DbusCallFailed { method, error } => {
+                tonic::Status::internal(format!("D-Bus call failed: {}: {}", method, error))
+            }
+            SchemaRouterError::SerializationFailed(msg) => {
+                tonic::Status::internal(format!("Serialization failed: {}", msg))
+            }
+        }
+    }
 }
 
 fn json_to_zvariant_value(
