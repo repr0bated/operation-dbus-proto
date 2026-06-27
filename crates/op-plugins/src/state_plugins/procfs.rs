@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use op_state::{
     ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
 };
-use op_state_store::{FieldSchema, FieldType, PluginSchema};
+use op_state_store::PluginSchema;
 use simd_json::OwnedValue as Value;
 use std::path::Path;
 use tokio::fs;
@@ -47,7 +47,7 @@ impl StatePlugin for ProcfsPlugin {
     }
 
     fn schema(&self) -> Option<PluginSchema> {
-        Some(procfs_schema())
+        Some(super::plugin_schema_defs::procfs_plugin_schema())
     }
 
     async fn query_current_state(&self) -> Result<Value> {
@@ -102,53 +102,6 @@ impl StatePlugin for ProcfsPlugin {
             supports_verification: true,
             atomic_operations: true,
         }
-    }
-}
-
-fn procfs_schema() -> PluginSchema {
-    PluginSchema::builder("procfs")
-        .version("1.0.0")
-        .category("host")
-        .description("Read-only procfs host state projected through PluginSchema.")
-        .field("memory", readonly_any("Parsed /proc/meminfo values."))
-        .field("loadavg", readonly_any("Parsed /proc/loadavg values."))
-        .field("uptime", readonly_any("Parsed /proc/uptime values."))
-        .field(
-            "cpuinfo",
-            readonly_any("Parsed CPU inventory from /proc/cpuinfo."),
-        )
-        .field("stat", readonly_any("Parsed /proc/stat values."))
-        .field("net_dev", readonly_any("Parsed /proc/net/dev counters."))
-        .field("mounts", readonly_any("Parsed /proc/mounts entries."))
-        .field("kernel", readonly_any("Kernel version from /proc/version."))
-        .field("vmstat", readonly_any("Parsed /proc/vmstat values."))
-        .field("diskstats", readonly_any("Parsed /proc/diskstats rows."))
-        .immutable_paths(&[
-            "/memory",
-            "/loadavg",
-            "/uptime",
-            "/cpuinfo",
-            "/stat",
-            "/net_dev",
-            "/mounts",
-            "/kernel",
-            "/vmstat",
-            "/diskstats",
-        ])
-        .tag("read_only")
-        .build()
-}
-
-fn readonly_any(description: &str) -> FieldSchema {
-    FieldSchema {
-        field_type: FieldType::Any,
-        required: false,
-        description: description.to_string(),
-        default: None,
-        example: None,
-        constraints: Vec::new(),
-        read_only: true,
-        read_only_when: None,
     }
 }
 
