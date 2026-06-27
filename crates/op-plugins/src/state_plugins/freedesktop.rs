@@ -100,17 +100,9 @@ impl FreeDesktopPlugin {
         plugin
     }
 
-    /// Initialize the plugin schema
+    /// Initialize the plugin schema from the canonical plugin_schema_defs.
     fn initialize_schema(&mut self) {
-        // In a full implementation, this would load from schemas/plugin/freedesktop.json
-        // For now, we define the schema programmatically following the canonical structure
-        self.schema = Some(
-            PluginSchema::builder("freedesktop")
-                .version("1.0.0")
-                .category("system")
-                .description("FreeDesktop D-Bus standards implementation")
-                .build(),
-        );
+        self.schema = Some(super::plugin_schema_defs::freedesktop_plugin_schema());
     }
 
     /// Register standard FreeDesktop D-Bus interfaces
@@ -417,13 +409,10 @@ mod tests {
         let plugin = FreeDesktopPlugin::new();
 
         // Verify canonical paths
-        assert_eq!(
-            plugin.dbus_path(),
-            "/org/opdbus/v1/plugin/plugins/freedesktop"
-        );
+        assert_eq!(plugin.dbus_path(), "/org/opdbus/v1/plugins/freedesktop");
         assert_eq!(
             plugin.dbus_interface(),
-            "org.opdbus.v1.Plugin.Plugins.FreeDesktop"
+            "org.opdbus.v1.Plugin.Plugins.Freedesktop"
         );
     }
 
@@ -450,7 +439,7 @@ mod tests {
 
         // Valid canonical path
         assert!(plugin
-            .validate_canonical_path("/org/opdbus/v1/plugin/plugins/test")
+            .validate_canonical_path("/org/opdbus/v1/plugins/test")
             .is_ok());
 
         // Invalid legacy path
@@ -465,17 +454,11 @@ mod tests {
 
         // Legacy path should be normalized
         let normalized = plugin.normalize_path("/opdbus/v1/plugins/test");
-        assert_eq!(
-            normalized,
-            Some("/org/opdbus/v1/plugin/plugins/test".to_string())
-        );
+        assert_eq!(normalized, Some("/org/opdbus/v1/plugins/test".to_string()));
 
         // Canonical path stays the same
-        let canonical = plugin.normalize_path("/org/opdbus/v1/plugin/plugins/test");
-        assert_eq!(
-            canonical,
-            Some("/org/opdbus/v1/plugin/plugins/test".to_string())
-        );
+        let canonical = plugin.normalize_path("/org/opdbus/v1/plugins/test");
+        assert_eq!(canonical, Some("/org/opdbus/v1/plugins/test".to_string()));
     }
 
     #[tokio::test]

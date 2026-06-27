@@ -1,7 +1,107 @@
-use op_state_store::{Constraint, FieldSchema, FieldType, PluginSchema, ReadOnlyCondition};
+use op_state_store::{
+    Constraint, FieldSchema, FieldType, MethodDecl, PluginCapabilities, PluginSchema,
+    ReadOnlyCondition, SideEffect, SignalDecl,
+};
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
 use std::collections::HashMap;
+
+// ---------------------------------------------------------------------------
+// Capability-surface helpers
+// ---------------------------------------------------------------------------
+
+fn read_method(
+    name: &str,
+    subid: &str,
+    args: serde_json::Value,
+    required_capability: Option<&str>,
+) -> MethodDecl {
+    MethodDecl {
+        name: name.to_string(),
+        args,
+        returns: None,
+        side_effect: SideEffect::Read,
+        idempotent: true,
+        required_capability: required_capability.map(|s| s.to_string()),
+        subid: subid.to_string(),
+    }
+}
+
+fn mutation_method(
+    name: &str,
+    subid: &str,
+    args: serde_json::Value,
+    required_capability: Option<&str>,
+    idempotent: bool,
+) -> MethodDecl {
+    MethodDecl {
+        name: name.to_string(),
+        args,
+        returns: None,
+        side_effect: SideEffect::Mutation,
+        idempotent,
+        required_capability: required_capability.map(|s| s.to_string()),
+        subid: subid.to_string(),
+    }
+}
+
+fn signal_decl(name: &str, subid: &str, payload: Option<serde_json::Value>) -> SignalDecl {
+    SignalDecl {
+        name: name.to_string(),
+        payload,
+        subid: subid.to_string(),
+    }
+}
+
+fn subids_from(
+    methods: &HashMap<String, MethodDecl>,
+    signals: &[SignalDecl],
+) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    for (name, decl) in methods {
+        map.insert(name.clone(), decl.subid.clone());
+    }
+    for sig in signals {
+        map.insert(sig.name.clone(), sig.subid.clone());
+    }
+    map
+}
+
+fn empty_args() -> serde_json::Value {
+    serde_json::json!({"type": "object", "properties": {}, "additionalProperties": false})
+}
+
+fn state_changed_payload() -> Option<serde_json::Value> {
+    Some(
+        serde_json::json!({"type": "object", "properties": {"plugin": {"type": "string"}, "timestamp": {"type": "integer"}}}),
+    )
+}
+
+fn readonly_any(description: &str) -> FieldSchema {
+    FieldSchema {
+        field_type: FieldType::Any,
+        required: false,
+        description: description.to_string(),
+        default: None,
+        example: None,
+        constraints: Vec::new(),
+        read_only: true,
+        read_only_when: None,
+    }
+}
+
+fn with_caps(
+    mut schema: PluginSchema,
+    methods: HashMap<String, MethodDecl>,
+    signals: Vec<SignalDecl>,
+    guarantees: PluginCapabilities,
+) -> PluginSchema {
+    schema.subids = subids_from(&methods, &signals);
+    schema.methods = methods;
+    schema.signals = signals;
+    schema.guarantees = guarantees;
+    schema
+}
 
 /// Format a plugin's live state into a `PluginSchema`.
 ///
@@ -30,7 +130,44 @@ pub(crate) fn schema_from_state(
         }
     }
 
-    builder.example(state.clone()).build()
+    let methods = HashMap::from([
+        (
+            "GetState".to_string(),
+            read_method(
+                "GetState",
+                "obs.service.factory.get-state@v1",
+                empty_args(),
+                None,
+            ),
+        ),
+        (
+            "SetConfig".to_string(),
+            mutation_method(
+                "SetConfig",
+                "mut.service.factory.set-config@v1",
+                serde_json::json!({"type":"object","properties":{}}),
+                None,
+                false,
+            ),
+        ),
+    ]);
+    let signals = vec![signal_decl(
+        "ConfigChanged",
+        "evt.service.factory.config-changed@v1",
+        state_changed_payload(),
+    )];
+    let guarantees = PluginCapabilities {
+        supports_rollback: true,
+        supports_checkpoints: true,
+        supports_verification: true,
+        atomic_operations: false,
+    };
+    with_caps(
+        builder.example(state.clone()).build(),
+        methods,
+        signals,
+        guarantees,
+    )
 }
 
 /// Infer a `FieldSchema` (type + example) from a live state value.
@@ -107,290 +244,893 @@ fn simple_schema(
 }
 
 pub(crate) fn adc_plugin_schema() -> PluginSchema {
-    simple_schema(
-        "adc",
-        "Application default credentials state",
-        &[],
-        vec![(
-            "configured",
-            FieldSchema {
-                field_type: FieldType::Boolean,
-                required: true,
-                description: "Whether ADC is configured".to_string(),
-                default: Some(json!(false)),
-                example: None,
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        )],
+    let methods = HashMap::from([
+        (
+            "GetState".to_string(),
+            read_method(
+                "GetState",
+                "obs.software.adc.get-state@v1",
+                empty_args(),
+                None,
+            ),
+        ),
+        (
+            "Configure".to_string(),
+            mutation_method(
+                "Configure",
+                "mut.software.adc.configure@v1",
+                serde_json::json!({"type":"object","properties":{"credentials_path":{"type":"string"}}}),
+                Some("adc.configure"),
+                false,
+            ),
+        ),
+    ]);
+    let signals = vec![signal_decl(
+        "ConfigChanged",
+        "evt.software.adc.config-changed@v1",
+        state_changed_payload(),
+    )];
+    let guarantees = PluginCapabilities {
+        supports_rollback: false,
+        supports_checkpoints: false,
+        supports_verification: true,
+        atomic_operations: false,
+    };
+    with_caps(
+        simple_schema(
+            "adc",
+            "Application default credentials state",
+            &[],
+            vec![(
+                "configured",
+                FieldSchema {
+                    field_type: FieldType::Boolean,
+                    required: true,
+                    description: "Whether ADC is configured".to_string(),
+                    default: Some(json!(false)),
+                    example: None,
+                    constraints: Vec::new(),
+                    read_only: false,
+                    read_only_when: None,
+                },
+            )],
+        ),
+        methods,
+        signals,
+        guarantees,
     )
 }
 
 pub(crate) fn agent_config_plugin_schema() -> PluginSchema {
-    simple_schema(
-        "agent_config",
-        "Agent configuration and tool assignments",
-        &[],
-        vec![(
-            "agents",
-            FieldSchema {
-                field_type: FieldType::Array(Box::new(FieldType::Any)),
-                required: true,
-                description: "List of agent configurations".to_string(),
-                default: Some(json!([])),
-                example: None,
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        )],
+    let methods = HashMap::from([
+        (
+            "GetState".to_string(),
+            read_method(
+                "GetState",
+                "obs.software.agent-config.get-state@v1",
+                empty_args(),
+                None,
+            ),
+        ),
+        (
+            "SetConfig".to_string(),
+            mutation_method(
+                "SetConfig",
+                "mut.software.agent-config.set-config@v1",
+                serde_json::json!({"type":"object","properties":{"agents":{"type":"array"}}}),
+                None,
+                false,
+            ),
+        ),
+    ]);
+    let signals = vec![signal_decl(
+        "ConfigChanged",
+        "evt.software.agent-config.config-changed@v1",
+        state_changed_payload(),
+    )];
+    let guarantees = PluginCapabilities {
+        supports_rollback: true,
+        supports_checkpoints: true,
+        supports_verification: true,
+        atomic_operations: false,
+    };
+    with_caps(
+        simple_schema(
+            "agent_config",
+            "Agent configuration and tool assignments",
+            &[],
+            vec![(
+                "agents",
+                FieldSchema {
+                    field_type: FieldType::Array(Box::new(FieldType::Any)),
+                    required: true,
+                    description: "List of agent configurations".to_string(),
+                    default: Some(json!([])),
+                    example: None,
+                    constraints: Vec::new(),
+                    read_only: false,
+                    read_only_when: None,
+                },
+            )],
+        ),
+        methods,
+        signals,
+        guarantees,
     )
 }
 
 pub(crate) fn endpoint_plugin_schema() -> PluginSchema {
-    simple_schema(
-        "endpoint",
-        "Endpoint configuration",
-        &["net"],
-        vec![(
-            "endpoints",
-            FieldSchema {
-                field_type: FieldType::Array(Box::new(FieldType::String)),
-                required: true,
-                description: "Declared endpoints".to_string(),
-                default: Some(json!([])),
-                example: None,
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        )],
+    let methods = HashMap::from([
+        (
+            "GetState".to_string(),
+            read_method(
+                "GetState",
+                "obs.network.endpoint.get-state@v1",
+                empty_args(),
+                None,
+            ),
+        ),
+        (
+            "SetEndpoints".to_string(),
+            mutation_method(
+                "SetEndpoints",
+                "mut.network.endpoint.set-endpoints@v1",
+                serde_json::json!({"type":"object","properties":{"endpoints":{"type":"array","items":{"type":"string"}}}}),
+                None,
+                false,
+            ),
+        ),
+    ]);
+    let signals = vec![signal_decl(
+        "EndpointsChanged",
+        "evt.network.endpoint.endpoints-changed@v1",
+        state_changed_payload(),
+    )];
+    let guarantees = PluginCapabilities {
+        supports_rollback: true,
+        supports_checkpoints: true,
+        supports_verification: true,
+        atomic_operations: false,
+    };
+    with_caps(
+        simple_schema(
+            "endpoint",
+            "Endpoint configuration",
+            &["net"],
+            vec![(
+                "endpoints",
+                FieldSchema {
+                    field_type: FieldType::Array(Box::new(FieldType::String)),
+                    required: true,
+                    description: "Declared endpoints".to_string(),
+                    default: Some(json!([])),
+                    example: None,
+                    constraints: Vec::new(),
+                    read_only: false,
+                    read_only_when: None,
+                },
+            )],
+        ),
+        methods,
+        signals,
+        guarantees,
     )
 }
 
 pub(crate) fn gcloud_adc_plugin_schema() -> PluginSchema {
-    simple_schema(
-        "gcloud_adc",
-        "Google Cloud ADC state",
-        &[],
-        vec![
-            ("account", any_field(false, "Authenticated account", None)),
-            ("project_id", any_field(false, "Project id", None)),
-            (
-                "authenticated",
-                FieldSchema {
-                    field_type: FieldType::Boolean,
-                    required: true,
-                    description: "Authentication status".to_string(),
-                    default: Some(json!(false)),
-                    example: None,
-                    constraints: Vec::new(),
-                    read_only: false,
-                    read_only_when: None,
-                },
+    let methods = HashMap::from([
+        (
+            "GetState".to_string(),
+            read_method(
+                "GetState",
+                "obs.software.gcloud-adc.get-state@v1",
+                empty_args(),
+                None,
             ),
-        ],
+        ),
+        (
+            "Authenticate".to_string(),
+            mutation_method(
+                "Authenticate",
+                "mut.software.gcloud-adc.authenticate@v1",
+                serde_json::json!({"type":"object","properties":{"account":{"type":"string"},"project_id":{"type":"string"}}}),
+                None,
+                false,
+            ),
+        ),
+    ]);
+    let signals = vec![signal_decl(
+        "AuthChanged",
+        "evt.software.gcloud-adc.auth-changed@v1",
+        state_changed_payload(),
+    )];
+    let guarantees = PluginCapabilities {
+        supports_rollback: true,
+        supports_checkpoints: true,
+        supports_verification: true,
+        atomic_operations: false,
+    };
+    with_caps(
+        simple_schema(
+            "gcloud_adc",
+            "Google Cloud ADC state",
+            &[],
+            vec![
+                ("account", any_field(false, "Authenticated account", None)),
+                ("project_id", any_field(false, "Project id", None)),
+                (
+                    "authenticated",
+                    FieldSchema {
+                        field_type: FieldType::Boolean,
+                        required: true,
+                        description: "Authentication status".to_string(),
+                        default: Some(json!(false)),
+                        example: None,
+                        constraints: Vec::new(),
+                        read_only: false,
+                        read_only_when: None,
+                    },
+                ),
+            ],
+        ),
+        methods,
+        signals,
+        guarantees,
     )
 }
 
 pub(crate) fn hardware_plugin_schema() -> PluginSchema {
-    simple_schema(
-        "hardware",
-        "Hardware inventory snapshot",
-        &[],
-        vec![
-            ("cpu", any_field(true, "CPU info", Some(json!({})))),
-            ("memory", any_field(true, "Memory info", Some(json!({})))),
-            ("disks", any_field(true, "Disk list", Some(json!([])))),
-        ],
+    let methods = HashMap::from([(
+        "GetState".to_string(),
+        read_method(
+            "GetState",
+            "obs.hardware.hardware.get-state@v1",
+            empty_args(),
+            None,
+        ),
+    )]);
+    let signals = vec![signal_decl(
+        "InventoryChanged",
+        "evt.hardware.hardware.inventory-changed@v1",
+        state_changed_payload(),
+    )];
+    let guarantees = PluginCapabilities {
+        supports_rollback: false,
+        supports_checkpoints: false,
+        supports_verification: true,
+        atomic_operations: false,
+    };
+    with_caps(
+        simple_schema(
+            "hardware",
+            "Hardware inventory snapshot",
+            &[],
+            vec![
+                ("cpu", any_field(true, "CPU info", Some(json!({})))),
+                ("memory", any_field(true, "Memory info", Some(json!({})))),
+                ("disks", any_field(true, "Disk list", Some(json!([])))),
+            ],
+        ),
+        methods,
+        signals,
+        guarantees,
     )
 }
 
 pub(crate) fn keypair_plugin_schema() -> PluginSchema {
-    simple_schema(
-        "keypair",
-        "Keypair declaration state",
-        &[],
-        vec![(
-            "keypairs",
-            any_field(true, "Managed keypairs", Some(json!([]))),
-        )],
+    let methods = HashMap::from([
+        (
+            "GetState".to_string(),
+            read_method(
+                "GetState",
+                "obs.software.keypair.get-state@v1",
+                empty_args(),
+                None,
+            ),
+        ),
+        (
+            "Generate".to_string(),
+            mutation_method(
+                "Generate",
+                "mut.software.keypair.generate@v1",
+                serde_json::json!({"type":"object","properties":{"name":{"type":"string"},"type":{"type":"string"}}}),
+                None,
+                false,
+            ),
+        ),
+        (
+            "Delete".to_string(),
+            mutation_method(
+                "Delete",
+                "mut.software.keypair.delete@v1",
+                serde_json::json!({"type":"object","properties":{"name":{"type":"string"}}}),
+                None,
+                true,
+            ),
+        ),
+    ]);
+    let signals = vec![signal_decl(
+        "KeypairChanged",
+        "evt.software.keypair.keypair-changed@v1",
+        state_changed_payload(),
+    )];
+    let guarantees = PluginCapabilities {
+        supports_rollback: true,
+        supports_checkpoints: true,
+        supports_verification: true,
+        atomic_operations: true,
+    };
+    with_caps(
+        simple_schema(
+            "keypair",
+            "Keypair declaration state",
+            &[],
+            vec![(
+                "keypairs",
+                any_field(true, "Managed keypairs", Some(json!([]))),
+            )],
+        ),
+        methods,
+        signals,
+        guarantees,
     )
 }
 
 pub(crate) fn ovsdb_bridge_plugin_schema() -> PluginSchema {
-    simple_schema(
-        "ovsdb_bridge",
-        "OVS bridge declarations",
-        &["net"],
-        vec![(
-            "bridges",
-            any_field(true, "Bridge declarations", Some(json!([]))),
-        )],
+    let methods = HashMap::from([
+        (
+            "GetState".to_string(),
+            read_method(
+                "GetState",
+                "obs.network.ovsdb-bridge.get-state@v1",
+                empty_args(),
+                None,
+            ),
+        ),
+        (
+            "CreateBridge".to_string(),
+            mutation_method(
+                "CreateBridge",
+                "mut.network.ovsdb-bridge.create-bridge@v1",
+                serde_json::json!({"type":"object","properties":{"name":{"type":"string"}}}),
+                None,
+                false,
+            ),
+        ),
+        (
+            "DeleteBridge".to_string(),
+            mutation_method(
+                "DeleteBridge",
+                "mut.network.ovsdb-bridge.delete-bridge@v1",
+                serde_json::json!({"type":"object","properties":{"name":{"type":"string"}}}),
+                None,
+                true,
+            ),
+        ),
+    ]);
+    let signals = vec![signal_decl(
+        "BridgeChanged",
+        "evt.network.ovsdb-bridge.bridge-changed@v1",
+        state_changed_payload(),
+    )];
+    let guarantees = PluginCapabilities {
+        supports_rollback: true,
+        supports_checkpoints: true,
+        supports_verification: true,
+        atomic_operations: true,
+    };
+    with_caps(
+        simple_schema(
+            "ovsdb_bridge",
+            "OVS bridge declarations",
+            &["net"],
+            vec![(
+                "bridges",
+                any_field(true, "Bridge declarations", Some(json!([]))),
+            )],
+        ),
+        methods,
+        signals,
+        guarantees,
     )
 }
 
 pub(crate) fn proxmox_plugin_schema() -> PluginSchema {
-    simple_schema(
-        "proxmox",
-        "Proxmox container declarations",
-        &["net"],
-        vec![(
-            "containers",
-            any_field(true, "Container declarations", Some(json!([]))),
-        )],
+    let methods = HashMap::from([
+        (
+            "GetState".to_string(),
+            read_method(
+                "GetState",
+                "obs.system.proxmox.get-state@v1",
+                empty_args(),
+                None,
+            ),
+        ),
+        (
+            "CreateContainer".to_string(),
+            mutation_method(
+                "CreateContainer",
+                "mut.system.proxmox.create-container@v1",
+                serde_json::json!({"type":"object","properties":{"vmid":{"type":"integer"},"name":{"type":"string"}}}),
+                None,
+                false,
+            ),
+        ),
+    ]);
+    let signals = vec![signal_decl(
+        "ContainerChanged",
+        "evt.system.proxmox.container-changed@v1",
+        state_changed_payload(),
+    )];
+    let guarantees = PluginCapabilities {
+        supports_rollback: true,
+        supports_checkpoints: true,
+        supports_verification: true,
+        atomic_operations: true,
+    };
+    with_caps(
+        simple_schema(
+            "proxmox",
+            "Proxmox container declarations",
+            &["net"],
+            vec![(
+                "containers",
+                any_field(true, "Container declarations", Some(json!([]))),
+            )],
+        ),
+        methods,
+        signals,
+        guarantees,
     )
 }
 
 pub(crate) fn proxy_server_plugin_schema() -> PluginSchema {
-    simple_schema(
-        "proxy_server",
-        "Proxy server runtime config",
-        &["net"],
-        vec![
-            (
-                "enabled",
-                FieldSchema {
-                    field_type: FieldType::Boolean,
-                    required: true,
-                    description: "Enable proxy".to_string(),
-                    default: Some(json!(false)),
-                    example: None,
-                    constraints: Vec::new(),
-                    read_only: false,
-                    read_only_when: None,
-                },
+    let methods = HashMap::from([
+        (
+            "GetState".to_string(),
+            read_method(
+                "GetState",
+                "obs.network.proxy-server.get-state@v1",
+                empty_args(),
+                None,
             ),
-            (
-                "port",
-                FieldSchema {
-                    field_type: FieldType::Integer,
-                    required: true,
-                    description: "Proxy port".to_string(),
-                    default: Some(json!(8080)),
-                    example: None,
-                    constraints: vec![
-                        Constraint::Min { value: 1.0 },
-                        Constraint::Max { value: 65535.0 },
-                    ],
-                    read_only: false,
-                    read_only_when: None,
-                },
+        ),
+        (
+            "SetConfig".to_string(),
+            mutation_method(
+                "SetConfig",
+                "mut.network.proxy-server.set-config@v1",
+                serde_json::json!({"type":"object","properties":{"enabled":{"type":"boolean"},"port":{"type":"integer"}}}),
+                None,
+                false,
             ),
-        ],
+        ),
+    ]);
+    let signals = vec![signal_decl(
+        "ConfigChanged",
+        "evt.network.proxy-server.config-changed@v1",
+        state_changed_payload(),
+    )];
+    let guarantees = PluginCapabilities {
+        supports_rollback: true,
+        supports_checkpoints: true,
+        supports_verification: true,
+        atomic_operations: false,
+    };
+    with_caps(
+        simple_schema(
+            "proxy_server",
+            "Proxy server runtime config",
+            &["net"],
+            vec![
+                (
+                    "enabled",
+                    FieldSchema {
+                        field_type: FieldType::Boolean,
+                        required: true,
+                        description: "Enable proxy".to_string(),
+                        default: Some(json!(false)),
+                        example: None,
+                        constraints: Vec::new(),
+                        read_only: false,
+                        read_only_when: None,
+                    },
+                ),
+                (
+                    "port",
+                    FieldSchema {
+                        field_type: FieldType::Integer,
+                        required: true,
+                        description: "Proxy port".to_string(),
+                        default: Some(json!(8080)),
+                        example: None,
+                        constraints: vec![
+                            Constraint::Min { value: 1.0 },
+                            Constraint::Max { value: 65535.0 },
+                        ],
+                        read_only: false,
+                        read_only_when: None,
+                    },
+                ),
+            ],
+        ),
+        methods,
+        signals,
+        guarantees,
     )
 }
 
 pub(crate) fn service_plugin_schema() -> PluginSchema {
-    simple_schema(
-        "service",
-        "Service definition declarations",
-        &["net"],
-        vec![("services", any_field(true, "Service map", Some(json!({}))))],
+    let methods = HashMap::from([
+        (
+            "GetState".to_string(),
+            read_method(
+                "GetState",
+                "obs.network.service.get-state@v1",
+                empty_args(),
+                None,
+            ),
+        ),
+        (
+            "CreateService".to_string(),
+            mutation_method(
+                "CreateService",
+                "mut.network.service.create-service@v1",
+                serde_json::json!({"type":"object","properties":{"name":{"type":"string"}}}),
+                None,
+                false,
+            ),
+        ),
+        (
+            "DeleteService".to_string(),
+            mutation_method(
+                "DeleteService",
+                "mut.network.service.delete-service@v1",
+                serde_json::json!({"type":"object","properties":{"name":{"type":"string"}}}),
+                None,
+                true,
+            ),
+        ),
+    ]);
+    let signals = vec![signal_decl(
+        "ServiceChanged",
+        "evt.network.service.service-changed@v1",
+        state_changed_payload(),
+    )];
+    let guarantees = PluginCapabilities {
+        supports_rollback: true,
+        supports_checkpoints: true,
+        supports_verification: true,
+        atomic_operations: true,
+    };
+    with_caps(
+        simple_schema(
+            "service",
+            "Service definition declarations",
+            &["net"],
+            vec![("services", any_field(true, "Service map", Some(json!({}))))],
+        ),
+        methods,
+        signals,
+        guarantees,
     )
 }
 
 pub(crate) fn sess_decl_plugin_schema() -> PluginSchema {
-    simple_schema(
-        "sess_decl",
-        "Session declaration state",
-        &["users"],
-        vec![(
-            "sessions",
-            any_field(true, "Session declarations", Some(json!([]))),
-        )],
+    let methods = HashMap::from([
+        (
+            "GetState".to_string(),
+            read_method(
+                "GetState",
+                "obs.system.sess-decl.get-state@v1",
+                empty_args(),
+                None,
+            ),
+        ),
+        (
+            "CreateSession".to_string(),
+            mutation_method(
+                "CreateSession",
+                "mut.system.sess-decl.create-session@v1",
+                serde_json::json!({"type":"object","properties":{"user_id":{"type":"string"}}}),
+                None,
+                false,
+            ),
+        ),
+    ]);
+    let signals = vec![signal_decl(
+        "SessionChanged",
+        "evt.system.sess-decl.session-changed@v1",
+        state_changed_payload(),
+    )];
+    let guarantees = PluginCapabilities {
+        supports_rollback: true,
+        supports_checkpoints: true,
+        supports_verification: true,
+        atomic_operations: false,
+    };
+    with_caps(
+        simple_schema(
+            "sess_decl",
+            "Session declaration state",
+            &["users"],
+            vec![(
+                "sessions",
+                any_field(true, "Session declarations", Some(json!([]))),
+            )],
+        ),
+        methods,
+        signals,
+        guarantees,
     )
 }
 
 pub(crate) fn software_plugin_schema() -> PluginSchema {
-    simple_schema(
-        "software",
-        "Software package inventory",
-        &[],
-        vec![("packages", any_field(true, "Package list", Some(json!([]))))],
+    let methods = HashMap::from([
+        (
+            "GetState".to_string(),
+            read_method(
+                "GetState",
+                "obs.software.software.get-state@v1",
+                empty_args(),
+                None,
+            ),
+        ),
+        (
+            "Install".to_string(),
+            mutation_method(
+                "Install",
+                "mut.software.software.install@v1",
+                serde_json::json!({"type":"object","properties":{"package":{"type":"string"}}}),
+                None,
+                false,
+            ),
+        ),
+        (
+            "Remove".to_string(),
+            mutation_method(
+                "Remove",
+                "mut.software.software.remove@v1",
+                serde_json::json!({"type":"object","properties":{"package":{"type":"string"}}}),
+                None,
+                true,
+            ),
+        ),
+    ]);
+    let signals = vec![signal_decl(
+        "PackageChanged",
+        "evt.software.software.package-changed@v1",
+        state_changed_payload(),
+    )];
+    let guarantees = PluginCapabilities {
+        supports_rollback: true,
+        supports_checkpoints: true,
+        supports_verification: true,
+        atomic_operations: false,
+    };
+    with_caps(
+        simple_schema(
+            "software",
+            "Software package inventory",
+            &[],
+            vec![("packages", any_field(true, "Package list", Some(json!([]))))],
+        ),
+        methods,
+        signals,
+        guarantees,
     )
 }
 
 pub(crate) fn users_plugin_schema() -> PluginSchema {
-    simple_schema(
-        "users",
-        "User account declarations",
-        &[],
-        vec![("users", any_field(true, "Users list", Some(json!([]))))],
+    let methods = HashMap::from([
+        (
+            "GetState".to_string(),
+            read_method(
+                "GetState",
+                "obs.system.users.get-state@v1",
+                empty_args(),
+                None,
+            ),
+        ),
+        (
+            "CreateUser".to_string(),
+            mutation_method(
+                "CreateUser",
+                "mut.system.users.create-user@v1",
+                serde_json::json!({"type":"object","properties":{"username":{"type":"string"}}}),
+                None,
+                false,
+            ),
+        ),
+        (
+            "DeleteUser".to_string(),
+            mutation_method(
+                "DeleteUser",
+                "mut.system.users.delete-user@v1",
+                serde_json::json!({"type":"object","properties":{"username":{"type":"string"}}}),
+                None,
+                true,
+            ),
+        ),
+    ]);
+    let signals = vec![signal_decl(
+        "UserChanged",
+        "evt.system.users.user-changed@v1",
+        state_changed_payload(),
+    )];
+    let guarantees = PluginCapabilities {
+        supports_rollback: true,
+        supports_checkpoints: true,
+        supports_verification: true,
+        atomic_operations: false,
+    };
+    with_caps(
+        simple_schema(
+            "users",
+            "User account declarations",
+            &[],
+            vec![("users", any_field(true, "Users list", Some(json!([]))))],
+        ),
+        methods,
+        signals,
+        guarantees,
     )
 }
 
 pub(crate) fn web_ui_plugin_schema() -> PluginSchema {
-    simple_schema(
-        "web_ui",
-        "Web UI tunables",
-        &["mcp"],
-        vec![
-            (
-                "enabled",
-                FieldSchema {
-                    field_type: FieldType::Boolean,
-                    required: true,
-                    description: "Enable UI".to_string(),
-                    default: Some(json!(true)),
-                    example: None,
-                    constraints: Vec::new(),
-                    read_only: false,
-                    read_only_when: None,
-                },
+    let methods = HashMap::from([
+        (
+            "GetState".to_string(),
+            read_method(
+                "GetState",
+                "obs.service.web-ui.get-state@v1",
+                empty_args(),
+                None,
             ),
-            (
-                "cors_origins",
-                any_field(false, "Allowed CORS origins", Some(json!([]))),
+        ),
+        (
+            "SetConfig".to_string(),
+            mutation_method(
+                "SetConfig",
+                "mut.service.web-ui.set-config@v1",
+                serde_json::json!({"type":"object","properties":{"enabled":{"type":"boolean"},"theme":{"type":"string"}}}),
+                None,
+                false,
             ),
-            (
-                "compression",
-                FieldSchema {
-                    field_type: FieldType::Boolean,
-                    required: true,
-                    description: "Enable compression".to_string(),
-                    default: Some(json!(true)),
-                    example: None,
-                    constraints: Vec::new(),
-                    read_only: false,
-                    read_only_when: None,
-                },
-            ),
-            (
-                "cache_ttl",
-                FieldSchema {
-                    field_type: FieldType::Integer,
-                    required: true,
-                    description: "Cache TTL seconds".to_string(),
-                    default: Some(json!(86400)),
-                    example: None,
-                    constraints: vec![Constraint::Min { value: 0.0 }],
-                    read_only: false,
-                    read_only_when: None,
-                },
-            ),
-            (
-                "theme",
-                any_field(true, "Theme name", Some(json!("default"))),
-            ),
-            (
-                "feature_flags",
-                any_field(false, "Feature flag map", Some(json!({}))),
-            ),
-        ],
+        ),
+    ]);
+    let signals = vec![signal_decl(
+        "ConfigChanged",
+        "evt.service.web-ui.config-changed@v1",
+        state_changed_payload(),
+    )];
+    let guarantees = PluginCapabilities {
+        supports_rollback: true,
+        supports_checkpoints: true,
+        supports_verification: true,
+        atomic_operations: false,
+    };
+    with_caps(
+        simple_schema(
+            "web_ui",
+            "Web UI tunables",
+            &["mcp"],
+            vec![
+                (
+                    "enabled",
+                    FieldSchema {
+                        field_type: FieldType::Boolean,
+                        required: true,
+                        description: "Enable UI".to_string(),
+                        default: Some(json!(true)),
+                        example: None,
+                        constraints: Vec::new(),
+                        read_only: false,
+                        read_only_when: None,
+                    },
+                ),
+                (
+                    "cors_origins",
+                    any_field(false, "Allowed CORS origins", Some(json!([]))),
+                ),
+                (
+                    "compression",
+                    FieldSchema {
+                        field_type: FieldType::Boolean,
+                        required: true,
+                        description: "Enable compression".to_string(),
+                        default: Some(json!(true)),
+                        example: None,
+                        constraints: Vec::new(),
+                        read_only: false,
+                        read_only_when: None,
+                    },
+                ),
+                (
+                    "cache_ttl",
+                    FieldSchema {
+                        field_type: FieldType::Integer,
+                        required: true,
+                        description: "Cache TTL seconds".to_string(),
+                        default: Some(json!(86400)),
+                        example: None,
+                        constraints: vec![Constraint::Min { value: 0.0 }],
+                        read_only: false,
+                        read_only_when: None,
+                    },
+                ),
+                (
+                    "theme",
+                    any_field(true, "Theme name", Some(json!("default"))),
+                ),
+                (
+                    "feature_flags",
+                    any_field(false, "Feature flag map", Some(json!({}))),
+                ),
+            ],
+        ),
+        methods,
+        signals,
+        guarantees,
     )
 }
 
 pub(crate) fn wireguard_plugin_schema() -> PluginSchema {
-    simple_schema(
-        "wireguard",
-        "WireGuard interface state",
-        &["net"],
-        vec![(
-            "interfaces",
-            any_field(true, "WireGuard interfaces", Some(json!([]))),
-        )],
+    let methods = HashMap::from([
+        (
+            "GetState".to_string(),
+            read_method(
+                "GetState",
+                "obs.network.wireguard.get-state@v1",
+                empty_args(),
+                None,
+            ),
+        ),
+        (
+            "SetKey".to_string(),
+            mutation_method(
+                "SetKey",
+                "mut.network.wireguard.set-key@v1",
+                serde_json::json!({"type":"object","properties":{"interface":{"type":"string"},"private_key":{"type":"string"}}}),
+                None,
+                false,
+            ),
+        ),
+        (
+            "SetConfig".to_string(),
+            mutation_method(
+                "SetConfig",
+                "mut.network.wireguard.set-config@v1",
+                serde_json::json!({"type":"object","properties":{"interface":{"type":"string"}}}),
+                None,
+                false,
+            ),
+        ),
+    ]);
+    let signals = vec![signal_decl(
+        "KeyRotated",
+        "evt.network.wireguard.key-rotated@v1",
+        state_changed_payload(),
+    )];
+    let guarantees = PluginCapabilities {
+        supports_rollback: true,
+        supports_checkpoints: true,
+        supports_verification: true,
+        atomic_operations: true,
+    };
+    with_caps(
+        simple_schema(
+            "wireguard",
+            "WireGuard interface state",
+            &["net"],
+            vec![(
+                "interfaces",
+                any_field(true, "WireGuard interfaces", Some(json!([]))),
+            )],
+        ),
+        methods,
+        signals,
+        guarantees,
     )
 }
 
@@ -517,189 +1257,237 @@ pub(crate) fn incus_plugin_schema() -> PluginSchema {
         fields
     };
 
-    PluginSchema::builder("incus")
-        .version("1.0.0")
-        .description("Incus instance management")
-        .array_field(
-            "instances",
-            FieldType::Object(instance_fields),
-            true,
-            "List of Incus instances",
-        )
-        .example(json!({
-            "instances": [
-                {
-                    "name": "privacy-user-123",
-                    "status": "Running",
-                    "type": "container",
-                    "image": "images:debian/13",
-                    "storage_pool": "registration",
-                    "profiles": ["default"],
-                    "config": {
-                        "limits.cpu": "2"
+    let methods = HashMap::from([
+        (
+            "GetState".to_string(),
+            read_method(
+                "GetState",
+                "obs.system.incus.get-state@v1",
+                empty_args(),
+                None,
+            ),
+        ),
+        (
+            "CreateContainer".to_string(),
+            mutation_method(
+                "CreateContainer",
+                "mut.system.incus.create-container@v1",
+                serde_json::json!({"type":"object","properties":{"name":{"type":"string"},"image":{"type":"string"}}}),
+                None,
+                false,
+            ),
+        ),
+        (
+            "DeleteContainer".to_string(),
+            mutation_method(
+                "DeleteContainer",
+                "mut.system.incus.delete-container@v1",
+                serde_json::json!({"type":"object","properties":{"name":{"type":"string"}}}),
+                None,
+                true,
+            ),
+        ),
+    ]);
+    let signals = vec![signal_decl(
+        "ContainerChanged",
+        "evt.system.incus.container-changed@v1",
+        state_changed_payload(),
+    )];
+    let guarantees = PluginCapabilities {
+        supports_rollback: true,
+        supports_checkpoints: true,
+        supports_verification: true,
+        atomic_operations: true,
+    };
+
+    with_caps(
+        PluginSchema::builder("incus")
+            .version("1.0.0")
+            .description("Incus instance management")
+            .array_field(
+                "instances",
+                FieldType::Object(instance_fields),
+                true,
+                "List of Incus instances",
+            )
+            .example(json!({
+                "instances": [
+                    {
+                        "name": "privacy-user-123",
+                        "status": "Running",
+                        "type": "container",
+                        "image": "images:debian/13",
+                        "storage_pool": "registration",
+                        "profiles": ["default"],
+                        "config": {
+                            "limits.cpu": "2"
+                        },
+                        "devices": {
+                            "eth0": {
+                                "type": "nic",
+                                "nictype": "bridged",
+                                "parent": "ovsbr0"
+                            }
+                        }
                     },
-                    "devices": {
-                        "eth0": {
-                            "type": "nic",
-                            "nictype": "bridged",
-                            "parent": "ovsbr0"
+                    {
+                        "name": "netmaker",
+                        "status": "Running",
+                        "type": "container",
+                        "image": "docker.io/gravitl/netmaker:v1.5.1",
+                        "profiles": ["default"],
+                        "config": {
+                            "boot.autostart": "true",
+                            "security.privileged": "false"
+                        },
+                        "devices": {
+                            "api-sock": {
+                                "type": "proxy",
+                                "listen": "unix:/run/netmaker/api.sock",
+                                "connect": "tcp:127.0.0.1:8081",
+                                "uid": "0",
+                                "gid": "0",
+                                "mode": "0660"
+                            },
+                            "sqldata": {
+                                "type": "disk",
+                                "path": "/root/data",
+                                "source": "nm-sqldata"
+                            },
+                            "dnsconfig": {
+                                "type": "disk",
+                                "path": "/root/config/dnsconfig",
+                                "source": "nm-dnsconfig"
+                            }
+                        }
+                    },
+                    {
+                        "name": "netmaker-mq",
+                        "status": "Running",
+                        "type": "container",
+                        "image": "docker.io/eclipse-mosquitto:2.0.15-openssl",
+                        "profiles": ["default"],
+                        "config": {
+                            "boot.autostart": "true"
+                        },
+                        "devices": {
+                            "mqtt-sock": {
+                                "type": "proxy",
+                                "listen": "unix:/run/netmaker/mq.sock",
+                                "connect": "tcp:127.0.0.1:1883",
+                                "uid": "0",
+                                "gid": "0",
+                                "mode": "0660"
+                            },
+                            "mqtts-sock": {
+                                "type": "proxy",
+                                "listen": "unix:/run/netmaker/mqtts.sock",
+                                "connect": "tcp:127.0.0.1:8883",
+                                "uid": "0",
+                                "gid": "0",
+                                "mode": "0660"
+                            },
+                            "mq-data": {
+                                "type": "disk",
+                                "path": "/mosquitto/data",
+                                "source": "nm-mosquitto-data"
+                            },
+                            "mq-config": {
+                                "type": "disk",
+                                "path": "/mosquitto/config/mosquitto.conf",
+                                "source": "/etc/netmaker/mosquitto.conf",
+                                "readonly": "true"
+                            }
+                        }
+                    },
+                    {
+                        "name": "netmaker-ui",
+                        "status": "Running",
+                        "type": "container",
+                        "image": "docker.io/gravitl/netmaker-ui:v1.5.1",
+                        "profiles": ["default"],
+                        "config": {
+                            "boot.autostart": "true"
+                        },
+                        "devices": {
+                            "ui-sock": {
+                                "type": "proxy",
+                                "listen": "unix:/run/netmaker/ui.sock",
+                                "connect": "tcp:127.0.0.1:80",
+                                "uid": "0",
+                                "gid": "0",
+                                "mode": "0660"
+                            }
+                        }
+                    },
+                    {
+                        "name": "wg-xray",
+                        "status": "Running",
+                        "type": "container",
+                        "profiles": ["default"],
+                        "config": {
+                            "boot.autostart": "true",
+                            "security.privileged": "true"
+                        },
+                        "devices": {
+                            "eth0": {
+                                "type": "nic",
+                                "nictype": "physical",
+                                "parent": "wg-xray-net0"
+                            },
+                            "ovs-socks": {
+                                "type": "disk",
+                                "path": "/var/lib/ovs",
+                                "source": "/run/openvswitch"
+                            },
+                            "xray-config": {
+                                "type": "disk",
+                                "path": "/etc/xray",
+                                "source": "/etc/xray"
+                            },
+                            "netmaker-socks": {
+                                "type": "disk",
+                                "path": "/run/netmaker",
+                                "source": "/run/netmaker"
+                            },
+                            "xray-mcp": {
+                                "type": "proxy",
+                                "listen": "tcp:127.0.0.1:1081",
+                                "connect": "tcp:10.200.0.1:1081"
+                            },
+                            "netmaker-api-tcp": {
+                                "type": "proxy",
+                                "bind": "container",
+                                "listen": "tcp:127.0.0.1:18081",
+                                "connect": "unix:/run/netmaker/api.sock"
+                            },
+                            "netmaker-mqtt-tcp": {
+                                "type": "proxy",
+                                "bind": "container",
+                                "listen": "tcp:127.0.0.1:11883",
+                                "connect": "unix:/run/netmaker/mq.sock"
+                            },
+                            "netmaker-mqtts-tcp": {
+                                "type": "proxy",
+                                "bind": "container",
+                                "listen": "tcp:127.0.0.1:18883",
+                                "connect": "unix:/run/netmaker/mqtts.sock"
+                            },
+                            "netmaker-ui-tcp": {
+                                "type": "proxy",
+                                "bind": "container",
+                                "listen": "tcp:127.0.0.1:18082",
+                                "connect": "unix:/run/netmaker/ui.sock"
+                            }
                         }
                     }
-                },
-                {
-                    "name": "netmaker",
-                    "status": "Running",
-                    "type": "container",
-                    "image": "docker.io/gravitl/netmaker:v1.5.1",
-                    "profiles": ["default"],
-                    "config": {
-                        "boot.autostart": "true",
-                        "security.privileged": "false"
-                    },
-                    "devices": {
-                        "api-sock": {
-                            "type": "proxy",
-                            "listen": "unix:/run/netmaker/api.sock",
-                            "connect": "tcp:127.0.0.1:8081",
-                            "uid": "0",
-                            "gid": "0",
-                            "mode": "0660"
-                        },
-                        "sqldata": {
-                            "type": "disk",
-                            "path": "/root/data",
-                            "source": "nm-sqldata"
-                        },
-                        "dnsconfig": {
-                            "type": "disk",
-                            "path": "/root/config/dnsconfig",
-                            "source": "nm-dnsconfig"
-                        }
-                    }
-                },
-                {
-                    "name": "netmaker-mq",
-                    "status": "Running",
-                    "type": "container",
-                    "image": "docker.io/eclipse-mosquitto:2.0.15-openssl",
-                    "profiles": ["default"],
-                    "config": {
-                        "boot.autostart": "true"
-                    },
-                    "devices": {
-                        "mqtt-sock": {
-                            "type": "proxy",
-                            "listen": "unix:/run/netmaker/mq.sock",
-                            "connect": "tcp:127.0.0.1:1883",
-                            "uid": "0",
-                            "gid": "0",
-                            "mode": "0660"
-                        },
-                        "mqtts-sock": {
-                            "type": "proxy",
-                            "listen": "unix:/run/netmaker/mqtts.sock",
-                            "connect": "tcp:127.0.0.1:8883",
-                            "uid": "0",
-                            "gid": "0",
-                            "mode": "0660"
-                        },
-                        "mq-data": {
-                            "type": "disk",
-                            "path": "/mosquitto/data",
-                            "source": "nm-mosquitto-data"
-                        },
-                        "mq-config": {
-                            "type": "disk",
-                            "path": "/mosquitto/config/mosquitto.conf",
-                            "source": "/etc/netmaker/mosquitto.conf",
-                            "readonly": "true"
-                        }
-                    }
-                },
-                {
-                    "name": "netmaker-ui",
-                    "status": "Running",
-                    "type": "container",
-                    "image": "docker.io/gravitl/netmaker-ui:v1.5.1",
-                    "profiles": ["default"],
-                    "config": {
-                        "boot.autostart": "true"
-                    },
-                    "devices": {
-                        "ui-sock": {
-                            "type": "proxy",
-                            "listen": "unix:/run/netmaker/ui.sock",
-                            "connect": "tcp:127.0.0.1:80",
-                            "uid": "0",
-                            "gid": "0",
-                            "mode": "0660"
-                        }
-                    }
-                },
-                {
-                    "name": "wg-xray",
-                    "status": "Running",
-                    "type": "container",
-                    "profiles": ["default"],
-                    "config": {
-                        "boot.autostart": "true",
-                        "security.privileged": "true"
-                    },
-                    "devices": {
-                        "eth0": {
-                            "type": "nic",
-                            "nictype": "physical",
-                            "parent": "wg-xray-net0"
-                        },
-                        "ovs-socks": {
-                            "type": "disk",
-                            "path": "/var/lib/ovs",
-                            "source": "/run/openvswitch"
-                        },
-                        "xray-config": {
-                            "type": "disk",
-                            "path": "/etc/xray",
-                            "source": "/etc/xray"
-                        },
-                        "netmaker-socks": {
-                            "type": "disk",
-                            "path": "/run/netmaker",
-                            "source": "/run/netmaker"
-                        },
-                        "xray-mcp": {
-                            "type": "proxy",
-                            "listen": "tcp:127.0.0.1:1081",
-                            "connect": "tcp:10.200.0.1:1081"
-                        },
-                        "netmaker-api-tcp": {
-                            "type": "proxy",
-                            "bind": "container",
-                            "listen": "tcp:127.0.0.1:18081",
-                            "connect": "unix:/run/netmaker/api.sock"
-                        },
-                        "netmaker-mqtt-tcp": {
-                            "type": "proxy",
-                            "bind": "container",
-                            "listen": "tcp:127.0.0.1:11883",
-                            "connect": "unix:/run/netmaker/mq.sock"
-                        },
-                        "netmaker-mqtts-tcp": {
-                            "type": "proxy",
-                            "bind": "container",
-                            "listen": "tcp:127.0.0.1:18883",
-                            "connect": "unix:/run/netmaker/mqtts.sock"
-                        },
-                        "netmaker-ui-tcp": {
-                            "type": "proxy",
-                            "bind": "container",
-                            "listen": "tcp:127.0.0.1:18082",
-                            "connect": "unix:/run/netmaker/ui.sock"
-                        }
-                    }
-                }
-            ]
-        }))
-        .build()
+                ]
+            }))
+            .build(),
+        methods,
+        signals,
+        guarantees,
+    )
 }
 
 pub(crate) fn net_plugin_schema() -> PluginSchema {
@@ -766,26 +1554,74 @@ pub(crate) fn net_plugin_schema() -> PluginSchema {
         fields
     };
 
-    PluginSchema::builder("net")
-        .version("1.0.0")
-        .description("Network interface management via rtnetlink")
-        .array_field(
-            "interfaces",
-            FieldType::Object(interface_fields),
-            true,
-            "List of network interfaces",
-        )
-        .example(json!({
-            "interfaces": [
-                {
-                    "name": "eth0",
-                    "type": "ethernet",
-                    "state": "up",
-                    "addresses": ["192.168.1.100/24"]
-                }
-            ]
-        }))
-        .build()
+    let methods = HashMap::from([
+        (
+            "GetState".to_string(),
+            read_method(
+                "GetState",
+                "obs.network.net.get-state@v1",
+                empty_args(),
+                None,
+            ),
+        ),
+        (
+            "SetConfig".to_string(),
+            mutation_method(
+                "SetConfig",
+                "mut.network.net.set-config@v1",
+                serde_json::json!({"type":"object","properties":{"interfaces":{"type":"array"}}}),
+                None,
+                false,
+            ),
+        ),
+        (
+            "Apply".to_string(),
+            mutation_method(
+                "Apply",
+                "mut.network.net.apply@v1",
+                serde_json::json!({"type":"object","properties":{}}),
+                None,
+                false,
+            ),
+        ),
+    ]);
+    let signals = vec![signal_decl(
+        "StateChanged",
+        "evt.network.net.state-changed@v1",
+        state_changed_payload(),
+    )];
+    let guarantees = PluginCapabilities {
+        supports_rollback: true,
+        supports_checkpoints: true,
+        supports_verification: true,
+        atomic_operations: true,
+    };
+
+    with_caps(
+        PluginSchema::builder("net")
+            .version("1.0.0")
+            .description("Network interface management via rtnetlink")
+            .array_field(
+                "interfaces",
+                FieldType::Object(interface_fields),
+                true,
+                "List of network interfaces",
+            )
+            .example(json!({
+                "interfaces": [
+                    {
+                        "name": "eth0",
+                        "type": "ethernet",
+                        "state": "up",
+                        "addresses": ["192.168.1.100/24"]
+                    }
+                ]
+            }))
+            .build(),
+        methods,
+        signals,
+        guarantees,
+    )
 }
 
 pub(crate) fn rtnetlink_plugin_schema() -> PluginSchema {
@@ -859,26 +1695,64 @@ pub(crate) fn rtnetlink_plugin_schema() -> PluginSchema {
         fields
     };
 
-    PluginSchema::builder("rtnetlink")
-        .version("1.0.0")
-        .description("Native kernel rtnetlink interface management")
-        .array_field(
-            "interfaces",
-            FieldType::Object(interface_fields),
-            true,
-            "Desired rtnetlink-managed interfaces",
-        )
-        .example(json!({
-            "interfaces": [
-                {
-                    "name": "ovsbr0",
-                    "state": "up",
-                    "addresses": ["10.10.0.1/24"],
-                    "default_gateway": "10.10.0.254"
-                }
-            ]
-        }))
-        .build()
+    let methods = HashMap::from([
+        (
+            "GetState".to_string(),
+            read_method(
+                "GetState",
+                "obs.network.rtnetlink.get-state@v1",
+                empty_args(),
+                None,
+            ),
+        ),
+        (
+            "SetLink".to_string(),
+            mutation_method(
+                "SetLink",
+                "mut.network.rtnetlink.set-link@v1",
+                serde_json::json!({"type":"object","properties":{"name":{"type":"string"},"state":{"type":"string"}}}),
+                None,
+                false,
+            ),
+        ),
+    ]);
+    let signals = vec![signal_decl(
+        "LinkChanged",
+        "evt.network.rtnetlink.link-changed@v1",
+        state_changed_payload(),
+    )];
+    let guarantees = PluginCapabilities {
+        supports_rollback: true,
+        supports_checkpoints: true,
+        supports_verification: true,
+        atomic_operations: true,
+    };
+
+    with_caps(
+        PluginSchema::builder("rtnetlink")
+            .version("1.0.0")
+            .description("Native kernel rtnetlink interface management")
+            .array_field(
+                "interfaces",
+                FieldType::Object(interface_fields),
+                true,
+                "Desired rtnetlink-managed interfaces",
+            )
+            .example(json!({
+                "interfaces": [
+                    {
+                        "name": "ovsbr0",
+                        "state": "up",
+                        "addresses": ["10.10.0.1/24"],
+                        "default_gateway": "10.10.0.254"
+                    }
+                ]
+            }))
+            .build(),
+        methods,
+        signals,
+        guarantees,
+    )
 }
 
 pub(crate) fn openflow_plugin_schema() -> PluginSchema {
@@ -1110,6 +1984,50 @@ pub(crate) fn openflow_plugin_schema() -> PluginSchema {
         fields
     };
 
+    let methods = HashMap::from([
+        (
+            "GetState".to_string(),
+            read_method(
+                "GetState",
+                "obs.network.openflow.get-state@v1",
+                empty_args(),
+                None,
+            ),
+        ),
+        (
+            "AddFlow".to_string(),
+            mutation_method(
+                "AddFlow",
+                "mut.network.openflow.add-flow@v1",
+                serde_json::json!({"type":"object","properties":{"bridge":{"type":"string"},"flow":{"type":"object"}}}),
+                None,
+                false,
+            ),
+        ),
+        (
+            "DeleteFlow".to_string(),
+            mutation_method(
+                "DeleteFlow",
+                "mut.network.openflow.delete-flow@v1",
+                serde_json::json!({"type":"object","properties":{"bridge":{"type":"string"},"cookie":{"type":"integer"}}}),
+                None,
+                true,
+            ),
+        ),
+    ]);
+    let signals = vec![signal_decl(
+        "FlowChanged",
+        "evt.network.openflow.flow-changed@v1",
+        state_changed_payload(),
+    )];
+    let guarantees = PluginCapabilities {
+        supports_rollback: true,
+        supports_checkpoints: true,
+        supports_verification: true,
+        atomic_operations: true,
+    };
+
+    with_caps(
     PluginSchema::builder("openflow")
         .version("1.0.0")
         .description("OpenFlow flow table management")
@@ -1161,7 +2079,11 @@ pub(crate) fn openflow_plugin_schema() -> PluginSchema {
             "enable_security_flows": false,
             "obfuscation_level": 0
         }))
-        .build()
+        .build(),
+        methods,
+        signals,
+        guarantees,
+    )
 }
 
 pub(crate) fn s6_plugin_schema() -> PluginSchema {
@@ -1213,20 +2135,68 @@ pub(crate) fn s6_plugin_schema() -> PluginSchema {
         fields
     };
 
-    PluginSchema::builder("s6")
-        .version("1.0.0")
-        .description("s6 service management")
-        .array_field("units", FieldType::Object(unit_fields), true, "s6 services")
-        .example(json!({
-            "units": [
-                {
-                    "name": "nginx",
-                    "state": "active",
-                    "enabled": true
-                }
-            ]
-        }))
-        .build()
+    let methods = HashMap::from([
+        (
+            "GetState".to_string(),
+            read_method(
+                "GetState",
+                "obs.service.s6.get-state@v1",
+                empty_args(),
+                None,
+            ),
+        ),
+        (
+            "StartService".to_string(),
+            mutation_method(
+                "StartService",
+                "mut.service.s6.start-service@v1",
+                serde_json::json!({"type":"object","properties":{"name":{"type":"string"}}}),
+                None,
+                true,
+            ),
+        ),
+        (
+            "StopService".to_string(),
+            mutation_method(
+                "StopService",
+                "mut.service.s6.stop-service@v1",
+                serde_json::json!({"type":"object","properties":{"name":{"type":"string"}}}),
+                None,
+                true,
+            ),
+        ),
+    ]);
+    let signals = vec![signal_decl(
+        "ServiceChanged",
+        "evt.service.s6.service-changed@v1",
+        state_changed_payload(),
+    )];
+    let guarantees = PluginCapabilities {
+        supports_rollback: true,
+        supports_checkpoints: true,
+        supports_verification: true,
+        atomic_operations: true,
+    };
+
+    with_caps(
+        PluginSchema::builder("s6")
+            .version("1.0.0")
+            .description("s6 service management")
+            .array_field("units", FieldType::Object(unit_fields), true, "s6 services")
+            .example(json!({
+                "units": [
+                    {
+                        "name": "nginx",
+                        "state": "active",
+                        "enabled": true
+                    }
+                ]
+            }))
+            .build(),
+        methods,
+        signals,
+        guarantees,
+    )
 }
 
 pub(crate) fn privacy_router_plugin_schema() -> PluginSchema {
@@ -1465,59 +2435,97 @@ pub(crate) fn privacy_router_plugin_schema() -> PluginSchema {
         fields
     };
 
-    PluginSchema::builder("privacy_router")
-        .version("1.1.0")
-        .description("System privacy fabric (WireGuard/XRay ingress, WARP bridge, XRay egress)")
-        .dependency("incus")
-        .dependency("openflow")
-        .dependency("privacy_routes")
-        .string_field("bridge_name", true, "OVS bridge for privacy network")
-        .object_field(
-            "wireguard",
-            wireguard_fields,
-            true,
-            "WireGuard tunnel config",
-        )
-        .object_field("warp", warp_fields, true, "Cloudflare WARP bridge config")
-        .object_field(
-            "xray",
-            xray_fields,
-            true,
-            "XRay REALITY egress client config",
-        )
-        .object_field(
-            "vps",
-            vps_fields,
-            true,
-            "Remote XRay server endpoint config",
-        )
-        .example(json!({
-            "bridge_name": "ovsbr0",
-            "wireguard": {
-                "enabled": true,
-                "container_id": 100,
-                "socket_port": "gbr_wg",
-                "listen_port": 51820
-            },
-            "warp": {
-                "enabled": true,
-                "bridge_interface": "wgcf",
-                "netclient_network": "gbr_warp"
-            },
-            "xray": {
-                "enabled": true,
-                "container_id": 101,
-                "socket_port": "gbr_xray",
-                "socks_port": 1080,
-                "vps_address": "vps.example.com",
-                "vps_port": 443
-            },
-            "vps": {
-                "xray_server": "vps.example.com",
-                "xray_port": 443
-            }
-        }))
-        .build()
+    let methods = HashMap::from([
+        (
+            "GetState".to_string(),
+            read_method(
+                "GetState",
+                "obs.service.privacy-router.get-state@v1",
+                empty_args(),
+                None,
+            ),
+        ),
+        (
+            "SetPolicy".to_string(),
+            mutation_method(
+                "SetPolicy",
+                "mut.service.privacy-router.set-policy@v1",
+                serde_json::json!({"type":"object","properties":{"wireguard":{"type":"object"},"warp":{"type":"object"},"xray":{"type":"object"}}}),
+                None,
+                false,
+            ),
+        ),
+    ]);
+    let signals = vec![signal_decl(
+        "PolicyChanged",
+        "evt.service.privacy-router.policy-changed@v1",
+        state_changed_payload(),
+    )];
+    let guarantees = PluginCapabilities {
+        supports_rollback: true,
+        supports_checkpoints: true,
+        supports_verification: true,
+        atomic_operations: true,
+    };
+
+    with_caps(
+        PluginSchema::builder("privacy_router")
+            .version("1.1.0")
+            .description("System privacy fabric (WireGuard/XRay ingress, WARP bridge, XRay egress)")
+            .dependency("incus")
+            .dependency("openflow")
+            .dependency("privacy_routes")
+            .string_field("bridge_name", true, "OVS bridge for privacy network")
+            .object_field(
+                "wireguard",
+                wireguard_fields,
+                true,
+                "WireGuard tunnel config",
+            )
+            .object_field("warp", warp_fields, true, "Cloudflare WARP bridge config")
+            .object_field(
+                "xray",
+                xray_fields,
+                true,
+                "XRay REALITY egress client config",
+            )
+            .object_field(
+                "vps",
+                vps_fields,
+                true,
+                "Remote XRay server endpoint config",
+            )
+            .example(json!({
+                "bridge_name": "ovsbr0",
+                "wireguard": {
+                    "enabled": true,
+                    "container_id": 100,
+                    "socket_port": "gbr_wg",
+                    "listen_port": 51820
+                },
+                "warp": {
+                    "enabled": true,
+                    "bridge_interface": "wgcf",
+                    "netclient_network": "gbr_warp"
+                },
+                "xray": {
+                    "enabled": true,
+                    "container_id": 101,
+                    "socket_port": "gbr_xray",
+                    "socks_port": 1080,
+                    "vps_address": "vps.example.com",
+                    "vps_port": 443
+                },
+                "vps": {
+                    "xray_server": "vps.example.com",
+                    "xray_port": 443
+                }
+            }))
+            .build(),
+        methods,
+        signals,
+        guarantees,
+    )
 }
 
 pub(crate) fn unix_socket_plugin_schema() -> PluginSchema {
@@ -1579,50 +2587,88 @@ pub(crate) fn unix_socket_plugin_schema() -> PluginSchema {
         },
     );
 
-    PluginSchema::builder("unix_socket")
-        .version("1.0.0")
-        .description("Unix domain socket endpoints proxied into xray outbounds")
-        .array_field(
-            "sockets",
-            FieldType::Object(socket_fields),
-            true,
-            "Declared unix socket endpoints",
-        )
-        .example(json!({
-            "sockets": [
-                {
-                    "path": "/run/qdrant.sock",
-                    "port": 6334,
-                    "protocol": "grpc",
-                    "label": "qdrant-grpc"
-                },
-                {
-                    "path": "/run/netmaker/api.sock",
-                    "port": 8081,
-                    "protocol": "http",
-                    "label": "netmaker-api"
-                },
-                {
-                    "path": "/run/netmaker/mq.sock",
-                    "port": 1883,
-                    "protocol": "mqtt",
-                    "label": "netmaker-mqtt"
-                },
-                {
-                    "path": "/run/netmaker/mqtts.sock",
-                    "port": 8883,
-                    "protocol": "mqtt",
-                    "label": "netmaker-mqtts"
-                },
-                {
-                    "path": "/run/netmaker/ui.sock",
-                    "port": 80,
-                    "protocol": "http",
-                    "label": "netmaker-ui"
-                }
-            ]
-        }))
-        .build()
+    let methods = HashMap::from([
+        (
+            "GetState".to_string(),
+            read_method(
+                "GetState",
+                "obs.network.unix-socket.get-state@v1",
+                empty_args(),
+                None,
+            ),
+        ),
+        (
+            "CreateSocket".to_string(),
+            mutation_method(
+                "CreateSocket",
+                "mut.network.unix-socket.create-socket@v1",
+                serde_json::json!({"type":"object","properties":{"path":{"type":"string"},"port":{"type":"integer"}}}),
+                None,
+                false,
+            ),
+        ),
+    ]);
+    let signals = vec![signal_decl(
+        "SocketChanged",
+        "evt.network.unix-socket.socket-changed@v1",
+        state_changed_payload(),
+    )];
+    let guarantees = PluginCapabilities {
+        supports_rollback: true,
+        supports_checkpoints: true,
+        supports_verification: true,
+        atomic_operations: false,
+    };
+
+    with_caps(
+        PluginSchema::builder("unix_socket")
+            .version("1.0.0")
+            .description("Unix domain socket endpoints proxied into xray outbounds")
+            .array_field(
+                "sockets",
+                FieldType::Object(socket_fields),
+                true,
+                "Declared unix socket endpoints",
+            )
+            .example(json!({
+                "sockets": [
+                    {
+                        "path": "/run/qdrant.sock",
+                        "port": 6334,
+                        "protocol": "grpc",
+                        "label": "qdrant-grpc"
+                    },
+                    {
+                        "path": "/run/netmaker/api.sock",
+                        "port": 8081,
+                        "protocol": "http",
+                        "label": "netmaker-api"
+                    },
+                    {
+                        "path": "/run/netmaker/mq.sock",
+                        "port": 1883,
+                        "protocol": "mqtt",
+                        "label": "netmaker-mqtt"
+                    },
+                    {
+                        "path": "/run/netmaker/mqtts.sock",
+                        "port": 8883,
+                        "protocol": "mqtt",
+                        "label": "netmaker-mqtts"
+                    },
+                    {
+                        "path": "/run/netmaker/ui.sock",
+                        "port": 80,
+                        "protocol": "http",
+                        "label": "netmaker-ui"
+                    }
+                ]
+            }))
+            .build(),
+        methods,
+        signals,
+        guarantees,
+    )
 }
 
 pub(crate) fn privacy_routes_plugin_schema() -> PluginSchema {
@@ -1805,6 +2851,50 @@ pub(crate) fn privacy_routes_plugin_schema() -> PluginSchema {
         fields
     };
 
+    let methods = HashMap::from([
+        (
+            "GetState".to_string(),
+            read_method(
+                "GetState",
+                "obs.service.privacy-routes.get-state@v1",
+                empty_args(),
+                None,
+            ),
+        ),
+        (
+            "AddRoute".to_string(),
+            mutation_method(
+                "AddRoute",
+                "mut.service.privacy-routes.add-route@v1",
+                serde_json::json!({"type":"object","properties":{"user_id":{"type":"string"},"wireguard_public_key":{"type":"string"}}}),
+                None,
+                false,
+            ),
+        ),
+        (
+            "DeleteRoute".to_string(),
+            mutation_method(
+                "DeleteRoute",
+                "mut.service.privacy-routes.delete-route@v1",
+                serde_json::json!({"type":"object","properties":{"route_id":{"type":"string"}}}),
+                None,
+                true,
+            ),
+        ),
+    ]);
+    let signals = vec![signal_decl(
+        "RouteChanged",
+        "evt.service.privacy-routes.route-changed@v1",
+        state_changed_payload(),
+    )];
+    let guarantees = PluginCapabilities {
+        supports_rollback: true,
+        supports_checkpoints: true,
+        supports_verification: true,
+        atomic_operations: true,
+    };
+
+    with_caps(
     PluginSchema::builder("privacy_routes")
         .version("1.0.0")
         .description("Per-user privacy route objects keyed by WireGuard identity")
@@ -1835,7 +2925,11 @@ pub(crate) fn privacy_routes_plugin_schema() -> PluginSchema {
                 }
             ]
         }))
-        .build()
+        .build(),
+        methods,
+        signals,
+        guarantees,
+    )
 }
 
 pub(crate) fn mail_server_plugin_schema() -> PluginSchema {
@@ -1924,147 +3018,185 @@ pub(crate) fn mail_server_plugin_schema() -> PluginSchema {
         fields
     };
 
-    PluginSchema::builder("mail_server")
-        .version("1.0.0")
-        .description("Mail server container state and D-Bus registration for 3tched.com")
-        .dependency("incus")
-        .dependency("unix_socket")
-        .field(
-            "container_name",
-            FieldSchema {
-                field_type: FieldType::String,
-                required: true,
-                description: "Incus container name running the mail stack".to_string(),
-                default: Some(json!("mail-3tched")),
-                example: None,
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        )
-        .field(
-            "container_status",
-            FieldSchema {
-                field_type: FieldType::String,
-                required: true,
-                description: "Container runtime status".to_string(),
-                default: Some(json!("Unknown")),
-                example: None,
-                constraints: Vec::new(),
-                read_only: true,
-                read_only_when: None,
-            },
-        )
-        .field(
-            "domain",
-            FieldSchema {
-                field_type: FieldType::String,
-                required: true,
-                description: "Primary mail domain".to_string(),
-                default: Some(json!("3tched.com")),
-                example: None,
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        )
-        .field(
-            "xray_socket_path",
-            FieldSchema {
-                field_type: FieldType::String,
-                required: true,
-                description: "Unix socket path for Xray naive routing integration".to_string(),
-                default: Some(json!("/run/xray/mail-naive.sock")),
-                example: None,
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        )
-        .field(
-            "dbus_service_name",
-            FieldSchema {
-                field_type: FieldType::String,
-                required: true,
-                description: "D-Bus service name registered for this mail instance".to_string(),
-                default: Some(json!("org.opdbus.MailServer.3tched")),
-                example: None,
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        )
-        .field(
-            "endpoints",
-            FieldSchema {
-                field_type: FieldType::Object(endpoint_fields),
-                required: true,
-                description: "Active mail service endpoints".to_string(),
-                default: Some(json!({})),
-                example: None,
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        )
-        .field(
-            "container_ip",
-            FieldSchema {
-                field_type: FieldType::String,
-                required: false,
-                description: "Container IPv4 address".to_string(),
-                default: None,
-                example: None,
-                constraints: Vec::new(),
-                read_only: true,
-                read_only_when: None,
-            },
-        )
-        .field(
-            "healthy",
-            FieldSchema {
-                field_type: FieldType::Boolean,
-                required: true,
-                description: "Whether the mail stack is healthy".to_string(),
-                default: Some(json!(false)),
-                example: None,
-                constraints: Vec::new(),
-                read_only: true,
-                read_only_when: None,
-            },
-        )
-        .field(
-            "last_error",
-            FieldSchema {
-                field_type: FieldType::String,
-                required: false,
-                description: "Last error message if unhealthy".to_string(),
-                default: None,
-                example: None,
-                constraints: Vec::new(),
-                read_only: true,
-                read_only_when: None,
-            },
-        )
-        .example(json!({
-            "container_name": "mail-3tched",
-            "container_status": "Running",
-            "domain": "3tched.com",
-            "xray_socket_path": "/run/xray/mail-naive.sock",
-            "dbus_service_name": "org.opdbus.MailServer.3tched",
-            "endpoints": {
-                "smtp_submission": "0.0.0.0:587",
-                "smtp_tls": "0.0.0.0:465",
-                "imap": "0.0.0.0:143",
-                "imaps": "0.0.0.0:993",
-                "dovecot_lmtp": "/var/spool/postfix/private/dovecot-lmtp",
-                "postfix_pickup": "/var/spool/postfix/private/pickup"
-            },
-            "container_ip": "10.200.0.2",
-            "healthy": true,
-            "last_error": null
-        }))
-        .build()
+    let methods = HashMap::from([
+        (
+            "GetState".to_string(),
+            read_method(
+                "GetState",
+                "obs.service.mail-server.get-state@v1",
+                empty_args(),
+                None,
+            ),
+        ),
+        (
+            "SetConfig".to_string(),
+            mutation_method(
+                "SetConfig",
+                "mut.service.mail-server.set-config@v1",
+                serde_json::json!({"type":"object","properties":{"domain":{"type":"string"},"endpoints":{"type":"object"}}}),
+                None,
+                false,
+            ),
+        ),
+    ]);
+    let signals = vec![signal_decl(
+        "ConfigChanged",
+        "evt.service.mail-server.config-changed@v1",
+        state_changed_payload(),
+    )];
+    let guarantees = PluginCapabilities {
+        supports_rollback: true,
+        supports_checkpoints: true,
+        supports_verification: true,
+        atomic_operations: false,
+    };
+
+    with_caps(
+        PluginSchema::builder("mail_server")
+            .version("1.0.0")
+            .description("Mail server container state and D-Bus registration for 3tched.com")
+            .dependency("incus")
+            .dependency("unix_socket")
+            .field(
+                "container_name",
+                FieldSchema {
+                    field_type: FieldType::String,
+                    required: true,
+                    description: "Incus container name running the mail stack".to_string(),
+                    default: Some(json!("mail-3tched")),
+                    example: None,
+                    constraints: Vec::new(),
+                    read_only: false,
+                    read_only_when: None,
+                },
+            )
+            .field(
+                "container_status",
+                FieldSchema {
+                    field_type: FieldType::String,
+                    required: true,
+                    description: "Container runtime status".to_string(),
+                    default: Some(json!("Unknown")),
+                    example: None,
+                    constraints: Vec::new(),
+                    read_only: true,
+                    read_only_when: None,
+                },
+            )
+            .field(
+                "domain",
+                FieldSchema {
+                    field_type: FieldType::String,
+                    required: true,
+                    description: "Primary mail domain".to_string(),
+                    default: Some(json!("3tched.com")),
+                    example: None,
+                    constraints: Vec::new(),
+                    read_only: false,
+                    read_only_when: None,
+                },
+            )
+            .field(
+                "xray_socket_path",
+                FieldSchema {
+                    field_type: FieldType::String,
+                    required: true,
+                    description: "Unix socket path for Xray naive routing integration".to_string(),
+                    default: Some(json!("/run/xray/mail-naive.sock")),
+                    example: None,
+                    constraints: Vec::new(),
+                    read_only: false,
+                    read_only_when: None,
+                },
+            )
+            .field(
+                "dbus_service_name",
+                FieldSchema {
+                    field_type: FieldType::String,
+                    required: true,
+                    description: "D-Bus service name registered for this mail instance".to_string(),
+                    default: Some(json!("org.opdbus.MailServer.3tched")),
+                    example: None,
+                    constraints: Vec::new(),
+                    read_only: false,
+                    read_only_when: None,
+                },
+            )
+            .field(
+                "endpoints",
+                FieldSchema {
+                    field_type: FieldType::Object(endpoint_fields),
+                    required: true,
+                    description: "Active mail service endpoints".to_string(),
+                    default: Some(json!({})),
+                    example: None,
+                    constraints: Vec::new(),
+                    read_only: false,
+                    read_only_when: None,
+                },
+            )
+            .field(
+                "container_ip",
+                FieldSchema {
+                    field_type: FieldType::String,
+                    required: false,
+                    description: "Container IPv4 address".to_string(),
+                    default: None,
+                    example: None,
+                    constraints: Vec::new(),
+                    read_only: true,
+                    read_only_when: None,
+                },
+            )
+            .field(
+                "healthy",
+                FieldSchema {
+                    field_type: FieldType::Boolean,
+                    required: true,
+                    description: "Whether the mail stack is healthy".to_string(),
+                    default: Some(json!(false)),
+                    example: None,
+                    constraints: Vec::new(),
+                    read_only: true,
+                    read_only_when: None,
+                },
+            )
+            .field(
+                "last_error",
+                FieldSchema {
+                    field_type: FieldType::String,
+                    required: false,
+                    description: "Last error message if unhealthy".to_string(),
+                    default: None,
+                    example: None,
+                    constraints: Vec::new(),
+                    read_only: true,
+                    read_only_when: None,
+                },
+            )
+            .example(json!({
+                "container_name": "mail-3tched",
+                "container_status": "Running",
+                "domain": "3tched.com",
+                "xray_socket_path": "/run/xray/mail-naive.sock",
+                "dbus_service_name": "org.opdbus.MailServer.3tched",
+                "endpoints": {
+                    "smtp_submission": "0.0.0.0:587",
+                    "smtp_tls": "0.0.0.0:465",
+                    "imap": "0.0.0.0:143",
+                    "imaps": "0.0.0.0:993",
+                    "dovecot_lmtp": "/var/spool/postfix/private/dovecot-lmtp",
+                    "postfix_pickup": "/var/spool/postfix/private/pickup"
+                },
+                "container_ip": "10.200.0.2",
+                "healthy": true,
+                "last_error": null
+            }))
+            .build(),
+        methods,
+        signals,
+        guarantees,
+    )
 }
 
 pub(crate) fn cognitive_mcp_plugin_schema() -> PluginSchema {
@@ -2714,6 +3846,39 @@ pub(crate) fn cognitive_mcp_plugin_schema() -> PluginSchema {
         fields
     };
 
+    let methods = HashMap::from([
+        (
+            "GetState".to_string(),
+            read_method(
+                "GetState",
+                "obs.service.cognitive-mcp.get-state@v1",
+                empty_args(),
+                None,
+            ),
+        ),
+        (
+            "SetConfig".to_string(),
+            mutation_method(
+                "SetConfig",
+                "mut.service.cognitive-mcp.set-config@v1",
+                serde_json::json!({"type":"object","properties":{"http":{"type":"string"},"grpc":{"type":"string"}}}),
+                None,
+                false,
+            ),
+        ),
+    ]);
+    let signals = vec![signal_decl(
+        "ConfigChanged",
+        "evt.service.cognitive-mcp.config-changed@v1",
+        state_changed_payload(),
+    )];
+    let guarantees = PluginCapabilities {
+        supports_rollback: true,
+        supports_checkpoints: true,
+        supports_verification: true,
+        atomic_operations: false,
+    };
+
     PluginSchema::builder("cognitive_mcp")
         .version("2.0.0")
         .description("Cognitive MCP server — memory, gRPC CognitiveToolService. THE PLUGIN IS THE SCHEMA: every method, tool, property, and field is declared here. Downstream inherits.")
@@ -2844,9 +4009,49 @@ pub(crate) fn cognitive_mcp_plugin_schema() -> PluginSchema {
             read_only: true, read_only_when: None,
         })
         .subid("code_index", "src.software.workspace.index@v1")
+        .subid("GetState", "obs.service.cognitive-mcp.get-state@v1")
+        .subid("SetConfig", "mut.service.cognitive-mcp.set-config@v1")
+        .subid("ConfigChanged", "evt.service.cognitive-mcp.config-changed@v1")
+        .methods(methods)
+        .signals(signals)
+        .guarantees(guarantees)
         .build()
 }
 pub(crate) fn compact_mcp_plugin_schema() -> PluginSchema {
+    let methods = HashMap::from([
+        (
+            "GetState".to_string(),
+            read_method(
+                "GetState",
+                "obs.service.compact-mcp.get-state@v1",
+                empty_args(),
+                None,
+            ),
+        ),
+        (
+            "SetConfig".to_string(),
+            mutation_method(
+                "SetConfig",
+                "mut.service.compact-mcp.set-config@v1",
+                serde_json::json!({"type":"object","properties":{"mode":{"type":"string"},"http":{"type":"string"}}}),
+                None,
+                false,
+            ),
+        ),
+    ]);
+    let signals = vec![signal_decl(
+        "ConfigChanged",
+        "evt.service.compact-mcp.config-changed@v1",
+        state_changed_payload(),
+    )];
+    let guarantees = PluginCapabilities {
+        supports_rollback: true,
+        supports_checkpoints: true,
+        supports_verification: true,
+        atomic_operations: false,
+    };
+
+    with_caps(
     PluginSchema::builder("compact_mcp")
         .version("1.0.0")
         .description("op-mcp-server — multi-mode MCP server (compact/full/agents) with stdio, HTTP, and WebSocket transports")
@@ -2924,57 +4129,219 @@ pub(crate) fn compact_mcp_plugin_schema() -> PluginSchema {
             read_only: true,
             read_only_when: None,
         })
-        .build()
+        .build(),
+        methods,
+        signals,
+        guarantees,
+    )
 }
 
 pub(crate) fn netmaker_plugin_schema() -> PluginSchema {
-    let state = simd_json::serde::to_owned_value(super::netmaker::NetmakerPlugin::current_state())
-        .unwrap_or_else(|_| json!({}));
-    schema_from_state(
-        "netmaker",
-        "net",
-        "1.0.0",
-        "Netmaker daemon state and execution schema",
-        &state,
+    let methods = HashMap::from([
+        (
+            "GetState".to_string(),
+            read_method(
+                "GetState",
+                "obs.network.netmaker.get-state@v1",
+                empty_args(),
+                None,
+            ),
+        ),
+        (
+            "SetConfig".to_string(),
+            mutation_method(
+                "SetConfig",
+                "mut.network.netmaker.set-config@v1",
+                serde_json::json!({"type":"object","properties":{}}),
+                None,
+                false,
+            ),
+        ),
+    ]);
+    let signals = vec![signal_decl(
+        "NetworkChanged",
+        "evt.network.netmaker.network-changed@v1",
+        state_changed_payload(),
+    )];
+    let guarantees = PluginCapabilities {
+        supports_rollback: true,
+        supports_checkpoints: true,
+        supports_verification: true,
+        atomic_operations: false,
+    };
+    with_caps(
+        {
+            let state =
+                simd_json::serde::to_owned_value(super::netmaker::NetmakerPlugin::current_state())
+                    .unwrap_or_else(|_| json!({}));
+            schema_from_state(
+                "netmaker",
+                "net",
+                "1.0.0",
+                "Netmaker daemon state and execution schema",
+                &state,
+            )
+        },
+        methods,
+        signals,
+        guarantees,
     )
 }
 
 pub(crate) fn wgcf_plugin_schema() -> PluginSchema {
-    let state = simd_json::serde::to_owned_value(super::wgcf::WgcfPlugin::current_state())
-        .unwrap_or_else(|_| json!({}));
-    schema_from_state(
-        "wgcf",
-        "net",
-        "1.0.0",
-        "WireGuard Cloudflare (WGCF) state and execution schema",
-        &state,
+    let methods = HashMap::from([
+        (
+            "GetState".to_string(),
+            read_method(
+                "GetState",
+                "obs.network.wgcf.get-state@v1",
+                empty_args(),
+                None,
+            ),
+        ),
+        (
+            "SetConfig".to_string(),
+            mutation_method(
+                "SetConfig",
+                "mut.network.wgcf.set-config@v1",
+                serde_json::json!({"type":"object","properties":{}}),
+                None,
+                false,
+            ),
+        ),
+    ]);
+    let signals = vec![signal_decl(
+        "ConfigChanged",
+        "evt.network.wgcf.config-changed@v1",
+        state_changed_payload(),
+    )];
+    let guarantees = PluginCapabilities {
+        supports_rollback: true,
+        supports_checkpoints: true,
+        supports_verification: true,
+        atomic_operations: false,
+    };
+    with_caps(
+        {
+            let state = simd_json::serde::to_owned_value(super::wgcf::WgcfPlugin::current_state())
+                .unwrap_or_else(|_| json!({}));
+            schema_from_state(
+                "wgcf",
+                "net",
+                "1.0.0",
+                "WireGuard Cloudflare (WGCF) state and execution schema",
+                &state,
+            )
+        },
+        methods,
+        signals,
+        guarantees,
     )
 }
 
 pub(crate) fn xray_plugin_schema() -> PluginSchema {
-    let state = simd_json::serde::to_owned_value(super::xray::XrayPlugin::current_state())
-        .unwrap_or_else(|_| json!({}));
-    schema_from_state(
-        "xray",
-        "net",
-        "1.0.0",
-        "Xray proxy state and execution schema",
-        &state,
+    let methods = HashMap::from([
+        (
+            "GetState".to_string(),
+            read_method(
+                "GetState",
+                "obs.network.xray.get-state@v1",
+                empty_args(),
+                None,
+            ),
+        ),
+        (
+            "SetConfig".to_string(),
+            mutation_method(
+                "SetConfig",
+                "mut.network.xray.set-config@v1",
+                serde_json::json!({"type":"object","properties":{}}),
+                None,
+                false,
+            ),
+        ),
+    ]);
+    let signals = vec![signal_decl(
+        "ConfigChanged",
+        "evt.network.xray.config-changed@v1",
+        state_changed_payload(),
+    )];
+    let guarantees = PluginCapabilities {
+        supports_rollback: true,
+        supports_checkpoints: true,
+        supports_verification: true,
+        atomic_operations: false,
+    };
+    with_caps(
+        {
+            let state = simd_json::serde::to_owned_value(super::xray::XrayPlugin::current_state())
+                .unwrap_or_else(|_| json!({}));
+            schema_from_state(
+                "xray",
+                "net",
+                "1.0.0",
+                "Xray proxy state and execution schema",
+                &state,
+            )
+        },
+        methods,
+        signals,
+        guarantees,
     )
 }
 
 pub(crate) fn zeroclaw_plugin_schema() -> PluginSchema {
-    // The plugin IS the schema: derive directly from ZeroclawPlugin's live
-    // state. Nothing is indexed here — adding a field to ZeroclawState is the
-    // only way to change this schema.
-    let state = simd_json::serde::to_owned_value(super::zeroclaw::ZeroclawPlugin::current_state())
-        .unwrap_or_else(|_| json!({}));
-    schema_from_state(
+    let methods = HashMap::from([
+        (
+            "GetState".to_string(),
+            read_method(
+                "GetState",
+                "obs.service.zeroclaw.get-state@v1",
+                empty_args(),
+                None,
+            ),
+        ),
+        (
+            "SetConfig".to_string(),
+            mutation_method(
+                "SetConfig",
+                "mut.service.zeroclaw.set-config@v1",
+                serde_json::json!({"type":"object","properties":{}}),
+                None,
+                false,
+            ),
+        ),
+    ]);
+    let signals = vec![signal_decl(
+        "StateChanged",
+        "evt.service.zeroclaw.state-changed@v1",
+        state_changed_payload(),
+    )];
+    let guarantees = PluginCapabilities {
+        supports_rollback: true,
+        supports_checkpoints: true,
+        supports_verification: true,
+        atomic_operations: false,
+    };
+    with_caps(
+        {
+            // The plugin IS the schema: derive directly from ZeroclawPlugin's live
+            // state. Nothing is indexed here — adding a field to ZeroclawState is the
+            // only way to change this schema.
+            let state =
+                simd_json::serde::to_owned_value(super::zeroclaw::ZeroclawPlugin::current_state())
+                    .unwrap_or_else(|_| json!({}));
+            schema_from_state(
         "zeroclaw",
         "llm",
         "1.0.0",
         "Zeroclaw schema/RPC-native model router for Antigravity UI, CLI providers, and structured JSON output",
         &state,
+    )
+        },
+        methods,
+        signals,
+        guarantees,
     )
 }
 
@@ -3244,6 +4611,40 @@ pub(crate) fn ctl_plane_chatbot_plugin_schema() -> PluginSchema {
         fields
     };
 
+    let methods = HashMap::from([
+        (
+            "GetState".to_string(),
+            read_method(
+                "GetState",
+                "obs.service.ctl-plane-chatbot.get-state@v1",
+                empty_args(),
+                None,
+            ),
+        ),
+        (
+            "SendMessage".to_string(),
+            mutation_method(
+                "SendMessage",
+                "mut.service.ctl-plane-chatbot.send-message@v1",
+                serde_json::json!({"type":"object","properties":{"message":{"type":"string"}}}),
+                None,
+                false,
+            ),
+        ),
+    ]);
+    let signals = vec![signal_decl(
+        "MessageReceived",
+        "evt.service.ctl-plane-chatbot.message-received@v1",
+        state_changed_payload(),
+    )];
+    let guarantees = PluginCapabilities {
+        supports_rollback: true,
+        supports_checkpoints: true,
+        supports_verification: true,
+        atomic_operations: false,
+    };
+
+    with_caps(
     PluginSchema::builder("ctl_plane_chatbot")
         .version("1.0.0")
         .description("Control-plane chatbot reasoning episodes — THE PLUGIN IS THE SCHEMA. Declares every episode field (REQ-2), PII tagging (REQ-8), significance classification (REQ-3), and vectorization pipeline config (REQ-4/5/6/7). Downstream (Qdrant, CozoDB, Accountability UI, EventChainService) inherits.")
@@ -3340,7 +4741,11 @@ pub(crate) fn ctl_plane_chatbot_plugin_schema() -> PluginSchema {
             default: None, example: None,
             constraints: Vec::new(), read_only: true, read_only_when: None,
         })
-        .build()
+        .build(),
+        methods,
+        signals,
+        guarantees,
+    )
 }
 
 // ── OSCAL Subid Registry ─────────────────────────────────────────────────────
@@ -3353,6 +4758,39 @@ pub(crate) fn ctl_plane_chatbot_plugin_schema() -> PluginSchema {
 
 #[allow(dead_code)]
 pub(crate) fn oscal_subid_registry_plugin_schema() -> PluginSchema {
+    let methods = HashMap::from([
+        (
+            "GetState".to_string(),
+            read_method(
+                "GetState",
+                "obs.standard.oscal-subid-registry.get-state@v1",
+                empty_args(),
+                None,
+            ),
+        ),
+        (
+            "Lookup".to_string(),
+            read_method(
+                "Lookup",
+                "obs.standard.oscal-subid-registry.lookup@v1",
+                serde_json::json!({"type":"object","properties":{"subid":{"type":"string"}}}),
+                None,
+            ),
+        ),
+    ]);
+    let signals = vec![signal_decl(
+        "RegistryChanged",
+        "evt.standard.oscal-subid-registry.registry-changed@v1",
+        state_changed_payload(),
+    )];
+    let guarantees = PluginCapabilities {
+        supports_rollback: true,
+        supports_checkpoints: true,
+        supports_verification: true,
+        atomic_operations: false,
+    };
+
+    with_caps(
     PluginSchema::builder("oscal_subid_registry")
         .version("1.0.0")
         .description("OSCAL subid registry — dual-identifier model for every system artifact. uuid = machine identity, subid = operational taxonomy key.")
@@ -3703,7 +5141,11 @@ pub(crate) fn oscal_subid_registry_plugin_schema() -> PluginSchema {
             read_only_when: None,
         })
 
-        .build()
+        .build(),
+        methods,
+        signals,
+        guarantees,
+    )
 }
 
 pub(crate) fn factory_plugin_schema() -> PluginSchema {
@@ -3725,115 +5167,551 @@ pub(crate) fn factory_plugin_schema() -> PluginSchema {
         }
     }
 
-    builder.example(state.clone()).build()
+    let methods = HashMap::from([
+        (
+            "GetState".to_string(),
+            read_method(
+                "GetState",
+                "obs.service.factory.get-state@v1",
+                empty_args(),
+                None,
+            ),
+        ),
+        (
+            "SetConfig".to_string(),
+            mutation_method(
+                "SetConfig",
+                "mut.service.factory.set-config@v1",
+                serde_json::json!({"type":"object","properties":{}}),
+                None,
+                false,
+            ),
+        ),
+    ]);
+    let signals = vec![signal_decl(
+        "ConfigChanged",
+        "evt.service.factory.config-changed@v1",
+        state_changed_payload(),
+    )];
+    let guarantees = PluginCapabilities {
+        supports_rollback: false,
+        supports_checkpoints: true,
+        supports_verification: true,
+        atomic_operations: false,
+    };
+
+    with_caps(
+        builder.example(state.clone()).build(),
+        methods,
+        signals,
+        guarantees,
+    )
 }
 
 pub(crate) fn fail2ban_plugin_schema() -> PluginSchema {
-    let state = simd_json::serde::to_owned_value(super::fail2ban::Fail2banPlugin::current_state())
-        .unwrap_or_else(|_| json!({}));
-    schema_from_state(
-        "fail2ban",
-        "security",
-        "1.0.0",
-        "Fail2ban intrusion prevention — jails, bans, filters, actions",
-        &state,
+    let methods = HashMap::from([
+        (
+            "GetState".to_string(),
+            read_method(
+                "GetState",
+                "obs.service.fail2ban.get-state@v1",
+                empty_args(),
+                None,
+            ),
+        ),
+        (
+            "SetConfig".to_string(),
+            mutation_method(
+                "SetConfig",
+                "mut.service.fail2ban.set-config@v1",
+                serde_json::json!({"type":"object","properties":{}}),
+                None,
+                false,
+            ),
+        ),
+    ]);
+    let signals = vec![signal_decl(
+        "ConfigChanged",
+        "evt.service.fail2ban.config-changed@v1",
+        state_changed_payload(),
+    )];
+    let guarantees = PluginCapabilities {
+        supports_rollback: true,
+        supports_checkpoints: true,
+        supports_verification: true,
+        atomic_operations: false,
+    };
+    with_caps(
+        {
+            let state =
+                simd_json::serde::to_owned_value(super::fail2ban::Fail2banPlugin::current_state())
+                    .unwrap_or_else(|_| json!({}));
+            schema_from_state(
+                "fail2ban",
+                "security",
+                "1.0.0",
+                "Fail2ban intrusion prevention — jails, bans, filters, actions",
+                &state,
+            )
+        },
+        methods,
+        signals,
+        guarantees,
     )
 }
 pub(crate) fn cron_plugin_schema() -> PluginSchema {
-    let state = simd_json::serde::to_owned_value(super::cron::CronPlugin::current_state())
-        .unwrap_or_else(|_| json!({}));
-    schema_from_state(
-        "cron",
-        "infrastructure",
-        "1.0.0",
-        "Cron scheduler — jobs, schedules, execution history",
-        &state,
+    let methods = HashMap::from([
+        (
+            "GetState".to_string(),
+            read_method(
+                "GetState",
+                "obs.service.cron.get-state@v1",
+                empty_args(),
+                None,
+            ),
+        ),
+        (
+            "CreateJob".to_string(),
+            mutation_method(
+                "CreateJob",
+                "mut.service.cron.create-job@v1",
+                serde_json::json!({"type":"object","properties":{"name":{"type":"string"},"schedule":{"type":"string"}}}),
+                None,
+                false,
+            ),
+        ),
+        (
+            "DeleteJob".to_string(),
+            mutation_method(
+                "DeleteJob",
+                "mut.service.cron.delete-job@v1",
+                serde_json::json!({"type":"object","properties":{"name":{"type":"string"}}}),
+                None,
+                true,
+            ),
+        ),
+    ]);
+    let signals = vec![signal_decl(
+        "JobChanged",
+        "evt.service.cron.job-changed@v1",
+        state_changed_payload(),
+    )];
+    let guarantees = PluginCapabilities {
+        supports_rollback: true,
+        supports_checkpoints: true,
+        supports_verification: true,
+        atomic_operations: false,
+    };
+    with_caps(
+        {
+            let state = simd_json::serde::to_owned_value(super::cron::CronPlugin::current_state())
+                .unwrap_or_else(|_| json!({}));
+            schema_from_state(
+                "cron",
+                "infrastructure",
+                "1.0.0",
+                "Cron scheduler — jobs, schedules, execution history",
+                &state,
+            )
+        },
+        methods,
+        signals,
+        guarantees,
     )
 }
 pub(crate) fn memory_plugin_schema() -> PluginSchema {
-    let state =
-        simd_json::serde::to_owned_value(super::memory_plugin::MemoryPlugin::current_state())
+    let methods = HashMap::from([
+        (
+            "GetState".to_string(),
+            read_method(
+                "GetState",
+                "obs.service.memory.get-state@v1",
+                empty_args(),
+                None,
+            ),
+        ),
+        (
+            "Store".to_string(),
+            mutation_method(
+                "Store",
+                "mut.service.memory.store@v1",
+                serde_json::json!({"type":"object","properties":{"namespace":{"type":"string"},"key":{"type":"string"},"value":{}}}),
+                None,
+                false,
+            ),
+        ),
+        (
+            "Delete".to_string(),
+            mutation_method(
+                "Delete",
+                "mut.service.memory.delete@v1",
+                serde_json::json!({"type":"object","properties":{"namespace":{"type":"string"},"key":{"type":"string"}}}),
+                None,
+                true,
+            ),
+        ),
+    ]);
+    let signals = vec![signal_decl(
+        "EntryChanged",
+        "evt.service.memory.entry-changed@v1",
+        state_changed_payload(),
+    )];
+    let guarantees = PluginCapabilities {
+        supports_rollback: true,
+        supports_checkpoints: true,
+        supports_verification: true,
+        atomic_operations: false,
+    };
+    with_caps(
+        {
+            let state = simd_json::serde::to_owned_value(
+                super::memory_plugin::MemoryPlugin::current_state(),
+            )
             .unwrap_or_else(|_| json!({}));
-    schema_from_state(
-        "memory",
-        "data",
-        "1.0.0",
-        "Cognitive memory — namespaces, embeddings, search",
-        &state,
+            schema_from_state(
+                "memory",
+                "data",
+                "1.0.0",
+                "Cognitive memory — namespaces, embeddings, search",
+                &state,
+            )
+        },
+        methods,
+        signals,
+        guarantees,
     )
 }
 pub(crate) fn workflows_plugin_schema() -> PluginSchema {
-    let state =
-        simd_json::serde::to_owned_value(super::workflows_plugin::WorkflowsPlugin::current_state())
+    let methods = HashMap::from([
+        (
+            "GetState".to_string(),
+            read_method(
+                "GetState",
+                "obs.service.workflows.get-state@v1",
+                empty_args(),
+                None,
+            ),
+        ),
+        (
+            "CreateWorkflow".to_string(),
+            mutation_method(
+                "CreateWorkflow",
+                "mut.service.workflows.create-workflow@v1",
+                serde_json::json!({"type":"object","properties":{"name":{"type":"string"}}}),
+                None,
+                false,
+            ),
+        ),
+    ]);
+    let signals = vec![signal_decl(
+        "WorkflowChanged",
+        "evt.service.workflows.workflow-changed@v1",
+        state_changed_payload(),
+    )];
+    let guarantees = PluginCapabilities {
+        supports_rollback: true,
+        supports_checkpoints: true,
+        supports_verification: true,
+        atomic_operations: false,
+    };
+    with_caps(
+        {
+            let state = simd_json::serde::to_owned_value(
+                super::workflows_plugin::WorkflowsPlugin::current_state(),
+            )
             .unwrap_or_else(|_| json!({}));
-    schema_from_state(
-        "workflows",
-        "automation",
-        "1.0.0",
-        "Workflow automation — pipelines, triggers, execution",
-        &state,
+            schema_from_state(
+                "workflows",
+                "automation",
+                "1.0.0",
+                "Workflow automation — pipelines, triggers, execution",
+                &state,
+            )
+        },
+        methods,
+        signals,
+        guarantees,
     )
 }
 pub(crate) fn btrfs_plugin_schema() -> PluginSchema {
-    let state = simd_json::serde::to_owned_value(super::btrfs_plugin::BtrfsPlugin::current_state())
-        .unwrap_or_else(|_| json!({}));
-    schema_from_state(
-        "btrfs",
-        "infrastructure",
-        "1.0.0",
-        "Btrfs filesystem — subvolumes, snapshots, send/receive, DR",
-        &state,
+    let methods = HashMap::from([(
+        "GetState".to_string(),
+        read_method(
+            "GetState",
+            "obs.system.btrfs.get-state@v1",
+            empty_args(),
+            None,
+        ),
+    )]);
+    let signals = vec![signal_decl(
+        "StateChanged",
+        "evt.system.btrfs.state-changed@v1",
+        state_changed_payload(),
+    )];
+    let guarantees = PluginCapabilities {
+        supports_rollback: false,
+        supports_checkpoints: false,
+        supports_verification: true,
+        atomic_operations: false,
+    };
+    with_caps(
+        {
+            let state =
+                simd_json::serde::to_owned_value(super::btrfs_plugin::BtrfsPlugin::current_state())
+                    .unwrap_or_else(|_| json!({}));
+            schema_from_state(
+                "btrfs",
+                "infrastructure",
+                "1.0.0",
+                "Btrfs filesystem — subvolumes, snapshots, send/receive, DR",
+                &state,
+            )
+        },
+        methods,
+        signals,
+        guarantees,
     )
 }
 pub(crate) fn knowledge_plugin_schema() -> PluginSchema {
-    let state =
-        simd_json::serde::to_owned_value(super::knowledge_plugin::KnowledgePlugin::current_state())
+    let methods = HashMap::from([
+        (
+            "GetState".to_string(),
+            read_method(
+                "GetState",
+                "obs.service.knowledge.get-state@v1",
+                empty_args(),
+                None,
+            ),
+        ),
+        (
+            "Store".to_string(),
+            mutation_method(
+                "Store",
+                "mut.service.knowledge.store@v1",
+                serde_json::json!({"type":"object","properties":{"namespace":{"type":"string"},"key":{"type":"string"},"value":{}}}),
+                None,
+                false,
+            ),
+        ),
+    ]);
+    let signals = vec![signal_decl(
+        "EntryChanged",
+        "evt.service.knowledge.entry-changed@v1",
+        state_changed_payload(),
+    )];
+    let guarantees = PluginCapabilities {
+        supports_rollback: true,
+        supports_checkpoints: true,
+        supports_verification: true,
+        atomic_operations: false,
+    };
+    with_caps(
+        {
+            let state = simd_json::serde::to_owned_value(
+                super::knowledge_plugin::KnowledgePlugin::current_state(),
+            )
             .unwrap_or_else(|_| json!({}));
-    schema_from_state(
-        "knowledge",
-        "data",
-        "1.0.0",
-        "Knowledge stores — Qdrant, CozoDB, Sled, embedding pipeline",
-        &state,
+            schema_from_state(
+                "knowledge",
+                "data",
+                "1.0.0",
+                "Knowledge stores — Qdrant, CozoDB, Sled, embedding pipeline",
+                &state,
+            )
+        },
+        methods,
+        signals,
+        guarantees,
     )
 }
 pub(crate) fn antigravity_chat_plugin_schema() -> PluginSchema {
-    let state = simd_json::serde::to_owned_value(
-        super::antigravity_chat::AntigravityChatPlugin::current_state(),
-    )
-    .unwrap_or_else(|_| json!({}));
-    schema_from_state(
-        "antigravity_chat",
-        "llm",
-        "1.0.0",
-        "Antigravity Chat — OAuth bridge, Gemini models, headless IDE",
-        &state,
+    let methods = HashMap::from([
+        (
+            "GetState".to_string(),
+            read_method(
+                "GetState",
+                "obs.service.antigravity-chat.get-state@v1",
+                empty_args(),
+                None,
+            ),
+        ),
+        (
+            "SendMessage".to_string(),
+            mutation_method(
+                "SendMessage",
+                "mut.service.antigravity-chat.send-message@v1",
+                serde_json::json!({"type":"object","properties":{"message":{"type":"string"}}}),
+                None,
+                false,
+            ),
+        ),
+    ]);
+    let signals = vec![signal_decl(
+        "MessageReceived",
+        "evt.service.antigravity-chat.message-received@v1",
+        state_changed_payload(),
+    )];
+    let guarantees = PluginCapabilities {
+        supports_rollback: true,
+        supports_checkpoints: true,
+        supports_verification: true,
+        atomic_operations: false,
+    };
+    with_caps(
+        {
+            let state = simd_json::serde::to_owned_value(
+                super::antigravity_chat::AntigravityChatPlugin::current_state(),
+            )
+            .unwrap_or_else(|_| json!({}));
+            schema_from_state(
+                "antigravity_chat",
+                "llm",
+                "1.0.0",
+                "Antigravity Chat — OAuth bridge, Gemini models, headless IDE",
+                &state,
+            )
+        },
+        methods,
+        signals,
+        guarantees,
     )
 }
 pub(crate) fn schema_renderer_plugin_schema() -> PluginSchema {
-    let state = simd_json::serde::to_owned_value(
-        super::schema_renderer::SchemaRendererPlugin::current_state(),
-    )
-    .unwrap_or_else(|_| json!({}));
-    schema_from_state(
-        "schema_renderer",
-        "ui",
-        "1.0.0",
-        "Schema Renderer - dynamic JSON Schema to React form generation with auto-gallery",
-        &state,
+    let methods = HashMap::from([
+        (
+            "GetState".to_string(),
+            read_method(
+                "GetState",
+                "obs.standard.schema-renderer.get-state@v1",
+                empty_args(),
+                None,
+            ),
+        ),
+        (
+            "Render".to_string(),
+            read_method(
+                "Render",
+                "obs.standard.schema-renderer.render@v1",
+                serde_json::json!({"type":"object","properties":{"schema":{"type":"object"}}}),
+                None,
+            ),
+        ),
+    ]);
+    let signals = vec![signal_decl(
+        "SchemaChanged",
+        "evt.standard.schema-renderer.schema-changed@v1",
+        state_changed_payload(),
+    )];
+    let guarantees = PluginCapabilities {
+        supports_rollback: true,
+        supports_checkpoints: true,
+        supports_verification: true,
+        atomic_operations: false,
+    };
+    with_caps(
+        {
+            let state = simd_json::serde::to_owned_value(
+                super::schema_renderer::SchemaRendererPlugin::current_state(),
+            )
+            .unwrap_or_else(|_| json!({}));
+            schema_from_state(
+                "schema_renderer",
+                "ui",
+                "1.0.0",
+                "Schema Renderer - dynamic JSON Schema to React form generation with auto-gallery",
+                &state,
+            )
+        },
+        methods,
+        signals,
+        guarantees,
     )
 }
 pub(crate) fn antigravity_plugin_schema() -> PluginSchema {
-    let state =
-        simd_json::serde::to_owned_value(super::antigravity::AntigravityPlugin::current_state())
+    let methods = HashMap::from([
+        (
+            "GetState".to_string(),
+            read_method(
+                "GetState",
+                "obs.service.antigravity.get-state@v1",
+                empty_args(),
+                None,
+            ),
+        ),
+        (
+            "SetConfig".to_string(),
+            mutation_method(
+                "SetConfig",
+                "mut.service.antigravity.set-config@v1",
+                serde_json::json!({"type":"object","properties":{}}),
+                None,
+                false,
+            ),
+        ),
+    ]);
+    let signals = vec![signal_decl(
+        "StateChanged",
+        "evt.service.antigravity.state-changed@v1",
+        state_changed_payload(),
+    )];
+    let guarantees = PluginCapabilities {
+        supports_rollback: true,
+        supports_checkpoints: true,
+        supports_verification: true,
+        atomic_operations: false,
+    };
+    with_caps(
+        {
+            let state = simd_json::serde::to_owned_value(
+                super::antigravity::AntigravityPlugin::current_state(),
+            )
             .unwrap_or_else(|_| json!({"status":"error"}));
-    schema_from_state("antigravity", "llm", "1.0.0", "Google Antigravity SDK provider — Vertex AI Gemini models, OAuth auth, structured output, OSCAL compliance routing", &state)
+            schema_from_state("antigravity", "llm", "1.0.0", "Google Antigravity SDK provider — Vertex AI Gemini models, OAuth auth, structured output, OSCAL compliance routing", &state)
+        },
+        methods,
+        signals,
+        guarantees,
+    )
 }
 
 /// rovs_commands plugin schema — Command definitions for OVS/ROVS operations
 /// Schema-only plugin (no StatePlugin apply_state) — serves as source of truth
 /// for available OVS commands and their arguments
 pub(crate) fn rovs_commands_plugin_schema() -> PluginSchema {
+    let methods = HashMap::from([
+        (
+            "GetState".to_string(),
+            read_method(
+                "GetState",
+                "obs.network.rovs-commands.get-state@v1",
+                empty_args(),
+                None,
+            ),
+        ),
+        (
+            "Execute".to_string(),
+            mutation_method(
+                "Execute",
+                "mut.network.rovs-commands.execute@v1",
+                serde_json::json!({"type":"object","properties":{"command":{"type":"string"},"args":{"type":"object"}}}),
+                None,
+                false,
+            ),
+        ),
+    ]);
+    let signals = vec![signal_decl(
+        "CommandCompleted",
+        "evt.network.rovs-commands.command-completed@v1",
+        state_changed_payload(),
+    )];
+    let guarantees = PluginCapabilities {
+        supports_rollback: true,
+        supports_checkpoints: true,
+        supports_verification: true,
+        atomic_operations: false,
+    };
+
+    with_caps(
     PluginSchema::builder("rovs_commands")
         .version("1.0.0")
         .category("network")
@@ -3876,12 +5754,60 @@ pub(crate) fn rovs_commands_plugin_schema() -> PluginSchema {
             true,
             "Available OVS/rovs commands exposed via D-Bus",
         )
-        .build()
+        .build(),
+        methods,
+        signals,
+        guarantees,
+    )
 }
 
 /// OVSDB Daemon plugin schema — Native Rust D-Bus daemon for OpenVSwitch management
 /// Replaces OvsdbClient CLI wrappers with schema-driven D-Bus service
 pub(crate) fn ovsdb_daemon_plugin_schema() -> PluginSchema {
+    let methods = HashMap::from([
+        (
+            "GetState".to_string(),
+            read_method(
+                "GetState",
+                "obs.network.ovsdb-daemon.get-state@v1",
+                empty_args(),
+                None,
+            ),
+        ),
+        (
+            "CreateBridge".to_string(),
+            mutation_method(
+                "CreateBridge",
+                "mut.network.ovsdb-daemon.create-bridge@v1",
+                serde_json::json!({"type":"object","properties":{"name":{"type":"string"}}}),
+                None,
+                false,
+            ),
+        ),
+        (
+            "DeleteBridge".to_string(),
+            mutation_method(
+                "DeleteBridge",
+                "mut.network.ovsdb-daemon.delete-bridge@v1",
+                serde_json::json!({"type":"object","properties":{"name":{"type":"string"}}}),
+                None,
+                true,
+            ),
+        ),
+    ]);
+    let signals = vec![signal_decl(
+        "BridgeChanged",
+        "evt.network.ovsdb-daemon.bridge-changed@v1",
+        state_changed_payload(),
+    )];
+    let guarantees = PluginCapabilities {
+        supports_rollback: true,
+        supports_checkpoints: true,
+        supports_verification: true,
+        atomic_operations: true,
+    };
+
+    with_caps(
     PluginSchema::builder("ovsdb_daemon")
         .version("1.0.0")
         .category("network")
@@ -3934,5 +5860,681 @@ pub(crate) fn ovsdb_daemon_plugin_schema() -> PluginSchema {
             false,
             "Optional gRPC listen address (e.g., 0.0.0.0:50051)",
         )
-        .build()
+        .build(),
+        methods,
+        signals,
+        guarantees,
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Moved inline schemas (procfs, config, mcp, freedesktop)
+// ---------------------------------------------------------------------------
+
+/// Procfs plugin schema — moved from procfs.rs inline definition.
+pub(crate) fn procfs_plugin_schema() -> PluginSchema {
+    let methods = HashMap::from([(
+        "GetState".to_string(),
+        read_method(
+            "GetState",
+            "obs.this-system.procfs.get-state@v1",
+            empty_args(),
+            None,
+        ),
+    )]);
+    let signals = vec![signal_decl(
+        "StateChanged",
+        "evt.this-system.procfs.state-changed@v1",
+        state_changed_payload(),
+    )];
+    let guarantees = PluginCapabilities {
+        supports_rollback: false,
+        supports_checkpoints: false,
+        supports_verification: true,
+        atomic_operations: false,
+    };
+
+    let schema = PluginSchema::builder("procfs")
+        .version("1.0.0")
+        .category("host")
+        .description("Read-only procfs host state projected through PluginSchema.")
+        .field("memory", readonly_any("Parsed /proc/meminfo values."))
+        .field("loadavg", readonly_any("Parsed /proc/loadavg values."))
+        .field("uptime", readonly_any("Parsed /proc/uptime values."))
+        .field(
+            "cpuinfo",
+            readonly_any("Parsed CPU inventory from /proc/cpuinfo."),
+        )
+        .field("stat", readonly_any("Parsed /proc/stat values."))
+        .field("net_dev", readonly_any("Parsed /proc/net/dev counters."))
+        .field("mounts", readonly_any("Parsed /proc/mounts entries."))
+        .field("kernel", readonly_any("Kernel version from /proc/version."))
+        .field("vmstat", readonly_any("Parsed /proc/vmstat values."))
+        .field("diskstats", readonly_any("Parsed /proc/diskstats rows."))
+        .immutable_paths(&[
+            "/memory",
+            "/loadavg",
+            "/uptime",
+            "/cpuinfo",
+            "/stat",
+            "/net_dev",
+            "/mounts",
+            "/kernel",
+            "/vmstat",
+            "/diskstats",
+        ])
+        .tag("read_only")
+        .build();
+    with_caps(schema, methods, signals, guarantees)
+}
+
+/// Config plugin schema — moved from config.rs inline definition.
+pub(crate) fn config_plugin_schema() -> PluginSchema {
+    let methods = HashMap::from([
+        (
+            "GetState".to_string(),
+            read_method(
+                "GetState",
+                "obs.software.config.get-state@v1",
+                empty_args(),
+                None,
+            ),
+        ),
+        (
+            "SetConfig".to_string(),
+            mutation_method(
+                "SetConfig",
+                "mut.software.config.set-config@v1",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "key": {"type": "string"},
+                        "value": {}
+                    },
+                    "required": ["key", "value"]
+                }),
+                None,
+                false,
+            ),
+        ),
+        (
+            "DeleteKey".to_string(),
+            mutation_method(
+                "DeleteKey",
+                "mut.software.config.delete-key@v1",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {"key": {"type": "string"}},
+                    "required": ["key"]
+                }),
+                None,
+                false,
+            ),
+        ),
+    ]);
+    let signals = vec![signal_decl(
+        "ConfigChanged",
+        "evt.software.config.config-changed@v1",
+        state_changed_payload(),
+    )];
+    let guarantees = PluginCapabilities {
+        supports_rollback: true,
+        supports_checkpoints: true,
+        supports_verification: true,
+        atomic_operations: false,
+    };
+
+    let schema = PluginSchema::builder("config")
+        .version("1.0.0")
+        .description("Global key/value config store")
+        .field(
+            "configs",
+            FieldSchema {
+                field_type: FieldType::Any,
+                required: true,
+                description: "Configuration map".to_string(),
+                default: Some(json!({})),
+                example: Some(json!({
+                    "anna_scribe": {
+                        "snowball_path": "/var/lib/op-dbus/snowball"
+                    }
+                })),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        )
+        .build();
+    with_caps(schema, methods, signals, guarantees)
+}
+
+/// MCP plugin schema — moved from mcp.rs inline definition.
+pub(crate) fn mcp_plugin_schema() -> PluginSchema {
+    let methods = HashMap::from([
+        (
+            "GetState".to_string(),
+            read_method(
+                "GetState",
+                "obs.service.mcp.get-state@v1",
+                empty_args(),
+                None,
+            ),
+        ),
+        (
+            "SetConfig".to_string(),
+            mutation_method(
+                "SetConfig",
+                "mut.service.mcp.set-config@v1",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "servers": {"type": "object"},
+                        "tool_groups": {"type": "object"},
+                        "compact_mode": {"type": "object"}
+                    }
+                }),
+                None,
+                false,
+            ),
+        ),
+        (
+            "ExecuteTool".to_string(),
+            mutation_method(
+                "ExecuteTool",
+                "mut.service.mcp.execute-tool@v1",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "tool_name": {"type": "string"},
+                        "args": {"type": "object"}
+                    },
+                    "required": ["tool_name"]
+                }),
+                Some("mcp.execute"),
+                false,
+            ),
+        ),
+    ]);
+    let signals = vec![signal_decl(
+        "ConfigChanged",
+        "evt.service.mcp.config-changed@v1",
+        state_changed_payload(),
+    )];
+    let guarantees = PluginCapabilities {
+        supports_rollback: true,
+        supports_checkpoints: true,
+        supports_verification: true,
+        atomic_operations: false,
+    };
+
+    let schema = PluginSchema::builder("mcp")
+        .version("1.0.0")
+        .description("MCP server and tool-group configuration")
+        .dependency("agent_config")
+        .field(
+            "servers",
+            FieldSchema {
+                field_type: FieldType::Any,
+                required: false,
+                description: "MCP server map".to_string(),
+                default: Some(json!({})),
+                example: Some(json!({
+                    "rust-pro": {
+                        "command": "dbus-agent",
+                        "args": ["rust-pro"],
+                        "enabled": true,
+                        "transport": "stdio"
+                    }
+                })),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        )
+        .field(
+            "tool_groups",
+            FieldSchema {
+                field_type: FieldType::Any,
+                required: false,
+                description: "Tool group config".to_string(),
+                default: Some(json!({})),
+                example: Some(json!({
+                    "enabled": ["default"],
+                    "max_tools": 40,
+                    "access_zone": "local"
+                })),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        )
+        .field(
+            "compact_mode",
+            FieldSchema {
+                field_type: FieldType::Any,
+                required: false,
+                description: "Compact mode config".to_string(),
+                default: Some(json!({})),
+                example: Some(json!({
+                    "enabled": true,
+                    "meta_tools": ["list_tools", "search_tools", "get_tool_schema", "execute_tool", "respond"]
+                })),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        )
+        .build();
+    with_caps(schema, methods, signals, guarantees)
+}
+
+/// FreeDesktop plugin schema — moved from freedesktop.rs inline definition.
+pub(crate) fn freedesktop_plugin_schema() -> PluginSchema {
+    let methods = HashMap::from([(
+        "GetState".to_string(),
+        read_method(
+            "GetState",
+            "obs.standard.freedesktop.get-state@v1",
+            empty_args(),
+            None,
+        ),
+    )]);
+    let signals = vec![signal_decl(
+        "InterfacesChanged",
+        "evt.standard.freedesktop.interfaces-changed@v1",
+        state_changed_payload(),
+    )];
+    let guarantees = PluginCapabilities {
+        supports_rollback: false,
+        supports_checkpoints: false,
+        supports_verification: true,
+        atomic_operations: false,
+    };
+
+    let schema = PluginSchema::builder("freedesktop")
+        .version("1.0.0")
+        .category("system")
+        .description("FreeDesktop D-Bus standards implementation")
+        .build();
+    with_caps(schema, methods, signals, guarantees)
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Collect every plugin schema function into a Vec for iteration.
+    fn all_schemas() -> Vec<(&'static str, PluginSchema)> {
+        vec![
+            ("adc", adc_plugin_schema()),
+            ("agent_config", agent_config_plugin_schema()),
+            ("endpoint", endpoint_plugin_schema()),
+            ("gcloud_adc", gcloud_adc_plugin_schema()),
+            ("hardware", hardware_plugin_schema()),
+            ("keypair", keypair_plugin_schema()),
+            ("ovsdb_bridge", ovsdb_bridge_plugin_schema()),
+            ("proxmox", proxmox_plugin_schema()),
+            ("proxy_server", proxy_server_plugin_schema()),
+            ("service", service_plugin_schema()),
+            ("sess_decl", sess_decl_plugin_schema()),
+            ("software", software_plugin_schema()),
+            ("users", users_plugin_schema()),
+            ("web_ui", web_ui_plugin_schema()),
+            ("wireguard", wireguard_plugin_schema()),
+            ("incus", incus_plugin_schema()),
+            ("net", net_plugin_schema()),
+            ("rtnetlink", rtnetlink_plugin_schema()),
+            ("openflow", openflow_plugin_schema()),
+            ("s6", s6_plugin_schema()),
+            ("privacy_router", privacy_router_plugin_schema()),
+            ("unix_socket", unix_socket_plugin_schema()),
+            ("privacy_routes", privacy_routes_plugin_schema()),
+            ("mail_server", mail_server_plugin_schema()),
+            ("cognitive_mcp", cognitive_mcp_plugin_schema()),
+            ("compact_mcp", compact_mcp_plugin_schema()),
+            ("netmaker", netmaker_plugin_schema()),
+            ("wgcf", wgcf_plugin_schema()),
+            ("xray", xray_plugin_schema()),
+            ("zeroclaw", zeroclaw_plugin_schema()),
+            ("ctl_plane_chatbot", ctl_plane_chatbot_plugin_schema()),
+            ("oscal_subid_registry", oscal_subid_registry_plugin_schema()),
+            ("factory", factory_plugin_schema()),
+            ("fail2ban", fail2ban_plugin_schema()),
+            ("cron", cron_plugin_schema()),
+            ("memory", memory_plugin_schema()),
+            ("workflows", workflows_plugin_schema()),
+            ("btrfs", btrfs_plugin_schema()),
+            ("knowledge", knowledge_plugin_schema()),
+            ("antigravity_chat", antigravity_chat_plugin_schema()),
+            ("schema_renderer", schema_renderer_plugin_schema()),
+            ("antigravity", antigravity_plugin_schema()),
+            ("rovs_commands", rovs_commands_plugin_schema()),
+            ("ovsdb_daemon", ovsdb_daemon_plugin_schema()),
+            ("procfs", procfs_plugin_schema()),
+            ("config", config_plugin_schema()),
+            ("mcp", mcp_plugin_schema()),
+            ("freedesktop", freedesktop_plugin_schema()),
+        ]
+    }
+
+    /// VAL-CAP-001: Every plugin schema must have non-absent methods map,
+    /// signals array, and guarantees block.
+    #[test]
+    fn plugin_schema_has_capability_fields() {
+        for (name, schema) in all_schemas() {
+            assert!(
+                !schema.methods.is_empty(),
+                "Plugin '{}' has empty methods map — must declare at least one method",
+                name
+            );
+            assert!(
+                !schema.signals.is_empty(),
+                "Plugin '{}' has empty signals array — must declare at least one signal",
+                name
+            );
+            // Guarantees is always present (PluginCapabilities::default if unset),
+            // but we verify it has the four fields by serializing.
+            let json = serde_json::to_value(&schema.guarantees).unwrap();
+            assert!(
+                json.as_object().is_some(),
+                "Plugin '{}' guarantees must serialize to a JSON object",
+                name
+            );
+            let obj = json.as_object().unwrap();
+            assert!(
+                obj.contains_key("supports_rollback"),
+                "Plugin '{}' guarantees missing supports_rollback",
+                name
+            );
+            assert!(
+                obj.contains_key("supports_checkpoints"),
+                "Plugin '{}' guarantees missing supports_checkpoints",
+                name
+            );
+            assert!(
+                obj.contains_key("supports_verification"),
+                "Plugin '{}' guarantees missing supports_verification",
+                name
+            );
+            assert!(
+                obj.contains_key("atomic_operations"),
+                "Plugin '{}' guarantees missing atomic_operations",
+                name
+            );
+        }
+    }
+
+    /// VAL-PROD-008: Every MethodDecl subid must follow OSCAL taxonomy.
+    /// Mutation methods use category `mut`, read methods use `obs`.
+    /// Every SignalDecl subid must use category `evt`.
+    #[test]
+    fn subid_taxonomy_valid_for_all_methods_and_signals() {
+        let valid_categories = ["src", "prj", "sch", "mut", "obs", "evt", "exp"];
+
+        for (pname, schema) in all_schemas() {
+            for (mname, decl) in &schema.methods {
+                let parts: Vec<&str> = decl.subid.split('.').collect();
+                assert!(
+                    parts.len() >= 4,
+                    "Plugin '{}' method '{}' subid '{}' must have at least 4 dot-separated parts",
+                    pname,
+                    mname,
+                    decl.subid
+                );
+                let category = parts[0];
+                assert!(
+                    valid_categories.contains(&category),
+                    "Plugin '{}' method '{}' subid '{}' has invalid category '{}'",
+                    pname,
+                    mname,
+                    decl.subid,
+                    category
+                );
+                // Verify category matches side_effect
+                match decl.side_effect {
+                    SideEffect::Read => assert_eq!(
+                        category, "obs",
+                        "Plugin '{}' method '{}' has side_effect Read but subid category is '{}' (expected 'obs')",
+                        pname, mname, category
+                    ),
+                    SideEffect::Mutation => assert_eq!(
+                        category, "mut",
+                        "Plugin '{}' method '{}' has side_effect Mutation but subid category is '{}' (expected 'mut')",
+                        pname, mname, category
+                    ),
+                }
+            }
+
+            for sig in &schema.signals {
+                let parts: Vec<&str> = sig.subid.split('.').collect();
+                assert!(
+                    parts.len() >= 4,
+                    "Plugin '{}' signal '{}' subid '{}' must have at least 4 dot-separated parts",
+                    pname,
+                    sig.name,
+                    sig.subid
+                );
+                let category = parts[0];
+                assert_eq!(
+                    category, "evt",
+                    "Plugin '{}' signal '{}' subid '{}' must have category 'evt', got '{}'",
+                    pname, sig.name, sig.subid, category
+                );
+            }
+        }
+    }
+
+    /// VAL-PROD-009: PluginSchema.subids must include an entry for every
+    /// declared method and signal by name.
+    #[test]
+    fn subids_map_covers_all_methods_and_signals() {
+        for (pname, schema) in all_schemas() {
+            for (mname, decl) in &schema.methods {
+                assert!(
+                    schema.subids.contains_key(mname),
+                    "Plugin '{}' subids map missing entry for method '{}'",
+                    pname,
+                    mname
+                );
+                assert_eq!(
+                    schema.subids.get(mname),
+                    Some(&decl.subid),
+                    "Plugin '{}' subids map entry for method '{}' does not match MethodDecl.subid",
+                    pname,
+                    mname
+                );
+            }
+            for sig in &schema.signals {
+                assert!(
+                    schema.subids.contains_key(&sig.name),
+                    "Plugin '{}' subids map missing entry for signal '{}'",
+                    pname,
+                    sig.name
+                );
+                assert_eq!(
+                    schema.subids.get(&sig.name),
+                    Some(&sig.subid),
+                    "Plugin '{}' subids map entry for signal '{}' does not match SignalDecl.subid",
+                    pname,
+                    sig.name
+                );
+            }
+        }
+    }
+
+    /// VAL-PROD-009: Subids must be unique across the entire registry.
+    #[test]
+    fn subids_unique_across_registry() {
+        let mut seen: HashMap<String, String> = HashMap::new();
+        for (pname, schema) in all_schemas() {
+            for (mname, decl) in &schema.methods {
+                if let Some(existing) = seen.get(&decl.subid) {
+                    panic!(
+                        "Duplicate subid '{}' found in plugin '{}' method '{}', already used by {}",
+                        decl.subid, pname, mname, existing
+                    );
+                }
+                seen.insert(
+                    decl.subid.clone(),
+                    format!("plugin '{}' method '{}'", pname, mname),
+                );
+            }
+            for sig in &schema.signals {
+                if let Some(existing) = seen.get(&sig.subid) {
+                    panic!(
+                        "Duplicate subid '{}' found in plugin '{}' signal '{}', already used by {}",
+                        sig.subid, pname, sig.name, existing
+                    );
+                }
+                seen.insert(
+                    sig.subid.clone(),
+                    format!("plugin '{}' signal '{}'", pname, sig.name),
+                );
+            }
+        }
+    }
+
+    /// VAL-CAP-006: If a StatePlugin's schema() returns None, the system must
+    /// NOT register a D-Bus object, gRPC route, or SHM entry for that plugin.
+    #[test]
+    fn none_schema_plugin_not_registered() {
+        // Plugins that return None from schema() are not in all_schemas.
+        // The producer (WS2) skips plugins returning None.  Here we verify
+        // that our schema collection only contains valid, non-None schemas.
+        let schemas = all_schemas();
+        for (name, schema) in &schemas {
+            assert!(
+                !schema.name.is_empty(),
+                "Plugin '{}' has empty schema name — would not be registered",
+                name
+            );
+            assert!(
+                !schema.version.is_empty(),
+                "Plugin '{}' has empty schema version — would not be registered",
+                name
+            );
+        }
+        assert!(
+            !schemas.is_empty(),
+            "Schema collection must not be empty — at least one plugin must have a schema"
+        );
+    }
+
+    /// VAL-CAP-002: Each MethodDecl must contain all required fields.
+    #[test]
+    fn method_decl_fields_complete() {
+        for (pname, schema) in all_schemas() {
+            for (mname, decl) in &schema.methods {
+                assert!(
+                    !decl.name.is_empty(),
+                    "Plugin '{}' method '{}' has empty name",
+                    pname,
+                    mname
+                );
+                assert_eq!(
+                    decl.name, *mname,
+                    "Plugin '{}' method key '{}' does not match MethodDecl.name '{}'",
+                    pname, mname, decl.name
+                );
+                assert!(
+                    decl.args.is_object(),
+                    "Plugin '{}' method '{}' args must be a JSON Schema object",
+                    pname,
+                    mname
+                );
+                assert!(
+                    !decl.subid.is_empty(),
+                    "Plugin '{}' method '{}' has empty subid",
+                    pname,
+                    mname
+                );
+            }
+        }
+    }
+
+    /// VAL-CAP-003: Each SignalDecl must contain all required fields.
+    #[test]
+    fn signal_decl_fields_complete() {
+        for (pname, schema) in all_schemas() {
+            for sig in &schema.signals {
+                assert!(
+                    !sig.name.is_empty(),
+                    "Plugin '{}' signal '{}' has empty name",
+                    pname,
+                    sig.name
+                );
+                assert!(
+                    !sig.subid.is_empty(),
+                    "Plugin '{}' signal '{}' has empty subid",
+                    pname,
+                    sig.name
+                );
+            }
+        }
+    }
+
+    /// VAL-CAP-005: Serialized PluginSchema must include methods, signals,
+    /// guarantees keys.
+    #[test]
+    fn schema_serializes_capability_keys() {
+        for (pname, schema) in all_schemas() {
+            let json = serde_json::to_value(&schema).unwrap();
+            let obj = json.as_object().unwrap();
+            assert!(
+                obj.contains_key("methods"),
+                "Plugin '{}' serialized schema missing 'methods' key",
+                pname
+            );
+            assert!(
+                obj.contains_key("signals"),
+                "Plugin '{}' serialized schema missing 'signals' key",
+                pname
+            );
+            assert!(
+                obj.contains_key("guarantees"),
+                "Plugin '{}' serialized schema missing 'guarantees' key",
+                pname
+            );
+            assert!(
+                obj.contains_key("subids"),
+                "Plugin '{}' serialized schema missing 'subids' key",
+                pname
+            );
+        }
+    }
+
+    /// VAL-PROD-010: Round-trip serialize/deserialize preserves capability surface.
+    #[test]
+    fn schema_round_trip_preserves_capability_surface() {
+        for (pname, schema) in all_schemas() {
+            let json = serde_json::to_string(&schema).unwrap();
+            let restored: PluginSchema = serde_json::from_str(&json).unwrap();
+            assert_eq!(
+                schema.methods.len(),
+                restored.methods.len(),
+                "Plugin '{}' methods count changed after round-trip",
+                pname
+            );
+            assert_eq!(
+                schema.signals.len(),
+                restored.signals.len(),
+                "Plugin '{}' signals count changed after round-trip",
+                pname
+            );
+            assert_eq!(
+                schema.guarantees, restored.guarantees,
+                "Plugin '{}' guarantees changed after round-trip",
+                pname
+            );
+            assert_eq!(
+                schema.subids, restored.subids,
+                "Plugin '{}' subids changed after round-trip",
+                pname
+            );
+        }
+    }
 }

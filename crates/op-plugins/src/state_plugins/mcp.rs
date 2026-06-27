@@ -6,11 +6,8 @@ use async_trait::async_trait;
 use op_state::{
     ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
 };
-use op_state_store::{
-    ExecutionJob, ExecutionStatus, FieldSchema, FieldType, PluginSchema, StateStore,
-};
+use op_state_store::{ExecutionJob, ExecutionStatus, StateStore};
 use serde::{Deserialize, Serialize};
-use simd_json::json;
 use simd_json::OwnedValue as Value;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -306,67 +303,6 @@ impl McpStatePlugin {
     }
 }
 
-fn mcp_plugin_schema() -> PluginSchema {
-    PluginSchema::builder("mcp")
-        .version("1.0.0")
-        .description("MCP server and tool-group configuration")
-        .dependency("agent_config")
-        .field(
-            "servers",
-            FieldSchema {
-                field_type: FieldType::Any,
-                required: false,
-                description: "MCP server map".to_string(),
-                default: Some(json!({})),
-                example: Some(json!({
-                    "rust-pro": {
-                        "command": "dbus-agent",
-                        "args": ["rust-pro"],
-                        "enabled": true,
-                        "transport": "stdio"
-                    }
-                })),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        )
-        .field(
-            "tool_groups",
-            FieldSchema {
-                field_type: FieldType::Any,
-                required: false,
-                description: "Tool group config".to_string(),
-                default: Some(json!({})),
-                example: Some(json!({
-                    "enabled": ["default"],
-                    "max_tools": 40,
-                    "access_zone": "local"
-                })),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        )
-        .field(
-            "compact_mode",
-            FieldSchema {
-                field_type: FieldType::Any,
-                required: false,
-                description: "Compact mode config".to_string(),
-                default: Some(json!({})),
-                example: Some(json!({
-                    "enabled": true,
-                    "meta_tools": ["list_tools", "search_tools", "get_tool_schema", "execute_tool", "respond"]
-                })),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        )
-        .build()
-}
-
 #[async_trait]
 impl StatePlugin for McpStatePlugin {
     fn name(&self) -> &str {
@@ -378,7 +314,7 @@ impl StatePlugin for McpStatePlugin {
     }
 
     fn schema(&self) -> Option<op_state_store::PluginSchema> {
-        Some(mcp_plugin_schema())
+        Some(super::plugin_schema_defs::mcp_plugin_schema())
     }
 
     async fn query_current_state(&self) -> Result<Value> {
