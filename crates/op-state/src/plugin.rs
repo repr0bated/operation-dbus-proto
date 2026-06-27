@@ -212,12 +212,7 @@ pub struct Checkpoint {
     pub backend_checkpoint: Option<Value>,
 }
 
-/// Plugin capabilities flags
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
-pub struct PluginCapabilities {
-    pub supports_rollback: bool,
-    pub supports_checkpoints: bool,
-    pub supports_verification: bool,
-    pub atomic_operations: bool,
-}
+// PluginCapabilities is now canonically defined in op_state_store::plugin_schema
+// and re-exported from the op_state_store crate root.  This file re-exports it
+// so existing `use op_state::PluginCapabilities` call sites continue to work.
+pub use op_state_store::PluginCapabilities;

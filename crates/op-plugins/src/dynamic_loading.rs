@@ -306,16 +306,7 @@ impl Plugin for DynamicLoadingPlugin {
     }
 
     fn capabilities(&self) -> PluginCapabilities {
-        PluginCapabilities {
-            can_read: true,
-            can_write: true,
-            can_delete: false,
-            supports_dry_run: true,
-            supports_rollback: false,
-            supports_transactions: false,
-            requires_root: false,
-            supported_platforms: vec!["linux".to_string()],
-        }
+        PluginCapabilities::default()
     }
 
     fn metadata(&self) -> PluginMetadata {

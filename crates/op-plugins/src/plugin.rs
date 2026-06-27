@@ -61,32 +61,12 @@ impl Default for PluginTunables {
 }
 
 /// Plugin capabilities
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PluginCapabilities {
-    pub can_read: bool,
-    pub can_write: bool,
-    pub can_delete: bool,
-    pub supports_dry_run: bool,
-    pub supports_rollback: bool,
-    pub supports_transactions: bool,
-    pub requires_root: bool,
-    pub supported_platforms: Vec<String>,
-}
-
-impl Default for PluginCapabilities {
-    fn default() -> Self {
-        Self {
-            can_read: true,
-            can_write: true,
-            can_delete: false,
-            supports_dry_run: true,
-            supports_rollback: false,
-            supports_transactions: false,
-            requires_root: false,
-            supported_platforms: vec!["linux".to_string()],
-        }
-    }
-}
+///
+/// Re-exported from `op_state_store` — the single canonical definition.
+/// The previous 8-field struct has been replaced by the 4-field guarantee
+/// block (`supports_rollback`, `supports_checkpoints`, `supports_verification`,
+/// `atomic_operations`).
+pub use op_state_store::PluginCapabilities;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FeatureSchema {
