@@ -279,6 +279,21 @@ impl OperationGrpcServer {
         self
     }
 
+    /// Compares the producer's `catalog_hash` against the cached value and, on
+    /// a change, reloads the SHM catalog and re-registers objects.
+    ///
+    /// Invoked on inbound connection arrival (before dispatching a method call),
+    /// never on a timer — this is the no-polling manifest change-detection hook
+    /// (R4.5 / NFR1.2). A refresh failure is logged but does not abort the call;
+    /// the in-memory catalog simply remains at its last good state.
+    async fn refresh_schema_on_inbound(&self) {
+        if let Some(router) = &self.schema_router {
+            if let Err(e) = router.refresh_if_changed().await {
+                tracing::warn!(error = %e, "schema refresh on inbound connection failed");
+            }
+        }
+    }
+
     /// Snapshot of all registered components plus a live-update receiver.
     ///
     /// The receiver fires a `RegistryEvent` every time a component registers,
@@ -657,6 +672,10 @@ impl PluginService for OperationGrpcServer {
         &self,
         request: Request<CallMethodRequest>,
     ) -> Result<Response<CallMethodResponse>, Status> {
+        // Inbound connection arrival: compare the producer's catalog_hash and
+        // reload the SHM catalog before dispatch if it changed (no polling).
+        self.refresh_schema_on_inbound().await;
+
         let req = request.into_inner();
         let args: Vec<simd_json::OwnedValue> = req
             .arguments
@@ -4484,6 +4503,10 @@ impl crate::proto::dbus_passthrough_server::DbusPassthrough for OperationGrpcSer
         &self,
         request: Request<crate::proto::DbusCallRequest>,
     ) -> Result<Response<crate::proto::DbusCallResponse>, Status> {
+        // Inbound connection arrival: compare the producer's catalog_hash and
+        // reload the SHM catalog before dispatch if it changed (no polling).
+        self.refresh_schema_on_inbound().await;
+
         let req = request.into_inner();
         let conn = self
             .schema_engine
