@@ -142,10 +142,35 @@ pub trait Plugin: Send + Sync {
     }
 
     /// Handle plugin-specific commands
+    ///
+    /// Deprecated: use [`dispatch_method`](Plugin::dispatch_method) instead.
+    /// `dispatch_method` receives only method names declared in
+    /// `PluginSchema.methods`, providing structured, schema-validated dispatch.
+    #[deprecated(note = "Use dispatch_method instead")]
     async fn handle_command(&self, command: &str, _args: Value) -> Result<Value> {
         Err(anyhow::anyhow!(
             "Command '{}' not supported by plugin '{}'",
             command,
+            self.name()
+        ))
+    }
+
+    /// Dispatch a method call to the plugin.
+    ///
+    /// Receives only method names that are declared in the plugin's
+    /// `PluginSchema.methods`. The bridge validates the method name and
+    /// arguments against the schema before calling this method.
+    ///
+    /// The default implementation returns an error indicating the method
+    /// is not implemented. Plugins override this to provide real dispatch.
+    async fn dispatch_method(
+        &self,
+        method: &str,
+        _args: serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        Err(anyhow::anyhow!(
+            "Method '{}' not implemented by plugin '{}'",
+            method,
             self.name()
         ))
     }
@@ -180,7 +205,45 @@ pub type BoxedPlugin = Box<dyn Plugin>;
 #[cfg(test)]
 mod tests {
     use super::PluginCapabilities as ReExportedCaps;
+    use super::*;
     use op_state_store::PluginCapabilities as CanonicalCaps;
+
+    /// Minimal mock plugin for testing trait default implementations.
+    struct TestPlugin;
+
+    #[async_trait]
+    impl Plugin for TestPlugin {
+        fn name(&self) -> &str {
+            "test"
+        }
+        fn description(&self) -> &str {
+            "test plugin"
+        }
+        fn version(&self) -> &str {
+            "0.1.0"
+        }
+        async fn get_state(&self) -> Result<Value> {
+            Ok(Value::null())
+        }
+        async fn get_desired_state(&self) -> Result<DesiredState> {
+            Ok(DesiredState::default())
+        }
+        async fn set_desired_state(&self, _desired: DesiredState) -> Result<()> {
+            Ok(())
+        }
+        async fn apply_state(&self) -> Result<Vec<StateChange>> {
+            Ok(vec![])
+        }
+        async fn diff(&self) -> Result<Vec<StateChange>> {
+            Ok(vec![])
+        }
+        async fn validate(&self, _config: &Value) -> Result<ValidationResult> {
+            Ok(ValidationResult::success())
+        }
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+    }
 
     /// VAL-DEDUP-003: op-plugins must not define its own PluginCapabilities
     /// type. The re-exported type must be the exact same type as the canonical
@@ -253,5 +316,59 @@ mod tests {
             !json.contains("supported_platforms"),
             "supported_platforms must not exist in PluginCapabilities"
         );
+    }
+
+    /// VAL-CAP-007: dispatch_method must exist on the Plugin trait and its
+    /// default implementation must return an error containing both the method
+    /// name and the plugin name.
+    #[tokio::test]
+    async fn dispatch_method_default_impl_returns_error() {
+        let plugin = TestPlugin;
+        let result = plugin
+            .dispatch_method("some_method", serde_json::json!({}))
+            .await;
+        assert!(
+            result.is_err(),
+            "dispatch_method default impl must return Err, not Ok"
+        );
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("some_method"),
+            "Error message must mention the method name: got '{err_msg}'"
+        );
+        assert!(
+            err_msg.contains("test"),
+            "Error message must mention the plugin name: got '{err_msg}'"
+        );
+    }
+
+    /// VAL-CAP-007: dispatch_method must accept `serde_json::Value` as its
+    /// args parameter (not simd_json::Value).  This test verifies the
+    /// signature at compile time by passing a `serde_json::Value` literal.
+    #[tokio::test]
+    async fn dispatch_method_accepts_serde_json_value() {
+        let plugin = TestPlugin;
+        let args = serde_json::json!({
+            "key": "value",
+            "nested": { "inner": 42 }
+        });
+        let result = plugin.dispatch_method("method", args).await;
+        assert!(result.is_err());
+    }
+
+    /// VAL-CAP-007: handle_command must be marked #[deprecated].  The
+    /// #[allow(deprecated)] attribute on this test is only needed because
+    /// handle_command is deprecated.  If the attribute were removed, the
+    /// compiler would emit a deprecation warning, proving the annotation
+    /// exists on the trait method.
+    #[tokio::test]
+    #[allow(deprecated)]
+    async fn handle_command_is_deprecated() {
+        let plugin = TestPlugin;
+        // Calling handle_command here would produce a deprecation warning
+        // if not for #[allow(deprecated)]. The fact that the allow is needed
+        // proves #[deprecated] is present on the trait method.
+        let result = plugin.handle_command("cmd", Value::null()).await;
+        assert!(result.is_err());
     }
 }

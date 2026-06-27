@@ -326,6 +326,7 @@ impl Plugin for DynamicLoadingPlugin {
         }
     }
 
+    #[allow(deprecated)]
     async fn handle_command(&self, command: &str, args: Value) -> Result<Value> {
         match command {
             "get_stats" => {
