@@ -157,6 +157,24 @@ async fn main() -> Result<()> {
         schema_engine.list_schemas().len()
     );
 
+    // 1b. Write plugin capability schemas to SHM.
+    // The producer is the sole writer of per-plugin schema files, the combined
+    // monolith, the catalog hash manifest, and present-state snapshots.
+    // Plugins returning None from schema() are skipped (VAL-PROD-001).
+    let shm_writer = ShmWriter::default();
+    if let Err(e) = shm_writer.ensure_dirs() {
+        warn!(error = %e, "Failed to create SHM directory hierarchy; continuing");
+    }
+    let plugin_schemas = plugin_reader.plugin_schemas_with_ids();
+    if let Err(e) = shm_writer.write_all_schemas(&plugin_schemas) {
+        warn!(error = %e, "Failed to write plugin schemas to SHM; continuing");
+    } else {
+        info!(
+            plugin_count = plugin_schemas.iter().filter(|(_, s)| s.is_some()).count(),
+            "Wrote plugin capability schemas to SHM"
+        );
+    }
+
     // 2. Initialize Projection Store and Engine
     let store = ProjectionStore::new();
     let validator = SchemaValidator::new(schema_engine.clone());
@@ -200,6 +218,18 @@ async fn main() -> Result<()> {
             match plugin_reader.read_all_async().await {
                 Ok(entities) => initial_entities.extend(entities),
                 Err(error) => warn!(error = %error, "Failed to read plugin projection entities"),
+            }
+
+            // Write present-state snapshots to SHM for every plugin that
+            // successfully reports its state (VAL-PROD-004).
+            let present_states = plugin_reader.plugin_present_states().await;
+            if let Err(e) = shm_writer.write_all_present_states(&present_states) {
+                warn!(error = %e, "Failed to write present-states to SHM");
+            } else {
+                info!(
+                    count = present_states.len(),
+                    "Wrote present-state snapshots to SHM"
+                );
             }
         }
 
@@ -253,6 +283,13 @@ async fn main() -> Result<()> {
                     error = %error,
                     "Failed to refresh plugin projection entities"
                 ),
+            }
+
+            // Refresh present-state snapshots in SHM and update manifest hash
+            // so the bridge detects the change on its next inbound connection.
+            let present_states = plugin_reader.plugin_present_states().await;
+            if let Err(e) = shm_writer.write_all_present_states(&present_states) {
+                warn!(error = %e, "Failed to refresh present-states in SHM");
             }
         }
 

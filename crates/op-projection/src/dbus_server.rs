@@ -1,9 +1,10 @@
 //! D-Bus object server for projections.
 //!
 //! Serves every Projection as a D-Bus object under org.opdbus.projection at
-//! /org/opdbus/v1/plugins/<category>/<id>, e.g. /org/opdbus/v1/plugins/system/memory
-//! or /org/opdbus/v1/plugins/system/process/1234. Nothing mounts outside the
-//! plugins root: no plugin means no schema means no object.
+//! /org/opdbus/projection/<category>/<id>, e.g. /org/opdbus/projection/system/memory
+//! or /org/opdbus/projection/system/process/1234. The bridge (op-grpc-bridge)
+//! exclusively owns /org/opdbus/v1/plugins/ for plugin state objects; the
+//! producer MUST NOT register any object under that path (VAL-PROD-006).
 
 use anyhow::Result;
 use std::collections::HashMap;
@@ -56,16 +57,20 @@ impl ProjectedObject {
 
 /// Derives the D-Bus object path from a projection's entity_type and entity_id.
 ///
-/// Every projected object lives under the single plugins root. No plugin means
-/// no schema means no object — nothing is ever mounted outside this path.
+/// Projected objects live under `/org/opdbus/projection/` — a path owned by
+/// `op-projection` (bus name `org.opdbus.projection`).  The bridge
+/// (`op-grpc-bridge`) exclusively owns `/org/opdbus/v1/plugins/` for plugin
+/// state objects.  The producer MUST NOT register any object under the plugins
+/// path (VAL-PROD-006).
 ///
-/// entity_type "system.memory"    → /org/opdbus/v1/plugins/system/memory
-/// entity_type "system.process"   → /org/opdbus/v1/plugins/system/process/<entity_id>
-/// entity_type "identity.sled"    → /org/opdbus/v1/plugins/identity/sled
-/// entity_type "ovsdb_bridge"     → /org/opdbus/v1/plugins/ovsdb/bridge/<entity_id>
+/// entity_type "system.memory"    → /org/opdbus/projection/system/memory
+/// entity_type "system.process"   → /org/opdbus/projection/system/process/<entity_id>
+/// entity_type "identity.sled"    → /org/opdbus/projection/identity/sled
+/// entity_type "ovsdb_bridge"     → /org/opdbus/projection/ovsdb/bridge/<entity_id>
 pub fn projection_path(entity_type: &str, entity_id: &str) -> String {
-    // The ONLY path projections are allowed to mount under.
-    const PLUGIN_ROOT: &str = "/org/opdbus/v1/plugins";
+    // Projection objects are served under the projection root, NOT under
+    // /org/opdbus/v1/plugins/ which is exclusively owned by the bridge.
+    const PROJECTION_ROOT: &str = "/org/opdbus/projection";
 
     // Replace dots and underscores in type with slashes for the path prefix
     let type_path = entity_type.replace(['.', '_'], "/").to_lowercase();
@@ -81,7 +86,7 @@ pub fn projection_path(entity_type: &str, entity_id: &str) -> String {
         || entity_id == "sled";
 
     if is_singleton {
-        format!("{}/{}", PLUGIN_ROOT, type_path)
+        format!("{}/{}", PROJECTION_ROOT, type_path)
     } else {
         // Sanitize entity_id for use in a path segment
         let safe_id: String = entity_id
@@ -94,7 +99,7 @@ pub fn projection_path(entity_type: &str, entity_id: &str) -> String {
                 }
             })
             .collect();
-        format!("{}/{}/{}", PLUGIN_ROOT, type_path, safe_id)
+        format!("{}/{}/{}", PROJECTION_ROOT, type_path, safe_id)
     }
 }
 
