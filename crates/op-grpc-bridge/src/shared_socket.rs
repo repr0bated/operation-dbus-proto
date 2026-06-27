@@ -124,6 +124,7 @@ pub fn extract_peer_cred<T>(request: &tonic::Request<T>) -> Option<tokio::net::u
 /// sees the same headers it expects from the Xray/HTTP path.
 ///
 /// This is the UDS equivalent of Xray injecting `X-Ghostbridge-Footprint`.
+#[allow(clippy::result_large_err)]
 pub fn uds_identity_interceptor(
     mut req: tonic::Request<()>,
 ) -> Result<tonic::Request<()>, tonic::Status> {

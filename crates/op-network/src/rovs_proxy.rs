@@ -697,7 +697,7 @@ impl OvsdbDbusClient {
     /// Returns a JSON object with database contents.
     pub async fn dump_db(&self, database: &str) -> Result<serde_json::Value> {
         // Query all tables in the database
-        let tables_result = self
+        let _tables_result = self
             .transact_one(serde_json::json!({
                 "op": "select",
                 "table": "Open_vSwitch",

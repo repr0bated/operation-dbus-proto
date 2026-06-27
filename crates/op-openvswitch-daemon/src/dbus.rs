@@ -483,6 +483,7 @@ fn bytes_to_hex(bytes: &[u8]) -> String {
 }
 
 #[derive(serde::Deserialize, Debug)]
+#[allow(dead_code)]
 pub struct JsonFlowEntry {
     pub table: u8,
     pub priority: u16,
@@ -497,6 +498,7 @@ pub struct JsonFlowEntry {
 
 #[derive(serde::Deserialize, Debug)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[allow(dead_code)]
 pub enum JsonFlowAction {
     Output { port: String },
     LoadRegister { register: u8, value: u64 },

@@ -142,6 +142,6 @@ impl SchemaPassthroughService {
 
     /// Trigger a schema reload (called reactively on mutation, not polled).
     pub async fn reload(&self) {
-        self.router.reload().await;
+        let _ = self.router.reload().await;
     }
 }
