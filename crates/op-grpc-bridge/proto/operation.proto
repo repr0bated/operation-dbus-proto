@@ -809,3 +809,30 @@ message DbusSignalEvent {
   string json_body = 4;
   google.protobuf.Timestamp timestamp = 5;
 }
+
+// =============================================================================
+// Zeroclaw projection (read-only gRPC view of the plugin's route/provider tree)
+// subid: exp.service.zeroclaw-bridge.grpc-stream@v1
+// =============================================================================
+
+message ModelRouteProto {
+  string hint = 1;
+  string model = 2;
+  string provider = 3;
+  bool available = 4;
+  string effort_level = 5;
+  string privacy_tier = 6;
+  uint32 context_window = 7;
+}
+
+message ProviderProto {
+  string id = 1;
+  string route = 2;
+  string kind = 3;
+}
+
+message ZeroclawProjection {
+  string schema_json = 1;
+  repeated ModelRouteProto model_routes = 2;
+  repeated ProviderProto providers = 3;
+}

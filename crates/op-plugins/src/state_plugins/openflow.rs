@@ -149,6 +149,12 @@ pub struct OpenFlowPlugin {
     ovsdb_client: op_network::rovs_proxy::OvsdbDbusClient,
 }
 
+impl Default for OpenFlowPlugin {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl OpenFlowPlugin {
     pub fn new() -> Self {
         Self {
@@ -638,6 +644,7 @@ impl OpenFlowPlugin {
     /// Generate default security flows to prevent dangerous edge packets
     /// These flows protect against: ARP spoofing, invalid TCP flags, malformed packets,
     /// packet storms, and other intrusion-like traffic
+    #[allow(clippy::vec_init_then_push)]
     fn generate_security_flows(bridge_name: &str) -> Vec<FlowEntry> {
         let mut security_flows = Vec::new();
 
@@ -921,6 +928,7 @@ impl OpenFlowPlugin {
 
     /// Generate Level 2 obfuscation flows: Pattern hiding
     /// Hides traffic patterns via timing randomization, packet padding, TTL normalization
+    #[allow(clippy::vec_init_then_push)]
     fn generate_pattern_hiding_flows(bridge_name: &str) -> Vec<FlowEntry> {
         let mut obfuscation_flows = Vec::new();
 
@@ -990,6 +998,7 @@ impl OpenFlowPlugin {
 
     /// Generate Level 3 obfuscation flows: Advanced traffic morphing
     /// Makes tunnel traffic look like normal HTTPS/HTTP traffic via protocol mimicry
+    #[allow(clippy::vec_init_then_push)]
     fn generate_advanced_obfuscation_flows(bridge_name: &str) -> Vec<FlowEntry> {
         let mut advanced_flows = Vec::new();
 

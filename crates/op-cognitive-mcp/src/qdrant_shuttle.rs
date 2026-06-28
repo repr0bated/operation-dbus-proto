@@ -751,6 +751,9 @@ mod tests {
             dialect: op_state_store::DEFAULT_SCHEMA_DIALECT.into(),
             mutation_index: Some(7),
             subids: std::collections::HashMap::new(),
+            methods: std::collections::HashMap::new(),
+            signals: vec![],
+            guarantees: op_state_store::PluginCapabilities::default(),
         };
 
         let rendered = render_schema_embedding_text(&schema);

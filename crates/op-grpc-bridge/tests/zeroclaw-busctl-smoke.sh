@@ -1,0 +1,38 @@
+#!/usr/bin/env sh
+# Zeroclaw D-Bus smoke test (mission T-18).
+#
+# Requires a running op-grpc-bridge that owns org.opdbus.v1 on the session or
+# system bus. This is an integration check, not a unit test; it is not run by
+# `cargo test`. Run it after starting the bridge:
+#
+#   busctl --user / sudo busctl flags select the bus. Override with BUSCTL_ARGS.
+#
+# Exit non-zero on the first failed assertion.
+set -eu
+
+BUS="${BUSCTL_ARGS:---user}"
+DEST="org.opdbus.v1"
+PLUGIN_PATH="/org/opdbus/v1/plugins/zeroclaw"
+IFACE="org.opdbus.v1.PluginV1"
+
+say() { printf '[zeroclaw-smoke] %s\n' "$1"; }
+
+# 1. GetModelRoutes on the top-level plugin object returns a JSON array.
+say "calling GetModelRoutes"
+routes_json=$(busctl $BUS call "$DEST" "$PLUGIN_PATH" "$IFACE" call ss "GetModelRoutes" "")
+echo "$routes_json" | grep -q "model_routes\|hint\|result" || {
+  say "FAIL: GetModelRoutes returned no recognizable payload"; exit 1; }
+
+# 2. The route sub-objects are registered under .../routes.
+say "introspecting $PLUGIN_PATH/routes"
+busctl $BUS introspect "$DEST" "$PLUGIN_PATH/routes" >/dev/null 2>&1 || {
+  say "FAIL: routes sub-tree not introspectable (no sub-objects registered)"; exit 1; }
+
+# 3. SelectModel with a minimal payload returns JSON carrying selected_model.
+say "calling SelectModel"
+payload='{"task_class":"chat","requested_effort":"medium","context_tokens":1000,"privacy_tier":"public"}'
+sel_json=$(busctl $BUS call "$DEST" "$PLUGIN_PATH" "$IFACE" call ss "SelectModel" "$payload")
+echo "$sel_json" | grep -q "selected_model" || {
+  say "FAIL: SelectModel response missing selected_model"; exit 1; }
+
+say "PASS: GetModelRoutes, routes sub-tree, and SelectModel all responded"
