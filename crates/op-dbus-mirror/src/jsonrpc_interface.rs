@@ -18,7 +18,7 @@ fn str_to_simd(s: &str) -> Result<simd_json::OwnedValue, zbus::fdo::Error> {
     simd_json::to_owned_value(&mut bytes).map_err(|e| zbus::fdo::Error::InvalidArgs(e.to_string()))
 }
 
-/// OVSDB D-Bus interface - mirrors JSON-RPC methods
+/// OVSDB D-Bus interface - mirrors JSON-RPC methods at /org/opdbus/v1/mirror/ovsdb
 pub struct OvsdbInterface {
     pub client: Arc<OvsdbDbusClient>,
     pub schema_engine: Option<Arc<MutationEngine>>,
@@ -33,7 +33,7 @@ impl OvsdbInterface {
     }
 }
 
-#[interface(name = "org.opdbus.OvsdbV1")]
+#[interface(name = "org.opdbus.mirror.OvsdbV1")]
 impl OvsdbInterface {
     /// Execute JSON-RPC transact on OVSDB
     async fn transact(&self, operations: String) -> zbus::fdo::Result<String> {
@@ -44,7 +44,7 @@ impl OvsdbInterface {
             match engine
                 .mutate(
                     "net".to_string(),
-                    "/org/opdbus/v1/ovsdb".to_string(),
+                    "/org/opdbus/v1/mirror/ovsdb".to_string(),
                     ChangeType::MethodCall,
                     Some("transact".to_string()),
                     operations_val,
@@ -94,7 +94,7 @@ impl OvsdbInterface {
             engine
                 .mutate(
                     "net".to_string(),
-                    "/org/opdbus/v1/ovsdb".to_string(),
+                    "/org/opdbus/v1/mirror/ovsdb".to_string(),
                     ChangeType::MethodCall,
                     Some("create_bridge".to_string()),
                     simd_json::json!(name),
@@ -126,7 +126,7 @@ impl OvsdbInterface {
             engine
                 .mutate(
                     "net".to_string(),
-                    "/org/opdbus/v1/ovsdb".to_string(),
+                    "/org/opdbus/v1/mirror/ovsdb".to_string(),
                     ChangeType::MethodCall,
                     Some("add_port".to_string()),
                     simd_json::json!([bridge, port]),
@@ -161,7 +161,7 @@ impl OvsdbInterface {
     }
 }
 
-/// NonNet D-Bus interface - mirrors JSON-RPC methods
+/// NonNet D-Bus interface - mirrors JSON-RPC methods at /org/opdbus/v1/mirror/nonnet
 pub struct NonNetInterface {
     pub nonnet: Arc<NonNetDb>,
     pub schema_engine: Option<Arc<MutationEngine>>,
@@ -176,7 +176,7 @@ impl NonNetInterface {
     }
 }
 
-#[interface(name = "org.opdbus.NonNetV1")]
+#[interface(name = "org.opdbus.mirror.NonNetV1")]
 impl NonNetInterface {
     /// Execute JSON-RPC transact on NonNet
     async fn transact(&self, request: String) -> zbus::fdo::Result<String> {
@@ -196,7 +196,7 @@ impl NonNetInterface {
                 match engine
                     .mutate(
                         "nonnet".to_string(),
-                        "/org/opdbus/v1/nonnet".to_string(),
+                        "/org/opdbus/v1/mirror/nonnet".to_string(),
                         ChangeType::MethodCall,
                         Some(json_req.method.clone()),
                         req_simd,

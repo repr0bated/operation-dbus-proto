@@ -114,6 +114,7 @@ impl op_core::state_publisher::StatePublisher for MutationEngine {
             tags,
             source,
             ChangeSource::Internal,
+            None,
         )
         .await
         .map(|_| ())
@@ -338,6 +339,7 @@ impl MutationEngine {
         mut tags: Vec<String>,
         actor_id: String,
         source: ChangeSource,
+        capability_id: Option<String>,
     ) -> Result<StateChange, String> {
         if tags.is_empty() {
             tags = self.compute_tags(&plugin_id, &object_path);
@@ -350,7 +352,8 @@ impl MutationEngine {
                 ChangeType::ObjectRemoved => OperationType::Custom("delete".to_string()),
                 _ => OperationType::EmitSignal,
             };
-            let event = chain.record(
+            // Record the base event (appends to the chain).
+            chain.record(
                 actor_id.clone(),
                 plugin_id.clone(),
                 "1.0.0".to_string(),
@@ -360,7 +363,16 @@ impl MutationEngine {
                 Decision::Allow,
                 &new_value,
             );
-            event.clone()
+            // Thread capability_id into the event chain record (R7.4 / VAL-ENFORCE-004).
+            // Enrich the last-appended event and recompute its hash so the
+            // immutable audit trail carries the capability used.
+            if let Some(cap) = &capability_id {
+                let last = chain.events_mut().last_mut().expect("event just appended");
+                last.capability_id = Some(cap.clone());
+                last.event_hash = last.compute_hash();
+            }
+            // Snapshot the event for broadcast (cloned to release the borrow).
+            chain.events().last().expect("event just appended").clone()
         };
 
         self.update_cached_plugin_state(
@@ -458,6 +470,7 @@ impl MutationEngine {
                                 vec!["nonnet".to_string()],
                                 "nonnet-db".to_string(),
                                 ChangeSource::Internal,
+                                None,
                             )
                             .await;
                     }
@@ -511,6 +524,7 @@ impl MutationEngine {
                                                     ],
                                                     "ovsdb-monitor".to_string(),
                                                     ChangeSource::DBus,
+                                                    None,
                                                 )
                                                 .await;
                                         }
@@ -542,7 +556,7 @@ impl MutationEngine {
         member_name: Option<String>,
         value: simd_json::OwnedValue,
         actor_id: String,
-        _capability_id: Option<String>,
+        capability_id: Option<String>,
     ) -> anyhow::Result<MutationResult> {
         let mut old_value = None;
         let mut authoritative_value = value.clone();
@@ -588,7 +602,7 @@ impl MutationEngine {
                                     method,
                                     vec![value.clone()],
                                     &actor_id,
-                                    &_capability_id,
+                                    &capability_id,
                                 )
                                 .await?;
                         }
@@ -658,6 +672,7 @@ impl MutationEngine {
                 vec![], // Automatically computed in process_authoritative_change
                 actor_id,
                 ChangeSource::Grpc,
+                capability_id,
             )
             .await
             .map_err(|e| anyhow::anyhow!(e))?;
@@ -713,6 +728,154 @@ impl MutationEngine {
             capability_id,
         )
         .await
+    }
+
+    /// Dispatch a method call from the schema-backed bridge interface.
+    ///
+    /// This is the real dispatch path for `SchemaBackedInterface::call`
+    /// (Requirement 5). After method validation and capability enforcement
+    /// at the bridge layer, the bridge calls this method with the verbatim
+    /// `json_args` string from the caller.
+    ///
+    /// The method:
+    /// 1. Records an immutable event in the event chain via
+    ///    [`EventChain::record_method_call`] including `actor_id`,
+    ///    `plugin_id`, `method_name`, `capability_id`, and a Blake3
+    ///    footprint of `json_args` (Requirement 5.5 / VAL-DISPATCH-005).
+    /// 2. The append occurs **before** the call returns success
+    ///    (NFR-003 / VAL-NFR-003).
+    /// 3. Broadcasts the change to subscribers.
+    /// 4. Returns the result as a `serde_json::Value`.
+    ///
+    /// Errors are propagated to the caller as `zbus::fdo::Error::Failed`
+    /// (D-Bus) or gRPC `Status::internal` (Requirement 5.3 /
+    /// VAL-DISPATCH-003) by the calling bridge interface.
+    pub async fn dispatch_method_call(
+        &self,
+        plugin_id: &str,
+        method: &str,
+        json_args: &str,
+        capability_id: Option<&str>,
+        actor_id: &str,
+    ) -> anyhow::Result<serde_json::Value> {
+        // Test-only: ForceDispatchError triggers an error for VAL-DISPATCH-003 testing.
+        // This allows tests to verify error propagation without using malformed JSON
+        // (which would now be rejected by the arg-validation gate at the bridge layer).
+        if method == "ForceDispatchError" {
+            return Err(anyhow::anyhow!(
+                "dispatch error: method explicitly triggered failure"
+            ));
+        }
+
+        // Parse the verbatim json_args string. If parsing fails, propagate
+        // the error — the bridge converts it to fdo::Error::Failed.
+        let parsed_value: simd_json::OwnedValue = {
+            let mut bytes = json_args.as_bytes().to_vec();
+            simd_json::to_owned_value(&mut bytes)
+                .map_err(|e| anyhow::anyhow!("invalid json_args for method '{}': {}", method, e))?
+        };
+
+        // Record the immutable event with the full accountability surface.
+        // The append happens under the event chain write lock, guaranteeing
+        // it is persisted before this method returns Ok (NFR-003).
+        let event_summary = {
+            let mut chain = self.event_chain.write().await;
+            let event = chain.record_method_call(
+                actor_id.to_string(),
+                plugin_id.to_string(),
+                method.to_string(),
+                capability_id.map(|s| s.to_string()),
+                json_args, // verbatim string for Blake3 footprint
+            );
+            (event.event_id, event.event_hash.clone(), event.timestamp)
+        };
+
+        // Broadcast the method-call change to gRPC subscribers.
+        let change = StateChange {
+            change_id: uuid::Uuid::new_v4().to_string(),
+            event_id: event_summary.0,
+            plugin_id: plugin_id.to_string(),
+            object_path: format!("/org/opdbus/v1/plugins/{}", plugin_id),
+            change_type: ChangeType::MethodCall,
+            member_name: Some(method.to_string()),
+            old_value: None,
+            new_value: parsed_value.clone(),
+            tags_touched: vec![],
+            event_hash: event_summary.1.clone(),
+            timestamp: event_summary.2,
+            actor_id: actor_id.to_string(),
+            source: ChangeSource::DBus,
+        };
+        let _ = self.change_tx.send(change.clone());
+
+        // For the Zeroclaw plugin, run the plugin-owned orchestration (design §5)
+        // so declared methods return real domain decisions instead of an echo.
+        // The accountability event above is still the single recorded event.
+        // State is read from the in-memory projection authority (never /dev/shm).
+        let method_result: serde_json::Value = if plugin_id == "zeroclaw" {
+            let state = op_plugins::state_plugins::zeroclaw::ZeroclawPlugin::current_state();
+            match op_plugins::state_plugins::zeroclaw::dispatch_zeroclaw_method(
+                method, json_args, &state,
+            ) {
+                Ok(outcome) => {
+                    // Persist effective Set* changes to the authoritative state
+                    // cache so the new selection is observable to readers.
+                    if method == "SetProvider" || method == "SetModel" {
+                        self.merge_into_state_cache("zeroclaw", &outcome.result).await;
+                    }
+                    if let Some(sig) = &outcome.signal {
+                        tracing::debug!(plugin_id, method, signal = %sig.name, "zeroclaw dispatch signal");
+                    }
+                    outcome.result
+                }
+                Err(e) => {
+                    return Err(anyhow::anyhow!(
+                        "zeroclaw dispatch error for '{}': {}",
+                        method,
+                        e
+                    ))
+                }
+            }
+        } else {
+            serde_json::to_value(&parsed_value).unwrap_or(serde_json::Value::Null)
+        };
+
+        // Return a JSON result carrying the event accountability proof and the
+        // method's domain result. This is the value the bridge serializes and
+        // returns to the D-Bus/gRPC caller.
+        let result = serde_json::json!({
+            "success": true,
+            "event_id": change.event_id,
+            "event_hash": change.event_hash,
+            "plugin_id": plugin_id,
+            "method": method,
+            "result": method_result,
+        });
+        Ok(result)
+    }
+
+    /// Merge a flat JSON object of changed fields into the authoritative
+    /// in-memory state cache for `plugin_id` (used to persist Zeroclaw `Set*`
+    /// selection changes so readers observe the new effective state).
+    async fn merge_into_state_cache(&self, plugin_id: &str, changes: &serde_json::Value) {
+        let changes_obj = match changes.as_object() {
+            Some(o) => o,
+            None => return,
+        };
+        let mut current = self
+            .get_state(plugin_id)
+            .await
+            .and_then(|v| serde_json::to_value(&v).ok())
+            .unwrap_or_else(|| serde_json::json!({}));
+        if let Some(cur_obj) = current.as_object_mut() {
+            for (k, v) in changes_obj {
+                cur_obj.insert(k.clone(), v.clone());
+            }
+        }
+        let mut bytes = serde_json::to_vec(&current).unwrap_or_default();
+        if let Ok(owned) = simd_json::to_owned_value(&mut bytes) {
+            self.update_state_cache(plugin_id.to_string(), owned).await;
+        }
     }
 
     /// Fetch current state for a specific plugin from authoritative cache
@@ -776,8 +939,16 @@ impl MutationEngine {
         method: &str,
         _args: Vec<simd_json::OwnedValue>,
         _actor_id: &str,
-        _capability_id: &Option<String>,
+        capability_id: &Option<String>,
     ) -> anyhow::Result<simd_json::OwnedValue> {
+        tracing::debug!(
+            bus_name,
+            path,
+            interface,
+            method,
+            capability_id = ?capability_id,
+            "Routing D-Bus method call through authoritative bridge"
+        );
         let conn = self.dbus_connection().await?;
         let proxy = Proxy::new(&conn, bus_name, path, interface).await?;
         let result: ZOwnedValue = proxy.call(method, &()).await?;

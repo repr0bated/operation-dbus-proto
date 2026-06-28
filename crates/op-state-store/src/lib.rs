@@ -41,7 +41,8 @@ pub use execution_job::{ExecutionJob, ExecutionResult, ExecutionStatus};
 pub use memory_store::MemoryStore;
 pub use plugin_schema::{
     builtin_plugin_schema, builtin_plugin_schemas, dialects, Constraint, FieldSchema, FieldType,
-    PluginSchema, ReadOnlyCondition, SchemaCatalog, SchemaLoadError, SchemaRegistry,
+    MethodDecl, PluginCapabilities, PluginSchema, ReadOnlyCondition, SchemaCatalog,
+    SchemaLoadError, SchemaRegistry, SideEffect, SignalDecl,
     ValidationResult as SchemaValidationResult, DEFAULT_SCHEMA_DIALECT,
 };
 pub use redis_stream::RedisStream;

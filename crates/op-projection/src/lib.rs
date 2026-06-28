@@ -38,6 +38,7 @@ pub mod projection_engine;
 pub mod projection_store;
 pub mod schema_engine;
 pub mod schema_validator;
+pub mod shm_writer;
 
 // Re-export core types
 pub mod sled_reader;
@@ -68,4 +69,5 @@ pub use projection_engine::ProjectionSystemEngine;
 pub use projection_store::ProjectionStore;
 pub use schema_engine::SchemaEngine;
 pub use schema_validator::SchemaValidator;
+pub use shm_writer::ShmWriter;
 pub use sled_reader::IdentitySledReader;

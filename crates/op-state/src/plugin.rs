@@ -209,12 +209,86 @@ pub struct Checkpoint {
     pub backend_checkpoint: Option<Value>,
 }
 
-/// Plugin capabilities flags
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
-pub struct PluginCapabilities {
-    pub supports_rollback: bool,
-    pub supports_checkpoints: bool,
-    pub supports_verification: bool,
-    pub atomic_operations: bool,
+// PluginCapabilities is now canonically defined in op_state_store::plugin_schema
+// and re-exported from the op_state_store crate root.  This file re-exports it
+// so existing `use op_state::PluginCapabilities` call sites continue to work.
+pub use op_state_store::PluginCapabilities;
+
+#[cfg(test)]
+mod tests {
+    use super::PluginCapabilities as ReExportedCaps;
+    use op_state_store::PluginCapabilities as CanonicalCaps;
+
+    /// VAL-DEDUP-002: op-state must not define its own PluginCapabilities
+    /// type. The re-exported type must be the exact same type as the canonical
+    /// one in op_state_store (type identity, not a duplicate definition).
+    #[test]
+    fn plugin_capabilities_is_reexport_from_op_state_store() {
+        use std::any::TypeId;
+        assert_eq!(
+            TypeId::of::<ReExportedCaps>(),
+            TypeId::of::<CanonicalCaps>(),
+            "op_state::PluginCapabilities must be the same type as \
+             op_state_store::PluginCapabilities, not a separate struct"
+        );
+    }
+
+    /// VAL-DEDUP-004: callers that `use op_state::PluginCapabilities` are
+    /// transitively importing from op_state_store.  The 4-field guarantee
+    /// block must be the one they get.
+    #[test]
+    fn reexported_plugin_capabilities_has_four_bool_fields() {
+        let caps = ReExportedCaps::default();
+        assert!(!caps.supports_rollback);
+        assert!(!caps.supports_checkpoints);
+        assert!(!caps.supports_verification);
+        assert!(!caps.atomic_operations);
+    }
+
+    /// The serialized form must contain exactly the four canonical keys.
+    #[test]
+    fn reexported_plugin_capabilities_serializes_four_keys() {
+        let caps = ReExportedCaps {
+            supports_rollback: true,
+            supports_checkpoints: false,
+            supports_verification: true,
+            atomic_operations: false,
+        };
+        let json = serde_json::to_value(&caps).unwrap();
+        let obj = json.as_object().unwrap();
+        assert_eq!(obj.len(), 4);
+        assert_eq!(obj["supports_rollback"], serde_json::json!(true));
+        assert_eq!(obj["supports_checkpoints"], serde_json::json!(false));
+        assert_eq!(obj["supports_verification"], serde_json::json!(true));
+        assert_eq!(obj["atomic_operations"], serde_json::json!(false));
+    }
+
+    /// The old 8-field access-control fields (can_read, can_write, can_delete,
+    /// requires_root, supported_platforms) must not be present in the
+    /// serialized form.  They are superseded by MethodDecl.required_capability.
+    #[test]
+    fn reexported_plugin_capabilities_has_no_access_control_fields() {
+        let caps = ReExportedCaps::default();
+        let json = serde_json::to_string(&caps).unwrap();
+        assert!(
+            !json.contains("can_read"),
+            "can_read must not exist in PluginCapabilities"
+        );
+        assert!(
+            !json.contains("can_write"),
+            "can_write must not exist in PluginCapabilities"
+        );
+        assert!(
+            !json.contains("can_delete"),
+            "can_delete must not exist in PluginCapabilities"
+        );
+        assert!(
+            !json.contains("requires_root"),
+            "requires_root must not exist in PluginCapabilities"
+        );
+        assert!(
+            !json.contains("supported_platforms"),
+            "supported_platforms must not exist in PluginCapabilities"
+        );
+    }
 }

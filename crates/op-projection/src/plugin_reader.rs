@@ -140,6 +140,62 @@ impl SystemPluginReader {
         schemas
     }
 
+    /// Returns `(plugin_id, Option<PluginSchema>)` pairs for every loaded
+    /// plugin.  Plugins returning `None` from `schema()` are included with
+    /// `None` so the SHM writer can skip them.
+    pub fn plugin_schemas_with_ids(&self) -> Vec<(String, Option<PluginSchema>)> {
+        self.plugins
+            .iter()
+            .map(|plugin| (plugin.name.clone(), plugin.schema.clone()))
+            .collect()
+    }
+
+    /// Queries the present-state of every loaded plugin and returns it as
+    /// `(plugin_id, serde_json::Value)` pairs.  Plugins whose state query
+    /// fails are skipped with a warning.
+    pub async fn plugin_present_states(&self) -> Vec<(String, serde_json::Value)> {
+        let mut result = Vec::new();
+        for plugin in &self.plugins {
+            match plugin.plugin.query_current_state().await {
+                Ok(state) => {
+                    // Convert simd_json::OwnedValue to serde_json::Value via
+                    // string round-trip.
+                    let json_str = match simd_json::to_string(&state) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            warn!(
+                                plugin_id = %plugin.name,
+                                error = %e,
+                                "Failed to serialize plugin state for SHM"
+                            );
+                            continue;
+                        }
+                    };
+                    let value: serde_json::Value = match serde_json::from_str(&json_str) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            warn!(
+                                plugin_id = %plugin.name,
+                                error = %e,
+                                "Failed to parse plugin state as serde_json"
+                            );
+                            continue;
+                        }
+                    };
+                    result.push((plugin.name.clone(), value));
+                }
+                Err(e) => {
+                    warn!(
+                        plugin_id = %plugin.name,
+                        error = %e,
+                        "Failed to query plugin state for SHM present-state"
+                    );
+                }
+            }
+        }
+        result
+    }
+
     /// Reads all plugin-backed projection entities asynchronously.
     pub async fn read_all_async(&self) -> Result<Vec<RawEntity>> {
         let mut entities = Vec::new();
