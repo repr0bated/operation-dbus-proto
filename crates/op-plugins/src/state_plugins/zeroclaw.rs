@@ -86,7 +86,10 @@ impl ZeroclawPlugin {
         }
     }
 
-    pub(crate) fn current_state() -> ZeroclawState {
+    /// The in-memory typed Zeroclaw state. This is the projection authority:
+    /// the bridge projection hook and method dispatch read it directly here and
+    /// never re-read `/dev/shm`.
+    pub fn current_state() -> ZeroclawState {
         // Decoupled from factory: local routing defaults to the on-box gemma4
         // via ollama. gemma4 is also the universal router (see `router` below).
         let selected_provider = Self::env_or("LLM_PROVIDER", "ollama");
