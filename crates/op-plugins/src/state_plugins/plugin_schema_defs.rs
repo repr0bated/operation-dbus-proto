@@ -4,13 +4,13 @@ use op_state_store::{
 };
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 // ---------------------------------------------------------------------------
 // Capability-surface helpers
 // ---------------------------------------------------------------------------
 
-fn read_method(
+pub(crate) fn read_method(
     name: &str,
     subid: &str,
     args: serde_json::Value,
@@ -27,7 +27,7 @@ fn read_method(
     }
 }
 
-fn mutation_method(
+pub(crate) fn mutation_method(
     name: &str,
     subid: &str,
     args: serde_json::Value,
@@ -45,7 +45,7 @@ fn mutation_method(
     }
 }
 
-fn signal_decl(name: &str, subid: &str, payload: Option<serde_json::Value>) -> SignalDecl {
+pub(crate) fn signal_decl(name: &str, subid: &str, payload: Option<serde_json::Value>) -> SignalDecl {
     SignalDecl {
         name: name.to_string(),
         payload,
@@ -67,7 +67,7 @@ fn subids_from(
     map
 }
 
-fn empty_args() -> serde_json::Value {
+pub(crate) fn empty_args() -> serde_json::Value {
     serde_json::json!({"type": "object", "properties": {}, "additionalProperties": false})
 }
 
@@ -101,6 +101,277 @@ fn with_caps(
     schema.signals = signals;
     schema.guarantees = guarantees;
     schema
+}
+
+// ---------------------------------------------------------------------------
+// schemars → PluginSchema generator (spec §8) — the *single* schema generator
+// for schema-contract plugins (Zeroclaw). Unlike `schema_from_state`, which
+// infers types from a live JSON value, this derives the field set directly from
+// the `#[derive(JsonSchema)]` type, so the contract cannot drift from the Rust
+// type. Adding a field to the type is the only way to change the schema.
+// ---------------------------------------------------------------------------
+
+/// Convert a `schemars` `JsonSchema` type into a runtime `PluginSchema`.
+///
+/// The field set comes entirely from `schemars::schema_for!(T)`; the caller
+/// supplies the declared `methods`/`signals`/`guarantees` (the capability
+/// surface) and the authoritative `subids` map (spec §13.1). Method and signal
+/// subids are backfilled from their decls so the caller only needs to provide
+/// field-level subids explicitly.
+pub(crate) fn plugin_schema_from_schemars<T: schemars::JsonSchema>(
+    name: &str,
+    category: &str,
+    version: &str,
+    description: &str,
+    methods: HashMap<String, MethodDecl>,
+    signals: Vec<SignalDecl>,
+    guarantees: PluginCapabilities,
+    subids: HashMap<String, String>,
+) -> PluginSchema {
+    let root = schemars::gen::SchemaGenerator::default().into_root_schema_for::<T>();
+    let defs = &root.definitions;
+
+    let mut builder = PluginSchema::builder(name)
+        .version(version)
+        .category(category)
+        .description(description);
+
+    let (props, required) = schemars_collect_props(&root.schema, defs);
+    for (key, schema) in props {
+        let field_type = schemars_field_type(&schema, defs, 0);
+        builder = builder.field(
+            &key,
+            FieldSchema {
+                field_type,
+                required: required.contains(&key),
+                description: schemars_description(&schema),
+                default: None,
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+    }
+
+    let mut schema = builder.build();
+
+    // The subids map is the single authority (spec §13.1). Backfill method and
+    // signal subids from their decls so the map is complete without forcing the
+    // caller to duplicate them.
+    let mut all_subids = subids;
+    for (mname, decl) in &methods {
+        all_subids
+            .entry(mname.clone())
+            .or_insert_with(|| decl.subid.clone());
+    }
+    for sig in &signals {
+        all_subids
+            .entry(sig.name.clone())
+            .or_insert_with(|| sig.subid.clone());
+    }
+
+    schema.methods = methods;
+    schema.signals = signals;
+    schema.guarantees = guarantees;
+    schema.subids = all_subids;
+    schema
+}
+
+fn schemars_ref_name(reference: &str) -> Option<&str> {
+    reference
+        .strip_prefix("#/definitions/")
+        .or_else(|| reference.strip_prefix("#/$defs/"))
+        .or_else(|| reference.strip_prefix("#/components/schemas/"))
+}
+
+fn schemars_is_null(schema: &schemars::schema::Schema) -> bool {
+    use schemars::schema::{InstanceType, Schema, SingleOrVec};
+    if let Schema::Object(obj) = schema {
+        if let Some(it) = &obj.instance_type {
+            return match it {
+                SingleOrVec::Single(t) => **t == InstanceType::Null,
+                SingleOrVec::Vec(v) => v.len() == 1 && v[0] == InstanceType::Null,
+            };
+        }
+    }
+    false
+}
+
+fn schemars_description(schema: &schemars::schema::Schema) -> String {
+    if let schemars::schema::Schema::Object(obj) = schema {
+        if let Some(meta) = &obj.metadata {
+            if let Some(desc) = &meta.description {
+                return desc.clone();
+            }
+        }
+    }
+    String::new()
+}
+
+/// Collect the (merged) object properties + required set for a schema object,
+/// resolving `$ref` and merging `allOf` subschemas (how `#[serde(flatten)]` is
+/// represented). Returns property name → subschema pairs.
+fn schemars_collect_props(
+    obj: &schemars::schema::SchemaObject,
+    defs: &schemars::Map<String, schemars::schema::Schema>,
+) -> (Vec<(String, schemars::schema::Schema)>, HashSet<String>) {
+    let mut props = Vec::new();
+    let mut required = HashSet::new();
+    schemars_collect_into(obj, defs, &mut props, &mut required, 0);
+    (props, required)
+}
+
+fn schemars_collect_into(
+    obj: &schemars::schema::SchemaObject,
+    defs: &schemars::Map<String, schemars::schema::Schema>,
+    props: &mut Vec<(String, schemars::schema::Schema)>,
+    required: &mut HashSet<String>,
+    depth: u8,
+) {
+    use schemars::schema::Schema;
+    if depth > 12 {
+        return;
+    }
+    if let Some(reference) = &obj.reference {
+        if let Some(Schema::Object(target)) =
+            schemars_ref_name(reference).and_then(|n| defs.get(n))
+        {
+            schemars_collect_into(target, defs, props, required, depth + 1);
+        }
+        return;
+    }
+    if let Some(ov) = &obj.object {
+        for (key, schema) in &ov.properties {
+            props.push((key.clone(), schema.clone()));
+        }
+        for req in &ov.required {
+            required.insert(req.clone());
+        }
+    }
+    if let Some(sub) = &obj.subschemas {
+        if let Some(all_of) = &sub.all_of {
+            for s in all_of {
+                if let Schema::Object(o) = s {
+                    schemars_collect_into(o, defs, props, required, depth + 1);
+                }
+            }
+        }
+    }
+}
+
+/// Map a `schemars` subschema to a `FieldType`, resolving `$ref`, `Option`
+/// (`anyOf [T, null]`), enums, arrays, and nested objects.
+fn schemars_field_type(
+    schema: &schemars::schema::Schema,
+    defs: &schemars::Map<String, schemars::schema::Schema>,
+    depth: u8,
+) -> FieldType {
+    use schemars::schema::Schema;
+    match schema {
+        Schema::Bool(_) => FieldType::Any,
+        Schema::Object(obj) => schemars_obj_field_type(obj, defs, depth),
+    }
+}
+
+fn schemars_obj_field_type(
+    obj: &schemars::schema::SchemaObject,
+    defs: &schemars::Map<String, schemars::schema::Schema>,
+    depth: u8,
+) -> FieldType {
+    use schemars::schema::{InstanceType, SingleOrVec};
+    if depth > 12 {
+        return FieldType::Any;
+    }
+
+    if let Some(reference) = &obj.reference {
+        if let Some(target) = schemars_ref_name(reference).and_then(|n| defs.get(n)) {
+            return schemars_field_type(target, defs, depth + 1);
+        }
+        return FieldType::Any;
+    }
+
+    if let Some(enum_values) = &obj.enum_values {
+        let strs: Vec<String> = enum_values
+            .iter()
+            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .collect();
+        if !strs.is_empty() && strs.len() == enum_values.len() {
+            return FieldType::Enum(strs);
+        }
+    }
+
+    if let Some(sub) = &obj.subschemas {
+        // Option<T> / nullable unions: pick the first non-null variant.
+        for set in [sub.any_of.as_ref(), sub.one_of.as_ref()].into_iter().flatten() {
+            for s in set {
+                if !schemars_is_null(s) {
+                    return schemars_field_type(s, defs, depth + 1);
+                }
+            }
+        }
+        if let Some(all_of) = &sub.all_of {
+            if let Some(first) = all_of.first() {
+                return schemars_field_type(first, defs, depth + 1);
+            }
+        }
+    }
+
+    if let Some(it) = &obj.instance_type {
+        let primary = match it {
+            SingleOrVec::Single(t) => Some(**t),
+            SingleOrVec::Vec(v) => v.iter().copied().find(|t| *t != InstanceType::Null),
+        };
+        if let Some(t) = primary {
+            return match t {
+                InstanceType::String => FieldType::String,
+                InstanceType::Integer => FieldType::Integer,
+                InstanceType::Number => FieldType::Float,
+                InstanceType::Boolean => FieldType::Boolean,
+                InstanceType::Null => FieldType::Any,
+                InstanceType::Array => {
+                    let inner = obj
+                        .array
+                        .as_ref()
+                        .and_then(|a| a.items.as_ref())
+                        .and_then(|items| match items {
+                            SingleOrVec::Single(s) => Some(schemars_field_type(s, defs, depth + 1)),
+                            SingleOrVec::Vec(v) => {
+                                v.first().map(|s| schemars_field_type(s, defs, depth + 1))
+                            }
+                        })
+                        .unwrap_or(FieldType::Any);
+                    FieldType::Array(Box::new(inner))
+                }
+                InstanceType::Object => {
+                    let (nested, nested_required) = schemars_collect_props(obj, defs);
+                    let fields = nested
+                        .into_iter()
+                        .map(|(k, s)| {
+                            let ft = schemars_field_type(&s, defs, depth + 1);
+                            let required = nested_required.contains(&k);
+                            (
+                                k,
+                                FieldSchema {
+                                    field_type: ft,
+                                    required,
+                                    description: schemars_description(&s),
+                                    default: None,
+                                    example: None,
+                                    constraints: Vec::new(),
+                                    read_only: false,
+                                    read_only_when: None,
+                                },
+                            )
+                        })
+                        .collect::<HashMap<_, _>>();
+                    FieldType::Object(fields)
+                }
+            };
+        }
+    }
+
+    FieldType::Any
 }
 
 /// Format a plugin's live state into a `PluginSchema`.
@@ -4290,60 +4561,11 @@ pub(crate) fn xray_plugin_schema() -> PluginSchema {
     )
 }
 
-pub(crate) fn zeroclaw_plugin_schema() -> PluginSchema {
-    let methods = HashMap::from([
-        (
-            "GetState".to_string(),
-            read_method(
-                "GetState",
-                "obs.service.zeroclaw.get-state@v1",
-                empty_args(),
-                None,
-            ),
-        ),
-        (
-            "SetConfig".to_string(),
-            mutation_method(
-                "SetConfig",
-                "mut.service.zeroclaw.set-config@v1",
-                serde_json::json!({"type":"object","properties":{}}),
-                None,
-                false,
-            ),
-        ),
-    ]);
-    let signals = vec![signal_decl(
-        "StateChanged",
-        "evt.service.zeroclaw.state-changed@v1",
-        state_changed_payload(),
-    )];
-    let guarantees = PluginCapabilities {
-        supports_rollback: true,
-        supports_checkpoints: true,
-        supports_verification: true,
-        atomic_operations: false,
-    };
-    with_caps(
-        {
-            // The plugin IS the schema: derive directly from ZeroclawPlugin's live
-            // state. Nothing is indexed here — adding a field to ZeroclawState is the
-            // only way to change this schema.
-            let state =
-                simd_json::serde::to_owned_value(super::zeroclaw::ZeroclawPlugin::current_state())
-                    .unwrap_or_else(|_| json!({}));
-            schema_from_state(
-        "zeroclaw",
-        "llm",
-        "1.0.0",
-        "Zeroclaw schema/RPC-native model router for Antigravity UI, CLI providers, and structured JSON output",
-        &state,
-    )
-        },
-        methods,
-        signals,
-        guarantees,
-    )
-}
+// NOTE: The Zeroclaw schema is defined IN the plugin (`super::zeroclaw::
+// zeroclaw_plugin_schema`), not here. The plugin IS the schema: it is generated
+// from `schemars::schema_for!(ZeroclawState)` via the generic
+// `plugin_schema_from_schemars` converter above. This module only supplies that
+// shared generator + the capability-surface helpers.
 
 pub(crate) fn ctl_plane_chatbot_plugin_schema() -> PluginSchema {
     // ── REQ-2: Reasoning Episode Record sub-object ──────────────────────────
@@ -6199,7 +6421,7 @@ mod tests {
             ("netmaker", netmaker_plugin_schema()),
             ("wgcf", wgcf_plugin_schema()),
             ("xray", xray_plugin_schema()),
-            ("zeroclaw", zeroclaw_plugin_schema()),
+            ("zeroclaw", crate::state_plugins::zeroclaw::zeroclaw_plugin_schema()),
             ("ctl_plane_chatbot", ctl_plane_chatbot_plugin_schema()),
             ("oscal_subid_registry", oscal_subid_registry_plugin_schema()),
             ("factory", factory_plugin_schema()),
