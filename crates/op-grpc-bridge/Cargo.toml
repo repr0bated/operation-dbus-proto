@@ -22,7 +22,7 @@ tower-http = { workspace = true }
 
 # Async runtime
 tokio = { workspace = true, features = ["full", "sync"] }
-tokio-stream = { version = "0.1", features = ["sync"] }
+tokio-stream = { version = "0.1", features = ["sync", "net"] }
 
 # D-Bus
 zbus = { workspace = true }
@@ -31,6 +31,8 @@ zbus = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 simd-json = { workspace = true }
+schemars = { workspace = true }
+jsonschema = { workspace = true }
 
 # Internal crates
 op-state-store = { path = "../op-state-store" }
@@ -46,6 +48,7 @@ op-cache = { path = "../op-cache" }
 memmap2 = { workspace = true }
 hex = { workspace = true }
 sha2 = { workspace = true }
+blake3 = { workspace = true }
 
 # Utilities
 tracing = { workspace = true }

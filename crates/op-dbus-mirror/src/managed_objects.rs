@@ -76,13 +76,31 @@ impl ObjectManagerInterface {
 
 // ── Helper ─────────────────────────────────────────────────────────────────
 
-/// Build the `InterfaceMap` for a plugin object whose state is a raw JSON blob.
+/// Build the `InterfaceMap` for an object whose state is a raw JSON blob.
 ///
-/// The single interface `org.opdbus.ProjectedObjectV1` is exposed with a
-/// `JsonData` property that carries the serialised JSON.
-pub fn build_interface_map(json_str: &str) -> InterfaceMap {
+/// Schema-backed plugin objects also expose their declared method/capability,
+/// signal, and guarantee surfaces.
+pub fn build_interface_map(
+    json_str: &str,
+    schema_json: Option<&str>,
+    methods_json: Option<&str>,
+    signals_json: Option<&str>,
+    guarantees_json: Option<&str>,
+) -> InterfaceMap {
     let mut props = PropertyMap::new();
     props.insert("JsonData".to_string(), json_str.to_string());
+    if let Some(schema_json) = schema_json {
+        props.insert("SchemaJson".to_string(), schema_json.to_string());
+    }
+    if let Some(methods_json) = methods_json {
+        props.insert("Methods".to_string(), methods_json.to_string());
+    }
+    if let Some(signals_json) = signals_json {
+        props.insert("Signals".to_string(), signals_json.to_string());
+    }
+    if let Some(guarantees_json) = guarantees_json {
+        props.insert("Guarantees".to_string(), guarantees_json.to_string());
+    }
     let mut iface_map = InterfaceMap::new();
     iface_map.insert(PROJECTED_IFACE.to_string(), props);
     iface_map
