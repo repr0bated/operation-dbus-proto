@@ -11,7 +11,6 @@
 
 use serde::{Deserialize, Serialize};
 
-use sqlx::Row;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -27,172 +26,48 @@ use ring::rand::{SecureRandom, SystemRandom};
 use crate::encrypted_storage::{EncryptedKeyStorage, EncryptedStorageConfig, KeyType};
 use anyhow::Result;
 
-/// Separate WireGuard database (not the main services database)
 #[derive(Clone)]
 pub struct WireGuardDatabase {
-    pool: sqlx::SqlitePool,
+    sessions: Arc<RwLock<HashMap<String, WireGuardSession>>>,
 }
 
 impl WireGuardDatabase {
-    /// Create new WireGuard database connection
     pub async fn new() -> Result<Self> {
-        let database_url = std::env::var("OP_WIREGUARD_DATABASE_URL")
-            .unwrap_or_else(|_| "sqlite:///var/lib/op-dbus/wireguard.db".to_string());
-
-        // Ensure directory exists
-        if let Some(parent) = std::path::Path::new(&database_url.replace("sqlite://", "")).parent()
-        {
-            tokio::fs::create_dir_all(parent).await?;
-        }
-
-        let pool = sqlx::SqlitePool::connect(&database_url).await?;
-
-        Ok(Self { pool })
+        Ok(Self {
+            sessions: Arc::new(RwLock::new(HashMap::new())),
+        })
     }
 
-    /// Run WireGuard database migrations
     pub async fn migrate(&self) -> Result<()> {
-        // Create WireGuard sessions table
-        sqlx::query(
-            r#"
-            CREATE TABLE IF NOT EXISTS wireguard_sessions (
-                session_id TEXT PRIMARY KEY,
-                peer_pubkey TEXT NOT NULL,
-                psk TEXT NOT NULL,
-                created_at INTEGER NOT NULL,
-                expires_at INTEGER NOT NULL,
-                is_active BOOLEAN NOT NULL DEFAULT true,
-                last_used INTEGER NOT NULL,
-                client_ip TEXT,
-                client_version TEXT,
-                auth_method TEXT NOT NULL DEFAULT 'wireguard',
-                key_rotation_count INTEGER NOT NULL DEFAULT 0,
-                flags TEXT
-            )
-        "#,
-        )
-        .execute(&self.pool)
-        .await?;
-
-        // Create indexes for WireGuard sessions
-        sqlx::query("CREATE INDEX IF NOT EXISTS idx_wireguard_sessions_peer_pubkey ON wireguard_sessions(peer_pubkey)").execute(&self.pool).await?;
-        sqlx::query("CREATE INDEX IF NOT EXISTS idx_wireguard_sessions_expires_at ON wireguard_sessions(expires_at)").execute(&self.pool).await?;
-        sqlx::query("CREATE INDEX IF NOT EXISTS idx_wireguard_sessions_is_active ON wireguard_sessions(is_active)").execute(&self.pool).await?;
-
         Ok(())
     }
 
-    // WireGuard-specific database methods...
     pub async fn store_wireguard_session(&self, session: &WireGuardSession) -> Result<()> {
-        let flags_json = simd_json::to_string(&session.flags)?;
-
-        sqlx::query(
-            r#"
-            INSERT OR REPLACE INTO wireguard_sessions 
-            (session_id, peer_pubkey, psk, created_at, expires_at, is_active, last_used, 
-             client_ip, client_version, auth_method, key_rotation_count, flags)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        "#,
-        )
-        .bind(&session.session_id)
-        .bind(&session.peer_pubkey)
-        .bind(&session.psk)
-        .bind(session.created_at as i64)
-        .bind(session.expires_at as i64)
-        .bind(session.is_active)
-        .bind(session.last_used as i64)
-        .bind(&session.client_ip)
-        .bind(&session.client_version)
-        .bind(&session.auth_method)
-        .bind(session.key_rotation_count as i64)
-        .bind(&flags_json)
-        .execute(&self.pool)
-        .await?;
-
+        self.sessions
+            .write()
+            .await
+            .insert(session.session_id.clone(), session.clone());
         Ok(())
     }
 
     pub async fn update_wireguard_session(&self, session: &WireGuardSession) -> Result<()> {
-        let flags_json = simd_json::to_string(&session.flags)?;
-
-        sqlx::query(
-            r#"
-            UPDATE wireguard_sessions 
-            SET psk = ?, expires_at = ?, is_active = ?, last_used = ?, 
-                client_ip = ?, client_version = ?, key_rotation_count = ?, flags = ?
-            WHERE session_id = ?
-        "#,
-        )
-        .bind(&session.psk)
-        .bind(session.expires_at as i64)
-        .bind(session.is_active)
-        .bind(session.last_used as i64)
-        .bind(&session.client_ip)
-        .bind(&session.client_version)
-        .bind(session.key_rotation_count as i64)
-        .bind(&flags_json)
-        .bind(&session.session_id)
-        .execute(&self.pool)
-        .await?;
-
+        self.store_wireguard_session(session).await?;
         Ok(())
     }
 
     pub async fn update_session_last_used(&self, session_id: &str, last_used: u64) -> Result<()> {
-        sqlx::query("UPDATE wireguard_sessions SET last_used = ? WHERE session_id = ?")
-            .bind(last_used as i64)
-            .bind(session_id)
-            .execute(&self.pool)
-            .await?;
-
+        if let Some(session) = self.sessions.write().await.get_mut(session_id) {
+            session.last_used = last_used;
+        }
         Ok(())
     }
 
     pub async fn load_wireguard_sessions(&self) -> Result<Vec<WireGuardSession>> {
-        let rows = sqlx::query(
-            r#"
-            SELECT session_id, peer_pubkey, psk, created_at, expires_at, is_active, 
-                   last_used, client_ip, client_version, auth_method, key_rotation_count, flags
-            FROM wireguard_sessions
-        "#,
-        )
-        .fetch_all(&self.pool)
-        .await?;
-
-        let mut sessions = Vec::new();
-        for row in rows {
-            let flags_json: String = row.get("flags");
-            let mut flags_bytes = flags_json.into_bytes();
-            let flags: std::collections::HashMap<String, String> =
-                simd_json::from_slice(&mut flags_bytes).unwrap_or_default();
-
-            let session = WireGuardSession {
-                session_id: row.get("session_id"),
-                peer_pubkey: row.get("peer_pubkey"),
-                psk: row.get("psk"),
-                created_at: row.get::<i64, _>("created_at") as u64,
-                expires_at: row.get::<i64, _>("expires_at") as u64,
-                is_active: row.get("is_active"),
-                last_used: row.get::<i64, _>("last_used") as u64,
-                client_ip: row.get("client_ip"),
-                client_version: row.get("client_version"),
-                auth_method: row.get("auth_method"),
-                key_rotation_count: row.get::<i64, _>("key_rotation_count") as u32,
-                flags,
-            };
-
-            sessions.push(session);
-        }
-
-        Ok(sessions)
+        Ok(self.sessions.read().await.values().cloned().collect())
     }
 
     pub async fn remove_wireguard_session(&self, session_id: &str) -> Result<()> {
-        sqlx::query("DELETE FROM wireguard_sessions WHERE session_id = ?")
-            .bind(session_id)
-            .execute(&self.pool)
-            .await?;
-
+        self.sessions.write().await.remove(session_id);
         Ok(())
     }
 }

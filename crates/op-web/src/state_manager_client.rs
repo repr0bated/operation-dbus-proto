@@ -31,12 +31,10 @@ where
     T: DeserializeOwned,
 {
     match client().get_state(plugin_id, "").await {
-        Ok(state) => {
-            match simd_json::serde::from_owned_value::<T>(state) {
-                Ok(value) => Ok(Some(value)),
-                Err(_) => Ok(None),
-            }
-        }
+        Ok(state) => match simd_json::serde::from_owned_value::<T>(state) {
+            Ok(value) => Ok(Some(value)),
+            Err(_) => Ok(None),
+        },
         Err(_) => Ok(None),
     }
 }

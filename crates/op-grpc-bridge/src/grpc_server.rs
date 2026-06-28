@@ -9,8 +9,6 @@ use async_stream::stream;
 use chrono::{DateTime, Utc};
 use futures::StreamExt as _;
 use op_cognitive_mcp::QdrantSemanticShuttle;
-use op_plugins::prelude::ZeroclawPlugin;
-use op_state::StatePlugin;
 use prost_types::{Struct as ProstStruct, Timestamp as ProstTimestamp, Value as ProstValue};
 use serde_json::Value as JsonValue;
 use simd_json::prelude::{ValueAsContainer, ValueAsScalar};
@@ -22,8 +20,9 @@ use tower_http::cors::{Any, CorsLayer};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
-use crate::interceptor;
+use crate::interceptor::{self, GhostbridgeIdentity};
 
+use crate::mutation_engine::{ChangeType, MutationEngine};
 use crate::proto::{
     event_chain_service_server::EventChainService, ovsdb_mirror_server::OvsdbMirror,
     plugin_service_server::PluginService, runtime_mirror_server::RuntimeMirror,
@@ -52,16 +51,14 @@ use crate::proto::{
     SubscribeEventsRequest, SubscribeRequest, SubscribeSignalsRequest, TagLock as ProtoTagLock,
     VerifyChainRequest, VerifyChainResponse,
 };
-use crate::mutation_engine::{ChangeType, MutationEngine};
 use op_state_store::{Decision, DenyReason, MerkleProof};
 use zbus::zvariant::{Array as ZArray, OwnedValue as ZOwnedValue, Str as ZStr, Value as ZValue};
 use zbus::{Connection, Proxy};
 
 /// Plugin schema provider.
 ///
-/// The provider is expected to read from the canonical plugin-document path
-/// and/or its in-memory catalog projection. It is not intended to invent
-/// schema independently of the plugin document.
+/// The provider reads only from the canonical SchemaEngine live-schema catalog.
+/// Per-plugin schema files are not a valid source of truth.
 #[tonic::async_trait]
 pub trait PluginSchemaProvider: Send + Sync {
     async fn list_plugins(&self) -> Vec<PluginInfo>;
@@ -70,32 +67,147 @@ pub trait PluginSchemaProvider: Send + Sync {
 
 const LIVE_SCHEMA_PATH: &str = "/dev/shm/live-schema.json";
 
-#[tonic::async_trait]
-impl PluginSchemaProvider for SchemaCatalogPluginProvider {
-    async fn list_plugins(&self) -> Vec<PluginInfo> {
-        let mut plugins = read_live_schema_plugins();
-        if !plugins.iter().any(|plugin| plugin.id == "zeroclaw") {
-            plugins.push(zeroclaw_plugin_info());
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SchemaMethodCapability {
+    required_capability: Option<String>,
+    grants_declared: bool,
+    granted_by_footprint: bool,
+}
+
+fn read_plugin_schema_json(plugin_id: &str) -> Option<JsonValue> {
+    let bytes = std::fs::read(LIVE_SCHEMA_PATH).ok()?;
+    let root = serde_json::from_slice::<JsonValue>(&bytes).ok()?;
+    root.as_object()?
+        .get(plugin_id)
+        .and_then(first_schema_entry)
+        .cloned()
+}
+
+fn first_schema_entry(value: &JsonValue) -> Option<&JsonValue> {
+    value
+        .as_array()
+        .and_then(|items| items.first())
+        .or(Some(value))
+}
+
+fn method_capability_from_schema(
+    schema: &JsonValue,
+    method_name: &str,
+    footprint: Option<&str>,
+) -> Option<SchemaMethodCapability> {
+    let method = schema.get("methods")?.as_object()?.get(method_name)?;
+    let required_capability = match method.get("required_capability") {
+        Some(JsonValue::String(capability)) if !capability.is_empty() => Some(capability.clone()),
+        _ => None,
+    };
+
+    let Some(capability) = required_capability.as_deref() else {
+        return Some(SchemaMethodCapability {
+            required_capability: None,
+            grants_declared: false,
+            granted_by_footprint: true,
+        });
+    };
+
+    let mut grants_declared = false;
+    let mut granted_by_footprint = false;
+    if let Some(grants) = schema
+        .get("capability_grants")
+        .and_then(JsonValue::as_object)
+    {
+        grants_declared = true;
+        if let Some(footprint) = footprint {
+            granted_by_footprint = grants
+                .get(footprint)
+                .or_else(|| grants.get("*"))
+                .and_then(JsonValue::as_array)
+                .is_some_and(|caps| caps.iter().any(|cap| cap.as_str() == Some(capability)));
         }
-        plugins
     }
 
-    async fn get_schema(&self, plugin_id: &str) -> Option<(String, String, String)> {
-        if plugin_id == "zeroclaw" {
-            return zeroclaw_schema_json();
-        }
+    Some(SchemaMethodCapability {
+        required_capability,
+        grants_declared,
+        granted_by_footprint,
+    })
+}
 
-        read_live_schema(plugin_id).or_else(|| {
-            if plugin_id == "zeroclaw" {
-                zeroclaw_schema_json()
-            } else {
-                None
-            }
+fn method_capability_for_plugin(
+    plugin_id: &str,
+    method_name: &str,
+    footprint: Option<&str>,
+) -> Option<SchemaMethodCapability> {
+    let schema = read_plugin_schema_json(plugin_id)?;
+    method_capability_from_schema(&schema, method_name, footprint)
+}
+
+fn enforce_bridge_capability(
+    plugin_id: &str,
+    method_name: &str,
+    capability_id: Option<&str>,
+    identity: Option<&GhostbridgeIdentity>,
+) -> Result<(), ProtoMutationError> {
+    let footprint = identity.map(|ctx| ctx.footprint.as_str());
+    let Some(method_capability) = method_capability_for_plugin(plugin_id, method_name, footprint)
+    else {
+        return Ok(());
+    };
+    let Some(required) = method_capability.required_capability else {
+        return Ok(());
+    };
+
+    let capability_matches = capability_id == Some(required.as_str());
+    let footprint_grants = if method_capability.grants_declared {
+        method_capability.granted_by_footprint
+    } else {
+        identity.is_some() && capability_matches
+    };
+
+    if capability_matches && footprint_grants {
+        Ok(())
+    } else {
+        Err(ProtoMutationError {
+            code: ProtoErrorCode::PermissionDenied as i32,
+            message: format!(
+                "AccessDenied: method {plugin_id}.{method_name} requires capability {required}"
+            ),
+            deny_reason: Some(ProtoDenyReason {
+                reason: Some(crate::proto::deny_reason::Reason::CapabilityMissing(
+                    ProtoCapabilityMissing {
+                        capability: required,
+                    },
+                )),
+            }),
         })
     }
 }
 
+fn plugin_id_from_dbus_path(path: &str) -> Option<String> {
+    let prefix = "/org/opdbus/v1/plugins/";
+    path.strip_prefix(prefix)
+        .and_then(|rest| rest.split('/').next())
+        .filter(|id| !id.is_empty())
+        .map(|id| id.replace('/', "."))
+}
+
+#[tonic::async_trait]
+impl PluginSchemaProvider for SchemaCatalogPluginProvider {
+    async fn list_plugins(&self) -> Vec<PluginInfo> {
+        read_schema_catalog_plugins()
+    }
+
+    async fn get_schema(&self, plugin_id: &str) -> Option<(String, String, String)> {
+        read_schema(plugin_id)
+    }
+}
+
 struct SchemaCatalogPluginProvider;
+
+fn read_schema_catalog_plugins() -> Vec<PluginInfo> {
+    let mut plugins = read_live_schema_plugins();
+    plugins.sort_by(|a, b| a.id.cmp(&b.id));
+    plugins
+}
 
 fn read_live_schema_plugins() -> Vec<PluginInfo> {
     let Ok(bytes) = std::fs::read(LIVE_SCHEMA_PATH) else {
@@ -111,10 +223,14 @@ fn read_live_schema_plugins() -> Vec<PluginInfo> {
     catalog
         .iter()
         .filter_map(|(id, entries)| {
-            let schema = entries.as_array().and_then(|items| items.first())?;
+            let schema = first_schema_entry(entries)?;
             Some(plugin_info_from_schema(id, schema))
         })
         .collect()
+}
+
+fn read_schema(plugin_id: &str) -> Option<(String, String, String)> {
+    read_live_schema(plugin_id)
 }
 
 fn read_live_schema(plugin_id: &str) -> Option<(String, String, String)> {
@@ -124,7 +240,12 @@ fn read_live_schema(plugin_id: &str) -> Option<(String, String, String)> {
         .as_object()?
         .get(plugin_id)?
         .as_array()
-        .and_then(|items| items.first())?;
+        .and_then(|items| items.first())
+        .or_else(|| root.as_object()?.get(plugin_id))?;
+    schema_response_from_value(schema)
+}
+
+fn schema_response_from_value(schema: &JsonValue) -> Option<(String, String, String)> {
     let version = schema
         .get("version")
         .and_then(JsonValue::as_str)
@@ -167,27 +288,6 @@ fn plugin_info_from_schema(id: &str, schema: &JsonValue) -> PluginInfo {
         interfaces: vec!["org.opdbus.v1.Plugin".to_string()],
         tags,
     }
-}
-
-fn zeroclaw_plugin_info() -> PluginInfo {
-    PluginInfo {
-        id: "zeroclaw".to_string(),
-        name: "zeroclaw".to_string(),
-        version: "1.0.0".to_string(),
-        description: "Zeroclaw schema/RPC-native model router for Antigravity UI".to_string(),
-        dbus_path: "/org/opdbus/v1/plugins/zeroclaw".to_string(),
-        interfaces: vec!["org.opdbus.v1.Plugin".to_string()],
-        tags: vec!["llm".to_string(), "antigravity".to_string()],
-    }
-}
-
-fn zeroclaw_schema_json() -> Option<(String, String, String)> {
-    let schema = ZeroclawPlugin::new().schema()?;
-    Some((
-        serde_json::to_string(&schema).ok()?,
-        "operation.pluginschema+json".to_string(),
-        schema.version,
-    ))
 }
 
 // =============================================================================
@@ -299,7 +399,7 @@ impl OperationGrpcServer {
 /// Services (all behind the Ghostbridge interceptor, all gRPC-Web enabled):
 ///   StateSync, PluginService, EventChainService, OvsdbMirror, RuntimeMirror,
 ///   ComponentRegistry, MailService, PrivacyNetworkService, RegistrationService,
-///   DbusPassthrough, McpService, ChatService, plus gRPC server reflection.
+///   DbusPassthrough, ChatService, plus gRPC server reflection.
 ///
 /// The caller supplies a fully-configured `OperationGrpcServer` (plugin provider /
 /// semantic shuttle already attached) and adds endpoint-specific extras
@@ -319,20 +419,6 @@ pub fn build_operation_routes(server: OperationGrpcServer) -> tonic::service::Ro
     use crate::proto::registry::component_registry_server::ComponentRegistryServer;
     use crate::proto::runtime_mirror_server::RuntimeMirrorServer;
     use crate::proto::state_sync_server::StateSyncServer;
-    use op_cache::grpc::{AgentServiceImpl, McpServiceImpl, OrchestratorServiceImpl};
-    use op_cache::proto::mcp_service_server::McpServiceServer;
-
-    // MCP service backed by agent registry.
-    let agent_svc = std::sync::Arc::new(AgentServiceImpl::new());
-    let cache_svc = std::sync::Arc::new(op_cache::grpc::CacheServiceImpl::with_ttl(3600));
-    let orch_svc = std::sync::Arc::new(OrchestratorServiceImpl::with_config(
-        agent_svc.clone(),
-        cache_svc,
-        2,    // workstack_threshold
-        true, // enable_caching
-        3,    // promotion_threshold
-    ));
-    let mcp_svc = std::sync::Arc::new(McpServiceImpl::new(agent_svc, orch_svc));
 
     // Reflection — exposes combined FileDescriptorSet covering all domain protos.
     // Enables grpcurl discovery and drives MCP tool auto-registration in op-chat.
@@ -379,10 +465,6 @@ pub fn build_operation_routes(server: OperationGrpcServer) -> tonic::service::Ro
         server.clone(),
         intercept,
     )))
-    .add_service(tonic_web::enable(tonic::codegen::InterceptedService::new(
-        McpServiceServer::from_arc(mcp_svc),
-        intercept,
-    )))
     .add_service(tonic_web::enable(
         crate::proto::chat::chat_service_server::ChatServiceServer::new(
             crate::chat_service::ChatServiceImpl::new(),
@@ -413,6 +495,11 @@ pub async fn run_grpc_server(
     use crate::proto::registry::component_registry_server::ComponentRegistryServer;
     use crate::proto::runtime_mirror_server::RuntimeMirrorServer;
     use crate::proto::state_sync_server::StateSyncServer;
+
+    match mutation_engine.seed_missing_plugin_projections().await {
+        Ok(count) => info!(count, "Plugin projections seeded"),
+        Err(error) => warn!(%error, "Plugin projection seeding failed"),
+    }
 
     let server = if let Some(provider) = plugin_provider {
         OperationGrpcServer::with_plugin_provider(mutation_engine, provider)
@@ -457,7 +544,9 @@ pub async fn run_grpc_server(
         .set_serving::<RegistrationServiceServer<OperationGrpcServer>>()
         .await;
     health_reporter
-        .set_serving::<crate::proto::chat::chat_service_server::ChatServiceServer<crate::chat_service::ChatServiceImpl>>()
+        .set_serving::<crate::proto::chat::chat_service_server::ChatServiceServer<
+            crate::chat_service::ChatServiceImpl,
+        >>()
         .await;
 
     info!(addr = %addr, "gRPC bridge listening");
@@ -539,6 +628,7 @@ impl StateSync for OperationGrpcServer {
         &self,
         request: Request<MutateRequest>,
     ) -> Result<Response<MutateResponse>, Status> {
+        let identity = request.extensions().get::<GhostbridgeIdentity>().cloned();
         let req = request.into_inner();
         let value = prost_value_to_simd(&req.value.unwrap_or_else(|| ProstValue::from(0)));
         let change_type = match req.operation {
@@ -547,6 +637,37 @@ impl StateSync for OperationGrpcServer {
             x if x == ProtoOperationType::ApplyPatch as i32 => ChangeType::ObjectAdded,
             _ => ChangeType::PropertySet,
         };
+        let capability_id = if req.capability_id.is_empty() {
+            None
+        } else {
+            Some(req.capability_id.clone())
+        };
+
+        if change_type == ChangeType::MethodCall {
+            if let Some(method_name) = req.member_name.strip_prefix("method:").or_else(|| {
+                if req.member_name.is_empty() {
+                    None
+                } else {
+                    Some(req.member_name.as_str())
+                }
+            }) {
+                if let Err(error) = enforce_bridge_capability(
+                    &req.plugin_id,
+                    method_name,
+                    capability_id.as_deref(),
+                    identity.as_ref(),
+                ) {
+                    return Ok(Response::new(MutateResponse {
+                        success: false,
+                        event_id: 0,
+                        event_hash: String::new(),
+                        result: None,
+                        error: Some(error),
+                        effective_hash: String::new(),
+                    }));
+                }
+            }
+        }
 
         let result = self
             .mutation_engine
@@ -561,11 +682,7 @@ impl StateSync for OperationGrpcServer {
                 },
                 value,
                 req.actor_id.clone(),
-                if req.capability_id.is_empty() {
-                    None
-                } else {
-                    Some(req.capability_id.clone())
-                },
+                capability_id,
             )
             .await;
 
@@ -680,7 +797,27 @@ impl PluginService for OperationGrpcServer {
         &self,
         request: Request<CallMethodRequest>,
     ) -> Result<Response<CallMethodResponse>, Status> {
+        let identity = request.extensions().get::<GhostbridgeIdentity>().cloned();
         let req = request.into_inner();
+        let capability_id = if req.capability_id.is_empty() {
+            None
+        } else {
+            Some(req.capability_id.clone())
+        };
+        if let Err(error) = enforce_bridge_capability(
+            &req.plugin_id,
+            &req.method_name,
+            capability_id.as_deref(),
+            identity.as_ref(),
+        ) {
+            return Ok(Response::new(CallMethodResponse {
+                success: false,
+                result: None,
+                event_id: 0,
+                event_hash: String::new(),
+                error: Some(error),
+            }));
+        }
         let args: Vec<simd_json::OwnedValue> = req
             .arguments
             .into_iter()
@@ -697,11 +834,7 @@ impl PluginService for OperationGrpcServer {
                 Some(req.method_name.clone()),
                 simd_json::json!(args),
                 req.actor_id.clone(),
-                if req.capability_id.is_empty() {
-                    None
-                } else {
-                    Some(req.capability_id.clone())
-                },
+                capability_id,
             )
             .await;
 
@@ -765,35 +898,42 @@ impl PluginService for OperationGrpcServer {
         request: Request<SetPropertyRequest>,
     ) -> Result<Response<SetPropertyResponse>, Status> {
         let req = request.into_inner();
-        let connection = Connection::system()
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?;
-        let proxy = zbus::fdo::PropertiesProxy::builder(&connection)
-            .destination(format!("org.opdbus.{}.v1", req.plugin_id))
-            .map_err(|e| Status::internal(e.to_string()))?
-            .path(req.object_path.as_str())
-            .map_err(|e| Status::internal(e.to_string()))?
-            .build()
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?;
-
-        let iface = zbus::names::InterfaceName::try_from(req.interface_name.as_str())
-            .map_err(|e| Status::invalid_argument(e.to_string()))?;
         let value = prost_value_to_simd(&req.value.unwrap_or_else(|| ProstValue::from(0)));
-        let zval =
-            simd_json_to_zvariant(&value).map_err(|e| Status::invalid_argument(e.to_string()))?;
 
-        proxy
-            .set(iface, req.property_name.as_str(), zval.into())
+        match self
+            .mutation_engine
+            .mutate(
+                req.plugin_id,
+                req.object_path,
+                ChangeType::PropertySet,
+                Some(req.property_name),
+                value,
+                req.actor_id,
+                if req.capability_id.is_empty() {
+                    None
+                } else {
+                    Some(req.capability_id)
+                },
+            )
             .await
-            .map_err(|e| Status::internal(e.to_string()))?;
-
-        Ok(Response::new(SetPropertyResponse {
-            success: true,
-            event_id: 0,
-            event_hash: String::new(),
-            error: None,
-        }))
+        {
+            Ok(ok) => Ok(Response::new(SetPropertyResponse {
+                success: ok.success,
+                event_id: ok.event_id,
+                event_hash: ok.event_hash,
+                error: None,
+            })),
+            Err(e) => Ok(Response::new(SetPropertyResponse {
+                success: false,
+                event_id: 0,
+                event_hash: String::new(),
+                error: Some(ProtoMutationError {
+                    code: ProtoErrorCode::Internal as i32,
+                    message: e.to_string(),
+                    deny_reason: None,
+                }),
+            })),
+        }
     }
 
     async fn subscribe_signals(
@@ -4507,7 +4647,15 @@ impl crate::proto::dbus_passthrough_server::DbusPassthrough for OperationGrpcSer
         &self,
         request: Request<crate::proto::DbusCallRequest>,
     ) -> Result<Response<crate::proto::DbusCallResponse>, Status> {
+        let identity = request.extensions().get::<GhostbridgeIdentity>().cloned();
         let req = request.into_inner();
+        if let Some(plugin_id) = plugin_id_from_dbus_path(&req.path) {
+            if let Err(error) =
+                enforce_bridge_capability(&plugin_id, &req.method, None, identity.as_ref())
+            {
+                return Err(Status::permission_denied(error.message));
+            }
+        }
         let conn = self
             .mutation_engine
             .dbus_connection()
@@ -4588,7 +4736,16 @@ impl crate::proto::dbus_passthrough_server::DbusPassthrough for OperationGrpcSer
         &self,
         request: Request<crate::proto::DbusSetPropertyRequest>,
     ) -> Result<Response<crate::proto::DbusSetPropertyResponse>, Status> {
+        let identity = request.extensions().get::<GhostbridgeIdentity>().cloned();
         let req = request.into_inner();
+        if let Some(plugin_id) = plugin_id_from_dbus_path(&req.path) {
+            let setter = format!("set_{}", req.property);
+            if let Err(error) =
+                enforce_bridge_capability(&plugin_id, &setter, None, identity.as_ref())
+            {
+                return Err(Status::permission_denied(error.message));
+            }
+        }
         let bus_conn = match req.bus.as_str() {
             "session" => Connection::session()
                 .await

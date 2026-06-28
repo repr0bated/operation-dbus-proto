@@ -31,14 +31,14 @@ fn write_schema(path: &PathBuf, value: &serde_json::Value) {
 
 async fn start_test_server() -> (SocketAddr, Arc<SchemaLoader>, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("zeroclaw.json");
+    let path = dir.path().join("live-schema.json");
     let schema = json!({
         "name": "zeroclaw",
         "version": "1.0.0",
         "kind": "llm",
         "description": "test schema"
     });
-    write_schema(&path, &schema);
+    write_schema(&path, &json!({ "zeroclaw": [schema] }));
 
     let loader = Arc::new(SchemaLoader::new(&path).unwrap());
 
@@ -50,7 +50,11 @@ async fn start_test_server() -> (SocketAddr, Arc<SchemaLoader>, PathBuf) {
     )));
     let ovsdb = Arc::new(op_network::rovs_proxy::OvsdbDbusClient::new());
     let nonnet = Arc::new(op_jsonrpc::nonnet::NonNetDb::new());
-    let mutation_engine = Arc::new(op_grpc_bridge::MutationEngine::new(event_chain, ovsdb, nonnet));
+    let mutation_engine = Arc::new(op_grpc_bridge::MutationEngine::new(
+        event_chain,
+        ovsdb,
+        nonnet,
+    ));
     let operation_server = op_grpc_bridge::grpc_server::OperationGrpcServer::new(mutation_engine);
     let app = build_axum_app(loader.clone(), operation_server);
 

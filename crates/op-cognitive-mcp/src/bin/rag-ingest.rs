@@ -143,7 +143,9 @@ async fn main() -> Result<()> {
     println!("  Repos          : {}", targets.len());
     println!("  Est. chunks    : ~{estimated_chunks}");
     println!("  Est. tokens    : ~{}M", estimated_tokens / 1_000_000);
-    println!("  Est. cost      : ~${estimated_cost:.2}  (Voyage @ ${VOYAGE_COST_PER_MILLION}/M tokens)");
+    println!(
+        "  Est. cost      : ~${estimated_cost:.2}  (Voyage @ ${VOYAGE_COST_PER_MILLION}/M tokens)"
+    );
     println!(
         "  Token cap      : {}M  (--max-tokens)",
         cli.max_tokens / 1_000_000

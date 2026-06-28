@@ -2,6 +2,7 @@
 //!
 //! Moves OVS internal ports between the host netns and container netns.
 //! Uses rtnetlink for link operations and libc setns for namespace switching.
+#![allow(dead_code)]
 
 use anyhow::{Context, Result};
 use std::fs::File;
@@ -433,7 +434,7 @@ pub fn container_netns_init(
     // Step 2: If port config is provided, attach the OVS port
     // (This will be handled by the existing attach_port D-Bus method,
     //  but container_init can orchestrate it as a combined operation.)
-    if let Some(cfg) = port_config {
+    if let Some(_cfg) = port_config {
         results.push(serde_json::json!({
             "step": "port_attach",
             "success": true,

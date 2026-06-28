@@ -283,7 +283,6 @@ impl StatePlugin for S6SystemctlPlugin {
         )
     }
 
-
     async fn calculate_diff(&self, current: &Value, desired: &Value) -> Result<StateDiff> {
         let current_s: S6SystemctlState = simd_json::serde::from_owned_value(current.clone())?;
         let desired_s: S6SystemctlState = simd_json::serde::from_owned_value(desired.clone())?;

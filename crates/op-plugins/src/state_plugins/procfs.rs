@@ -163,7 +163,6 @@ impl StatePlugin for ProcfsPlugin {
         Some(procfs_schema())
     }
 
-
     async fn calculate_diff(&self, current: &Value, desired: &Value) -> Result<StateDiff> {
         Ok(StateDiff {
             plugin: self.name().to_string(),

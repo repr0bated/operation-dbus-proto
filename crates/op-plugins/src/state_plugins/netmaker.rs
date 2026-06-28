@@ -382,7 +382,6 @@ impl StatePlugin for NetmakerPlugin {
         }
     }
 
-
     async fn calculate_diff(&self, current: &Value, desired: &Value) -> Result<StateDiff> {
         let mut actions = Vec::new();
 
@@ -556,13 +555,22 @@ impl StatePlugin for NetmakerPlugin {
 pub(crate) fn netmaker_schema() -> PluginSchema {
     let state = simd_json::serde::to_owned_value(super::netmaker::NetmakerPlugin::current_state())
         .unwrap_or_else(|_| json!({}));
-    schema_from_state(
+    let mut schema = schema_from_state(
         "netmaker",
         "net",
         "1.0.0",
         "Netmaker daemon state and execution schema",
         &state,
-    )
+    );
+    let method = super::plugin_schema_defs::cap_method(
+        "join_network",
+        op_state_store::SideEffect::Mutation,
+        false,
+        "cap.network.netmaker.network.join@v1",
+        "mut.network.netmaker.network.join@v1",
+    );
+    schema.methods.insert(method.name.clone(), method);
+    schema
 }
 
 // Self-registration: the plugin registry discovers this via inventory

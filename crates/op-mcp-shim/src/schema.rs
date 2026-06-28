@@ -33,9 +33,7 @@ fn message_schema_inner(desc: &MessageDescriptor, visited: &mut Vec<String>) -> 
 fn field_schema(field: &FieldDescriptor, visited: &mut Vec<String>) -> Value {
     if field.is_map() {
         let value_schema = match field.kind() {
-            Kind::Message(entry) => match entry.map_entry_value_field().kind() {
-                k => kind_schema(&k, visited),
-            },
+            Kind::Message(entry) => kind_schema(&entry.map_entry_value_field().kind(), visited),
             _ => json!({}),
         };
         return json!({"type": "object", "additionalProperties": value_schema});

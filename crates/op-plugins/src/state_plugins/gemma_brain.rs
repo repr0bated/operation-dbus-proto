@@ -200,7 +200,10 @@ impl StatePlugin for GemmaBrainPlugin {
     }
 
     fn unavailable_reason(&self) -> String {
-        format!("op-gemma generator binary not found at {}", Self::gemma_binary())
+        format!(
+            "op-gemma generator binary not found at {}",
+            Self::gemma_binary()
+        )
     }
 
     fn schema(&self) -> Option<PluginSchema> {
@@ -208,7 +211,6 @@ impl StatePlugin for GemmaBrainPlugin {
         super::common::oscal::ensure_category_metadata_fields(&mut schema);
         Some(schema)
     }
-
 
     async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {
         Ok(StateDiff {

@@ -190,7 +190,6 @@ impl StatePlugin for CompactMcpPlugin {
         "op-mcp-compact s6 service definition not found at /etc/s6/sv/op-mcp-compact".into()
     }
 
-
     async fn calculate_diff(&self, current: &Value, desired: &Value) -> Result<StateDiff> {
         let cur: CompactMcpConfig = simd_json::serde::from_owned_value(current.clone())?;
         let des: CompactMcpConfig = simd_json::serde::from_owned_value(desired.clone())?;

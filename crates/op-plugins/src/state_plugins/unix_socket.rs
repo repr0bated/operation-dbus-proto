@@ -302,7 +302,6 @@ impl StatePlugin for UnixSocketPlugin {
         Some(schema)
     }
 
-
     async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {
         // No diff loop: the schema-declared state is authoritative and applied
         // wholesale by `apply_state`.

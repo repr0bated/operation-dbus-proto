@@ -506,6 +506,7 @@ fn write_xray_config_with_sockets(
 /// sockets are only added when no Gemma route has the same tag.  The final
 /// catch-all rule sends unmatched ingress traffic to the grpc-bridge, matching
 /// the historical fallback behavior.
+#[allow(clippy::too_many_arguments)]
 fn build_xray_config(
     footprint: &str,
     trace_id: &str,
@@ -598,13 +599,13 @@ fn build_xray_config(
 
     // Final catch-all fallback to the grpc-bridge.
     let fallback_rule = if seen_tags.contains("grpc-bridge") {
-        format!(
+        String::from(
             r#",
-      {{
+      {
         "type": "field",
         "inboundTag": ["op-tls", "ghostbridge-reality"],
         "outboundTag": "to-grpc-bridge"
-      }}"#
+      }"#,
         )
     } else {
         String::new()
@@ -817,7 +818,7 @@ fn decode_wg_pubkey(b64: &str) -> [u8; 32] {
 /// factor (WireGuard is the authenticator; see op-grpc-bridge GhostbridgeInterceptor).
 /// Manifest published by op-projection — the ONE place the canonical
 /// `catalog_hash` lives.
-const SHM_SCHEMA_MANIFEST_PATH: &str = "/dev/shm/opdbus/schemas/.manifest.json";
+const SHM_SCHEMA_MANIFEST_PATH: &str = "/dev/shm/opdbus/.manifest.json";
 /// Derived monolith catalog; fallback source for the hash before the manifest
 /// exists (deploy ordering). Same bytes → identical hash value.
 const SHM_LIVE_SCHEMA_PATH: &str = "/dev/shm/live-schema.json";

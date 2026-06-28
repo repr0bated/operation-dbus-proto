@@ -18,6 +18,17 @@ pub enum MirrorEvent {
         delta: Value,
         sequence: u64,
     },
+    /// Plugin state/projection change event
+    Plugin {
+        plugin_id: String,
+        delta: Value,
+        sequence: u64,
+    },
+    /// ComponentRegistry event mirrored from the gRPC registry service
+    Registry {
+        event: Box<op_grpc_bridge::proto::registry::RegistryEvent>,
+        sequence: u64,
+    },
     /// Procfs memory info event
     ProcMem { delta: Value, sequence: u64 },
     /// Procfs load average event
@@ -43,6 +54,15 @@ impl MirrorEvent {
             MirrorEvent::NonNet { key, .. } => {
                 Some(format!("/org/opdbus/v1/mirror/nonnet/{}", key))
             }
+            MirrorEvent::Plugin { plugin_id, .. } => {
+                Some(format!("/org/opdbus/v1/plugins/{}", plugin_id))
+            }
+            MirrorEvent::Registry { event, .. } => event.component.as_ref().map(|component| {
+                format!(
+                    "/org/opdbus/v1/registry/components/{}",
+                    component.component_id
+                )
+            }),
             MirrorEvent::ProcMem { .. } => Some("/org/opdbus/v1/mirror/host/meminfo".to_string()),
             MirrorEvent::ProcLoad { .. } => Some("/org/opdbus/v1/mirror/host/loadavg".to_string()),
             MirrorEvent::ProcStatic { section, .. } => {
@@ -56,6 +76,8 @@ impl MirrorEvent {
         match self {
             MirrorEvent::OvsdbRow { sequence, .. }
             | MirrorEvent::NonNet { sequence, .. }
+            | MirrorEvent::Plugin { sequence, .. }
+            | MirrorEvent::Registry { sequence, .. }
             | MirrorEvent::ProcMem { sequence, .. }
             | MirrorEvent::ProcLoad { sequence, .. }
             | MirrorEvent::ProcStatic { sequence, .. } => *sequence,

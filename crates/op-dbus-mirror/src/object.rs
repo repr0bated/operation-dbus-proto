@@ -111,13 +111,6 @@ pub fn plugin_id_from_path(path: &str) -> Option<String> {
 }
 
 pub fn read_plugin_schema(plugin_id: &str) -> Option<PluginSchema> {
-    let path = format!("/dev/shm/opdbus/schemas/{plugin_id}.json");
-    if let Ok(bytes) = std::fs::read(path) {
-        if let Ok(schema) = serde_json::from_slice::<PluginSchema>(&bytes) {
-            return Some(schema);
-        }
-    }
-
     let bytes = std::fs::read("/dev/shm/live-schema.json").ok()?;
     let root = serde_json::from_slice::<serde_json::Value>(&bytes).ok()?;
     let schema = root

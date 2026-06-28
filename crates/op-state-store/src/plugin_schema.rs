@@ -122,15 +122,15 @@ pub enum SideEffect {
 /// Every `MethodDecl` is exposed as a D-Bus method (and gRPC route) by the
 /// bridge.  The `args` field is a JSON Schema object that the bridge uses to
 /// validate caller arguments before dispatch.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MethodDecl {
     /// Method name as it appears on the D-Bus interface / gRPC route.
     pub name: String,
     /// JSON Schema describing the method's input arguments.
-    pub args: serde_json::Value,
+    pub args: Value,
     /// Optional JSON Schema describing the method's return value.
     #[serde(default)]
-    pub returns: Option<serde_json::Value>,
+    pub returns: Option<Value>,
     /// Whether the method reads or mutates state.
     pub side_effect: SideEffect,
     /// Whether repeated calls with the same args produce the same effect.
@@ -149,7 +149,7 @@ pub struct SignalDecl {
     pub name: String,
     /// Optional JSON Schema describing the signal payload.
     #[serde(default)]
-    pub payload: Option<serde_json::Value>,
+    pub payload: Option<Value>,
     /// OSCAL subid for this signal (category must be `evt`).
     pub subid: String,
 }
@@ -909,6 +909,18 @@ impl PluginSchemaBuilder {
     /// Set the signals list for the schema being built.
     pub fn signals(mut self, signals: Vec<SignalDecl>) -> Self {
         self.signals = signals;
+        self
+    }
+
+    /// Add a single method declaration to the schema being built.
+    pub fn method(mut self, method: MethodDecl) -> Self {
+        self.methods.insert(method.name.clone(), method);
+        self
+    }
+
+    /// Add a single signal declaration to the schema being built.
+    pub fn signal(mut self, signal: SignalDecl) -> Self {
+        self.signals.push(signal);
         self
     }
 

@@ -11,11 +11,11 @@
 
 pub use op_plugins::state_plugins::common::errors::ZeroclawError;
 pub use op_plugins::state_plugins::common::llm_projection::{
-    ConfigSchema, LlmProjection, LlmTool, LlmTransport, ModelRoute, Provider, Router,
-    SelectionEvent, SelectionInput, SelectionOutput, SelectorPolicy, StructuredOutput, UiSurface,
+    ConfigSchema, LlmProjection, LlmTool, ModelRoute, Provider, Router, StructuredOutput, UiSurface,
 };
-pub use op_plugins::state_plugins::common::selector::select_model;
-pub use op_plugins::state_plugins::zeroclaw::{zeroclaw_plugin_schema, ZeroclawPlugin, ZeroclawState};
+pub use op_plugins::state_plugins::zeroclaw::{
+    zeroclaw_plugin_schema, LlmTransport, ZeroclawPlugin, ZeroclawState,
+};
 
 /// The single Zeroclaw `PluginSchema`, included from the plugin. op-llm reads
 /// the provider/model/tool contract from here — never a separate copy.

@@ -94,7 +94,6 @@ impl StatePlugin for PrivacyRoutesPlugin {
         Some(privacy_routes_schema())
     }
 
-
     async fn calculate_diff(&self, current: &Value, desired: &Value) -> Result<StateDiff> {
         let current_state: PrivacyRoutesState = simd_json::serde::from_owned_value(current.clone())
             .context("deserialize current privacy routes")?;

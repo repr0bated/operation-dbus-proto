@@ -32,10 +32,11 @@ use managed_objects::{
     PROJECTED_IFACE,
 };
 use op_core::types::BusType;
-use op_grpc_bridge::{OperationGrpcServer, MutationEngine};
+use op_grpc_bridge::{MutationEngine, OperationGrpcServer};
 use op_network::rovs_proxy::OvsdbDbusClient;
+use op_state_store::PluginSchema;
 use procfs::Current as _;
-use serde_json::{Map, Value};
+use serde_json::Value;
 use std::collections::HashSet;
 use std::sync::Arc;
 use zbus::zvariant::{ObjectPath, OwnedObjectPath};
@@ -802,6 +803,7 @@ impl DbusMirror {
     }
 
     async fn publish_object(&self, path: &str, data: Value) -> Result<()> {
+        let schema = Self::schema_for_object_path(path);
         // Get current data and sequence from the store
         let mut entry = self
             .current_data
@@ -832,14 +834,16 @@ impl DbusMirror {
                     let emitter = iface_ref.signal_emitter();
                     let _ = iface_ref.get().await.data_updated(emitter).await;
                     // Ensure the ObjectManager knows the properties changed as well
-                    self.register_in_object_manager(path, &data).await;
+                    self.register_in_object_manager(path, &data, schema.as_ref())
+                        .await;
                 }
             } else {
-                let obj = object::MirrorObject::new(data.clone());
+                let obj = object::MirrorObject::with_schema(data.clone(), schema.clone());
                 self.connection.object_server().at(path, obj).await?;
                 self.published_objects.insert(path.to_string(), ());
 
-                self.register_in_object_manager(path, &data).await;
+                self.register_in_object_manager(path, &data, schema.as_ref())
+                    .await;
             }
         }
 
@@ -874,7 +878,12 @@ impl DbusMirror {
 
     /// Insert a plugin object into the ObjectManager registry and emit
     /// `InterfacesAdded` if the ObjectManager interface is already up.
-    async fn register_in_object_manager(&self, path: &str, data: &Value) {
+    async fn register_in_object_manager(
+        &self,
+        path: &str,
+        data: &Value,
+        schema: Option<&PluginSchema>,
+    ) {
         let op = match OwnedObjectPath::try_from(path.to_string()) {
             Ok(p) => p,
             Err(e) => {
@@ -884,9 +893,21 @@ impl DbusMirror {
         };
 
         let json_str = serde_json::to_string(data).unwrap_or_default();
+        let schema_json = schema.and_then(|schema| serde_json::to_string(schema).ok());
+        let methods_json = schema.and_then(|schema| serde_json::to_string(&schema.methods).ok());
+        let signals_json = schema.and_then(|schema| serde_json::to_string(&schema.signals).ok());
+        let guarantees_json =
+            schema.and_then(|schema| serde_json::to_string(&schema.guarantees).ok());
+        let iface_map = build_interface_map(
+            &json_str,
+            schema_json.as_deref(),
+            methods_json.as_deref(),
+            signals_json.as_deref(),
+            guarantees_json.as_deref(),
+        );
         let existed = self
             .plugin_registry
-            .insert(op.clone(), build_interface_map(&json_str))
+            .insert(op.clone(), iface_map.clone())
             .is_some();
 
         // Best-effort: emit InterfacesAdded only when the object first appears.
@@ -902,12 +923,8 @@ impl DbusMirror {
         {
             Ok(iface_ref) => {
                 let emitter = iface_ref.signal_emitter();
-                if let Err(e) = ObjectManagerInterface::interfaces_added(
-                    emitter,
-                    op,
-                    build_interface_map(&json_str),
-                )
-                .await
+                if let Err(e) =
+                    ObjectManagerInterface::interfaces_added(emitter, op, iface_map).await
                 {
                     tracing::warn!("InterfacesAdded signal failed for {path}: {e}");
                 }
@@ -917,6 +934,11 @@ impl DbusMirror {
                 // so GetManagedObjects will return this entry once it comes up.
             }
         }
+    }
+
+    fn schema_for_object_path(path: &str) -> Option<PluginSchema> {
+        let plugin_id = object::plugin_id_from_path(path)?;
+        object::read_plugin_schema(&plugin_id)
     }
 
     /// Remove a plugin object from the ObjectManager registry and emit

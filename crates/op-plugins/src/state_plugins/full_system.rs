@@ -803,7 +803,6 @@ impl StatePlugin for FullSystemPlugin {
         )
     }
 
-
     async fn calculate_diff(&self, current: &Value, desired: &Value) -> Result<StateDiff> {
         use op_state::DiffMetadata;
         use sha2::{Digest, Sha256};

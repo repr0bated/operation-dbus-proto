@@ -968,7 +968,6 @@ impl StatePlugin for PrivacyRouterPlugin {
         }
     }
 
-
     async fn calculate_diff(&self, current: &Value, desired: &Value) -> Result<StateDiff> {
         let mut actions = Vec::new();
         let current_config = current.get("config").unwrap_or(current);

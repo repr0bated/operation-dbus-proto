@@ -9,9 +9,11 @@ use zbus::interface;
 
 /// D-Bus service for s6-systemctl operations
 pub struct S6SystemctlService {
-    /// Base directory for s6 service definitions
+    /// Base directory for Artix s6 service definitions.
     s6_svc_dir: String,
-    /// s6-rc live directory
+    /// Live supervision directory for running longruns.
+    s6_runtime_dir: String,
+    /// s6-rc live directory.
     s6_rc_dir: String,
 }
 
@@ -19,8 +21,13 @@ impl S6SystemctlService {
     pub fn new() -> Self {
         Self {
             s6_svc_dir: "/etc/s6/sv".to_string(),
+            s6_runtime_dir: "/run/service".to_string(),
             s6_rc_dir: "/run/s6-rc".to_string(),
         }
+    }
+
+    fn enable_bundle(&self) -> String {
+        std::env::var("S6D_ENABLE_BUNDLE").unwrap_or_else(|_| "misc".to_string())
     }
 
     /// Check if s6 tools are available
@@ -38,6 +45,9 @@ impl S6SystemctlService {
         }
 
         let mut cmd = Command::new("s6-rc");
+        if std::path::Path::new(&self.s6_rc_dir).exists() {
+            cmd.arg("-l").arg(&self.s6_rc_dir);
+        }
         cmd.args(args);
 
         match cmd.output() {
@@ -66,7 +76,7 @@ impl S6SystemctlService {
             );
         }
 
-        let service_path = format!("{}/{}", self.s6_svc_dir, service);
+        let service_path = format!("{}/{}", self.s6_runtime_dir, service);
 
         let mut cmd = Command::new("s6-svc");
         cmd.arg(signal).arg(&service_path);
@@ -90,7 +100,7 @@ impl S6SystemctlService {
 
     /// Execute s6-svstat command and parse output
     fn run_s6_svstat(&self, service: &str) -> Result<S6ServiceStatus, String> {
-        let service_path = format!("{}/{}", self.s6_svc_dir, service);
+        let service_path = format!("{}/{}", self.s6_runtime_dir, service);
 
         match Command::new("s6-svstat").arg(&service_path).output() {
             Ok(output) => {
@@ -107,9 +117,97 @@ impl S6SystemctlService {
 
     /// Check if service is enabled (in the active bundle)
     fn is_service_enabled(&self, service: &str) -> bool {
-        // Check /etc/s6-rc/default/<service> symlink exists
-        let enabled_link = format!("/etc/s6-rc/default/{}", service);
-        std::path::Path::new(&enabled_link).exists()
+        let bundle_entry = format!(
+            "{}/{}/contents.d/{}",
+            self.s6_svc_dir,
+            self.enable_bundle(),
+            service
+        );
+        if std::path::Path::new(&bundle_entry).exists() {
+            return true;
+        }
+
+        let Ok(entries) = std::fs::read_dir(&self.s6_svc_dir) else {
+            return false;
+        };
+        entries.flatten().any(|entry| {
+            let path = entry.path().join("contents.d").join(service);
+            path.exists()
+        })
+    }
+
+    fn run_artix_frontend_reload(&self) -> (bool, String) {
+        let script = std::env::var("S6D_RELOAD_SCRIPT")
+            .unwrap_or_else(|_| "/usr/local/sbin/op-s6-recompile-and-update".to_string());
+        if std::path::Path::new(&script).exists() {
+            match Command::new("sh")
+                .env("SKIP_BUILD", "1")
+                .arg(&script)
+                .output()
+            {
+                Ok(output) => {
+                    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                    if output.status.success() {
+                        return (true, stdout);
+                    }
+                    return (false, if stderr.is_empty() { stdout } else { stderr });
+                }
+                Err(e) => return (false, format!("Failed to execute {script}: {e}")),
+            }
+        }
+
+        let repo_script = "/home/jeremy/git/operation-dbus-proto/deploy/s6/recompile-and-update.sh";
+        if std::path::Path::new(repo_script).exists() {
+            match Command::new("sh")
+                .env("SKIP_BUILD", "1")
+                .arg(repo_script)
+                .output()
+            {
+                Ok(output) => {
+                    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                    if output.status.success() {
+                        return (true, stdout);
+                    }
+                    return (false, if stderr.is_empty() { stdout } else { stderr });
+                }
+                Err(e) => return (false, format!("Failed to execute {repo_script}: {e}")),
+            }
+        }
+
+        let steps: &[(&str, &[&str])] = &[
+            ("s6", &["repository", "sync"]),
+            ("s6", &["set", "check", "-F", "-u"]),
+            ("s6", &["set", "commit", "-f", "-D", "default"]),
+            ("s6", &["live", "install", "-b"]),
+        ];
+        let mut messages = Vec::new();
+        for (bin, args) in steps {
+            match Command::new(bin).args(*args).output() {
+                Ok(output) if output.status.success() => {
+                    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    if !stdout.is_empty() {
+                        messages.push(stdout);
+                    }
+                }
+                Ok(output) => {
+                    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    return (
+                        false,
+                        format!(
+                            "{} {:?} failed: {}",
+                            bin,
+                            args,
+                            if stderr.is_empty() { stdout } else { stderr }
+                        ),
+                    );
+                }
+                Err(e) => return (false, format!("Failed to run {bin}: {e}")),
+            }
+        }
+        (true, messages.join("\n"))
     }
 }
 
@@ -166,7 +264,7 @@ impl S6ServiceStatus {
     }
 }
 
-#[interface(name = "opdbus.v1.S6.Systemctl")]
+#[interface(name = "org.opdbus.v1.S6.Systemctl")]
 impl S6SystemctlService {
     /// Start a service (maps to: s6-rc -u change <service>)
     async fn start(&self, service: &str) -> (bool, String) {
@@ -244,7 +342,7 @@ impl S6SystemctlService {
         debug!("Reloading service: {}", service);
         info!(
             "systemctl reload {} -> s6-svc -h {}/{}",
-            service, self.s6_svc_dir, service
+            service, self.s6_runtime_dir, service
         );
 
         let result = self.run_s6_svc(service, "-h");
@@ -262,10 +360,8 @@ impl S6SystemctlService {
     /// Note: This creates a symlink in the s6-rc service directory
     async fn enable(&self, service: &str) -> (bool, String) {
         debug!("Enabling service: {}", service);
-        info!(
-            "systemctl enable {} -> s6-rc-bundle add {}",
-            service, service
-        );
+        let bundle = self.enable_bundle();
+        info!("systemctl enable {} -> add to {} bundle", service, bundle);
 
         let service_src = format!("{}/{}", self.s6_svc_dir, service);
         if !std::path::Path::new(&service_src).exists() {
@@ -275,49 +371,25 @@ impl S6SystemctlService {
             );
         }
 
-        // Use s6-rc-bundle or manual symlink approach
-        // s6-rc-bundle is the modern way, fall back to manual symlink
-        match Command::new("s6-rc-bundle")
-            .args(["add", "default", service])
-            .output()
-        {
-            Ok(output) => {
-                if output.status.success() {
-                    info!("Service {} enabled successfully", service);
-                    (true, format!("Service {} enabled", service))
-                } else {
-                    let err = String::from_utf8_lossy(&output.stderr);
-                    // Fallback: manual symlink to /etc/s6-rc/default
-                    let enabled_dir = format!("/etc/s6-rc/default/{}", service);
-                    match std::os::unix::fs::symlink(&service_src, &enabled_dir) {
-                        Ok(_) => {
-                            info!("Service {} enabled via symlink", service);
-                            (true, format!("Service {} enabled", service))
-                        }
-                        Err(e) => {
-                            error!("Failed to enable service {}: {}", service, e);
-                            (
-                                false,
-                                format!("Failed to enable: {} (s6-rc-bundle: {})", e, err),
-                            )
-                        }
-                    }
-                }
+        let bundle_dir = format!("{}/{}/contents.d", self.s6_svc_dir, bundle);
+        if let Err(e) = std::fs::create_dir_all(&bundle_dir) {
+            return (
+                false,
+                format!("Failed to create bundle dir {bundle_dir}: {e}"),
+            );
+        }
+        let bundle_entry = format!("{}/{}", bundle_dir, service);
+        match std::fs::File::create(&bundle_entry) {
+            Ok(_) => {
+                info!("Service {} enabled in {} bundle", service, bundle);
+                (
+                    true,
+                    format!("Service {service} enabled in {bundle}; run daemon-reload"),
+                )
             }
             Err(e) => {
-                warn!("s6-rc-bundle not available, using manual symlink: {}", e);
-                // Manual fallback
-                let enabled_dir = format!("/etc/s6-rc/default/{}", service);
-                match std::os::unix::fs::symlink(&service_src, &enabled_dir) {
-                    Ok(_) => {
-                        info!("Service {} enabled via symlink", service);
-                        (true, format!("Service {} enabled", service))
-                    }
-                    Err(e) => {
-                        error!("Failed to enable service {}: {}", service, e);
-                        (false, format!("Failed to enable: {}", e))
-                    }
-                }
+                error!("Failed to enable service {}: {}", service, e);
+                (false, format!("Failed to enable {service}: {e}"))
             }
         }
     }
@@ -325,50 +397,30 @@ impl S6SystemctlService {
     /// Disable a service (remove from s6-rc bundle)
     async fn disable(&self, service: &str) -> (bool, String) {
         debug!("Disabling service: {}", service);
+        let bundle = self.enable_bundle();
         info!(
-            "systemctl disable {} -> s6-rc-bundle delete {}",
-            service, service
+            "systemctl disable {} -> remove from {} bundle",
+            service, bundle
         );
 
         // Stop the service first
         let _ = self.run_s6_rc(&["-d", "change", service]);
 
-        match Command::new("s6-rc-bundle")
-            .args(["delete", "default", service])
-            .output()
-        {
-            Ok(output) => {
-                if output.status.success() {
-                    info!("Service {} disabled successfully", service);
-                    (true, format!("Service {} disabled", service))
-                } else {
-                    // Fallback: remove manual symlink
-                    let enabled_link = format!("/etc/s6-rc/default/{}", service);
-                    match std::fs::remove_file(&enabled_link) {
-                        Ok(_) => {
-                            info!("Service {} disabled via symlink removal", service);
-                            (true, format!("Service {} disabled", service))
-                        }
-                        Err(e) => {
-                            error!("Failed to disable service {}: {}", service, e);
-                            (false, format!("Failed to disable: {}", e))
-                        }
-                    }
-                }
+        let enabled_link = format!("{}/{}/contents.d/{}", self.s6_svc_dir, bundle, service);
+        match std::fs::remove_file(&enabled_link) {
+            Ok(_) => {
+                info!("Service {} disabled via bundle removal", service);
+                (
+                    true,
+                    format!("Service {service} disabled from {bundle}; run daemon-reload"),
+                )
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                (true, format!("Service {service} was not in {bundle}"))
             }
             Err(e) => {
-                warn!("s6-rc-bundle not available, using manual removal: {}", e);
-                let enabled_link = format!("/etc/s6-rc/default/{}", service);
-                match std::fs::remove_file(&enabled_link) {
-                    Ok(_) => {
-                        info!("Service {} disabled via symlink removal", service);
-                        (true, format!("Service {} disabled", service))
-                    }
-                    Err(e) => {
-                        error!("Failed to disable service {}: {}", service, e);
-                        (false, format!("Failed to disable: {}", e))
-                    }
-                }
+                error!("Failed to disable service {}: {}", service, e);
+                (false, format!("Failed to disable {service}: {e}"))
             }
         }
     }
@@ -412,6 +464,47 @@ impl S6SystemctlService {
         }
     }
 
+    /// Compatibility alias used by existing generated zbus proxies.
+    async fn is_enabled_method(&self, service: &str) -> String {
+        self.is_enabled(service).await
+    }
+
+    /// Show service properties as JSON.
+    async fn show(&self, service: &str) -> String {
+        let mut properties = serde_json::Map::new();
+        properties.insert("Id".to_string(), serde_json::json!(service));
+        properties.insert("Names".to_string(), serde_json::json!(service));
+        properties.insert("LoadState".to_string(), serde_json::json!("loaded"));
+        properties.insert(
+            "UnitFileState".to_string(),
+            serde_json::json!(self.is_enabled(service).await),
+        );
+        properties.insert(
+            "Type".to_string(),
+            serde_json::json!(self.get_unit_type(service).await),
+        );
+
+        match self.run_s6_svstat(service) {
+            Ok(status) => {
+                properties.insert(
+                    "ActiveState".to_string(),
+                    serde_json::json!(status.active_state),
+                );
+                properties.insert("SubState".to_string(), serde_json::json!(status.sub_state));
+                properties.insert("MainPID".to_string(), serde_json::json!(status.main_pid));
+                properties.insert("Ready".to_string(), serde_json::json!(status.ready));
+                properties.insert("UpTime".to_string(), serde_json::json!(status.up_time));
+            }
+            Err(e) => {
+                properties.insert("ActiveState".to_string(), serde_json::json!("unknown"));
+                properties.insert("SubState".to_string(), serde_json::json!("error"));
+                properties.insert("Error".to_string(), serde_json::json!(e));
+            }
+        }
+
+        serde_json::Value::Object(properties).to_string()
+    }
+
     /// List all active units (JSON array)
     async fn list_units(&self) -> String {
         debug!("Listing all units");
@@ -421,7 +514,11 @@ impl S6SystemctlService {
         }
 
         // Get list of running services from s6-rc
-        match Command::new("s6-rc").args(["-a", "list"]).output() {
+        let mut cmd = Command::new("s6-rc");
+        if std::path::Path::new(&self.s6_rc_dir).exists() {
+            cmd.arg("-l").arg(&self.s6_rc_dir);
+        }
+        match cmd.args(["-a", "list"]).output() {
             Ok(output) => {
                 if !output.status.success() {
                     return format!(
@@ -467,6 +564,90 @@ impl S6SystemctlService {
         }
     }
 
+    /// List all available unit files from the s6 service directory.
+    async fn list_unit_files(&self) -> String {
+        debug!("Listing all unit files");
+
+        let entries = match std::fs::read_dir(&self.s6_svc_dir) {
+            Ok(entries) => entries,
+            Err(e) => return format!("{{\"error\":\"Failed to list unit files: {}\"}}", e),
+        };
+
+        let mut units = Vec::new();
+        for entry in entries.flatten() {
+            let file_type = match entry.file_type() {
+                Ok(file_type) => file_type,
+                Err(_) => continue,
+            };
+            if !file_type.is_dir() && !file_type.is_symlink() {
+                continue;
+            }
+            let Some(name) = entry.file_name().to_str().map(str::to_string) else {
+                continue;
+            };
+            if name.starts_with('.') {
+                continue;
+            }
+            units.push(serde_json::json!({
+                "unit_file": format!("{name}.service"),
+                "state": self.is_enabled(&name).await,
+                "vendor_preset": "disabled"
+            }));
+        }
+
+        units.sort_by(|a, b| {
+            a.get("unit_file")
+                .and_then(|v| v.as_str())
+                .cmp(&b.get("unit_file").and_then(|v| v.as_str()))
+        });
+
+        serde_json::Value::Array(units).to_string()
+    }
+
+    /// Retrieve service logs using s6-logwatch when present, with tail fallback.
+    async fn journalctl(&self, service: &str, lines: u32) -> String {
+        let lines = lines.max(1).to_string();
+        let log_candidates = [
+            format!("/var/log/op-dbus/{service}/current"),
+            format!("/var/log/{service}/current"),
+            format!("/var/log/{service}/access.log"),
+            format!("/var/log/{service}/error.log"),
+        ];
+        let Some(log_path) = log_candidates
+            .iter()
+            .find(|path| std::path::Path::new(path.as_str()).exists())
+        else {
+            return format!("{{\"error\":\"No log file found for {}\"}}", service);
+        };
+
+        match Command::new("tail").args(["-n", &lines, log_path]).output() {
+            Ok(output) if output.status.success() => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let entries: Vec<_> = stdout
+                    .lines()
+                    .map(|line| {
+                        serde_json::json!({
+                            "UNIT": service,
+                            "LOG_PATH": log_path,
+                            "MESSAGE": line
+                        })
+                    })
+                    .collect();
+                serde_json::Value::Array(entries).to_string()
+            }
+            Ok(output) => format!(
+                "{{\"error\":\"{}\"}}",
+                String::from_utf8_lossy(&output.stderr)
+            ),
+            Err(e) => format!("{{\"error\":\"Failed to read logs: {}\"}}", e),
+        }
+    }
+
+    /// Re-read the active s6-rc database.
+    async fn daemon_reload(&self) -> (bool, String) {
+        self.run_artix_frontend_reload()
+    }
+
     /// Get daemon/s6 supervisor status
     async fn daemon_status(&self) -> String {
         if self.check_s6_available() {
@@ -490,6 +671,15 @@ impl S6SystemctlService {
             }
         } else {
             "not-available".to_string()
+        }
+    }
+
+    /// Return the best-known unit type from the service definition.
+    async fn get_unit_type(&self, service: &str) -> String {
+        let type_path = format!("{}/{}/type", self.s6_svc_dir, service);
+        match std::fs::read_to_string(&type_path) {
+            Ok(value) => value.trim().to_string(),
+            Err(_) => "unknown".to_string(),
         }
     }
 }

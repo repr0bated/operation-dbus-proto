@@ -2,11 +2,8 @@
 //!
 //! Publishes the Antigravity-facing model and CLI routing contract through
 //! `PluginSchema` so the UI can render provider/model controls from D-Bus.
-//!
-//! Also writes the plugin-owned schema JSON to `/dev/shm/opdbus/schemas/zeroclaw.json`
-//! so that the `op-grpc-bridge` Axum host can read it without duplicating the
-//! schema definition.
 
+use super::common::errors::ZeroclawError;
 use super::common::llm_projection::{
     ConfigSchema, LlmProjection, LlmTool, ModelRoute, Provider, Router, StructuredOutput, UiSurface,
 };
@@ -17,9 +14,6 @@ use op_state_store::PluginSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use simd_json::OwnedValue as Value;
-use std::path::Path;
-
-const ZEROCLAW_SCHEMA_SHM_PATH: &str = "/dev/shm/opdbus/schemas/zeroclaw.json";
 
 /// Transport layer metadata for the Zeroclaw plugin.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
@@ -98,43 +92,7 @@ impl ZeroclawPlugin {
         std::env::var(key).unwrap_or_else(|_| fallback.to_string())
     }
 
-    /// Serialize the canonical zeroclaw schema to the plugin-owned tmpfs file.
-    ///
-    /// This is the only write path to `/dev/shm/opdbus/schemas/zeroclaw.json`;
-    /// the `op-grpc-bridge` Axum host reads this file and never writes it.
-    pub fn write_schema_file() -> Result<()> {
-        Self::write_schema_file_to(ZEROCLAW_SCHEMA_SHM_PATH)
-    }
-
-    /// Serialize the canonical zeroclaw schema to a specific path.
-    ///
-    /// Used by tests and any caller that needs a hermetic output location.
-    pub fn write_schema_file_to(path: impl AsRef<Path>) -> Result<()> {
-        let schema = zeroclaw_schema();
-        let json = serde_json::to_string(&schema)
-            .map_err(|e| anyhow::anyhow!("failed to serialize zeroclaw schema to JSON: {}", e))?;
-
-        let path = path.as_ref();
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                anyhow::anyhow!(
-                    "failed to create schema directory {}: {}",
-                    parent.display(),
-                    e
-                )
-            })?;
-        }
-
-        std::fs::write(path, json).map_err(|e| {
-            anyhow::anyhow!(
-                "failed to write zeroclaw schema to {}: {}",
-                path.display(),
-                e
-            )
-        })
-    }
-
-    pub(crate) fn current_state() -> ZeroclawState {
+    pub fn current_state() -> ZeroclawState {
         // Decoupled from factory: local routing defaults to the on-box gemma4
         // via ollama. gemma4 is also the universal router (see `router` below).
         let selected_provider = Self::env_or("LLM_PROVIDER", "ollama");
@@ -492,7 +450,6 @@ impl StatePlugin for ZeroclawPlugin {
         Some(schema)
     }
 
-
     async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {
         Ok(StateDiff {
             plugin: self.name().to_string(),
@@ -546,12 +503,158 @@ impl StatePlugin for ZeroclawPlugin {
 pub(crate) fn zeroclaw_schema() -> PluginSchema {
     let root = serde_json::to_value(schemars::schema_for!(ZeroclawState))
         .expect("schemars schema serializes to JSON");
-    super::schemars_adapter::plugin_schema_from_json(
+    let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "zeroclaw",
         "1.0.0",
         "Zeroclaw schema/RPC-native model router for Antigravity UI, CLI providers, and structured JSON output",
         &root,
-    )
+    );
+    if let Ok(state) = simd_json::serde::to_owned_value(ZeroclawPlugin::current_state()) {
+        super::schemars_adapter::apply_state_defaults(&mut schema, &state);
+        schema.example = Some(state);
+    }
+    schema
+}
+
+/// Public accessor for crates that embed the Zeroclaw plugin contract.
+pub fn zeroclaw_plugin_schema() -> PluginSchema {
+    zeroclaw_schema()
+}
+
+/// A signal the bridge can emit after a successful plugin-owned dispatch.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DispatchSignal {
+    pub name: String,
+    pub payload: JsonValue,
+}
+
+/// Outcome of a plugin-owned method dispatch.
+#[derive(Debug, Clone)]
+pub struct DispatchOutcome {
+    pub result: JsonValue,
+    pub signal: Option<DispatchSignal>,
+}
+
+impl DispatchOutcome {
+    fn plain(result: JsonValue) -> Self {
+        Self {
+            result,
+            signal: None,
+        }
+    }
+}
+
+/// Plugin-owned method dispatch for the Zeroclaw D-Bus/gRPC surface.
+pub fn dispatch_zeroclaw_method(
+    method: &str,
+    json_args: &str,
+    state: &ZeroclawState,
+) -> std::result::Result<DispatchOutcome, ZeroclawError> {
+    match method {
+        "GetState" => Ok(DispatchOutcome::plain(to_json(state))),
+        "GetModelRoutes" => Ok(DispatchOutcome::plain(to_json(
+            &state.projection.model_routes,
+        ))),
+        "GetProviderCatalog" => Ok(DispatchOutcome::plain(to_json(&state.projection.providers))),
+        "GetTools" => Ok(DispatchOutcome::plain(to_json(&state.projection.tools))),
+        "ResolveRoute" => resolve_route(json_args, state).map(DispatchOutcome::plain),
+        "SetProvider" => set_provider_handler(json_args, state),
+        "SetModel" => set_model_handler(json_args, state),
+        other => Err(ZeroclawError::ExecutionDenied {
+            reason: format!("undeclared method: {other}"),
+        }),
+    }
+}
+
+fn to_json<T: Serialize>(value: &T) -> JsonValue {
+    serde_json::to_value(value).unwrap_or(JsonValue::Null)
+}
+
+fn parse_args(method: &str, json_args: &str) -> std::result::Result<JsonValue, ZeroclawError> {
+    if json_args.trim().is_empty() {
+        return Ok(serde_json::json!({}));
+    }
+    serde_json::from_str(json_args).map_err(|error| ZeroclawError::ExecutionDenied {
+        reason: format!("{method} arguments are not valid JSON: {error}"),
+    })
+}
+
+fn require_str(
+    args: &JsonValue,
+    field: &str,
+    method: &str,
+) -> std::result::Result<String, ZeroclawError> {
+    args.get(field)
+        .and_then(JsonValue::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| ZeroclawError::ExecutionDenied {
+            reason: format!("{method} requires string field '{field}'"),
+        })
+}
+
+fn resolve_route(
+    json_args: &str,
+    state: &ZeroclawState,
+) -> std::result::Result<JsonValue, ZeroclawError> {
+    let args = parse_args("ResolveRoute", json_args)?;
+    let hint = require_str(&args, "hint", "ResolveRoute")?;
+    state
+        .projection
+        .model_routes
+        .iter()
+        .find(|route| route.hint == hint || route.model == hint)
+        .map(to_json)
+        .ok_or(ZeroclawError::RouteNotDeclared { hint })
+}
+
+fn set_provider_handler(
+    json_args: &str,
+    state: &ZeroclawState,
+) -> std::result::Result<DispatchOutcome, ZeroclawError> {
+    let args = parse_args("SetProvider", json_args)?;
+    let provider_id = require_str(&args, "provider_id", "SetProvider")?;
+    if !state
+        .projection
+        .providers
+        .iter()
+        .any(|provider| provider.id == provider_id)
+    {
+        return Err(ZeroclawError::ProviderNotDeclared {
+            provider: provider_id,
+        });
+    }
+    let old = state.selected_provider.clone();
+    Ok(DispatchOutcome {
+        result: serde_json::json!({ "selected_provider": provider_id }),
+        signal: Some(DispatchSignal {
+            name: "ProviderChanged".to_string(),
+            payload: serde_json::json!({ "old": old, "new": provider_id, "reason": "explicit set" }),
+        }),
+    })
+}
+
+fn set_model_handler(
+    json_args: &str,
+    state: &ZeroclawState,
+) -> std::result::Result<DispatchOutcome, ZeroclawError> {
+    let args = parse_args("SetModel", json_args)?;
+    let model_id = require_str(&args, "model_id", "SetModel")?;
+    if !state
+        .projection
+        .model_routes
+        .iter()
+        .any(|route| route.model == model_id)
+    {
+        return Err(ZeroclawError::ModelNotDeclared { model: model_id });
+    }
+    let old = state.selected_model.clone();
+    Ok(DispatchOutcome {
+        result: serde_json::json!({ "selected_model": model_id }),
+        signal: Some(DispatchSignal {
+            name: "ModelChanged".to_string(),
+            payload: serde_json::json!({ "old": old, "new": model_id, "reason": "explicit set" }),
+        }),
+    })
 }
 
 /// Frozen golden reference: the original schema inferred from the default state
@@ -582,8 +685,6 @@ mod tests {
     use crate::state_plugins::common::oscal::validate_subid;
     use crate::state_plugins::schemars_adapter::schema_diffs;
     use serde_json::Value as JVal;
-    use std::io::Read;
-
     fn collect_subids(node: &JVal, out: &mut Vec<String>) {
         if let Some(subid) = node.get("x-oscal-subid").and_then(JVal::as_str) {
             out.push(subid.to_string());
@@ -639,23 +740,10 @@ mod tests {
     }
 
     #[test]
-    fn should_write_zeroclaw_schema_to_shm() {
-        // Use a temporary directory as the tmpfs root so the test is hermetic.
-        let tmp = tempfile::tempdir().unwrap();
-        let schema_path = tmp.path().join("opdbus/schemas/zeroclaw.json");
-
-        ZeroclawPlugin::write_schema_file_to(&schema_path).unwrap();
-
-        assert!(schema_path.exists());
-
-        let mut buf = String::new();
-        std::fs::File::open(&schema_path)
-            .unwrap()
-            .read_to_string(&mut buf)
-            .unwrap();
-        let round_tripped: PluginSchema = serde_json::from_str(&buf).unwrap();
-        assert_eq!(round_tripped.name, "zeroclaw");
-        assert_eq!(round_tripped.version, "1.0.0");
+    fn public_schema_accessor_returns_zeroclaw_schema() {
+        let schema = zeroclaw_plugin_schema();
+        assert_eq!(schema.name, "zeroclaw");
+        assert_eq!(schema.version, "1.0.0");
     }
 }
 

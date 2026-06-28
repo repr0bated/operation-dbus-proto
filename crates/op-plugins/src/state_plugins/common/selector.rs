@@ -115,7 +115,10 @@ pub fn select_model(
     }
 
     order_candidates(&mut scored);
-    Ok(build_output(&scored, "best-scoring declared route after hard filters"))
+    Ok(build_output(
+        &scored,
+        "best-scoring declared route after hard filters",
+    ))
 }
 
 /// Resolve an explicit provider/model request against declared routes.
@@ -175,7 +178,10 @@ fn select_explicit(
     }
 
     order_candidates(&mut scored);
-    Ok(build_output(&scored, "explicit provider/model authorized by schema"))
+    Ok(build_output(
+        &scored,
+        "explicit provider/model authorized by schema",
+    ))
 }
 
 /// Phase 1 hard filters (design §4). Each returns a specific error so explicit
@@ -217,7 +223,10 @@ fn hard_filter(route: &ModelRoute, input: &SelectionInput) -> Result<(), Zerocla
         if cost_ord(&route.cost_profile) > cost_ord(policy) {
             return Err(ZeroclawError::CostPolicyViolation {
                 policy: policy.clone(),
-                reason: format!("route cost_profile `{}` exceeds ceiling", route.cost_profile),
+                reason: format!(
+                    "route cost_profile `{}` exceeds ceiling",
+                    route.cost_profile
+                ),
             });
         }
     }
@@ -257,7 +266,8 @@ fn score_route(route: &ModelRoute, input: &SelectionInput, policy: &SelectorPoli
 
     let latency_penalty = match input.latency_target.as_deref() {
         Some(target) if !target.is_empty() => {
-            policy.latency_weight * latency_ord(&route.latency_class) as f64
+            policy.latency_weight
+                * latency_ord(&route.latency_class) as f64
                 * latency_ord(target).max(1) as f64
                 / latency_ord("interactive").max(1) as f64
         }
@@ -267,7 +277,8 @@ fn score_route(route: &ModelRoute, input: &SelectionInput, policy: &SelectorPoli
     let route_health_bonus =
         policy.health_weight * route.health_score + if route.available { 0.1 } else { 0.0 };
 
-    capability_match_bonus + policy.effort_weight * effort_quality_score - cost_term
+    capability_match_bonus + policy.effort_weight * effort_quality_score
+        - cost_term
         - latency_penalty
         + route_health_bonus
 }
@@ -421,7 +432,15 @@ mod tests {
         inp.privacy_tier = "public".to_string();
         // Only a confidential route exists; public request must exclude it.
         let routes = vec![route(
-            "a", "p1", "m1", true, "low", "high", "confidential", 8000, 0.9,
+            "a",
+            "p1",
+            "m1",
+            true,
+            "low",
+            "high",
+            "confidential",
+            8000,
+            0.9,
         )];
         let err = select_model(&inp, &state_with(routes)).unwrap_err();
         assert!(matches!(err, ZeroclawError::NoCandidateAfterFiltering));
@@ -431,7 +450,9 @@ mod tests {
     fn should_reject_undeclared_route() {
         let mut inp = input();
         inp.explicit_provider = Some("ghost".to_string());
-        let routes = vec![route("a", "p1", "m1", true, "low", "high", "public", 8000, 0.9)];
+        let routes = vec![route(
+            "a", "p1", "m1", true, "low", "high", "public", 8000, 0.9,
+        )];
         let err = select_model(&inp, &state_with(routes)).unwrap_err();
         assert!(matches!(err, ZeroclawError::ProviderNotDeclared { .. }));
     }
@@ -439,13 +460,20 @@ mod tests {
     #[test]
     fn should_return_fallback_routes_ordered() {
         let routes = vec![
-            route("best", "p1", "m1", true, "free", "high", "public", 8000, 1.0),
+            route(
+                "best", "p1", "m1", true, "free", "high", "public", 8000, 1.0,
+            ),
             route("mid", "p2", "m2", true, "low", "high", "public", 8000, 0.8),
-            route("worst", "p3", "m3", true, "premium", "high", "public", 8000, 0.2),
+            route(
+                "worst", "p3", "m3", true, "premium", "high", "public", 8000, 0.2,
+            ),
         ];
         let out = select_model(&input(), &state_with(routes)).unwrap();
         assert_eq!(out.selected_provider, "p1");
-        assert_eq!(out.fallback_routes, vec!["mid".to_string(), "worst".to_string()]);
+        assert_eq!(
+            out.fallback_routes,
+            vec!["mid".to_string(), "worst".to_string()]
+        );
     }
 
     #[test]
@@ -454,7 +482,9 @@ mod tests {
         inp.explicit_provider = Some("p2".to_string());
         let routes = vec![
             route("a", "p1", "m1", true, "free", "high", "public", 8000, 1.0),
-            route("b", "p2", "m2", true, "premium", "high", "public", 8000, 0.5),
+            route(
+                "b", "p2", "m2", true, "premium", "high", "public", 8000, 0.5,
+            ),
         ];
         let out = select_model(&inp, &state_with(routes)).unwrap();
         assert_eq!(out.selected_provider, "p2");
@@ -465,7 +495,9 @@ mod tests {
     fn should_reject_undeclared_tool_before_scoring() {
         let mut inp = input();
         inp.tool_needs = vec!["nonexistent.tool".to_string()];
-        let routes = vec![route("a", "p1", "m1", true, "low", "high", "public", 8000, 0.9)];
+        let routes = vec![route(
+            "a", "p1", "m1", true, "low", "high", "public", 8000, 0.9,
+        )];
         let err = select_model(&inp, &state_with(routes)).unwrap_err();
         assert!(matches!(err, ZeroclawError::ToolNotDeclared { .. }));
     }

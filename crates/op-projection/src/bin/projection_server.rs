@@ -12,6 +12,7 @@
 
 use anyhow::{Context, Result};
 use op_projection::*;
+use std::collections::HashMap;
 use tracing::{info, warn};
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
@@ -38,7 +39,13 @@ async fn main() -> Result<()> {
         }
     };
 
-    for schema in plugin_reader.projection_schemas() {
+    let projection_schemas = plugin_reader.projection_schemas();
+    let schema_map: HashMap<String, PluginSchema> = projection_schemas
+        .iter()
+        .map(|schema| (schema.name.clone(), schema.clone()))
+        .collect();
+
+    for schema in projection_schemas {
         register_schema_if_missing(&mut schema_engine, schema)?;
     }
 
@@ -49,7 +56,7 @@ async fn main() -> Result<()> {
 
     // 2. Initialize D-Bus server (owns org.opdbus.v1.plugins, root interface
     //    at /org/opdbus/v1/plugins is always present for introspection).
-    let dbus_server = ProjectionDbusServer::new()
+    let dbus_server = ProjectionDbusServer::new_with_schemas(schema_map.clone())
         .await
         .context("failed to start projection D-Bus server")?;
 
@@ -57,15 +64,15 @@ async fn main() -> Result<()> {
     //    plugin roots from the schema catalog so the tree is never empty.
     dbus_server.sync_from_shm().await?;
 
-    let known_plugins: Vec<String> = plugin_reader
-        .projection_schemas()
-        .iter()
-        .map(|s| s.name.clone())
-        .collect();
+    let known_plugins: Vec<String> = schema_map.keys().cloned().collect();
     dbus_server.seed_plugin_roots(&known_plugins).await?;
 
     let count = dbus_server.object_count().await;
-    info!(objects = count, plugins = known_plugins.len(), "Initial tree sync complete");
+    info!(
+        objects = count,
+        plugins = known_plugins.len(),
+        "Initial tree sync complete"
+    );
 
     // 4. Initialize JSON-stream server (for WebSocket clients).
     let mut stream_server = ProjectionStreamServer::new();

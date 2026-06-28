@@ -7,7 +7,7 @@
 
 use anyhow::Result;
 use op_core::state_publisher::{ChangeType, StatePublisher};
-use op_dbus_model::{CatalogDocument, SqlitePluginCatalog};
+use op_dbus_model::{CatalogDocument, PluginCatalog};
 use op_state::StatePlugin;
 use op_state_store::SchemaCatalog;
 use parking_lot::RwLock;
@@ -29,7 +29,7 @@ pub struct PluginRegistry {
     plugins: AsyncRwLock<HashMap<String, PluginRecord>>,
     base_path: PathBuf,
     schema_catalog: Arc<RwLock<SchemaCatalog>>,
-    schema_catalog_store: Option<Arc<SqlitePluginCatalog>>,
+    schema_catalog_store: Option<Arc<PluginCatalog>>,
     publisher: AsyncRwLock<Option<Arc<dyn StatePublisher>>>,
     dbus_connection: AsyncRwLock<Option<zbus::Connection>>,
 }
@@ -46,7 +46,7 @@ impl PluginRegistry {
     pub fn with_schema_catalog_and_store(
         base_path: impl AsRef<Path>,
         schema_catalog: Arc<RwLock<SchemaCatalog>>,
-        schema_catalog_store: Option<Arc<SqlitePluginCatalog>>,
+        schema_catalog_store: Option<Arc<PluginCatalog>>,
     ) -> Self {
         Self {
             plugins: AsyncRwLock::new(HashMap::new()),

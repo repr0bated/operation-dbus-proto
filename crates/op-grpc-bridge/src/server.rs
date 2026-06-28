@@ -4,8 +4,8 @@
 //!   - native gRPC over Unix socket `/run/opdbus/zeroclaw-grpc.sock`
 //!   - HTTP/1.1 + gRPC-Web on TCP `0.0.0.0:8090` (configurable via D-Bus)
 //!
-//! The schema itself is never generated here; it is read from
-//! `/dev/shm/opdbus/schemas/zeroclaw.json` written by the zeroclaw plugin.
+//! The schema itself is never generated here; it is read from the canonical
+//! SchemaEngine monolith at `/dev/shm/live-schema.json`.
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -33,11 +33,12 @@ use crate::proto::zeroclaw::{
 
 const DEFAULT_UNIX_SOCKET: &str = "/run/opdbus/zeroclaw-grpc.sock";
 const DEFAULT_BIND_ADDR: &str = "0.0.0.0:8090";
-const DEFAULT_SCHEMA_PATH: &str = "/dev/shm/opdbus/schemas/zeroclaw.json";
+const DEFAULT_SCHEMA_PATH: &str = "/dev/shm/live-schema.json";
 
 /// Runtime configuration for the zeroclaw Axum host.
 #[derive(Clone, Debug)]
 pub struct ServerConfig {
+    pub plugin_id: String,
     pub schema_path: PathBuf,
     pub unix_socket: PathBuf,
     pub bind_addr: String,
@@ -46,6 +47,7 @@ pub struct ServerConfig {
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
+            plugin_id: "zeroclaw".to_string(),
             schema_path: PathBuf::from(DEFAULT_SCHEMA_PATH),
             unix_socket: PathBuf::from(DEFAULT_UNIX_SOCKET),
             bind_addr: DEFAULT_BIND_ADDR.to_string(),
@@ -57,6 +59,9 @@ impl ServerConfig {
     /// Load configuration from environment variables, falling back to defaults.
     pub fn from_env() -> Self {
         Self {
+            plugin_id: std::env::var("OP_DBUS_SCHEMA_PLUGIN_ID")
+                .or_else(|_| std::env::var("ZEROCLAW_PLUGIN_ID"))
+                .unwrap_or_else(|_| "zeroclaw".to_string()),
             schema_path: PathBuf::from(
                 std::env::var("ZEROCLAW_SCHEMA_PATH")
                     .unwrap_or_else(|_| DEFAULT_SCHEMA_PATH.to_string()),
@@ -155,7 +160,8 @@ fn inject_trace_metadata<T>(response: &mut TonicResponse<T>, context: &TraceCont
 /// unix-socket plugin's createsocket through PluginService, not a raw Incus proxy
 /// device).
 fn build_routes(loader: Arc<SchemaLoader>, server: OperationGrpcServer) -> tonic::service::Routes {
-    let zeroclaw_svc = tonic_web::enable(ZeroclawServiceServer::new(ZeroclawGrpcService { loader }));
+    let zeroclaw_svc =
+        tonic_web::enable(ZeroclawServiceServer::new(ZeroclawGrpcService { loader }));
     build_operation_routes(server).add_service(zeroclaw_svc)
 }
 
@@ -185,7 +191,10 @@ fn build_tonic_routes(
 /// Returns only when both listeners exit (which should not happen under normal
 /// operation).
 pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
-    let loader = Arc::new(SchemaLoader::new(&config.schema_path)?);
+    let loader = Arc::new(SchemaLoader::new_for_plugin(
+        &config.schema_path,
+        config.plugin_id.clone(),
+    )?);
 
     // Channel for D-Bus-triggered rebind requests. Only `SchemaPath` changes are
     // applied live; `BindAddr` changes are recorded and honored on the next
@@ -204,12 +213,13 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
     // plugin_id="unix_socket" routes through MutationEngine.mutate →
     // UnixSocketPlugin::create_unix_socket. The sled identity is resolved as
     // the actor_id inside mutate when the caller omits it.
-    let event_chain = Arc::new(tokio::sync::RwLock::new(
-        op_state_store::EventChain::new(op_state_store::ChainConfig::default()),
-    ));
+    let event_chain = Arc::new(tokio::sync::RwLock::new(op_state_store::EventChain::new(
+        op_state_store::ChainConfig::default(),
+    )));
     let ovsdb = Arc::new(op_network::rovs_proxy::OvsdbDbusClient::new());
     let nonnet = Arc::new(op_jsonrpc::nonnet::NonNetDb::new());
     let mutation_engine = Arc::new(MutationEngine::new(event_chain, ovsdb, nonnet));
+    mutation_engine.seed_missing_plugin_projections().await?;
     let operation_server = OperationGrpcServer::new(mutation_engine);
     // Attach the semantic shuttle for parity with run_grpc_server so
     // SearchSemanticTrace behaves identically on both endpoints (best-effort:
