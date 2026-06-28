@@ -140,6 +140,47 @@ impl SchemaPassthroughService {
         self.router.list_plugin_ids().await
     }
 
+    /// Build the read-only `ZeroclawProjection` proto for the `"zeroclaw"`
+    /// plugin from the in-memory `ZeroclawState` (never a `/dev/shm` re-read).
+    /// Returns `None` for any other plugin name.
+    /// subid: `exp.service.zeroclaw-bridge.grpc-stream@v1`.
+    pub fn zeroclaw_projection(plugin_name: &str) -> Option<crate::proto::ZeroclawProjection> {
+        if plugin_name != "zeroclaw" {
+            return None;
+        }
+        let state = op_plugins::state_plugins::zeroclaw::ZeroclawPlugin::current_state();
+        let schema_json = serde_json::to_string(&state).unwrap_or_else(|_| "{}".to_string());
+        let model_routes = state
+            .projection
+            .model_routes
+            .iter()
+            .map(|r| crate::proto::ModelRouteProto {
+                hint: r.hint.clone(),
+                model: r.model.clone(),
+                provider: r.provider.clone(),
+                available: r.available,
+                effort_level: r.effort_level.clone(),
+                privacy_tier: r.privacy_tier.clone(),
+                context_window: r.context_window,
+            })
+            .collect();
+        let providers = state
+            .projection
+            .providers
+            .iter()
+            .map(|p| crate::proto::ProviderProto {
+                id: p.id.clone(),
+                route: p.route.clone(),
+                kind: p.kind.clone(),
+            })
+            .collect();
+        Some(crate::proto::ZeroclawProjection {
+            schema_json,
+            model_routes,
+            providers,
+        })
+    }
+
     /// Trigger a schema reload (called reactively on mutation, not polled).
     pub async fn reload(&self) {
         let _ = self.router.reload().await;

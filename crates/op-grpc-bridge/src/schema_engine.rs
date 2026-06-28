@@ -577,8 +577,40 @@ impl SchemaEngine {
         };
         let _ = self.change_tx.send(change.clone());
 
-        // Return a JSON result carrying the event accountability proof and
-        // the echoed value. This is the value the bridge serializes and
+        // For the Zeroclaw plugin, run the plugin-owned orchestration (design §5)
+        // so declared methods return real domain decisions instead of an echo.
+        // The accountability event above is still the single recorded event.
+        // State is read from the in-memory projection authority (never /dev/shm).
+        let method_result: serde_json::Value = if plugin_id == "zeroclaw" {
+            let state = op_plugins::state_plugins::zeroclaw::ZeroclawPlugin::current_state();
+            match op_plugins::state_plugins::zeroclaw::dispatch_zeroclaw_method(
+                method, json_args, &state,
+            ) {
+                Ok(outcome) => {
+                    // Persist effective Set* changes to the authoritative state
+                    // cache so the new selection is observable to readers.
+                    if method == "SetProvider" || method == "SetModel" {
+                        self.merge_into_state_cache("zeroclaw", &outcome.result).await;
+                    }
+                    if let Some(sig) = &outcome.signal {
+                        tracing::debug!(plugin_id, method, signal = %sig.name, "zeroclaw dispatch signal");
+                    }
+                    outcome.result
+                }
+                Err(e) => {
+                    return Err(anyhow::anyhow!(
+                        "zeroclaw dispatch error for '{}': {}",
+                        method,
+                        e
+                    ))
+                }
+            }
+        } else {
+            serde_json::to_value(&parsed_value).unwrap_or(serde_json::Value::Null)
+        };
+
+        // Return a JSON result carrying the event accountability proof and the
+        // method's domain result. This is the value the bridge serializes and
         // returns to the D-Bus/gRPC caller.
         let result = serde_json::json!({
             "success": true,
@@ -586,9 +618,33 @@ impl SchemaEngine {
             "event_hash": change.event_hash,
             "plugin_id": plugin_id,
             "method": method,
-            "result": serde_json::to_value(&parsed_value).unwrap_or(serde_json::Value::Null),
+            "result": method_result,
         });
         Ok(result)
+    }
+
+    /// Merge a flat JSON object of changed fields into the authoritative
+    /// in-memory state cache for `plugin_id` (used to persist Zeroclaw `Set*`
+    /// selection changes so readers observe the new effective state).
+    async fn merge_into_state_cache(&self, plugin_id: &str, changes: &serde_json::Value) {
+        let changes_obj = match changes.as_object() {
+            Some(o) => o,
+            None => return,
+        };
+        let mut current = self
+            .get_state(plugin_id)
+            .await
+            .and_then(|v| serde_json::to_value(&v).ok())
+            .unwrap_or_else(|| serde_json::json!({}));
+        if let Some(cur_obj) = current.as_object_mut() {
+            for (k, v) in changes_obj {
+                cur_obj.insert(k.clone(), v.clone());
+            }
+        }
+        let mut bytes = serde_json::to_vec(&current).unwrap_or_default();
+        if let Ok(owned) = simd_json::to_owned_value(&mut bytes) {
+            self.update_state_cache(plugin_id.to_string(), owned).await;
+        }
     }
 
     /// Fetch current state for a specific plugin from authoritative cache
