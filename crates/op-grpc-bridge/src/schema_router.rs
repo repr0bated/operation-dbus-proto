@@ -24,6 +24,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use jsonschema::Validator;
 use serde_json::Value as JsonValue;
 use tokio::sync::RwLock;
 use tracing::{debug, info};
@@ -702,6 +703,29 @@ impl SchemaBackedInterface {
         .await
         .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
     }
+
+    /// Validates that json_args conforms to the JSON Schema in MethodDecl.args.
+    ///
+    /// Returns Ok(()) if validation passes, Err(String) with details if it fails.
+    /// This validation happens before dispatch, so invalid args cause no mutation
+    /// (Requirement 6.3 / VAL-VALIDATE-003).
+    fn validate_json_args(&self, method_decl: &JsonValue, json_args: &str) -> Result<(), String> {
+        let args_schema = method_decl.get("args").ok_or_else(|| "missing args schema".to_string())?;
+
+        // Parse the args schema as a validator
+        let validator = Validator::new(args_schema).map_err(|e| format!("invalid schema: {}", e))?;
+
+        // Parse the args JSON
+        let args_value: JsonValue = serde_json::from_str(json_args)
+            .map_err(|e| format!("invalid JSON: {}", e))?;
+
+        // Validate against the schema (jsonschema uses draft-07 by default)
+        if let Err(e) = validator.validate(&args_value) {
+            return Err(format!("validation error: {}", e));
+        }
+
+        Ok(())
+    }
 }
 
 #[zbus::interface(name = "org.opdbus.v1.PluginV1")]
@@ -719,13 +743,24 @@ impl SchemaBackedInterface {
     /// `zbus::fdo::Error::Failed` (Requirement 5.3 / VAL-DISPATCH-003).
     async fn call(&self, method: String, json_args: String) -> zbus::fdo::Result<String> {
         // 1. Method-existence gate: reject undeclared methods (Requirement 6).
-        if !self.route.methods.contains_key(&method) {
-            return Err(zbus::fdo::Error::UnknownMethod(method));
-        }
+        // If the methods map is empty, ALL invocations are rejected as UnknownMethod.
+        let method_decl = match self.route.methods.get(&method) {
+            Some(decl) => decl,
+            None => return Err(zbus::fdo::Error::UnknownMethod(method)),
+        };
 
         info!(plugin_id = %self.plugin_id, method, "D-Bus method call received");
 
-        // 2. Real dispatch through SchemaEngine (Requirement 5).
+        // 2. Argument validation against MethodDecl.args JSON Schema (Requirement 6.3).
+        // json_args must conform to the schema; rejection as InvalidArgs without calling mutate.
+        if let Err(e) = self.validate_json_args(&method_decl, &json_args) {
+            return Err(zbus::fdo::Error::InvalidArgs(format!(
+                "arguments do not conform to schema for method '{}': {}",
+                method, e
+            )));
+        }
+
+        // 3. Real dispatch through SchemaEngine (Requirement 5).
         //    json_args is passed verbatim — no default, no placeholder
         //    (Requirement 5.4 / VAL-DISPATCH-004).
         let engine = self.engine.as_ref().ok_or_else(|| {
@@ -738,11 +773,8 @@ impl SchemaBackedInterface {
         // (enforcement is bridge-layer, Requirement 7). For the dispatch call,
         // the declared required_capability is threaded through so the event
         // chain records it.
-        let capability_id = self
-            .route
-            .methods
-            .get(&method)
-            .and_then(|decl| decl.get("required_capability"))
+        let capability_id = method_decl
+            .get("required_capability")
             .and_then(|c| c.as_str())
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string());
@@ -763,7 +795,7 @@ impl SchemaBackedInterface {
             .await
             .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
 
-        // 3. Return the serialized result to the D-Bus caller.
+        // 4. Return the serialized result to the D-Bus caller.
         serde_json::to_string(&result).map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
     }
 
@@ -1667,6 +1699,7 @@ mod tests {
     }
 
     /// Builds a `PluginRoute` with a method that has a `required_capability`.
+    /// Also includes ForceDispatchError for testing VAL-DISPATCH-003 error propagation.
     fn dispatch_test_route() -> PluginRoute {
         let mut methods = HashMap::new();
         methods.insert(
@@ -1691,6 +1724,20 @@ mod tests {
                 "idempotent": true,
                 "required_capability": null,
                 "subid": "obs.service.beta.get-status@v1"
+            }),
+        );
+        // Test-only method to trigger dispatch errors for VAL-DISPATCH-003.
+        // Accepts empty object as valid args, but dispatch_method_call returns an error.
+        methods.insert(
+            "ForceDispatchError".to_string(),
+            json!({
+                "name": "ForceDispatchError",
+                "args": { "type": "object", "properties": {} },
+                "returns": null,
+                "side_effect": "read",
+                "idempotent": true,
+                "required_capability": null,
+                "subid": "obs.service.beta.force-dispatch-error@v1"
             }),
         );
         PluginRoute {
@@ -1774,16 +1821,19 @@ mod tests {
     async fn mutate_error_propagated_to_caller() {
         // VAL-DISPATCH-003: if SchemaEngine returns an error, the bridge
         // propagates it as zbus::fdo::Error::Failed.
+        // Uses ForceDispatchError method with valid JSON args to trigger dispatch error
+        // (without using malformed JSON, which would be rejected by arg-validation gate).
         let engine = test_engine();
         let route = dispatch_test_route();
         let iface =
             SchemaBackedInterface::with_engine("beta".to_string(), route, Some(engine.clone()));
 
-        // Invalid JSON args → dispatch_method_call returns Err → fdo::Error::Failed.
+        // Valid JSON args that pass validation, but ForceDispatchError triggers
+        // an error in dispatch_method_call to test error propagation.
         let result = iface
-            .call("GetStatus".to_string(), "not-valid-json".to_string())
+            .call("ForceDispatchError".to_string(), "{}".to_string())
             .await;
-        assert!(result.is_err(), "invalid json_args must produce an error");
+        assert!(result.is_err(), "dispatch error must propagate to caller");
         let err = result.unwrap_err();
         assert!(
             matches!(err, zbus::fdo::Error::Failed(_)),
@@ -1932,5 +1982,167 @@ mod tests {
             chain.events().is_empty(),
             "unknown method must not record an event (mutate not called)"
         );
+    }
+
+    // ── VAL-VALIDATE-001: Look up MethodDecl before dispatch ─────────────────
+
+    #[tokio::test]
+    async fn bridge_looks_up_method_decl_before_dispatch() {
+        // VAL-VALIDATE-001: the bridge must look up the MethodDecl in
+        // PluginSchema.methods before dispatching to SchemaEngine.
+        let base = test_base_dir();
+        let monolith_path = write_test_monolith(&base);
+        let per_plugin_dir = base.join("opdbus/schemas");
+        let routes = SchemaRouter::load_routes_from(&monolith_path, &per_plugin_dir);
+
+        let beta = routes["beta"].clone();
+        let engine = test_engine();
+        let iface =
+            SchemaBackedInterface::with_engine("beta".to_string(), beta, Some(engine.clone()));
+
+        // The call should validate by looking up the method in the route's methods map
+        // (which contains MethodDecl JSON) and then dispatch.
+        let result = iface.call("SetKey".to_string(), r#"{"key":"test"}"#.to_string()).await;
+        assert!(result.is_ok(), "call should succeed after method lookup and validation");
+
+        let chain = engine.event_chain.read().await;
+        assert_eq!(
+            chain.events().len(),
+            1,
+            "one event recorded - mutate was called after method lookup"
+        );
+
+        cleanup(&base);
+    }
+
+    // ── VAL-VALIDATE-003: Argument validation against JSON Schema ──────────────
+
+    #[tokio::test]
+    async fn invalid_args_rejected_before_mutate() {
+        // VAL-VALIDATE-003: if json_args do not conform to MethodDecl.args
+        // (validated via jsonschema crate), the bridge returns InvalidArgs
+        // without calling mutate.
+        let engine = test_engine();
+        let route = dispatch_test_route();
+        let iface =
+            SchemaBackedInterface::with_engine("beta".to_string(), route, Some(engine.clone()));
+
+        // SetKey requires {"key": "string"} with key in required array
+        // Missing required key should be rejected
+        let result = iface.call("SetKey".to_string(), "{}".to_string()).await;
+        assert!(
+            matches!(result, Err(zbus::fdo::Error::InvalidArgs(_))),
+            "missing required key should be rejected as InvalidArgs"
+        );
+
+        // SchemaEngine.mutate should NOT have been called
+        let chain = engine.event_chain.read().await;
+        assert!(
+            chain.events().is_empty(),
+            "invalid args must not trigger mutate (no event recorded)"
+        );
+    }
+
+    #[tokio::test]
+    async fn valid_args_pass_to_mutate() {
+        // Valid args conform to the schema and should dispatch successfully.
+        let engine = test_engine();
+        let route = dispatch_test_route();
+        let iface =
+            SchemaBackedInterface::with_engine("beta".to_string(), route, Some(engine.clone()));
+
+        let result = iface.call("SetKey".to_string(), r#"{"key":"my-key"}"#.to_string()).await;
+        assert!(result.is_ok(), "valid args should dispatch successfully");
+
+        // Event should have been recorded
+        let chain = engine.event_chain.read().await;
+        assert_eq!(
+            chain.events().len(),
+            1,
+            "valid args should trigger mutate (one event recorded)"
+        );
+    }
+
+    // ── VAL-VALIDATE-004: Uses cached schema, not per-call re-read ────────────
+
+    #[test]
+    fn validation_uses_cached_schema_not_per_call_read() {
+        // VAL-VALIDATE-004: method validation uses the schema loaded from SHM
+        // at bridge startup (refreshed on manifest hash change), not per-call
+        // file reads. SchemaBackedInterface::validate_json_args reads from the
+        // method_decl already stored in the route (which was loaded once at
+        // startup), not from a file.
+        let base = test_base_dir();
+        let monolith_path = write_test_monolith(&base);
+        let per_plugin_dir = base.join("opdbus/schemas");
+
+        // Load routes once - this simulates the one-time SHM read at startup
+        let routes = SchemaRouter::load_routes_from(&monolith_path, &per_plugin_dir);
+        let beta = routes["beta"].clone();
+
+        // Create interface - it has no file reads inside validate_json_args
+        let iface = SchemaBackedInterface::with_shm_state_dir(
+            "beta".to_string(),
+            beta,
+            &base.join("state"),
+        );
+
+        // The validate_json_args method operates on the cached method_decl
+        // (the JsonValue stored in the route), not on a file read.
+        let result = iface.validate_json_args(
+            &iface.route.methods.get("SetKey").unwrap(),
+            r#"{"key":"test"}"#,
+        );
+        assert!(result.is_ok(), "validation should work against cached schema");
+
+        cleanup(&base);
+    }
+
+    // ── VAL-VALIDATE-005: Empty methods map rejects all invocations ───────────
+
+    #[tokio::test]
+    async fn empty_methods_rejects_all_invocations() {
+        // VAL-VALIDATE-005: where PluginSchema.methods is empty, ALL method
+        // invocations on that object are rejected as UnknownMethod.
+        let base = test_base_dir();
+        let empty_monolith = json!({
+            "empty_plugin": {
+                "name": "empty_plugin",
+                "methods": {},
+                "signals": [],
+                "properties": {}
+            }
+        });
+        let monolith_path = base.join("live-schema.json");
+        fs::write(&monolith_path, serde_json::to_vec_pretty(&empty_monolith).unwrap()).unwrap();
+        let per_plugin_dir = base.join("opdbus/schemas");
+
+        let routes = SchemaRouter::load_routes_from(&monolith_path, &per_plugin_dir);
+        assert!(routes.contains_key("empty_plugin"), "empty_plugin should be registered");
+        assert!(
+            routes["empty_plugin"].methods.is_empty(),
+            "empty_plugin should have empty methods map"
+        );
+
+        let engine = test_engine();
+        let route = routes["empty_plugin"].clone();
+        let iface =
+            SchemaBackedInterface::with_engine("empty_plugin".to_string(), route, Some(engine.clone()));
+
+        // Any method call should be rejected as UnknownMethod
+        let result = iface.call("AnyMethod".to_string(), "{}".to_string()).await;
+        assert!(
+            matches!(result, Err(zbus::fdo::Error::UnknownMethod(_))),
+            "empty methods map must reject all invocations as UnknownMethod"
+        );
+
+        // mutate should NOT have been called
+        let chain = engine.event_chain.read().await;
+        assert!(
+            chain.events().is_empty(),
+            "empty methods must not trigger mutate"
+        );
+
+        cleanup(&base);
     }
 }

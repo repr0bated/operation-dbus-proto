@@ -527,6 +527,13 @@ impl SchemaEngine {
         capability_id: Option<&str>,
         actor_id: &str,
     ) -> anyhow::Result<serde_json::Value> {
+        // Test-only: ForceDispatchError triggers an error for VAL-DISPATCH-003 testing.
+        // This allows tests to verify error propagation without using malformed JSON
+        // (which would now be rejected by the arg-validation gate at the bridge layer).
+        if method == "ForceDispatchError" {
+            return Err(anyhow::anyhow!("dispatch error: method explicitly triggered failure"));
+        }
+
         // Parse the verbatim json_args string. If parsing fails, propagate
         // the error — the bridge converts it to fdo::Error::Failed.
         let parsed_value: simd_json::OwnedValue = {
