@@ -15,18 +15,17 @@ use std::collections::HashMap;
 use std::io::Write;
 use tracing::{debug, error, info, warn};
 
-/// Derived "all-together" monolith cache of the PluginSchema catalog. Kept for
-/// whole-catalog readers; NO LONGER the hash source (the manifest root is).
+/// Authoritative all-together monolith of the PluginSchema catalog.
 const SHM_SCHEMA_PATH: &str = "/dev/shm/live-schema.json";
 
-/// Directory of bare per-plugin schema objects (`<plugin>.json`) for individual
-/// consumption — emitted alongside the monolith from the same single producer.
+/// Materialized per-plugin schema views. These are written by the same
+/// SchemaEngine commit as the monolith; they are not consumer-owned caches.
 const SHM_SCHEMA_DIR: &str = "/dev/shm/opdbus/schemas";
 
-/// Manifest carrying the single folded `catalog_hash` + per-plugin leaf hashes +
+/// Manifest carrying the single `catalog_hash`, per-plugin leaf hashes, and
 /// `generation`. Written LAST as the atomic commit point; the one place the
 /// catalog hash is published — consumers read it, never re-hash.
-const SHM_MANIFEST_PATH: &str = "/dev/shm/opdbus/schemas/.manifest.json";
+const SHM_MANIFEST_PATH: &str = "/dev/shm/opdbus/.manifest.json";
 
 /// Schema version identifier
 pub type SchemaVersion = u64;
@@ -66,6 +65,10 @@ fn numeric_or_length(value: &Value) -> Option<f64> {
 /// Atomically publish `bytes` to a `/dev/shm` path via a sibling temp file +
 /// rename, so readers see either the old or new content, never a torn write.
 fn atomic_write_shm(path: &str, bytes: &[u8]) -> Result<()> {
+    if let Some(parent) = std::path::Path::new(path).parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| anyhow::anyhow!("Cannot create {}: {}", parent.display(), e))?;
+    }
     let tmp = format!("{}.tmp", path);
     {
         let mut file = std::fs::File::create(&tmp)
@@ -181,20 +184,15 @@ impl SchemaEngine {
             .map(|(k, v)| (k.clone(), v.iter().collect()))
             .collect();
 
-        // 1. Derived "all-together" monolith cache (atomic). Kept for
-        //    whole-catalog readers; no longer the hash source.
         let json_bytes = serde_json::to_vec_pretty(&catalog)
             .map_err(|e| anyhow::anyhow!("Failed to serialize schema catalog: {}", e))?;
         atomic_write_shm(SHM_SCHEMA_PATH, &json_bytes)?;
 
-        // 2. Folder of bare per-plugin schema objects + per-plugin leaf hashes.
         std::fs::create_dir_all(SHM_SCHEMA_DIR)
             .map_err(|e| anyhow::anyhow!("Cannot create schema dir {}: {}", SHM_SCHEMA_DIR, e))?;
         let mut leaves: std::collections::BTreeMap<String, String> =
             std::collections::BTreeMap::new();
         for (id, schemas) in &catalog {
-            // Bare PluginSchema object (canonical one if a plugin declares
-            // several) — "the schema is the plugin"; consumers read this directly.
             let Some(schema) = schemas.first() else {
                 continue;
             };
@@ -204,13 +202,12 @@ impl SchemaEngine {
             leaves.insert(id.clone(), blake3::hash(&bytes).to_hex().to_string());
         }
 
-        // 3. Canonical catalog hash = blake3 of the monolith bytes — the EXACT
+        // Canonical catalog hash = blake3 of the monolith bytes — the EXACT
         //    value the identity derivation already uses, kept stable so the
-        //    WG/ghostbridge verifier needs no change. Per-plugin `leaves` are
-        //    published alongside for per-file integrity / future incremental use.
+        //    WG/ghostbridge verifier needs no change.
         let catalog_hash = blake3::hash(&json_bytes).to_hex().to_string();
 
-        // 4. Manifest, written LAST as the atomic commit point — the one place
+        // Manifest, written LAST as the atomic commit point — the one place
         //    `catalog_hash` is published; consumers read it, never re-hash.
         let generation = Self::read_manifest_generation().wrapping_add(1);
         let mut manifest = serde_json::Map::new();
@@ -218,7 +215,10 @@ impl SchemaEngine {
             "catalog_hash".to_string(),
             serde_json::Value::String(catalog_hash.clone()),
         );
-        manifest.insert("generation".to_string(), serde_json::Value::from(generation));
+        manifest.insert(
+            "generation".to_string(),
+            serde_json::Value::from(generation),
+        );
         manifest.insert(
             "plugins".to_string(),
             serde_json::to_value(&leaves)
@@ -229,11 +229,12 @@ impl SchemaEngine {
         atomic_write_shm(SHM_MANIFEST_PATH, &manifest_bytes)?;
 
         info!(
-            dir = SHM_SCHEMA_DIR,
+            schema_path = SHM_SCHEMA_PATH,
+            manifest_path = SHM_MANIFEST_PATH,
             catalog_hash = %catalog_hash,
             generation,
-            plugins = leaves.len(),
-            "Schema catalog written to shared memory (folder + monolith + manifest)"
+            plugins = catalog.len(),
+            "Schema catalog and materialized plugin schemas written to shared memory"
         );
         Ok(catalog_hash)
     }

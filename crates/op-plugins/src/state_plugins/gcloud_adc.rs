@@ -117,7 +117,6 @@ impl StatePlugin for GcloudAdcPlugin {
         Some(gcloud_adc_schema())
     }
 
-
     async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {
         // For now, no-op diff calculation
         Ok(StateDiff {

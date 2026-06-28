@@ -46,7 +46,6 @@ impl StatePlugin for AdcPlugin {
         Some(adc_schema())
     }
 
-
     async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {
         Ok(StateDiff {
             plugin: self.name().to_string(),

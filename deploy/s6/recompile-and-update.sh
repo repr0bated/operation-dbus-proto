@@ -9,6 +9,7 @@ set -eu
 PROJECT_ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 S6_COMPILED_LINK=${S6_COMPILED_LINK:-/etc/s6/rc/compiled}
 DEFAULT_BUNDLE=${DEFAULT_BUNDLE:-default}
+INSTALL_SBIN=${INSTALL_SBIN:-/usr/local/sbin}
 
 # Build the Rust workspace as the unprivileged user who owns the source tree,
 # then install every binary target to /usr/local/bin. This keeps the cargo
@@ -31,6 +32,12 @@ install_binaries() {
         done
 }
 
+install_control_scripts() {
+    echo "Installing s6 control scripts to $INSTALL_SBIN..."
+    install -Dm755 "$PROJECT_ROOT/deploy/s6/recompile-and-update.sh" \
+        "$INSTALL_SBIN/op-s6-recompile-and-update"
+}
+
 if ! command -v s6 >/dev/null 2>&1 || ! command -v s6-rc-db >/dev/null 2>&1; then
     echo "s6 frontend or s6-rc-db not found" >&2
     exit 127
@@ -40,6 +47,7 @@ if [ "${SKIP_BUILD:-}" != "1" ]; then
     build_workspace
 fi
 install_binaries
+install_control_scripts
 
 old_db="$(readlink -f "$S6_COMPILED_LINK" 2>/dev/null || true)"
 

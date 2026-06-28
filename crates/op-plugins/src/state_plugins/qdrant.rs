@@ -20,7 +20,7 @@ const DEFAULT_QDRANT_GRPC_ENDPOINT: &str = "http://127.0.0.1:6334";
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QdrantCollectionInfo {
     pub name: String,
-    pub status: String,         // CollectionStatus enum: green, yellow, grey, red
+    pub status: String, // CollectionStatus enum: green, yellow, grey, red
     pub optimizer_status: String, // OptimizersStatus enum: ok, disabled
     pub points_count: Option<u64>,
     pub indexed_vectors_count: Option<u64>,
@@ -256,8 +256,8 @@ impl StatePlugin for QdrantPlugin {
 }
 
 pub(crate) fn qdrant_schema() -> PluginSchema {
-    let state =
-        simd_json::serde::to_owned_value(QdrantPlugin::exemplar_state()).unwrap_or_else(|_| json!({}));
+    let state = simd_json::serde::to_owned_value(QdrantPlugin::exemplar_state())
+        .unwrap_or_else(|_| json!({}));
     let mut schema = schema_from_state(
         "qdrant",
         "data",
@@ -265,15 +265,42 @@ pub(crate) fn qdrant_schema() -> PluginSchema {
         "Qdrant vector search engine — collections, vector config, HNSW, optimizers",
         &state,
     );
-    schema.subids.insert("__schema__".to_string(), "sch.software.plugin.qdrant.schema@v1".to_string());
-    schema.subids.insert("version".to_string(), "obs.software.plugin.qdrant.version@v1".to_string());
-    schema.subids.insert("title".to_string(), "obs.software.plugin.qdrant.title@v1".to_string());
-    schema.subids.insert("commit".to_string(), "obs.software.plugin.qdrant.commit@v1".to_string());
-    schema.subids.insert("http_endpoint".to_string(), "src.software.plugin.qdrant.http-endpoint@v1".to_string());
-    schema.subids.insert("grpc_endpoint".to_string(), "src.software.plugin.qdrant.grpc-endpoint@v1".to_string());
-    schema.subids.insert("collections".to_string(), "obs.software.plugin.qdrant.collections@v1".to_string());
-    schema.subids.insert("cluster_status".to_string(), "obs.software.plugin.qdrant.cluster-status@v1".to_string());
-    schema.subids.insert("telemetry".to_string(), "obs.software.plugin.qdrant.telemetry@v1".to_string());
+    schema.subids.insert(
+        "__schema__".to_string(),
+        "sch.software.plugin.qdrant.schema@v1".to_string(),
+    );
+    schema.subids.insert(
+        "version".to_string(),
+        "obs.software.plugin.qdrant.version@v1".to_string(),
+    );
+    schema.subids.insert(
+        "title".to_string(),
+        "obs.software.plugin.qdrant.title@v1".to_string(),
+    );
+    schema.subids.insert(
+        "commit".to_string(),
+        "obs.software.plugin.qdrant.commit@v1".to_string(),
+    );
+    schema.subids.insert(
+        "http_endpoint".to_string(),
+        "src.software.plugin.qdrant.http-endpoint@v1".to_string(),
+    );
+    schema.subids.insert(
+        "grpc_endpoint".to_string(),
+        "src.software.plugin.qdrant.grpc-endpoint@v1".to_string(),
+    );
+    schema.subids.insert(
+        "collections".to_string(),
+        "obs.software.plugin.qdrant.collections@v1".to_string(),
+    );
+    schema.subids.insert(
+        "cluster_status".to_string(),
+        "obs.software.plugin.qdrant.cluster-status@v1".to_string(),
+    );
+    schema.subids.insert(
+        "telemetry".to_string(),
+        "obs.software.plugin.qdrant.telemetry@v1".to_string(),
+    );
     schema
 }
 

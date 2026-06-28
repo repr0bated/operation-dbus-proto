@@ -849,18 +849,13 @@ fn env_u64(key: &str, default: u64) -> u64 {
 }
 
 fn dedupe_results_by_file(results: &mut Vec<RagResult>) {
-    let mut seen: HashMap<String, ()> = HashMap::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     results.retain(|result| {
         let key = format!(
             "{}:{}:{}",
             result.retrieval_collection, result.repo, result.file_path
         );
-        if seen.contains_key(&key) {
-            false
-        } else {
-            seen.insert(key, ());
-            true
-        }
+        seen.insert(key)
     });
 }
 

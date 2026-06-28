@@ -1,28 +1,20 @@
 #!/bin/sh
 # gbr-xray - Xray REALITY egress for GhostBridge privacy chain
 # AGENTS.md: D-Bus-first architecture with accountability headers
-#
-# Dynamic cutover: prefer the schema-shuttle-generated config in /dev/shm;
-# fall back to the static config until the shuttle has run at least once.
 
-# Load secrets if available (XRAY_UUID, XRAY_PRIVATE_KEY, XRAY_SHORT_ID, NEXTDNS_PROFILE_ID)
-if [ -f /etc/ghostbridge/xray.env ]; then
-    . /etc/ghostbridge/xray.env
-fi
+XRAY_CONFIG="${XRAY_CONFIG:-/etc/xray/config.json}"
 
-DYNAMIC_CONFIG="/dev/shm/xray-ghostbridge.json"
-STATIC_CONFIG="/etc/xray/config.json"
-
-if [ -f "$DYNAMIC_CONFIG" ]; then
-    XRAY_CONFIG="${XRAY_CONFIG:-$DYNAMIC_CONFIG}"
-else
-    XRAY_CONFIG="${XRAY_CONFIG:-$STATIC_CONFIG}"
-fi
-
+# Check if config exists
 if [ ! -f "$XRAY_CONFIG" ]; then
     echo "Xray config not found: $XRAY_CONFIG"
     exit 0
 fi
 
+# Load secrets if available (XRAY_PUBLIC_KEY, etc.)
+if [ -f /etc/ghostbridge/xray.env ]; then
+    . /etc/ghostbridge/xray.env
+fi
+
+# Run Xray
 exec 2>&1
 exec /usr/local/bin/xray run -c "$XRAY_CONFIG"

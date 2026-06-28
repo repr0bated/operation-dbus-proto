@@ -16,6 +16,12 @@ use std::io::Write;
 
 /// Directory for per-plugin projection files (one JSON file per plugin).
 pub const SHM_PROJECTION_DIR: &str = "/dev/shm/opdbus/projections";
+/// Legacy/current present-state directory produced by the projection server.
+///
+/// Readers prefer `SHM_PROJECTION_DIR` because that is the mutation projection
+/// contract. Until every producer writes there, this fallback keeps the D-Bus
+/// tree derived from the live tmpfs state instead of exposing schema roots only.
+pub const SHM_STATE_DIR: &str = "/dev/shm/opdbus/state";
 
 /// Manifest carrying the monotonic `generation` counter. Written LAST as the
 /// atomic commit point after each projection write. Consumers read it to
@@ -27,8 +33,8 @@ pub const SHM_PROJECTION_MANIFEST: &str = "/dev/shm/opdbus/projections/.manifest
 pub fn atomic_write_shm(path: &str, bytes: &[u8]) -> anyhow::Result<()> {
     let tmp = format!("{}.tmp", path);
     {
-        let mut file = fs::File::create(&tmp)
-            .map_err(|e| anyhow::anyhow!("Cannot create {}: {}", tmp, e))?;
+        let mut file =
+            fs::File::create(&tmp).map_err(|e| anyhow::anyhow!("Cannot create {}: {}", tmp, e))?;
         file.write_all(bytes)
             .map_err(|e| anyhow::anyhow!("Failed to write {}: {}", tmp, e))?;
         file.sync_all()
@@ -43,13 +49,23 @@ pub fn atomic_write_shm(path: &str, bytes: &[u8]) -> anyhow::Result<()> {
 fn safe_filename(plugin_id: &str) -> String {
     plugin_id
         .chars()
-        .map(|c| if c == '/' || c == '\\' || c == '\0' { '_' } else { c })
+        .map(|c| {
+            if c == '/' || c == '\\' || c == '\0' {
+                '_'
+            } else {
+                c
+            }
+        })
         .collect()
 }
 
 /// File path for a specific plugin's projection.
 pub fn projection_file_path(plugin_id: &str) -> String {
     format!("{}/{}.json", SHM_PROJECTION_DIR, safe_filename(plugin_id))
+}
+
+fn state_file_path(plugin_id: &str) -> String {
+    format!("{}/{}.json", SHM_STATE_DIR, safe_filename(plugin_id))
 }
 
 /// Write a plugin's full projected state to shm and bump the manifest
@@ -77,7 +93,9 @@ pub fn write_projection(plugin_id: &str, json_bytes: &[u8]) -> anyhow::Result<()
 
 /// Read the raw bytes of a plugin's projection from shm.
 pub fn read_projection_bytes(plugin_id: &str) -> Option<Vec<u8>> {
-    fs::read(projection_file_path(plugin_id)).ok()
+    fs::read(projection_file_path(plugin_id))
+        .or_else(|_| fs::read(state_file_path(plugin_id)))
+        .ok()
 }
 
 /// Read the current manifest `generation`, or 0 if no manifest exists yet.
@@ -102,8 +120,17 @@ pub fn read_manifest_generation() -> u64 {
 /// unsanitized back to their original form (the safe-filename transform is
 /// lossless for valid plugin ids).
 pub fn list_projected_plugins() -> Vec<String> {
+    let mut plugins = list_plugin_files(SHM_PROJECTION_DIR);
+    if plugins.is_empty() {
+        plugins = list_plugin_files(SHM_STATE_DIR);
+    }
+    plugins.sort();
+    plugins
+}
+
+fn list_plugin_files(dir: &str) -> Vec<String> {
     let mut plugins = Vec::new();
-    if let Ok(entries) = fs::read_dir(SHM_PROJECTION_DIR) {
+    if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
             if let Some(name) = entry.file_name().to_str() {
                 if let Some(plugin) = name.strip_suffix(".json") {
@@ -115,7 +142,6 @@ pub fn list_projected_plugins() -> Vec<String> {
             }
         }
     }
-    plugins.sort();
     plugins
 }
 

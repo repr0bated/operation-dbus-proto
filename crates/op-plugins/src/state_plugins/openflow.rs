@@ -1120,7 +1120,6 @@ impl StatePlugin for OpenFlowPlugin {
         "OpenFlow requires /var/run/openvswitch/db.sock (OVSDB daemon)".to_string()
     }
 
-
     async fn calculate_diff(&self, current: &Value, desired: &Value) -> Result<StateDiff> {
         log::info!("Calculating OpenFlow diff with policy-based flow generation");
 

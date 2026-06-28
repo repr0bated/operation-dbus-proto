@@ -43,8 +43,8 @@ async fn resolve_listen_addr() -> SocketAddr {
         .ok()
         .and_then(|p| p.parse().ok())
         .unwrap_or(DEFAULT_GRPC_PORT);
-    let iface = std::env::var("OP_DBUS_GRPC_IFACE")
-        .unwrap_or_else(|_| DEFAULT_GRPC_IFACE.to_string());
+    let iface =
+        std::env::var("OP_DBUS_GRPC_IFACE").unwrap_or_else(|_| DEFAULT_GRPC_IFACE.to_string());
 
     if let Ok(interfaces) = list_interfaces().await {
         if let Some(ni) = interfaces.iter().find(|i| i.name == iface) {

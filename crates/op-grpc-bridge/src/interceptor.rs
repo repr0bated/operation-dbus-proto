@@ -9,6 +9,14 @@
 use op_identity::IdentitySled;
 use tonic::{Request, Status};
 
+/// Identity extracted by the Ghostbridge interceptor and attached to each
+/// accepted request for bridge-layer authorization.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GhostbridgeIdentity {
+    pub footprint: String,
+    pub session_id: String,
+}
+
 /// Check whether a sled is "valid" per the Absolute Base rule.
 fn is_sled_valid(sled: &IdentitySled) -> bool {
     sled.hashed_footprint != [0u8; 32] && sled.trace_id != [0u8; 16]
@@ -36,7 +44,11 @@ pub fn ghostbridge_interceptor(mut req: Request<()>) -> Result<Request<()>, Stat
     //    Clone header values upfront to release the immutable borrow on `req`,
     //    allowing the mutable `extensions_mut()` call downstream.
     let footprint_value = req.metadata().get("x-ghostbridge-footprint").cloned();
-    let trace_value = req.metadata().get("x-ghostbridge-trace-id").cloned();
+    let trace_value = req
+        .metadata()
+        .get("x-ghostbridge-trace-id")
+        .or_else(|| req.metadata().get("x-wireguard-pubkey"))
+        .cloned();
 
     if footprint_value.is_none() || trace_value.is_none() {
         return Err(Status::unauthenticated(
@@ -76,9 +88,16 @@ pub fn ghostbridge_interceptor(mut req: Request<()>) -> Result<Request<()>, Stat
     }
 
     // 4. Pass the Trace ID downstream into the gRPC context for the React GUI.
-    if let Some(trace_val) = trace_value {
-        req.extensions_mut().insert(trace_val);
-    }
+    let session_id = trace_value
+        .as_ref()
+        .expect("trace checked above")
+        .to_str()
+        .map_err(|_| Status::invalid_argument("Invalid trace header encoding"))?
+        .to_string();
+    req.extensions_mut().insert(GhostbridgeIdentity {
+        footprint: request_footprint.to_string(),
+        session_id,
+    });
 
     Ok(req)
 }
@@ -165,7 +184,9 @@ mod tests {
         assert!(result.is_err());
         let status = result.unwrap_err();
         assert_eq!(status.code(), tonic::Code::Internal);
-        assert!(status.message().contains("MutationEngine Memory Unreachable"));
+        assert!(status
+            .message()
+            .contains("MutationEngine Memory Unreachable"));
     }
 
     #[test]

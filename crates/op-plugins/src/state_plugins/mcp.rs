@@ -458,7 +458,6 @@ impl StatePlugin for McpStatePlugin {
         Some(mcp_schema())
     }
 
-
     async fn calculate_diff(&self, current: &Value, desired: &Value) -> Result<StateDiff> {
         let current_config: McpConfig = simd_json::serde::from_owned_value(current.clone())?;
         let desired_config: McpConfig = simd_json::serde::from_owned_value(desired.clone())?;
@@ -591,7 +590,7 @@ mod tests {
     use super::*;
     use crate::state_plugins::common::oscal::validate_subid;
     use crate::state_plugins::schemars_adapter::schema_diffs;
-    use op_state_store::SqliteStore;
+    use op_state_store::MemoryStore;
     use serde_json::Value as JVal;
 
     fn collect_subids(node: &JVal, out: &mut Vec<String>) {
@@ -628,15 +627,7 @@ mod tests {
 
     #[test]
     fn should_publish_plugin_owned_mcp_schema() {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime");
-        let store = Arc::new(
-            runtime
-                .block_on(SqliteStore::new(":memory:"))
-                .expect("store"),
-        );
+        let store = Arc::new(MemoryStore::new());
         let plugin = McpStatePlugin::new(store, "/tmp/test-mcp-schema.json");
         let schema = plugin.schema().expect("mcp schema");
 

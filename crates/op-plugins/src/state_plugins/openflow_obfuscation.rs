@@ -411,7 +411,6 @@ impl StatePlugin for OpenFlowObfuscationPlugin {
         }
     }
 
-
     async fn calculate_diff(&self, current: &Value, desired: &Value) -> Result<StateDiff> {
         let mut actions = Vec::new();
 

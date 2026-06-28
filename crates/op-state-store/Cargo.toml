@@ -7,8 +7,6 @@ description = "MCP Execution State Store - Persistent job ledger and state track
 
 [dependencies]
 tokio = { workspace = true, features = ["full"] }
-sqlx = { workspace = true, features = ["sqlite", "runtime-tokio", "chrono", "json"] }
-redis = { workspace = true, features = ["tokio-comp"] }
 serde = { workspace = true }
 simd-json = { workspace = true }
 chrono = { workspace = true }

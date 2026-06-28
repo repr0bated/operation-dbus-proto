@@ -22,10 +22,8 @@ use tonic::{Request, Response, Status};
 use tracing::{info, warn};
 
 use crate::proto::chat::{
-    chat_service_server::ChatService,
-    chat_frame,
-    ApproveRequest, ApproveResponse, CancelRequest, CancelResponse,
-    ChatFrame, Heartbeat, SendRequest, StreamDone, UiMessagePart,
+    chat_frame, chat_service_server::ChatService, ApproveRequest, ApproveResponse, CancelRequest,
+    CancelResponse, ChatFrame, Heartbeat, SendRequest, StreamDone, UiMessagePart,
 };
 
 /// Shared state for the ChatService.
@@ -57,7 +55,10 @@ type ChatStream = Pin<Box<dyn Stream<Item = Result<ChatFrame, Status>> + Send + 
 impl ChatService for ChatServiceImpl {
     type SendStream = ChatStream;
 
-    async fn send(&self, request: Request<SendRequest>) -> Result<Response<Self::SendStream>, Status> {
+    async fn send(
+        &self,
+        request: Request<SendRequest>,
+    ) -> Result<Response<Self::SendStream>, Status> {
         let req = request.into_inner();
         let conversation_id = req.conversation_id.clone();
         let provider = req.provider.clone();
@@ -92,12 +93,14 @@ impl ChatService for ChatServiceImpl {
         tokio::spawn(async move {
             let bump = || cursor.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             // Emit heartbeat immediately so the client knows the stream is alive.
-            let _ = tx.send(Ok(ChatFrame {
-                cursor: bump(),
-                body: Some(chat_frame::Body::Heartbeat(Heartbeat {
-                    server_time_ms: chrono::Utc::now().timestamp_millis() as u64,
-                })),
-            })).await;
+            let _ = tx
+                .send(Ok(ChatFrame {
+                    cursor: bump(),
+                    body: Some(chat_frame::Body::Heartbeat(Heartbeat {
+                        server_time_ms: chrono::Utc::now().timestamp_millis() as u64,
+                    })),
+                }))
+                .await;
 
             // TODO: Wire to gemma_brain routing + ForcedToolPipeline.
             //
@@ -115,8 +118,14 @@ impl ChatService for ChatServiceImpl {
             // Placeholder: echo back the last user message as a reasoning part
             // so the client can verify the stream is working.
             if let Some(last_msg) = ui_messages.last() {
-                let role = last_msg.get("role").and_then(|v| v.as_str()).unwrap_or("user");
-                let content = last_msg.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                let role = last_msg
+                    .get("role")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("user");
+                let content = last_msg
+                    .get("content")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
 
                 let payload = serde_json::json!({
                     "type": "text",
@@ -126,25 +135,29 @@ impl ChatService for ChatServiceImpl {
                     )
                 });
 
-                let _ = tx.send(Ok(ChatFrame {
-                    cursor: bump(),
-                    body: Some(chat_frame::Body::Part(UiMessagePart {
-                        message_id: uuid::Uuid::new_v4().to_string(),
-                        role: "assistant".to_string(),
-                        kind: "reasoning".to_string(),
-                        payload: serde_json::to_vec(&payload).unwrap_or_default(),
-                    })),
-                })).await;
+                let _ = tx
+                    .send(Ok(ChatFrame {
+                        cursor: bump(),
+                        body: Some(chat_frame::Body::Part(UiMessagePart {
+                            message_id: uuid::Uuid::new_v4().to_string(),
+                            role: "assistant".to_string(),
+                            kind: "reasoning".to_string(),
+                            payload: serde_json::to_vec(&payload).unwrap_or_default(),
+                        })),
+                    }))
+                    .await;
             }
 
             // Stream done.
-            let _ = tx.send(Ok(ChatFrame {
-                cursor: bump(),
-                body: Some(chat_frame::Body::Done(StreamDone {
-                    conversation_id: conv_id.clone(),
-                    total_parts: 1,
-                })),
-            })).await;
+            let _ = tx
+                .send(Ok(ChatFrame {
+                    cursor: bump(),
+                    body: Some(chat_frame::Body::Done(StreamDone {
+                        conversation_id: conv_id.clone(),
+                        total_parts: 1,
+                    })),
+                }))
+                .await;
 
             // Cleanup cancellation registration.
             {

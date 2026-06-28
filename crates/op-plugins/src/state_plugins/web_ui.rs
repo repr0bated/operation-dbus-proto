@@ -426,7 +426,6 @@ impl StatePlugin for WebUiPlugin {
         String::new() // Never unavailable.
     }
 
-
     async fn calculate_diff(&self, current: &Value, desired: &Value) -> Result<StateDiff> {
         let current_state: WebUiState = simd_json::serde::from_owned_value(current.clone())?;
         let desired_state: WebUiState = simd_json::serde::from_owned_value(desired.clone())?;

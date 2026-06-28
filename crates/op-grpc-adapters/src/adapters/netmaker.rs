@@ -12,10 +12,12 @@ use std::pin::Pin;
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status};
 
+#[allow(dead_code)]
 const API_SOCK: &str = "/run/netmaker/api.sock";
 
 pub struct NetmakerAdapter {
     client: reqwest::Client,
+    #[allow(dead_code)]
     base_url: String,
 }
 
@@ -25,7 +27,7 @@ impl NetmakerAdapter {
         let client = reqwest::Client::builder().build().expect("reqwest client");
         Self {
             client,
-            base_url: format!("http://localhost"),
+            base_url: "http://localhost".to_string(),
         }
     }
 

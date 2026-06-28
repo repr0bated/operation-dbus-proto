@@ -1,7 +1,6 @@
 //! Schema-Driven Dynamic gRPC Router
 //!
-//! Reads the live schema catalog from `/dev/shm/live-schema.json` (combined
-//! monolith) and/or per-plugin schema files from the `schemas/plugin/` directory.
+//! Reads the live schema catalog from `/dev/shm/live-schema.json`.
 //! Dynamically routes incoming gRPC calls to their corresponding D-Bus objects
 //! at `/org/opdbus/v1/plugins/<plugin>`.
 //!
@@ -9,18 +8,13 @@
 //! gRPC-callable service through the bridge. Unknown methods are rejected by
 //! schema validation — no hand-rolling required.
 //!
-//! ## Schema Access Paths (both supported)
+//! ## Schema Access Path
 //!
-//! 1. **Combined monolith:** `/dev/shm/live-schema.json` — derived catalog of all plugins.
-//! 2. **Per-plugin files:** `/dev/shm/opdbus/schemas/<plugin_id>.json` — fallback
-//!    when the monolith is unavailable.
-//!
-//! The monolith is preferred; per-plugin files fill in any plugin the monolith
-//! does not cover (and provide a complete fallback when the monolith is absent).
+//! **Combined monolith:** `/dev/shm/live-schema.json` — authoritative catalog of all plugins.
 //!
 //! The manifest hash is read, never re-computed. Consumers trust the manifest.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -39,10 +33,6 @@ use op_plugins::canonical::{self, BASE_SERVICE_NAME};
 
 /// The combined monolith catalog in shared memory.
 const LIVE_SCHEMA_PATH: &str = "/dev/shm/live-schema.json";
-
-/// Per-plugin schema directory in shared memory (fallback when the combined
-/// monolith is unavailable). Written by the producer (`op-projection`).
-const PER_PLUGIN_SCHEMA_DIR: &str = "/dev/shm/opdbus/schemas";
 
 /// The producer's catalog manifest in shared memory. Carries the Blake3
 /// `catalog_hash` of the schema catalog (`{ "catalog_hash": "<hex>" }`).
@@ -76,8 +66,8 @@ pub struct SchemaRouter {
     dbus_connection: Arc<tokio::sync::OnceCell<Connection>>,
     /// Combined monolith catalog path (default [`LIVE_SCHEMA_PATH`]).
     monolith_path: PathBuf,
-    /// Per-plugin schema directory (default [`PER_PLUGIN_SCHEMA_DIR`]).
-    per_plugin_dir: PathBuf,
+    /// Present-state directory used to derive read-only child objects.
+    state_dir: PathBuf,
     /// Producer manifest path (default [`MANIFEST_PATH`]).
     manifest_path: PathBuf,
     /// Last-seen `catalog_hash` read from the manifest. Compared on each
@@ -91,6 +81,8 @@ pub struct SchemaRouter {
     /// the read-only Zeroclaw route/provider sub-object tree (Phase 1b). Push
     /// only — invoked from the registration cycle, never on a timer.
     projection_hook: Option<Arc<dyn crate::zeroclaw_projection::SchemaProjectionHook>>,
+    /// Child object paths currently registered by this router.
+    child_objects: Arc<RwLock<HashSet<String>>>,
 }
 
 impl SchemaRouter {
@@ -106,7 +98,7 @@ impl SchemaRouter {
         Self::with_paths(
             dbus_connection,
             PathBuf::from(LIVE_SCHEMA_PATH),
-            PathBuf::from(PER_PLUGIN_SCHEMA_DIR),
+            PathBuf::from(DEFAULT_SHM_STATE_DIR),
             PathBuf::from(MANIFEST_PATH),
         )
     }
@@ -134,10 +126,10 @@ impl SchemaRouter {
     pub fn with_paths(
         dbus_connection: Arc<tokio::sync::OnceCell<Connection>>,
         monolith_path: PathBuf,
-        per_plugin_dir: PathBuf,
+        state_dir: PathBuf,
         manifest_path: PathBuf,
     ) -> Self {
-        let routes = Self::load_routes_from(&monolith_path, &per_plugin_dir);
+        let routes = Self::load_routes_from(&monolith_path);
         let cached_hash = Self::read_manifest_hash_at(&manifest_path);
         info!(
             count = routes.len(),
@@ -147,11 +139,12 @@ impl SchemaRouter {
             routes: Arc::new(RwLock::new(routes)),
             dbus_connection,
             monolith_path,
-            per_plugin_dir,
+            state_dir,
             manifest_path,
             cached_hash: Arc::new(RwLock::new(cached_hash)),
             engine: None,
             projection_hook: None,
+            child_objects: Arc::new(RwLock::new(HashSet::new())),
         }
     }
 
@@ -190,20 +183,71 @@ impl SchemaRouter {
         }
         drop(routes);
 
-        // Publish the read-only Zeroclaw projection sub-tree from in-memory state
-        // (never a /dev/shm re-read). Push-only: invoked here in the registration
-        // cycle, not on a timer.
-        if let Some(hook) = &self.projection_hook {
-            if self.get_route("zeroclaw").await.is_some() {
-                let state = op_plugins::state_plugins::zeroclaw::ZeroclawPlugin::current_state();
-                match serde_json::to_value(&state) {
-                    Ok(state_json) => {
-                        hook.apply("zeroclaw", &serde_json::Value::Null, &state_json);
-                    }
-                    Err(e) => warn!(error = %e, "failed to serialize ZeroclawState for projection hook"),
-                }
-            }
+        self.sync_child_objects().await?;
+        Ok(())
+    }
+
+    /// Register read-only child objects for every plugin from present-state.
+    ///
+    /// Child paths are derived from nested objects/arrays in
+    /// `/dev/shm/opdbus/state/<plugin>.json`. The router stores only mounted
+    /// paths for lifecycle; every child property read re-reads SHM directly.
+    async fn sync_child_objects(&self) -> anyhow::Result<()> {
+        let conn = self
+            .dbus_connection
+            .get()
+            .ok_or_else(|| anyhow::anyhow!("D-Bus connection not initialized"))?;
+
+        let routes = self.routes.read().await;
+        let desired = routes
+            .iter()
+            .flat_map(|(plugin_id, route)| {
+                derive_child_paths(plugin_id, &self.state_dir, &route.properties)
+                    .into_iter()
+                    .map(|segments| {
+                        (
+                            build_child_path(plugin_id, &segments),
+                            plugin_id.clone(),
+                            segments,
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        drop(routes);
+
+        let desired_paths = desired
+            .iter()
+            .map(|(path, _, _)| path.clone())
+            .collect::<HashSet<_>>();
+
+        let mut current = self.child_objects.write().await;
+        for stale in current
+            .iter()
+            .filter(|path| !desired_paths.contains(*path))
+            .cloned()
+            .collect::<Vec<_>>()
+        {
+            conn.object_server()
+                .remove::<SchemaChildInterface, _>(stale.as_str())
+                .await?;
+            current.remove(&stale);
+            debug!(
+                path = stale,
+                "unregistered stale schema-derived child object"
+            );
         }
+
+        for (path, plugin_id, segments) in desired {
+            if current.contains(&path) {
+                continue;
+            }
+            let child = SchemaChildInterface::new(plugin_id, segments, self.state_dir.clone());
+            conn.object_server().at(path.as_str(), child).await?;
+            current.insert(path.clone());
+            debug!(path, "registered schema-derived child object");
+        }
+
         Ok(())
     }
 
@@ -217,9 +261,9 @@ impl SchemaRouter {
     /// Reload routes from the SHM catalog into the in-memory route table
     /// without touching the D-Bus object server. Returns the route count.
     ///
-    /// This is a direct read of the schema files — no polling, no watchers.
+    /// This is a direct read of the live schema catalog — no polling, no watchers.
     async fn reload_routes_only(&self) -> usize {
-        let routes = Self::load_routes_from(&self.monolith_path, &self.per_plugin_dir);
+        let routes = Self::load_routes_from(&self.monolith_path);
         let count = routes.len();
         let mut w = self.routes.write().await;
         *w = routes;
@@ -457,27 +501,10 @@ impl SchemaRouter {
             .map(String::from)
     }
 
-    /// Loads plugin routes from the combined monolith, falling back to the
-    /// per-plugin schema directory for any plugin the monolith does not cover.
-    ///
-    /// If the monolith is unavailable, routes are sourced entirely from the
-    /// per-plugin files. This is the testable core of [`load_all_routes`].
-    fn load_routes_from(
-        monolith_path: &Path,
-        per_plugin_dir: &Path,
-    ) -> HashMap<String, PluginRoute> {
-        let mut routes = HashMap::new();
-        if let Some(monolith_routes) = Self::load_from_monolith(monolith_path) {
-            for (id, route) in monolith_routes {
-                routes.insert(id, route);
-            }
-        }
-        if let Some(per_plugin_routes) = Self::load_from_per_plugin_dir(per_plugin_dir) {
-            for (id, route) in per_plugin_routes {
-                routes.entry(id).or_insert(route);
-            }
-        }
-        routes
+    /// Loads plugin routes from the combined monolith. If the monolith is
+    /// unavailable or invalid, no routes are exposed.
+    fn load_routes_from(monolith_path: &Path) -> HashMap<String, PluginRoute> {
+        Self::load_from_monolith(monolith_path).unwrap_or_default()
     }
 
     fn load_from_monolith(path: &Path) -> Option<HashMap<String, PluginRoute>> {
@@ -494,35 +521,6 @@ impl SchemaRouter {
             };
             let route = Self::build_route(plugin_id, schema);
             routes.insert(plugin_id.clone(), route);
-        }
-        Some(routes)
-    }
-
-    fn load_from_per_plugin_dir(dir: &Path) -> Option<HashMap<String, PluginRoute>> {
-        if !dir.is_dir() {
-            return None;
-        }
-        let mut routes = HashMap::new();
-        let entries = std::fs::read_dir(dir).ok()?;
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("json") {
-                continue;
-            }
-            let plugin_id = path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("")
-                .to_string();
-            if plugin_id.is_empty() {
-                continue;
-            }
-            if let Ok(bytes) = std::fs::read(&path) {
-                if let Ok(schema) = serde_json::from_slice::<JsonValue>(&bytes) {
-                    let route = Self::build_route(&plugin_id, &schema);
-                    routes.insert(plugin_id, route);
-                }
-            }
         }
         Some(routes)
     }
@@ -568,7 +566,11 @@ impl SchemaRouter {
 
     fn extract_properties(schema: &JsonValue) -> HashMap<String, JsonValue> {
         let mut properties = HashMap::new();
-        if let Some(props) = schema.get("properties").and_then(|p| p.as_object()) {
+        if let Some(props) = schema
+            .get("fields")
+            .or_else(|| schema.get("properties"))
+            .and_then(|p| p.as_object())
+        {
             for (name, def) in props {
                 properties.insert(name.clone(), def.clone());
             }
@@ -579,6 +581,207 @@ impl SchemaRouter {
 
 /// Default SHM state directory: `/dev/shm/opdbus/state`.
 const DEFAULT_SHM_STATE_DIR: &str = "/dev/shm/opdbus/state";
+
+fn derive_child_paths(
+    plugin_id: &str,
+    state_dir: &Path,
+    schema_fields: &HashMap<String, JsonValue>,
+) -> Vec<Vec<String>> {
+    let state = read_plugin_state(plugin_id, state_dir);
+    let root = state.get("data").unwrap_or(&state);
+    let mut paths = Vec::new();
+    derive_child_paths_recursive(root, schema_fields, &mut Vec::new(), &mut paths);
+    paths
+}
+
+fn derive_child_paths_recursive(
+    state: &JsonValue,
+    schema_fields: &HashMap<String, JsonValue>,
+    current: &mut Vec<String>,
+    paths: &mut Vec<Vec<String>>,
+) {
+    let Some(state_obj) = state.as_object() else {
+        return;
+    };
+
+    for (field_name, field_schema) in schema_fields {
+        if field_name.starts_with('_') {
+            continue;
+        }
+        let Some(child) = state_obj.get(field_name) else {
+            continue;
+        };
+
+        if let Some(nested_fields) = schema_object_fields(field_schema) {
+            if child.is_object() {
+                current.push(path_element(field_name));
+                paths.push(current.clone());
+                derive_child_paths_recursive(child, &nested_fields, current, paths);
+                current.pop();
+            }
+            continue;
+        }
+
+        if let Some(item_fields) = schema_array_item_fields(field_schema) {
+            let Some(items) = child.as_array() else {
+                continue;
+            };
+            current.push(path_element(field_name));
+            paths.push(current.clone());
+            for (index, item) in items.iter().enumerate() {
+                if item.is_object() {
+                    let segment = ["id", "name", "label", "key", "path", "domain", "host"]
+                        .iter()
+                        .find_map(|field| item.get(*field).and_then(JsonValue::as_str))
+                        .map(path_element)
+                        .unwrap_or_else(|| index.to_string());
+                    current.push(segment);
+                    paths.push(current.clone());
+                    derive_child_paths_recursive(item, &item_fields, current, paths);
+                    current.pop();
+                }
+            }
+            current.pop();
+        }
+    }
+}
+
+fn schema_object_fields(field_schema: &JsonValue) -> Option<HashMap<String, JsonValue>> {
+    field_schema
+        .get("field_type")?
+        .get("object")?
+        .as_object()
+        .map(|fields| {
+            fields
+                .iter()
+                .map(|(name, schema)| (name.clone(), schema.clone()))
+                .collect()
+        })
+}
+
+fn schema_array_item_fields(field_schema: &JsonValue) -> Option<HashMap<String, JsonValue>> {
+    field_schema
+        .get("field_type")?
+        .get("array")?
+        .get("object")?
+        .as_object()
+        .map(|fields| {
+            fields
+                .iter()
+                .map(|(name, schema)| (name.clone(), schema.clone()))
+                .collect()
+        })
+}
+
+fn build_child_path(plugin_id: &str, segments: &[String]) -> String {
+    let mut path = canonical::plugin_path(plugin_id);
+    for segment in segments {
+        path.push('/');
+        path.push_str(&path_element(segment));
+    }
+    path
+}
+
+fn path_element(value: &str) -> String {
+    let mut out = value
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    if out.is_empty() {
+        out.push('_');
+    }
+    if out
+        .chars()
+        .next()
+        .map(|c| c.is_ascii_digit())
+        .unwrap_or(false)
+    {
+        out.insert(0, '_');
+    }
+    out
+}
+
+fn read_plugin_state(plugin_id: &str, state_dir: &Path) -> JsonValue {
+    let path = state_dir.join(format!("{plugin_id}.json"));
+    match std::fs::read_to_string(path) {
+        Ok(text) => {
+            serde_json::from_str(&text).unwrap_or(JsonValue::Object(serde_json::Map::new()))
+        }
+        Err(_) => JsonValue::Object(serde_json::Map::new()),
+    }
+}
+
+fn value_at_segments<'a>(value: &'a JsonValue, segments: &[String]) -> Option<&'a JsonValue> {
+    let mut current = value.get("data").unwrap_or(value);
+    for segment in segments {
+        current = match current {
+            JsonValue::Object(map) => map.get(segment).or_else(|| {
+                map.iter()
+                    .find(|(key, _)| path_element(key) == *segment)
+                    .map(|(_, value)| value)
+            })?,
+            JsonValue::Array(items) => items
+                .iter()
+                .find(|item| {
+                    ["id", "name", "label", "key", "path", "domain", "host"]
+                        .iter()
+                        .find_map(|field| item.get(*field).and_then(JsonValue::as_str))
+                        .map(path_element)
+                        .as_deref()
+                        == Some(segment.as_str())
+                })
+                .or_else(|| segment.parse::<usize>().ok().and_then(|idx| items.get(idx)))?,
+            _ => return None,
+        };
+    }
+    Some(current)
+}
+
+/// Read-only D-Bus object for a schema-derived child path.
+pub struct SchemaChildInterface {
+    plugin_id: String,
+    path_segments: Vec<String>,
+    shm_state_dir: PathBuf,
+}
+
+impl SchemaChildInterface {
+    fn new(plugin_id: String, path_segments: Vec<String>, shm_state_dir: PathBuf) -> Self {
+        Self {
+            plugin_id,
+            path_segments,
+            shm_state_dir,
+        }
+    }
+
+    fn read_child_state(&self) -> JsonValue {
+        let state = read_plugin_state(&self.plugin_id, &self.shm_state_dir);
+        value_at_segments(&state, &self.path_segments)
+            .cloned()
+            .unwrap_or(JsonValue::Object(serde_json::Map::new()))
+    }
+}
+
+#[zbus::interface(name = "org.opdbus.v1.PluginChildV1")]
+impl SchemaChildInterface {
+    /// Get a property from this child object's current SHM state.
+    async fn get_property(&self, name: String) -> zbus::fdo::Result<String> {
+        let state = self.read_child_state();
+        let value = state.get(&name).unwrap_or(&JsonValue::Null);
+        serde_json::to_string(value).map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
+    }
+
+    /// Get all properties for this child object from current SHM state.
+    async fn get_all_properties(&self) -> zbus::fdo::Result<String> {
+        let state = self.read_child_state();
+        serde_json::to_string(&state).map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
+    }
+}
 
 /// A generic D-Bus interface backed by a plugin schema.
 ///
@@ -1234,6 +1437,102 @@ mod tests {
         cleanup(&state_dir);
     }
 
+    #[test]
+    fn should_derive_child_paths_from_schemars_schema_and_present_state() {
+        #[derive(serde::Serialize, schemars::JsonSchema)]
+        struct GeneratedChild {
+            id: String,
+            enabled: bool,
+        }
+
+        #[derive(serde::Serialize, schemars::JsonSchema)]
+        struct GeneratedGroup {
+            label: String,
+            children: Vec<GeneratedChild>,
+        }
+
+        #[derive(serde::Serialize, schemars::JsonSchema)]
+        struct GeneratedState {
+            status: String,
+            group: GeneratedGroup,
+            providers: Vec<GeneratedChild>,
+        }
+
+        let state_dir = test_state_dir();
+        let root = serde_json::to_value(schemars::schema_for!(GeneratedState)).unwrap();
+        let schema = op_plugins::state_plugins::schemars_adapter::plugin_schema_from_json(
+            "generated",
+            "1.0.0",
+            "test generated schema",
+            &root,
+        );
+        let schema_json = serde_json::to_value(&schema).unwrap();
+        let live_schema_path = state_dir.join("live-schema.json");
+        fs::write(
+            &live_schema_path,
+            serde_json::to_vec_pretty(&json!({ "generated": [schema_json] })).unwrap(),
+        )
+        .expect("write live schema catalog");
+        let routes = SchemaRouter::load_routes_from(&live_schema_path);
+        let route = routes
+            .get("generated")
+            .expect("route generated from live schema catalog");
+        let state_json = serde_json::to_value(GeneratedState {
+            status: "active".to_string(),
+            group: GeneratedGroup {
+                label: "primary".to_string(),
+                children: vec![GeneratedChild {
+                    id: "nested child".to_string(),
+                    enabled: true,
+                }],
+            },
+            providers: vec![GeneratedChild {
+                id: "openrouter".to_string(),
+                enabled: true,
+            }],
+        })
+        .unwrap();
+        fs::write(
+            state_dir.join("generated.json"),
+            serde_json::to_vec_pretty(&state_json).unwrap(),
+        )
+        .expect("write state file");
+
+        let paths = derive_child_paths("generated", &state_dir, &route.properties);
+
+        for (field_name, field_schema) in &route.properties {
+            let Some(state_value) = state_json.get(field_name) else {
+                continue;
+            };
+            if schema_object_fields(field_schema).is_some() && state_value.is_object() {
+                assert!(
+                    paths.contains(&vec![path_element(field_name)]),
+                    "object field '{field_name}' should produce a child path"
+                );
+            }
+            if schema_array_item_fields(field_schema).is_some() && state_value.is_array() {
+                let field_segment = path_element(field_name);
+                assert!(
+                    paths.contains(&vec![field_segment.clone()]),
+                    "array field '{field_name}' should produce a collection child path"
+                );
+                if let Some(first_item) = state_value.as_array().and_then(|items| items.first()) {
+                    let segment = ["id", "name", "label", "key", "path", "domain", "host"]
+                        .iter()
+                        .find_map(|field| first_item.get(*field).and_then(JsonValue::as_str))
+                        .map(path_element)
+                        .unwrap_or_else(|| "0".to_string());
+                    assert!(
+                        paths.contains(&vec![field_segment, segment]),
+                        "array field '{field_name}' should produce item child paths"
+                    );
+                }
+            }
+        }
+
+        cleanup(&state_dir);
+    }
+
     // ── R9.4 / NFR1.1: No timer-based polling constructs ────────────────
     //
     // This is a structural test: it verifies that SchemaBackedInterface does
@@ -1380,10 +1679,7 @@ mod tests {
     fn bridge_registers_object_per_plugin_from_shm() {
         let base = test_base_dir();
         let monolith_path = write_test_monolith(&base);
-        // No per-plugin dir on disk → routes come purely from the monolith.
-        let per_plugin_dir = base.join("opdbus/schemas");
-
-        let routes = SchemaRouter::load_routes_from(&monolith_path, &per_plugin_dir);
+        let routes = SchemaRouter::load_routes_from(&monolith_path);
         assert_eq!(
             routes.len(),
             2,
@@ -1409,10 +1705,10 @@ mod tests {
         cleanup(&base);
     }
 
-    // ── Fallback: per-plugin files when the monolith is unavailable ──
+    // ── Fail closed: no per-plugin schema fallback ──
 
     #[test]
-    fn bridge_falls_back_to_per_plugin_files_when_monolith_missing() {
+    fn bridge_does_not_load_per_plugin_files_when_monolith_missing() {
         let base = test_base_dir();
         let schemas_dir = base.join("opdbus/schemas");
         fs::create_dir_all(&schemas_dir).unwrap();
@@ -1441,15 +1737,13 @@ mod tests {
 
         // Point at a monolith path that does not exist.
         let missing_monolith = base.join("nonexistent-live-schema.json");
-        let routes = SchemaRouter::load_routes_from(&missing_monolith, &schemas_dir);
+        let routes = SchemaRouter::load_routes_from(&missing_monolith);
 
         assert_eq!(
             routes.len(),
-            1,
-            "fallback must load per-plugin files when the monolith is unavailable"
+            0,
+            "missing live-schema catalog must expose no routes"
         );
-        assert!(routes.contains_key("alpha"));
-        assert!(routes["alpha"].methods.contains_key("Ping"));
 
         cleanup(&base);
     }
@@ -1460,8 +1754,7 @@ mod tests {
     async fn bridge_exposes_all_declared_methods() {
         let base = test_base_dir();
         let monolith_path = write_test_monolith(&base);
-        let per_plugin_dir = base.join("opdbus/schemas");
-        let routes = SchemaRouter::load_routes_from(&monolith_path, &per_plugin_dir);
+        let routes = SchemaRouter::load_routes_from(&monolith_path);
 
         // beta declares SetKey and GetKey — both must be exposed.
         let beta = routes["beta"].clone();
@@ -1500,8 +1793,7 @@ mod tests {
     fn bridge_exposes_all_declared_signals() {
         let base = test_base_dir();
         let monolith_path = write_test_monolith(&base);
-        let per_plugin_dir = base.join("opdbus/schemas");
-        let routes = SchemaRouter::load_routes_from(&monolith_path, &per_plugin_dir);
+        let routes = SchemaRouter::load_routes_from(&monolith_path);
 
         // beta declares KeyRotated and KeyExpired signals.
         let beta = routes["beta"].clone();
@@ -1533,8 +1825,7 @@ mod tests {
     fn route_extracts_methods_and_signals_from_schema() {
         let base = test_base_dir();
         let monolith_path = write_test_monolith(&base);
-        let per_plugin_dir = base.join("opdbus/schemas");
-        let routes = SchemaRouter::load_routes_from(&monolith_path, &per_plugin_dir);
+        let routes = SchemaRouter::load_routes_from(&monolith_path);
 
         let beta = &routes["beta"];
         // Methods preserved with full MethodDecl bodies.
@@ -1613,7 +1904,6 @@ mod tests {
     async fn bridge_reloads_on_manifest_hash_change() {
         let base = test_base_dir();
         let monolith_path = base.join("live-schema.json");
-        let per_plugin_dir = base.join("opdbus/schemas");
         let manifest_path = base.join(".manifest.json");
 
         // Producer writes initial catalog (alpha only) + manifest hash-1.
@@ -1625,7 +1915,7 @@ mod tests {
         let router = SchemaRouter::with_paths(
             conn,
             monolith_path.clone(),
-            per_plugin_dir.clone(),
+            base.join("state"),
             manifest_path.clone(),
         );
         assert_eq!(
@@ -1671,7 +1961,6 @@ mod tests {
     async fn hash_check_on_inbound_not_timer() {
         let base = test_base_dir();
         let monolith_path = base.join("live-schema.json");
-        let per_plugin_dir = base.join("opdbus/schemas");
         let manifest_path = base.join(".manifest.json");
 
         write_monolith_plugins(&monolith_path, &["alpha"]);
@@ -1681,7 +1970,7 @@ mod tests {
         let router = SchemaRouter::with_paths(
             conn,
             monolith_path.clone(),
-            per_plugin_dir.clone(),
+            base.join("state"),
             manifest_path.clone(),
         );
 
@@ -1718,7 +2007,6 @@ mod tests {
     async fn refresh_no_manifest_does_not_reload() {
         let base = test_base_dir();
         let monolith_path = base.join("live-schema.json");
-        let per_plugin_dir = base.join("opdbus/schemas");
         let manifest_path = base.join(".manifest.json");
 
         write_monolith_plugins(&monolith_path, &["alpha"]);
@@ -1728,7 +2016,7 @@ mod tests {
         let router = SchemaRouter::with_paths(
             conn,
             monolith_path.clone(),
-            per_plugin_dir.clone(),
+            base.join("state"),
             manifest_path.clone(),
         );
         assert_eq!(router.cached_catalog_hash().await, None);
@@ -2100,8 +2388,7 @@ mod tests {
         // PluginSchema.methods before dispatching to SchemaEngine.
         let base = test_base_dir();
         let monolith_path = write_test_monolith(&base);
-        let per_plugin_dir = base.join("opdbus/schemas");
-        let routes = SchemaRouter::load_routes_from(&monolith_path, &per_plugin_dir);
+        let routes = SchemaRouter::load_routes_from(&monolith_path);
 
         let beta = routes["beta"].clone();
         let engine = test_engine();
@@ -2206,10 +2493,10 @@ mod tests {
         );
     }
 
-    // ── VAL-VALIDATE-004: Uses cached schema, not per-call re-read ────────────
+    // ── VAL-VALIDATE-004: Uses loaded route schema, not per-call file read ────────────
 
     #[test]
-    fn validation_uses_cached_schema_not_per_call_read() {
+    fn validation_uses_loaded_route_schema_not_per_call_file_read() {
         // VAL-VALIDATE-004: method validation uses the schema loaded from SHM
         // at bridge startup (refreshed on manifest hash change), not per-call
         // file reads. SchemaBackedInterface::validate_json_args reads from the
@@ -2217,17 +2504,16 @@ mod tests {
         // startup), not from a file.
         let base = test_base_dir();
         let monolith_path = write_test_monolith(&base);
-        let per_plugin_dir = base.join("opdbus/schemas");
 
         // Load routes once - this simulates the one-time SHM read at startup
-        let routes = SchemaRouter::load_routes_from(&monolith_path, &per_plugin_dir);
+        let routes = SchemaRouter::load_routes_from(&monolith_path);
         let beta = routes["beta"].clone();
 
         // Create interface - it has no file reads inside validate_json_args
         let iface =
             SchemaBackedInterface::with_shm_state_dir("beta".to_string(), beta, base.join("state"));
 
-        // The validate_json_args method operates on the cached method_decl
+        // The validate_json_args method operates on the loaded method_decl
         // (the JsonValue stored in the route), not on a file read.
         let result = iface.validate_json_args(
             iface.route.methods.get("SetKey").unwrap(),
@@ -2235,7 +2521,7 @@ mod tests {
         );
         assert!(
             result.is_ok(),
-            "validation should work against cached schema"
+            "validation should work against loaded schema"
         );
 
         cleanup(&base);
@@ -2262,9 +2548,8 @@ mod tests {
             serde_json::to_vec_pretty(&empty_monolith).unwrap(),
         )
         .unwrap();
-        let per_plugin_dir = base.join("opdbus/schemas");
 
-        let routes = SchemaRouter::load_routes_from(&monolith_path, &per_plugin_dir);
+        let routes = SchemaRouter::load_routes_from(&monolith_path);
         assert!(
             routes.contains_key("empty_plugin"),
             "empty_plugin should be registered"

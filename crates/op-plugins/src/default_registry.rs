@@ -85,7 +85,6 @@ fn default_auto_load() -> Vec<String> {
     Vec::new()
 }
 
-
 impl Default for PluginRegistryConfig {
     fn default() -> Self {
         Self {
@@ -333,11 +332,11 @@ impl DefaultPluginRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use op_state_store::SqliteStore;
+    use op_state_store::MemoryStore;
 
     #[tokio::test]
     async fn test_default_plugin_registry() {
-        let store = Arc::new(SqliteStore::new(":memory:").await.unwrap());
+        let store = Arc::new(MemoryStore::new());
         let registry = DefaultPluginRegistry::new(store);
 
         let plugins = registry.load_default_plugins().await.unwrap();
@@ -348,7 +347,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_discovered_plugins_publish_schema() {
-        let store = Arc::new(SqliteStore::new(":memory:").await.unwrap());
+        let store = Arc::new(MemoryStore::new());
         let registry = DefaultPluginRegistry::new(store);
 
         let plugins = registry.load_all_plugins().await.unwrap();
@@ -372,7 +371,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_loadable_plugins_publish_schema() {
-        let store = Arc::new(SqliteStore::new(":memory:").await.unwrap());
+        let store = Arc::new(MemoryStore::new());
         let registry = DefaultPluginRegistry::new(store);
         let plugin_names = vec![
             "mcp",
@@ -424,7 +423,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_auto_load_config_does_not_control_registration() {
-        let store = Arc::new(SqliteStore::new(":memory:").await.unwrap());
+        let store = Arc::new(MemoryStore::new());
 
         let config = PluginRegistryConfig {
             auto_load: vec!["s6".to_string()],
@@ -470,7 +469,7 @@ mod tests {
     #[tokio::test]
     async fn test_load_plugin_from_canonical_projection_path() {
         use crate::canonical;
-        let store = Arc::new(SqliteStore::new(":memory:").await.unwrap());
+        let store = Arc::new(MemoryStore::new());
         let registry = DefaultPluginRegistry::new(store);
 
         // Use canonical path format
@@ -502,7 +501,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_unknown_plugin_auto_creates_review_draft() {
-        let store = Arc::new(SqliteStore::new(":memory:").await.unwrap());
+        let store = Arc::new(MemoryStore::new());
         let registry = DefaultPluginRegistry::new(store);
 
         let plugin = registry.load_plugin("new_future_plugin").await.unwrap();
@@ -514,7 +513,7 @@ mod tests {
         use crate::state_plugins::common::oscal::{category_required_fields, validate_subid};
         use std::collections::HashMap;
 
-        let store = Arc::new(SqliteStore::new(":memory:").await.unwrap());
+        let store = Arc::new(MemoryStore::new());
         let registry = DefaultPluginRegistry::new(store);
         let plugins = registry.load_all_plugins().await.unwrap();
 

@@ -82,7 +82,6 @@ impl StatePlugin for Login1Plugin {
         )
     }
 
-
     async fn calculate_diff(&self, current: &Value, desired: &Value) -> Result<StateDiff> {
         let actions = if current != desired {
             vec![StateAction::Modify {

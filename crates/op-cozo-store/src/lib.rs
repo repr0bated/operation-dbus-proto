@@ -224,7 +224,10 @@ impl CozoGraphShuttle {
         for script in &relations {
             if let Err(e) = cozo_run(&self.db, script, BTreeMap::new()) {
                 let msg = e.to_string();
-                if !msg.contains("already exists") && !msg.contains("AlreadyExists") {
+                if !msg.contains("already exists")
+                    && !msg.contains("AlreadyExists")
+                    && !msg.contains("conflicts with an existing")
+                {
                     eprintln!("COZO_SCHEMA_ERR: {}", msg);
                     warn!(error = %msg, "CozoDB schema init warning");
                 }

@@ -1625,7 +1625,6 @@ impl StatePlugin for AntigravityPlugin {
         Some(schema)
     }
 
-
     async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {
         Ok(StateDiff {
             plugin: self.name().to_string(),
@@ -1679,12 +1678,17 @@ impl StatePlugin for AntigravityPlugin {
 pub(crate) fn antigravity_schema() -> PluginSchema {
     let root = serde_json::to_value(schemars::schema_for!(AntigravityState))
         .expect("schemars schema serializes to JSON");
-    super::schemars_adapter::plugin_schema_from_json(
+    let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "antigravity",
         "1.0.0",
         "Google Antigravity SDK provider — Vertex AI Gemini models, OAuth auth, structured output, OSCAL compliance routing",
         &root,
-    )
+    );
+    if let Ok(state) = simd_json::serde::to_owned_value(AntigravityPlugin::current_state()) {
+        super::schemars_adapter::apply_state_defaults(&mut schema, &state);
+        schema.example = Some(state);
+    }
+    schema
 }
 
 /// Frozen golden reference: the original schema inferred from the default state

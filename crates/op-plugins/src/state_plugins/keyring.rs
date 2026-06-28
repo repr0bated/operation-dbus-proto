@@ -159,7 +159,6 @@ impl StatePlugin for KeyringPlugin {
         "org.freedesktop.secrets not available via op-dbus freedesktop plugin at /org/opdbus/v1/plugins/freedesktop".to_string()
     }
 
-
     async fn apply_state(&self, _diff: &StateDiff) -> Result<ApplyResult> {
         // Keyring operations are typically interactive and should not be automated
         Err(anyhow::anyhow!(

@@ -27,8 +27,8 @@ const DEFAULT_COZO_DB_PATH: &str = "/var/lib/opdbus/cognitive.db";
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CozoColumn {
     pub name: String,
-    pub r#type: String,     // Int, Float, Bool, String, Bytes, Uuid, Json, Validity, Any, Any?
-    pub is_key: bool,       // true if before => in :create spec
+    pub r#type: String, // Int, Float, Bool, String, Bytes, Uuid, Json, Validity, Any, Any?
+    pub is_key: bool,   // true if before => in :create spec
     pub default: Option<String>,
     pub description: String,
 }
@@ -36,7 +36,7 @@ pub struct CozoColumn {
 /// CozoDB index definition — mirrors `::indices` system op output.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CozoIndex {
-    pub name: String,       // e.g. "relation_name:index_name"
+    pub name: String, // e.g. "relation_name:index_name"
     pub relation: String,
     pub columns: Vec<String>,
 }
@@ -45,7 +45,7 @@ pub struct CozoIndex {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CozoTrigger {
     pub relation: String,
-    pub event: String,      // "put", "rm", "replace"
+    pub event: String, // "put", "rm", "replace"
     pub query: String,
 }
 
@@ -67,19 +67,19 @@ pub struct CozoHnswIndex {
     pub relation: String,
     pub vector_column: String,
     pub dim: u32,
-    pub dtype: String,      // "f32" or "f64"
+    pub dtype: String, // "f32" or "f64"
     pub m: u32,
     pub ef_construction: u32,
     pub ef_search: u32,
-    pub distance: String,   // "Cosine", "Euclid", "Dot"
+    pub distance: String, // "Cosine", "Euclid", "Dot"
 }
 
 /// Top-level CozoDB plugin state — the shape the projection tree exposes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CozoState {
-    pub engine: String,         // mem, sled, rocksdb, sqlite
-    pub path: String,           // database path (empty for mem)
-    pub version: String,        // CozoDB version
+    pub engine: String,  // mem, sled, rocksdb, sqlite
+    pub path: String,    // database path (empty for mem)
+    pub version: String, // CozoDB version
     pub relations: Vec<CozoRelation>,
     pub indices: Vec<CozoIndex>,
     pub hnsw_indices: Vec<CozoHnswIndex>,
@@ -216,8 +216,8 @@ impl StatePlugin for CozoPlugin {
 }
 
 pub(crate) fn cozo_schema() -> PluginSchema {
-    let state =
-        simd_json::serde::to_owned_value(CozoPlugin::exemplar_state()).unwrap_or_else(|_| json!({}));
+    let state = simd_json::serde::to_owned_value(CozoPlugin::exemplar_state())
+        .unwrap_or_else(|_| json!({}));
     let mut schema = schema_from_state(
         "cozo",
         "data",
@@ -225,15 +225,42 @@ pub(crate) fn cozo_schema() -> PluginSchema {
         "CozoDB relational-graph-vector database — relations, indices, HNSW, triggers, Datalog",
         &state,
     );
-    schema.subids.insert("__schema__".to_string(), "sch.software.plugin.cozo.schema@v1".to_string());
-    schema.subids.insert("engine".to_string(), "src.software.plugin.cozo.engine@v1".to_string());
-    schema.subids.insert("path".to_string(), "src.software.plugin.cozo.path@v1".to_string());
-    schema.subids.insert("version".to_string(), "obs.software.plugin.cozo.version@v1".to_string());
-    schema.subids.insert("relations".to_string(), "obs.software.plugin.cozo.relations@v1".to_string());
-    schema.subids.insert("indices".to_string(), "obs.software.plugin.cozo.indices@v1".to_string());
-    schema.subids.insert("hnsw_indices".to_string(), "obs.software.plugin.cozo.hnsw-indices@v1".to_string());
-    schema.subids.insert("triggers".to_string(), "obs.software.plugin.cozo.triggers@v1".to_string());
-    schema.subids.insert("running_queries".to_string(), "obs.software.plugin.cozo.running-queries@v1".to_string());
+    schema.subids.insert(
+        "__schema__".to_string(),
+        "sch.software.plugin.cozo.schema@v1".to_string(),
+    );
+    schema.subids.insert(
+        "engine".to_string(),
+        "src.software.plugin.cozo.engine@v1".to_string(),
+    );
+    schema.subids.insert(
+        "path".to_string(),
+        "src.software.plugin.cozo.path@v1".to_string(),
+    );
+    schema.subids.insert(
+        "version".to_string(),
+        "obs.software.plugin.cozo.version@v1".to_string(),
+    );
+    schema.subids.insert(
+        "relations".to_string(),
+        "obs.software.plugin.cozo.relations@v1".to_string(),
+    );
+    schema.subids.insert(
+        "indices".to_string(),
+        "obs.software.plugin.cozo.indices@v1".to_string(),
+    );
+    schema.subids.insert(
+        "hnsw_indices".to_string(),
+        "obs.software.plugin.cozo.hnsw-indices@v1".to_string(),
+    );
+    schema.subids.insert(
+        "triggers".to_string(),
+        "obs.software.plugin.cozo.triggers@v1".to_string(),
+    );
+    schema.subids.insert(
+        "running_queries".to_string(),
+        "obs.software.plugin.cozo.running-queries@v1".to_string(),
+    );
     schema
 }
 

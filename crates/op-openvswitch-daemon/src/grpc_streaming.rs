@@ -1,6 +1,7 @@
 //! gRPC Streaming Service for OVSDB and OpenFlow updates
 //!
 //! Implements server-streaming subscriptions that act as mutate triggers
+#![allow(dead_code, clippy::result_large_err)]
 //! into the SchemaEngine. Uses `tokio::sync::broadcast` for internal event
 //! distribution, allowing multiple subscribers to receive updates.
 //!

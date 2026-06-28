@@ -4,12 +4,9 @@
 //! - Job counts by status
 //! - Operation latencies
 //! - Error rates
-//! - Database connection pool stats
 
 use lazy_static::lazy_static;
-use prometheus::{
-    Counter, CounterVec, Gauge, GaugeVec, HistogramOpts, HistogramVec, Opts, Registry,
-};
+use prometheus::{Counter, CounterVec, GaugeVec, HistogramOpts, HistogramVec, Opts, Registry};
 use std::sync::Once;
 use tracing::info;
 
@@ -83,37 +80,6 @@ lazy_static! {
         "Total audit log entries"
     ).expect("hardcoded metric definition is valid");
 
-    // Redis metrics
-    /// Redis connection status
-    pub static ref REDIS_CONNECTED: Gauge = Gauge::new(
-        "op_state_redis_connected",
-        "Redis connection status (1=connected, 0=disconnected)"
-    ).expect("hardcoded metric definition is valid");
-
-    /// Redis stream lengths
-    pub static ref REDIS_STREAM_LENGTH: GaugeVec = GaugeVec::new(
-        Opts::new("op_state_redis_stream_length", "Redis stream length"),
-        &["stream"]
-    ).expect("hardcoded metric definition is valid");
-
-    /// Redis operations
-    pub static ref REDIS_OPS_TOTAL: CounterVec = CounterVec::new(
-        Opts::new("op_state_redis_operations_total", "Redis operations"),
-        &["operation"]
-    ).expect("hardcoded metric definition is valid");
-
-    // SQLite metrics
-    /// SQLite connection pool size
-    pub static ref SQLITE_POOL_SIZE: Gauge = Gauge::new(
-        "op_state_sqlite_pool_size",
-        "SQLite connection pool size"
-    ).expect("hardcoded metric definition is valid");
-
-    /// SQLite database size
-    pub static ref SQLITE_DB_SIZE_BYTES: Gauge = Gauge::new(
-        "op_state_sqlite_db_size_bytes",
-        "SQLite database file size in bytes"
-    ).expect("hardcoded metric definition is valid");
 }
 
 static INIT: Once = Once::new();
@@ -151,19 +117,6 @@ pub fn register_metrics() {
         // Audit metrics
         REGISTRY
             .register(Box::new(AUDIT_ENTRIES_TOTAL.clone()))
-            .ok();
-
-        // Redis metrics
-        REGISTRY.register(Box::new(REDIS_CONNECTED.clone())).ok();
-        REGISTRY
-            .register(Box::new(REDIS_STREAM_LENGTH.clone()))
-            .ok();
-        REGISTRY.register(Box::new(REDIS_OPS_TOTAL.clone())).ok();
-
-        // SQLite metrics
-        REGISTRY.register(Box::new(SQLITE_POOL_SIZE.clone())).ok();
-        REGISTRY
-            .register(Box::new(SQLITE_DB_SIZE_BYTES.clone()))
             .ok();
 
         info!("State store metrics registered");
@@ -253,26 +206,6 @@ pub fn update_job_counts(pending: u64, running: u64, completed: u64, failed: u64
         .set(failed as f64);
 }
 
-/// Update Redis status
-pub fn update_redis_status(connected: bool) {
-    REDIS_CONNECTED.set(if connected { 1.0 } else { 0.0 });
-}
-
-/// Update Redis stream lengths
-pub fn update_redis_stream_lengths(job_len: u64, plugin_len: u64) {
-    REDIS_STREAM_LENGTH
-        .with_label_values(&["jobs"])
-        .set(job_len as f64);
-    REDIS_STREAM_LENGTH
-        .with_label_values(&["plugins"])
-        .set(plugin_len as f64);
-}
-
-/// Update SQLite database size
-pub fn update_sqlite_size(size_bytes: u64) {
-    SQLITE_DB_SIZE_BYTES.set(size_bytes as f64);
-}
-
 /// Get metrics as text for Prometheus scraping
 pub fn gather_metrics() -> String {
     use prometheus::Encoder;
@@ -301,7 +234,7 @@ mod tests {
         register_metrics();
 
         {
-            let _timer = OperationTimer::new("save_job", "sqlite");
+            let _timer = OperationTimer::new("save_job", "memory");
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
 
@@ -319,10 +252,7 @@ mod tests {
         record_plugin_apply("lxc", true);
         record_checkpoint("lxc");
         record_audit_entry();
-        record_store_error("save", "sqlite", "connection");
+        record_store_error("save", "memory", "lock");
         update_job_counts(1, 2, 3, 4);
-        update_redis_status(true);
-        update_redis_stream_lengths(100, 50);
-        update_sqlite_size(1024);
     }
 }

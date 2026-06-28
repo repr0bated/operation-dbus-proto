@@ -251,7 +251,6 @@ impl StatePlugin for PackageKitPlugin {
         )
     }
 
-
     async fn calculate_diff(&self, _current: &Value, desired: &Value) -> Result<StateDiff> {
         println!("PackageKit calculate_diff called with: {}", desired);
         let packages_obj = desired

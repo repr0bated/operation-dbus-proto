@@ -219,7 +219,6 @@ impl StatePlugin for S6StatePlugin {
         format!("s6-rc live directory not found at {S6_RC_LIVE}")
     }
 
-
     async fn calculate_diff(&self, current: &Value, desired: &Value) -> Result<StateDiff> {
         let current_config: S6Config = simd_json::serde::from_owned_value(current.clone())?;
         let desired_config: S6Config = simd_json::serde::from_owned_value(desired.clone())?;
