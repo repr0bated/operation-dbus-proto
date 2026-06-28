@@ -7,3 +7,4 @@
 
 pub mod errors;
 pub mod llm_projection;
+pub mod selector;
