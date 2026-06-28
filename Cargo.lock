@@ -4525,6 +4525,8 @@ dependencies = [
  "chrono",
  "dirs",
  "jsonwebtoken",
+ "op-plugins",
+ "op-state-store",
  "reqwest 0.11.27",
  "rsa",
  "serde",

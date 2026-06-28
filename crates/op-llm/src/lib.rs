@@ -50,6 +50,7 @@ pub mod openclaw;
 pub mod perplexity;
 pub mod provider;
 pub mod pty_bridge;
+pub mod schema;
 
 pub use anthropic::AnthropicClient;
 pub use antigravity::AntigravityProvider;
