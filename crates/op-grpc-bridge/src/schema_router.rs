@@ -29,6 +29,8 @@ use tokio::sync::RwLock;
 use tracing::{debug, info};
 use zbus::{Connection, Proxy};
 
+use crate::schema_engine::SchemaEngine;
+
 use op_plugins::canonical::{self, BASE_SERVICE_NAME};
 
 /// The combined monolith catalog in shared memory.
@@ -78,6 +80,9 @@ pub struct SchemaRouter {
     /// inbound connection; a change triggers a reload. `None` when no manifest
     /// has been observed yet.
     cached_hash: Arc<RwLock<Option<String>>>,
+    /// The SchemaEngine used for real method dispatch (Requirement 5).
+    /// `None` in unit tests that do not exercise the dispatch path.
+    engine: Option<Arc<SchemaEngine>>,
 }
 
 impl SchemaRouter {
@@ -96,6 +101,21 @@ impl SchemaRouter {
             PathBuf::from(PER_PLUGIN_SCHEMA_DIR),
             PathBuf::from(MANIFEST_PATH),
         )
+    }
+
+    /// Create a new SchemaRouter wired to a SchemaEngine for real dispatch.
+    ///
+    /// This is the production constructor: the bridge passes its
+    /// `Arc<SchemaEngine>` so every registered `SchemaBackedInterface` can
+    /// dispatch method calls through `SchemaEngine::dispatch_method_call`
+    /// (Requirement 5 / VAL-DISPATCH-001).
+    pub fn with_engine(
+        dbus_connection: Arc<tokio::sync::OnceCell<Connection>>,
+        engine: Arc<SchemaEngine>,
+    ) -> Self {
+        let mut router = Self::new(dbus_connection);
+        router.engine = Some(engine);
+        router
     }
 
     /// Create a SchemaRouter with explicit SHM paths.
@@ -122,6 +142,7 @@ impl SchemaRouter {
             per_plugin_dir,
             manifest_path,
             cached_hash: Arc::new(RwLock::new(cached_hash)),
+            engine: None,
         }
     }
 
@@ -137,7 +158,11 @@ impl SchemaRouter {
 
         let routes = self.routes.read().await;
         for (plugin_id, route) in routes.iter() {
-            let interface = SchemaBackedInterface::new(plugin_id.clone(), route.clone());
+            let interface = SchemaBackedInterface::with_engine(
+                plugin_id.clone(),
+                route.clone(),
+                self.engine.clone(),
+            );
             let path = route.dbus_path.clone();
 
             debug!(plugin_id, path, "Registering authoritative D-Bus object");
@@ -536,13 +561,36 @@ pub struct SchemaBackedInterface {
     route: PluginRoute,
     /// Directory containing per-plugin present-state JSON files.
     shm_state_dir: PathBuf,
+    /// The SchemaEngine for real method dispatch (Requirement 5).
+    /// `None` when no engine is wired (unit tests that only exercise
+    /// method-existence / property-read paths).
+    engine: Option<Arc<SchemaEngine>>,
 }
 
 impl SchemaBackedInterface {
     /// Creates a new `SchemaBackedInterface` using the default SHM state
-    /// directory (`/dev/shm/opdbus/state`).
+    /// directory (`/dev/shm/opdbus/state`) and no engine.
+    ///
+    /// Prefer [`with_engine`](Self::with_engine) in production so the
+    /// interface can dispatch method calls through `SchemaEngine`.
     pub fn new(plugin_id: String, route: PluginRoute) -> Self {
         Self::with_shm_state_dir(plugin_id, route, DEFAULT_SHM_STATE_DIR)
+    }
+
+    /// Creates a new `SchemaBackedInterface` wired to a SchemaEngine for
+    /// real method dispatch.
+    ///
+    /// The engine is used by [`call`](Self::call) to dispatch method
+    /// invocations through `SchemaEngine::dispatch_method_call`
+    /// (Requirement 5 / VAL-DISPATCH-001).
+    pub fn with_engine(
+        plugin_id: String,
+        route: PluginRoute,
+        engine: Option<Arc<SchemaEngine>>,
+    ) -> Self {
+        let mut iface = Self::with_shm_state_dir(plugin_id, route, DEFAULT_SHM_STATE_DIR);
+        iface.engine = engine;
+        iface
     }
 
     /// Creates a new `SchemaBackedInterface` with a custom SHM state directory.
@@ -558,6 +606,7 @@ impl SchemaBackedInterface {
             plugin_id,
             route,
             shm_state_dir: shm_state_dir.as_ref().to_path_buf(),
+            engine: None,
         }
     }
 
@@ -661,22 +710,61 @@ impl SchemaBackedInterface {
     ///
     /// All schema-defined methods are funneled through this call, allowing
     /// dynamic dispatch without compile-time traits for every plugin.
-    async fn call(&self, method: String, _json_args: String) -> zbus::fdo::Result<String> {
+    ///
+    /// After validating that the method is declared in the plugin's
+    /// capability surface, the bridge dispatches to
+    /// `SchemaEngine::dispatch_method_call` with the verbatim `json_args`
+    /// string from the caller (Requirement 5 / VAL-DISPATCH-001).
+    /// Errors from the engine are propagated as
+    /// `zbus::fdo::Error::Failed` (Requirement 5.3 / VAL-DISPATCH-003).
+    async fn call(&self, method: String, json_args: String) -> zbus::fdo::Result<String> {
+        // 1. Method-existence gate: reject undeclared methods (Requirement 6).
         if !self.route.methods.contains_key(&method) {
             return Err(zbus::fdo::Error::UnknownMethod(method));
         }
-        // In the bridge, a D-Bus call to a SchemaBackedInterface usually means
-        // a container is calling a host service. The bridge handles this by
-        // either performing the action or proxying it.
+
         info!(plugin_id = %self.plugin_id, method, "D-Bus method call received");
 
-        // This is where the authoritative bridge logic lives.
-        // For now, we return a successful response acknowledging the call.
-        // In a full implementation, this would trigger the actual plugin action.
-        Ok(format!(
-            r#"{{"success": true, "plugin": "{}", "method": "{}"}}"#,
-            self.plugin_id, method
-        ))
+        // 2. Real dispatch through SchemaEngine (Requirement 5).
+        //    json_args is passed verbatim — no default, no placeholder
+        //    (Requirement 5.4 / VAL-DISPATCH-004).
+        let engine = self.engine.as_ref().ok_or_else(|| {
+            zbus::fdo::Error::Failed(
+                "SchemaEngine not wired to this interface — dispatch unavailable".to_string(),
+            )
+        })?;
+
+        // The capability_id is read from the MethodDecl's required_capability
+        // (enforcement is bridge-layer, Requirement 7). For the dispatch call,
+        // the declared required_capability is threaded through so the event
+        // chain records it.
+        let capability_id = self
+            .route
+            .methods
+            .get(&method)
+            .and_then(|decl| decl.get("required_capability"))
+            .and_then(|c| c.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+
+        // The actor_id for a D-Bus dispatch is the caller's bus identity.
+        // The interceptor-extracted footprint/session is the primary gate;
+        // here we use the plugin's bus name as the actor for audit purposes.
+        let actor_id = format!("dbus:{}", self.plugin_id);
+
+        let result = engine
+            .dispatch_method_call(
+                &self.plugin_id,
+                &method,
+                &json_args,
+                capability_id.as_deref(),
+                &actor_id,
+            )
+            .await
+            .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
+
+        // 3. Return the serialized result to the D-Bus caller.
+        serde_json::to_string(&result).map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
     }
 
     /// Get a property value from SHM present-state.
@@ -1561,5 +1649,288 @@ mod tests {
         );
 
         cleanup(&base);
+    }
+
+    // ── R5.1 / VAL-DISPATCH-001: Bridge dispatches to SchemaEngine.mutate ──
+
+    /// Builds a test `SchemaEngine` with a real `EventChain` so dispatch
+    /// tests can verify the event chain record.
+    fn test_engine() -> Arc<SchemaEngine> {
+        use op_jsonrpc::nonnet::NonNetDb;
+        use op_network::rovs_proxy::OvsdbDbusClient;
+        use op_state_store::{ChainConfig, EventChain};
+
+        let event_chain = Arc::new(RwLock::new(EventChain::new(ChainConfig::default())));
+        let ovsdb = Arc::new(OvsdbDbusClient::new());
+        let nonnet = Arc::new(NonNetDb::new());
+        Arc::new(SchemaEngine::new(event_chain, ovsdb, nonnet))
+    }
+
+    /// Builds a `PluginRoute` with a method that has a `required_capability`.
+    fn dispatch_test_route() -> PluginRoute {
+        let mut methods = HashMap::new();
+        methods.insert(
+            "SetKey".to_string(),
+            json!({
+                "name": "SetKey",
+                "args": { "type": "object", "properties": { "key": { "type": "string" } }, "required": ["key"] },
+                "returns": null,
+                "side_effect": "mutation",
+                "idempotent": false,
+                "required_capability": "beta.set_key",
+                "subid": "mut.service.beta.set-key@v1"
+            }),
+        );
+        methods.insert(
+            "GetStatus".to_string(),
+            json!({
+                "name": "GetStatus",
+                "args": { "type": "object", "properties": {} },
+                "returns": { "type": "object" },
+                "side_effect": "read",
+                "idempotent": true,
+                "required_capability": null,
+                "subid": "obs.service.beta.get-status@v1"
+            }),
+        );
+        PluginRoute {
+            plugin_id: "beta".to_string(),
+            dbus_path: "/org/opdbus/v1/plugins/beta".to_string(),
+            dbus_destination: "org.opdbus.v1".to_string(),
+            dbus_interface: "org.opdbus.v1.Plugin.Beta".to_string(),
+            methods,
+            signals: vec![],
+            properties: HashMap::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn bridge_dispatches_to_schema_engine_mutate() {
+        // VAL-DISPATCH-001: call() dispatches to SchemaEngine, not a stub.
+        let engine = test_engine();
+        let route = dispatch_test_route();
+        let iface =
+            SchemaBackedInterface::with_engine("beta".to_string(), route, Some(engine.clone()));
+
+        let result = iface
+            .call("GetStatus".to_string(), r#"{"verbose":true}"#.to_string())
+            .await;
+        assert!(result.is_ok(), "dispatch should succeed: {:?}", result);
+        let body: serde_json::Value = serde_json::from_str(&result.unwrap()).unwrap();
+        assert_eq!(body["success"], json!(true));
+        assert_eq!(body["plugin_id"], json!("beta"));
+        assert_eq!(body["method"], json!("GetStatus"));
+        assert!(
+            body["event_id"].as_u64().unwrap() > 0,
+            "event_id must be set"
+        );
+        assert!(
+            !body["event_hash"].as_str().unwrap().is_empty(),
+            "event_hash must be set"
+        );
+
+        // The event chain must have a recorded event for this dispatch.
+        let chain = engine.event_chain.read().await;
+        assert_eq!(
+            chain.events().len(),
+            1,
+            "one event recorded for the dispatch"
+        );
+    }
+
+    // ── R5.2 / VAL-DISPATCH-002: Stub removed ─────────────────────────────
+
+    #[tokio::test]
+    async fn stub_success_true_removed_from_call_path() {
+        // VAL-DISPATCH-002: the old stub returned {"success": true, ...}
+        // without an event_id/event_hash. The real dispatch returns a result
+        // carrying event accountability proof.
+        let engine = test_engine();
+        let route = dispatch_test_route();
+        let iface =
+            SchemaBackedInterface::with_engine("beta".to_string(), route, Some(engine.clone()));
+
+        let body: serde_json::Value = serde_json::from_str(
+            &iface
+                .call("GetStatus".to_string(), "{}".to_string())
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+
+        assert!(
+            body.get("event_id").is_some(),
+            "real dispatch must include event_id (stub did not)"
+        );
+        assert!(
+            body.get("event_hash").is_some(),
+            "real dispatch must include event_hash (stub did not)"
+        );
+    }
+
+    // ── R5.3 / VAL-DISPATCH-003: Errors propagated as fdo::Error::Failed ──
+
+    #[tokio::test]
+    async fn mutate_error_propagated_to_caller() {
+        // VAL-DISPATCH-003: if SchemaEngine returns an error, the bridge
+        // propagates it as zbus::fdo::Error::Failed.
+        let engine = test_engine();
+        let route = dispatch_test_route();
+        let iface =
+            SchemaBackedInterface::with_engine("beta".to_string(), route, Some(engine.clone()));
+
+        // Invalid JSON args → dispatch_method_call returns Err → fdo::Error::Failed.
+        let result = iface
+            .call("GetStatus".to_string(), "not-valid-json".to_string())
+            .await;
+        assert!(result.is_err(), "invalid json_args must produce an error");
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, zbus::fdo::Error::Failed(_)),
+            "error must be zbus::fdo::Error::Failed, got {:?}",
+            err
+        );
+    }
+
+    // ── R5.4 / VAL-DISPATCH-004: json_args passed verbatim ─────────────────
+
+    #[tokio::test]
+    async fn mutate_receives_verbatim_json_args() {
+        // VAL-DISPATCH-004: the json_args argument is the verbatim string
+        // from the caller. We verify by checking the Blake3 footprint in the
+        // event chain matches a footprint computed from the verbatim string.
+        let engine = test_engine();
+        let route = dispatch_test_route();
+        let iface =
+            SchemaBackedInterface::with_engine("beta".to_string(), route, Some(engine.clone()));
+
+        let verbatim = r#"{"key":"secret-value-123","nested":{"a":1}}"#;
+        iface
+            .call("SetKey".to_string(), verbatim.to_string())
+            .await
+            .unwrap();
+
+        let chain = engine.event_chain.read().await;
+        let event = chain.events().last().unwrap();
+        let expected_footprint = blake3::hash(verbatim.as_bytes()).to_hex().to_string();
+        assert_eq!(
+            event.json_args_footprint.as_deref(),
+            Some(expected_footprint.as_str()),
+            "Blake3 footprint must match the verbatim json_args string"
+        );
+    }
+
+    // ── R5.5 / VAL-DISPATCH-005 / VAL-NFR-003: Event chain record ────────
+
+    #[tokio::test]
+    async fn mutate_appends_event_chain_record() {
+        // VAL-DISPATCH-005: the event chain record includes actor_id,
+        // plugin_id, method_name, capability_id, and a Blake3 footprint.
+        let engine = test_engine();
+        let route = dispatch_test_route();
+        let iface =
+            SchemaBackedInterface::with_engine("beta".to_string(), route, Some(engine.clone()));
+
+        iface
+            .call("SetKey".to_string(), r#"{"key":"abc"}"#.to_string())
+            .await
+            .unwrap();
+
+        let chain = engine.event_chain.read().await;
+        let event = chain.events().last().unwrap();
+
+        assert!(!event.actor_id.is_empty(), "event must carry actor_id");
+        assert_eq!(event.plugin_id, "beta", "event must carry plugin_id");
+        assert_eq!(
+            event.method_name.as_deref(),
+            Some("SetKey"),
+            "event must carry method_name"
+        );
+        assert_eq!(
+            event.capability_id.as_deref(),
+            Some("beta.set_key"),
+            "event must carry capability_id from MethodDecl"
+        );
+        let footprint = event.json_args_footprint.as_ref().expect("footprint set");
+        assert!(
+            !footprint.is_empty(),
+            "event must carry a Blake3 footprint of json_args"
+        );
+        assert_eq!(footprint.len(), 64, "Blake3 hex footprint must be 64 chars");
+    }
+
+    #[tokio::test]
+    async fn mutation_appended_before_success() {
+        // VAL-NFR-003: the event chain append occurs before the call returns
+        // success.
+        let engine = test_engine();
+        let route = dispatch_test_route();
+        let iface =
+            SchemaBackedInterface::with_engine("beta".to_string(), route, Some(engine.clone()));
+
+        {
+            let chain = engine.event_chain.read().await;
+            assert!(chain.events().is_empty(), "no events before dispatch");
+        }
+
+        let result = iface.call("GetStatus".to_string(), "{}".to_string()).await;
+
+        assert!(result.is_ok(), "dispatch must succeed");
+        let chain = engine.event_chain.read().await;
+        assert_eq!(
+            chain.events().len(),
+            1,
+            "event must be appended before success is returned"
+        );
+    }
+
+    // ── R7.4 / VAL-ENFORCE-004: capability_id threaded, null allowed ──────
+
+    #[tokio::test]
+    async fn null_required_capability_dispatched_without_capability() {
+        // VAL-ENFORCE-005: where required_capability is null, the dispatch
+        // still proceeds and the event records capability_id as None.
+        let engine = test_engine();
+        let route = dispatch_test_route();
+        let iface =
+            SchemaBackedInterface::with_engine("beta".to_string(), route, Some(engine.clone()));
+
+        iface
+            .call("GetStatus".to_string(), "{}".to_string())
+            .await
+            .unwrap();
+
+        let chain = engine.event_chain.read().await;
+        let event = chain.events().last().unwrap();
+        assert!(
+            event.capability_id.is_none(),
+            "null required_capability → event capability_id is None"
+        );
+    }
+
+    // ── R6.2: Unknown method rejected without dispatch ─────────────────────
+
+    #[tokio::test]
+    async fn unknown_method_rejected_without_dispatch() {
+        // VAL-VALIDATE-002: unknown method is rejected as UnknownMethod
+        // without calling SchemaEngine (no event recorded).
+        let engine = test_engine();
+        let route = dispatch_test_route();
+        let iface =
+            SchemaBackedInterface::with_engine("beta".to_string(), route, Some(engine.clone()));
+
+        let result = iface
+            .call("Nonexistent".to_string(), "{}".to_string())
+            .await;
+        assert!(
+            matches!(result, Err(zbus::fdo::Error::UnknownMethod(_))),
+            "unknown method must be rejected as UnknownMethod"
+        );
+
+        let chain = engine.event_chain.read().await;
+        assert!(
+            chain.events().is_empty(),
+            "unknown method must not record an event (mutate not called)"
+        );
     }
 }

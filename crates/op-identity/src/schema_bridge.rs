@@ -288,8 +288,27 @@ pub fn write_sled(sled: &IdentitySled) -> std::io::Result<()> {
 /// # Safety
 /// The caller must ensure no concurrent writer is modifying the file
 /// mid-read.  `write_sled` uses rename so this is safe in practice.
+///
+/// The sled path is overridable via the `OP_SLED_PATH` environment variable.
+/// This allows tests to point at an isolated/empty memory region so the
+/// "SchemaEngine unreachable" branch is deterministic regardless of host
+/// SHM state. When the env var is unset, the canonical [`SHM_SLED_PATH`] is
+/// used.
 pub fn read_sled() -> std::io::Result<(*const IdentitySled, memmap2::Mmap)> {
-    let file = File::open(SHM_SLED_PATH)?;
+    let path = std::env::var("OP_SLED_PATH").unwrap_or_else(|_| SHM_SLED_PATH.to_string());
+    read_sled_at(&path)
+}
+
+/// Read the sled from an explicit path — zero copy, no allocation.
+///
+/// This is the testable core of [`read_sled`]. Production code should call
+/// [`read_sled`] which resolves the path from the environment.
+///
+/// # Safety
+/// The caller must ensure no concurrent writer is modifying the file
+/// mid-read.  `write_sled` uses rename so this is safe in practice.
+pub fn read_sled_at(path: &str) -> std::io::Result<(*const IdentitySled, memmap2::Mmap)> {
+    let file = File::open(path)?;
     let mmap = unsafe { MmapOptions::new().len(IdentitySled::SIZE).map(&file)? };
     let ptr = mmap.as_ptr() as *const IdentitySled;
     Ok((ptr, mmap))

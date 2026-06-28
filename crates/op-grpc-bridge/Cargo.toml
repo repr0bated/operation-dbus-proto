@@ -42,6 +42,7 @@ op-cache = { path = "../op-cache" }
 memmap2 = { workspace = true }
 hex = { workspace = true }
 sha2 = { workspace = true }
+blake3 = { workspace = true }
 
 # Utilities
 tracing = { workspace = true }

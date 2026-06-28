@@ -152,6 +152,22 @@ mod tests {
 
     #[test]
     fn test_schema_engine_unreachable_returns_internal() {
+        // Make the test hermetic: point the interceptor at an isolated/empty
+        // SchemaEngine memory region via the env-overridable sled path. This
+        // ensures the "unreachable" branch is exercised deterministically
+        // regardless of host SHM state (a populated /dev/shm/plugin_schema.dat
+        // may exist on the live system). Do NOT merely flip the expected error.
+        let isolated_path = format!(
+            "/dev/shm/opdbus-test-sled-unreachable-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        // The path does not exist → read_sled() returns Err → Status::internal.
+        std::env::set_var("OP_SLED_PATH", &isolated_path);
+
         let mut req = Request::new(());
         req.metadata_mut().insert(
             "x-ghostbridge-footprint",
@@ -164,8 +180,17 @@ mod tests {
         let result = ghostbridge_interceptor(req);
         assert!(result.is_err());
         let status = result.unwrap_err();
-        assert_eq!(status.code(), tonic::Code::Internal);
+        assert_eq!(
+            status.code(),
+            tonic::Code::Internal,
+            "unreachable sled must yield Status::internal, got {:?}: {}",
+            status.code(),
+            status.message()
+        );
         assert!(status.message().contains("SchemaEngine Memory Unreachable"));
+
+        // Restore the default sled path for other tests.
+        std::env::remove_var("OP_SLED_PATH");
     }
 
     #[test]

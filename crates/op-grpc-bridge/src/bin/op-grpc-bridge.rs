@@ -44,7 +44,12 @@ async fn main() -> anyhow::Result<()> {
     let schema_engine = Arc::new(SchemaEngine::new(event_chain, ovsdb, nonnet));
 
     // ── Schema Router (dynamic D-Bus routing from live schema catalog) ───────
-    let schema_router = Arc::new(SchemaRouter::new(schema_engine.dbus_connection.clone()));
+    // The router is wired to the SchemaEngine so SchemaBackedInterface::call
+    // dispatches through SchemaEngine::dispatch_method_call (Requirement 5).
+    let schema_router = Arc::new(SchemaRouter::with_engine(
+        schema_engine.dbus_connection.clone(),
+        schema_engine.clone(),
+    ));
 
     // Authoritative D-Bus object registration:
     // The bridge brings the schema-defined objects into existence on the bus.
