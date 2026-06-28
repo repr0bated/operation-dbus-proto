@@ -753,7 +753,7 @@ impl SchemaBackedInterface {
 
         // 2. Argument validation against MethodDecl.args JSON Schema (Requirement 6.3).
         // json_args must conform to the schema; rejection as InvalidArgs without calling mutate.
-        if let Err(e) = self.validate_json_args(&method_decl, &json_args) {
+        if let Err(e) = self.validate_json_args(method_decl, &json_args) {
             return Err(zbus::fdo::Error::InvalidArgs(format!(
                 "arguments do not conform to schema for method '{}': {}",
                 method, e
