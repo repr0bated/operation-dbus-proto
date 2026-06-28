@@ -1,4 +1,8 @@
 //! D-Bus server for system bus integration
+//!
+//! NOTE: op-state has no s6 service. The bridge (op-grpc-bridge) owns
+//! org.opdbus.v1 and all /org/opdbus/v1/plugins/* paths. This module
+//! provides register_on_connection for library use only.
 
 use crate::manager::StateManager;
 use crate::plugin::StatePlugin;
@@ -8,7 +12,7 @@ use op_state_store::{SchemaCatalog, SchemaRegistry};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use simd_json::OwnedValue as Value;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 use zbus::Connection;
 
@@ -27,8 +31,8 @@ struct ProjectedObject {
 #[derive(Default)]
 #[allow(dead_code)]
 struct PublicationRegistry {
-    published_paths: HashSet<String>,
-    paths_by_service: HashMap<String, HashSet<String>>,
+    published_paths: std::collections::HashSet<String>,
+    paths_by_service: HashMap<String, std::collections::HashSet<String>>,
 }
 
 #[allow(dead_code)]
@@ -180,6 +184,8 @@ pub type SharedSchemaCatalog = Arc<RwLock<SchemaCatalog>>;
 /// Compatibility alias for older call sites that still say `registry`.
 pub type SharedSchemaRegistry = SharedSchemaCatalog;
 
+/// Register the state manager interface on an existing connection.
+/// Used by other components; does NOT claim org.opdbus.v1.
 pub async fn register_on_connection(
     connection: &Connection,
     state_manager: Arc<StateManager>,
@@ -192,19 +198,17 @@ pub async fn register_on_connection(
     Ok(())
 }
 
-pub async fn start_system_bus(state_manager: Arc<StateManager>) -> Result<()> {
-    let connection = Connection::system().await?;
-    serve_connection(connection, state_manager).await
+/// NOTE: These functions are kept for API compatibility but are deprecated.
+/// op-state has no s6 service; op-grpc-bridge owns org.opdbus.v1.
+
+pub async fn start_system_bus(_state_manager: Arc<StateManager>) -> Result<()> {
+    // Dead code: no s6 service. op-grpc-bridge owns org.opdbus.v1.
+    std::future::pending::<()>().await;
+    Ok(())
 }
 
-pub async fn start_session_bus(state_manager: Arc<StateManager>) -> Result<()> {
-    let connection = Connection::session().await?;
-    serve_connection(connection, state_manager).await
-}
-
-async fn serve_connection(connection: Connection, state_manager: Arc<StateManager>) -> Result<()> {
-    register_on_connection(&connection, state_manager).await?;
-    connection.request_name("org.opdbus.v1").await?;
+pub async fn start_session_bus(_state_manager: Arc<StateManager>) -> Result<()> {
+    // Dead code: no s6 service. op-grpc-bridge owns org.opdbus.v1.
     std::future::pending::<()>().await;
     Ok(())
 }

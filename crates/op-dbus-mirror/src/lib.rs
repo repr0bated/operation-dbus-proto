@@ -1,7 +1,8 @@
-//! op-dbus-mirror: 1:1 D-Bus publication of internal databases
+//! op-dbus-mirror: Mirror-management D-Bus publication
 //!
-//! This crate publishes the internal OVSDB and NonNet database structures as a
-//! D-Bus object hierarchy without introducing a second source of truth.
+//! This crate provides mirror-management interfaces at /org/opdbus/v1/mirror/
+//! for the D-Bus mirror service. Plugin objects (at /org/opdbus/v1/plugins/)
+//! are served exclusively by op-grpc-bridge (the sole owner of org.opdbus.v1).
 
 use anyhow::Result;
 use dashmap::DashMap;
@@ -36,6 +37,7 @@ use op_grpc_bridge::{OperationGrpcServer, SchemaEngine};
 use op_jsonrpc::nonnet::NonNetDb;
 use op_network::rovs_proxy::OvsdbDbusClient;
 use op_state::manager::StateManager;
+use op_state_store::PluginSchema;
 use procfs::Current as _;
 use serde_json::{Map, Value};
 use std::collections::HashSet;
@@ -57,8 +59,8 @@ pub mod tree;
 
 /// D-Bus publication service.
 ///
-/// Responsible for maintaining a 1:1 D-Bus object view of authoritative
-/// internal databases.
+/// Responsible for maintaining mirror-management interfaces at /org/opdbus/v1/mirror/.
+/// Plugin objects (at /org/opdbus/v1/plugins/) are served exclusively by op-grpc-bridge.
 pub struct DbusMirror {
     ovsdb: Arc<OvsdbDbusClient>,
     nonnet: Arc<NonNetDb>,
@@ -67,12 +69,10 @@ pub struct DbusMirror {
     /// Published D-Bus object paths managed by this service.
     published_objects: DashMap<String, ()>,
     /// Registry backing the org.freedesktop.DBus.ObjectManager at OBJECT_MANAGER_PATH.
-    /// Tracks every plugin object so GetManagedObjects can enumerate them all.
     plugin_registry: ManagedObjectRegistry,
-    /// Optional handle to the gRPC server so the ComponentRegistry can be
-    /// mirrored into the D-Bus tree under /org/opdbus/v1/registry/.
+    /// Optional handle to the gRPC server so the ComponentRegistry can be mirrored.
     grpc_server: Option<Arc<OperationGrpcServer>>,
-    /// StateManager for enumerating all registered plugins (active or not).
+    /// StateManager for enumerating all registered plugins.
     state_manager: Option<Arc<StateManager>>,
     /// Current data and sequence numbers per object path
     current_data: DashMap<String, (Value, u64)>,
@@ -89,8 +89,18 @@ impl DbusMirror {
         schema_engine: Option<Arc<SchemaEngine>>,
     ) -> std::result::Result<Self, MirrorError> {
         let connection = match bus_type {
-            BusType::System => Builder::system()?.name("org.opdbus.v1")?.build().await?,
-            BusType::Session => Builder::session()?.name("org.opdbus.v1")?.build().await?,
+            BusType::System => {
+                Builder::system()?
+                    .name("org.opdbus.v1.mirror")?
+                    .build()
+                    .await?
+            }
+            BusType::Session => {
+                Builder::session()?
+                    .name("org.opdbus.v1.mirror")?
+                    .build()
+                    .await?
+            }
         };
 
         Ok(Self {
@@ -113,8 +123,7 @@ impl DbusMirror {
         self
     }
 
-    /// Attach the StateManager so all registered plugins are always visible in
-    /// the managed objects tree (active or not).
+    /// Attach the StateManager so registered plugins are visible in the tree.
     pub fn with_state_manager(mut self, state_manager: Arc<StateManager>) -> Self {
         self.state_manager = Some(state_manager);
         self
@@ -122,8 +131,11 @@ impl DbusMirror {
 
     /// Start the mirror service.
     ///
-    /// Performs an initial full-tree publication and then enters an event-driven
-    /// loop to publish deltas from all data sources.
+    /// Registers mirror-management interfaces and enters an event-driven
+    /// loop to publish deltas from data sources.
+    ///
+    /// NOTE: Plugin objects (at /org/opdbus/v1/plugins/) are served
+    /// exclusively by op-grpc-bridge (the sole owner of org.opdbus.v1).
     pub async fn start(self: Arc<Self>) -> std::result::Result<(), MirrorError> {
         tracing::info!("Starting D-Bus mirror publication service...");
 
@@ -132,14 +144,14 @@ impl DbusMirror {
             tracing::error!("Initial D-Bus mirror sync failed: {}", e);
         }
 
-        // Register ObjectManager at the root to manage EVERYTHING.
+        // Register ObjectManager so clients can enumerate schema-backed mirror objects.
         let om = ObjectManagerInterface::new(self.plugin_registry.clone());
         self.connection
             .object_server()
-            .at("/org/opdbus/v1", om)
+            .at(OBJECT_MANAGER_PATH, om)
             .await?;
 
-        // Register PluginsV1 at the canonical plugins path.
+        // Register PluginsV1 helper at the canonical plugins path.
         let plugin_iface = plugin_interface::PluginInterface::new();
         let plugin_snap = plugin_iface.snapshot_handle();
         self.connection
@@ -147,29 +159,31 @@ impl DbusMirror {
             .at("/org/opdbus/v1/plugins", plugin_iface)
             .await?;
 
-        // Register mirror-management interface
+        // Register mirror-management interface at /org/opdbus/v1/mirror
+        // (NOT /org/opdbus/v1/plugins/ - those are handled by the bridge)
         let interface = dbus_interface::DbusMirrorInterface::new(self.clone());
         self.connection
             .object_server()
-            .at("/org/opdbus/v1", interface)
+            .at("/org/opdbus/v1/mirror", interface)
             .await?;
 
-        // Register OVSDB JSON-RPC interface at /org/opdbus/v1/ovsdb
+        // Register OVSDB JSON-RPC interface at /org/opdbus/mirror/ovsdb
+        // (mirror namespace, not the canonical plugins path)
         let ovsdb_interface =
             jsonrpc_interface::OvsdbInterface::new(self.ovsdb.clone(), self.schema_engine.clone());
         self.connection
             .object_server()
-            .at("/org/opdbus/v1/ovsdb", ovsdb_interface)
+            .at("/org/opdbus/v1/mirror/ovsdb", ovsdb_interface)
             .await?;
 
-        // Register NonNet JSON-RPC interface at /org/opdbus/v1/nonnet
+        // Register NonNet JSON-RPC interface at /org/opdbus/v1/mirror/nonnet
         let nonnet_interface = jsonrpc_interface::NonNetInterface::new(
             self.nonnet.clone(),
             self.schema_engine.clone(),
         );
         self.connection
             .object_server()
-            .at("/org/opdbus/v1/nonnet", nonnet_interface)
+            .at("/org/opdbus/v1/mirror/nonnet", nonnet_interface)
             .await?;
 
         // Create event dispatcher
@@ -177,8 +191,6 @@ impl DbusMirror {
             self.clone(),
             self.ovsdb.clone(),
             self.nonnet.clone(),
-            self.state_manager.clone(),
-            self.grpc_server.clone(),
         );
 
         // Spawn all event sources
@@ -199,10 +211,8 @@ impl DbusMirror {
             tracing::error!("Event loop failed: {}", e);
         }
 
-        // Populate fixed objects immediately on startup.
         self.refresh_plugin_snapshot(&plugin_snap).await;
 
-        // Watch ComponentRegistry for live register/deregister events
         if let Some(grpc) = &self.grpc_server {
             let (_, mut rx) = grpc.registry_watch().await;
             let mirror = self.clone();
@@ -210,11 +220,7 @@ impl DbusMirror {
                 loop {
                     match rx.recv().await {
                         Ok(event) => mirror.apply_registry_event(event).await,
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                            tracing::warn!(
-                                "ComponentRegistry watcher lagged by {} events, resyncing",
-                                n
-                            );
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
                             if let Err(e) = mirror.refresh_full_tree().await {
                                 tracing::error!("Registry resync failed: {}", e);
                             }
@@ -286,10 +292,8 @@ impl DbusMirror {
             tracing::warn!("Process snapshot failed: {}", e);
         }
 
-        // 8. Keep plugin objects published even when a plugin is currently inactive.
-        if let Err(e) = self.publish_plugin_snapshot(&mut active_paths).await {
-            tracing::warn!("Plugin snapshot failed: {}", e);
-        }
+        // 8. Plugin objects removed from mirror — now served by op-grpc-bridge
+        // which owns the /org/opdbus/v1/plugins/ path.
 
         // 9. Remove any D-Bus objects that no longer exist in any authority
         self.remove_stale_publications(&active_paths).await?;
@@ -311,7 +315,7 @@ impl DbusMirror {
         ];
 
         for section in sections {
-            let path = format!("/org/opdbus/v1/host/{}", section);
+            let path = format!("/org/opdbus/v1/mirror/host/{}", section);
             let data = match section {
                 "meminfo" => self.gather_meminfo().await?,
                 "cpuinfo" => self.gather_cpuinfo().await?,
@@ -936,6 +940,7 @@ impl DbusMirror {
     ///
     /// If a plugin cannot currently provide state, it still appears in the tree
     /// with `active: false`.
+    #[allow(dead_code)]
     async fn publish_plugin_snapshot(&self, active_paths: &mut HashSet<String>) -> Result<()> {
         let sm = match &self.state_manager {
             Some(sm) => sm.clone(),
@@ -1045,6 +1050,7 @@ impl DbusMirror {
     }
 
     async fn publish_object(&self, path: &str, data: Value) -> Result<()> {
+        let schema = Self::schema_for_object_path(path);
         // Get current data and sequence from the store
         let mut entry = self
             .current_data
@@ -1075,14 +1081,16 @@ impl DbusMirror {
                     let emitter = iface_ref.signal_emitter();
                     let _ = iface_ref.get().await.data_updated(emitter).await;
                     // Ensure the ObjectManager knows the properties changed as well
-                    self.register_in_object_manager(path, &data).await;
+                    self.register_in_object_manager(path, &data, schema.as_ref())
+                        .await;
                 }
             } else {
-                let obj = object::MirrorObject::new(data.clone());
+                let obj = object::MirrorObject::with_schema(data.clone(), schema.clone());
                 self.connection.object_server().at(path, obj).await?;
                 self.published_objects.insert(path.to_string(), ());
 
-                self.register_in_object_manager(path, &data).await;
+                self.register_in_object_manager(path, &data, schema.as_ref())
+                    .await;
             }
         }
 
@@ -1117,7 +1125,12 @@ impl DbusMirror {
 
     /// Insert a plugin object into the ObjectManager registry and emit
     /// `InterfacesAdded` if the ObjectManager interface is already up.
-    async fn register_in_object_manager(&self, path: &str, data: &Value) {
+    async fn register_in_object_manager(
+        &self,
+        path: &str,
+        data: &Value,
+        schema: Option<&PluginSchema>,
+    ) {
         let op = match OwnedObjectPath::try_from(path.to_string()) {
             Ok(p) => p,
             Err(e) => {
@@ -1127,9 +1140,21 @@ impl DbusMirror {
         };
 
         let json_str = serde_json::to_string(data).unwrap_or_default();
+        let schema_json = schema.and_then(|schema| serde_json::to_string(schema).ok());
+        let methods_json = schema.and_then(|schema| serde_json::to_string(&schema.methods).ok());
+        let signals_json = schema.and_then(|schema| serde_json::to_string(&schema.signals).ok());
+        let guarantees_json =
+            schema.and_then(|schema| serde_json::to_string(&schema.guarantees).ok());
+        let iface_map = build_interface_map(
+            &json_str,
+            schema_json.as_deref(),
+            methods_json.as_deref(),
+            signals_json.as_deref(),
+            guarantees_json.as_deref(),
+        );
         let existed = self
             .plugin_registry
-            .insert(op.clone(), build_interface_map(&json_str))
+            .insert(op.clone(), iface_map.clone())
             .is_some();
 
         // Best-effort: emit InterfacesAdded only when the object first appears.
@@ -1145,12 +1170,8 @@ impl DbusMirror {
         {
             Ok(iface_ref) => {
                 let emitter = iface_ref.signal_emitter();
-                if let Err(e) = ObjectManagerInterface::interfaces_added(
-                    emitter,
-                    op,
-                    build_interface_map(&json_str),
-                )
-                .await
+                if let Err(e) =
+                    ObjectManagerInterface::interfaces_added(emitter, op, iface_map).await
                 {
                     tracing::warn!("InterfacesAdded signal failed for {path}: {e}");
                 }
@@ -1160,6 +1181,11 @@ impl DbusMirror {
                 // so GetManagedObjects will return this entry once it comes up.
             }
         }
+    }
+
+    fn schema_for_object_path(path: &str) -> Option<PluginSchema> {
+        let plugin_id = object::plugin_id_from_path(path)?;
+        object::read_plugin_schema(&plugin_id)
     }
 
     /// Remove a plugin object from the ObjectManager registry and emit

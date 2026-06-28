@@ -1,16 +1,7 @@
-//! Pure passthrough D-Bus interfaces for the op-openvswitch-daemon.
+//! OVSDB D-Bus interface - passthrough for ovsdb JSON-RPC
 //!
-//! THREE D-Bus object paths (locked design):
-//! - `/org/opdbus/rovs/jsonrpc`  → interface `org.opdbus.rovs.jsonrpc`
-//! - `/org/opdbus/rovs/openflow` → interface `org.opdbus.rovs.openflow`
-//! - `/org/opdbus/rovs/proxy`    → interface `org.opdbus.rovs.proxy`
-//!
-//! The daemon knows NOTHING about bridges, ports, or containers on the jsonrpc/openflow
-//! paths.  It only proxies raw `rovs-jsonrpc` / `rovs-openflow` primitives over D-Bus.
-//! Business logic lives in the consuming plugins.
-//!
-//! The `proxy` path provides the openvswitch proxy operations for container
-//! network namespace management (attach/detach OVS internal ports).
+//! D-Bus object path: /org/opdbus/v1/plugins/ovsdb
+//! Interface name: org.opdbus.v1.plugins.ovsdb
 
 use anyhow::{Context, Result};
 use rovs_ovsdb::Client;
@@ -81,7 +72,7 @@ impl JsonRpcService {
     }
 }
 
-#[interface(name = "org.opdbus.rovs.jsonrpc")]
+#[interface(name = "org.opdbus.v1.plugins.ovsdb")]
 impl JsonRpcService {
     /// Execute a raw OVSDB JSON-RPC `transact`.
     ///
