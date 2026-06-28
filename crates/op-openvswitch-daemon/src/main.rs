@@ -1,12 +1,9 @@
-//! op-openvswitch-daemon — Pure passthrough D-Bus proxy for rovs primitives.
+//! op-openvswitch-daemon — OVSDB D-Bus passthrough
 //!
-//! TWO separate D-Bus object paths (locked design):
-//! - `/org/opdbus/rovs/jsonrpc`  → `org.opdbus.rovs.jsonrpc`
-//! - `/org/opdbus/rovs/openflow` → `org.opdbus.rovs.openflow`
+//! D-Bus object path:
+//! - `/org/opdbus/v1/plugins/ovsdb` → `org.opdbus.v1.plugins.ovsdb`
 //!
-//! The daemon is a literal passthrough: it owns the rovs crate connections
-//! and exposes raw primitives over D-Bus.  Zero business logic.
-//!
+//! The daemon owns the OVSDB connection and exposes JSON-RPC primitives over D-Bus.
 //! Per AGENTS.md §4: D-Bus is the ONLY control plane.
 
 use anyhow::{Context, Result};
@@ -15,13 +12,11 @@ use tracing::{info, warn};
 use zbus::connection::Connection;
 
 mod dbus;
-mod execution;
 mod grpc;
 mod grpc_streaming;
 mod netns;
 
-use dbus::{DaemonState, JsonRpcService, OpenFlowService, ProxyService};
-use execution::PluginExecutionService;
+use dbus::{DaemonState, JsonRpcService};
 use grpc_streaming::{EventBus, StreamingService};
 
 // ── CLI ───────────────────────────────────────────────────────────────────────
@@ -87,7 +82,7 @@ async fn main() -> Result<()> {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
-    info!("Starting op-openvswitch-daemon (pure passthrough)");
+    info!("Starting op-openvswitch-daemon (OVSDB passthrough)");
 
     let args = Args::parse();
     let socket_path = args.ovs_socket.unwrap_or_else(find_ovs_socket);
@@ -108,43 +103,22 @@ async fn main() -> Result<()> {
         .context("Failed to connect to system D-Bus")?;
     info!("Connected to system D-Bus");
 
-    // Register TWO separate object paths (locked design).
-    let grpc_state = state.clone();
+    // Register D-Bus object at /org/opdbus/v1/plugins/ovsdb on our own bus name.
+    // We use org.opdbus.v1.plugins.ovsdb (not the bare org.opdbus.v1).
+    // Note: The bridge owns org.opdbus.v1 and /org/opdbus/v1/plugins/* - this daemon
+    // provides passthrough to the local OVSDB socket.
+    conn.request_name("org.opdbus.v1.plugins.ovsdb")
+        .await
+        .context("Failed to request bus name org.opdbus.v1.plugins.ovsdb")?;
+
     let json_service = JsonRpcService::new(state.clone());
-    let of_service = OpenFlowService::new(state.clone());
-    let proxy_service = ProxyService::new(state);
-
     conn.object_server()
-        .at("/org/opdbus/rovs/jsonrpc", json_service)
+        .at("/org/opdbus/v1/plugins/ovsdb", json_service)
         .await
-        .context("Failed to register /org/opdbus/rovs/jsonrpc")?;
+        .context("Failed to register /org/opdbus/v1/plugins/ovsdb")?;
 
-    conn.object_server()
-        .at("/org/opdbus/rovs/openflow", of_service)
-        .await
-        .context("Failed to register /org/opdbus/rovs/openflow")?;
-
-    conn.object_server()
-        .at("/org/opdbus/rovs/proxy", proxy_service)
-        .await
-        .context("Failed to register /org/opdbus/rovs/proxy")?;
-
-    let exec_service = PluginExecutionService::new();
-    conn.object_server()
-        .at("/org/opdbus/execution", exec_service)
-        .await
-        .context("Failed to register /org/opdbus/execution")?;
-
-    // Request single well-known bus name.
-    conn.request_name("org.opdbus.v1")
-        .await
-        .context("Failed to request bus name org.opdbus.v1")?;
-
-    info!("D-Bus services registered:");
-    info!("  /org/opdbus/rovs/jsonrpc  -> org.opdbus.rovs.jsonrpc");
-    info!("  /org/opdbus/rovs/openflow -> org.opdbus.rovs.openflow");
-    info!("  /org/opdbus/rovs/proxy    -> org.opdbus.rovs.proxy");
-    info!("  /org/opdbus/execution     -> org.opdbus.execution");
+    info!("D-Bus service registered:");
+    info!("  /org/opdbus/v1/plugins/ovsdb on org.opdbus.v1.plugins.ovsdb");
 
     // Optional gRPC with streaming support (M2)
     if let Some(grpc_addr) = args.grpc_addr {
@@ -153,11 +127,11 @@ async fn main() -> Result<()> {
 
         // Create shared event bus for streaming subscriptions
         let event_bus = EventBus::new();
-        let streaming_service = StreamingService::new(grpc_state.clone(), event_bus);
+        let streaming_service = StreamingService::new(state.clone(), event_bus);
 
         tokio::spawn(async move {
             if let Err(e) =
-                grpc::run_grpc_server_with_streaming(addr, grpc_state, streaming_service).await
+                grpc::run_grpc_server_with_streaming(addr, state, streaming_service).await
             {
                 warn!("gRPC server error: {}", e);
             }
