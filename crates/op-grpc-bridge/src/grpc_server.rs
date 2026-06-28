@@ -1,6 +1,6 @@
 //! gRPC Server - Implements the Operation gRPC services (shared-server topology)
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::TryFrom;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -676,12 +676,43 @@ impl PluginService for OperationGrpcServer {
         // reload the SHM catalog before dispatch if it changed (no polling).
         self.refresh_schema_on_inbound().await;
 
+        // Extract capability context from interceptor (VAL-ENFORCE-001).
+        // Clone the granted capabilities to avoid borrow issues.
+        let granted_caps: HashSet<String> = request
+            .extensions()
+            .get::<interceptor::GhostbridgeContext>()
+            .map(|ctx| ctx.granted_capabilities.clone())
+            .unwrap_or_default();
+
         let req = request.into_inner();
         let args: Vec<simd_json::OwnedValue> = req
             .arguments
             .into_iter()
             .map(|v| prost_value_to_simd(&v))
             .collect();
+
+        // Load the method schema to check required_capability (VAL-ENFORCE-002).
+        // Read from the router's cached routes (SHM-loaded).
+        if let Some(router) = &self.schema_router {
+            if let Some(route) = router.get_route(&req.plugin_id).await {
+                if let Some(method_decl) = route.methods.get(&req.method_name) {
+                    if let Some(required_cap) = method_decl
+                        .get("required_capability")
+                        .and_then(|c| c.as_str())
+                        .filter(|s| !s.is_empty())
+                    {
+                        // VAL-ENFORCE-002: Check if the caller's footprint grants the capability.
+                        // VAL-ENFORCE-003: If not granted, deny without calling mutate.
+                        if !granted_caps.contains(required_cap) {
+                            return Err(Status::permission_denied(format!(
+                                "capability '{}' required for method '{}' is not granted",
+                                required_cap, req.method_name
+                            )));
+                        }
+                    }
+                }
+            }
+        }
 
         // New pipeline: Route through SchemaEngine.mutate for authoritative recording.
         let result = self

@@ -531,7 +531,9 @@ impl SchemaEngine {
         // This allows tests to verify error propagation without using malformed JSON
         // (which would now be rejected by the arg-validation gate at the bridge layer).
         if method == "ForceDispatchError" {
-            return Err(anyhow::anyhow!("dispatch error: method explicitly triggered failure"));
+            return Err(anyhow::anyhow!(
+                "dispatch error: method explicitly triggered failure"
+            ));
         }
 
         // Parse the verbatim json_args string. If parsing fails, propagate

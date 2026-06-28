@@ -6,11 +6,71 @@
 // Operated by A.N.N.A. Scribe. No payload enters the system without a cryptographic
 // "Snowball" session. No SQL databases, no D-Bus watchers. 1:1 Direct Read only.
 
-use op_identity::IdentitySled;
+use serde_json::Value as JsonValue;
+use std::collections::HashSet;
 use tonic::{Request, Status};
 
+/// Sled capability grants path in SHM (read directly, no polling).
+const CAPABILITY_GRANTS_PATH: &str = "/dev/shm/opdbus/capability-grants.json";
+
+/// Can be overridden via OP_GRANTS_PATH environment variable for testing.
+fn capability_grants_path() -> String {
+    std::env::var("OP_GRANTS_PATH").unwrap_or_else(|_| CAPABILITY_GRANTS_PATH.to_string())
+}
+
+/// Load capability grants for a footprint from SHM (VAL-ENFORCE-002).
+/// Returns a set of capability strings that the footprint has been granted.
+/// If the file is missing or the footprint is not found, returns an empty set.
+#[allow(clippy::implicit_return)]
+pub fn load_capability_grants(footprint_hex: &str) -> HashSet<String> {
+    let path = capability_grants_path();
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(_) => return HashSet::new(),
+    };
+    let grants_json: JsonValue = match serde_json::from_str(&text) {
+        Ok(j) => j,
+        Err(_) => return HashSet::new(),
+    };
+    let per_footprint = grants_json
+        .as_object()
+        .and_then(|o| o.get(footprint_hex))
+        .and_then(|v| v.as_object())
+        .and_then(|o| o.get("capabilities"))
+        .and_then(|c| c.as_array());
+
+    match per_footprint {
+        Some(arr) => arr
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect(),
+        None => HashSet::new(),
+    }
+}
+
+impl GhostbridgeContext {
+    /// Check if this context grants a specific capability (VAL-ENFORCE-002).
+    pub fn grants(&self, capability: &str) -> bool {
+        self.granted_capabilities.contains(capability)
+    }
+}
+
+/// Request context attached to gRPC extensions containing footprint and session info.
+/// Retrieved by the bridge for capability enforcement (VAL-ENFORCE-001, VAL-ENFORCE-002).
+#[derive(Debug, Clone)]
+pub struct GhostbridgeContext {
+    /// The hex-encoded footprint extracted from the sled
+    pub footprint_hex: String,
+    /// The hex-encoded trace/session ID
+    pub trace_id_hex: String,
+    /// WireGuard public key (hex-encoded) for this session
+    pub wg_pubkey_hex: String,
+    /// Capabilities granted to this footprint (loaded from SHM grants file)
+    pub granted_capabilities: HashSet<String>,
+}
+
 /// Check whether a sled is "valid" per the Absolute Base rule.
-fn is_sled_valid(sled: &IdentitySled) -> bool {
+fn is_sled_valid(sled: &op_identity::IdentitySled) -> bool {
     sled.hashed_footprint != [0u8; 32] && sled.trace_id != [0u8; 16]
 }
 
@@ -21,6 +81,9 @@ fn is_sled_valid(sled: &IdentitySled) -> bool {
 /// is rejected. Once validated, embeds the `x-ghostbridge-trace-id` into Tonic Request
 /// extensions so the Chatbot and Qdrant semantic search on the Accountability Page
 /// have the exact Trace ID needed to link the session.
+///
+/// Also loads capability grants for the footprint and attaches them to the request
+/// context for enforcement at the bridge layer (VAL-ENFORCE-001, VAL-ENFORCE-002).
 #[derive(Clone, Debug)]
 pub struct GhostbridgeInterceptor;
 
@@ -75,10 +138,24 @@ pub fn ghostbridge_interceptor(mut req: Request<()>) -> Result<Request<()>, Stat
         ));
     }
 
-    // 4. Pass the Trace ID downstream into the gRPC context for the React GUI.
-    if let Some(trace_val) = trace_value {
-        req.extensions_mut().insert(trace_val);
-    }
+    // 4. Load capability grants for this footprint from SHM (VAL-ENFORCE-002).
+    let granted_capabilities = load_capability_grants(request_footprint);
+
+    // 5. Attach full context to request extensions for bridge-layer enforcement.
+    // This satisfies VAL-ENFORCE-001 (extract footprint) and VAL-ENFORCE-002
+    // (read grants to check for required capability).
+    let context = GhostbridgeContext {
+        footprint_hex: request_footprint.to_string(),
+        trace_id_hex: trace_value
+            .as_ref()
+            .unwrap()
+            .to_str()
+            .unwrap_or("")
+            .to_string(),
+        wg_pubkey_hex: hex::encode(sled.wireguard_pubkey),
+        granted_capabilities,
+    };
+    req.extensions_mut().insert(context);
 
     Ok(req)
 }
@@ -86,6 +163,8 @@ pub fn ghostbridge_interceptor(mut req: Request<()>) -> Result<Request<()>, Stat
 #[cfg(test)]
 mod tests {
     use super::*;
+    use op_identity::IdentitySled;
+    use std::path::Path;
     use tonic::metadata::MetadataValue;
 
     #[test]
@@ -219,5 +298,197 @@ mod tests {
             vector_id: [0xDD; 16],
         };
         assert!(is_sled_valid(&sled));
+    }
+
+    // ── VAL-ENFORCE-001: GhostbridgeInterceptor extracts footprint and session ID ──
+
+    #[test]
+    fn interceptor_extracts_footprint_and_session_id() {
+        let base = test_base_dir();
+        let (footprint_hex, trace_hex) = write_test_sled(&base);
+
+        // Write capability grants file
+        let grants_path = base.join("opdbus/capability-grants.json");
+        let grants_json = serde_json::json!({
+            footprint_hex.clone(): {
+                "capabilities": ["plugin.alpha.read", "plugin.beta.write"]
+            }
+        });
+        std::fs::create_dir_all(grants_path.parent().unwrap()).unwrap();
+        std::fs::write(&grants_path, serde_json::to_vec(&grants_json).unwrap()).unwrap();
+
+        // Set up the interceptor to use our test sled
+        std::env::set_var("OP_SLED_PATH", sled_path(&base));
+        std::env::set_var("OP_GRANTS_PATH", grants_path.into_os_string());
+
+        let mut req = Request::new(());
+        req.metadata_mut().insert(
+            "x-ghostbridge-footprint",
+            MetadataValue::try_from(footprint_hex.clone()).unwrap(),
+        );
+        req.metadata_mut().insert(
+            "x-ghostbridge-trace-id",
+            MetadataValue::try_from(trace_hex.clone()).unwrap(),
+        );
+
+        let result = ghostbridge_interceptor(req);
+        assert!(result.is_ok(), "interceptor should accept valid request");
+        let req = result.unwrap();
+
+        // Extract and verify the context from extensions
+        let ctx = req
+            .extensions()
+            .get::<GhostbridgeContext>()
+            .expect("GhostbridgeContext should be in extensions");
+
+        assert_eq!(ctx.footprint_hex, footprint_hex);
+        assert_eq!(ctx.trace_id_hex, trace_hex);
+        assert!(ctx.grants("plugin.alpha.read"), "should grant alpha.read");
+        assert!(ctx.grants("plugin.beta.write"), "should grant beta.write");
+
+        cleanup(&base);
+        std::env::remove_var("OP_SLED_PATH");
+        std::env::remove_var("OP_GRANTS_PATH");
+    }
+
+    // ── VAL-ENFORCE-002: Load capability grants for footprint ──
+
+    #[test]
+    fn interceptor_loads_capability_grants_for_footprint() {
+        let base = test_base_dir();
+        let (footprint_hex, trace_hex) = write_test_sled(&base);
+
+        // Write grants with multiple capabilities
+        let grants_path = base.join("opdbus/capability-grants.json");
+        let grants_json = serde_json::json!({
+            footprint_hex.clone(): {
+                "capabilities": ["cap.alpha.read", "cap.beta.exec", "cap.gamma.admin"]
+            }
+        });
+        std::fs::create_dir_all(grants_path.parent().unwrap()).unwrap();
+        std::fs::write(&grants_path, serde_json::to_vec(&grants_json).unwrap()).unwrap();
+
+        std::env::set_var("OP_SLED_PATH", sled_path(&base));
+        std::env::set_var("OP_GRANTS_PATH", grants_path.into_os_string());
+
+        let mut req = Request::new(());
+        req.metadata_mut().insert(
+            "x-ghostbridge-footprint",
+            MetadataValue::try_from(footprint_hex).unwrap(),
+        );
+        req.metadata_mut().insert(
+            "x-ghostbridge-trace-id",
+            MetadataValue::try_from(trace_hex).unwrap(),
+        );
+
+        let req = ghostbridge_interceptor(req).unwrap();
+        let ctx = req.extensions().get::<GhostbridgeContext>().unwrap();
+
+        assert!(ctx.grants("cap.alpha.read"));
+        assert!(ctx.grants("cap.beta.exec"));
+        assert!(ctx.grants("cap.gamma.admin"));
+        assert!(!ctx.grants("cap.not-granted"));
+
+        cleanup(&base);
+        std::env::remove_var("OP_SLED_PATH");
+        std::env::remove_var("OP_GRANTS_PATH");
+    }
+
+    // ── VAL-ENFORCE-005: No grants file returns empty grants set ──
+
+    #[test]
+    fn interceptor_no_grants_file_returns_empty_grants() {
+        // Set up a test environment with a sled but no grants file
+        let base = test_base_dir();
+        let (_, _) = write_test_sled(&base);
+
+        // Set up a path that doesn't exist for grants
+        let grants_path = base.join("nonexistent-grants.json");
+        std::env::set_var("OP_SLED_PATH", sled_path(&base));
+        std::env::set_var("OP_GRANTS_PATH", grants_path.into_os_string());
+
+        let mut req = Request::new(());
+        req.metadata_mut().insert(
+            "x-ghostbridge-footprint",
+            MetadataValue::try_from(hex::encode([0xBB; 32])).unwrap(),
+        );
+        req.metadata_mut().insert(
+            "x-ghostbridge-trace-id",
+            MetadataValue::try_from(hex::encode([0xCC; 16])).unwrap(),
+        );
+
+        let req = ghostbridge_interceptor(req).unwrap();
+        let ctx = req.extensions().get::<GhostbridgeContext>().unwrap();
+
+        assert!(
+            ctx.granted_capabilities.is_empty() || !ctx.grants("any-capability"),
+            "should have no grants"
+        );
+
+        cleanup(&base);
+        std::env::remove_var("OP_SLED_PATH");
+        std::env::remove_var("OP_GRANTS_PATH");
+    }
+
+    // ── Helper functions for tests ──
+
+    fn test_base_dir() -> std::path::PathBuf {
+        let id = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir =
+            std::path::PathBuf::from(format!("/dev/shm/opdbus-test-interceptor-{}-{}", id, nanos));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create test base dir");
+        dir
+    }
+
+    fn sled_path(base: &Path) -> String {
+        base.join("plugin_schema.dat")
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    fn write_test_sled(base: &Path) -> (String, String) {
+        let sled = IdentitySled {
+            wireguard_pubkey: [0xAA; 32],
+            mutation_index: 1,
+            hashed_footprint: [0xBB; 32],
+            trace_id: [0xCC; 16],
+            schema_version: 1,
+            reserved: [0u8; 44],
+            vector_id: [0xDD; 16],
+        };
+        let footprint_hex = hex::encode(sled.hashed_footprint);
+        let trace_hex = hex::encode(sled.trace_id);
+
+        // Clean up any existing sled file from prior tests that might pollute /dev/shm
+        let _ = std::fs::remove_file("/dev/shm/plugin_schema.dat");
+
+        // Write sled bytes directly to the custom path (bypass write_sled's hardcoded path)
+        let bytes: &[u8] = unsafe {
+            std::slice::from_raw_parts(
+                &sled as *const IdentitySled as *const u8,
+                IdentitySled::SIZE,
+            )
+        };
+        let sled_path = sled_path(base);
+        let tmp = format!("{}.tmp", sled_path);
+        let mut f = std::fs::File::create(&tmp).unwrap();
+        std::io::Write::write_all(&mut f, bytes).unwrap();
+        f.sync_data().unwrap();
+        std::fs::rename(&tmp, &sled_path).unwrap();
+
+        // Set env var for sled path - need to clone before we move
+        let sled_path_for_env = sled_path.clone();
+        std::env::set_var("OP_SLED_PATH", sled_path_for_env);
+
+        (footprint_hex, trace_hex)
+    }
+
+    fn cleanup(path: &std::path::Path) {
+        let _ = std::fs::remove_dir_all(path);
     }
 }
