@@ -12,10 +12,12 @@ use serde::{Deserialize, Serialize};
 use simd_json::OwnedValue as Value;
 use std::collections::HashMap;
 
+use super::common::errors::ZeroclawError;
 use super::common::llm_projection::{
     ConfigSchema, LlmProjection, LlmTool, LlmTransport, ModelRoute, Provider, Router,
     SelectionInput, SelectionOutput, SelectorPolicy, StructuredOutput, UiSurface,
 };
+use super::common::selector::select_model;
 use super::plugin_schema_defs::{
     empty_args, mutation_method, plugin_schema_from_schemars, read_method, signal_decl,
 };
@@ -57,6 +59,7 @@ impl ZeroclawPlugin {
         std::env::var(key).unwrap_or_else(|_| fallback.to_string())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn declared_route(
         hint: &str,
         provider: &str,
@@ -604,6 +607,256 @@ pub(crate) fn zeroclaw_plugin_schema() -> PluginSchema {
     )
 }
 
+// ── Orchestration Layer (design §5, Layer 2) ────────────────────────────────
+//
+// The gRPC bridge auto-generates the D-Bus/gRPC *surface* from `PluginSchema`
+// (method existence, arg-schema validation, `required_capability` gate) and
+// validates each request before this layer runs. The bridge's generic
+// dispatcher only records an accountability event and echoes args, so it
+// supplies no domain decision — these handlers do, ensuring declared methods
+// are never inert (mission hard rule).
+//
+// Every handler reads **only** the in-memory `ZeroclawState` passed in (never
+// `/dev/shm`, never a network call), so execution decisions stay on the
+// schema/state authority. Provider/model branching is data-driven from declared
+// routes — there are no `match` arms on provider or model name.
+
+/// A signal the bridge should emit after a successful dispatch, alongside the
+/// method's JSON return value.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DispatchSignal {
+    pub name: String,
+    pub payload: serde_json::Value,
+}
+
+/// Outcome of a plugin-owned method dispatch: the JSON return value plus any
+/// declared signal the bridge should emit through its accountability pipeline.
+#[derive(Debug, Clone)]
+pub struct DispatchOutcome {
+    pub result: serde_json::Value,
+    pub signal: Option<DispatchSignal>,
+}
+
+impl DispatchOutcome {
+    fn plain(result: serde_json::Value) -> Self {
+        Self { result, signal: None }
+    }
+}
+
+/// Plugin-owned entry point the bridge routes a validated D-Bus/gRPC method
+/// call to. `method` is the verbatim declared method name; `json_args` is the
+/// verbatim caller payload (already validated against the method's arg schema
+/// at the bridge layer).
+pub fn dispatch_zeroclaw_method(
+    method: &str,
+    json_args: &str,
+    state: &ZeroclawState,
+) -> Result<DispatchOutcome, ZeroclawError> {
+    match method {
+        "GetState" => Ok(DispatchOutcome::plain(to_json(state))),
+        "GetModelRoutes" => Ok(DispatchOutcome::plain(to_json(&state.projection.model_routes))),
+        "GetProviderCatalog" => {
+            Ok(DispatchOutcome::plain(to_json(&state.projection.providers)))
+        }
+        "GetTools" => Ok(DispatchOutcome::plain(to_json(&state.projection.tools))),
+        "ResolveRoute" => resolve_route(json_args, state).map(DispatchOutcome::plain),
+        "SelectModel" => select_model_handler(json_args, state).map(DispatchOutcome::plain),
+        "AuthorizeExecution" => authorize_execution_handler(json_args, state),
+        "SetProvider" => set_provider_handler(json_args, state),
+        "SetModel" => set_model_handler(json_args, state),
+        other => Err(ZeroclawError::ExecutionDenied {
+            reason: format!("undeclared method: {other}"),
+        }),
+    }
+}
+
+fn to_json<T: Serialize>(value: &T) -> serde_json::Value {
+    serde_json::to_value(value).unwrap_or(serde_json::Value::Null)
+}
+
+fn parse_args(method: &str, json_args: &str) -> Result<serde_json::Value, ZeroclawError> {
+    if json_args.trim().is_empty() {
+        return Ok(serde_json::json!({}));
+    }
+    serde_json::from_str(json_args).map_err(|e| ZeroclawError::ExecutionDenied {
+        reason: format!("invalid json_args for {method}: {e}"),
+    })
+}
+
+fn require_str(
+    args: &serde_json::Value,
+    field: &str,
+    method: &str,
+) -> Result<String, ZeroclawError> {
+    args.get(field)
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| ZeroclawError::ExecutionDenied {
+            reason: format!("{method}: missing required field '{field}'"),
+        })
+}
+
+/// `ResolveRoute`: resolve a route hint against the declared `model_routes`.
+/// An undeclared hint is rejected (never silently substituted); a declared but
+/// unavailable route is reported with its `status_reason`.
+fn resolve_route(
+    json_args: &str,
+    state: &ZeroclawState,
+) -> Result<serde_json::Value, ZeroclawError> {
+    let args = parse_args("ResolveRoute", json_args)?;
+    let hint = require_str(&args, "hint", "ResolveRoute")?;
+
+    let route = state
+        .projection
+        .model_routes
+        .iter()
+        .find(|r| r.hint == hint)
+        .ok_or_else(|| ZeroclawError::RouteNotDeclared { hint: hint.clone() })?;
+
+    if !route.available {
+        return Err(ZeroclawError::RouteUnavailable {
+            hint: hint.clone(),
+            reason: route.status_reason.clone(),
+        });
+    }
+
+    if let Some(limit) = args.get("context_tokens").and_then(|v| v.as_u64()) {
+        if route.context_window > 0 && limit as u32 > route.context_window {
+            return Err(ZeroclawError::ContextWindowExceeded {
+                limit: route.context_window,
+                requested: limit as u32,
+            });
+        }
+    }
+
+    Ok(to_json(route))
+}
+
+/// `SelectModel`: run the pure selector, then stamp the non-deterministic audit
+/// fields (`trace_id`, `timestamp`) the selector intentionally leaves blank.
+fn select_model_handler(
+    json_args: &str,
+    state: &ZeroclawState,
+) -> Result<serde_json::Value, ZeroclawError> {
+    let input: SelectionInput =
+        serde_json::from_str(json_args).map_err(|e| ZeroclawError::ExecutionDenied {
+            reason: format!("invalid SelectionInput: {e}"),
+        })?;
+
+    let mut output: SelectionOutput = select_model(&input, state)?;
+    output.event_metadata.trace_id = uuid::Uuid::new_v4().to_string();
+    output.event_metadata.timestamp = chrono::Utc::now().to_rfc3339();
+    Ok(to_json(&output))
+}
+
+/// `AuthorizeExecution`: deterministic gate that a (provider, model, tool?)
+/// triple is declared and reachable. Emits `ExecutionAuthorized` on success or
+/// `ExecutionDenied` on a declared-but-unavailable route.
+fn authorize_execution_handler(
+    json_args: &str,
+    state: &ZeroclawState,
+) -> Result<DispatchOutcome, ZeroclawError> {
+    let args = parse_args("AuthorizeExecution", json_args)?;
+    let provider = require_str(&args, "provider", "AuthorizeExecution")?;
+    let model = require_str(&args, "model", "AuthorizeExecution")?;
+    let tool = args.get("tool").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let trace_id = uuid::Uuid::new_v4().to_string();
+
+    if !state.projection.providers.iter().any(|p| p.id == provider) {
+        return Err(ZeroclawError::ProviderNotDeclared { provider });
+    }
+
+    let route = state
+        .projection
+        .model_routes
+        .iter()
+        .find(|r| r.model == model && r.provider == provider);
+    let route = match route {
+        Some(r) => r,
+        None => return Err(ZeroclawError::ModelNotDeclared { model }),
+    };
+
+    if let Some(t) = &tool {
+        if !state.projection.tools.iter().any(|d| &d.name == t) {
+            return Err(ZeroclawError::ToolNotDeclared { tool: t.clone() });
+        }
+    }
+
+    if !route.available {
+        let reason = route.status_reason.clone();
+        return Ok(DispatchOutcome {
+            result: serde_json::json!({"authorized": false, "reason": reason}),
+            signal: Some(DispatchSignal {
+                name: "ExecutionDenied".to_string(),
+                payload: serde_json::json!({
+                    "provider": provider, "model": model, "tool": tool,
+                    "reason": route.status_reason, "trace_id": trace_id,
+                }),
+            }),
+        });
+    }
+
+    Ok(DispatchOutcome {
+        result: serde_json::json!({"authorized": true, "reason": "declared route available"}),
+        signal: Some(DispatchSignal {
+            name: "ExecutionAuthorized".to_string(),
+            payload: serde_json::json!({
+                "provider": provider, "model": model, "tool": tool, "trace_id": trace_id,
+            }),
+        }),
+    })
+}
+
+/// `SetProvider`: validate the target provider is declared, then surface the
+/// effective change for the bridge to persist through the mutation pipeline and
+/// emit `ProviderChanged`. (Validation here; durable write is the bridge's
+/// `MutationEngine` path so a single accountability event is recorded.)
+fn set_provider_handler(
+    json_args: &str,
+    state: &ZeroclawState,
+) -> Result<DispatchOutcome, ZeroclawError> {
+    let args = parse_args("SetProvider", json_args)?;
+    let provider_id = require_str(&args, "provider_id", "SetProvider")?;
+
+    if !state.projection.providers.iter().any(|p| p.id == provider_id) {
+        return Err(ZeroclawError::ProviderNotDeclared {
+            provider: provider_id,
+        });
+    }
+
+    let old = state.selected_provider.clone();
+    Ok(DispatchOutcome {
+        result: serde_json::json!({"selected_provider": provider_id}),
+        signal: Some(DispatchSignal {
+            name: "ProviderChanged".to_string(),
+            payload: serde_json::json!({"old": old, "new": provider_id, "reason": "explicit set"}),
+        }),
+    })
+}
+
+/// `SetModel`: validate the target model is declared on some route, then surface
+/// the effective change (persistence + `ModelChanged` via the bridge).
+fn set_model_handler(
+    json_args: &str,
+    state: &ZeroclawState,
+) -> Result<DispatchOutcome, ZeroclawError> {
+    let args = parse_args("SetModel", json_args)?;
+    let model_id = require_str(&args, "model_id", "SetModel")?;
+
+    if !state.projection.model_routes.iter().any(|r| r.model == model_id) {
+        return Err(ZeroclawError::ModelNotDeclared { model: model_id });
+    }
+
+    let old = state.selected_model.clone();
+    Ok(DispatchOutcome {
+        result: serde_json::json!({"selected_model": model_id}),
+        signal: Some(DispatchSignal {
+            name: "ModelChanged".to_string(),
+            payload: serde_json::json!({"old": old, "new": model_id, "reason": "explicit set"}),
+        }),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -681,5 +934,131 @@ mod tests {
         assert!(args.contains("task_class") && args.contains("requested_effort"));
         let returns = serde_json::to_string(select.returns.as_ref().unwrap()).unwrap();
         assert!(returns.contains("selected_provider") && returns.contains("confidence"));
+    }
+
+    fn state() -> ZeroclawState {
+        ZeroclawPlugin::current_state()
+    }
+
+    fn first_route(state: &ZeroclawState) -> ModelRoute {
+        state
+            .projection
+            .model_routes
+            .iter()
+            .find(|r| r.available)
+            .cloned()
+            .expect("at least one available declared route")
+    }
+
+    #[test]
+    fn dispatch_unknown_method_is_denied() {
+        let err = dispatch_zeroclaw_method("Frobnicate", "{}", &state()).unwrap_err();
+        assert!(matches!(err, ZeroclawError::ExecutionDenied { .. }));
+    }
+
+    #[test]
+    fn dispatch_get_methods_return_projection_slices() {
+        let st = state();
+        let routes = dispatch_zeroclaw_method("GetModelRoutes", "", &st).unwrap();
+        assert!(routes.result.is_array());
+        let providers = dispatch_zeroclaw_method("GetProviderCatalog", "", &st).unwrap();
+        assert_eq!(
+            providers.result.as_array().unwrap().len(),
+            st.projection.providers.len()
+        );
+    }
+
+    #[test]
+    fn resolve_route_rejects_undeclared_hint() {
+        let err = dispatch_zeroclaw_method(
+            "ResolveRoute",
+            r#"{"hint":"does-not-exist"}"#,
+            &state(),
+        )
+        .unwrap_err();
+        assert!(matches!(err, ZeroclawError::RouteNotDeclared { .. }));
+    }
+
+    #[test]
+    fn resolve_route_returns_declared_route() {
+        let st = state();
+        let route = first_route(&st);
+        let args = format!(r#"{{"hint":"{}"}}"#, route.hint);
+        let out = dispatch_zeroclaw_method("ResolveRoute", &args, &st).unwrap();
+        assert_eq!(out.result.get("hint").unwrap().as_str().unwrap(), route.hint);
+    }
+
+    #[test]
+    fn select_model_stamps_audit_fields() {
+        let st = state();
+        let input = serde_json::json!({
+            "task_class": "chat",
+            "requested_effort": "medium",
+            "context_tokens": 1000,
+            "privacy_tier": "public"
+        })
+        .to_string();
+        let out = dispatch_zeroclaw_method("SelectModel", &input, &st).unwrap();
+        let meta = out.result.get("event_metadata").unwrap();
+        assert!(!meta.get("trace_id").unwrap().as_str().unwrap().is_empty());
+        assert!(!meta.get("timestamp").unwrap().as_str().unwrap().is_empty());
+        assert!(out.result.get("selected_provider").is_some());
+    }
+
+    #[test]
+    fn authorize_execution_rejects_undeclared_provider() {
+        let err = dispatch_zeroclaw_method(
+            "AuthorizeExecution",
+            r#"{"provider":"nope","model":"x"}"#,
+            &state(),
+        )
+        .unwrap_err();
+        assert!(matches!(err, ZeroclawError::ProviderNotDeclared { .. }));
+    }
+
+    #[test]
+    fn authorize_execution_emits_signal_on_declared_route() {
+        let st = state();
+        let route = first_route(&st);
+        let args = format!(
+            r#"{{"provider":"{}","model":"{}"}}"#,
+            route.provider, route.model
+        );
+        let out = dispatch_zeroclaw_method("AuthorizeExecution", &args, &st).unwrap();
+        assert_eq!(out.result.get("authorized").unwrap().as_bool().unwrap(), true);
+        let sig = out.signal.expect("authorize emits a signal");
+        assert_eq!(sig.name, "ExecutionAuthorized");
+    }
+
+    #[test]
+    fn set_provider_rejects_undeclared_and_accepts_declared() {
+        let st = state();
+        let err = dispatch_zeroclaw_method(
+            "SetProvider",
+            r#"{"provider_id":"ghost"}"#,
+            &st,
+        )
+        .unwrap_err();
+        assert!(matches!(err, ZeroclawError::ProviderNotDeclared { .. }));
+
+        let declared = &st.projection.providers[0].id;
+        let args = format!(r#"{{"provider_id":"{declared}"}}"#);
+        let out = dispatch_zeroclaw_method("SetProvider", &args, &st).unwrap();
+        assert_eq!(
+            out.result.get("selected_provider").unwrap().as_str().unwrap(),
+            declared
+        );
+        assert_eq!(out.signal.unwrap().name, "ProviderChanged");
+    }
+
+    #[test]
+    fn set_model_rejects_undeclared_model() {
+        let err = dispatch_zeroclaw_method(
+            "SetModel",
+            r#"{"model_id":"imaginary-model"}"#,
+            &state(),
+        )
+        .unwrap_err();
+        assert!(matches!(err, ZeroclawError::ModelNotDeclared { .. }));
     }
 }
