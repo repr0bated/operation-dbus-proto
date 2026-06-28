@@ -27,7 +27,7 @@ use std::sync::Arc;
 use jsonschema::Validator;
 use serde_json::Value as JsonValue;
 use tokio::sync::RwLock;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 // Import capability grants loader for bridge-layer enforcement (VAL-ENFORCE-002).
 use crate::interceptor::load_capability_grants;
@@ -87,6 +87,10 @@ pub struct SchemaRouter {
     /// The SchemaEngine used for real method dispatch (Requirement 5).
     /// `None` in unit tests that do not exercise the dispatch path.
     engine: Option<Arc<SchemaEngine>>,
+    /// Optional projection hook invoked after object registration to publish
+    /// the read-only Zeroclaw route/provider sub-object tree (Phase 1b). Push
+    /// only — invoked from the registration cycle, never on a timer.
+    projection_hook: Option<Arc<dyn crate::zeroclaw_projection::SchemaProjectionHook>>,
 }
 
 impl SchemaRouter {
@@ -147,7 +151,17 @@ impl SchemaRouter {
             manifest_path,
             cached_hash: Arc::new(RwLock::new(cached_hash)),
             engine: None,
+            projection_hook: None,
         }
+    }
+
+    /// Register a projection hook that publishes the read-only Zeroclaw
+    /// route/provider sub-object tree after each object-registration cycle.
+    pub fn set_projection_hook(
+        &mut self,
+        hook: Arc<dyn crate::zeroclaw_projection::SchemaProjectionHook>,
+    ) {
+        self.projection_hook = Some(hook);
     }
 
     /// Register D-Bus objects for all plugins in the catalog.
@@ -172,6 +186,22 @@ impl SchemaRouter {
             debug!(plugin_id, path, "Registering authoritative D-Bus object");
             if let Err(e) = conn.object_server().at(path.as_str(), interface).await {
                 debug!(plugin_id, path, error = %e, "Failed to register D-Bus object (likely already registered)");
+            }
+        }
+        drop(routes);
+
+        // Publish the read-only Zeroclaw projection sub-tree from in-memory state
+        // (never a /dev/shm re-read). Push-only: invoked here in the registration
+        // cycle, not on a timer.
+        if let Some(hook) = &self.projection_hook {
+            if self.get_route("zeroclaw").await.is_some() {
+                let state = op_plugins::state_plugins::zeroclaw::ZeroclawPlugin::current_state();
+                match serde_json::to_value(&state) {
+                    Ok(state_json) => {
+                        hook.apply("zeroclaw", &serde_json::Value::Null, &state_json);
+                    }
+                    Err(e) => warn!(error = %e, "failed to serialize ZeroclawState for projection hook"),
+                }
             }
         }
         Ok(())

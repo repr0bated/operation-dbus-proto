@@ -21,6 +21,7 @@ use op_grpc_bridge::{
     schema_engine::SchemaEngine,
     schema_router::SchemaRouter,
     shared_socket,
+    zeroclaw_projection::GrpcBridgeProjectionHook,
 };
 use op_jsonrpc::nonnet::NonNetDb;
 use op_network::rovs_proxy::OvsdbDbusClient;
@@ -46,10 +47,16 @@ async fn main() -> anyhow::Result<()> {
     // ── Schema Router (dynamic D-Bus routing from live schema catalog) ───────
     // The router is wired to the SchemaEngine so SchemaBackedInterface::call
     // dispatches through SchemaEngine::dispatch_method_call (Requirement 5).
-    let schema_router = Arc::new(SchemaRouter::with_engine(
+    let mut schema_router = SchemaRouter::with_engine(
         schema_engine.dbus_connection.clone(),
         schema_engine.clone(),
-    ));
+    );
+    // Publish the read-only Zeroclaw route/provider sub-object tree after each
+    // object-registration cycle (push-only projection hook, Phase 1b).
+    schema_router.set_projection_hook(Arc::new(GrpcBridgeProjectionHook::new(
+        schema_engine.dbus_connection.clone(),
+    )));
+    let schema_router = Arc::new(schema_router);
 
     // Authoritative D-Bus object registration:
     // The bridge brings the schema-defined objects into existence on the bus.
