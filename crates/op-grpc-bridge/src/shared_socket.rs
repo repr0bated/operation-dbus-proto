@@ -86,9 +86,10 @@ pub async fn bind_shared_socket() -> std::io::Result<UnixListenerStream> {
         tokio::fs::create_dir_all(parent).await?;
     }
 
-    // Remove stale socket file.
-    if path.exists() {
-        tokio::fs::remove_file(&path).await?;
+    if let Err(e) = tokio::fs::remove_file(&path).await {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            return Err(e);
+        }
     }
 
     let listener = UnixListener::bind(&path)?;
