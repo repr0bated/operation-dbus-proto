@@ -385,7 +385,11 @@ impl StatePlugin for ZeroclawPlugin {
 /// `plugin_schema_from_schemars` converter (spec §8); only the declared method
 /// surface (§3), signals, guarantees, and the authoritative `subids` map (§13)
 /// are supplied here. `schema_from_state()` is NOT used for Zeroclaw.
-pub(crate) fn zeroclaw_plugin_schema() -> PluginSchema {
+///
+/// Public so the single schema can be **included/embedded** by other crates
+/// (e.g. `op-llm`) instead of duplicating the contract — the plugin remains the
+/// sole source of truth, referenced in more than one place.
+pub fn zeroclaw_plugin_schema() -> PluginSchema {
     let selection_input_args = serde_json::to_value(schemars::schema_for!(SelectionInput))
         .unwrap_or_else(|_| serde_json::json!({"type": "object"}));
     let selection_output_ret = serde_json::to_value(schemars::schema_for!(SelectionOutput))
