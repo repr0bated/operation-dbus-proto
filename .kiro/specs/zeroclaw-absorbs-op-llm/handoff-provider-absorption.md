@@ -1,6 +1,11 @@
-# Handoff — Provider Absorption Agent (T-40 spike)
+# Handoff — Provider Absorption Agent (T-40/T-41 resolved)
 
-## T-40 Spike Findings (read-only)
+## Resolution adopted (user direction)
+Keep **one schema source**: the zeroclaw plugin (op-plugins). op-llm **embeds/includes**
+that schema via `src/schema.rs` instead of defining a divergent copy. This allows
+op-llm to remain (providing its adapter runtime) while the zeroclaw plugin owns
+the single authoritative contract. op-llm adds an `op-plugins` dependency
+(acyclic: only op-chat/op-web depend on op-llm).
 
 ### Dependency facts
 - `op-plugins` does **not** depend on `op-llm`; `op-llm` does **not** depend on
