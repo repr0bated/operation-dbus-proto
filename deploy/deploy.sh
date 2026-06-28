@@ -15,6 +15,7 @@ S6_SV="/etc/s6/sv"
 S6_DB="/etc/s6/db"
 
 SERVICES=(
+    "op-grpc-bridge:op-grpc-bridge:op-grpc-bridge"
     "op-web:op-dbus:op-dbus"
     "op-web:op-web-server:op-web-server"
     "op-chat:op-chat:chatmanager"
