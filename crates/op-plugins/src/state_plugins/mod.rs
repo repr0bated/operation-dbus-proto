@@ -2,6 +2,7 @@
 //!
 //! These plugins implement the StatePlugin trait from op-state
 
+pub mod common;
 pub mod dnsresolver;
 pub mod full_system;
 pub mod keyring;
