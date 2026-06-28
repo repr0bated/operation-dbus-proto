@@ -33,7 +33,7 @@ pub mod shared_socket;
 // Re-export main types
 pub use grpc_client::{GrpcClientPool, RemoteEndpoint, RemoteOperationClient};
 pub use grpc_server::{run_grpc_server, OperationGrpcServer, PluginSchemaProvider};
-pub use interceptor::ghostbridge_interceptor;
+pub use interceptor::{ghostbridge_interceptor, GhostbridgeContext};
 pub use proto_gen::{ProtoGenConfig, ProtoGenerator};
 pub use schema_engine::{ChangeSource, ChangeType, SchemaEngine, StateChange};
 pub use schema_passthrough::{ResolvedRoute, SchemaPassthroughService};
