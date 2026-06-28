@@ -118,6 +118,7 @@ fn with_caps(
 /// surface) and the authoritative `subids` map (spec §13.1). Method and signal
 /// subids are backfilled from their decls so the caller only needs to provide
 /// field-level subids explicitly.
+#[allow(clippy::too_many_arguments)] // signature fixed by spec §8
 pub(crate) fn plugin_schema_from_schemars<T: schemars::JsonSchema>(
     name: &str,
     category: &str,
