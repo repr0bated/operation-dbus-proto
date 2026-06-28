@@ -1023,7 +1023,6 @@ impl StatePlugin for LxcPlugin {
         "Proxmox VE not detected (/etc/pve not found) - this plugin requires Proxmox VE".to_string()
     }
 
-
     async fn calculate_diff(&self, current: &Value, desired: &Value) -> Result<StateDiff> {
         // For now, emit a single modify if different; once lifecycle is defined, compute granular actions.
         let actions = if current != desired {
@@ -1255,12 +1254,38 @@ impl StatePlugin for LxcPlugin {
 pub(crate) fn lxc_schema() -> PluginSchema {
     let root = serde_json::to_value(schemars::schema_for!(LxcState))
         .expect("schemars schema serializes to JSON");
-    super::schemars_adapter::plugin_schema_from_json(
+    let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "lxc",
         "2.0.0",
         "LXC container management via native Proxmox API",
         &root,
-    )
+    );
+    for method in [
+        super::plugin_schema_defs::cap_method(
+            "create_container",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.service.lxc.container.create@v1",
+            "mut.service.lxc.container.create@v1",
+        ),
+        super::plugin_schema_defs::cap_method(
+            "delete_container",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.service.lxc.container.delete@v1",
+            "mut.service.lxc.container.delete@v1",
+        ),
+        super::plugin_schema_defs::cap_method(
+            "attach_container_port",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.network.lxc.port.attach@v1",
+            "mut.network.lxc.port.attach@v1",
+        ),
+    ] {
+        schema.methods.insert(method.name.clone(), method);
+    }
+    schema
 }
 
 /// Hand-rolled golden reference for the LXC schema. Kept test-only so the

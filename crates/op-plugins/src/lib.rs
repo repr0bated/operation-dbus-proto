@@ -1,4 +1,19 @@
 #![recursion_limit = "512"]
+#![allow(
+    dead_code,
+    unused_imports,
+    unused_variables,
+    clippy::derivable_impls,
+    clippy::collapsible_if,
+    clippy::large_enum_variant,
+    clippy::let_and_return,
+    clippy::new_without_default,
+    clippy::vec_init_then_push,
+    clippy::needless_update,
+    clippy::needless_borrows_for_generic_args,
+    clippy::op_ref,
+    clippy::empty_line_after_outer_attr
+)]
 
 //! op-plugins: Plugin system with state management and blockchain footprints
 //!
@@ -53,6 +68,13 @@ pub use op_state_store::{Constraint, FieldSchema, FieldType, PluginSchema, ReadO
 /// `input_schema()` from this via `PluginSchema::field_input_schema(...)`.
 pub fn cognitive_mcp_plugin_schema() -> PluginSchema {
     state_plugins::cognitive_mcp::cognitive_mcp_schema()
+}
+
+/// Deterministically materialize the initial D-Bus projection state from a
+/// plugin schema. This is the bootstrap counterpart to the MutationEngine's
+/// normal projection writes: it is used only when no live projection exists.
+pub fn projection_seed_state_from_schema(schema: &PluginSchema) -> simd_json::OwnedValue {
+    state_plugins::plugin_schema_defs::materialize_state_from_schema(schema)
 }
 
 // Re-export chat types

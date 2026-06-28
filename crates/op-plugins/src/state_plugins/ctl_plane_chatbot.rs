@@ -592,7 +592,6 @@ impl StatePlugin for CtlPlaneChatbotPlugin {
         String::new()
     }
 
-
     async fn calculate_diff(&self, current: &Value, desired: &Value) -> Result<StateDiff> {
         let cur: CtlPlaneChatbotConfig = simd_json::serde::from_owned_value(current.clone())?;
         let des: CtlPlaneChatbotConfig = simd_json::serde::from_owned_value(desired.clone())?;

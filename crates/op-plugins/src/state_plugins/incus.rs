@@ -841,7 +841,6 @@ impl StatePlugin for IncusPlugin {
         "Incus not installed (/usr/bin/incus not found)".to_string()
     }
 
-
     async fn calculate_diff(&self, current: &Value, desired: &Value) -> Result<StateDiff> {
         let current_state: IncusState = simd_json::serde::from_owned_value(current.clone())
             .context("Failed to deserialize current IncusState")?;
@@ -1455,6 +1454,27 @@ pub(crate) fn incus_schema() -> PluginSchema {
                 }
             ]
         }))
+        .method(super::plugin_schema_defs::cap_method(
+            "create_instance",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.service.incus.instance.create@v1",
+            "mut.service.incus.instance.create@v1",
+        ))
+        .method(super::plugin_schema_defs::cap_method(
+            "modify_instance",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.service.incus.instance.modify@v1",
+            "mut.service.incus.instance.modify@v1",
+        ))
+        .method(super::plugin_schema_defs::cap_method(
+            "delete_instance",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.service.incus.instance.delete@v1",
+            "mut.service.incus.instance.delete@v1",
+        ))
         .build()
 }
 

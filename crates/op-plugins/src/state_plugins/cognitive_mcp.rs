@@ -184,7 +184,6 @@ impl StatePlugin for CognitiveMcpPlugin {
         "op-cognitive-mcp s6 service definition not found at /etc/s6/sv/op-cognitive-mcp".into()
     }
 
-
     async fn calculate_diff(&self, current: &Value, desired: &Value) -> Result<StateDiff> {
         let current_cfg: CognitiveMcpConfig = simd_json::serde::from_owned_value(current.clone())?;
         let desired_cfg: CognitiveMcpConfig = simd_json::serde::from_owned_value(desired.clone())?;
@@ -1214,8 +1213,9 @@ pub(crate) fn cognitive_mcp_schema_golden() -> PluginSchema {
             FieldSchema {
                 field_type: FieldType::String,
                 required: false,
-                description: "Override the Qdrant collection (see qdrant plugin collections) for this search"
-                    .to_string(),
+                description:
+                    "Override the Qdrant collection (see qdrant plugin collections) for this search"
+                        .to_string(),
                 default: None,
                 example: Some(json!("repomix_rag")),
                 constraints: Vec::new(),

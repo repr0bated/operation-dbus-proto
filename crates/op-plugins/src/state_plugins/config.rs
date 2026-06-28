@@ -141,7 +141,6 @@ impl StatePlugin for ConfigPlugin {
         Some(schema)
     }
 
-
     async fn calculate_diff(&self, current: &Value, desired: &Value) -> Result<StateDiff> {
         let current_state: ConfigStoreState = simd_json::serde::from_owned_value(current.clone())?;
         let desired_state: ConfigStoreState = simd_json::serde::from_owned_value(desired.clone())?;

@@ -136,12 +136,8 @@ async fn main() -> Result<()> {
     if loopback_required {
         eprintln!("loopback_required=true for {instance_name}, calling BringUpLoopback...");
 
-        let daemon = get_json_property(
-            &conn,
-            "/org/opdbus/v1/plugins/ovsdb_daemon",
-            "JsonData",
-        )
-        .await?;
+        let daemon =
+            get_json_property(&conn, "/org/opdbus/v1/plugins/ovsdb_daemon", "JsonData").await?;
         let dbus_bus = daemon["dbus_bus_name"]
             .as_str()
             .unwrap_or("org.opdbus.v1.plugins.ovsdb");
@@ -171,7 +167,7 @@ async fn main() -> Result<()> {
     // ── Step 3: Attach OVS port ─────────────────────────────────────────
     // If the OCI schema has port_attach config, use it directly.
     // Otherwise fall back to the privacy_router schema for the xray container.
-    let (params, bridge, socket_port) = if let Some(pa) = &port_attach_config {
+    let (params, _bridge, socket_port) = if let Some(pa) = &port_attach_config {
         let bridge = pa["bridge"].as_str().unwrap_or("ovsbr0").to_string();
         let iface_name = pa["iface_name"].as_str().unwrap_or("gbr_xray").to_string();
         let ip_addrs: Vec<Value> = pa["ip_addrs"].as_array().cloned().unwrap_or_default();
@@ -231,12 +227,8 @@ async fn main() -> Result<()> {
     }
 
     // Discover AttachPort method location
-    let daemon = get_json_property(
-        &conn,
-        "/org/opdbus/v1/plugins/ovsdb_daemon",
-        "JsonData",
-    )
-    .await?;
+    let daemon =
+        get_json_property(&conn, "/org/opdbus/v1/plugins/ovsdb_daemon", "JsonData").await?;
     let dbus_bus = daemon["dbus_bus_name"]
         .as_str()
         .unwrap_or("org.opdbus.v1.plugins.ovsdb");

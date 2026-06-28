@@ -54,8 +54,71 @@ pub(crate) use super::zeroclaw::zeroclaw_schema as zeroclaw_plugin_schema;
 
 // ── Shared utility functions (not schemas) ─────────────────────────────────────
 
-use op_state_store::{FieldSchema, FieldType, PluginSchema};
-use simd_json::OwnedValue as Value;
+use op_state_store::{FieldSchema, FieldType, MethodDecl, PluginSchema, SideEffect};
+use simd_json::{json, OwnedValue as Value};
+
+/// Materialize a deterministic initial live state from a plugin schema.
+///
+/// This is the schema-side bootstrap for D-Bus projection creation. It never
+/// queries a plugin backend and never invents data outside the contract:
+/// field defaults win, then examples, then an empty value matching the field
+/// type. The MutationEngine writes this once when no projection exists yet;
+/// later mutations replace it through the normal `/dev/shm/opdbus/projections`
+/// write door.
+pub(crate) fn materialize_state_from_schema(schema: &PluginSchema) -> Value {
+    if let Some(example) = &schema.example {
+        return example.clone();
+    }
+
+    let mut state = simd_json::value::owned::Object::new();
+    let mut fields = schema.fields.iter().collect::<Vec<_>>();
+    fields.sort_by(|(a, _), (b, _)| a.cmp(b));
+
+    for (name, field) in fields {
+        state.insert(name.clone(), materialize_field(field));
+    }
+
+    Value::Object(Box::new(state))
+}
+
+fn materialize_field(field: &FieldSchema) -> Value {
+    if let Some(value) = &field.default {
+        return value.clone();
+    }
+    if let Some(value) = &field.example {
+        return value.clone();
+    }
+
+    materialize_field_type(&field.field_type)
+}
+
+fn materialize_field_type(field_type: &FieldType) -> Value {
+    match field_type {
+        FieldType::String => json!(""),
+        FieldType::Integer => json!(0),
+        FieldType::Float => json!(0.0),
+        FieldType::Boolean => json!(false),
+        FieldType::Array(_) => json!([]),
+        FieldType::Object(fields) => {
+            let mut object = simd_json::value::owned::Object::new();
+            let mut fields = fields.iter().collect::<Vec<_>>();
+            fields.sort_by(|(a, _), (b, _)| a.cmp(b));
+            for (name, field) in fields {
+                object.insert(name.clone(), materialize_field(field));
+            }
+            Value::Object(Box::new(object))
+        }
+        FieldType::Enum(values) => values
+            .first()
+            .map(|value| json!(value))
+            .unwrap_or_else(|| json!(null)),
+        FieldType::OneOf(types) => types
+            .first()
+            .map(materialize_field_type)
+            .unwrap_or_else(|| json!(null)),
+        FieldType::Any => json!(null),
+    }
+}
 
 /// Format a plugin's live state into a `PluginSchema`.
 ///
@@ -142,6 +205,24 @@ pub(crate) fn any_field(required: bool, description: &str, default: Option<Value
     }
 }
 
+pub(crate) fn cap_method(
+    name: &str,
+    side_effect: SideEffect,
+    idempotent: bool,
+    required_capability: &str,
+    subid: &str,
+) -> MethodDecl {
+    MethodDecl {
+        name: name.to_string(),
+        args: json!({"type": "object", "additionalProperties": true}),
+        returns: Some(json!({"type": "object", "additionalProperties": true})),
+        side_effect,
+        idempotent,
+        required_capability: Some(required_capability.to_string()),
+        subid: subid.to_string(),
+    }
+}
+
 pub(crate) fn simple_schema(
     name: &str,
     description: &str,
@@ -158,4 +239,69 @@ pub(crate) fn simple_schema(
         builder = builder.field(field_name, schema);
     }
     builder.build()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn field(field_type: FieldType, default: Option<Value>, example: Option<Value>) -> FieldSchema {
+        FieldSchema {
+            field_type,
+            required: false,
+            description: String::new(),
+            default,
+            example,
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        }
+    }
+
+    #[test]
+    fn materializes_seed_state_from_schema_defaults_examples_and_types() {
+        let schema = PluginSchema::builder("example")
+            .field(
+                "enabled",
+                field(FieldType::Boolean, Some(json!(true)), Some(json!(false))),
+            )
+            .field("label", field(FieldType::String, None, Some(json!("demo"))))
+            .field(
+                "mode",
+                field(
+                    FieldType::Enum(vec!["active".to_string(), "passive".to_string()]),
+                    None,
+                    None,
+                ),
+            )
+            .field(
+                "choice",
+                field(
+                    FieldType::OneOf(vec![FieldType::Integer, FieldType::String]),
+                    None,
+                    None,
+                ),
+            )
+            .field(
+                "nested",
+                field(
+                    FieldType::Object(HashMap::from([(
+                        "count".to_string(),
+                        field(FieldType::Integer, None, None),
+                    )])),
+                    None,
+                    None,
+                ),
+            )
+            .build();
+
+        let state = materialize_state_from_schema(&schema);
+
+        assert_eq!(state["enabled"], json!(true));
+        assert_eq!(state["label"], json!("demo"));
+        assert_eq!(state["mode"], json!("active"));
+        assert_eq!(state["choice"], json!(0));
+        assert_eq!(state["nested"]["count"], json!(0));
+    }
 }

@@ -170,7 +170,6 @@ impl StatePlugin for PciDeclPlugin {
         )
     }
 
-
     async fn calculate_diff(&self, _current: &Value, desired: &Value) -> Result<StateDiff> {
         let want: PciDecl = simd_json::serde::from_owned_value(desired.clone())
             .context("desired must be PciDecl")?;

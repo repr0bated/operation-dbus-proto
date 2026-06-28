@@ -13,5 +13,4 @@ pub mod op_chat_chat {
 
 /// Combined file descriptor set for tonic-reflection.
 /// Includes both orchestration and chat protos.
-pub const FILE_DESCRIPTOR_SET: &[u8] =
-    tonic::include_file_descriptor_set!("op_chat_descriptor");
+pub const FILE_DESCRIPTOR_SET: &[u8] = tonic::include_file_descriptor_set!("op_chat_descriptor");

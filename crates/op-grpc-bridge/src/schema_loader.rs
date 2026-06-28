@@ -1,9 +1,8 @@
-//! SchemaLoader — reads the plugin-owned zeroclaw schema JSON from tmpfs.
+//! SchemaLoader — reads a canonical PluginSchema from tmpfs.
 //!
-//! The zeroclaw plugin in `op-plugins` is the sole writer of
-//! `/dev/shm/opdbus/schemas/zeroclaw.json`. This loader only reads and reloads
-//! on `SIGHUP` or D-Bus mutation. Reloads are broadcast to `WatchSchema`
-//! streams via a tokio broadcast channel.
+//! The SchemaEngine monolith at `/dev/shm/live-schema.json` is the source of
+//! truth. Per-plugin schema files are not accepted. Reloads are broadcast to
+//! `WatchSchema` streams via a tokio broadcast channel.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
@@ -11,6 +10,8 @@ use std::time::Instant;
 
 use tokio::sync::broadcast;
 use tracing::{info, warn};
+
+const ZEROCLAW_PLUGIN_ID: &str = "zeroclaw";
 
 /// Event emitted to `WatchSchema` subscribers after a successful reload.
 #[derive(Clone, Debug)]
@@ -22,6 +23,7 @@ pub struct SchemaReloadEvent {
 #[derive(Clone)]
 pub struct SchemaLoader {
     path: Arc<RwLock<PathBuf>>,
+    plugin_id: Arc<RwLock<String>>,
     schema: Arc<RwLock<serde_json::Value>>,
     reload_tx: broadcast::Sender<SchemaReloadEvent>,
     health_status: Arc<RwLock<String>>,
@@ -30,12 +32,21 @@ pub struct SchemaLoader {
 impl SchemaLoader {
     /// Create a loader and perform the initial read.
     ///
-    /// Panics with a descriptive message if the plugin-owned schema file is
-    /// absent. This is intentional: the plugin must start first.
+    /// Panics with a descriptive message if the live schema catalog is absent.
+    /// This is intentional: the SchemaEngine must start first.
     pub fn new(path: impl Into<PathBuf>) -> anyhow::Result<Self> {
+        Self::new_for_plugin(path, ZEROCLAW_PLUGIN_ID)
+    }
+
+    /// Create a loader for a specific plugin id and perform the initial read.
+    pub fn new_for_plugin(
+        path: impl Into<PathBuf>,
+        plugin_id: impl Into<String>,
+    ) -> anyhow::Result<Self> {
         let path = Arc::new(RwLock::new(path.into()));
         let loader = Self {
             path,
+            plugin_id: Arc::new(RwLock::new(plugin_id.into())),
             schema: Arc::new(RwLock::new(serde_json::Value::Null)),
             reload_tx: broadcast::channel(16).0,
             health_status: Arc::new(RwLock::new(String::from("ok"))),
@@ -51,9 +62,11 @@ impl SchemaLoader {
         let start = Instant::now();
         let path = self.path.read().unwrap().clone();
         let bytes = std::fs::read(&path).map_err(|e| {
+            let plugin_id = self.plugin_id();
             anyhow::anyhow!(
-                "zeroclaw schema file not readable at {}: {}. \
-                 Ensure the zeroclaw plugin has started and written the file first.",
+                "{} schema file not readable at {}: {}. \
+                 Ensure the plugin has started and written the file first.",
+                plugin_id,
                 path.display(),
                 e
             )
@@ -66,9 +79,11 @@ impl SchemaLoader {
         let start = Instant::now();
         let path = self.path.read().unwrap().clone();
         let bytes = tokio::fs::read(&path).await.map_err(|e| {
+            let plugin_id = self.plugin_id();
             anyhow::anyhow!(
-                "zeroclaw schema file not readable at {}: {}. \
-                 Ensure the zeroclaw plugin has started and written the file first.",
+                "{} schema file not readable at {}: {}. \
+                 Ensure the plugin has started and written the file first.",
+                plugin_id,
                 path.display(),
                 e
             )
@@ -85,18 +100,33 @@ impl SchemaLoader {
     fn parse_and_store(&self, bytes: &[u8], start: Instant, path: &Path) -> anyhow::Result<()> {
         let text = std::str::from_utf8(bytes).map_err(|e| {
             anyhow::anyhow!(
-                "zeroclaw schema file at {} is not valid UTF-8: {}",
+                "plugin schema file at {} is not valid UTF-8: {}",
                 path.display(),
                 e
             )
         })?;
         let value: serde_json::Value = serde_json::from_str(text).map_err(|e| {
             anyhow::anyhow!(
-                "zeroclaw schema file at {} is not valid JSON: {}",
+                "plugin schema file at {} is not valid JSON: {}",
                 path.display(),
                 e
             )
         })?;
+        let plugin_id = self.plugin_id();
+        let value = if let Some(schema) = value
+            .as_object()
+            .and_then(|catalog| catalog.get(&plugin_id))
+            .and_then(first_schema_entry)
+            .cloned()
+        {
+            schema
+        } else {
+            return Err(anyhow::anyhow!(
+                "live schema catalog at {} does not contain '{}'",
+                path.display(),
+                plugin_id
+            ));
+        };
 
         {
             let mut schema = self.schema.write().unwrap();
@@ -107,10 +137,15 @@ impl SchemaLoader {
         if elapsed > std::time::Duration::from_millis(50) {
             warn!(
                 elapsed_ms = elapsed.as_millis(),
-                "zeroclaw schema reload exceeded 50 ms budget"
+                plugin_id = %self.plugin_id(),
+                "plugin schema reload exceeded 50 ms budget"
             );
         } else {
-            info!(elapsed_ms = elapsed.as_millis(), "zeroclaw schema loaded");
+            info!(
+                elapsed_ms = elapsed.as_millis(),
+                plugin_id = %self.plugin_id(),
+                "plugin schema loaded"
+            );
         }
 
         let mut health = self.health_status.write().unwrap();
@@ -127,6 +162,18 @@ impl SchemaLoader {
     /// Return the configured schema file path.
     pub fn path(&self) -> PathBuf {
         self.path.read().unwrap().clone()
+    }
+
+    /// Return the plugin id extracted from live-schema catalogs.
+    pub fn plugin_id(&self) -> String {
+        self.plugin_id.read().unwrap().clone()
+    }
+
+    /// Update the plugin id; the next `load()` will extract that schema from
+    /// the live catalog when `path` points at `/dev/shm/live-schema.json`.
+    pub fn set_plugin_id(&self, plugin_id: impl Into<String>) {
+        let mut id = self.plugin_id.write().unwrap();
+        *id = plugin_id.into();
     }
 
     /// Update the schema file path; the next `load()` will read from the new path.
@@ -151,8 +198,8 @@ impl SchemaLoader {
         *h = status;
     }
 
-    /// Spawn a task that reloads the schema on `SIGHUP` and broadcasts the
-    /// `evt.service.zeroclaw-schema.reloaded@v1` event.
+    /// Spawn a task that reloads the schema on `SIGHUP` and broadcasts a
+    /// plugin schema reload event.
     pub fn watch_sighup(self: Arc<Self>) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             let mut sig =
@@ -167,7 +214,8 @@ impl SchemaLoader {
             loop {
                 sig.recv().await;
                 info!(
-                    subid = "evt.service.zeroclaw-schema.reloaded@v1",
+                    subid = "evt.service.plugin-schema.reloaded@v1",
+                    plugin_id = %self.plugin_id(),
                     "SIGHUP received"
                 );
                 match self.reload().await {
@@ -187,6 +235,13 @@ impl SchemaLoader {
     }
 }
 
+fn first_schema_entry(value: &serde_json::Value) -> Option<&serde_json::Value> {
+    value
+        .as_array()
+        .and_then(|items| items.first())
+        .or(Some(value))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -199,11 +254,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn should_load_schema_from_file() {
+    async fn should_load_schema_from_live_catalog() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("zeroclaw.json");
+        let path = dir.path().join("live-schema.json");
         let value = serde_json::json!({"name": "zeroclaw", "version": "1.0.0"});
-        write_json(&path, &value);
+        write_json(&path, &serde_json::json!({ "zeroclaw": [value.clone()] }));
 
         let loader = SchemaLoader::new(&path).unwrap();
         let loaded = loader.get().await;
@@ -212,12 +267,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn should_extract_requested_plugin_from_live_schema_catalog() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("live-schema.json");
+        let value = serde_json::json!({
+            "zeroclaw": [{"name": "zeroclaw", "version": "1.0.0"}],
+            "gemma_brain": [{"name": "gemma_brain", "version": "2.0.0"}]
+        });
+        write_json(&path, &value);
+
+        let loader = SchemaLoader::new_for_plugin(&path, "gemma_brain").unwrap();
+        let loaded = loader.get().await;
+        assert_eq!(
+            loaded,
+            serde_json::json!({"name": "gemma_brain", "version": "2.0.0"})
+        );
+        assert_eq!(loader.plugin_id(), "gemma_brain");
+    }
+
+    #[tokio::test]
     async fn should_reload_schema_on_sighup() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("zeroclaw.json");
+        let path = dir.path().join("live-schema.json");
         let initial = serde_json::json!({"name": "zeroclaw", "version": "1.0.0"});
         let updated = serde_json::json!({"name": "zeroclaw", "version": "2.0.0"});
-        write_json(&path, &initial);
+        write_json(&path, &serde_json::json!({ "zeroclaw": [initial.clone()] }));
 
         let loader = Arc::new(SchemaLoader::new(&path).unwrap());
         let mut rx = loader.reload_tx().subscribe();
@@ -234,7 +308,7 @@ mod tests {
         assert_eq!(loader.get().await, initial);
 
         // Update the file and reload again.
-        write_json(&path, &updated);
+        write_json(&path, &serde_json::json!({ "zeroclaw": [updated.clone()] }));
         loader.load().unwrap();
         let _ = loader.reload_tx.send(SchemaReloadEvent {
             event_type: "reload".to_string(),

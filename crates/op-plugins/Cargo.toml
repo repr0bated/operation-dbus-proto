@@ -7,7 +7,7 @@ license.workspace = true
 description = "Plugin system with state management, domain plugins, and blockchain footprints"
 
 [dependencies]
-# PROTOTYPE: derive plugin schemas from structs (see state_plugins/schemars_adapter.rs)
+# Plugin schemas are derived from Rust state structs via schemars.
 schemars = "1"
 # Distributed plugin self-registration: each plugin module submits its
 # name+constructor via inventory::submit!; the registry iterates them. This is
@@ -26,7 +26,6 @@ op-agents = { path = "../op-agents" }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-schemars = { workspace = true }
 simd-json = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }

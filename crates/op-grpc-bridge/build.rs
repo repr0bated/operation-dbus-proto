@@ -23,11 +23,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "proto/privacy_network.proto",
                 "proto/registration.proto",
                 "proto/registry.proto",
-                "../op-cache/proto/op_cache.proto",
                 "../op-chat/proto/chat.proto",
                 "src/grpc/zeroclaw.proto",
             ],
-            &["proto", "../op-cache/proto", "../op-chat/proto", "src/grpc"],
+            &["proto", "../op-chat/proto", "src/grpc"],
         )?;
 
     println!("cargo:rerun-if-changed=proto/operation.proto");
@@ -35,7 +34,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=proto/privacy_network.proto");
     println!("cargo:rerun-if-changed=proto/registration.proto");
     println!("cargo:rerun-if-changed=proto/registry.proto");
-    println!("cargo:rerun-if-changed=../op-cache/proto/op_cache.proto");
     println!("cargo:rerun-if-changed=../op-chat/proto/chat.proto");
     println!("cargo:rerun-if-changed=src/grpc/zeroclaw.proto");
     println!("cargo:rerun-if-changed=build.rs");

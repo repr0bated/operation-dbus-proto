@@ -10,7 +10,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
-use zbus::Connection;
+use zbus::{
+    proxy::{Builder as ProxyBuilder, CacheProperties},
+    Connection,
+};
 
 pub type ProjectionCache = Arc<RwLock<HashMap<String, Value>>>;
 
@@ -74,7 +77,13 @@ async fn refresh_projection(
     plugin_id: &str,
     path: &str,
 ) -> Result<()> {
-    let proxy = zbus::Proxy::new(conn, DBUS_SERVICE, path, PROJECTED_OBJECT_IFACE).await?;
+    let proxy = ProxyBuilder::<zbus::Proxy<'_>>::new(conn)
+        .destination(DBUS_SERVICE)?
+        .path(path)?
+        .interface(PROJECTED_OBJECT_IFACE)?
+        .cache_properties(CacheProperties::No)
+        .build()
+        .await?;
     let data_json: String = proxy.get_property("JsonData").await?;
     let mut bytes = data_json.into_bytes();
     let value = simd_json::to_owned_value(&mut bytes)

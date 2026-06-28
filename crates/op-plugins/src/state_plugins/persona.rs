@@ -86,7 +86,6 @@ impl StatePlugin for PersonaPlugin {
         Some(persona_schema())
     }
 
-
     async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {
         // The persona catalog is defined in code (op-agents); it is not runtime
         // mutable, so there is never anything to apply.
@@ -156,7 +155,8 @@ impl StatePlugin for PersonaPlugin {
 }
 
 pub(crate) fn persona_schema() -> PluginSchema {
-    let state = simd_json::serde::to_owned_value(PersonaPlugin::live()).unwrap_or_else(|_| json!({}));
+    let state =
+        simd_json::serde::to_owned_value(PersonaPlugin::live()).unwrap_or_else(|_| json!({}));
     schema_from_state(
         "persona",
         "agents",

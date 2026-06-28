@@ -191,6 +191,41 @@ pub(crate) fn ovsdb_daemon_schema() -> PluginSchema {
             false,
             "Optional gRPC listen address (e.g., 0.0.0.0:50051)",
         )
+        .method(super::plugin_schema_defs::cap_method(
+            "list_bridges",
+            op_state_store::SideEffect::Read,
+            true,
+            "cap.network.ovsdb.bridge.list@v1",
+            "obs.network.ovsdb.bridge.list@v1",
+        ))
+        .method(super::plugin_schema_defs::cap_method(
+            "list_ports",
+            op_state_store::SideEffect::Read,
+            true,
+            "cap.network.ovsdb.port.list@v1",
+            "obs.network.ovsdb.port.list@v1",
+        ))
+        .method(super::plugin_schema_defs::cap_method(
+            "create_bridge",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.network.ovsdb.bridge.create@v1",
+            "mut.network.ovsdb.bridge.create@v1",
+        ))
+        .method(super::plugin_schema_defs::cap_method(
+            "delete_bridge",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.network.ovsdb.bridge.delete@v1",
+            "mut.network.ovsdb.bridge.delete@v1",
+        ))
+        .method(super::plugin_schema_defs::cap_method(
+            "add_port",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.network.ovsdb.port.add@v1",
+            "mut.network.ovsdb.port.add@v1",
+        ))
         .build()
 }
 

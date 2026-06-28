@@ -168,7 +168,7 @@ impl MailService for MailAdapter {
             .await
             .map_err(|e| Status::internal(format!("IMAP UID FETCH failed: {}", e)))?;
 
-        use futures::{StreamExt, TryStreamExt};
+        use futures::TryStreamExt;
         let raw: Vec<_> = messages
             .try_collect()
             .await
@@ -282,7 +282,7 @@ impl MailService for MailAdapter {
         let r = req.into_inner();
         let mut session = self.imap_session().await?;
         session.select(&r.folder).await.ok();
-        session
+        let _ = session
             .uid_store(r.uid.to_string(), "+FLAGS (\\Deleted)")
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
@@ -318,10 +318,10 @@ impl MailService for MailAdapter {
         let (reader, mut writer) = tokio::io::split(stream);
         let mut lines = BufReader::new(reader).lines();
 
-        let mut smtp_cmd = |cmd: &str| {
-            let _ = cmd; // used below
+        let smtp_cmd = |cmd: &str| {
+            let _ = cmd;
         };
-        let _ = smtp_cmd; // suppress warning
+        let _ = smtp_cmd;
 
         // Read banner
         lines.next_line().await.ok();
@@ -330,7 +330,7 @@ impl MailService for MailAdapter {
         let msg_id = uuid::Uuid::new_v4().to_string();
 
         for (cmd, _) in [
-            (format!("EHLO localhost\r\n"), "250"),
+            ("EHLO localhost\r\n".to_string(), "250"),
             (format!("MAIL FROM:<{}>\r\n", from), "250"),
             (format!("RCPT TO:<{}>\r\n", r.to), "250"),
             ("DATA\r\n".to_string(), "354"),

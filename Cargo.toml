@@ -151,9 +151,7 @@ tonic-health = "0.12"
 tonic-web = "0.12"
 
 # Databases
-sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "json"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
-redis = { version = "0.25", features = ["tokio-comp"] }
 lru = "0.12"
 
 # Additional
@@ -206,7 +204,6 @@ tracing-subscriber.workspace = true
 thiserror.workspace = true
 async-trait.workspace = true
 zbus.workspace = true
-sqlx.workspace = true
 chrono.workspace = true
 base64.workspace = true
 futures.workspace = true

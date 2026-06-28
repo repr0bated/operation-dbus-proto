@@ -128,7 +128,6 @@ impl StatePlugin for DataStorePlugin {
         Some(datastore_schema())
     }
 
-
     async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {
         // Writes flow through the MutationEngine / owning plugins, not through a
         // whole-store diff. Always NoOp here.

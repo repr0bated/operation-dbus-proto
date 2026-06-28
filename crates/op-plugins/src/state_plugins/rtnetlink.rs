@@ -92,7 +92,6 @@ impl StatePlugin for RtnetlinkPlugin {
         "rtnetlink is always available".to_string()
     }
 
-
     async fn calculate_diff(&self, current: &Value, desired: &Value) -> Result<StateDiff> {
         let current_state: RtnetlinkState = simd_json::serde::from_owned_value(current.clone())
             .unwrap_or(RtnetlinkState { interfaces: vec![] });
@@ -365,6 +364,34 @@ pub(crate) fn rtnetlink_schema() -> PluginSchema {
                 }
             ]
         }))
+        .method(super::plugin_schema_defs::cap_method(
+            "set_link_state",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.network.rtnetlink.link-state.set@v1",
+            "mut.network.rtnetlink.link-state.set@v1",
+        ))
+        .method(super::plugin_schema_defs::cap_method(
+            "add_ipv4_address",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.network.rtnetlink.ipv4-address.add@v1",
+            "mut.network.rtnetlink.ipv4-address.add@v1",
+        ))
+        .method(super::plugin_schema_defs::cap_method(
+            "set_mac_address",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.network.rtnetlink.mac-address.set@v1",
+            "mut.network.rtnetlink.mac-address.set@v1",
+        ))
+        .method(super::plugin_schema_defs::cap_method(
+            "set_default_route",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.network.rtnetlink.default-route.set@v1",
+            "mut.network.rtnetlink.default-route.set@v1",
+        ))
         .build()
 }
 

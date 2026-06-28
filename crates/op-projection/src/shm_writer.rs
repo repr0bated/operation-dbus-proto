@@ -2,8 +2,9 @@
 //! shared memory.
 //!
 //! This module implements the producer side of the SHM pipeline.  It is the
-//! **only** component that writes schema files, the combined monolith, the
-//! catalog hash manifest, and present-state snapshots to `/dev/shm/opdbus/`.
+//! **only** component that writes the live schema monolith, materialized
+//! per-plugin schema views, the catalog hash manifest, and present-state
+//! snapshots to `/dev/shm/opdbus/`.
 //!
 //! # Layout
 //!
@@ -13,9 +14,9 @@
 //! └── opdbus/
 //!     ├── .manifest.json                        ← { "catalog_hash": "<blake3>" }
 //!     ├── schemas/
-//!     │   ├── wireguard.json
+//!     │   ├── wireguard.json                    ← materialized plugin schema
 //!     │   ├── xray.json
-//!     │   └── ...                               ← one file per plugin
+//!     │   └── ...
 //!     └── state/
 //!         ├── wireguard.json                    ← present-state snapshot
 //!         ├── xray.json
@@ -30,10 +31,8 @@
 //!
 //! # Catalog Hash
 //!
-//! The Blake3 catalog hash is computed by sorting per-plugin schema filenames,
-//! leaf-hashing each file's bytes, and folding the leaf hashes into a single
-//! root hash.  Only the producer computes this hash; consumers read it from
-//! `.manifest.json`.
+//! The Blake3 catalog hash is computed from `live-schema.json`. Only the
+//! producer computes this hash; consumers read it from `.manifest.json`.
 
 use anyhow::{Context, Result};
 use op_state_store::PluginSchema;
@@ -49,7 +48,7 @@ const DEFAULT_SHM_BASE: &str = "/dev/shm";
 /// Subdirectory under the SHM base for all opdbus files.
 const OPDBUS_DIR: &str = "opdbus";
 
-/// Subdirectory for per-plugin capability schema files.
+/// Subdirectory for materialized per-plugin schema views.
 const SCHEMAS_DIR: &str = "schemas";
 
 /// Subdirectory for per-plugin present-state files.
@@ -147,7 +146,7 @@ impl ShmWriter {
         Ok(())
     }
 
-    /// Writes a single per-plugin capability schema JSON file to
+    /// Writes a single materialized plugin schema JSON file to
     /// `/dev/shm/opdbus/schemas/<plugin_id>.json`.
     pub fn write_plugin_schema(&self, plugin_id: &str, schema: &PluginSchema) -> Result<()> {
         let path = self.schemas_dir.join(format!("{}.json", plugin_id));
@@ -155,7 +154,7 @@ impl ShmWriter {
             .with_context(|| format!("failed to serialize schema for '{}'", plugin_id))?;
         atomic_write(&path, &json_bytes)
             .with_context(|| format!("failed to write schema for '{}'", plugin_id))?;
-        debug!(plugin_id, path = %path.display(), "wrote per-plugin schema");
+        debug!(plugin_id, path = %path.display(), "wrote materialized plugin schema");
         Ok(())
     }
 
@@ -176,36 +175,11 @@ impl ShmWriter {
         Ok(())
     }
 
-    /// Computes the Blake3 catalog hash over all per-plugin schema files.
-    ///
-    /// Algorithm:
-    /// 1. List all `*.json` files in the schemas directory.
-    /// 2. Sort by filename.
-    /// 3. Leaf-hash each file's bytes with Blake3.
-    /// 4. Fold (concatenate) the leaf hashes and hash the result to produce
-    ///    a single root hash.
+    /// Computes the Blake3 catalog hash over the live schema monolith.
     pub fn compute_catalog_hash(&self) -> Result<String> {
-        let mut entries: Vec<_> = fs::read_dir(&self.schemas_dir)
-            .with_context(|| format!("cannot read schemas dir {}", self.schemas_dir.display()))?
-            .filter_map(|e| e.ok())
-            .filter(|e| e.path().extension().is_some_and(|ext| ext == "json"))
-            .collect();
-        entries.sort_by_key(|e| e.file_name());
-
-        if entries.is_empty() {
-            // No schema files — hash of empty input is still a valid Blake3.
-            return Ok(blake3::hash(&[]).to_hex().to_string());
-        }
-
-        let mut concatenated: Vec<u8> = Vec::with_capacity(entries.len() * 32);
-        for entry in &entries {
-            let bytes = fs::read(entry.path())
-                .with_context(|| format!("cannot read {}", entry.path().display()))?;
-            let leaf_hash = blake3::hash(&bytes);
-            concatenated.extend_from_slice(leaf_hash.as_bytes());
-        }
-        let root_hash = blake3::hash(&concatenated);
-        Ok(root_hash.to_hex().to_string())
+        let bytes = fs::read(&self.monolith_path)
+            .with_context(|| format!("cannot read {}", self.monolith_path.display()))?;
+        Ok(blake3::hash(&bytes).to_hex().to_string())
     }
 
     /// Writes `{ "catalog_hash": "<hex>" }` to `.manifest.json` atomically.
@@ -224,8 +198,7 @@ impl ShmWriter {
     }
 
     /// Writes present-state JSON for a plugin to
-    /// `/dev/shm/opdbus/state/<plugin_id>.json` and then recomputes and
-    /// rewrites the manifest hash so consumers detect the change.
+    /// `/dev/shm/opdbus/state/<plugin_id>.json`.
     pub fn write_present_state(&self, plugin_id: &str, state: &serde_json::Value) -> Result<()> {
         let path = self.state_dir.join(format!("{}.json", plugin_id));
         let json_bytes = serde_json::to_vec_pretty(state)
@@ -234,15 +207,11 @@ impl ShmWriter {
             .with_context(|| format!("failed to write present-state for '{}'", plugin_id))?;
         debug!(plugin_id, path = %path.display(), "wrote present-state");
 
-        // Recompute catalog hash and update manifest so consumers detect the
-        // state change on their next inbound connection.
-        let hash = self.compute_catalog_hash()?;
-        self.write_manifest(&hash)?;
         Ok(())
     }
 
-    /// Convenience: writes all per-plugin schema files, the combined monolith,
-    /// and the manifest in one call.
+    /// Convenience: writes materialized plugin schema views, the combined
+    /// monolith, and the manifest in one call.
     ///
     /// Plugins returning `None` from `schema()` are skipped entirely — no
     /// per-plugin file, no monolith entry, no state file.
@@ -269,13 +238,12 @@ impl ShmWriter {
         info!(
             plugin_count = monolith.len(),
             catalog_hash = %hash,
-            "wrote all schemas to SHM"
+            "wrote live schema and materialized plugin schemas to SHM"
         );
         Ok(())
     }
 
-    /// Convenience: writes present-state for all provided plugins and refreshes
-    /// the manifest hash once at the end.
+    /// Convenience: writes present-state for all provided plugins.
     pub fn write_all_present_states(&self, states: &[(String, serde_json::Value)]) -> Result<()> {
         self.ensure_dirs()?;
         for (plugin_id, state) in states {
@@ -286,8 +254,6 @@ impl ShmWriter {
             atomic_write(&path, &json_bytes)
                 .with_context(|| format!("failed to write present-state for '{}'", plugin_id))?;
         }
-        let hash = self.compute_catalog_hash()?;
-        self.write_manifest(&hash)?;
         info!(state_count = states.len(), "wrote present-states to SHM");
         Ok(())
     }

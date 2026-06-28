@@ -19,7 +19,7 @@ use base64::Engine;
 use op_identity::{read_sled, write_sled_full};
 use op_jsonrpc::nonnet::NonNetDb;
 use op_network::rovs_proxy::OvsdbDbusClient;
-use op_state_store::{Decision, EventChain, OperationType};
+use op_state_store::{ChainEvent, Decision, EventChain, MemoryStore, OperationType, StateStore};
 
 /// A state change projected from the authoritative system bus
 #[derive(Debug, Clone)]
@@ -113,8 +113,8 @@ impl op_core::state_publisher::StatePublisher for MutationEngine {
             new_value,
             tags,
             source,
-            ChangeSource::Internal,
             None,
+            ChangeSource::Internal,
         )
         .await
         .map(|_| ())
@@ -141,6 +141,52 @@ impl MutationEngine {
             nonnet,
             unix_socket: Arc::new(op_plugins::state_plugins::UnixSocketPlugin::new()),
         }
+    }
+
+    /// Seed missing plugin projection files from the canonical PluginSchema
+    /// catalog. This runs once during bridge startup; existing projection files
+    /// are left untouched so real mutation state always wins.
+    pub async fn seed_missing_plugin_projections(&self) -> anyhow::Result<usize> {
+        let state_store: Arc<dyn StateStore> = Arc::new(MemoryStore::new());
+        let registry = op_plugins::DefaultPluginRegistry::new(state_store);
+        let plugins = registry.load_all_plugins().await?;
+        let mut seeded = 0usize;
+
+        for plugin in plugins {
+            let plugin_id = plugin.name().to_string();
+            if op_core::projection_shm::read_projection_bytes(&plugin_id).is_some() {
+                continue;
+            }
+
+            let Some(schema) = plugin.schema() else {
+                tracing::debug!(
+                    plugin_id = %plugin_id,
+                    "Skipping projection seed for plugin without PluginSchema"
+                );
+                continue;
+            };
+
+            if schema.name != plugin_id {
+                tracing::warn!(
+                    plugin_id = %plugin_id,
+                    schema_name = %schema.name,
+                    "Skipping projection seed for schema owned by a different plugin"
+                );
+                continue;
+            }
+
+            let seed_state = op_plugins::projection_seed_state_from_schema(&schema);
+            let json = simd_json::to_string(&seed_state)?;
+            op_core::projection_shm::write_projection(&plugin_id, json.as_bytes())?;
+            self.update_state_cache(plugin_id.clone(), seed_state).await;
+            seeded += 1;
+        }
+
+        tracing::info!(
+            count = seeded,
+            "Seeded missing plugin projections from PluginSchema"
+        );
+        Ok(seeded)
     }
 
     /// Authoritative D-Bus connection getter
@@ -172,10 +218,7 @@ impl MutationEngine {
     /// Crawl the D-Bus projection tree for a plugin and return its full state
     /// as JSON. Introspects `/org/opdbus/v1/plugins/<plugin_id>`, recursively
     /// descends child nodes, and reads all properties from all interfaces.
-    async fn crawl_plugin_dbus_tree(
-        &self,
-        plugin_id: &str,
-    ) -> Option<simd_json::OwnedValue> {
+    async fn crawl_plugin_dbus_tree(&self, plugin_id: &str) -> Option<simd_json::OwnedValue> {
         let conn = match self.session_bus().await {
             Ok(c) => c,
             Err(e) => {
@@ -233,40 +276,42 @@ impl MutationEngine {
                 continue;
             }
 
-            let props: std::collections::HashMap<String, zbus::zvariant::OwnedValue> =
-                match conn
-                    .call_method(
-                        Some(bus_name),
-                        path,
-                        Some("org.freedesktop.DBus.Properties"),
-                        "GetAll",
-                        &iface,
-                    )
-                    .await
-                {
-                    Ok(msg) => msg
-                        .body()
-                        .deserialize::<std::collections::HashMap<String, zbus::zvariant::OwnedValue>>()
-                        .unwrap_or_default(),
-                    Err(_) => std::collections::HashMap::new(),
-                };
+            let props: std::collections::HashMap<String, zbus::zvariant::OwnedValue> = match conn
+                .call_method(
+                    Some(bus_name),
+                    path,
+                    Some("org.freedesktop.DBus.Properties"),
+                    "GetAll",
+                    &iface,
+                )
+                .await
+            {
+                Ok(msg) => msg
+                    .body()
+                    .deserialize::<std::collections::HashMap<String, zbus::zvariant::OwnedValue>>()
+                    .unwrap_or_default(),
+                Err(_) => std::collections::HashMap::new(),
+            };
 
             let mut iface_obj = simd_json::value::owned::Object::new();
             for (prop_name, prop_val) in &props {
                 // zvariant::OwnedValue serializes as {"signature":"s","value":"..."}
                 // Extract just the value field for a clean JSON projection.
                 let json_val: serde_json::Value =
-                    serde_json::to_value(&prop_val).unwrap_or(serde_json::Value::Null);
+                    serde_json::to_value(prop_val).unwrap_or(serde_json::Value::Null);
                 let extracted = json_val.get("value").unwrap_or(&json_val);
-                let json_str = serde_json::to_string(extracted)
-                    .unwrap_or_else(|_| "null".to_string());
+                let json_str =
+                    serde_json::to_string(extracted).unwrap_or_else(|_| "null".to_string());
                 let mut bytes = json_str.into_bytes();
                 if let Ok(v) = simd_json::to_owned_value(&mut bytes) {
                     iface_obj.insert(prop_name.clone(), v);
                 }
             }
             if !iface_obj.is_empty() {
-                out.insert(iface.clone(), simd_json::OwnedValue::Object(Box::new(iface_obj)));
+                out.insert(
+                    iface.clone(),
+                    simd_json::OwnedValue::Object(Box::new(iface_obj)),
+                );
             }
         }
 
@@ -274,10 +319,18 @@ impl MutationEngine {
         for child in &child_nodes {
             let child_path = format!("{}/{}", path.trim_end_matches('/'), child);
             let mut child_obj = simd_json::value::owned::Object::new();
-            Box::pin(Self::crawl_path(conn, bus_name, &child_path, &mut child_obj))
-                .await;
+            Box::pin(Self::crawl_path(
+                conn,
+                bus_name,
+                &child_path,
+                &mut child_obj,
+            ))
+            .await;
             if !child_obj.is_empty() {
-                out.insert(child.clone(), simd_json::OwnedValue::Object(Box::new(child_obj)));
+                out.insert(
+                    child.clone(),
+                    simd_json::OwnedValue::Object(Box::new(child_obj)),
+                );
             }
         }
     }
@@ -338,8 +391,8 @@ impl MutationEngine {
         new_value: simd_json::OwnedValue,
         mut tags: Vec<String>,
         actor_id: String,
-        source: ChangeSource,
         capability_id: Option<String>,
+        source: ChangeSource,
     ) -> Result<StateChange, String> {
         if tags.is_empty() {
             tags = self.compute_tags(&plugin_id, &object_path);
@@ -352,27 +405,34 @@ impl MutationEngine {
                 ChangeType::ObjectRemoved => OperationType::Custom("delete".to_string()),
                 _ => OperationType::EmitSignal,
             };
-            // Record the base event (appends to the chain).
-            chain.record(
-                actor_id.clone(),
-                plugin_id.clone(),
-                "1.0.0".to_string(),
-                op,
-                object_path.clone(),
-                tags.clone(),
-                Decision::Allow,
-                &new_value,
-            );
-            // Thread capability_id into the event chain record (R7.4 / VAL-ENFORCE-004).
-            // Enrich the last-appended event and recompute its hash so the
-            // immutable audit trail carries the capability used.
-            if let Some(cap) = &capability_id {
-                let last = chain.events_mut().last_mut().expect("event just appended");
-                last.capability_id = Some(cap.clone());
-                last.event_hash = last.compute_hash();
+            if let Some(capability) = capability_id {
+                let event = ChainEvent::new(
+                    chain.next_event_id(),
+                    chain.last_hash().to_string(),
+                    actor_id.clone(),
+                    plugin_id.clone(),
+                    "1.0.0".to_string(),
+                    op,
+                    object_path.clone(),
+                    tags.clone(),
+                    Decision::Allow,
+                    &new_value,
+                )
+                .with_capability(capability);
+                chain.append(event).clone()
+            } else {
+                let event = chain.record(
+                    actor_id.clone(),
+                    plugin_id.clone(),
+                    "1.0.0".to_string(),
+                    op,
+                    object_path.clone(),
+                    tags.clone(),
+                    Decision::Allow,
+                    &new_value,
+                );
+                event.clone()
             }
-            // Snapshot the event for broadcast (cloned to release the borrow).
-            chain.events().last().expect("event just appended").clone()
         };
 
         self.update_cached_plugin_state(
@@ -469,8 +529,8 @@ impl MutationEngine {
                                 simd_json::json!(update.rows),
                                 vec!["nonnet".to_string()],
                                 "nonnet-db".to_string(),
-                                ChangeSource::Internal,
                                 None,
+                                ChangeSource::Internal,
                             )
                             .await;
                     }
@@ -523,8 +583,8 @@ impl MutationEngine {
                                                         "network".to_string(),
                                                     ],
                                                     "ovsdb-monitor".to_string(),
-                                                    ChangeSource::DBus,
                                                     None,
+                                                    ChangeSource::DBus,
                                                 )
                                                 .await;
                                         }
@@ -671,8 +731,8 @@ impl MutationEngine {
                 authoritative_value.clone(),
                 vec![], // Automatically computed in process_authoritative_change
                 actor_id,
-                ChangeSource::Grpc,
                 capability_id,
+                ChangeSource::Grpc,
             )
             .await
             .map_err(|e| anyhow::anyhow!(e))?;
@@ -821,7 +881,8 @@ impl MutationEngine {
                     // Persist effective Set* changes to the authoritative state
                     // cache so the new selection is observable to readers.
                     if method == "SetProvider" || method == "SetModel" {
-                        self.merge_into_state_cache("zeroclaw", &outcome.result).await;
+                        self.merge_into_state_cache("zeroclaw", &outcome.result)
+                            .await;
                     }
                     if let Some(sig) = &outcome.signal {
                         tracing::debug!(plugin_id, method, signal = %sig.name, "zeroclaw dispatch signal");
@@ -1087,9 +1148,7 @@ fn parse_socket_args(value: &simd_json::OwnedValue) -> (String, Vec<u16>) {
     (String::new(), Vec::new())
 }
 
-fn parse_socket_arg_object(
-    obj: &simd_json::value::owned::Object,
-) -> (String, Vec<u16>) {
+fn parse_socket_arg_object(obj: &simd_json::value::owned::Object) -> (String, Vec<u16>) {
     let name = obj
         .get("name")
         .and_then(|v| v.as_str())

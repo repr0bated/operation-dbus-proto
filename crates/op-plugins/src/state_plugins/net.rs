@@ -786,7 +786,6 @@ impl StatePlugin for NetStatePlugin {
         "OpenVSwitch OVSDB socket not found at /var/run/openvswitch/db.sock - install with: apt install openvswitch-switch".to_string()
     }
 
-
     async fn calculate_diff(&self, current: &Value, desired: &Value) -> Result<StateDiff> {
         let current_config: NetworkConfig = simd_json::serde::from_owned_value(current.clone())?;
         let desired_config: NetworkConfig = simd_json::serde::from_owned_value(desired.clone())?;
@@ -957,12 +956,31 @@ impl StatePlugin for NetStatePlugin {
 pub(crate) fn net_schema() -> PluginSchema {
     let root = serde_json::to_value(schemars::schema_for!(NetworkConfig))
         .expect("schemars schema serializes to JSON");
-    super::schemars_adapter::plugin_schema_from_json(
+    let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "net",
         "1.0.0",
         "Network interface management via rtnetlink",
         &root,
-    )
+    );
+    for method in [
+        super::plugin_schema_defs::cap_method(
+            "apply_interface",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.network.interface.apply@v1",
+            "mut.network.interface.apply@v1",
+        ),
+        super::plugin_schema_defs::cap_method(
+            "delete_ovs_bridge",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.network.ovs-bridge.delete@v1",
+            "mut.network.ovs-bridge.delete@v1",
+        ),
+    ] {
+        schema.methods.insert(method.name.clone(), method);
+    }
+    schema
 }
 
 /// Frozen golden reference: the original hand-rolled schema, kept **test-only**

@@ -3,6 +3,7 @@
 
 use tonic::{Request, Status};
 
+#[allow(clippy::result_large_err)]
 pub fn ghostbridge_interceptor(req: Request<()>) -> Result<Request<()>, Status> {
     let footprint = req.metadata().get("x-ghostbridge-footprint");
     let trace_id = req.metadata().get("x-ghostbridge-trace-id");

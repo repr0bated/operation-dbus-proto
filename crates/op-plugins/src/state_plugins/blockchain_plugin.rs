@@ -180,7 +180,6 @@ impl StatePlugin for BlockchainPlugin {
         Some(blockchain_schema())
     }
 
-
     async fn calculate_diff(&self, current: &Value, desired: &Value) -> Result<StateDiff> {
         // The only writable projection of an append-only audit chain is its DR
         // `current_state` blob. Emit a real Modify when the desired state

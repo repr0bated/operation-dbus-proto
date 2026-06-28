@@ -1,8 +1,10 @@
 #!/bin/sh
 set -eu
 
-GEMMA_BIN="/home/jeremy/git/operation-dbus-proto/target/debug/op-gemma"
-SHUTTLE_BIN="/home/jeremy/git/operation-dbus-proto/target/debug/op-identity-shuttle"
+PATH="${PATH:-/usr/local/sbin:/usr/local/bin:/usr/bin:/bin}"
+
+GEMMA_BIN="${GEMMA_BIN:-/usr/local/bin/op-gemma}"
+SHUTTLE_BIN="${SHUTTLE_BIN:-/usr/local/bin/op-identity-shuttle}"
 
 if [ -f /etc/ghostbridge/xray.env ]; then
     . /etc/ghostbridge/xray.env

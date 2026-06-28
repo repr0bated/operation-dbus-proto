@@ -3,6 +3,7 @@
 //! This module implements the `PluginReader` trait by loading the default
 //! runtime plugins, querying their live state, and emitting both top-level
 //! plugin state entities and nested object projections.
+#![allow(dead_code, unused_imports)]
 
 use crate::data_models::{FieldSchema, FieldType, PluginSchema};
 use crate::interfaces::{PluginLifecycleEvent, PluginReader, RawEntity, SourceReader};
@@ -19,6 +20,7 @@ use tracing::{debug, info, warn};
 struct LoadedPlugin {
     name: String,
     schema: Option<PluginSchema>,
+    #[allow(dead_code)]
     plugin: Arc<dyn StatePlugin>,
 }
 
@@ -150,17 +152,17 @@ impl SystemPluginReader {
             .collect()
     }
 
-    /// Queries the present-state of every loaded plugin and returns it as
-    /// `(plugin_id, serde_json::Value)` pairs.  Plugins whose state query
-    /// fails are skipped with a warning.
+    /// Snapshots the present-state of every loaded plugin and returns it as
+    /// `(plugin_id, serde_json::Value)` pairs. Plugins whose checkpoint
+    /// snapshot fails are skipped with a warning.
     pub async fn plugin_present_states(&self) -> Vec<(String, serde_json::Value)> {
         let mut result = Vec::new();
         for plugin in &self.plugins {
-            match plugin.plugin.query_current_state().await {
-                Ok(state) => {
+            match plugin.plugin.create_checkpoint().await {
+                Ok(checkpoint) => {
                     // Convert simd_json::OwnedValue to serde_json::Value via
                     // string round-trip.
-                    let json_str = match simd_json::to_string(&state) {
+                    let json_str = match simd_json::to_string(&checkpoint.state_snapshot) {
                         Ok(s) => s,
                         Err(e) => {
                             warn!(
@@ -188,7 +190,7 @@ impl SystemPluginReader {
                     warn!(
                         plugin_id = %plugin.name,
                         error = %e,
-                        "Failed to query plugin state for SHM present-state"
+                        "Failed to snapshot plugin state for SHM present-state"
                     );
                 }
             }
@@ -284,7 +286,7 @@ impl SystemPluginReader {
             .collect())
     }
 
-    async fn read_loaded_plugin(&self, plugin: &LoadedPlugin) -> Result<Vec<RawEntity>> {
+    async fn read_loaded_plugin(&self, _plugin: &LoadedPlugin) -> Result<Vec<RawEntity>> {
         // Schema is the source of truth — no query_current_state to call.
         // Plugin state comes from shm (written by mutations), not from
         // querying the plugin instance.

@@ -125,8 +125,8 @@ mod tests {
     #[tokio::test]
     async fn should_expose_dbus_properties() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("zeroclaw.json");
-        std::fs::write(&path, r#"{"name":"zeroclaw"}"#).unwrap();
+        let path = dir.path().join("live-schema.json");
+        std::fs::write(&path, r#"{"zeroclaw":[{"name":"zeroclaw"}]}"#).unwrap();
 
         let loader = Arc::new(SchemaLoader::new(&path).unwrap());
         let (rebind_tx, _rebind_rx) = mpsc::channel(1);

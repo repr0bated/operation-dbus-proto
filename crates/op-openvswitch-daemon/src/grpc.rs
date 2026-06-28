@@ -6,11 +6,11 @@
 //!
 //! The gRPC service delegates to the same `DaemonState` used by the D-Bus
 //! interfaces — zero duplication, zero drift.
+#![allow(dead_code, unused_imports)]
 
-use anyhow::Result;
 use std::net::SocketAddr;
 use tonic::{Request, Response, Status};
-use tonic_web;
+
 use tracing::info;
 
 use crate::dbus::DaemonState;
@@ -587,7 +587,7 @@ impl OvsdbService for OvsdbServiceImpl {
 }
 
 /// Run the gRPC server
-pub async fn run_grpc_server(addr: SocketAddr, state: DaemonState) -> Result<()> {
+pub async fn run_grpc_server(addr: SocketAddr, state: DaemonState) -> anyhow::Result<()> {
     info!("gRPC server starting on {}", addr);
 
     let reflection = tonic_reflection::server::Builder::configure()
@@ -613,7 +613,7 @@ pub async fn run_grpc_server_with_streaming(
     addr: SocketAddr,
     state: DaemonState,
     streaming_service: crate::grpc_streaming::StreamingService,
-) -> Result<()> {
+) -> anyhow::Result<()> {
     info!("gRPC server with streaming starting on {}", addr);
 
     let reflection = tonic_reflection::server::Builder::configure()

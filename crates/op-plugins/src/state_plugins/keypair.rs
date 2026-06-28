@@ -85,7 +85,6 @@ impl StatePlugin for KeypairPlugin {
         Some(keypair_schema())
     }
 
-
     async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {
         Ok(StateDiff {
             plugin: self.name().to_string(),
@@ -139,12 +138,21 @@ impl StatePlugin for KeypairPlugin {
 pub fn keypair_schema() -> PluginSchema {
     let root = serde_json::to_value(schemars::schema_for!(KeypairState))
         .expect("schemars schema serializes to JSON");
-    super::schemars_adapter::plugin_schema_from_json(
+    let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "keypair",
         "1.0.0",
         "Keypair declaration state",
         &root,
-    )
+    );
+    let method = super::plugin_schema_defs::cap_method(
+        "list_keypairs",
+        op_state_store::SideEffect::Read,
+        true,
+        "cap.service.keypair.list@v1",
+        "obs.service.keypair.list@v1",
+    );
+    schema.methods.insert(method.name.clone(), method);
+    schema
 }
 
 /// Frozen golden reference: the original hand-rolled schema, kept **test-only**
