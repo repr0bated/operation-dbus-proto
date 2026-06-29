@@ -13,6 +13,8 @@
 //! Engines: mem, sled, rocksdb, sqlite
 //! Access levels: normal, protected, read_only, hidden
 
+use schemars::JsonSchema;
+
 use super::plugin_schema_defs::schema_from_state;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -24,17 +26,28 @@ use simd_json::{json, OwnedValue as Value};
 const DEFAULT_COZO_DB_PATH: &str = "/var/lib/opdbus/cognitive.db";
 
 /// CozoDB column definition — mirrors `::columns` system op output.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct CozoColumn {
+    /// Column name.
+    #[schemars(extend("x-oscal-subid" = "exp.software.cozo.column.name@v1"))]
     pub name: String,
-    pub r#type: String, // Int, Float, Bool, String, Bytes, Uuid, Json, Validity, Any, Any?
-    pub is_key: bool,   // true if before => in :create spec
+    /// Column type (Int, Float, Bool, String, Bytes, Uuid, Json, Validity, Any, Any?).
+    #[schemars(extend("x-oscal-subid" = "obs.software.cozo.column.type@v1"))]
+    pub r#type: String,
+    /// Whether this column is a key in the :create specification.
+    #[schemars(extend("x-oscal-subid" = "obs.software.cozo.column.is-key@v1"))]
+    pub is_key: bool,
+    /// Default value for the column.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("x-oscal-subid" = "obs.software.cozo.column.default@v1"))]
     pub default: Option<String>,
+    /// Column description.
+    #[schemars(extend("x-oscal-subid" = "exp.software.cozo.column.description@v1"))]
     pub description: String,
 }
 
 /// CozoDB index definition — mirrors `::indices` system op output.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct CozoIndex {
     pub name: String, // e.g. "relation_name:index_name"
     pub relation: String,
@@ -42,7 +55,7 @@ pub struct CozoIndex {
 }
 
 /// CozoDB trigger — mirrors `::show_triggers` system op output.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct CozoTrigger {
     pub relation: String,
     pub event: String, // "put", "rm", "replace"
@@ -50,7 +63,7 @@ pub struct CozoTrigger {
 }
 
 /// CozoDB stored relation — mirrors `::relations` + `::columns` system op output.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct CozoRelation {
     pub name: String,
     pub description: String,
@@ -61,7 +74,7 @@ pub struct CozoRelation {
 }
 
 /// CozoDB HNSW vector index — from docs.cozodb.org/en/latest/vector.html
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct CozoHnswIndex {
     pub name: String,
     pub relation: String,
@@ -75,15 +88,32 @@ pub struct CozoHnswIndex {
 }
 
 /// Top-level CozoDB plugin state — the shape the projection tree exposes.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "sch.software.plugin.cozo.schema@v1"))]
 pub struct CozoState {
-    pub engine: String,  // mem, sled, rocksdb, sqlite
-    pub path: String,    // database path (empty for mem)
-    pub version: String, // CozoDB version
+    /// CozoDB engine type.
+    #[schemars(extend("x-oscal-subid" = "src.software.plugin.cozo.engine@v1"))]
+    pub engine: String,
+    /// Database path (empty for mem).
+    #[schemars(extend("x-oscal-subid" = "src.software.plugin.cozo.path@v1"))]
+    pub path: String,
+    /// CozoDB version.
+    #[schemars(extend("x-oscal-subid" = "obs.software.plugin.cozo.version@v1"))]
+    pub version: String,
+    /// Registered database relations.
+    #[schemars(extend("x-oscal-subid" = "obs.software.plugin.cozo.relations@v1"))]
     pub relations: Vec<CozoRelation>,
+    /// Database indices.
+    #[schemars(extend("x-oscal-subid" = "obs.software.plugin.cozo.indices@v1"))]
     pub indices: Vec<CozoIndex>,
+    /// HNSW vector indices.
+    #[schemars(extend("x-oscal-subid" = "obs.software.plugin.cozo.hnsw-indices@v1"))]
     pub hnsw_indices: Vec<CozoHnswIndex>,
+    /// Database triggers.
+    #[schemars(extend("x-oscal-subid" = "obs.software.plugin.cozo.triggers@v1"))]
     pub triggers: Vec<CozoTrigger>,
+    /// Currently running queries count.
+    #[schemars(extend("x-oscal-subid" = "obs.software.plugin.cozo.running-queries@v1"))]
     pub running_queries: u32,
 }
 

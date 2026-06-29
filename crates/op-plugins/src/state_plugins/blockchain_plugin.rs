@@ -36,29 +36,57 @@ const DEFAULT_BASE_PATH: &str = "/var/lib/opdbus/blockchain";
 /// the state subvolume (`StreamingBlockchain::write_current_state` writes here).
 const CURRENT_STATE_KEY: &str = "current";
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct RetentionView {
+    /// Hourly retention count.
+    #[schemars(extend("x-oscal-subid" = "obs.software.blockchain.retention.hourly@v1"))]
     pub hourly: usize,
+    /// Daily retention count.
+    #[schemars(extend("x-oscal-subid" = "obs.software.blockchain.retention.daily@v1"))]
     pub daily: usize,
+    /// Weekly retention count.
+    #[schemars(extend("x-oscal-subid" = "obs.software.blockchain.retention.weekly@v1"))]
     pub weekly: usize,
+    /// Quarterly retention count.
+    #[schemars(extend("x-oscal-subid" = "obs.software.blockchain.retention.quarterly@v1"))]
     pub quarterly: usize,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SnapshotEntry {
+    /// Snapshot name.
+    #[schemars(extend("x-oscal-subid" = "exp.software.blockchain.snapshot.name@v1"))]
     pub name: String,
+    /// Snapshot creation timestamp.
+    #[schemars(extend("x-oscal-subid" = "exp.software.blockchain.snapshot.created@v1"))]
     pub created: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Blockchain plugin state schema.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "sch.software.plugin.blockchain.schema@v1"))]
 pub struct BlockchainState {
     /// `active` once the chain exists on disk, `uninitialized` before first write.
+    #[schemars(extend("x-oscal-subid" = "obs.software.blockchain.status@v1"))]
     pub status: String,
+    /// Blockchain base path.
+    #[schemars(extend("x-oscal-subid" = "exp.software.blockchain.base-path@v1"))]
     pub base_path: String,
+    /// Blockchain snapshot interval.
+    #[schemars(extend("x-oscal-subid" = "mut.service.blockchain.snapshot-interval@v1"))]
     pub snapshot_interval: String,
+    /// Blockchain retention policy.
+    #[schemars(extend("x-oscal-subid" = "obs.service.blockchain.retention@v1"))]
     pub retention: RetentionView,
+    /// Number of snapshots.
+    #[schemars(extend("x-oscal-subid" = "exp.software.blockchain.snapshot-count@v1"))]
     pub snapshot_count: usize,
+    /// List of snapshots.
+    #[schemars(extend("x-oscal-subid" = "exp.software.blockchain.snapshots@v1"))]
     pub snapshots: Vec<SnapshotEntry>,
+    /// Current blockchain state.
+    #[schemars(skip)]
+    #[schemars(extend("x-oscal-subid" = "obs.software.blockchain.current-state@v1"))]
     pub current_state: Value,
 }
 

@@ -10,6 +10,7 @@ use op_state::{
     ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
 };
 use op_state_store::{FieldSchema, FieldType, PluginSchema};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
@@ -274,6 +275,43 @@ impl StatePlugin for RtnetlinkPlugin {
     }
 }
 
+/// Method input types - single source of truth via schemars
+/// set_link_state method input
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SetLinkStateInput {
+    /// Interface name
+    pub name: String,
+    /// Desired state: "up" or "down"
+    pub state: String,
+}
+
+/// add_ipv4_address method input
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AddIpv4AddressInput {
+    /// Interface name
+    pub name: String,
+    /// IP address (CIDR notation, e.g. "10.0.0.1/24")
+    pub address: String,
+}
+
+/// set_mac_address method input
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SetMacAddressInput {
+    /// Interface name
+    pub name: String,
+    /// MAC address
+    pub mac: String,
+}
+
+/// set_default_route method input
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SetDefaultRouteInput {
+    /// Interface name for default route
+    pub name: String,
+    /// Gateway IP address
+    pub gateway: String,
+}
+
 pub(crate) fn rtnetlink_schema() -> PluginSchema {
     let interface_fields = {
         let mut fields = HashMap::new();
@@ -345,7 +383,7 @@ pub(crate) fn rtnetlink_schema() -> PluginSchema {
         fields
     };
 
-    PluginSchema::builder("rtnetlink")
+    let mut schema = PluginSchema::builder("rtnetlink")
         .version("1.0.0")
         .description("Native kernel rtnetlink interface management")
         .array_field(
@@ -364,35 +402,37 @@ pub(crate) fn rtnetlink_schema() -> PluginSchema {
                 }
             ]
         }))
-        .method(super::plugin_schema_defs::cap_method(
-            "set_link_state",
-            op_state_store::SideEffect::Mutation,
-            false,
-            "cap.network.rtnetlink.link-state.set@v1",
-            "mut.network.rtnetlink.link-state.set@v1",
-        ))
-        .method(super::plugin_schema_defs::cap_method(
-            "add_ipv4_address",
-            op_state_store::SideEffect::Mutation,
-            false,
-            "cap.network.rtnetlink.ipv4-address.add@v1",
-            "mut.network.rtnetlink.ipv4-address.add@v1",
-        ))
-        .method(super::plugin_schema_defs::cap_method(
-            "set_mac_address",
-            op_state_store::SideEffect::Mutation,
-            false,
-            "cap.network.rtnetlink.mac-address.set@v1",
-            "mut.network.rtnetlink.mac-address.set@v1",
-        ))
-        .method(super::plugin_schema_defs::cap_method(
-            "set_default_route",
-            op_state_store::SideEffect::Mutation,
-            false,
-            "cap.network.rtnetlink.default-route.set@v1",
-            "mut.network.rtnetlink.default-route.set@v1",
-        ))
-        .build()
+        .build();
+    
+    schema.methods.insert("set_link_state".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<SetLinkStateInput>(
+        "set_link_state",
+        op_state_store::SideEffect::Mutation,
+        false,
+        "cap.network.rtnetlink.link-state.set@v1",
+        "mut.network.rtnetlink.link-state.set@v1",
+    ));
+    schema.methods.insert("add_ipv4_address".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<AddIpv4AddressInput>(
+        "add_ipv4_address",
+        op_state_store::SideEffect::Mutation,
+        false,
+        "cap.network.rtnetlink.ipv4-address.add@v1",
+        "mut.network.rtnetlink.ipv4-address.add@v1",
+    ));
+    schema.methods.insert("set_mac_address".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<SetMacAddressInput>(
+        "set_mac_address",
+        op_state_store::SideEffect::Mutation,
+        false,
+        "cap.network.rtnetlink.mac-address.set@v1",
+        "mut.network.rtnetlink.mac-address.set@v1",
+    ));
+    schema.methods.insert("set_default_route".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<SetDefaultRouteInput>(
+        "set_default_route",
+        op_state_store::SideEffect::Mutation,
+        false,
+        "cap.network.rtnetlink.default-route.set@v1",
+        "mut.network.rtnetlink.default-route.set@v1",
+    ));
+    schema
 }
 
 // Self-registration: the plugin registry discovers this via inventory

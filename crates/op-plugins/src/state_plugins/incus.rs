@@ -10,6 +10,7 @@ use op_state::{
     ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
 };
 use op_state_store::{FieldSchema, FieldType, PluginSchema};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use simd_json::{json, prelude::*, OwnedValue as Value};
 use std::collections::{BTreeMap, HashMap};
@@ -1143,6 +1144,55 @@ fn named_device_object() -> FieldType {
     FieldType::Object(schema.fields)
 }
 
+// =============================================================================
+// Method input types - single source of truth via schemars
+// =============================================================================
+
+/// create_instance method input
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CreateInstanceInput {
+    /// Instance name
+    pub name: String,
+    /// Instance type: container or virtual-machine
+    #[serde(default = "default_instance_type")]
+    pub instance_type: String,
+    /// Image reference
+    pub image: String,
+    /// Profile names to apply
+    #[serde(default)]
+    pub profiles: Vec<String>,
+    /// Configuration key-value pairs
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config: Option<HashMap<String, String>>,
+    /// Device definitions
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub devices: Vec<NamedDevice>,
+}
+
+fn default_instance_type() -> String {
+    "container".to_string()
+}
+
+/// modify_instance method input
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ModifyInstanceInput {
+    /// Instance name
+    pub name: String,
+    /// Configuration updates
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config: Option<HashMap<String, String>>,
+    /// Device updates
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub devices: Option<HashMap<String, HashMap<String, String>>>,
+}
+
+/// delete_instance method input
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct DeleteInstanceInput {
+    /// Instance name
+    pub name: String,
+}
+
 pub(crate) fn incus_schema() -> PluginSchema {
     let instance_fields = {
         let mut fields = HashMap::new();
@@ -1454,21 +1504,21 @@ pub(crate) fn incus_schema() -> PluginSchema {
                 }
             ]
         }))
-        .method(super::plugin_schema_defs::cap_method(
+        .method(super::plugin_schema_defs::method_decl_from_schemars::<CreateInstanceInput>(
             "create_instance",
             op_state_store::SideEffect::Mutation,
             false,
             "cap.service.incus.instance.create@v1",
             "mut.service.incus.instance.create@v1",
         ))
-        .method(super::plugin_schema_defs::cap_method(
+        .method(super::plugin_schema_defs::method_decl_from_schemars::<ModifyInstanceInput>(
             "modify_instance",
             op_state_store::SideEffect::Mutation,
             false,
             "cap.service.incus.instance.modify@v1",
             "mut.service.incus.instance.modify@v1",
         ))
-        .method(super::plugin_schema_defs::cap_method(
+        .method(super::plugin_schema_defs::method_decl_from_schemars::<DeleteInstanceInput>(
             "delete_instance",
             op_state_store::SideEffect::Mutation,
             false,

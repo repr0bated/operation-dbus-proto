@@ -1,3 +1,4 @@
+use schemars::JsonSchema;
 // dnsresolver_plugin.rs
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -10,27 +11,42 @@ use op_state::{
 };
 use op_state_store::{Constraint, FieldSchema, FieldType, PluginSchema};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct DnsState {
+    /// DNS plugin state schema.
+    #[schemars(extend("x-oscal-subid" = "sch.software.plugin.dnsresolver.schema@v1"))]
     pub version: u32,
+    #[schemars(extend("x-oscal-subid" = "obs.software.dnsresolver.state.items@v1"))]
     pub items: Vec<DnsItem>,
 }
 
-#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum Mode {
+    #[schemars(extend("x-oscal-subid" = "obs.software.dnsresolver.mode.enforce@v1"))]
     Enforce,
+    #[schemars(extend("x-oscal-subid" = "obs.software.dnsresolver.mode.observe-only@v1"))]
     ObserveOnly,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct DnsItem {
+    /// DNS item identifier.
+    #[schemars(extend("x-oscal-subid" = "exp.software.dnsresolver.item.id@v1"))]
     pub id: String,
+    /// DNS mode.
+    #[schemars(extend("x-oscal-subid" = "obs.software.dnsresolver.item.mode@v1"))]
     pub mode: Mode,
+    /// DNS server list.
+    #[schemars(extend("x-oscal-subid" = "mut.software.dnsresolver.item.servers@v1"))]
     pub servers: Vec<String>,
+    /// DNS search domains.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("x-oscal-subid" = "obs.software.dnsresolver.item.search@v1"))]
     pub search: Option<Vec<String>>,
+    /// DNS options.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("x-oscal-subid" = "obs.software.dnsresolver.item.options@v1"))]
     pub options: Option<Vec<String>>,
 }
 
