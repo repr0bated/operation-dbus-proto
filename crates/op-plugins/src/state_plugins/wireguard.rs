@@ -136,6 +136,22 @@ pub struct RemovePeerInput {
     pub public_key: String,
 }
 
+/// Input struct for ListPeers method.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ListPeersInput {
+    /// Interface name
+    pub interface: String,
+}
+
+/// Input struct for SetConfig method.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SetConfigInput {
+    /// Interface name
+    pub interface: String,
+    /// Full configuration as JSON
+    pub config: serde_json::Value,
+}
+
 pub(crate) fn wireguard_schema() -> PluginSchema {
     let mut schema = simple_schema(
         "wireguard",
@@ -185,6 +201,30 @@ pub(crate) fn wireguard_schema() -> PluginSchema {
             false,
             "wireguard.write",
             "mut.network.wireguard.peer.remove@v1",
+        ),
+    );
+
+    // ListPeers method
+    schema.methods.insert(
+        "list_peers".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<ListPeersInput>(
+            "ListPeers",
+            op_state_store::SideEffect::Read,
+            true,
+            "wireguard.read",
+            "obs.network.wireguard.peers.list@v1",
+        ),
+    );
+
+    // SetConfig method
+    schema.methods.insert(
+        "set_config".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<SetConfigInput>(
+            "SetConfig",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "wireguard.write",
+            "mut.network.wireguard.config.set@v1",
         ),
     );
 

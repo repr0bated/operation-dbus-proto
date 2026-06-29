@@ -12,6 +12,8 @@ use std::path::Path;
 use std::sync::Arc;
 use tracing::{info, warn};
 
+use super::plugin_schema_defs::method_decl_from_schemars;
+
 /// The single active-schema catalog in shared memory. Every plugin reads its
 /// own slice by name from this one file — there is no per-plugin shm file and
 /// no diff loop. The schema's declared state IS the desired state.
@@ -91,6 +93,54 @@ pub struct UnixSocketState {
     pub sockets: Vec<SocketEndpoint>,
 }
 
+/// Input struct for Bind method - bind a socket to a path.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct BindInput {
+    /// Socket name/identifier
+    pub name: String,
+    /// Filesystem path for the socket
+    pub path: String,
+    /// Backend ports
+    pub ports: Vec<u16>,
+    /// Protocol (grpc, jsonrpc)
+    #[serde(default)]
+    pub protocol: String,
+}
+
+/// Input struct for Listen method.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ListenInput {
+    /// Socket path to listen on
+    pub path: String,
+    /// Backlog size
+    #[serde(default = "default_backlog")]
+    pub backlog: u32,
+}
+
+/// Input struct for Accept method.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AcceptInput {
+    /// Socket path to accept from
+    pub path: String,
+    /// Timeout in seconds
+    #[serde(default)]
+    pub timeout_secs: Option<u64>,
+}
+
+/// Input struct for Close method.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct CloseInput {
+    /// Socket path to close
+    pub path: String,
+    /// Force close even if connections active
+    #[serde(default)]
+    pub force: bool,
+}
+
+fn default_backlog() -> u32 {
+    128
+}
+
 /// Canonical `unix_socket` schema, **derived** from the structs via schemars
 /// (see [`super::schemars_adapter`]). `port` bounds, field descriptions (from
 /// doc comments) and `required` flags all come from the type — the struct is
@@ -113,6 +163,55 @@ pub fn unix_socket_schema_derived() -> PluginSchema {
         "createunixsocket".to_string(),
         "mut.service.unix-socket.create-socket@v1".to_string(),
     );
+
+    // Bind method - bind a socket to a path
+    schema.methods.insert(
+        "bind".to_string(),
+        method_decl_from_schemars::<BindInput>(
+            "Bind",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "network.write",
+            "mut.service.unix-socket.bind@v1",
+        ),
+    );
+
+    // Listen method
+    schema.methods.insert(
+        "listen".to_string(),
+        method_decl_from_schemars::<ListenInput>(
+            "Listen",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "network.write",
+            "mut.service.unix-socket.listen@v1",
+        ),
+    );
+
+    // Accept method
+    schema.methods.insert(
+        "accept".to_string(),
+        method_decl_from_schemars::<AcceptInput>(
+            "Accept",
+            op_state_store::SideEffect::Read,
+            true,
+            "network.read",
+            "obs.service.unix-socket.accept@v1",
+        ),
+    );
+
+    // Close method
+    schema.methods.insert(
+        "close".to_string(),
+        method_decl_from_schemars::<CloseInput>(
+            "Close",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "network.write",
+            "mut.service.unix-socket.close@v1",
+        ),
+    );
+
     schema
 }
 
