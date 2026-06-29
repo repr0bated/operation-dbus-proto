@@ -1,23 +1,69 @@
-use super::plugin_schema_defs::{any_field, simple_schema};
+use super::plugin_schema_defs::{any_field, simple_schema, method_decl_from_schemars};
 use anyhow::Result;
 use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
-use op_state_store::PluginSchema;
+use op_state_store::{FieldSchema, FieldType, PluginSchema, SideEffect};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use simd_json::json;
 use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ProxmoxState {
     pub containers: Vec<ContainerState>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ContainerState {
     pub vmid: u32,
     pub hostname: Option<String>,
     pub status: String, // "running", "stopped"
+}
+
+// D-Bus method input types for Proxmox VM operations
+// Reference: https://pve.proxmox.com/wiki/Developer_Workspace/QEMU/KVM_virtual_machines
+
+/// CreateVM method input
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CreateVmInput {
+    /// VM ID (vmid)
+    pub vmid: u32,
+    /// VM name
+    pub name: String,
+    /// VM type (qemu or lxc)
+    #[serde(default)]
+    pub vm_type: String,
+    /// Number of cores
+    #[serde(default)]
+    pub cores: u32,
+    /// Amount of memory in MB
+    #[serde(default)]
+    pub memory: u32,
+}
+
+/// StartVM method input
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct StartVmInput {
+    /// VM ID (vmid)
+    pub vmid: u32,
+}
+
+/// StopVM method input  
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct StopVmInput {
+    /// VM ID (vmid)
+    pub vmid: u32,
+    /// Force stop (skip shutdown)
+    #[serde(default)]
+    pub force: bool,
+}
+
+/// DeleteVM method input
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct DeleteVmInput {
+    /// VM ID (vmid)
+    pub vmid: u32,
 }
 
 pub struct ProxmoxPlugin;
@@ -98,15 +144,48 @@ impl StatePlugin for ProxmoxPlugin {
 }
 
 pub(crate) fn proxmox_schema() -> PluginSchema {
-    simple_schema(
+    let mut schema = simple_schema(
         "proxmox",
-        "Proxmox container declarations",
+        "Proxmox container/VM declarations",
         &["net"],
         vec![(
             "containers",
             any_field(true, "Container declarations", Some(json!([]))),
         )],
-    )
+    );
+    
+    // Add D-Bus methods for VM lifecycle management
+    // Reference: https://pve.proxmox.com/wiki/Developer_Workspace/QEMU/KVM_virtual_machines
+    schema.methods.insert("create_vm".to_string(), method_decl_from_schemars::<CreateVmInput>(
+        "create_vm",
+        SideEffect::Mutation,
+        false,
+        "cap.virtualization.proxmox.vm.create@v1",
+        "mut.virtualization.proxmox.vm.create@v1",
+    ));
+    schema.methods.insert("start_vm".to_string(), method_decl_from_schemars::<StartVmInput>(
+        "start_vm",
+        SideEffect::Mutation,
+        false,
+        "cap.virtualization.proxmox.vm.start@v1",
+        "mut.virtualization.proxmox.vm.start@v1",
+    ));
+    schema.methods.insert("stop_vm".to_string(), method_decl_from_schemars::<StopVmInput>(
+        "stop_vm",
+        SideEffect::Mutation,
+        false,
+        "cap.virtualization.proxmox.vm.stop@v1",
+        "mut.virtualization.proxmox.vm.stop@v1",
+    ));
+    schema.methods.insert("delete_vm".to_string(), method_decl_from_schemars::<DeleteVmInput>(
+        "delete_vm",
+        SideEffect::Mutation,
+        false,
+        "cap.virtualization.proxmox.vm.delete@v1",
+        "mut.virtualization.proxmox.vm.delete@v1",
+    ));
+    
+    schema
 }
 
 // Self-registration: the plugin registry discovers this via inventory

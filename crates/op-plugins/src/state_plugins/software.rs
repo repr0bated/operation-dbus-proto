@@ -8,6 +8,8 @@ use simd_json::json;
 use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
 
+use super::plugin_schema_defs::{any_field, method_decl_from_schemars, simple_schema};
+
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SoftwareState {
     #[serde(default)]
@@ -19,6 +21,42 @@ pub struct PackageInfo {
     pub name: String,
     pub version: String,
     pub manager: String, // "dpkg", "rpm", "cargo", etc.
+}
+
+/// Input struct for Install method.
+/// See: https://www.freedesktop.org/software/systemd/man/org.freedesktop.systemd1.html
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct InstallInput {
+    /// Package name to install
+    pub name: String,
+    /// Package version (optional)
+    pub version: Option<String>,
+}
+
+/// Input struct for Uninstall method.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct UninstallInput {
+    /// Package name to uninstall
+    pub name: String,
+    /// Force removal even if dependent
+    #[serde(default)]
+    pub force: bool,
+}
+
+/// Input struct for Update method.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct UpdateInput {
+    /// Package name to update
+    pub name: String,
+    /// Target version (optional, defaults to latest)
+    pub version: Option<String>,
+}
+
+/// Input struct for GetInfo method.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct GetInfoInput {
+    /// Package name to query
+    pub name: String,
 }
 
 /// Schema-only state for the `software` plugin. The runtime state is fully typed
@@ -147,14 +185,65 @@ impl StatePlugin for SoftwarePlugin {
 }
 
 pub(crate) fn software_schema() -> PluginSchema {
-    let root = serde_json::to_value(schemars::schema_for!(SoftwareSchemaState))
-        .expect("schemars schema serializes to JSON");
-    super::schemars_adapter::plugin_schema_from_json(
+    let mut schema = simple_schema(
         "software",
-        "1.0.0",
         "Software package inventory",
-        &root,
-    )
+        &["os"],
+        vec![(
+            "packages",
+            any_field(true, "Package list", Some(json!([]))),
+        )],
+    );
+
+    // Install method - https://www.freedesktop.org/software/systemd/man/org.freedesktop.systemd1.html
+    schema.methods.insert(
+        "install".to_string(),
+        method_decl_from_schemars::<InstallInput>(
+            "Install",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "software.write",
+            "mut.software.plugin.software.install@v1",
+        ),
+    );
+
+    // Uninstall method
+    schema.methods.insert(
+        "uninstall".to_string(),
+        method_decl_from_schemars::<UninstallInput>(
+            "Uninstall",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "software.write",
+            "mut.software.plugin.software.uninstall@v1",
+        ),
+    );
+
+    // Update method
+    schema.methods.insert(
+        "update".to_string(),
+        method_decl_from_schemars::<UpdateInput>(
+            "Update",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "software.write",
+            "mut.software.plugin.software.update@v1",
+        ),
+    );
+
+    // GetInfo method
+    schema.methods.insert(
+        "get_info".to_string(),
+        method_decl_from_schemars::<GetInfoInput>(
+            "GetInfo",
+            op_state_store::SideEffect::Read,
+            true,
+            "software.read",
+            "obs.software.plugin.software.get-info@v1",
+        ),
+    );
+
+    schema
 }
 
 /// Frozen golden reference: the original hand-rolled `software` schema, kept

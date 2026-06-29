@@ -7,6 +7,7 @@ use super::common::errors::ZeroclawError;
 use super::common::llm_projection::{
     ConfigSchema, LlmProjection, LlmTool, ModelRoute, Provider, Router, StructuredOutput, UiSurface,
 };
+use super::plugin_schema_defs::method_decl_from_schemars;
 use anyhow::Result;
 use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
@@ -73,6 +74,39 @@ pub struct ZeroclawState {
     #[serde(flatten)]
     #[schemars(extend("x-oscal-subid" = "sch.software.zeroclaw.llm-projection@v1"))]
     pub projection: LlmProjection,
+}
+
+/// Input struct for RegisterAgent method.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct RegisterAgentInput {
+    /// Agent ID
+    pub agent_id: String,
+    /// Agent capabilities
+    pub capabilities: Vec<String>,
+    /// Agent endpoint
+    pub endpoint: Option<String>,
+}
+
+/// Input struct for ReportStatus method.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ReportStatusInput {
+    /// Agent ID
+    pub agent_id: String,
+    /// Status message
+    pub status: String,
+    /// Metrics payload
+    pub metrics: Option<serde_json::Value>,
+}
+
+/// Input struct for ReceiveCommand method.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ReceiveCommandInput {
+    /// Command type
+    pub command_type: String,
+    /// Command payload
+    pub payload: serde_json::Value,
+    /// Request ID for correlation
+    pub request_id: Option<String>,
 }
 
 pub struct ZeroclawPlugin;
@@ -513,6 +547,43 @@ pub(crate) fn zeroclaw_schema() -> PluginSchema {
         super::schemars_adapter::apply_state_defaults(&mut schema, &state);
         schema.example = Some(state);
     }
+
+    // RegisterAgent method
+    schema.methods.insert(
+        "register_agent".to_string(),
+        method_decl_from_schemars::<RegisterAgentInput>(
+            "RegisterAgent",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "zeroclaw.write",
+            "mut.service.zeroclaw.agent.register@v1",
+        ),
+    );
+
+    // ReportStatus method
+    schema.methods.insert(
+        "report_status".to_string(),
+        method_decl_from_schemars::<ReportStatusInput>(
+            "ReportStatus",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "zeroclaw.write",
+            "mut.service.zeroclaw.agent.status@v1",
+        ),
+    );
+
+    // ReceiveCommand method
+    schema.methods.insert(
+        "receive_command".to_string(),
+        method_decl_from_schemars::<ReceiveCommandInput>(
+            "ReceiveCommand",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "zeroclaw.write",
+            "mut.service.zeroclaw.command.receive@v1",
+        ),
+    );
+
     schema
 }
 

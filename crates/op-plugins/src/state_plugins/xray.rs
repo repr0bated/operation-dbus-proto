@@ -5,6 +5,8 @@ use op_state_store::PluginSchema;
 use serde::{Deserialize, Serialize};
 use simd_json::OwnedValue as Value;
 
+use super::plugin_schema_defs::method_decl_from_schemars;
+
 /// Xray proxy configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "sch.software.plugin.xray.config.schema@v1"))]
@@ -542,6 +544,42 @@ pub(crate) fn xray_schema_golden() -> PluginSchema {
         ),
     );
 
+    // StartTrace method - https://xtls.github.io/config/
+    schema.methods.insert(
+        "start_trace".to_string(),
+        method_decl_from_schemars::<StartTraceInput>(
+            "StartTrace",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "xray.write",
+            "mut.network.xray.trace.start@v1",
+        ),
+    );
+
+    // EndTrace method
+    schema.methods.insert(
+        "end_trace".to_string(),
+        method_decl_from_schemars::<EndTraceInput>(
+            "EndTrace",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "xray.write",
+            "mut.network.xray.trace.end@v1",
+        ),
+    );
+
+    // RecordSpan method
+    schema.methods.insert(
+        "record_span".to_string(),
+        method_decl_from_schemars::<RecordSpanInput>(
+            "RecordSpan",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "xray.write",
+            "mut.network.xray.span.record@v1",
+        ),
+    );
+
     schema
 }
 
@@ -560,6 +598,43 @@ pub struct InboundInput {
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct StatsInput {
     pub name: String,
+}
+
+/// Input struct for StartTrace method.
+/// See: https://xtls.github.io/config/
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct StartTraceInput {
+    /// Trace ID
+    pub trace_id: String,
+    /// Service name
+    pub service: String,
+    /// Tags
+    #[serde(default)]
+    pub tags: Vec<String>,
+}
+
+/// Input struct for EndTrace method.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct EndTraceInput {
+    /// Trace ID to end
+    pub trace_id: String,
+    /// Final status
+    pub status: Option<String>,
+}
+
+/// Input struct for RecordSpan method.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct RecordSpanInput {
+    /// Trace ID
+    pub trace_id: String,
+    /// Span name
+    pub span_name: String,
+    /// Start timestamp (unix epoch millis)
+    pub start_ms: i64,
+    /// End timestamp (unix epoch millis)
+    pub end_ms: i64,
+    /// Span metadata
+    pub metadata: Option<serde_json::Value>,
 }
 
 // Self-registration: the plugin registry discovers this via inventory

@@ -7,7 +7,7 @@ use simd_json::prelude::*;
 
 use simd_json::OwnedValue as Value;
 
-use super::plugin_schema_defs::{any_field, simple_schema};
+use super::plugin_schema_defs::{any_field, method_decl_from_schemars, simple_schema};
 use op_state_store::PluginSchema;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -23,6 +23,57 @@ pub struct UserConfig {
     pub groups: Vec<String>,
     pub shell: Option<String>,
     pub present: bool,
+}
+
+/// Input struct for CreateUser method.
+/// See: https://www.freedesktop.org/wiki/Software/systemd/
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct CreateUserInput {
+    /// Username to create
+    pub username: String,
+    /// User ID (optional, auto-assigned if not provided)
+    pub uid: Option<u32>,
+    /// Primary group ID (optional)
+    pub gid: Option<u32>,
+    /// Additional groups
+    #[serde(default)]
+    pub groups: Vec<String>,
+    /// Login shell
+    pub shell: Option<String>,
+}
+
+/// Input struct for DeleteUser method.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct DeleteUserInput {
+    /// Username to delete
+    pub username: String,
+    /// Remove home directory
+    #[serde(default)]
+    pub remove_home: bool,
+}
+
+/// Input struct for ModifyUser method.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ModifyUserInput {
+    /// Username to modify
+    pub username: String,
+    /// New login shell
+    pub shell: Option<String>,
+    /// New primary group
+    pub gid: Option<u32>,
+    /// Groups to add
+    #[serde(default)]
+    pub add_groups: Vec<String>,
+    /// Groups to remove
+    #[serde(default)]
+    pub remove_groups: Vec<String>,
+}
+
+/// Input struct for ListUsers method.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ListUsersInput {
+    /// Filter by group (optional)
+    pub group: Option<String>,
 }
 
 pub struct UsersPlugin;
@@ -103,12 +154,62 @@ impl StatePlugin for UsersPlugin {
 }
 
 pub(crate) fn users_schema() -> PluginSchema {
-    simple_schema(
+    let mut schema = simple_schema(
         "users",
         "User account declarations",
         &[],
         vec![("users", any_field(true, "Users list", Some(json!([]))))],
-    )
+    );
+
+    // CreateUser method - https://www.freedesktop.org/wiki/Software/systemd/
+    schema.methods.insert(
+        "create_user".to_string(),
+        method_decl_from_schemars::<CreateUserInput>(
+            "CreateUser",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "users.write",
+            "mut.software.plugin.users.create@v1",
+        ),
+    );
+
+    // DeleteUser method
+    schema.methods.insert(
+        "delete_user".to_string(),
+        method_decl_from_schemars::<DeleteUserInput>(
+            "DeleteUser",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "users.write",
+            "mut.software.plugin.users.delete@v1",
+        ),
+    );
+
+    // ModifyUser method
+    schema.methods.insert(
+        "modify_user".to_string(),
+        method_decl_from_schemars::<ModifyUserInput>(
+            "ModifyUser",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "users.write",
+            "mut.software.plugin.users.modify@v1",
+        ),
+    );
+
+    // ListUsers method
+    schema.methods.insert(
+        "list_users".to_string(),
+        method_decl_from_schemars::<ListUsersInput>(
+            "ListUsers",
+            op_state_store::SideEffect::Read,
+            true,
+            "users.read",
+            "obs.software.plugin.users.list@v1",
+        ),
+    );
+
+    schema
 }
 
 // Self-registration: the plugin registry discovers this via inventory

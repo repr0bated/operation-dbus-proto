@@ -1,13 +1,14 @@
 //! Service plugin - auto-generating, validating, init-agnostic service management.
 
-use super::plugin_schema_defs::{any_field, simple_schema};
+use super::plugin_schema_defs::{any_field, method_decl_from_schemars, simple_schema};
 use crate::service_def::{
     ExecCommand, LogType, ReadyNotification, RestartPolicy, ServiceDef, ServiceName, ServiceType,
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
-use op_state_store::PluginSchema;
+use op_state_store::{FieldSchema, FieldType, PluginSchema, SideEffect};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use simd_json::{json, OwnedValue as Value};
 use std::collections::HashMap;
@@ -15,12 +16,45 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use zbus::{Connection, Proxy};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ServiceLifecycle {
     pub last_active: Option<u64>,
     pub days_since_active: Option<u64>,
     pub is_orphaned: bool,
     pub orphan_reason: Option<String>,
+}
+
+// D-Bus method input types for Service lifecycle operations
+// Reference: https://www.freedesktop.org/wiki/Software/systemd/
+
+/// Init method input - initialize a service definition
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct InitInput {
+    /// Service name
+    pub name: String,
+    /// Service type (simple, forking, oneshot, etc.)
+    #[serde(default)]
+    pub service_type: String,
+}
+
+/// Run method input - start/running a service
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct RunInput {
+    /// Service name
+    pub name: String,
+    /// Arguments to pass
+    #[serde(default)]
+    pub args: Vec<String>,
+}
+
+/// Shutdown method input - stop a service
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ShutdownInput {
+    /// Service name
+    pub name: String,
+    /// Force stop (SIGKILL)
+    #[serde(default)]
+    pub force: bool,
 }
 
 /// Path to the s6-rc live database.
@@ -387,12 +421,38 @@ impl StatePlugin for ServicePlugin {
 }
 
 pub(crate) fn service_schema() -> PluginSchema {
-    simple_schema(
+    let mut schema = simple_schema(
         "service",
         "Service definition declarations",
         &["net"],
         vec![("services", any_field(true, "Service map", Some(json!({}))))],
-    )
+    );
+    
+    // Add D-Bus methods for service lifecycle management
+    // Reference: https://www.freedesktop.org/wiki/Software/systemd/
+    schema.methods.insert("init".to_string(), method_decl_from_schemars::<InitInput>(
+        "init",
+        SideEffect::Mutation,
+        false,
+        "cap.service.lifecycle.init@v1",
+        "mut.service.lifecycle.init@v1",
+    ));
+    schema.methods.insert("run".to_string(), method_decl_from_schemars::<RunInput>(
+        "run",
+        SideEffect::Mutation,
+        false,
+        "cap.service.lifecycle.run@v1",
+        "mut.service.lifecycle.run@v1",
+    ));
+    schema.methods.insert("shutdown".to_string(), method_decl_from_schemars::<ShutdownInput>(
+        "shutdown",
+        SideEffect::Mutation,
+        false,
+        "cap.service.lifecycle.shutdown@v1",
+        "mut.service.lifecycle.shutdown@v1",
+    ));
+    
+    schema
 }
 
 // Self-registration: the plugin registry discovers this via inventory

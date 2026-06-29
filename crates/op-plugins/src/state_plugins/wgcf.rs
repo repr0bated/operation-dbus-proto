@@ -5,6 +5,8 @@ use op_state_store::PluginSchema;
 use serde::{Deserialize, Serialize};
 use simd_json::OwnedValue as Value;
 
+use super::plugin_schema_defs::method_decl_from_schemars;
+
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "sch.software.plugin.wgcf.config.schema@v1"))]
 pub struct WgcfConfig {
@@ -220,6 +222,38 @@ pub struct SetEndpointInput {
     pub endpoint: String,
 }
 
+/// Input struct for GenerateConfig method.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct GenerateConfigInput {
+    /// Interface name
+    pub interface: Option<String>,
+    /// DNS servers
+    #[serde(default)]
+    pub dns: Vec<String>,
+}
+
+/// Input struct for ApplyConfig method.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ApplyConfigInput {
+    /// Config content
+    pub config: String,
+    /// Apply immediately
+    #[serde(default)]
+    pub immediate: bool,
+}
+
+/// Input struct for Refresh method.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct RefreshInput {
+    /// Refresh type: keys, ips, all
+    #[serde(default = "default_refresh_type")]
+    pub refresh_type: String,
+}
+
+fn default_refresh_type() -> String {
+    "all".to_string()
+}
+
 
 /// Derived `wgcf` schema from the typed [`WgcfState`] struct via schemars.
 pub(crate) fn wgcf_schema() -> PluginSchema {
@@ -270,6 +304,42 @@ pub(crate) fn wgcf_schema() -> PluginSchema {
         "cap.software.wgcf.endpoint.set@v1",
         "mut.software.wgcf.endpoint.set@v1",
     ));
+
+    // GenerateConfig method
+    schema.methods.insert(
+        "generate_config".to_string(),
+        method_decl_from_schemars::<GenerateConfigInput>(
+            "GenerateConfig",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "wgcf.write",
+            "mut.software.wgcf.config.generate@v1",
+        ),
+    );
+
+    // ApplyConfig method
+    schema.methods.insert(
+        "apply_config".to_string(),
+        method_decl_from_schemars::<ApplyConfigInput>(
+            "ApplyConfig",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "wgcf.write",
+            "mut.software.wgcf.config.apply@v1",
+        ),
+    );
+
+    // Refresh method
+    schema.methods.insert(
+        "refresh".to_string(),
+        method_decl_from_schemars::<RefreshInput>(
+            "Refresh",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "wgcf.write",
+            "mut.software.wgcf.refresh@v1",
+        ),
+    );
 
     schema
 }

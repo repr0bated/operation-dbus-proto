@@ -20,6 +20,8 @@ use simd_json::json;
 use simd_json::{prelude::*, OwnedValue as Value};
 use std::collections::HashMap;
 
+use super::plugin_schema_defs::method_decl_from_schemars;
+
 // ============================================================================
 // SECTION 1: IMMUTABLE IDENTITY (set once, never changes)
 // ============================================================================
@@ -288,6 +290,35 @@ pub struct WebUiState {
     pub capabilities: WebUiCapabilities,
 }
 
+/// Input struct for RenderPage method.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct RenderPageInput {
+    /// Page identifier to render
+    pub page_id: String,
+    /// Optional locale for internationalization
+    pub locale: Option<String>,
+}
+
+/// Input struct for HandleEvent method.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct HandleEventInput {
+    /// Event type
+    pub event_type: String,
+    /// Event payload as JSON
+    pub payload: serde_json::Value,
+    /// Session ID
+    pub session_id: Option<String>,
+}
+
+/// Input struct for UpdateComponent method.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct UpdateComponentInput {
+    /// Component path (e.g., "header.title")
+    pub component_path: String,
+    /// New component properties
+    pub properties: serde_json::Value,
+}
+
 impl WebUiTunables {
     /// Property schema - tracks which tunable fields exist (append-only).
     pub fn property_schema() -> Vec<String> {
@@ -530,6 +561,43 @@ pub(crate) fn web_ui_schema() -> PluginSchema {
     let state = simd_json::serde::to_owned_value(&WebUiState::default())
         .expect("WebUiState default serializes");
     super::schemars_adapter::apply_state_defaults(&mut schema, &state);
+
+    // RenderPage method
+    schema.methods.insert(
+        "render_page".to_string(),
+        method_decl_from_schemars::<RenderPageInput>(
+            "RenderPage",
+            op_state_store::SideEffect::Read,
+            true,
+            "ui.read",
+            "obs.software.plugin.web-ui.render-page@v1",
+        ),
+    );
+
+    // HandleEvent method
+    schema.methods.insert(
+        "handle_event".to_string(),
+        method_decl_from_schemars::<HandleEventInput>(
+            "HandleEvent",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "ui.write",
+            "mut.software.plugin.web-ui.handle-event@v1",
+        ),
+    );
+
+    // UpdateComponent method
+    schema.methods.insert(
+        "update_component".to_string(),
+        method_decl_from_schemars::<UpdateComponentInput>(
+            "UpdateComponent",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "ui.write",
+            "mut.software.plugin.web-ui.update-component@v1",
+        ),
+    );
+
     schema
 }
 
