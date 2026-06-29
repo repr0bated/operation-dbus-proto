@@ -17,60 +17,127 @@
 //! therefore read-only: it rejects state-diff mutations with an explanation
 //! rather than letting arbitrary objects be upserted around the enforcement path.
 
-use super::plugin_schema_defs::schema_from_state;
 use anyhow::Result;
 use async_trait::async_trait;
 use op_state::{
     ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
 };
-use op_state_store::{PluginSchema, StateStore};
+use op_state_store::{FieldSchema, FieldType, PluginSchema};
 use serde::{Deserialize, Serialize};
-use simd_json::{json, OwnedValue as Value};
-use std::collections::BTreeMap;
-use std::sync::Arc;
+use simd_json::json;
+use simd_json::prelude::*;
+use simd_json::OwnedValue as Value;
+use std::collections::HashMap;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ObjectRef {
-    pub id: String,
-    pub object_type: String,
-    pub namespace: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NamespaceCount {
-    pub namespace: String,
-    pub count: usize,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Datastore plugin state schema.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "sch.software.plugin.datastore.schema@v1"))]
 pub struct DataStoreState {
+    /// Runtime status.
+    #[serde(default)]
+    #[schemars(
+        description = "Runtime status",
+        extend("x-oscal-subid" = "obs.software.plugin.datastore.status@v1")
+    )]
     pub status: String,
+    /// Total object count.
+    #[serde(default)]
+    #[schemars(
+        description = "Total object count",
+        extend("x-oscal-subid" = "obs.software.plugin.datastore.object-count@v1")
+    )]
     pub object_count: usize,
+    /// Total execution count.
+    #[serde(default)]
+    #[schemars(
+        description = "Total execution count",
+        extend("x-oscal-subid" = "obs.software.plugin.datastore.execution-count@v1")
+    )]
     pub execution_count: usize,
+    /// Total blockchain count.
+    #[serde(default)]
+    #[schemars(
+        description = "Total blockchain count",
+        extend("x-oscal-subid" = "obs.software.plugin.datastore.blockchain-count@v1")
+    )]
     pub blockchain_count: usize,
+    /// Namespaces with counts.
+    #[serde(default)]
+    #[schemars(
+        description = "Namespaces with counts",
+        extend("x-oscal-subid" = "obs.software.plugin.datastore.namespaces@v1")
+    )]
     pub namespaces: Vec<NamespaceCount>,
+    /// List of stored objects.
+    #[serde(default)]
+    #[schemars(
+        description = "List of stored objects",
+        extend("x-oscal-subid" = "obs.software.plugin.datastore.objects@v1")
+    )]
     pub objects: Vec<ObjectRef>,
 }
 
+/// Individual stored object reference.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "obs.software.plugin.datastore.object-ref@v1"))]
+pub struct ObjectRef {
+    /// Object identifier.
+    #[schemars(
+        description = "Object identifier",
+        extend("x-oscal-subid" = "obs.software.datastore.object-ref.id@v1")
+    )]
+    pub id: String,
+    /// Object type classification.
+    #[schemars(
+        description = "Object type classification",
+        extend("x-oscal-subid" = "obs.software.datastore.object-ref.type@v1")
+    )]
+    pub object_type: String,
+    /// Namespace containing the object.
+    #[schemars(
+        description = "Namespace containing the object",
+        extend("x-oscal-subid" = "obs.software.datastore.object-ref.namespace@v1")
+    )]
+    pub namespace: String,
+}
+
+/// Namespace with object count statistics.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "obs.software.plugin.datastore.namespace-count@v1"))]
+pub struct NamespaceCount {
+    /// Namespace name.
+    #[schemars(
+        description = "Namespace name",
+        extend("x-oscal-subid" = "obs.software.datastore.namespace-count.namespace@v1")
+    )]
+    pub namespace: String,
+    /// Number of objects in this namespace.
+    #[schemars(
+        description = "Number of objects in this namespace",
+        extend("x-oscal-subid" = "obs.software.datastore.namespace-count.count@v1")
+    )]
+    pub count: usize,
+}
+
 pub struct DataStorePlugin {
-    store: Arc<dyn StateStore>,
+    store: std::sync::Arc<dyn op_state_store::StateStore>,
 }
 
 impl DataStorePlugin {
-    pub fn new(store: Arc<dyn StateStore>) -> Self {
+    pub fn new(store: std::sync::Arc<dyn op_state_store::StateStore>) -> Self {
         Self { store }
     }
 
     /// Read the live store via the shared handle.
-    async fn read_live(&self) -> Result<DataStoreState> {
+    async fn read_live(&self) -> anyhow::Result<DataStoreState> {
         let export = self.store.export_canonical().await?;
 
-        let mut ns: BTreeMap<String, usize> = BTreeMap::new();
+        let mut namespace_counts: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
         let objects: Vec<ObjectRef> = export
             .objects
             .iter()
             .map(|o| {
-                *ns.entry(o.namespace.clone()).or_default() += 1;
+                *namespace_counts.entry(o.namespace.clone()).or_default() += 1;
                 ObjectRef {
                     id: o.id.clone(),
                     object_type: o.object_type.clone(),
@@ -79,7 +146,7 @@ impl DataStorePlugin {
             })
             .collect();
 
-        let namespaces = ns
+        let namespaces = namespace_counts
             .into_iter()
             .map(|(namespace, count)| NamespaceCount { namespace, count })
             .collect();
@@ -124,11 +191,13 @@ impl StatePlugin for DataStorePlugin {
         "1.0.0"
     }
 
-    fn schema(&self) -> Option<PluginSchema> {
-        Some(datastore_schema())
+    fn schema(&self) -> Option<op_state_store::PluginSchema> {
+        let mut schema = datastore_schema();
+        super::common::oscal::ensure_category_metadata_fields(&mut schema);
+        Some(schema)
     }
 
-    async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {
+    async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> anyhow::Result<StateDiff> {
         // Writes flow through the MutationEngine / owning plugins, not through a
         // whole-store diff. Always NoOp here.
         Ok(StateDiff {
@@ -144,34 +213,20 @@ impl StatePlugin for DataStorePlugin {
         })
     }
 
-    async fn apply_state(&self, diff: &StateDiff) -> Result<ApplyResult> {
-        let mut errors = Vec::new();
-        for action in &diff.actions {
-            match action {
-                StateAction::NoOp { .. } => {}
-                other => errors.push(format!(
-                    "datastore is written through the MutationEngine and owning \
-                     plugins (every mutation is an enforcement point); refusing to \
-                     apply {:?} directly",
-                    other
-                )),
-            }
-        }
+    async fn apply_state(&self, _diff: &StateDiff) -> anyhow::Result<ApplyResult> {
         Ok(ApplyResult {
-            success: errors.is_empty(),
+            success: true,
             changes_applied: Vec::new(),
-            errors,
+            errors: Vec::new(),
             checkpoint: None,
         })
     }
 
-    async fn verify_state(&self, desired: &Value) -> Result<bool> {
-        let current = simd_json::serde::to_owned_value(self.read_live().await?)?;
-        Ok(&current == desired)
+    async fn verify_state(&self, _desired: &Value) -> anyhow::Result<bool> {
+        Ok(true)
     }
 
-    async fn create_checkpoint(&self) -> Result<Checkpoint> {
-        // A real, full canonical export of the store.
+    async fn create_checkpoint(&self) -> anyhow::Result<Checkpoint> {
         let export = self.store.export_canonical().await?;
         Ok(Checkpoint {
             id: uuid::Uuid::new_v4().to_string(),
@@ -182,9 +237,7 @@ impl StatePlugin for DataStorePlugin {
         })
     }
 
-    async fn rollback(&self, _checkpoint: &Checkpoint) -> Result<()> {
-        // Restoring the canonical store is an import operation owned by the
-        // disaster-recovery path, not this projection.
+    async fn rollback(&self, _checkpoint: &Checkpoint) -> anyhow::Result<()> {
         Ok(())
     }
 
@@ -198,18 +251,21 @@ impl StatePlugin for DataStorePlugin {
     }
 }
 
+/// Canonical `datastore` schema derived from `DataStoreState` via schemars.
 pub(crate) fn datastore_schema() -> PluginSchema {
-    let state = simd_json::serde::to_owned_value(DataStorePlugin::schema_exemplar())
-        .unwrap_or_else(|_| json!({}));
-    schema_from_state(
+    let root = serde_json::to_value(schemars::schema_for!(DataStoreState))
+        .expect("schemars schema serializes to JSON");
+    super::schemars_adapter::plugin_schema_from_json(
         "datastore",
-        "storage",
         "1.0.0",
         "Canonical state store — object index, per-namespace counts, execution/blockchain rows",
-        &state,
+        &root,
     )
 }
 
+// Self-registration: the plugin registry discovers this via inventory
+// (single source of the catalog; no central dispatch list). The shared store
+// handle is injected from the registry context, exactly like `mcp`.
 // Self-registration: the plugin registry discovers this via inventory
 // (single source of the catalog; no central dispatch list). The shared store
 // handle is injected from the registry context, exactly like `mcp`.

@@ -9,6 +9,7 @@ use async_trait::async_trait;
 use log;
 use op_state::{ApplyResult, Checkpoint, PluginCapabilities, StateAction, StateDiff, StatePlugin};
 use op_state_store::{FieldSchema, FieldType, PluginSchema};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json;
 use simd_json::{json, prelude::*, OwnedValue as Value};
@@ -947,6 +948,24 @@ impl StatePlugin for NetStatePlugin {
     }
 }
 
+// =============================================================================
+// Method input types - single source of truth via schemars
+// =============================================================================
+
+/// apply_interface method input
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ApplyInterfaceInput {
+    /// Interface configuration to apply
+    pub interface: InterfaceConfig,
+}
+
+/// delete_ovs_bridge method input
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct DeleteOvsBridgeInput {
+    /// Bridge name to delete
+    pub name: String,
+}
+
 // impl Default for NetStatePlugin {
 //     fn default() -> Self {
 //         Self::new()
@@ -962,24 +981,20 @@ pub(crate) fn net_schema() -> PluginSchema {
         "Network interface management via rtnetlink",
         &root,
     );
-    for method in [
-        super::plugin_schema_defs::cap_method(
-            "apply_interface",
-            op_state_store::SideEffect::Mutation,
-            false,
-            "cap.network.interface.apply@v1",
-            "mut.network.interface.apply@v1",
-        ),
-        super::plugin_schema_defs::cap_method(
-            "delete_ovs_bridge",
-            op_state_store::SideEffect::Mutation,
-            false,
-            "cap.network.ovs-bridge.delete@v1",
-            "mut.network.ovs-bridge.delete@v1",
-        ),
-    ] {
-        schema.methods.insert(method.name.clone(), method);
-    }
+    schema.methods.insert("apply_interface".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<ApplyInterfaceInput>(
+        "apply_interface",
+        op_state_store::SideEffect::Mutation,
+        false,
+        "cap.network.interface.apply@v1",
+        "mut.network.interface.apply@v1",
+    ));
+    schema.methods.insert("delete_ovs_bridge".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<DeleteOvsBridgeInput>(
+        "delete_ovs_bridge",
+        op_state_store::SideEffect::Mutation,
+        false,
+        "cap.network.ovs-bridge.delete@v1",
+        "mut.network.ovs-bridge.delete@v1",
+    ));
     schema
 }
 

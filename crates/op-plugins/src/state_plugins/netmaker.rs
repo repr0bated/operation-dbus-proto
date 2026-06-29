@@ -1,9 +1,9 @@
-use super::plugin_schema_defs::schema_from_state;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use op_state::StatePlugin;
 use op_state::{ApplyResult, PluginCapabilities, StateAction, StateDiff};
 use op_state_store::PluginSchema;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use simd_json::{json, prelude::*, OwnedValue as Value};
 use std::path::Path;
@@ -552,24 +552,34 @@ impl StatePlugin for NetmakerPlugin {
     }
 }
 
+/// Method input types - single source of truth via schemars
+/// join_network method input
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct JoinNetworkInput {
+    /// Network name to join
+    pub network: String,
+    /// Enrollment token (optional if already configured)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
+}
+
 pub(crate) fn netmaker_schema() -> PluginSchema {
-    let state = simd_json::serde::to_owned_value(super::netmaker::NetmakerPlugin::current_state())
+    let state = simd_json::serde::to_owned_value(NetmakerPlugin::current_state())
         .unwrap_or_else(|_| json!({}));
-    let mut schema = schema_from_state(
+    let mut schema = super::plugin_schema_defs::schema_from_state(
         "netmaker",
         "net",
         "1.0.0",
         "Netmaker daemon state and execution schema",
         &state,
     );
-    let method = super::plugin_schema_defs::cap_method(
+    schema.methods.insert("join_network".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<JoinNetworkInput>(
         "join_network",
         op_state_store::SideEffect::Mutation,
         false,
         "cap.network.netmaker.network.join@v1",
         "mut.network.netmaker.network.join@v1",
-    );
-    schema.methods.insert(method.name.clone(), method);
+    ));
     schema
 }
 

@@ -156,7 +156,7 @@ pub(crate) fn oci_schema() -> PluginSchema {
         .category("container")
         .description("OCI container lifecycle — schema-driven loopback bring-up, netns init, and port attach for incus-managed Docker/OCI containers")
         .dependency("incus")
-        .dependency("ovsdb_daemon")
+        .dependency("rovs_commands")
         .array_field(
             "containers",
             FieldType::Object(oci_container_fields()),

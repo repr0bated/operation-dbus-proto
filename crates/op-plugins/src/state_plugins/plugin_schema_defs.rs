@@ -31,7 +31,6 @@ pub(crate) use super::oci::oci_schema;
 pub(crate) use super::openflow::openflow_schema as openflow_plugin_schema;
 pub(crate) use super::oscal_subid_registry::oscal_subid_registry_schema;
 pub(crate) use super::ovsdb_bridge::ovsdb_bridge_schema as ovsdb_bridge_plugin_schema;
-pub(crate) use super::ovsdb_daemon::ovsdb_daemon_schema as ovsdb_daemon_plugin_schema;
 pub(crate) use super::privacy_router::privacy_router_schema as privacy_router_plugin_schema;
 pub(crate) use super::privacy_routes::privacy_routes_schema as privacy_routes_plugin_schema;
 pub(crate) use super::proxmox::proxmox_schema as proxmox_plugin_schema;
@@ -216,6 +215,34 @@ pub(crate) fn cap_method(
         name: name.to_string(),
         args: json!({"type": "object", "additionalProperties": true}),
         returns: Some(json!({"type": "object", "additionalProperties": true})),
+        side_effect,
+        idempotent,
+        required_capability: Some(required_capability.to_string()),
+        subid: subid.to_string(),
+    }
+}
+
+/// Create a MethodDecl from a schemars-typed input struct.
+///
+/// This is the canonical pattern for all plugins: define method inputs as
+/// Rust structs with `#[derive(schemars::JsonSchema)]`, then use this function
+/// to generate typed method declarations. The resulting schema drives D-Bus method
+/// validation and gRPC proto generation.
+pub fn method_decl_from_schemars<Input: schemars::JsonSchema>(
+    name: &str,
+    side_effect: SideEffect,
+    idempotent: bool,
+    required_capability: &str,
+    subid: &str,
+) -> MethodDecl {
+    let serde_schema = serde_json::to_value(schemars::schema_for!(Input)).unwrap();
+    let schema_bytes = serde_json::to_vec(&serde_schema).unwrap();
+    let mut schema_bytes = schema_bytes;
+    let args = simd_json::to_owned_value(&mut schema_bytes).unwrap();
+    MethodDecl {
+        name: name.to_string(),
+        args,
+        returns: Some(json!({"type": "object"})),
         side_effect,
         idempotent,
         required_capability: Some(required_capability.to_string()),
