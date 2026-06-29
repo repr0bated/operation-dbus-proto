@@ -12,18 +12,19 @@
 
 services:
   netmaker:
-    image: docker:gravitl/netmaker:v1.5.1
+    image: docker:gravitl/netmaker:v1.6.0-ee
     container_name: netmaker
     restart: unless-stopped
     x-incus-storage: default
     environment:
       SERVER_HOST: "129.153.134.63"
-      SERVER_API_CONN_STRING: "api.ghostbridge.tech:443"
-      SERVER_HTTP_HOST: "api.ghostbridge.tech"
-      SERVER_NAME: "ghostbridge.tech"
-      BROKER_ENDPOINT: "wss://broker.ghostbridge.tech"
+      SERVER_API_CONN_STRING: "api.3tched.com:443"
+      SERVER_HTTP_HOST: "api.3tched.com"
+      SERVER_NAME: "3tched.com"
+      BROKER_ENDPOINT: "wss://broker.3tched.com"
       COREDNS_ADDR: "127.0.0.1"
       REST_BACKEND: "on"
+      MASTER_KEY: "ghostbridge2026"
       DATABASE: "sqlite"
       API_PORT: "8081"
       VERBOSITY: "1"
@@ -33,7 +34,9 @@ services:
       CACHING_ENABLED: "true"
       ENDPOINT_DETECTION: "true"
       TELEMETRY: "on"
-      INSTALL_TYPE: "ce"
+      INSTALL_TYPE: "pro"
+      LICENSE_KEY: "DX8BAQL/gAABBgFAAAAx/4AAIEH/of/nB//fD28yMX8J/8AD/65S/77/gWr/xxNLBP/7/4xTSHP/+//t/+NxJA=="
+      NETMAKER_TENANT_ID: "8e65205a-b167-45f1-8911-03e1af5d98bf"
       DEFAULT_DOMAIN: "nm.internal"
       MANAGE_DNS: "false"
       RAC_RESTRICT_TO_SINGLE_NETWORK: "false"
@@ -41,6 +44,8 @@ services:
       MQ_HOST: "127.0.0.1"
       MQ_PORT: "1883"
       MQ_USERNAME: "netmaker"
+      METRICS_EXPORTER: "on"
+      METRICS_SECRET: "lExTsrr6d7MsWBaXlCJEJJpQT3VFnv"
     volumes:
       - nm-sqldata:/root/data
       - nm-dnsconfig:/root/config/dnsconfig
@@ -49,7 +54,7 @@ services:
     # eclipse-mosquitto OCI image incompatible with incus (missing /run in rootfs)
     # use alpine/edge + apk install mosquitto instead
     image: images:alpine/edge
-    container_name: netmaker-mq
+    container_name: mq
     restart: unless-stopped
     x-incus-storage: default
     environment:
@@ -63,12 +68,103 @@ services:
         read_only: true
 
   netmaker-ui:
-    image: docker:gravitl/netmaker-ui:v1.5.1
+    image: docker:gravitl/netmaker-ui:v1.6.0
     container_name: netmaker-ui
     restart: unless-stopped
     x-incus-storage: default
     environment:
-      BACKEND_URL: "https://api.ghostbridge.tech"
+      BACKEND_URL: "https://api.3tched.com"
+
+  prometheus:
+    container_name: prometheus
+    image: docker:prom/prometheus:latest
+    x-incus-storage: default
+    environment:
+      METRICS_USERNAME: "netmaker"
+      METRICS_SECRET: "lExTsrr6d7MsWBaXlCJEJJpQT3VFnv"
+      NETMAKER_METRICS_TARGET: "http://netmaker-exporter:8085"
+      PROMETHEUS_RETENTION_TIME: "15d"
+      PROMETHEUS_RETENTION_SIZE: "0"
+    volumes:
+      - type: bind
+        source: /opt/nm/p/prometheus.yml
+        target: /etc/prometheus/prometheus.yml.tmpl
+        read_only: true
+      - prometheus-data:/prometheus
+    command:
+      - /bin/sh
+      - -c
+      - |
+        cp /etc/prometheus/prometheus.yml.tmpl /etc/prometheus/prometheus.rendered.yml
+        url="$${NETMAKER_METRICS_TARGET}"
+        if echo "$${url}" | grep -q '://'; then
+          scheme="$${url%%://*}"; target="$${url#*://}"
+        else
+          scheme="https"; target="$${url}"
+        fi
+        sed -i "s~NETMAKER_METRICS_TARGET~$${target}~g" /etc/prometheus/prometheus.rendered.yml
+        sed -i "s~__SCHEME__~$${scheme}~g" /etc/prometheus/prometheus.rendered.yml
+        sed -i "s~METRICS_USERNAME~$${METRICS_USERNAME}~g" /etc/prometheus/prometheus.rendered.yml
+        sed -i "s~METRICS_SECRET~$${METRICS_SECRET}~g" /etc/prometheus/prometheus.rendered.yml
+        exec /bin/prometheus --config.file=/etc/prometheus/prometheus.rendered.yml --storage.tsdb.path=/prometheus --storage.tsdb.retention.time=$${PROMETHEUS_RETENTION_TIME:-15d} --storage.tsdb.retention.size=$${PROMETHEUS_RETENTION_SIZE:-0}
+    restart: unless-stopped
+
+  grafana:
+    container_name: grafana
+    image: docker:grafana/grafana:latest
+    x-incus-storage: default
+    environment:
+      PROMETHEUS_HOST: "http://prometheus:9090"
+    volumes:
+      - type: bind
+        source: /opt/nm/g/grafana.ini
+        target: /etc/grafana/grafana.ini
+        read_only: true
+      - type: bind
+        source: /opt/nm/g/datasource.yaml
+        target: /etc/grafana/provisioning/datasources/datasource.yaml
+        read_only: true
+      - type: bind
+        source: /opt/nm/g/dashboard-config.yaml
+        target: /etc/grafana/provisioning/dashboards/dashboard-config.yaml
+        read_only: true
+      - type: bind
+        source: /opt/nm/g/dashboard.json
+        target: /var/lib/grafana/dashboards/dashboard.json
+        read_only: true
+      - grafana-data:/var/lib/grafana
+    restart: unless-stopped
+
+  netmaker-exporter:
+    container_name: netmaker-exporter
+    image: docker:gravitl/netmaker-exporter:latest
+    x-incus-storage: default
+    environment:
+      PROMETHEUS_HOST: "http://prometheus:9090"
+      BROKER_ENDPOINT: "wss://broker.3tched.com"
+      API_PORT: "8085"
+      SERVER_NAME: "3tched.com"
+      LICENSE_KEY: "tenant:8e65205a-b167-45f1-8911-03e1af5d98bf"
+      METRICS_SECRET: "lExTsrr6d7MsWBaXlCJEJJpQT3VFnv"
+    restart: always
+
+  caddy:
+    image: docker:caddy:2.8.4
+    container_name: caddy
+    restart: unless-stopped
+    x-incus-storage: default
+    environment:
+      NM_DOMAIN: "3tched.com"
+    volumes:
+      - type: bind
+        source: /root/netmaker/Caddyfile
+        target: /etc/caddy/Caddyfile
+        read_only: true
+      - caddy_data:/data
+      - caddy_conf:/config
+    ports:
+      - "80:80/tcp"
+      - "443:443/tcp"
 
 volumes:
   nm-sqldata:
@@ -87,5 +183,17 @@ volumes:
       schedule: '@daily'
       expiry: 7d
   nm-mosquitto-logs:
+    driver_opts:
+      pool: default
+  prometheus-data:
+    driver_opts:
+      pool: default
+  grafana-data:
+    driver_opts:
+      pool: default
+  caddy_data:
+    driver_opts:
+      pool: default
+  caddy_conf:
     driver_opts:
       pool: default

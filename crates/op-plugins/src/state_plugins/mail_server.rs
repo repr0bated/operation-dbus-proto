@@ -15,7 +15,8 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// Top-level state for the mail server plugin.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+/// See: https://doc.dovecot.org/configuration_manual/references/
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, Default)]
 pub struct MailServerState {
     /// Incus container name running the mail stack
     pub container_name: String,
@@ -41,7 +42,8 @@ pub struct MailServerState {
 }
 
 /// Mail protocol endpoints.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+/// See: https://doc.dovecot.org/configuration_manual/references/
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
 pub struct MailEndpoints {
     /// SMTP submission port (587)
     pub smtp_submission: Option<String>,

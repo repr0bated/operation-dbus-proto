@@ -15,7 +15,7 @@ INSTALL_SBIN=${INSTALL_SBIN:-/usr/local/sbin}
 # then install every binary target to /usr/local/bin. This keeps the cargo
 # cache and target directory owned by the developer while allowing the final
 # install and s6 activation to run as root.
-BUILD_USER=${BUILD_USER:-$(logname 2>/dev/null || printf '%s' "${SUDO_USER:-$USER}")}
+BUILD_USER=${BUILD_USER:-$(logname 2>/dev/null || printf '%s' "${SUDO_USER:-${USER:-root}}")}
 
 build_workspace() {
     echo "Building workspace binaries as $BUILD_USER..."

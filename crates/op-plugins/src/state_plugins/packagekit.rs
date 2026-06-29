@@ -217,38 +217,7 @@ impl StatePlugin for PackageKitPlugin {
     }
 
     fn schema(&self) -> Option<PluginSchema> {
-        Some(
-            PluginSchema::builder("packagekit")
-                .version("1.0.0")
-                .description("PackageKit package declarations")
-                .field(
-                    "version",
-                    FieldSchema {
-                        field_type: FieldType::Integer,
-                        required: false,
-                        description: "Schema version".to_string(),
-                        default: Some(simd_json::json!(1)),
-                        example: None,
-                        constraints: vec![Constraint::Min { value: 1.0 }],
-                        read_only: false,
-                        read_only_when: None,
-                    },
-                )
-                .field(
-                    "packages",
-                    FieldSchema {
-                        field_type: FieldType::Any,
-                        required: true,
-                        description: "Package declaration map".to_string(),
-                        default: Some(simd_json::json!({})),
-                        example: None,
-                        constraints: Vec::new(),
-                        read_only: false,
-                        read_only_when: None,
-                    },
-                )
-                .build(),
-        )
+        Some(packagekit_schema())
     }
 
     async fn calculate_diff(&self, _current: &Value, desired: &Value) -> Result<StateDiff> {
@@ -403,4 +372,139 @@ impl StatePlugin for PackageKitPlugin {
 // (single source of the catalog; no central dispatch list).
 inventory::submit! {
     crate::default_registry::PluginReg::new("packagekit", |_ctx| std::sync::Arc::new(PackageKitPlugin::new()))
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ResolvePackagesInput {
+    pub filter: u64,
+    pub packages: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct InstallPackagesInput {
+    pub transaction_flags: u64,
+    pub package_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct RemovePackagesInput {
+    pub transaction_flags: u64,
+    pub package_ids: Vec<String>,
+    pub allow_deps: bool,
+    pub autoremove: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct UpdatePackagesInput {
+    pub transaction_flags: u64,
+    pub package_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct GetUpdatesInput {
+    pub filter: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SearchNamesInput {
+    pub filter: u64,
+    pub values: Vec<String>,
+}
+
+pub(crate) fn packagekit_schema() -> PluginSchema {
+    let mut schema = PluginSchema::builder("packagekit")
+        .version("1.0.0")
+        .description("PackageKit package declarations")
+        .field(
+            "version",
+            FieldSchema {
+                field_type: FieldType::Integer,
+                required: false,
+                description: "Schema version".to_string(),
+                default: Some(simd_json::json!(1)),
+                example: None,
+                constraints: vec![Constraint::Min { value: 1.0 }],
+                read_only: false,
+                read_only_when: None,
+            },
+        )
+        .field(
+            "packages",
+            FieldSchema {
+                field_type: FieldType::Any,
+                required: true,
+                description: "Package declaration map".to_string(),
+                default: Some(simd_json::json!({})),
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        )
+        .build();
+
+    // org.freedesktop.PackageKit methods
+    // Spec: https://www.freedesktop.org/software/PackageKit/gtk-doc/api-reference.html
+    schema.methods.insert(
+        "resolve".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<ResolvePackagesInput>(
+            "Resolve",
+            op_state_store::SideEffect::Read,
+            true,
+            "packagekit.read",
+            "obs.software.packagekit.package.resolve@v1",
+        ),
+    );
+    schema.methods.insert(
+        "install_packages".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<InstallPackagesInput>(
+            "InstallPackages",
+            op_state_store::SideEffect::Write,
+            false,
+            "packagekit.admin",
+            "mut.software.packagekit.package.install@v1",
+        ),
+    );
+    schema.methods.insert(
+        "remove_packages".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<RemovePackagesInput>(
+            "RemovePackages",
+            op_state_store::SideEffect::Write,
+            false,
+            "packagekit.admin",
+            "mut.software.packagekit.package.remove@v1",
+        ),
+    );
+    schema.methods.insert(
+        "update_packages".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<UpdatePackagesInput>(
+            "UpdatePackages",
+            op_state_store::SideEffect::Write,
+            false,
+            "packagekit.admin",
+            "mut.software.packagekit.package.update@v1",
+        ),
+    );
+    schema.methods.insert(
+        "get_updates".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<GetUpdatesInput>(
+            "GetUpdates",
+            op_state_store::SideEffect::Read,
+            true,
+            "packagekit.read",
+            "obs.software.packagekit.updates.get@v1",
+        ),
+    );
+    schema.methods.insert(
+        "search_names".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<SearchNamesInput>(
+            "SearchNames",
+            op_state_store::SideEffect::Read,
+            true,
+            "packagekit.read",
+            "obs.software.packagekit.names.search@v1",
+        ),
+    );
+
+    schema
 }
