@@ -110,14 +110,69 @@ impl StatePlugin for Fail2banPlugin {
 pub(crate) fn fail2ban_schema() -> PluginSchema {
     let state = simd_json::serde::to_owned_value(super::fail2ban::Fail2banPlugin::current_state())
         .unwrap_or_else(|_| json!({}));
-    schema_from_state(
+    let mut schema = schema_from_state(
         "fail2ban",
         "security",
         "1.0.0",
         "Fail2ban intrusion prevention — jails, bans, filters, actions",
         &state,
-    )
+    );
+
+    schema.methods.insert(
+        "ban_ip".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<BanIpInput>(
+            "BanIp",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "fail2ban.write",
+            "mut.security.fail2ban.ip.ban@v1",
+        ),
+    );
+    schema.methods.insert(
+        "unban_ip".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<BanIpInput>(
+            "UnbanIp",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "fail2ban.write",
+            "mut.security.fail2ban.ip.unban@v1",
+        ),
+    );
+    schema.methods.insert(
+        "get_jail_status".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<JailInput>(
+            "GetJailStatus",
+            op_state_store::SideEffect::Read,
+            true,
+            "fail2ban.read",
+            "obs.security.fail2ban.jail.status@v1",
+        ),
+    );
+    schema.methods.insert(
+        "reload".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<super::plugin_schema_defs::EmptyInput>(
+            "Reload",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "fail2ban.write",
+            "mut.security.fail2ban.service.reload@v1",
+        ),
+    );
+
+    schema
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct JailInput {
+    pub jail: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct BanIpInput {
+    pub jail: String,
+    pub ip: String,
+}
+
 
 // Self-registration: the plugin registry discovers this via inventory
 // (single source of the catalog; no central dispatch list).

@@ -312,6 +312,34 @@ pub struct SetDefaultRouteInput {
     pub gateway: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AddLinkInput {
+    pub name: String,
+    pub link_type: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct DelLinkInput {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AddRouteInput {
+    pub destination: String,
+    pub gateway: String,
+    pub interface: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct DelRouteInput {
+    pub destination: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AddRuleInput {
+    pub rule: String,
+}
+
 pub(crate) fn rtnetlink_schema() -> PluginSchema {
     let interface_fields = {
         let mut fields = HashMap::new();
@@ -431,6 +459,41 @@ pub(crate) fn rtnetlink_schema() -> PluginSchema {
         false,
         "cap.network.rtnetlink.default-route.set@v1",
         "mut.network.rtnetlink.default-route.set@v1",
+    ));
+    schema.methods.insert("add_link".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<AddLinkInput>(
+        "add_link",
+        op_state_store::SideEffect::Mutation,
+        false,
+        "cap.network.rtnetlink.link.add@v1",
+        "mut.network.rtnetlink.link.add@v1",
+    ));
+    schema.methods.insert("del_link".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<DelLinkInput>(
+        "del_link",
+        op_state_store::SideEffect::Mutation,
+        false,
+        "cap.network.rtnetlink.link.del@v1",
+        "mut.network.rtnetlink.link.del@v1",
+    ));
+    schema.methods.insert("add_route".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<AddRouteInput>(
+        "add_route",
+        op_state_store::SideEffect::Mutation,
+        false,
+        "cap.network.rtnetlink.route.add@v1",
+        "mut.network.rtnetlink.route.add@v1",
+    ));
+    schema.methods.insert("del_route".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<DelRouteInput>(
+        "del_route",
+        op_state_store::SideEffect::Mutation,
+        false,
+        "cap.network.rtnetlink.route.del@v1",
+        "mut.network.rtnetlink.route.del@v1",
+    ));
+    schema.methods.insert("add_rule".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<AddRuleInput>(
+        "add_rule",
+        op_state_store::SideEffect::Mutation,
+        false,
+        "cap.network.rtnetlink.rule.add@v1",
+        "mut.network.rtnetlink.rule.add@v1",
     ));
     schema
 }

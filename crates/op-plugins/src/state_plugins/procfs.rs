@@ -218,13 +218,92 @@ impl StatePlugin for ProcfsPlugin {
 pub(crate) fn procfs_schema() -> PluginSchema {
     let root = serde_json::to_value(schemars::schema_for!(ProcfsState))
         .expect("schemars schema serializes to JSON");
-    super::schemars_adapter::plugin_schema_from_json(
+    let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "procfs",
         "1.0.0",
         "Read-only procfs host state projected through PluginSchema.",
         &root,
-    )
+    );
+
+    schema.methods.insert(
+        "list_processes".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<super::plugin_schema_defs::EmptyInput>(
+            "ListProcesses",
+            op_state_store::SideEffect::Read,
+            true,
+            "procfs.read",
+            "obs.service.procfs.process.list@v1",
+        ),
+    );
+    schema.methods.insert(
+        "get_process_info".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<ProcessInfoInput>(
+            "GetProcessInfo",
+            op_state_store::SideEffect::Read,
+            true,
+            "procfs.read",
+            "obs.service.procfs.process.get@v1",
+        ),
+    );
+    schema.methods.insert(
+        "get_meminfo".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<super::plugin_schema_defs::EmptyInput>(
+            "GetMeminfo",
+            op_state_store::SideEffect::Read,
+            true,
+            "procfs.read",
+            "obs.service.procfs.meminfo.get@v1",
+        ),
+    );
+    schema.methods.insert(
+        "get_cpuinfo".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<super::plugin_schema_defs::EmptyInput>(
+            "GetCpuinfo",
+            op_state_store::SideEffect::Read,
+            true,
+            "procfs.read",
+            "obs.service.procfs.cpuinfo.get@v1",
+        ),
+    );
+    schema.methods.insert(
+        "get_loadavg".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<super::plugin_schema_defs::EmptyInput>(
+            "GetLoadavg",
+            op_state_store::SideEffect::Read,
+            true,
+            "procfs.read",
+            "obs.service.procfs.loadavg.get@v1",
+        ),
+    );
+    schema.methods.insert(
+        "get_uptime".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<super::plugin_schema_defs::EmptyInput>(
+            "GetUptime",
+            op_state_store::SideEffect::Read,
+            true,
+            "procfs.read",
+            "obs.service.procfs.uptime.get@v1",
+        ),
+    );
+    schema.methods.insert(
+        "get_net_dev".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<super::plugin_schema_defs::EmptyInput>(
+            "GetNetDev",
+            op_state_store::SideEffect::Read,
+            true,
+            "procfs.read",
+            "obs.service.procfs.net-dev.get@v1",
+        ),
+    );
+
+    schema
 }
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct ProcessInfoInput {
+    pub pid: i32,
+}
+
 
 /// Hand-rolled golden reference for the procfs schema. Kept test-only so the
 /// derived schema can be proven field-for-field equivalent to the original

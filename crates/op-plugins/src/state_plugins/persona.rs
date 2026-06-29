@@ -17,13 +17,14 @@ use anyhow::Result;
 use async_trait::async_trait;
 use op_agents::builtin_agent_descriptors;
 use op_state::{
-    ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
+    ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff,
+    StatePlugin,
 };
-use op_state_store::PluginSchema;
+use op_state_store::{PluginSchema, SideEffect};
 use serde::{Deserialize, Serialize};
 use simd_json::{json, OwnedValue as Value};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Persona {
     pub agent_type: String,
     pub name: String,
@@ -157,13 +158,78 @@ impl StatePlugin for PersonaPlugin {
 pub(crate) fn persona_schema() -> PluginSchema {
     let state =
         simd_json::serde::to_owned_value(PersonaPlugin::live()).unwrap_or_else(|_| json!({}));
-    schema_from_state(
+    let mut schema = schema_from_state(
         "persona",
         "agents",
         "1.0.0",
         "Agent persona catalog — built-in agent types, names, descriptions, operations",
         &state,
-    )
+    );
+
+    // Add D-Bus methods for persona
+    // https://docs.rs/crate/op-agents/latest/source/builtin_agents.rs
+    schema.methods.insert(
+        "get_identity".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<GetIdentityInput>(
+            "GetIdentity",
+            SideEffect::Read,
+            true,
+            "persona.read",
+            "obs.agent.persona.identity.get@v1",
+        ),
+    );
+    schema.methods.insert(
+        "set_identity".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<SetIdentityInput>(
+            "SetIdentity",
+            SideEffect::Mutation,
+            false,
+            "persona.write",
+            "mut.agent.persona.identity.set@v1",
+        ),
+    );
+    schema.methods.insert(
+        "authenticate".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<AuthenticateInput>(
+            "Authenticate",
+            SideEffect::Mutation,
+            false,
+            "persona.write",
+            "mut.agent.persona.authenticate@v1",
+        ),
+    );
+
+    schema
+}
+
+/// Input struct for GetIdentity method
+/// D-Bus method spec: https://docs.rs/crate/op-agents/latest/source/builtin_agents.rs
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct GetIdentityInput {
+    /// Agent type to get identity for
+    pub agent_type: String,
+}
+
+/// Input struct for SetIdentity method
+/// D-Bus method spec: https://docs.rs/crate/op-agents/latest/source/builtin_agents.rs
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SetIdentityInput {
+    /// Agent type to set identity for
+    pub agent_type: String,
+    /// New name
+    pub name: String,
+    /// New description
+    pub description: Option<String>,
+}
+
+/// Input struct for Authenticate method
+/// D-Bus method spec: https://docs.rs/crate/op-agents/latest/source/builtin_agents.rs
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AuthenticateInput {
+    /// Agent type to authenticate
+    pub agent_type: String,
+    /// Credentials
+    pub credentials: std::collections::HashMap<String, String>,
 }
 
 // Self-registration: the plugin registry discovers this via inventory

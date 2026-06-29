@@ -331,6 +331,104 @@ pub struct ResolveRecordInput {
     pub flags: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ResolveServiceInput {
+    pub ifindex: i32,
+    pub name: String,
+    pub family: i32,
+    pub flags: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct GetLinkInput {
+    pub ifindex: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SetLinkDNSInput {
+    pub ifindex: i32,
+    pub addresses: Vec<(i32, Vec<u8>)>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SetLinkDNSExInput {
+    pub ifindex: i32,
+    pub addresses: Vec<(i32, Vec<u8>, u16, String)>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SetLinkDomainsInput {
+    pub ifindex: i32,
+    pub domains: Vec<(String, bool)>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SetLinkDefaultRouteInput {
+    pub ifindex: i32,
+    pub enable: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SetLinkLLMNRInput {
+    pub ifindex: i32,
+    pub mode: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SetLinkMulticastDNSInput {
+    pub ifindex: i32,
+    pub mode: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SetLinkDNSOverTLSInput {
+    pub ifindex: i32,
+    pub mode: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SetLinkDNSSECInput {
+    pub ifindex: i32,
+    pub mode: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SetLinkDNSSECNegativeTrustAnchorsInput {
+    pub ifindex: i32,
+    pub names: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct RevertLinkInput {
+    pub ifindex: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct RegisterServiceInput {
+    pub id: String,
+    pub name_template: String,
+    pub type_: String,
+    pub port: u16,
+    pub priority: u16,
+    pub weight: u16,
+    pub txt: Vec<std::collections::BTreeMap<String, Vec<u8>>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct UnregisterServiceInput {
+    pub service_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ResetStatisticsInput {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct FlushCachesInput {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ResetServerFeaturesInput {}
+
+
 pub(crate) fn dnsresolver_schema() -> PluginSchema {
     let mut schema = PluginSchema::builder("dnsresolver")
         .version("1.0.0")
@@ -393,6 +491,176 @@ pub(crate) fn dnsresolver_schema() -> PluginSchema {
             true,
             "dnsresolver.read",
             "obs.software.dnsresolver.record.resolve@v1",
+        ),
+    );
+    schema.methods.insert(
+        "resolve_service".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<ResolveServiceInput>(
+            "ResolveService",
+            op_state_store::SideEffect::Read,
+            true,
+            "dnsresolver.read",
+            "obs.software.dnsresolver.service.resolve@v1",
+        ),
+    );
+    schema.methods.insert(
+        "get_link".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<GetLinkInput>(
+            "GetLink",
+            op_state_store::SideEffect::Read,
+            true,
+            "dnsresolver.read",
+            "obs.software.dnsresolver.link.get@v1",
+        ),
+    );
+    schema.methods.insert(
+        "set_link_dns".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<SetLinkDNSInput>(
+            "SetLinkDNS",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "dnsresolver.write",
+            "mut.software.dnsresolver.link.set-dns@v1",
+        ),
+    );
+    schema.methods.insert(
+        "set_link_dns_ex".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<SetLinkDNSExInput>(
+            "SetLinkDNSEx",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "dnsresolver.write",
+            "mut.software.dnsresolver.link.set-dns-ex@v1",
+        ),
+    );
+    schema.methods.insert(
+        "set_link_domains".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<SetLinkDomainsInput>(
+            "SetLinkDomains",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "dnsresolver.write",
+            "mut.software.dnsresolver.link.set-domains@v1",
+        ),
+    );
+    schema.methods.insert(
+        "set_link_default_route".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<SetLinkDefaultRouteInput>(
+            "SetLinkDefaultRoute",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "dnsresolver.write",
+            "mut.software.dnsresolver.link.set-default-route@v1",
+        ),
+    );
+    schema.methods.insert(
+        "set_link_llmnr".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<SetLinkLLMNRInput>(
+            "SetLinkLLMNR",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "dnsresolver.write",
+            "mut.software.dnsresolver.link.set-llmnr@v1",
+        ),
+    );
+    schema.methods.insert(
+        "set_link_multicast_dns".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<SetLinkMulticastDNSInput>(
+            "SetLinkMulticastDNS",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "dnsresolver.write",
+            "mut.software.dnsresolver.link.set-mdns@v1",
+        ),
+    );
+    schema.methods.insert(
+        "set_link_dns_over_tls".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<SetLinkDNSOverTLSInput>(
+            "SetLinkDNSOverTLS",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "dnsresolver.write",
+            "mut.software.dnsresolver.link.set-dot@v1",
+        ),
+    );
+    schema.methods.insert(
+        "set_link_dnssec".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<SetLinkDNSSECInput>(
+            "SetLinkDNSSEC",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "dnsresolver.write",
+            "mut.software.dnsresolver.link.set-dnssec@v1",
+        ),
+    );
+    schema.methods.insert(
+        "set_link_dnssec_nta".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<SetLinkDNSSECNegativeTrustAnchorsInput>(
+            "SetLinkDNSSECNegativeTrustAnchors",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "dnsresolver.write",
+            "mut.software.dnsresolver.link.set-dnssec-nta@v1",
+        ),
+    );
+    schema.methods.insert(
+        "revert_link".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<RevertLinkInput>(
+            "RevertLink",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "dnsresolver.write",
+            "mut.software.dnsresolver.link.revert@v1",
+        ),
+    );
+    schema.methods.insert(
+        "register_service".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<RegisterServiceInput>(
+            "RegisterService",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "dnsresolver.write",
+            "mut.software.dnsresolver.service.register@v1",
+        ),
+    );
+    schema.methods.insert(
+        "unregister_service".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<UnregisterServiceInput>(
+            "UnregisterService",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "dnsresolver.write",
+            "mut.software.dnsresolver.service.unregister@v1",
+        ),
+    );
+    schema.methods.insert(
+        "reset_statistics".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<ResetStatisticsInput>(
+            "ResetStatistics",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "dnsresolver.write",
+            "mut.software.dnsresolver.statistics.reset@v1",
+        ),
+    );
+    schema.methods.insert(
+        "flush_caches".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<FlushCachesInput>(
+            "FlushCaches",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "dnsresolver.write",
+            "mut.software.dnsresolver.caches.flush@v1",
+        ),
+    );
+    schema.methods.insert(
+        "reset_server_features".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<ResetServerFeaturesInput>(
+            "ResetServerFeatures",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "dnsresolver.write",
+            "mut.software.dnsresolver.server-features.reset@v1",
         ),
     );
     

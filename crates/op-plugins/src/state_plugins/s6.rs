@@ -608,7 +608,7 @@ pub(crate) fn s6_schema() -> PluginSchema {
         fields
     };
 
-    PluginSchema::builder("s6")
+    let mut schema = PluginSchema::builder("s6")
         .version("1.0.0")
         .description("s6 service management")
         .array_field("units", FieldType::Object(unit_fields), true, "s6 services")
@@ -621,7 +621,101 @@ pub(crate) fn s6_schema() -> PluginSchema {
                 }
             ]
         }))
-        .build()
+        .build();
+
+    schema.methods.insert(
+        "start".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<UnitInput>(
+            "Start",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "s6.write",
+            "mut.software.s6.service.start@v1",
+        ),
+    );
+    schema.methods.insert(
+        "stop".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<UnitInput>(
+            "Stop",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "s6.write",
+            "mut.software.s6.service.stop@v1",
+        ),
+    );
+    schema.methods.insert(
+        "restart".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<UnitInput>(
+            "Restart",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "s6.write",
+            "mut.software.s6.service.restart@v1",
+        ),
+    );
+    schema.methods.insert(
+        "enable".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<UnitInput>(
+            "Enable",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "s6.write",
+            "mut.software.s6.service.enable@v1",
+        ),
+    );
+    schema.methods.insert(
+        "disable".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<UnitInput>(
+            "Disable",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "s6.write",
+            "mut.software.s6.service.disable@v1",
+        ),
+    );
+    schema.methods.insert(
+        "status".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<UnitInput>(
+            "Status",
+            op_state_store::SideEffect::Read,
+            true,
+            "s6.read",
+            "obs.software.s6.service.status@v1",
+        ),
+    );
+    schema.methods.insert(
+        "list_services".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<super::plugin_schema_defs::EmptyInput>(
+            "ListServices",
+            op_state_store::SideEffect::Read,
+            true,
+            "s6.read",
+            "obs.software.s6.service.list@v1",
+        ),
+    );
+    schema.methods.insert(
+        "signal".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<SignalInput>(
+            "Signal",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "s6.write",
+            "mut.software.s6.service.signal@v1",
+        ),
+    );
+
+    schema
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct UnitInput {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SignalInput {
+    pub name: String,
+    pub signal: String,
 }
 
 // Self-registration: the plugin registry discovers this via inventory

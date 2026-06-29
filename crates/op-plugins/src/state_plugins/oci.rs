@@ -166,20 +166,43 @@ pub struct PullImageInput {
 /// See: https://docs.docker.com/engine/api/v1.45/
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct RunContainerInput {
-    /// Container name
     pub name: String,
-    /// Image reference
     pub image: String,
-    /// Whether loopback is required inside the container
     #[serde(default)]
     pub loopback_required: bool,
-    /// Whether to run in privileged mode
     #[serde(default)]
     pub privileged: bool,
-    /// Environment variables
     #[serde(default)]
     pub env: std::collections::HashMap<String, String>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CreateContainerInput {
+    pub id: String,
+    pub bundle_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct StartContainerInput {
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct KillContainerInput {
+    pub id: String,
+    pub signal: Option<i32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct DeleteContainerInput {
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GetContainerStateInput {
+    pub id: String,
+}
+
 
 pub(crate) fn oci_schema() -> PluginSchema {
     PluginSchema::builder("oci")
@@ -245,6 +268,41 @@ pub(crate) fn oci_schema() -> PluginSchema {
             false,
             "cap.container.oci.run@v1",
             "mut.container.oci.run@v1",
+        ))
+        .method(super::plugin_schema_defs::method_decl_from_schemars::<CreateContainerInput>(
+            "create",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.container.oci.create@v1",
+            "mut.container.oci.create@v1",
+        ))
+        .method(super::plugin_schema_defs::method_decl_from_schemars::<StartContainerInput>(
+            "start",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.container.oci.start@v1",
+            "mut.container.oci.start@v1",
+        ))
+        .method(super::plugin_schema_defs::method_decl_from_schemars::<KillContainerInput>(
+            "kill",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.container.oci.kill@v1",
+            "mut.container.oci.kill@v1",
+        ))
+        .method(super::plugin_schema_defs::method_decl_from_schemars::<DeleteContainerInput>(
+            "delete",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.container.oci.delete@v1",
+            "mut.container.oci.delete@v1",
+        ))
+        .method(super::plugin_schema_defs::method_decl_from_schemars::<GetContainerStateInput>(
+            "state",
+            op_state_store::SideEffect::Read,
+            true,
+            "cap.container.oci.state.get@v1",
+            "obs.container.oci.state.get@v1",
         ))
         .build()
 }
