@@ -35,6 +35,39 @@ use op_state::{
 use simd_json::prelude::{ValueAsScalar, ValueObjectAccess};
 use simd_json::OwnedValue as Value;
 use std::collections::HashMap;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GetManagedObjectsInput {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GetPropertyInput {
+    pub interface_name: String,
+    pub property_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GetAllPropertiesInput {
+    pub interface_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SetPropertyInput {
+    pub interface_name: String,
+    pub property_name: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct IntrospectInput {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PingInput {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GetMachineIdInput {}
+
 
 /// FreeDesktop plugin implementation
 pub struct FreeDesktopPlugin {
@@ -110,6 +143,55 @@ impl FreeDesktopPlugin {
                 .version("1.0.0")
                 .category("system")
                 .description("FreeDesktop D-Bus standards implementation")
+                .method(super::plugin_schema_defs::method_decl_from_schemars::<GetManagedObjectsInput>(
+                    "GetManagedObjects",
+                    op_state_store::SideEffect::Read,
+                    true,
+                    "freedesktop.read",
+                    "obs.software.freedesktop.managed_objects.get@v1",
+                ))
+                .method(super::plugin_schema_defs::method_decl_from_schemars::<GetPropertyInput>(
+                    "Get",
+                    op_state_store::SideEffect::Read,
+                    true,
+                    "freedesktop.read",
+                    "obs.software.freedesktop.property.get@v1",
+                ))
+                .method(super::plugin_schema_defs::method_decl_from_schemars::<GetAllPropertiesInput>(
+                    "GetAll",
+                    op_state_store::SideEffect::Read,
+                    true,
+                    "freedesktop.read",
+                    "obs.software.freedesktop.properties.getall@v1",
+                ))
+                .method(super::plugin_schema_defs::method_decl_from_schemars::<SetPropertyInput>(
+                    "Set",
+                    op_state_store::SideEffect::Mutation,
+                    true,
+                    "freedesktop.write",
+                    "mut.software.freedesktop.property.set@v1",
+                ))
+                .method(super::plugin_schema_defs::method_decl_from_schemars::<IntrospectInput>(
+                    "Introspect",
+                    op_state_store::SideEffect::Read,
+                    true,
+                    "freedesktop.read",
+                    "obs.software.freedesktop.introspect@v1",
+                ))
+                .method(super::plugin_schema_defs::method_decl_from_schemars::<PingInput>(
+                    "Ping",
+                    op_state_store::SideEffect::Read,
+                    true,
+                    "freedesktop.read",
+                    "obs.software.freedesktop.ping@v1",
+                ))
+                .method(super::plugin_schema_defs::method_decl_from_schemars::<GetMachineIdInput>(
+                    "GetMachineId",
+                    op_state_store::SideEffect::Read,
+                    true,
+                    "freedesktop.read",
+                    "obs.software.freedesktop.machine_id.get@v1",
+                ))
                 .build(),
         );
     }

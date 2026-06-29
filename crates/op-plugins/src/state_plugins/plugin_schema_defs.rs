@@ -238,6 +238,10 @@ pub(crate) fn cap_method(
     }
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct EmptyInput {}
+
+
 /// Create a MethodDecl from a schemars-typed input struct.
 ///
 /// This is the canonical pattern for all plugins: define method inputs as

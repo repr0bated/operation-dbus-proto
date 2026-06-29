@@ -1189,8 +1189,66 @@ pub struct ModifyInstanceInput {
 /// delete_instance method input
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct DeleteInstanceInput {
-    /// Instance name
     pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct StartInstanceInput {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct StopInstanceInput {
+    pub name: String,
+    pub force: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct RestartInstanceInput {
+    pub name: String,
+    pub force: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct FreezeInstanceInput {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct UnfreezeInstanceInput {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SnapshotInstanceInput {
+    pub name: String,
+    pub snapshot_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ExecInstanceInput {
+    pub name: String,
+    pub command: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AddDeviceInput {
+    pub instance_name: String,
+    pub device_name: String,
+    pub device: super::incus_device::Device,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct RemoveDeviceInput {
+    pub instance_name: String,
+    pub device_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct UpdateDeviceInput {
+    pub instance_name: String,
+    pub device_name: String,
+    pub device: super::incus_device::Device,
 }
 
 pub(crate) fn incus_schema() -> PluginSchema {
@@ -1524,6 +1582,76 @@ pub(crate) fn incus_schema() -> PluginSchema {
             false,
             "cap.service.incus.instance.delete@v1",
             "mut.service.incus.instance.delete@v1",
+        ))
+        .method(super::plugin_schema_defs::method_decl_from_schemars::<StartInstanceInput>(
+            "start_instance",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.service.incus.instance.start@v1",
+            "mut.service.incus.instance.start@v1",
+        ))
+        .method(super::plugin_schema_defs::method_decl_from_schemars::<StopInstanceInput>(
+            "stop_instance",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.service.incus.instance.stop@v1",
+            "mut.service.incus.instance.stop@v1",
+        ))
+        .method(super::plugin_schema_defs::method_decl_from_schemars::<RestartInstanceInput>(
+            "restart_instance",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.service.incus.instance.restart@v1",
+            "mut.service.incus.instance.restart@v1",
+        ))
+        .method(super::plugin_schema_defs::method_decl_from_schemars::<FreezeInstanceInput>(
+            "freeze_instance",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.service.incus.instance.freeze@v1",
+            "mut.service.incus.instance.freeze@v1",
+        ))
+        .method(super::plugin_schema_defs::method_decl_from_schemars::<UnfreezeInstanceInput>(
+            "unfreeze_instance",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.service.incus.instance.unfreeze@v1",
+            "mut.service.incus.instance.unfreeze@v1",
+        ))
+        .method(super::plugin_schema_defs::method_decl_from_schemars::<SnapshotInstanceInput>(
+            "snapshot_instance",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.service.incus.instance.snapshot@v1",
+            "mut.service.incus.instance.snapshot@v1",
+        ))
+        .method(super::plugin_schema_defs::method_decl_from_schemars::<ExecInstanceInput>(
+            "exec_instance",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.service.incus.instance.exec@v1",
+            "mut.service.incus.instance.exec@v1",
+        ))
+        .method(super::plugin_schema_defs::method_decl_from_schemars::<AddDeviceInput>(
+            "add_device",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.service.incus.device.add@v1",
+            "mut.service.incus.device.add@v1",
+        ))
+        .method(super::plugin_schema_defs::method_decl_from_schemars::<RemoveDeviceInput>(
+            "remove_device",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.service.incus.device.remove@v1",
+            "mut.service.incus.device.remove@v1",
+        ))
+        .method(super::plugin_schema_defs::method_decl_from_schemars::<UpdateDeviceInput>(
+            "update_device",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.service.incus.device.update@v1",
+            "mut.service.incus.device.update@v1",
         ))
         .build()
 }

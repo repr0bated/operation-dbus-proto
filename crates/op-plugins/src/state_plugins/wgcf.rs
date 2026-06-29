@@ -203,6 +203,24 @@ impl StatePlugin for WgcfPlugin {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct RegisterInput {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct UpdateInput {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct StatusInput {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct RotateKeysInput {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SetEndpointInput {
+    pub endpoint: String,
+}
+
+
 /// Derived `wgcf` schema from the typed [`WgcfState`] struct via schemars.
 pub(crate) fn wgcf_schema() -> PluginSchema {
     let root = serde_json::to_value(schemars::schema_for!(WgcfState))
@@ -216,6 +234,43 @@ pub(crate) fn wgcf_schema() -> PluginSchema {
     let state = simd_json::serde::to_owned_value(&WgcfState::default())
         .expect("WgcfState default serializes");
     super::schemars_adapter::apply_state_defaults(&mut schema, &state);
+
+    schema.methods.insert("register".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<RegisterInput>(
+        "register",
+        op_state_store::SideEffect::Mutation,
+        false,
+        "cap.software.wgcf.register@v1",
+        "mut.software.wgcf.register@v1",
+    ));
+    schema.methods.insert("update".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<UpdateInput>(
+        "update",
+        op_state_store::SideEffect::Mutation,
+        false,
+        "cap.software.wgcf.update@v1",
+        "mut.software.wgcf.update@v1",
+    ));
+    schema.methods.insert("status".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<StatusInput>(
+        "status",
+        op_state_store::SideEffect::Read,
+        true,
+        "cap.software.wgcf.status@v1",
+        "obs.software.wgcf.status@v1",
+    ));
+    schema.methods.insert("rotate_keys".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<RotateKeysInput>(
+        "rotate_keys",
+        op_state_store::SideEffect::Mutation,
+        false,
+        "cap.software.wgcf.keys.rotate@v1",
+        "mut.software.wgcf.keys.rotate@v1",
+    ));
+    schema.methods.insert("set_endpoint".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<SetEndpointInput>(
+        "set_endpoint",
+        op_state_store::SideEffect::Mutation,
+        false,
+        "cap.software.wgcf.endpoint.set@v1",
+        "mut.software.wgcf.endpoint.set@v1",
+    ));
+
     schema
 }
 

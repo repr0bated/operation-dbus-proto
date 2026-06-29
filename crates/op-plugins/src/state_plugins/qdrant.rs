@@ -8,10 +8,68 @@
 use super::plugin_schema_defs::schema_from_state;
 use anyhow::Result;
 use async_trait::async_trait;
-use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
+use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin};
 use op_state_store::PluginSchema;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use simd_json::{json, OwnedValue as Value};
+use simd_json::json;
+use simd_json::OwnedValue as Value;
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CreateCollectionInput {
+    pub name: String,
+    pub vectors_config: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct DeleteCollectionInput {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ListCollectionsInput {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct UpsertPointsInput {
+    pub collection_name: String,
+    pub points: Vec<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SearchPointsInput {
+    pub collection_name: String,
+    pub vector: Vec<f32>,
+    pub limit: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct DeletePointsInput {
+    pub collection_name: String,
+    pub points: Vec<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ScrollPointsInput {
+    pub collection_name: String,
+    pub limit: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CreateSnapshotInput {
+    pub collection_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ListSnapshotsInput {
+    pub collection_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CreatePayloadIndexInput {
+    pub collection_name: String,
+    pub field_name: String,
+    pub field_schema: serde_json::Value,
+}
 
 const DEFAULT_QDRANT_HTTP_ENDPOINT: &str = "http://127.0.0.1:6333";
 const DEFAULT_QDRANT_GRPC_ENDPOINT: &str = "http://127.0.0.1:6334";
@@ -301,6 +359,78 @@ pub(crate) fn qdrant_schema() -> PluginSchema {
         "telemetry".to_string(),
         "obs.software.plugin.qdrant.telemetry@v1".to_string(),
     );
+
+    schema.methods.insert("create_collection".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<CreateCollectionInput>(
+        "create_collection",
+        op_state_store::SideEffect::Mutation,
+        false,
+        "cap.data.qdrant.collection.create@v1",
+        "mut.data.qdrant.collection.create@v1",
+    ));
+    schema.methods.insert("delete_collection".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<DeleteCollectionInput>(
+        "delete_collection",
+        op_state_store::SideEffect::Mutation,
+        false,
+        "cap.data.qdrant.collection.delete@v1",
+        "mut.data.qdrant.collection.delete@v1",
+    ));
+    schema.methods.insert("list_collections".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<ListCollectionsInput>(
+        "list_collections",
+        op_state_store::SideEffect::Read,
+        true,
+        "cap.data.qdrant.collection.list@v1",
+        "obs.data.qdrant.collection.list@v1",
+    ));
+    schema.methods.insert("upsert_points".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<UpsertPointsInput>(
+        "upsert_points",
+        op_state_store::SideEffect::Mutation,
+        false,
+        "cap.data.qdrant.point.upsert@v1",
+        "mut.data.qdrant.point.upsert@v1",
+    ));
+    schema.methods.insert("search_points".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<SearchPointsInput>(
+        "search_points",
+        op_state_store::SideEffect::Read,
+        true,
+        "cap.data.qdrant.point.search@v1",
+        "obs.data.qdrant.point.search@v1",
+    ));
+    schema.methods.insert("delete_points".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<DeletePointsInput>(
+        "delete_points",
+        op_state_store::SideEffect::Mutation,
+        false,
+        "cap.data.qdrant.point.delete@v1",
+        "mut.data.qdrant.point.delete@v1",
+    ));
+    schema.methods.insert("scroll_points".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<ScrollPointsInput>(
+        "scroll_points",
+        op_state_store::SideEffect::Read,
+        true,
+        "cap.data.qdrant.point.scroll@v1",
+        "obs.data.qdrant.point.scroll@v1",
+    ));
+    schema.methods.insert("create_snapshot".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<CreateSnapshotInput>(
+        "create_snapshot",
+        op_state_store::SideEffect::Mutation,
+        false,
+        "cap.data.qdrant.snapshot.create@v1",
+        "mut.data.qdrant.snapshot.create@v1",
+    ));
+    schema.methods.insert("list_snapshots".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<ListSnapshotsInput>(
+        "list_snapshots",
+        op_state_store::SideEffect::Read,
+        true,
+        "cap.data.qdrant.snapshot.list@v1",
+        "obs.data.qdrant.snapshot.list@v1",
+    ));
+    schema.methods.insert("create_payload_index".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<CreatePayloadIndexInput>(
+        "create_payload_index",
+        op_state_store::SideEffect::Mutation,
+        false,
+        "cap.data.qdrant.payload-index.create@v1",
+        "mut.data.qdrant.payload-index.create@v1",
+    ));
+
     schema
 }
 

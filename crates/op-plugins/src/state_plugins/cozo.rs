@@ -23,6 +23,40 @@ use op_state_store::PluginSchema;
 use serde::{Deserialize, Serialize};
 use simd_json::{json, OwnedValue as Value};
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct RunQueryInput {
+    pub query: String,
+    pub params: std::collections::HashMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ImportRelationsInput {
+    pub data: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ExportRelationsInput {
+    pub relations: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct BackupInput {
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct RestoreInput {
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ListRelationsInput {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct DescribeRelationInput {
+    pub name: String,
+}
+
 const DEFAULT_COZO_DB_PATH: &str = "/var/lib/opdbus/cognitive.db";
 
 /// CozoDB column definition — mirrors `::columns` system op output.
@@ -291,6 +325,57 @@ pub(crate) fn cozo_schema() -> PluginSchema {
         "running_queries".to_string(),
         "obs.software.plugin.cozo.running-queries@v1".to_string(),
     );
+
+    schema.methods.insert("run_query".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<RunQueryInput>(
+        "run_query",
+        op_state_store::SideEffect::Mutation, // Assuming it could mutate data
+        false,
+        "cap.data.cozo.query.run@v1",
+        "mut.data.cozo.query.run@v1",
+    ));
+    schema.methods.insert("import_relations".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<ImportRelationsInput>(
+        "import_relations",
+        op_state_store::SideEffect::Mutation,
+        false,
+        "cap.data.cozo.relations.import@v1",
+        "mut.data.cozo.relations.import@v1",
+    ));
+    schema.methods.insert("export_relations".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<ExportRelationsInput>(
+        "export_relations",
+        op_state_store::SideEffect::Read,
+        true,
+        "cap.data.cozo.relations.export@v1",
+        "obs.data.cozo.relations.export@v1",
+    ));
+    schema.methods.insert("backup".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<BackupInput>(
+        "backup",
+        op_state_store::SideEffect::Mutation,
+        false,
+        "cap.data.cozo.backup.create@v1",
+        "mut.data.cozo.backup.create@v1",
+    ));
+    schema.methods.insert("restore".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<RestoreInput>(
+        "restore",
+        op_state_store::SideEffect::Mutation,
+        false,
+        "cap.data.cozo.backup.restore@v1",
+        "mut.data.cozo.backup.restore@v1",
+    ));
+    schema.methods.insert("list_relations".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<ListRelationsInput>(
+        "list_relations",
+        op_state_store::SideEffect::Read,
+        true,
+        "cap.data.cozo.relations.list@v1",
+        "obs.data.cozo.relations.list@v1",
+    ));
+    schema.methods.insert("describe_relation".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<DescribeRelationInput>(
+        "describe_relation",
+        op_state_store::SideEffect::Read,
+        true,
+        "cap.data.cozo.relation.describe@v1",
+        "obs.data.cozo.relation.describe@v1",
+    ));
+
     schema
 }
 

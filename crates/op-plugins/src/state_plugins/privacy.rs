@@ -1,6 +1,8 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, PluginCapabilities, StateDiff, StatePlugin};
+use op_state_store::{FieldSchema, FieldType, PluginSchema, SideEffect};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use simd_json::OwnedValue as Value;
 use simd_json::prelude::*;
@@ -64,6 +66,10 @@ impl StatePlugin for PrivacyPlugin {
 
     fn version(&self) -> &str {
         "1.0.0"
+    }
+
+    fn schema(&self) -> Option<PluginSchema> {
+        Some(privacy_schema())
     }
 
     fn capabilities(&self) -> PluginCapabilities {
@@ -132,4 +138,100 @@ impl StatePlugin for PrivacyPlugin {
     async fn rollback(&self, _checkpoint: &op_state::Checkpoint) -> Result<()> {
         Err(anyhow::anyhow!("Privacy plugin rollback not implemented - individual component plugins handle their own rollback"))
     }
+}
+
+/// Input struct for MaskData method
+/// D-Bus method spec: Privacy data masking for GDPR compliance
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct MaskDataInput {
+    /// Data to mask
+    pub data: String,
+    /// Type of data (email, phone, ssn, etc.)
+    pub data_type: String,
+}
+
+/// Input struct for UnmaskData method
+/// D-Bus method spec: Privacy data unmasking for authorized access
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct UnmaskDataInput {
+    /// Masked data to unmask
+    pub masked_data: String,
+    /// Authorization token
+    pub auth_token: String,
+}
+
+/// Input struct for GetPolicy method
+/// D-Bus method spec: Get privacy policy settings
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GetPolicyInput {
+    /// Policy scope (user, system, global)
+    pub scope: Option<String>,
+}
+
+/// Generate the privacy plugin schema
+pub(crate) fn privacy_schema() -> PluginSchema {
+    let mut schema = PluginSchema::builder("privacy")
+        .version("1.0.0")
+        .description("Privacy configuration and data masking")
+        .field(
+            "wireguard_gateway_enabled",
+            FieldSchema {
+                field_type: FieldType::Boolean,
+                required: true,
+                description: "Enable WireGuard gateway".to_string(),
+                default: Some(simd_json::json!(true)),
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        )
+        .field(
+            "wireguard_interface",
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "WireGuard interface name".to_string(),
+                default: Some(simd_json::json!("wg0")),
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        )
+        .build();
+    
+    // Add D-Bus methods for privacy
+    schema.methods.insert(
+        "mask_data".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<MaskDataInput>(
+            "MaskData",
+            SideEffect::Mutation,
+            false,
+            "privacy.write",
+            "mut.privacy.data.mask@v1",
+        ),
+    );
+    schema.methods.insert(
+        "unmask_data".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<UnmaskDataInput>(
+            "UnmaskData",
+            SideEffect::Mutation,
+            false,
+            "privacy.write",
+            "mut.privacy.data.unmask@v1",
+        ),
+    );
+    schema.methods.insert(
+        "get_policy".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<GetPolicyInput>(
+            "GetPolicy",
+            SideEffect::Read,
+            true,
+            "privacy.read",
+            "obs.privacy.policy.get@v1",
+        ),
+    );
+    
+    schema
 }

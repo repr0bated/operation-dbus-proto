@@ -490,7 +490,76 @@ pub(crate) fn xray_schema_golden() -> PluginSchema {
     let state = simd_json::serde::to_owned_value(&XrayState::default())
         .expect("XrayState default serializes");
     super::schemars_adapter::apply_state_defaults(&mut schema, &state);
+
+    schema.methods.insert(
+        "add_user".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<UserInput>(
+            "AddUser",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "xray.write",
+            "mut.network.xray.user.add@v1",
+        ),
+    );
+    schema.methods.insert(
+        "remove_user".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<UserInput>(
+            "RemoveUser",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "xray.write",
+            "mut.network.xray.user.remove@v1",
+        ),
+    );
+    schema.methods.insert(
+        "add_inbound".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<InboundInput>(
+            "AddInbound",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "xray.write",
+            "mut.network.xray.inbound.add@v1",
+        ),
+    );
+    schema.methods.insert(
+        "get_stats".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<StatsInput>(
+            "GetStats",
+            op_state_store::SideEffect::Read,
+            true,
+            "xray.read",
+            "obs.network.xray.stats.get@v1",
+        ),
+    );
+    schema.methods.insert(
+        "restart".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<super::plugin_schema_defs::EmptyInput>(
+            "Restart",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "xray.write",
+            "mut.network.xray.service.restart@v1",
+        ),
+    );
+
     schema
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct UserInput {
+    pub email: String,
+    pub protocol: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct InboundInput {
+    pub tag: String,
+    pub protocol: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct StatsInput {
+    pub name: String,
 }
 
 // Self-registration: the plugin registry discovers this via inventory

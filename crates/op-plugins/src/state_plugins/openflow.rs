@@ -87,7 +87,7 @@ pub struct FlowEntry {
 }
 
 /// OpenFlow actions
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum FlowAction {
     /// Output to port
@@ -1714,7 +1714,7 @@ pub(crate) fn openflow_schema() -> PluginSchema {
         fields
     };
 
-    PluginSchema::builder("openflow")
+    let mut schema = PluginSchema::builder("openflow")
         .version("1.0.0")
         .description("OpenFlow flow table management")
         .dependency("net")
@@ -1765,7 +1765,88 @@ pub(crate) fn openflow_schema() -> PluginSchema {
             "enable_security_flows": false,
             "obfuscation_level": 0
         }))
-        .build()
+        .build();
+    
+    // Add D-Bus methods for OpenFlow - https://www.opennetworking.org/wp-content/uploads/2014/10/of_spec_1_0.pdf
+    schema.methods.insert(
+        "add_flow".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<AddFlowInput>(
+            "AddFlow",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "openflow.write",
+            "mut.network.openflow.flow.add@v1",
+        ),
+    );
+    schema.methods.insert(
+        "delete_flow".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<DeleteFlowInput>(
+            "DeleteFlow",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "openflow.write",
+            "mut.network.openflow.flow.delete@v1",
+        ),
+    );
+    schema.methods.insert(
+        "modify_flow".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<ModifyFlowInput>(
+            "ModifyFlow",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "openflow.write",
+            "mut.network.openflow.flow.modify@v1",
+        ),
+    );
+    
+    schema
+}
+
+/// Input struct for AddFlow method
+/// D-Bus method spec: https://www.opennetworking.org/wp-content/uploads/2014/10/of_spec_1_0.pdf
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AddFlowInput {
+    /// Bridge name
+    pub bridge: String,
+    /// Flow table ID
+    pub table: u8,
+    /// Flow priority
+    pub priority: u16,
+    /// Match fields (in_port, ip, nw_src, nw_dst, etc.)
+    pub match_fields: HashMap<String, String>,
+    /// Actions to apply
+    pub actions: Vec<FlowAction>,
+    /// Cookie value for flow
+    pub cookie: Option<u64>,
+    /// Idle timeout in seconds (0 = never expires)
+    pub idle_timeout: Option<u32>,
+    /// Hard timeout in seconds (0 = never expires)
+    pub hard_timeout: Option<u32>,
+}
+
+
+/// Input struct for DeleteFlow method
+/// D-Bus method spec: https://www.opennetworking.org/wp-content/uploads/2014/10/of_spec_1_0.pdf
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct DeleteFlowInput {
+    /// Bridge name
+    pub bridge: String,
+    /// Match fields to identify flow (empty = delete all)
+    pub match_fields: HashMap<String, String>,
+}
+
+/// Input struct for ModifyFlow method
+/// D-Bus method spec: https://www.opennetworking.org/wp-content/uploads/2014/10/of_spec_1_0.pdf
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ModifyFlowInput {
+    /// Bridge name
+    pub bridge: String,
+    /// Match fields to identify flow
+    pub match_fields: HashMap<String, String>,
+    /// New actions to apply
+    pub actions: Vec<FlowAction>,
+    /// Update priority
+    pub priority: Option<u16>,
 }
 
 // Self-registration: the plugin registry discovers this via inventory
