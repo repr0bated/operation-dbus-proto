@@ -4,15 +4,27 @@ use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
 use op_state_store::PluginSchema;
 use serde::{Deserialize, Serialize};
-use simd_json::{json, OwnedValue as Value};
+use serde_json::Value as JsonValue;
+use serde_json::json;
+use simd_json::OwnedValue as Value;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Memory plugin state.
+/// See: https://github.com/memgraph/memgraph
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct MemoryState {
+    /// Plugin status
     pub status: String,
+    /// Backend type (sqlite, sled, etc.)
     pub backend: String,
-    pub namespaces: Value,
-    pub stats: Value,
-    pub config: Value,
+    /// Memory namespaces
+    #[schemars(with = "serde_json::Value")]
+    pub namespaces: JsonValue,
+    /// Memory statistics
+    #[schemars(with = "serde_json::Value")]
+    pub stats: JsonValue,
+    /// Memory configuration
+    #[schemars(with = "serde_json::Value")]
+    pub config: JsonValue,
 }
 pub struct MemoryPlugin;
 impl Default for MemoryPlugin {
@@ -92,7 +104,7 @@ impl StatePlugin for MemoryPlugin {
 pub(crate) fn memory_schema() -> PluginSchema {
     let state =
         simd_json::serde::to_owned_value(super::memory_plugin::MemoryPlugin::current_state())
-            .unwrap_or_else(|_| json!({}));
+            .unwrap_or_else(|_| simd_json::json!({}));
     schema_from_state(
         "memory",
         "data",

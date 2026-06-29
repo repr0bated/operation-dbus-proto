@@ -1,0 +1,49 @@
+#!/bin/sh
+# 🟢 🛷 Zeroclaw Wayland Sled — isolated headless compositor for zeroclaw-gui.
+#
+# Owns only WAYLAND_DISPLAY=zeroclaw-wayland. It never exports DISPLAY and does
+# not interact with CRD's X11 server.
+
+set -eu
+exec 2>&1
+
+[ -r /etc/op-dbus/environment ] && . /etc/op-dbus/environment
+[ -r /etc/ghostbridge/zeroclaw-wayland.env ] && . /etc/ghostbridge/zeroclaw-wayland.env
+
+OP_ZEROCLAW_USER="${OP_ZEROCLAW_USER:-jeremy}"
+OP_ZEROCLAW_GROUP="${OP_ZEROCLAW_GROUP:-$OP_ZEROCLAW_USER}"
+ZEROCLAW_WAYLAND_DISPLAY="${ZEROCLAW_WAYLAND_DISPLAY:-zeroclaw-wayland}"
+ZEROCLAW_SOFTWARE_RENDER="${ZEROCLAW_SOFTWARE_RENDER:-0}"
+PATH="${PATH:-/usr/local/sbin:/usr/local/bin:/usr/bin:/bin:/home/${OP_ZEROCLAW_USER}/.local/bin}"
+
+if ! command -v weston >/dev/null 2>&1; then
+  echo "weston is required for zeroclaw-wayland"
+  exit 127
+fi
+
+uid="$(id -u "$OP_ZEROCLAW_USER")"
+gid="$(id -g "$OP_ZEROCLAW_GROUP")"
+runtime_dir="${XDG_RUNTIME_DIR:-/run/user/${uid}}"
+state_dir="/run/op-dbus/zeroclaw-wayland"
+
+install -d -m 0700 -o "$uid" -g "$gid" "$runtime_dir"
+install -d -m 0750 -o "$uid" -g "$gid" "$state_dir"
+rm -f "${runtime_dir}/${ZEROCLAW_WAYLAND_DISPLAY}" "${runtime_dir}/${ZEROCLAW_WAYLAND_DISPLAY}.lock"
+
+if [ "$ZEROCLAW_SOFTWARE_RENDER" = "1" ]; then
+  export LIBGL_ALWAYS_SOFTWARE=1
+fi
+
+exec s6-setuidgid "$OP_ZEROCLAW_USER" env \
+  HOME="/home/${OP_ZEROCLAW_USER}" \
+  USER="$OP_ZEROCLAW_USER" \
+  LOGNAME="$OP_ZEROCLAW_USER" \
+  PATH="$PATH" \
+  XDG_RUNTIME_DIR="$runtime_dir" \
+  WAYLAND_DISPLAY="$ZEROCLAW_WAYLAND_DISPLAY" \
+  LIBGL_ALWAYS_SOFTWARE="${LIBGL_ALWAYS_SOFTWARE:-}" \
+  weston \
+    --backend=headless-backend.so \
+    --socket="$ZEROCLAW_WAYLAND_DISPLAY" \
+    --idle-time=0 \
+    --log="${state_dir}/weston.log"

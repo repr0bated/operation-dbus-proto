@@ -5,11 +5,16 @@ use op_state::{ApplyResult, PluginCapabilities, StateAction, StateDiff};
 use op_state_store::PluginSchema;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use simd_json::{json, prelude::*, OwnedValue as Value};
+use serde_json::json;
+use serde_json::Value as JsonValue;
+use simd_json::prelude::*;
+use simd_json::OwnedValue as Value;
 use std::path::Path;
 use zbus::{Connection, Proxy};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Netmaker configuration.
+/// See: https://docs.netmaker.io/
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, Default)]
 pub struct NetmakerConfig {
     /// Enable Netmaker mesh networking
     pub enabled: bool,
@@ -21,38 +26,45 @@ pub struct NetmakerConfig {
     pub api_endpoint: Option<String>,
 }
 
-impl Default for NetmakerConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            default_network: "mesh".to_string(),
-            enrollment_token: None,
-            api_endpoint: None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Netmaker network state.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct NetmakerNetwork {
+    /// Network name
     pub name: String,
+    /// Whether connected to this network
     pub connected: bool,
+    /// Whether this is the default network
     pub is_default: bool,
+    /// Node ID for this network
     pub node_id: Option<String>,
+    /// List of peer endpoints
     pub peers: Vec<String>,
+    /// Network address
     pub address: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Netmaker state.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct NetmakerState {
+    /// Software name (netclient)
     pub software: String,
+    /// Version string
     pub version: String,
+    /// Required dependencies
     pub dependencies: Vec<String>,
+    /// Whether netclient is installed
     pub installed: bool,
+    /// Whether daemon is running
     pub daemon_running: bool,
+    /// Connected networks
     pub networks: Vec<NetmakerNetwork>,
+    /// Public IP address
     pub public_ip: Option<String>,
+    /// Netmaker configuration
     pub config: NetmakerConfig,
-    pub tools: Value,
+    /// Available tools
+    #[schemars(with = "serde_json::Value")]
+    pub tools: JsonValue,
 }
 
 /// Service controller interface for managing daemon lifecycle
@@ -314,7 +326,7 @@ impl NetmakerPlugin {
     }
 
     pub(crate) fn current_state() -> NetmakerState {
-        let tools = simd_json::json!([
+        let tools = json!([
             {
                 "name": "netmaker.join",
                 "description": "Join a Netmaker network",
@@ -565,7 +577,7 @@ pub struct JoinNetworkInput {
 
 pub(crate) fn netmaker_schema() -> PluginSchema {
     let state = simd_json::serde::to_owned_value(NetmakerPlugin::current_state())
-        .unwrap_or_else(|_| json!({}));
+        .unwrap_or_else(|_| simd_json::json!({}));
     let mut schema = super::plugin_schema_defs::schema_from_state(
         "netmaker",
         "net",

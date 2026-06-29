@@ -11,17 +11,27 @@ use simd_json::{json, OwnedValue as Value};
 use zbus::zvariant::OwnedObjectPath;
 use zbus::{Connection, Proxy};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Login1 state containing active sessions.
+/// See: https://www.freedesktop.org/wiki/Software/systemd/Login1/
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Login1State {
+    /// Active login sessions
     pub sessions: Vec<SessionInfo>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Login1 session information.
+/// See: https://www.freedesktop.org/wiki/Software/systemd/Login1/
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SessionInfo {
+    /// Session ID
     pub id: String,
+    /// User ID
     pub uid: u32,
+    /// Username
     pub user: String,
+    /// Seat name
     pub seat: String,
+    /// Session object path
     pub path: String,
 }
 
@@ -61,25 +71,7 @@ impl StatePlugin for Login1Plugin {
     }
 
     fn schema(&self) -> Option<PluginSchema> {
-        Some(
-            PluginSchema::builder("login1")
-                .version("1.0.0")
-                .description("Runtime login sessions")
-                .field(
-                    "sessions",
-                    FieldSchema {
-                        field_type: FieldType::Any,
-                        required: true,
-                        description: "Active sessions".to_string(),
-                        default: Some(json!([])),
-                        example: None,
-                        constraints: Vec::new(),
-                        read_only: false,
-                        read_only_when: None,
-                    },
-                )
-                .build(),
-        )
+        Some(login1_schema())
     }
 
     async fn calculate_diff(&self, current: &Value, desired: &Value) -> Result<StateDiff> {
@@ -137,6 +129,131 @@ impl StatePlugin for Login1Plugin {
             atomic_operations: false,
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct GetSessionInput {
+    pub session_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct GetUserInput {
+    pub uid: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct GetSeatInput {
+    pub seat_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct PowerOffInput {
+    pub interactive: bool,
+}
+
+pub(crate) fn login1_schema() -> PluginSchema {
+    let mut schema = PluginSchema::builder("login1")
+        .version("1.0.0")
+        .description("Runtime login sessions")
+        .field(
+            "sessions",
+            FieldSchema {
+                field_type: FieldType::Any,
+                required: true,
+                description: "Active sessions".to_string(),
+                default: Some(json!([])),
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        )
+        .build();
+
+    // org.freedesktop.login1.Manager methods
+    // Spec: https://www.freedesktop.org/software/systemd/man/latest/org.freedesktop.login1.html
+    schema.methods.insert(
+        "list_sessions".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<()>(
+            "ListSessions",
+            op_state_store::SideEffect::Read,
+            true,
+            "login1.read",
+            "obs.software.login1.sessions.list@v1",
+        ),
+    );
+    schema.methods.insert(
+        "list_users".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<()>(
+            "ListUsers",
+            op_state_store::SideEffect::Read,
+            true,
+            "login1.read",
+            "obs.software.login1.users.list@v1",
+        ),
+    );
+    schema.methods.insert(
+        "list_seats".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<()>(
+            "ListSeats",
+            op_state_store::SideEffect::Read,
+            true,
+            "login1.read",
+            "obs.software.login1.seats.list@v1",
+        ),
+    );
+    schema.methods.insert(
+        "get_session".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<GetSessionInput>(
+            "GetSession",
+            op_state_store::SideEffect::Read,
+            true,
+            "login1.read",
+            "obs.software.login1.session.get@v1",
+        ),
+    );
+    schema.methods.insert(
+        "get_user".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<GetUserInput>(
+            "GetUser",
+            op_state_store::SideEffect::Read,
+            true,
+            "login1.read",
+            "obs.software.login1.user.get@v1",
+        ),
+    );
+    schema.methods.insert(
+        "get_seat".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<GetSeatInput>(
+            "GetSeat",
+            op_state_store::SideEffect::Read,
+            true,
+            "login1.read",
+            "obs.software.login1.seat.get@v1",
+        ),
+    );
+    schema.methods.insert(
+        "power_off".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<PowerOffInput>(
+            "PowerOff",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "login1.admin",
+            "mut.software.login1.system.poweroff@v1",
+        ),
+    );
+    schema.methods.insert(
+        "reboot".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<PowerOffInput>(
+            "Reboot",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "login1.admin",
+            "mut.software.login1.system.reboot@v1",
+        ),
+    );
+
+    schema
 }
 
 // Self-registration: the plugin registry discovers this via inventory

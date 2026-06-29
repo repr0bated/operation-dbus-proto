@@ -30,6 +30,7 @@ pub mod mutation_engine;
 pub mod proto_gen;
 pub mod schema_loader;
 pub mod server;
+pub mod shared_socket;
 pub mod tracing;
 
 // Re-export main types
