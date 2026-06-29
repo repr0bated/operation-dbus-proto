@@ -107,8 +107,37 @@ impl StatePlugin for WireGuardPlugin {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SetDeviceInput {
+    pub interface: String,
+    pub private_key: Option<String>,
+    pub listen_port: Option<u16>,
+    pub fwmark: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct GetDeviceInput {
+    pub interface: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AddPeerInput {
+    pub interface: String,
+    pub public_key: String,
+    pub endpoint: Option<String>,
+    pub allowed_ips: Vec<String>,
+    pub persistent_keepalive: Option<u16>,
+    pub preshared_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct RemovePeerInput {
+    pub interface: String,
+    pub public_key: String,
+}
+
 pub(crate) fn wireguard_schema() -> PluginSchema {
-    simple_schema(
+    let mut schema = simple_schema(
         "wireguard",
         "WireGuard interface state",
         &["net"],
@@ -116,7 +145,50 @@ pub(crate) fn wireguard_schema() -> PluginSchema {
             "interfaces",
             any_field(true, "WireGuard interfaces", Some(json!([]))),
         )],
-    )
+    );
+
+    schema.methods.insert(
+        "set_device".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<SetDeviceInput>(
+            "SetDevice",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "wireguard.write",
+            "mut.network.wireguard.device.set@v1",
+        ),
+    );
+    schema.methods.insert(
+        "get_device".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<GetDeviceInput>(
+            "GetDevice",
+            op_state_store::SideEffect::Read,
+            true,
+            "wireguard.read",
+            "obs.network.wireguard.device.get@v1",
+        ),
+    );
+    schema.methods.insert(
+        "add_peer".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<AddPeerInput>(
+            "AddPeer",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "wireguard.write",
+            "mut.network.wireguard.peer.add@v1",
+        ),
+    );
+    schema.methods.insert(
+        "remove_peer".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<RemovePeerInput>(
+            "RemovePeer",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "wireguard.write",
+            "mut.network.wireguard.peer.remove@v1",
+        ),
+    );
+
+    schema
 }
 
 // Self-registration: the plugin registry discovers this via inventory

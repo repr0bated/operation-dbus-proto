@@ -202,8 +202,7 @@ impl StatePlugin for S6SystemctlPlugin {
     }
 
     fn schema(&self) -> Option<PluginSchema> {
-        Some(
-            PluginSchema::builder("s6_systemctl")
+        let mut schema = PluginSchema::builder("s6_systemctl")
                 .version("1.0.0")
                 .description("s6 service manager — daemon status and unit control")
                 .field(
@@ -279,8 +278,110 @@ impl StatePlugin for S6SystemctlPlugin {
                         read_only_when: None,
                     },
                 )
-                .build(),
-        )
+                .build();
+
+        schema.methods.insert(
+            "start".to_string(),
+            super::plugin_schema_defs::method_decl_from_schemars::<UnitInput>(
+                "Start",
+                op_state_store::SideEffect::Mutation,
+                false,
+                "s6.systemctl.write",
+                "mut.software.s6.systemctl.start@v1",
+            ),
+        );
+        schema.methods.insert(
+            "stop".to_string(),
+            super::plugin_schema_defs::method_decl_from_schemars::<UnitInput>(
+                "Stop",
+                op_state_store::SideEffect::Mutation,
+                false,
+                "s6.systemctl.write",
+                "mut.software.s6.systemctl.stop@v1",
+            ),
+        );
+        schema.methods.insert(
+            "restart".to_string(),
+            super::plugin_schema_defs::method_decl_from_schemars::<UnitInput>(
+                "Restart",
+                op_state_store::SideEffect::Mutation,
+                false,
+                "s6.systemctl.write",
+                "mut.software.s6.systemctl.restart@v1",
+            ),
+        );
+        schema.methods.insert(
+            "enable".to_string(),
+            super::plugin_schema_defs::method_decl_from_schemars::<UnitInput>(
+                "Enable",
+                op_state_store::SideEffect::Mutation,
+                false,
+                "s6.systemctl.write",
+                "mut.software.s6.systemctl.enable@v1",
+            ),
+        );
+        schema.methods.insert(
+            "disable".to_string(),
+            super::plugin_schema_defs::method_decl_from_schemars::<UnitInput>(
+                "Disable",
+                op_state_store::SideEffect::Mutation,
+                false,
+                "s6.systemctl.write",
+                "mut.software.s6.systemctl.disable@v1",
+            ),
+        );
+        schema.methods.insert(
+            "status".to_string(),
+            super::plugin_schema_defs::method_decl_from_schemars::<UnitInput>(
+                "Status",
+                op_state_store::SideEffect::Read,
+                true,
+                "s6.systemctl.read",
+                "obs.software.s6.systemctl.status@v1",
+            ),
+        );
+        schema.methods.insert(
+            "is_active".to_string(),
+            super::plugin_schema_defs::method_decl_from_schemars::<UnitInput>(
+                "IsActive",
+                op_state_store::SideEffect::Read,
+                true,
+                "s6.systemctl.read",
+                "obs.software.s6.systemctl.is_active@v1",
+            ),
+        );
+        schema.methods.insert(
+            "is_enabled".to_string(),
+            super::plugin_schema_defs::method_decl_from_schemars::<UnitInput>(
+                "IsEnabled",
+                op_state_store::SideEffect::Read,
+                true,
+                "s6.systemctl.read",
+                "obs.software.s6.systemctl.is_enabled@v1",
+            ),
+        );
+        schema.methods.insert(
+            "daemon_reload".to_string(),
+            super::plugin_schema_defs::method_decl_from_schemars::<super::plugin_schema_defs::EmptyInput>(
+                "DaemonReload",
+                op_state_store::SideEffect::Mutation,
+                false,
+                "s6.systemctl.write",
+                "mut.software.s6.systemctl.daemon_reload@v1",
+            ),
+        );
+        schema.methods.insert(
+            "list_units".to_string(),
+            super::plugin_schema_defs::method_decl_from_schemars::<super::plugin_schema_defs::EmptyInput>(
+                "ListUnits",
+                op_state_store::SideEffect::Read,
+                true,
+                "s6.systemctl.read",
+                "obs.software.s6.systemctl.list_units@v1",
+            ),
+        );
+
+        Some(schema)
     }
 
     async fn calculate_diff(&self, current: &Value, desired: &Value) -> Result<StateDiff> {
@@ -410,4 +511,9 @@ impl StatePlugin for S6SystemctlPlugin {
 // (single source of the catalog; no central dispatch list).
 inventory::submit! {
     crate::default_registry::PluginReg::new("s6_systemctl", |_ctx| std::sync::Arc::new(S6SystemctlPlugin::new()))
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct UnitInput {
+    pub name: String,
 }

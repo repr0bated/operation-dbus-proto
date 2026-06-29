@@ -13,9 +13,10 @@ use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use op_network::{openflow::OpenFlowClient, rovs_proxy::OvsdbDbusClient};
 use op_state::{
-    ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
+    ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff,
+    StatePlugin,
 };
-use op_state_store::{Constraint, FieldSchema, FieldType, PluginSchema, ReadOnlyCondition};
+use op_state_store::{Constraint, FieldSchema, FieldType, PluginSchema, ReadOnlyCondition, SideEffect};
 use serde::{Deserialize, Serialize};
 use simd_json::{json, prelude::*, OwnedValue as Value};
 use std::collections::{HashMap, HashSet};
@@ -1425,7 +1426,7 @@ pub(crate) fn privacy_router_schema() -> PluginSchema {
         fields
     };
 
-    PluginSchema::builder("privacy_router")
+    let mut schema = PluginSchema::builder("privacy_router")
         .version("1.1.0")
         .description("System privacy fabric (WireGuard/XRay ingress, WARP bridge, XRay egress)")
         .dependency("incus")
@@ -1477,11 +1478,79 @@ pub(crate) fn privacy_router_schema() -> PluginSchema {
                 "xray_port": 443
             }
         }))
-        .build()
+        .build();
+    
+    // Add D-Bus methods for privacy router
+    schema.methods.insert(
+        "enforce_policy".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<EnforcePolicyInput>(
+            "EnforcePolicy",
+            SideEffect::Mutation,
+            false,
+            "privacy_router.write",
+            "mut.network.privacy.policy.enforce@v1",
+        ),
+    );
+    schema.methods.insert(
+        "audit_request".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<AuditRequestInput>(
+            "AuditRequest",
+            SideEffect::Read,
+            true,
+            "privacy_router.read",
+            "obs.network.privacy.request.audit@v1",
+        ),
+    );
+    schema.methods.insert(
+        "log_decision".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<LogDecisionInput>(
+            "LogDecision",
+            SideEffect::Mutation,
+            false,
+            "privacy_router.write",
+            "mut.network.privacy.decision.log@v1",
+        ),
+    );
+    
+    schema
 }
 
 // Self-registration: the plugin registry discovers this via inventory
 // (single source of the catalog; no central dispatch list).
 inventory::submit! {
     crate::default_registry::PluginReg::new("privacy_router", |_ctx| std::sync::Arc::new(PrivacyRouterPlugin::new(PrivacyRouterConfig::default())))
+}
+
+/// Input struct for EnforcePolicy method
+/// D-Bus method spec: Privacy policy enforcement
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct EnforcePolicyInput {
+    /// Policy ID to enforce
+    pub policy_id: String,
+    /// Target (user, IP, network)
+    pub target: String,
+    /// Action (allow, deny, mask)
+    pub action: String,
+}
+
+/// Input struct for AuditRequest method
+/// D-Bus method spec: Privacy request auditing
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AuditRequestInput {
+    /// Request ID to audit
+    pub request_id: String,
+    /// Include details
+    pub include_details: Option<bool>,
+}
+
+/// Input struct for LogDecision method
+/// D-Bus method spec: Privacy decision logging
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct LogDecisionInput {
+    /// Request ID
+    pub request_id: String,
+    /// Decision made
+    pub decision: String,
+    /// Reason
+    pub reason: Option<String>,
 }

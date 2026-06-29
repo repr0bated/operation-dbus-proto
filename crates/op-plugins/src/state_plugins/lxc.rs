@@ -1285,17 +1285,116 @@ pub(crate) fn lxc_schema() -> PluginSchema {
         "cap.network.lxc.port.attach@v1",
         "mut.network.lxc.port.attach@v1",
     ));
+    schema.methods.insert("start_container".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<StartContainerInput>(
+        "start_container",
+        op_state_store::SideEffect::Mutation,
+        false,
+        "cap.service.lxc.container.start@v1",
+        "mut.service.lxc.container.start@v1",
+    ));
+    schema.methods.insert("stop_container".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<StopContainerInput>(
+        "stop_container",
+        op_state_store::SideEffect::Mutation,
+        false,
+        "cap.service.lxc.container.stop@v1",
+        "mut.service.lxc.container.stop@v1",
+    ));
+    schema.methods.insert("restart_container".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<RestartContainerInput>(
+        "restart_container",
+        op_state_store::SideEffect::Mutation,
+        false,
+        "cap.service.lxc.container.restart@v1",
+        "mut.service.lxc.container.restart@v1",
+    ));
+    schema.methods.insert("freeze_container".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<FreezeContainerInput>(
+        "freeze_container",
+        op_state_store::SideEffect::Mutation,
+        false,
+        "cap.service.lxc.container.freeze@v1",
+        "mut.service.lxc.container.freeze@v1",
+    ));
+    schema.methods.insert("unfreeze_container".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<UnfreezeContainerInput>(
+        "unfreeze_container",
+        op_state_store::SideEffect::Mutation,
+        false,
+        "cap.service.lxc.container.unfreeze@v1",
+        "mut.service.lxc.container.unfreeze@v1",
+    ));
+    schema.methods.insert("snapshot_container".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<SnapshotContainerInput>(
+        "snapshot_container",
+        op_state_store::SideEffect::Mutation,
+        false,
+        "cap.service.lxc.container.snapshot@v1",
+        "mut.service.lxc.container.snapshot@v1",
+    ));
+    schema.methods.insert("exec_container".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<ExecContainerInput>(
+        "exec_container",
+        op_state_store::SideEffect::Mutation,
+        false,
+        "cap.service.lxc.container.exec@v1",
+        "mut.service.lxc.container.exec@v1",
+    ));
+    schema.methods.insert("migrate_container".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<MigrateContainerInput>(
+        "migrate_container",
+        op_state_store::SideEffect::Mutation,
+        false,
+        "cap.service.lxc.container.migrate@v1",
+        "mut.service.lxc.container.migrate@v1",
+    ));
     schema
 }
 
 /// delete_container method input
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct DeleteContainerInput {
-    /// Container VMID or name
     pub name: String,
-    /// Force delete
     #[serde(default)]
     pub force: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct StartContainerInput {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct StopContainerInput {
+    pub name: String,
+    #[serde(default)]
+    pub force: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct RestartContainerInput {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct FreezeContainerInput {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct UnfreezeContainerInput {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SnapshotContainerInput {
+    pub name: String,
+    pub snapshot_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ExecContainerInput {
+    pub name: String,
+    pub command: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct MigrateContainerInput {
+    pub name: String,
+    pub destination: String,
 }
 
 /// Hand-rolled golden reference for the LXC schema. Kept test-only so the

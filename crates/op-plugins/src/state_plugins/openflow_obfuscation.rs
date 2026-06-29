@@ -12,9 +12,10 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use op_state::{
-    ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
+    ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff,
+    StatePlugin,
 };
-use op_state_store::{FieldSchema, FieldType, PluginSchema};
+use op_state_store::{FieldSchema, FieldType, PluginSchema, SideEffect};
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
@@ -381,8 +382,7 @@ impl StatePlugin for OpenFlowObfuscationPlugin {
     }
 
     fn schema(&self) -> Option<PluginSchema> {
-        Some(
-            PluginSchema::builder("openflow_obfuscation")
+        let mut schema = PluginSchema::builder("openflow_obfuscation")
                 .version("1.0.0")
                 .description("OpenFlow traffic obfuscation configuration")
                 .field(
@@ -398,8 +398,31 @@ impl StatePlugin for OpenFlowObfuscationPlugin {
                         read_only_when: None,
                     },
                 )
-                .build(),
-        )
+                .build();
+        
+        // Add D-Bus methods for OpenFlow obfuscation - https://www.opennetworking.org/wp-content/uploads/2014/10/of_spec_1_0.pdf
+        schema.methods.insert(
+            "obfuscate_flow".to_string(),
+            super::plugin_schema_defs::method_decl_from_schemars::<ObfuscateFlowInput>(
+                "ObfuscateFlow",
+                SideEffect::Mutation,
+                false,
+                "openflow_obfuscation.write",
+                "mut.network.openflow.obfuscation.obfuscate@v1",
+            ),
+        );
+        schema.methods.insert(
+            "deobfuscate_flow".to_string(),
+            super::plugin_schema_defs::method_decl_from_schemars::<DeobfuscateFlowInput>(
+                "DeobfuscateFlow",
+                SideEffect::Mutation,
+                false,
+                "openflow_obfuscation.write",
+                "mut.network.openflow.obfuscation.deobfuscate@v1",
+            ),
+        );
+        
+        Some(schema)
     }
 
     fn capabilities(&self) -> PluginCapabilities {
@@ -613,6 +636,30 @@ mod tests {
         assert!(cmd.contains("tcp,tcp_dst=80"));
         assert!(cmd.contains("actions=output:1"));
     }
+}
+
+/// Input struct for ObfuscateFlow method
+/// D-Bus method spec: https://www.opennetworking.org/wp-content/uploads/2014/10/of_spec_1_0.pdf
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ObfuscateFlowInput {
+    /// Bridge name
+    pub bridge: String,
+    /// Flow match specification
+    pub match_spec: String,
+    /// Obfuscation level (1-3)
+    pub obfuscation_level: u8,
+    /// Flow priority
+    pub priority: Option<u16>,
+}
+
+/// Input struct for DeobfuscateFlow method
+/// D-Bus method spec: https://www.opennetworking.org/wp-content/uploads/2014/10/of_spec_1_0.pdf
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct DeobfuscateFlowInput {
+    /// Bridge name
+    pub bridge: String,
+    /// Flow match specification to remove obfuscation from
+    pub match_spec: String,
 }
 
 // Self-registration: the plugin registry discovers this via inventory

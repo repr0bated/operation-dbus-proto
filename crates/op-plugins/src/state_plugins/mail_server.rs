@@ -398,7 +398,7 @@ pub(crate) fn mail_server_schema() -> PluginSchema {
         fields
     };
 
-    PluginSchema::builder("mail_server")
+    let mut schema = PluginSchema::builder("mail_server")
         .version("1.0.0")
         .description("Mail server container state and D-Bus registration for 3tched.com")
         .dependency("incus")
@@ -538,7 +538,100 @@ pub(crate) fn mail_server_schema() -> PluginSchema {
             "healthy": true,
             "last_error": null
         }))
-        .build()
+        .build();
+
+    schema.methods.insert(
+        "add_domain".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<DomainInput>(
+            "AddDomain",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "mail.write",
+            "mut.service.mail.domain.add@v1",
+        ),
+    );
+    schema.methods.insert(
+        "remove_domain".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<DomainInput>(
+            "RemoveDomain",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "mail.write",
+            "mut.service.mail.domain.remove@v1",
+        ),
+    );
+    schema.methods.insert(
+        "add_mailbox".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<MailboxInput>(
+            "AddMailbox",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "mail.write",
+            "mut.service.mail.mailbox.add@v1",
+        ),
+    );
+    schema.methods.insert(
+        "remove_mailbox".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<MailboxInput>(
+            "RemoveMailbox",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "mail.write",
+            "mut.service.mail.mailbox.remove@v1",
+        ),
+    );
+    schema.methods.insert(
+        "add_alias".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<AliasInput>(
+            "AddAlias",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "mail.write",
+            "mut.service.mail.alias.add@v1",
+        ),
+    );
+    schema.methods.insert(
+        "remove_alias".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<AliasInput>(
+            "RemoveAlias",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "mail.write",
+            "mut.service.mail.alias.remove@v1",
+        ),
+    );
+    schema.methods.insert(
+        "set_quota".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<QuotaInput>(
+            "SetQuota",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "mail.write",
+            "mut.service.mail.quota.set@v1",
+        ),
+    );
+    schema.methods.insert(
+        "get_queue".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<super::plugin_schema_defs::EmptyInput>(
+            "GetQueue",
+            op_state_store::SideEffect::Read,
+            true,
+            "mail.read",
+            "obs.service.mail.queue.get@v1",
+        ),
+    );
+    schema.methods.insert(
+        "flush_queue".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<super::plugin_schema_defs::EmptyInput>(
+            "FlushQueue",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "mail.write",
+            "mut.service.mail.queue.flush@v1",
+        ),
+    );
+
+    schema
 }
 
 // Self-registration: the plugin registry discovers this via inventory
@@ -546,3 +639,29 @@ pub(crate) fn mail_server_schema() -> PluginSchema {
 inventory::submit! {
     crate::default_registry::PluginReg::new("mail_server", |_ctx| std::sync::Arc::new(MailServerPlugin::new()))
 }
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct DomainInput {
+    pub domain: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct MailboxInput {
+    pub domain: String,
+    pub user: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct AliasInput {
+    pub domain: String,
+    pub alias: String,
+    pub destination: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct QuotaInput {
+    pub domain: String,
+    pub user: String,
+    pub quota_mb: u32,
+}
+

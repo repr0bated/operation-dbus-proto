@@ -459,7 +459,7 @@ pub(crate) fn packagekit_schema() -> PluginSchema {
         "install_packages".to_string(),
         super::plugin_schema_defs::method_decl_from_schemars::<InstallPackagesInput>(
             "InstallPackages",
-            op_state_store::SideEffect::Write,
+            op_state_store::SideEffect::Mutation,
             false,
             "packagekit.admin",
             "mut.software.packagekit.package.install@v1",
@@ -469,7 +469,7 @@ pub(crate) fn packagekit_schema() -> PluginSchema {
         "remove_packages".to_string(),
         super::plugin_schema_defs::method_decl_from_schemars::<RemovePackagesInput>(
             "RemovePackages",
-            op_state_store::SideEffect::Write,
+            op_state_store::SideEffect::Mutation,
             false,
             "packagekit.admin",
             "mut.software.packagekit.package.remove@v1",
@@ -479,7 +479,7 @@ pub(crate) fn packagekit_schema() -> PluginSchema {
         "update_packages".to_string(),
         super::plugin_schema_defs::method_decl_from_schemars::<UpdatePackagesInput>(
             "UpdatePackages",
-            op_state_store::SideEffect::Write,
+            op_state_store::SideEffect::Mutation,
             false,
             "packagekit.admin",
             "mut.software.packagekit.package.update@v1",

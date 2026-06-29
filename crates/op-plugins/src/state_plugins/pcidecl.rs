@@ -2,15 +2,17 @@
 // Query via /sys/bus/pci/devices/* and lspci fallback. Enforce supports "driver_override".
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use simd_json::OwnedValue as Value;
 use std::fs;
 use std::path::Path;
 
 use op_state::{
-    ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
+    ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff,
+    StatePlugin,
 };
-use op_state_store::{Constraint, FieldSchema, FieldType, PluginSchema};
+use op_state_store::{Constraint, FieldSchema, FieldType, PluginSchema, SideEffect};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PciDecl {
@@ -136,8 +138,7 @@ impl StatePlugin for PciDeclPlugin {
     }
 
     fn schema(&self) -> Option<PluginSchema> {
-        Some(
-            PluginSchema::builder("pcidecl")
+        let mut schema = PluginSchema::builder("pcidecl")
                 .version("1.0.0")
                 .description("PCI device declaration state")
                 .field(
@@ -166,8 +167,10 @@ impl StatePlugin for PciDeclPlugin {
                         read_only_when: None,
                     },
                 )
-                .build(),
-        )
+                .build();
+        // Add D-Bus methods for PCI devices
+        add_pcidecl_methods(&mut schema);
+        Some(schema)
     }
 
     async fn calculate_diff(&self, _current: &Value, desired: &Value) -> Result<StateDiff> {
@@ -295,4 +298,48 @@ impl StatePlugin for PciDeclPlugin {
 // (single source of the catalog; no central dispatch list).
 inventory::submit! {
     crate::default_registry::PluginReg::new("pcidecl", |_ctx| std::sync::Arc::new(PciDeclPlugin::new()))
+}
+
+/// Input struct for EnumerateDevices method
+/// D-Bus method spec: https://github.com/pciutils/pciutils/blob/master/HEADER
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct EnumerateDevicesInput {
+    /// Filter by vendor ID (optional)
+    pub vendor_id: Option<String>,
+    /// Filter by device class (optional)
+    pub class_code: Option<String>,
+}
+
+/// Input struct for GetDeviceInfo method
+/// D-Bus method spec: https://github.com/pciutils/pciutils/blob/master/HEADER
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GetDeviceInfoInput {
+    /// PCI address (e.g., "0000:00:00.0")
+    pub address: String,
+}
+
+/// Add methods to schema for pcidecl
+fn add_pcidecl_methods(schema: &mut PluginSchema) {
+    // EnumerateDevices method
+    schema.methods.insert(
+        "enumerate_devices".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<EnumerateDevicesInput>(
+            "EnumerateDevices",
+            SideEffect::Read,
+            true,
+            "pcidecl.read",
+            "obs.hardware.pci.devices.enumerate@v1",
+        ),
+    );
+    // GetDeviceInfo method
+    schema.methods.insert(
+        "get_device_info".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<GetDeviceInfoInput>(
+            "GetDeviceInfo",
+            SideEffect::Read,
+            true,
+            "pcidecl.read",
+            "obs.hardware.pci.device.info@v1",
+        ),
+    );
 }

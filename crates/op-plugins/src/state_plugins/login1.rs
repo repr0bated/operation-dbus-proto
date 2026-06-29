@@ -151,6 +151,77 @@ pub struct PowerOffInput {
     pub interactive: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct CreateSessionInput {
+    pub uid: u32,
+    pub pid: u32,
+    pub service: String,
+    pub type_: String,
+    pub class: String,
+    pub desktop: String,
+    pub seat_id: String,
+    pub vtnr: u32,
+    pub tty: String,
+    pub display: String,
+    pub remote: bool,
+    pub remote_user: String,
+    pub remote_host: String,
+    pub properties: Vec<std::collections::BTreeMap<String, Vec<u8>>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SessionIdInput {
+    pub session_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct KillSessionInput {
+    pub session_id: String,
+    pub who: String,
+    pub signal_number: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct UidInput {
+    pub uid: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct KillUserInput {
+    pub uid: u32,
+    pub signal_number: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SetUserLingerInput {
+    pub uid: u32,
+    pub enable: bool,
+    pub interactive: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SeatIdInput {
+    pub seat_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AttachDeviceInput {
+    pub seat_id: String,
+    pub sysfs_path: String,
+    pub interactive: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct InteractiveInput {
+    pub interactive: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SleepInput {
+    pub sleep_operation: u64,
+}
+
+
 pub(crate) fn login1_schema() -> PluginSchema {
     let mut schema = PluginSchema::builder("login1")
         .version("1.0.0")
@@ -250,6 +321,156 @@ pub(crate) fn login1_schema() -> PluginSchema {
             false,
             "login1.admin",
             "mut.software.login1.system.reboot@v1",
+        ),
+    );
+    schema.methods.insert(
+        "create_session".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<CreateSessionInput>(
+            "CreateSession",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "login1.write",
+            "mut.software.login1.session.create@v1",
+        ),
+    );
+    schema.methods.insert(
+        "release_session".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<SessionIdInput>(
+            "ReleaseSession",
+            op_state_store::SideEffect::Mutation,
+            true,
+            "login1.write",
+            "mut.software.login1.session.release@v1",
+        ),
+    );
+    schema.methods.insert(
+        "terminate_session".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<SessionIdInput>(
+            "TerminateSession",
+            op_state_store::SideEffect::Mutation,
+            true,
+            "login1.write",
+            "mut.software.login1.session.terminate@v1",
+        ),
+    );
+    schema.methods.insert(
+        "lock_session".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<SessionIdInput>(
+            "LockSession",
+            op_state_store::SideEffect::Mutation,
+            true,
+            "login1.write",
+            "mut.software.login1.session.lock@v1",
+        ),
+    );
+    schema.methods.insert(
+        "unlock_session".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<SessionIdInput>(
+            "UnlockSession",
+            op_state_store::SideEffect::Mutation,
+            true,
+            "login1.write",
+            "mut.software.login1.session.unlock@v1",
+        ),
+    );
+    schema.methods.insert(
+        "kill_session".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<KillSessionInput>(
+            "KillSession",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "login1.write",
+            "mut.software.login1.session.kill@v1",
+        ),
+    );
+    schema.methods.insert(
+        "terminate_user".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<UidInput>(
+            "TerminateUser",
+            op_state_store::SideEffect::Mutation,
+            true,
+            "login1.admin",
+            "mut.software.login1.user.terminate@v1",
+        ),
+    );
+    schema.methods.insert(
+        "kill_user".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<KillUserInput>(
+            "KillUser",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "login1.admin",
+            "mut.software.login1.user.kill@v1",
+        ),
+    );
+    schema.methods.insert(
+        "set_user_linger".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<SetUserLingerInput>(
+            "SetUserLinger",
+            op_state_store::SideEffect::Mutation,
+            true,
+            "login1.admin",
+            "mut.software.login1.user.linger.set@v1",
+        ),
+    );
+    schema.methods.insert(
+        "terminate_seat".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<SeatIdInput>(
+            "TerminateSeat",
+            op_state_store::SideEffect::Mutation,
+            true,
+            "login1.admin",
+            "mut.software.login1.seat.terminate@v1",
+        ),
+    );
+    schema.methods.insert(
+        "attach_device".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<AttachDeviceInput>(
+            "AttachDevice",
+            op_state_store::SideEffect::Mutation,
+            true,
+            "login1.admin",
+            "mut.software.login1.device.attach@v1",
+        ),
+    );
+    schema.methods.insert(
+        "flush_devices".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<InteractiveInput>(
+            "FlushDevices",
+            op_state_store::SideEffect::Mutation,
+            true,
+            "login1.admin",
+            "mut.software.login1.devices.flush@v1",
+        ),
+    );
+    schema.methods.insert(
+        "suspend".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<InteractiveInput>(
+            "Suspend",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "login1.admin",
+            "mut.software.login1.system.suspend@v1",
+        ),
+    );
+    schema.methods.insert(
+        "hibernate".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<InteractiveInput>(
+            "Hibernate",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "login1.admin",
+            "mut.software.login1.system.hibernate@v1",
+        ),
+    );
+    schema.methods.insert(
+        "sleep".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<SleepInput>(
+            "Sleep",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "login1.admin",
+            "mut.software.login1.system.sleep@v1",
         ),
     );
 
