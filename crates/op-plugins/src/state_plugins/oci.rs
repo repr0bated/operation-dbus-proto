@@ -8,10 +8,14 @@
 //!
 //! THE PLUGIN IS THE SCHEMA — if a container is declared here with
 //! loopback_required=true, the daemon will bring up lo inside its netns.
+//!
+//! D-Bus methods: https://docs.docker.com/engine/api/v1.45/
 
 use anyhow::Result;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
 use op_state_store::{Constraint, FieldSchema, FieldType, PluginSchema, ReadOnlyCondition};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use simd_json::json;
 use simd_json::OwnedValue as Value;
 use std::collections::HashMap;
@@ -150,6 +154,33 @@ fn oci_container_fields() -> HashMap<String, FieldSchema> {
     fields
 }
 
+/// Input struct for pulling an OCI image.
+/// See: https://docs.docker.com/engine/api/v1.45/
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PullImageInput {
+    /// Image reference (e.g., docker:gravitl/netmaker:v1.5.1)
+    pub image: String,
+}
+
+/// Input struct for running a container from an OCI image.
+/// See: https://docs.docker.com/engine/api/v1.45/
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct RunContainerInput {
+    /// Container name
+    pub name: String,
+    /// Image reference
+    pub image: String,
+    /// Whether loopback is required inside the container
+    #[serde(default)]
+    pub loopback_required: bool,
+    /// Whether to run in privileged mode
+    #[serde(default)]
+    pub privileged: bool,
+    /// Environment variables
+    #[serde(default)]
+    pub env: std::collections::HashMap<String, String>,
+}
+
 pub(crate) fn oci_schema() -> PluginSchema {
     PluginSchema::builder("oci")
         .version("1.0.0")
@@ -201,6 +232,20 @@ pub(crate) fn oci_schema() -> PluginSchema {
                 }
             ]
         }))
+        .method(super::plugin_schema_defs::method_decl_from_schemars::<PullImageInput>(
+            "pull_image",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.container.oci.image.pull@v1",
+            "mut.container.oci.image.pull@v1",
+        ))
+        .method(super::plugin_schema_defs::method_decl_from_schemars::<RunContainerInput>(
+            "run_container",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.container.oci.run@v1",
+            "mut.container.oci.run@v1",
+        ))
         .build()
 }
 

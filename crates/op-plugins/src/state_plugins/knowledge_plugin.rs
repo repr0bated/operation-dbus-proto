@@ -4,18 +4,29 @@ use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
 use op_state_store::PluginSchema;
 use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
+use serde_json::json;
 use simd_json::prelude::ValueAsMutContainer;
-use simd_json::{json, OwnedValue as Value};
+use simd_json::OwnedValue as Value;
 use std::net::TcpStream;
 use std::time::Duration;
 
 const DEFAULT_QDRANT_ENDPOINT: &str = "http://127.0.0.1:6334";
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Knowledge plugin state.
+/// See: https://qdrant.tech/
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct KnowledgeState {
+    /// Plugin status
     pub status: String,
-    pub stores: Value,
-    pub embedding: Value,
-    pub config: Value,
+    /// Knowledge stores configuration
+    #[schemars(with = "serde_json::Value")]
+    pub stores: JsonValue,
+    /// Embedding pipeline configuration
+    #[schemars(with = "serde_json::Value")]
+    pub embedding: JsonValue,
+    /// Plugin configuration
+    #[schemars(with = "serde_json::Value")]
+    pub config: JsonValue,
 }
 pub struct KnowledgePlugin;
 impl Default for KnowledgePlugin {
@@ -126,7 +137,7 @@ impl StatePlugin for KnowledgePlugin {
 pub(crate) fn knowledge_schema() -> PluginSchema {
     let state =
         simd_json::serde::to_owned_value(super::knowledge_plugin::KnowledgePlugin::current_state())
-            .unwrap_or_else(|_| json!({}));
+            .unwrap_or_else(|_| simd_json::json!({}));
     schema_from_state(
         "knowledge",
         "data",

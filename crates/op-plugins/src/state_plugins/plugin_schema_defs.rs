@@ -51,6 +51,22 @@ pub(crate) use super::workflows_plugin::workflows_schema as workflows_plugin_sch
 pub(crate) use super::xray::xray_schema as xray_plugin_schema;
 pub(crate) use super::zeroclaw::zeroclaw_schema as zeroclaw_plugin_schema;
 
+// Added missing schema re-exports
+pub(crate) use super::blockchain_plugin::blockchain_schema as blockchain_plugin_schema;
+pub(crate) use super::config::config_plugin_schema;
+pub(crate) use super::cozo::cozo_schema as cozo_plugin_schema;
+pub(crate) use super::datastore::datastore_schema as datastore_plugin_schema;
+pub(crate) use super::dnsresolver::dnsresolver_schema as dnsresolver_plugin_schema;
+pub(crate) use super::gemma_brain::gemma_brain_schema as gemma_brain_plugin_schema;
+pub(crate) use super::large_language_model::large_language_model_schema as large_language_model_plugin_schema;
+pub(crate) use super::login1::login1_schema as login1_plugin_schema;
+pub(crate) use super::mcp::mcp_schema as mcp_plugin_schema;
+pub(crate) use super::notebooklm::notebooklm_schema as notebooklm_plugin_schema;
+// pub(crate) use super::packagekit::packagekit_schema as packagekit_plugin_schema;
+pub(crate) use super::persona::persona_schema as persona_plugin_schema;
+pub(crate) use super::procfs::procfs_schema as procfs_plugin_schema;
+pub(crate) use super::qdrant::qdrant_schema as qdrant_plugin_schema;
+
 // ── Shared utility functions (not schemas) ─────────────────────────────────────
 
 use op_state_store::{FieldSchema, FieldType, MethodDecl, PluginSchema, SideEffect};

@@ -1,0 +1,52 @@
+#!/bin/sh
+# 🟢 🛷 Zeroclaw GUI Shuttle — pins zeroclaw-gui to the isolated Wayland socket.
+#
+# CRD/X11 isolation rule: DISPLAY is explicitly unset before the GUI starts.
+
+set -eu
+exec 2>&1
+
+[ -r /etc/op-dbus/environment ] && . /etc/op-dbus/environment
+[ -r /etc/ghostbridge/zeroclaw-wayland.env ] && . /etc/ghostbridge/zeroclaw-wayland.env
+
+OP_ZEROCLAW_USER="${OP_ZEROCLAW_USER:-jeremy}"
+OP_ZEROCLAW_GROUP="${OP_ZEROCLAW_GROUP:-$OP_ZEROCLAW_USER}"
+ZEROCLAW_WAYLAND_DISPLAY="${ZEROCLAW_WAYLAND_DISPLAY:-zeroclaw-wayland}"
+ZEROCLAW_GUI_BIN="${ZEROCLAW_GUI_BIN:-/home/${OP_ZEROCLAW_USER}/.local/bin/zeroclaw-gui}"
+ZEROCLAW_SOFTWARE_RENDER="${ZEROCLAW_SOFTWARE_RENDER:-0}"
+PATH="${PATH:-/usr/local/sbin:/usr/local/bin:/usr/bin:/bin:/home/${OP_ZEROCLAW_USER}/.local/bin}"
+
+if [ ! -x "$ZEROCLAW_GUI_BIN" ]; then
+  echo "zeroclaw-gui binary not executable: $ZEROCLAW_GUI_BIN"
+  exit 127
+fi
+
+uid="$(id -u "$OP_ZEROCLAW_USER")"
+runtime_dir="${XDG_RUNTIME_DIR:-/run/user/${uid}}"
+socket_path="${runtime_dir}/${ZEROCLAW_WAYLAND_DISPLAY}"
+
+i=0
+while [ ! -S "$socket_path" ]; do
+  i=$((i + 1))
+  if [ "$i" -gt 200 ]; then
+    echo "Wayland socket not ready: $socket_path"
+    exit 1
+  fi
+  sleep 0.1
+done
+
+unset DISPLAY
+if [ "$ZEROCLAW_SOFTWARE_RENDER" = "1" ]; then
+  export LIBGL_ALWAYS_SOFTWARE=1
+fi
+
+exec s6-setuidgid "$OP_ZEROCLAW_USER" env \
+  HOME="/home/${OP_ZEROCLAW_USER}" \
+  USER="$OP_ZEROCLAW_USER" \
+  LOGNAME="$OP_ZEROCLAW_USER" \
+  PATH="$PATH" \
+  XDG_RUNTIME_DIR="$runtime_dir" \
+  WAYLAND_DISPLAY="$ZEROCLAW_WAYLAND_DISPLAY" \
+  DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-}" \
+  LIBGL_ALWAYS_SOFTWARE="${LIBGL_ALWAYS_SOFTWARE:-}" \
+  "$ZEROCLAW_GUI_BIN"

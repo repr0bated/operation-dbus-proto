@@ -17,7 +17,7 @@ sudo cp "$SCRIPT_DIR/mosquitto.conf" /etc/netmaker/mosquitto.conf
 # ── 2. Create containers via incus-compose ────────────────────────────────────
 
 cd "$SCRIPT_DIR"
-"$INCUS_COMPOSE" up --cwd "$SCRIPT_DIR"
+# "$INCUS_COMPOSE" up --cwd "$SCRIPT_DIR"
 
 # ── 3. Stop containers before rewiring network ────────────────────────────────
 

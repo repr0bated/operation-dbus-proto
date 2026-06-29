@@ -136,12 +136,9 @@ async fn main() -> Result<()> {
     if loopback_required {
         eprintln!("loopback_required=true for {instance_name}, calling BringUpLoopback...");
 
-        let daemon =
-            get_json_property(&conn, "/org/opdbus/v1/plugins/ovsdb_daemon", "JsonData").await?;
-        let dbus_bus = daemon["dbus_bus_name"]
-            .as_str()
-            .unwrap_or("org.opdbus.v1.plugins.ovsdb");
-        let proxy_path = discover_proxy_path(&conn, dbus_bus).await?;
+        // D-Bus bus name is the OVS daemon's name (hardcoded constant)
+        let dbus_bus = "org.opdbus.v1.plugins.ovsdb".to_string();
+        let proxy_path = discover_proxy_path(&conn, &dbus_bus).await?;
 
         let lo_params = serde_json::json!({
             "instance_name": instance_name
@@ -226,13 +223,9 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    // Discover AttachPort method location
-    let daemon =
-        get_json_property(&conn, "/org/opdbus/v1/plugins/ovsdb_daemon", "JsonData").await?;
-    let dbus_bus = daemon["dbus_bus_name"]
-        .as_str()
-        .unwrap_or("org.opdbus.v1.plugins.ovsdb");
-    let proxy_path = discover_proxy_path(&conn, dbus_bus).await?;
+    // D-Bus bus name is the OVS daemon's name (hardcoded constant)
+    let dbus_bus = "org.opdbus.v1.plugins.ovsdb".to_string();
+    let proxy_path = discover_proxy_path(&conn, &dbus_bus).await?;
 
     eprintln!("discovered AttachPort at bus={dbus_bus} path={proxy_path}");
 

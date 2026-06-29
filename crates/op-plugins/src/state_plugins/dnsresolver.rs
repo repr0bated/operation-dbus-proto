@@ -171,38 +171,7 @@ impl StatePlugin for DnsResolverPlugin {
     }
 
     fn schema(&self) -> Option<PluginSchema> {
-        Some(
-            PluginSchema::builder("dnsresolver")
-                .version("1.0.0")
-                .description("DNS resolver declaration state")
-                .field(
-                    "version",
-                    FieldSchema {
-                        field_type: FieldType::Integer,
-                        required: false,
-                        description: "Schema version".to_string(),
-                        default: Some(simd_json::json!(1)),
-                        example: None,
-                        constraints: vec![Constraint::Min { value: 1.0 }],
-                        read_only: false,
-                        read_only_when: None,
-                    },
-                )
-                .field(
-                    "items",
-                    FieldSchema {
-                        field_type: FieldType::Array(Box::new(FieldType::Any)),
-                        required: true,
-                        description: "Resolver items".to_string(),
-                        default: Some(simd_json::json!([])),
-                        example: None,
-                        constraints: Vec::new(),
-                        read_only: false,
-                        read_only_when: None,
-                    },
-                )
-                .build(),
-        )
+        Some(dnsresolver_schema())
     }
 
     async fn calculate_diff(&self, _current: &Value, desired: &Value) -> Result<StateDiff> {
@@ -335,6 +304,99 @@ impl StatePlugin for DnsResolverPlugin {
             atomic_operations: false,
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ResolveHostnameInput {
+    pub ifindex: i32,
+    pub name: String,
+    pub family: i32,
+    pub flags: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ResolveAddressInput {
+    pub ifindex: i32,
+    pub family: i32,
+    pub address: Vec<u8>,
+    pub flags: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ResolveRecordInput {
+    pub ifindex: i32,
+    pub name: String,
+    pub class: u16,
+    pub record_type: u16,
+    pub flags: u64,
+}
+
+pub(crate) fn dnsresolver_schema() -> PluginSchema {
+    let mut schema = PluginSchema::builder("dnsresolver")
+        .version("1.0.0")
+        .description("DNS resolver declaration state")
+        .field(
+            "version",
+            FieldSchema {
+                field_type: FieldType::Integer,
+                required: false,
+                description: "Schema version".to_string(),
+                default: Some(simd_json::json!(1)),
+                example: None,
+                constraints: vec![Constraint::Min { value: 1.0 }],
+                read_only: false,
+                read_only_when: None,
+            },
+        )
+        .field(
+            "items",
+            FieldSchema {
+                field_type: FieldType::Array(Box::new(FieldType::Any)),
+                required: true,
+                description: "Resolver items".to_string(),
+                default: Some(simd_json::json!([])),
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        )
+        .build();
+
+    // org.freedesktop.resolve1.Manager methods
+    // Spec: https://www.freedesktop.org/software/systemd/man/latest/org.freedesktop.resolve1.html
+    schema.methods.insert(
+        "resolve_hostname".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<ResolveHostnameInput>(
+            "ResolveHostname",
+            op_state_store::SideEffect::Read,
+            true,
+            "dnsresolver.read",
+            "obs.software.dnsresolver.hostname.resolve@v1",
+        ),
+    );
+    schema.methods.insert(
+        "resolve_address".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<ResolveAddressInput>(
+            "ResolveAddress",
+            op_state_store::SideEffect::Read,
+            true,
+            "dnsresolver.read",
+            "obs.software.dnsresolver.address.resolve@v1",
+        ),
+    );
+    schema.methods.insert(
+        "resolve_record".to_string(),
+        super::plugin_schema_defs::method_decl_from_schemars::<ResolveRecordInput>(
+            "ResolveRecord",
+            op_state_store::SideEffect::Read,
+            true,
+            "dnsresolver.read",
+            "obs.software.dnsresolver.record.resolve@v1",
+        ),
+    );
+    
+    schema
 }
 
 // Self-registration: the plugin registry discovers this via inventory

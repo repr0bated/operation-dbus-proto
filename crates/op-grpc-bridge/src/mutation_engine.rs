@@ -868,37 +868,40 @@ impl MutationEngine {
         };
         let _ = self.change_tx.send(change.clone());
 
-        // For the Zeroclaw plugin, run the plugin-owned orchestration (design §5)
-        // so declared methods return real domain decisions instead of an echo.
-        // The accountability event above is still the single recorded event.
-        // State is read from the in-memory projection authority (never /dev/shm).
-        let method_result: serde_json::Value = if plugin_id == "zeroclaw" {
-            let state = op_plugins::state_plugins::zeroclaw::ZeroclawPlugin::current_state();
-            match op_plugins::state_plugins::zeroclaw::dispatch_zeroclaw_method(
-                method, json_args, &state,
-            ) {
-                Ok(outcome) => {
-                    // Persist effective Set* changes to the authoritative state
-                    // cache so the new selection is observable to readers.
-                    if method == "SetProvider" || method == "SetModel" {
-                        self.merge_into_state_cache("zeroclaw", &outcome.result)
-                            .await;
+        // Dispatch to appropriate backend based on plugin_id
+        let method_result: serde_json::Value = match plugin_id {
+            "rovs_commands" => {
+                dispatch_rovs_commands_method(&self.ovsdb, method, &parsed_value).await?
+            }
+            "zeroclaw" => {
+                let state = op_plugins::state_plugins::zeroclaw::ZeroclawPlugin::current_state();
+                match op_plugins::state_plugins::zeroclaw::dispatch_zeroclaw_method(
+                    method, json_args, &state,
+                ) {
+                    Ok(outcome) => {
+                        // Persist effective Set* changes to the authoritative state
+                        // cache so the new selection is observable to readers.
+                        if method == "SetProvider" || method == "SetModel" {
+                            self.merge_into_state_cache("zeroclaw", &outcome.result)
+                                .await;
+                        }
+                        if let Some(sig) = &outcome.signal {
+                            tracing::debug!(plugin_id, method, signal = %sig.name, "zeroclaw dispatch signal");
+                        }
+                        outcome.result
                     }
-                    if let Some(sig) = &outcome.signal {
-                        tracing::debug!(plugin_id, method, signal = %sig.name, "zeroclaw dispatch signal");
+                    Err(e) => {
+                        return Err(anyhow::anyhow!(
+                            "zeroclaw dispatch error for '{}': {}",
+                            method,
+                            e
+                        ))
                     }
-                    outcome.result
-                }
-                Err(e) => {
-                    return Err(anyhow::anyhow!(
-                        "zeroclaw dispatch error for '{}': {}",
-                        method,
-                        e
-                    ))
                 }
             }
-        } else {
-            serde_json::to_value(&parsed_value).unwrap_or(serde_json::Value::Null)
+            _ => {
+                serde_json::to_value(&parsed_value).unwrap_or(serde_json::Value::Null)
+            }
         };
 
         // Return a JSON result carrying the event accountability proof and the
@@ -1122,6 +1125,73 @@ fn existing_unix_socket_sockets() -> Vec<simd_json::OwnedValue> {
         })
         .cloned()
         .collect()
+}
+
+/// Execute rovs_commands methods via OVSDB proxy
+async fn dispatch_rovs_commands_method(
+    ovsdb: &op_network::rovs_proxy::OvsdbDbusClient,
+    method: &str,
+    args: &simd_json::OwnedValue,
+) -> anyhow::Result<serde_json::Value> {
+    match method {
+        "create_bridge" => {
+            let bridge_name = args
+                .get("bridge_name")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("bridge_name required"))?;
+            ovsdb.create_bridge(bridge_name).await?;
+            Ok(serde_json::json!({"created": bridge_name}))
+        }
+        "delete_bridge" => {
+            let bridge_name = args
+                .get("bridge_name")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("bridge_name required"))?;
+            ovsdb.delete_bridge(bridge_name).await?;
+            Ok(serde_json::json!({"deleted": bridge_name}))
+        }
+        "add_port" => {
+            let bridge_name = args
+                .get("bridge_name")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("bridge_name required"))?;
+            let port_name = args
+                .get("port_name")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("port_name required"))?;
+            ovsdb.add_port(bridge_name, port_name).await?;
+            Ok(serde_json::json!({"added": port_name, "to": bridge_name}))
+        }
+        "remove_port" => {
+            let bridge_name = args
+                .get("bridge_name")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("bridge_name required"))?;
+            let port_name = args
+                .get("port_name")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("port_name required"))?;
+            ovsdb.delete_port(bridge_name, port_name).await?;
+            Ok(serde_json::json!({"removed": port_name, "from": bridge_name}))
+        }
+        "list_bridges" => {
+            let bridges = ovsdb.list_bridges().await?;
+            Ok(serde_json::json!(bridges))
+        }
+        "list_ports" => {
+            let bridge_name = args
+                .get("bridge_name")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("bridge_name required"))?;
+            let ports = ovsdb.list_bridge_ports(bridge_name).await?;
+            Ok(serde_json::json!(ports))
+        }
+        "list_dbs" => {
+            let dbs = ovsdb.list_dbs().await?;
+            Ok(serde_json::json!(dbs))
+        }
+        _ => Err(anyhow::anyhow!("unknown rovs_commands method: {}", method)),
+    }
 }
 
 /// Parse createunixsocket arguments. Accepts either a JSON array
