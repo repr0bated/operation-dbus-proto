@@ -98,7 +98,7 @@ pub mod prelude {
         FreeDesktopPlugin, FullSystemPlugin, GcloudAdcPlugin, HardwarePlugin, IncusPlugin,
         KeypairPlugin, KeyringPlugin, KnowledgePlugin, Login1Plugin, LxcPlugin, MailServerPlugin,
         McpStatePlugin, MemoryPlugin, NetStatePlugin, NetmakerConfig, NetmakerPlugin,
-        OpenFlowObfuscationPlugin, OpenFlowPlugin, OvsBridgePlugin, OvsdbDaemonPlugin,
+        OpenFlowObfuscationPlugin, OpenFlowPlugin, OvsBridgePlugin,
         PackageKitPlugin, PciDeclPlugin, PrivacyRouterPlugin, PrivacyRoutesPlugin, ProcfsPlugin,
         ProxmoxPlugin, ProxyServerPlugin, RovsCommandsPlugin, RtnetlinkPlugin, S6StatePlugin,
         SchemaRendererPlugin, ServicePlugin, SessDeclPlugin, SoftwarePlugin, ToolDefinition,

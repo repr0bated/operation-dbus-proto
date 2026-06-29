@@ -144,14 +144,13 @@ pub fn keypair_schema() -> PluginSchema {
         "Keypair declaration state",
         &root,
     );
-    let method = super::plugin_schema_defs::cap_method(
+    schema.methods.insert("list_keypairs".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<()>(
         "list_keypairs",
         op_state_store::SideEffect::Read,
         true,
         "cap.service.keypair.list@v1",
         "obs.service.keypair.list@v1",
-    );
-    schema.methods.insert(method.name.clone(), method);
+    ));
     schema
 }
 

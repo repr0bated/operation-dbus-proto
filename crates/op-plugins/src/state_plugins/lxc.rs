@@ -15,6 +15,7 @@ use op_state::{
 use op_state_store::PluginSchema;
 #[cfg(test)]
 use op_state_store::{Constraint, FieldSchema, FieldType};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
@@ -1260,32 +1261,41 @@ pub(crate) fn lxc_schema() -> PluginSchema {
         "LXC container management via native Proxmox API",
         &root,
     );
-    for method in [
-        super::plugin_schema_defs::cap_method(
-            "create_container",
-            op_state_store::SideEffect::Mutation,
-            false,
-            "cap.service.lxc.container.create@v1",
-            "mut.service.lxc.container.create@v1",
-        ),
-        super::plugin_schema_defs::cap_method(
-            "delete_container",
-            op_state_store::SideEffect::Mutation,
-            false,
-            "cap.service.lxc.container.delete@v1",
-            "mut.service.lxc.container.delete@v1",
-        ),
-        super::plugin_schema_defs::cap_method(
-            "attach_container_port",
-            op_state_store::SideEffect::Mutation,
-            false,
-            "cap.network.lxc.port.attach@v1",
-            "mut.network.lxc.port.attach@v1",
-        ),
-    ] {
-        schema.methods.insert(method.name.clone(), method);
-    }
+    // create_container uses ContainerInfo directly as input
+    schema.methods.insert("create_container".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<ContainerInfo>(
+        "create_container",
+        op_state_store::SideEffect::Mutation,
+        false,
+        "cap.service.lxc.container.create@v1",
+        "mut.service.lxc.container.create@v1",
+    ));
+    // delete_container needs a simple input struct
+    schema.methods.insert("delete_container".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<DeleteContainerInput>(
+        "delete_container",
+        op_state_store::SideEffect::Mutation,
+        false,
+        "cap.service.lxc.container.delete@v1",
+        "mut.service.lxc.container.delete@v1",
+    ));
+    // attach_container_port - passes through to rovs_commands for OVS port attachment
+    schema.methods.insert("attach_container_port".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<ContainerInfo>(
+        "attach_container_port",
+        op_state_store::SideEffect::Mutation,
+        false,
+        "cap.network.lxc.port.attach@v1",
+        "mut.network.lxc.port.attach@v1",
+    ));
     schema
+}
+
+/// delete_container method input
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct DeleteContainerInput {
+    /// Container VMID or name
+    pub name: String,
+    /// Force delete
+    #[serde(default)]
+    pub force: bool,
 }
 
 /// Hand-rolled golden reference for the LXC schema. Kept test-only so the

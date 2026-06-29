@@ -1,25 +1,85 @@
-//! rovs_commands Plugin — Command Definitions Schema
+//! rovs_commands Plugin — Direct OVSDB Command Execution via D-Bus
 //!
-//! Schema-only plugin (read-only StatePlugin — no apply_state mutations).
-//! Serves as the source of truth for available OVS/rovs commands
-//! and their D-Bus method mappings.
+//! Schema-only plugin defining callable methods for OVSDB operations.
+//! The grpc-bridge exposes these as D-Bus objects at `/org/opdbus/v1/plugins/rovs_commands`
+//! that can be called directly via zbus/busctl.
 //!
-//! Per AGENTS.md §4: D-Bus is the ONLY control plane. This plugin
-//! defines the schema for commands that are executed via D-Bus
-//! at `/org/opdbus/v1/plugins/rovs_commands`.
+//! Per AGENTS.md §4: D-Bus is the ONLY control plane. Methods execute OVSDB transact
+//! calls directly through the rovs proxy.
 //!
-//! Projected at: `/org/opdbus/v1/plugins/rovs_commands`
+//! Method input types use schemars::JsonSchema derive - this is the single source
+//! of truth for both JSON Schema (exposed in PluginSchema.methods.args) and
+//! gRPC proto generation [via `proto-from-methods` binary at build time].
 
-use op_state_store::{FieldSchema, FieldType, PluginSchema};
+use op_state_store::{FieldSchema, FieldType, MethodDecl, PluginSchema, SideEffect};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use simd_json::json;
 use simd_json::OwnedValue as Value;
 use std::collections::HashMap;
 
-/// rovs_commands Plugin — Command definitions schema
-///
-/// This plugin exposes the schema of available OVS commands.
-/// Commands are executed via D-Bus methods on the OVSDB daemon.
-/// Implements StatePlugin as a read-only schema provider.
+// =============================================================================
+// Method input types - single source of truth via schemars
+// =============================================================================
+
+/// create_bridge method input
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CreateBridgeInput {
+    /// Name of the bridge to create
+    pub bridge_name: String,
+    /// Datapath type (e.g. "system", "netdev")
+    #[serde(default = "default_datapath_type")]
+    pub datapath_type: String,
+}
+
+fn default_datapath_type() -> String {
+    "system".to_string()
+}
+
+/// delete_bridge method input
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct DeleteBridgeInput {
+    /// Name of the bridge to delete
+    pub bridge_name: String,
+}
+
+/// add_port method input
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AddPortInput {
+    /// Parent bridge name
+    pub bridge_name: String,
+    /// Port name to add
+    pub port_name: String,
+    /// Interface type (e.g. "internal", "system")
+    #[serde(default = "default_interface_type")]
+    pub interface_type: String,
+}
+
+fn default_interface_type() -> String {
+    "internal".to_string()
+}
+
+/// remove_port method input
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct RemovePortInput {
+    /// Bridge name containing the port (optional for backward compat)
+    #[serde(default)]
+    pub bridge_name: String,
+    /// Port name to remove
+    pub port_name: String,
+}
+
+/// list_ports method input
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ListPortsInput {
+    /// Bridge name to query
+    pub bridge_name: String,
+}
+
+// =============================================================================
+// Plugin implementation
+// =============================================================================
+
 pub struct RovsCommandsPlugin;
 
 impl Default for RovsCommandsPlugin {
@@ -33,60 +93,13 @@ impl RovsCommandsPlugin {
         Self
     }
 
-    /// Get the current state of available commands
     pub fn current_state() -> Value {
         simd_json::json!({
-            "commands": [
-                {
-                    "name": "create-bridge",
-                    "description": "Create a new OVS bridge",
-                    "dbus_method": "org.opdbus.v1.Ovsdb.JsonRpc.transact",
-                    "args": ["bridge_name", "datapath_type"],
-                },
-                {
-                    "name": "delete-bridge",
-                    "description": "Delete an existing OVS bridge",
-                    "dbus_method": "org.opdbus.v1.Ovsdb.JsonRpc.transact",
-                    "args": ["bridge_name"],
-                },
-                {
-                    "name": "add-port",
-                    "description": "Add a port to an OVS bridge",
-                    "dbus_method": "org.opdbus.v1.Ovsdb.JsonRpc.transact",
-                    "args": ["bridge_name", "port_name", "interface_type"],
-                },
-                {
-                    "name": "remove-port",
-                    "description": "Remove a port from an OVS bridge",
-                    "dbus_method": "org.opdbus.v1.Ovsdb.JsonRpc.transact",
-                    "args": ["port_name"],
-                },
-                {
-                    "name": "list-bridges",
-                    "description": "List all OVS bridges",
-                    "dbus_method": "org.opdbus.v1.Ovsdb.JsonRpc.transact",
-                    "args": [],
-                },
-                {
-                    "name": "list-ports",
-                    "description": "List ports on a bridge",
-                    "dbus_method": "org.opdbus.v1.Ovsdb.JsonRpc.transact",
-                    "args": ["bridge_name"],
-                },
-                {
-                    "name": "list-dbs",
-                    "description": "List OVSDB databases",
-                    "dbus_method": "org.opdbus.v1.Ovsdb.JsonRpc.transact",
-                    "args": [],
-                },
-            ],
-            "dbus_bus_name": "org.opdbus.v1.plugins.ovsdb",
-            "dbus_object_path": "/org/opdbus/v1/plugins/ovsdb",
+            "available": true,
             "schema_version": "1.0.0",
         })
     }
 
-    /// Return the plugin schema
     pub fn schema() -> Option<PluginSchema> {
         Some(rovs_commands_schema())
     }
@@ -106,12 +119,7 @@ impl op_state::StatePlugin for RovsCommandsPlugin {
         Self::schema()
     }
 
-    async fn calculate_diff(
-        &self,
-        _current: &Value,
-        _desired: &Value,
-    ) -> anyhow::Result<op_state::StateDiff> {
-        // Schema-only plugin: no state to apply
+    async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> anyhow::Result<op_state::StateDiff> {
         Ok(op_state::StateDiff {
             plugin: self.name().to_string(),
             actions: vec![],
@@ -123,11 +131,7 @@ impl op_state::StatePlugin for RovsCommandsPlugin {
         })
     }
 
-    async fn apply_state(
-        &self,
-        _diff: &op_state::StateDiff,
-    ) -> anyhow::Result<op_state::ApplyResult> {
-        // Schema-only plugin: no state to apply
+    async fn apply_state(&self, _diff: &op_state::StateDiff) -> anyhow::Result<op_state::ApplyResult> {
         Ok(op_state::ApplyResult {
             success: true,
             changes_applied: vec![],
@@ -165,53 +169,59 @@ impl op_state::StatePlugin for RovsCommandsPlugin {
 }
 
 pub(crate) fn rovs_commands_schema() -> PluginSchema {
+    let mut methods = HashMap::new();
+    methods.insert("create_bridge".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<CreateBridgeInput>(
+        "create_bridge", SideEffect::Mutation, false,
+        "cap.network.ovsdb.bridge.create@v1", "mut.network.ovsdb.bridge.create@v1"));
+    methods.insert("delete_bridge".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<DeleteBridgeInput>(
+        "delete_bridge", SideEffect::Mutation, false,
+        "cap.network.ovsdb.bridge.delete@v1", "mut.network.ovsdb.bridge.delete@v1"));
+    methods.insert("add_port".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<AddPortInput>(
+        "add_port", SideEffect::Mutation, false,
+        "cap.network.ovsdb.port.add@v1", "mut.network.ovsdb.port.add@v1"));
+    methods.insert("remove_port".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<RemovePortInput>(
+        "remove_port", SideEffect::Mutation, false,
+        "cap.network.ovsdb.port.delete@v1", "mut.network.ovsdb.port.delete@v1"));
+    // Use unit type () for methods with no arguments
+    methods.insert("list_bridges".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<()>(
+        "list_bridges", SideEffect::Read, true,
+        "cap.network.ovsdb.bridge.list@v1", "obs.network.ovsdb.bridge.list@v1"));
+    methods.insert("list_ports".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<ListPortsInput>(
+        "list_ports", SideEffect::Read, true,
+        "cap.network.ovsdb.port.list@v1", "obs.network.ovsdb.port.list@v1"));
+    methods.insert("list_dbs".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<()>(
+        "list_dbs", SideEffect::Read, true,
+        "cap.network.ovsdb.db.list@v1", "obs.network.ovsdb.db.list@v1"));
+
     PluginSchema::builder("rovs_commands")
         .version("1.0.0")
         .category("network")
-        .description("rovs command definitions — schema source of truth for OVS bridge/port/flow operations via D-Bus")
+        .description("Direct OVSDB command execution methods exposed via D-Bus by grpc-bridge")
         .dependency("net")
-        .array_field(
-            "commands",
-            FieldType::Object(HashMap::from([
-                ("name".to_string(), FieldSchema {
-                    field_type: FieldType::String,
-                    required: true,
-                    description: "Command name".to_string(),
-                    default: None,
-                    example: Some(json!("create-bridge")),
-                    constraints: Vec::new(),
-                    read_only: true,
-                    read_only_when: None,
-                }),
-                ("description".to_string(), FieldSchema {
-                    field_type: FieldType::String,
-                    required: true,
-                    description: "Human-readable description".to_string(),
-                    default: None,
-                    example: Some(json!("Create a new OVS bridge")),
-                    constraints: Vec::new(),
-                    read_only: true,
-                    read_only_when: None,
-                }),
-                ("dbus_method".to_string(), FieldSchema {
-                    field_type: FieldType::String,
-                    required: true,
-                    description: "D-Bus method path for this command".to_string(),
-                    default: None,
-                    example: Some(json!("org.opdbus.v1.Ovsdb.JsonRpc.transact")),
-                    constraints: Vec::new(),
-                    read_only: true,
-                    read_only_when: None,
-                }),
-            ])),
-            true,
-            "Available OVS/rovs commands exposed via D-Bus",
-        )
+        .field("available", FieldSchema {
+            field_type: FieldType::Boolean,
+            required: true,
+            description: "Plugin is available".to_string(),
+            default: Some(json!(true)),
+            example: Some(json!(true)),
+            constraints: Vec::new(),
+            read_only: true,
+            read_only_when: None,
+        })
+        .field("schema_version", FieldSchema {
+            field_type: FieldType::String,
+            required: false,
+            description: "Schema version".to_string(),
+            default: Some(json!("1.0.0")),
+            example: Some(json!("1.0.0")),
+            constraints: Vec::new(),
+            read_only: true,
+            read_only_when: None,
+        })
+        .methods(methods)
         .build()
 }
 
-// Self-registration: the plugin registry discovers this via inventory
-// (single source of the catalog; no central dispatch list).
 inventory::submit! {
     crate::default_registry::PluginReg::new("rovs_commands", |_ctx| std::sync::Arc::new(RovsCommandsPlugin::new()))
 }
