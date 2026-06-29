@@ -5,6 +5,8 @@ use op_state_store::PluginSchema;
 use serde::{Deserialize, Serialize};
 use simd_json::OwnedValue as Value;
 
+use super::plugin_schema_defs::method_decl_from_schemars;
+
 /// Runtime state of the workflow automation plugin.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "sch.software.plugin.workflows.schema@v1"))]
@@ -21,6 +23,39 @@ pub struct WorkflowsState {
     #[serde(default)]
     #[schemars(extend("x-oscal-subid" = "sch.software.plugin.workflows.config@v1"))]
     pub config: serde_json::Value,
+}
+
+/// Input struct for StartWorkflow method.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct StartWorkflowInput {
+    /// Workflow ID to start
+    pub workflow_id: String,
+    /// Optional parameters
+    pub params: Option<serde_json::Value>,
+}
+
+/// Input struct for PauseWorkflow method.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct PauseWorkflowInput {
+    /// Workflow ID to pause
+    pub workflow_id: String,
+}
+
+/// Input struct for ResumeWorkflow method.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ResumeWorkflowInput {
+    /// Workflow ID to resume
+    pub workflow_id: String,
+}
+
+/// Input struct for CancelWorkflow method.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct CancelWorkflowInput {
+    /// Workflow ID to cancel
+    pub workflow_id: String,
+    /// Force cancel even if running
+    #[serde(default)]
+    pub force: bool,
 }
 
 impl Default for WorkflowsState {
@@ -119,6 +154,55 @@ pub(crate) fn workflows_schema() -> PluginSchema {
     let state = simd_json::serde::to_owned_value(&WorkflowsState::default())
         .expect("WorkflowsState default serializes");
     super::schemars_adapter::apply_state_defaults(&mut schema, &state);
+
+    // StartWorkflow method
+    schema.methods.insert(
+        "start_workflow".to_string(),
+        method_decl_from_schemars::<StartWorkflowInput>(
+            "StartWorkflow",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "workflows.write",
+            "mut.software.plugin.workflows.start@v1",
+        ),
+    );
+
+    // PauseWorkflow method
+    schema.methods.insert(
+        "pause_workflow".to_string(),
+        method_decl_from_schemars::<PauseWorkflowInput>(
+            "PauseWorkflow",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "workflows.write",
+            "mut.software.plugin.workflows.pause@v1",
+        ),
+    );
+
+    // ResumeWorkflow method
+    schema.methods.insert(
+        "resume_workflow".to_string(),
+        method_decl_from_schemars::<ResumeWorkflowInput>(
+            "ResumeWorkflow",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "workflows.write",
+            "mut.software.plugin.workflows.resume@v1",
+        ),
+    );
+
+    // CancelWorkflow method
+    schema.methods.insert(
+        "cancel_workflow".to_string(),
+        method_decl_from_schemars::<CancelWorkflowInput>(
+            "CancelWorkflow",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "workflows.write",
+            "mut.software.plugin.workflows.cancel@v1",
+        ),
+    );
+
     schema
 }
 

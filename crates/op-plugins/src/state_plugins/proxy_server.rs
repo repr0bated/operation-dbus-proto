@@ -1,17 +1,50 @@
-use super::plugin_schema_defs::simple_schema;
+use super::plugin_schema_defs::{simple_schema, method_decl_from_schemars};
 use anyhow::Result;
 use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
-use op_state_store::{Constraint, FieldSchema, FieldType, PluginSchema};
+use op_state_store::{Constraint, FieldSchema, FieldType, MethodDecl, PluginSchema, SideEffect};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use simd_json::json;
 use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ProxyServerState {
     pub enabled: bool,
     pub port: u16,
+}
+
+// D-Bus method input types for Proxy Server operations
+// Reference: https://www.freedesktop.org/wiki/Specifications/ProxyServerSpec
+
+/// StartProxy method input
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct StartProxyInput {
+    /// Proxy server identifier
+    pub name: String,
+    /// Port to bind to
+    pub port: Option<u16>,
+}
+
+/// StopProxy method input
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct StopProxyInput {
+    /// Proxy server identifier
+    pub name: String,
+}
+
+/// ConfigureProxy method input
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ConfigureProxyInput {
+    /// Proxy server identifier
+    pub name: String,
+    /// Enable/disable the proxy
+    pub enabled: Option<bool>,
+    /// Port number
+    pub port: Option<u16>,
+    /// Upstream backend URL
+    pub upstream: Option<String>,
 }
 
 pub struct ProxyServerPlugin;
@@ -92,7 +125,7 @@ impl StatePlugin for ProxyServerPlugin {
 }
 
 pub(crate) fn proxy_server_schema() -> PluginSchema {
-    simple_schema(
+    let mut schema = simple_schema(
         "proxy_server",
         "Proxy server runtime config",
         &["net"],
@@ -127,7 +160,33 @@ pub(crate) fn proxy_server_schema() -> PluginSchema {
                 },
             ),
         ],
-    )
+    );
+    
+    // Add D-Bus methods for proxy lifecycle management
+    // Reference: https://www.freedesktop.org/wiki/Specifications/ProxyServerSpec
+    schema.methods.insert("start_proxy".to_string(), method_decl_from_schemars::<StartProxyInput>(
+        "start_proxy",
+        SideEffect::Mutation,
+        false,
+        "cap.network.proxy.start@v1",
+        "mut.network.proxy.start@v1",
+    ));
+    schema.methods.insert("stop_proxy".to_string(), method_decl_from_schemars::<StopProxyInput>(
+        "stop_proxy",
+        SideEffect::Mutation,
+        false,
+        "cap.network.proxy.stop@v1",
+        "mut.network.proxy.stop@v1",
+    ));
+    schema.methods.insert("configure".to_string(), method_decl_from_schemars::<ConfigureProxyInput>(
+        "configure",
+        SideEffect::Mutation,
+        false,
+        "cap.network.proxy.configure@v1",
+        "mut.network.proxy.configure@v1",
+    ));
+    
+    schema
 }
 
 // Self-registration: the plugin registry discovers this via inventory
