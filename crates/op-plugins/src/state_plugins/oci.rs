@@ -3,7 +3,8 @@
 //!
 //! OCI containers in incus with no NIC device boot with lo DOWN, preventing
 //! services from binding to 127.0.0.1. This plugin declares which containers
-//! need loopback bring-up, and the op-openvswitch-daemon's BringUpLoopback
+//! need loopback bring-up, and the `rovs_commands` plugin handles the OVS
+//! control-plane work.
 //! D-Bus method executes it.
 //!
 //! THE PLUGIN IS THE SCHEMA — if a container is declared here with
@@ -254,49 +255,49 @@ pub(crate) fn oci_schema() -> PluginSchema {
                 }
             ]
         }))
-        .method(super::plugin_scaffold_helpers::method_decl_from_schemars::<PullImageInput>(
+        .method(super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<PullImageInput, super::plugin_scaffold_helpers::AckOutput>(
             "pull_image",
             op_state_store::SideEffect::Mutation,
             false,
             "cap.container.oci.image.pull@v1",
             "mut.container.oci.image.pull@v1",
         ))
-        .method(super::plugin_scaffold_helpers::method_decl_from_schemars::<RunContainerInput>(
+        .method(super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<RunContainerInput, super::plugin_scaffold_helpers::AckOutput>(
             "run_container",
             op_state_store::SideEffect::Mutation,
             false,
             "cap.container.oci.run@v1",
             "mut.container.oci.run@v1",
         ))
-        .method(super::plugin_scaffold_helpers::method_decl_from_schemars::<CreateContainerInput>(
+        .method(super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<CreateContainerInput, super::plugin_scaffold_helpers::AckOutput>(
             "create",
             op_state_store::SideEffect::Mutation,
             false,
             "cap.container.oci.create@v1",
             "mut.container.oci.create@v1",
         ))
-        .method(super::plugin_scaffold_helpers::method_decl_from_schemars::<StartContainerInput>(
+        .method(super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<StartContainerInput, super::plugin_scaffold_helpers::AckOutput>(
             "start",
             op_state_store::SideEffect::Mutation,
             false,
             "cap.container.oci.start@v1",
             "mut.container.oci.start@v1",
         ))
-        .method(super::plugin_scaffold_helpers::method_decl_from_schemars::<KillContainerInput>(
+        .method(super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<KillContainerInput, super::plugin_scaffold_helpers::AckOutput>(
             "kill",
             op_state_store::SideEffect::Mutation,
             false,
             "cap.container.oci.kill@v1",
             "mut.container.oci.kill@v1",
         ))
-        .method(super::plugin_scaffold_helpers::method_decl_from_schemars::<DeleteContainerInput>(
+        .method(super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<DeleteContainerInput, super::plugin_scaffold_helpers::AckOutput>(
             "delete",
             op_state_store::SideEffect::Mutation,
             false,
             "cap.container.oci.delete@v1",
             "mut.container.oci.delete@v1",
         ))
-        .method(super::plugin_scaffold_helpers::method_decl_from_schemars::<GetContainerStateInput>(
+        .method(super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<GetContainerStateInput, super::plugin_scaffold_helpers::AckOutput>(
             "state",
             op_state_store::SideEffect::Read,
             true,

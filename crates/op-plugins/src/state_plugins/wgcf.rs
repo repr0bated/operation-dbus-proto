@@ -5,7 +5,9 @@ use op_state_store::PluginSchema;
 use serde::{Deserialize, Serialize};
 use simd_json::OwnedValue as Value;
 
-use super::plugin_scaffold_helpers::method_decl_from_schemars;
+use super::plugin_scaffold_helpers::{
+    method_decl_from_schemars, method_decl_from_schemars_with_output,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "sch.software.plugin.wgcf.config.schema@v1"))]
@@ -270,7 +272,7 @@ pub(crate) fn wgcf_schema() -> PluginSchema {
 
     schema.methods.insert(
         "register".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<RegisterInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<RegisterInput, super::plugin_scaffold_helpers::AckOutput>(
             "register",
             op_state_store::SideEffect::Mutation,
             false,
@@ -280,7 +282,7 @@ pub(crate) fn wgcf_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "update".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<UpdateInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<UpdateInput, super::plugin_scaffold_helpers::AckOutput>(
             "update",
             op_state_store::SideEffect::Mutation,
             false,
@@ -290,7 +292,7 @@ pub(crate) fn wgcf_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "status".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<StatusInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<StatusInput, super::plugin_scaffold_helpers::AckOutput>(
             "status",
             op_state_store::SideEffect::Read,
             true,
@@ -300,7 +302,7 @@ pub(crate) fn wgcf_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "rotate_keys".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<RotateKeysInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<RotateKeysInput, super::plugin_scaffold_helpers::AckOutput>(
             "rotate_keys",
             op_state_store::SideEffect::Mutation,
             false,
@@ -310,7 +312,7 @@ pub(crate) fn wgcf_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "set_endpoint".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<SetEndpointInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<SetEndpointInput, super::plugin_scaffold_helpers::AckOutput>(
             "set_endpoint",
             op_state_store::SideEffect::Mutation,
             false,
@@ -322,7 +324,7 @@ pub(crate) fn wgcf_schema() -> PluginSchema {
     // GenerateConfig method
     schema.methods.insert(
         "generate_config".to_string(),
-        method_decl_from_schemars::<GenerateConfigInput>(
+        method_decl_from_schemars_with_output::<GenerateConfigInput, super::plugin_scaffold_helpers::AckOutput>(
             "GenerateConfig",
             op_state_store::SideEffect::Mutation,
             false,
@@ -334,7 +336,7 @@ pub(crate) fn wgcf_schema() -> PluginSchema {
     // ApplyConfig method
     schema.methods.insert(
         "apply_config".to_string(),
-        method_decl_from_schemars::<ApplyConfigInput>(
+        method_decl_from_schemars_with_output::<ApplyConfigInput, super::plugin_scaffold_helpers::AckOutput>(
             "ApplyConfig",
             op_state_store::SideEffect::Mutation,
             false,
@@ -346,7 +348,7 @@ pub(crate) fn wgcf_schema() -> PluginSchema {
     // Refresh method
     schema.methods.insert(
         "refresh".to_string(),
-        method_decl_from_schemars::<RefreshInput>(
+        method_decl_from_schemars_with_output::<RefreshInput, super::plugin_scaffold_helpers::AckOutput>(
             "Refresh",
             op_state_store::SideEffect::Mutation,
             false,

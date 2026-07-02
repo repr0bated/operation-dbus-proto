@@ -3,12 +3,17 @@
 
 use crate::proto::{
     netmaker_service_server::NetmakerService, GetNetworkRequest, GetNetworkResponse,
-    GetNodeRequest, GetNodeResponse, HealthRequest, HealthResponse, Host, ListHostsRequest,
+    GetNodeRequest, GetNodeResponse, HealthRequest, HealthResponse, Host, JoinNetworkRequest,
+    JoinNetworkResponse, LeaveNetworkRequest, LeaveNetworkResponse, ListHostsRequest,
     ListHostsResponse, ListNetworksRequest, ListNetworksResponse, ListNodesRequest,
-    ListNodesResponse, NetmakerEvent, Network, Node, StreamEventsRequest,
+    ListNodesResponse, NetmakerEvent, Network, Node, RestartServiceRequest,
+    RestartServiceResponse, ExecuteCommandRequest, ExecuteCommandResponse,
+    StreamEventsRequest,
 };
 use async_trait::async_trait;
+use serde_json::Value as JsonValue;
 use std::pin::Pin;
+use tokio::process::Command;
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status};
 
@@ -23,7 +28,8 @@ pub struct NetmakerAdapter {
 
 impl NetmakerAdapter {
     pub fn new() -> Self {
-        // Route HTTP through the unix socket via a custom connector
+        // Route HTTP through the service endpoint exposed by the socket-backed
+        // registration path.
         let client = reqwest::Client::builder().build().expect("reqwest client");
         Self {
             client,
@@ -35,8 +41,8 @@ impl NetmakerAdapter {
         let master_key =
             std::env::var("NETMAKER_MASTER_KEY").unwrap_or_else(|_| "masterkey".to_string());
 
-        // Use the unix socket proxy device (host-side TCP forward from proxy device)
-        // The proxy device binds tcp:127.0.0.1:8081 → container tcp:127.0.0.1:8081
+        // The socket-backed registration path resolves the service endpoint;
+        // the adapter keeps a conventional HTTP client here.
         let url = format!("http://127.0.0.1:8081{}", path);
         let resp = self
             .client
@@ -56,6 +62,42 @@ impl NetmakerAdapter {
         resp.json::<T>()
             .await
             .map_err(|e| Status::internal(format!("Netmaker API parse error: {}", e)))
+    }
+
+    async fn patch_netclient_config<F>(&self, edit: F) -> Result<(), Status>
+    where
+        F: FnOnce(&mut JsonValue),
+    {
+        let path = "/etc/netclient/netclient.json";
+        let mut config = match tokio::fs::read_to_string(path).await {
+            Ok(content) => serde_json::from_str::<JsonValue>(&content)
+                .map_err(|e| Status::internal(format!("netclient config parse error: {}", e)))?,
+            Err(_) => serde_json::json!({}),
+        };
+
+        edit(&mut config);
+
+        tokio::fs::create_dir_all("/etc/netclient")
+            .await
+            .map_err(|e| Status::internal(format!("netclient config dir error: {}", e)))?;
+        tokio::fs::write(path, serde_json::to_string_pretty(&config).unwrap_or_else(|_| "{}".to_string()))
+            .await
+            .map_err(|e| Status::internal(format!("netclient config write error: {}", e)))?;
+        Ok(())
+    }
+
+    async fn restart_netclient(&self) -> Result<(), Status> {
+        let resp = self
+            .execute_command(Request::new(ExecuteCommandRequest {
+                command: Some(crate::proto::execute_command_request::Command::Restart(
+                    RestartServiceRequest {
+                        service: "netclient".to_string(),
+                    },
+                )),
+            }))
+            .await?
+            .into_inner();
+        if resp.success { Ok(()) } else { Err(Status::internal(resp.stderr)) }
     }
 }
 
@@ -217,6 +259,179 @@ impl NetmakerService for NetmakerAdapter {
         Ok(Response::new(ListHostsResponse { hosts }))
     }
 
+    async fn join_network(
+        &self,
+        req: Request<JoinNetworkRequest>,
+    ) -> Result<Response<JoinNetworkResponse>, Status> {
+        let r = req.into_inner();
+        self.patch_netclient_config(|config| {
+            config["enabled"] = serde_json::json!(true);
+            config["default_network"] = serde_json::json!(r.network);
+            config["enrollment_token"] = serde_json::json!(r.token);
+            config["interface"] = serde_json::json!("netmaker");
+            config["inittype"] = serde_json::json!(6);
+        })
+        .await?;
+        self.restart_netclient().await?;
+        Ok(Response::new(JoinNetworkResponse {
+            success: true,
+            message: "netclient configuration updated and restarted".to_string(),
+        }))
+    }
+
+    async fn leave_network(
+        &self,
+        req: Request<LeaveNetworkRequest>,
+    ) -> Result<Response<LeaveNetworkResponse>, Status> {
+        let network = req.into_inner().network;
+        self.patch_netclient_config(|config| {
+            if config
+                .get("default_network")
+                .and_then(|v| v.as_str())
+                == Some(network.as_str())
+            {
+                config["default_network"] = serde_json::json!("");
+            }
+            config["enabled"] = serde_json::json!(false);
+            config["enrollment_token"] = serde_json::json!(null);
+        })
+        .await?;
+        self.restart_netclient().await?;
+        Ok(Response::new(LeaveNetworkResponse {
+            success: true,
+            message: "netclient configuration updated and restarted".to_string(),
+        }))
+    }
+
+    async fn restart_service(
+        &self,
+        req: Request<RestartServiceRequest>,
+    ) -> Result<Response<RestartServiceResponse>, Status> {
+        let service = req.into_inner().service;
+        if service == "netclient" {
+            self.restart_netclient().await?;
+        } else {
+            return Err(Status::invalid_argument(format!(
+                "unsupported service '{}'",
+                service
+            )));
+        }
+        Ok(Response::new(RestartServiceResponse {
+            success: true,
+            message: format!("{} restarted", service),
+        }))
+    }
+
+    async fn execute_command(
+        &self,
+        req: Request<ExecuteCommandRequest>,
+    ) -> Result<Response<ExecuteCommandResponse>, Status> {
+        let command = req.into_inner().command.ok_or_else(|| {
+            Status::invalid_argument("missing command variant for netclient execution")
+        })?;
+
+        match command {
+            crate::proto::execute_command_request::Command::Join(join) => {
+                self.patch_netclient_config(|config| {
+                    config["enabled"] = serde_json::json!(true);
+                    config["default_network"] = serde_json::json!(join.network);
+                    config["enrollment_token"] = serde_json::json!(join.token);
+                    config["interface"] = serde_json::json!("netmaker");
+                    config["inittype"] = serde_json::json!(6);
+                })
+                .await?;
+                self.restart_netclient().await?;
+                Ok(Response::new(ExecuteCommandResponse {
+                    success: true,
+                    exit_code: 0,
+                    stdout: "joined network".to_string(),
+                    stderr: String::new(),
+                }))
+            }
+            crate::proto::execute_command_request::Command::Leave(leave) => {
+                self.patch_netclient_config(|config| {
+                    if config
+                        .get("default_network")
+                        .and_then(|v| v.as_str())
+                        == Some(leave.network.as_str())
+                    {
+                        config["default_network"] = serde_json::json!("");
+                    }
+                    config["enabled"] = serde_json::json!(false);
+                    config["enrollment_token"] = serde_json::json!(null);
+                })
+                .await?;
+                self.restart_netclient().await?;
+                Ok(Response::new(ExecuteCommandResponse {
+                    success: true,
+                    exit_code: 0,
+                    stdout: "left network".to_string(),
+                    stderr: String::new(),
+                }))
+            }
+            crate::proto::execute_command_request::Command::Restart(restart) => {
+                if restart.service != "netclient" {
+                    return Err(Status::invalid_argument(format!(
+                        "unsupported service '{}'",
+                        restart.service
+                    )));
+                }
+                let output = Command::new("s6d")
+                    .args(["restart", "netclient"])
+                    .output()
+                    .await
+                    .map_err(|e| Status::internal(format!("failed to execute s6d: {}", e)))?;
+                Ok(Response::new(ExecuteCommandResponse {
+                    success: output.status.success(),
+                    exit_code: output.status.code().unwrap_or(-1),
+                    stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+                    stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+                }))
+            }
+            crate::proto::execute_command_request::Command::Connect(req) => {
+                self.run_command("connect", vec![req.network]).await
+            }
+            crate::proto::execute_command_request::Command::Disconnect(req) => {
+                self.run_command("disconnect", vec![req.network]).await
+            }
+            crate::proto::execute_command_request::Command::List(_) => {
+                self.run_command("list", vec![]).await
+            }
+            crate::proto::execute_command_request::Command::Peers(_) => {
+                self.run_command("peers", vec![]).await
+            }
+            crate::proto::execute_command_request::Command::Ping(req) => {
+                self.run_command("ping", vec![req.peer]).await
+            }
+            crate::proto::execute_command_request::Command::Pull(_) => {
+                self.run_command("pull", vec![]).await
+            }
+            crate::proto::execute_command_request::Command::Push(_) => {
+                self.run_command("push", vec![]).await
+            }
+            crate::proto::execute_command_request::Command::Register(req) => {
+                self.run_command("register", vec![req.instance]).await
+            }
+            crate::proto::execute_command_request::Command::Server(req) => {
+                let mut args = vec![req.subcommand];
+                args.extend(req.args);
+                self.run_command("server", args).await
+            }
+            crate::proto::execute_command_request::Command::Install(_) => {
+                self.run_command("install", vec![]).await
+            }
+            crate::proto::execute_command_request::Command::Uninstall(_) => {
+                self.run_command("uninstall", vec![]).await
+            }
+            crate::proto::execute_command_request::Command::Use(req) => {
+                self.run_command("use", vec![req.version]).await
+            }
+            crate::proto::execute_command_request::Command::Version(_) => {
+                self.run_command("version", vec![]).await
+            }
+        }
+    }
+
     type StreamEventsStream = Pin<Box<dyn Stream<Item = Result<NetmakerEvent, Status>> + Send>>;
 
     async fn stream_events(
@@ -234,5 +449,29 @@ impl NetmakerService for NetmakerAdapter {
             }
         };
         Ok(Response::new(Box::pin(stream)))
+    }
+}
+
+impl NetmakerAdapter {
+    async fn run_command(
+        &self,
+        name: &str,
+        args: Vec<String>,
+    ) -> Result<Response<ExecuteCommandResponse>, Status> {
+        let mut cmd = Command::new("netclient");
+        cmd.arg(name);
+        for arg in args {
+            cmd.arg(arg);
+        }
+        let output = cmd
+            .output()
+            .await
+            .map_err(|e| Status::internal(format!("failed to execute netclient: {}", e)))?;
+        Ok(Response::new(ExecuteCommandResponse {
+            success: output.status.success(),
+            exit_code: output.status.code().unwrap_or(-1),
+            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        }))
     }
 }

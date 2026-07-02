@@ -983,7 +983,7 @@ pub(crate) fn net_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "apply_interface".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<ApplyInterfaceInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<ApplyInterfaceInput, super::plugin_scaffold_helpers::AckOutput>(
             "apply_interface",
             op_state_store::SideEffect::Mutation,
             false,
@@ -993,7 +993,7 @@ pub(crate) fn net_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "delete_ovs_bridge".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<DeleteOvsBridgeInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<DeleteOvsBridgeInput, super::plugin_scaffold_helpers::AckOutput>(
             "delete_ovs_bridge",
             op_state_store::SideEffect::Mutation,
             false,

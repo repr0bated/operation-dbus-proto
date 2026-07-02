@@ -495,7 +495,7 @@ pub(crate) fn xray_schema_golden() -> PluginSchema {
 
     schema.methods.insert(
         "add_user".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<UserInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<UserInput, super::plugin_scaffold_helpers::AckOutput>(
             "AddUser",
             op_state_store::SideEffect::Mutation,
             false,
@@ -505,7 +505,7 @@ pub(crate) fn xray_schema_golden() -> PluginSchema {
     );
     schema.methods.insert(
         "remove_user".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<UserInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<UserInput, super::plugin_scaffold_helpers::AckOutput>(
             "RemoveUser",
             op_state_store::SideEffect::Mutation,
             false,
@@ -515,7 +515,7 @@ pub(crate) fn xray_schema_golden() -> PluginSchema {
     );
     schema.methods.insert(
         "add_inbound".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<InboundInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<InboundInput, super::plugin_scaffold_helpers::AckOutput>(
             "AddInbound",
             op_state_store::SideEffect::Mutation,
             false,
@@ -525,7 +525,7 @@ pub(crate) fn xray_schema_golden() -> PluginSchema {
     );
     schema.methods.insert(
         "get_stats".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<StatsInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<StatsInput, super::plugin_scaffold_helpers::AckOutput>(
             "GetStats",
             op_state_store::SideEffect::Read,
             true,
@@ -535,7 +535,7 @@ pub(crate) fn xray_schema_golden() -> PluginSchema {
     );
     schema.methods.insert(
         "restart".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<super::plugin_scaffold_helpers::EmptyInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<super::plugin_scaffold_helpers::EmptyInput, super::plugin_scaffold_helpers::AckOutput>(
             "Restart",
             op_state_store::SideEffect::Mutation,
             false,
@@ -547,7 +547,7 @@ pub(crate) fn xray_schema_golden() -> PluginSchema {
     // StartTrace method - https://xtls.github.io/config/
     schema.methods.insert(
         "start_trace".to_string(),
-        method_decl_from_schemars::<StartTraceInput>(
+        method_decl_from_schemars_with_output::<StartTraceInput, super::plugin_scaffold_helpers::AckOutput>(
             "StartTrace",
             op_state_store::SideEffect::Mutation,
             false,
@@ -559,7 +559,7 @@ pub(crate) fn xray_schema_golden() -> PluginSchema {
     // EndTrace method
     schema.methods.insert(
         "end_trace".to_string(),
-        method_decl_from_schemars::<EndTraceInput>(
+        method_decl_from_schemars_with_output::<EndTraceInput, super::plugin_scaffold_helpers::AckOutput>(
             "EndTrace",
             op_state_store::SideEffect::Mutation,
             false,
@@ -571,7 +571,7 @@ pub(crate) fn xray_schema_golden() -> PluginSchema {
     // RecordSpan method
     schema.methods.insert(
         "record_span".to_string(),
-        method_decl_from_schemars::<RecordSpanInput>(
+        method_decl_from_schemars_with_output::<RecordSpanInput, super::plugin_scaffold_helpers::AckOutput>(
             "RecordSpan",
             op_state_store::SideEffect::Mutation,
             false,

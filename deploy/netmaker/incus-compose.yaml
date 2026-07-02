@@ -5,7 +5,7 @@
 #                             socket registration to the bridge/runtime
 #
 # Final topology (after install.sh):
-#   netmaker / netmaker-mq / netmaker-ui / prometheus / grafana / exporter / caddy
+#   netmaker / netmaker-mq / netmaker-ui / prometheus / grafana / exporter
 #     — loopback only, no NIC
 #   sockets owned by the bridge/runtime; no reverse proxy devices per container
 #   wg-xray — routes through the shared socket projection layer
@@ -149,21 +149,6 @@ services:
       METRICS_SECRET: "lExTsrr6d7MsWBaXlCJEJJpQT3VFnv"
     restart: always
 
-  caddy:
-    image: docker:caddy:2.8.4
-    container_name: caddy
-    restart: unless-stopped
-    x-incus-storage: default
-    environment:
-      NM_DOMAIN: "3tched.com"
-    volumes:
-      - type: bind
-        source: /root/netmaker/Caddyfile
-        target: /etc/caddy/Caddyfile
-        read_only: true
-      - caddy_data:/data
-      - caddy_conf:/config
-
 volumes:
   nm-sqldata:
     driver_opts:
@@ -187,11 +172,5 @@ volumes:
     driver_opts:
       pool: default
   grafana-data:
-    driver_opts:
-      pool: default
-  caddy_data:
-    driver_opts:
-      pool: default
-  caddy_conf:
     driver_opts:
       pool: default

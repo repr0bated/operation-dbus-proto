@@ -464,7 +464,7 @@ pub(crate) fn dnsresolver_schema() -> PluginSchema {
     // Spec: https://www.freedesktop.org/software/systemd/man/latest/org.freedesktop.resolve1.html
     schema.methods.insert(
         "resolve_hostname".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<ResolveHostnameInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<ResolveHostnameInput, super::plugin_scaffold_helpers::AckOutput>(
             "ResolveHostname",
             op_state_store::SideEffect::Read,
             true,
@@ -474,7 +474,7 @@ pub(crate) fn dnsresolver_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "resolve_address".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<ResolveAddressInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<ResolveAddressInput, super::plugin_scaffold_helpers::AckOutput>(
             "ResolveAddress",
             op_state_store::SideEffect::Read,
             true,
@@ -484,7 +484,7 @@ pub(crate) fn dnsresolver_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "resolve_record".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<ResolveRecordInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<ResolveRecordInput, super::plugin_scaffold_helpers::AckOutput>(
             "ResolveRecord",
             op_state_store::SideEffect::Read,
             true,
@@ -494,7 +494,7 @@ pub(crate) fn dnsresolver_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "resolve_service".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<ResolveServiceInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<ResolveServiceInput, super::plugin_scaffold_helpers::AckOutput>(
             "ResolveService",
             op_state_store::SideEffect::Read,
             true,
@@ -504,7 +504,7 @@ pub(crate) fn dnsresolver_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "get_link".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<GetLinkInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<GetLinkInput, super::plugin_scaffold_helpers::AckOutput>(
             "GetLink",
             op_state_store::SideEffect::Read,
             true,
@@ -514,7 +514,7 @@ pub(crate) fn dnsresolver_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "set_link_dns".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<SetLinkDNSInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<SetLinkDNSInput, super::plugin_scaffold_helpers::AckOutput>(
             "SetLinkDNS",
             op_state_store::SideEffect::Mutation,
             false,
@@ -524,7 +524,7 @@ pub(crate) fn dnsresolver_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "set_link_dns_ex".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<SetLinkDNSExInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<SetLinkDNSExInput, super::plugin_scaffold_helpers::AckOutput>(
             "SetLinkDNSEx",
             op_state_store::SideEffect::Mutation,
             false,
@@ -534,7 +534,7 @@ pub(crate) fn dnsresolver_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "set_link_domains".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<SetLinkDomainsInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<SetLinkDomainsInput, super::plugin_scaffold_helpers::AckOutput>(
             "SetLinkDomains",
             op_state_store::SideEffect::Mutation,
             false,
@@ -544,7 +544,7 @@ pub(crate) fn dnsresolver_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "set_link_default_route".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<SetLinkDefaultRouteInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<SetLinkDefaultRouteInput, super::plugin_scaffold_helpers::AckOutput>(
             "SetLinkDefaultRoute",
             op_state_store::SideEffect::Mutation,
             false,
@@ -554,7 +554,7 @@ pub(crate) fn dnsresolver_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "set_link_llmnr".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<SetLinkLLMNRInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<SetLinkLLMNRInput, super::plugin_scaffold_helpers::AckOutput>(
             "SetLinkLLMNR",
             op_state_store::SideEffect::Mutation,
             false,
@@ -564,7 +564,7 @@ pub(crate) fn dnsresolver_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "set_link_multicast_dns".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<SetLinkMulticastDNSInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<SetLinkMulticastDNSInput, super::plugin_scaffold_helpers::AckOutput>(
             "SetLinkMulticastDNS",
             op_state_store::SideEffect::Mutation,
             false,
@@ -574,7 +574,7 @@ pub(crate) fn dnsresolver_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "set_link_dns_over_tls".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<SetLinkDNSOverTLSInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<SetLinkDNSOverTLSInput, super::plugin_scaffold_helpers::AckOutput>(
             "SetLinkDNSOverTLS",
             op_state_store::SideEffect::Mutation,
             false,
@@ -584,7 +584,7 @@ pub(crate) fn dnsresolver_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "set_link_dnssec".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<SetLinkDNSSECInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<SetLinkDNSSECInput, super::plugin_scaffold_helpers::AckOutput>(
             "SetLinkDNSSEC",
             op_state_store::SideEffect::Mutation,
             false,
@@ -594,8 +594,9 @@ pub(crate) fn dnsresolver_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "set_link_dnssec_nta".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             SetLinkDNSSECNegativeTrustAnchorsInput,
+            super::plugin_scaffold_helpers::AckOutput,
         >(
             "SetLinkDNSSECNegativeTrustAnchors",
             op_state_store::SideEffect::Mutation,
@@ -606,7 +607,7 @@ pub(crate) fn dnsresolver_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "revert_link".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<RevertLinkInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<RevertLinkInput, super::plugin_scaffold_helpers::AckOutput>(
             "RevertLink",
             op_state_store::SideEffect::Mutation,
             false,
@@ -616,7 +617,7 @@ pub(crate) fn dnsresolver_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "register_service".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<RegisterServiceInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<RegisterServiceInput, super::plugin_scaffold_helpers::AckOutput>(
             "RegisterService",
             op_state_store::SideEffect::Mutation,
             false,
@@ -626,7 +627,7 @@ pub(crate) fn dnsresolver_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "unregister_service".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<UnregisterServiceInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<UnregisterServiceInput, super::plugin_scaffold_helpers::AckOutput>(
             "UnregisterService",
             op_state_store::SideEffect::Mutation,
             false,
@@ -636,7 +637,7 @@ pub(crate) fn dnsresolver_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "reset_statistics".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<ResetStatisticsInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<ResetStatisticsInput, super::plugin_scaffold_helpers::AckOutput>(
             "ResetStatistics",
             op_state_store::SideEffect::Mutation,
             false,
@@ -646,7 +647,7 @@ pub(crate) fn dnsresolver_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "flush_caches".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<FlushCachesInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<FlushCachesInput, super::plugin_scaffold_helpers::AckOutput>(
             "FlushCaches",
             op_state_store::SideEffect::Mutation,
             false,
@@ -656,7 +657,7 @@ pub(crate) fn dnsresolver_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "reset_server_features".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<ResetServerFeaturesInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<ResetServerFeaturesInput, super::plugin_scaffold_helpers::AckOutput>(
             "ResetServerFeatures",
             op_state_store::SideEffect::Mutation,
             false,

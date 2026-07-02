@@ -7,9 +7,9 @@
 //! Per AGENTS.md §4: D-Bus is the ONLY control plane. Methods execute OVSDB transact
 //! calls directly through the rovs proxy.
 //!
-//! Method input types use schemars::JsonSchema derive - this is the single source
-//! of truth for both JSON Schema (exposed in PluginSchema.methods.args) and
-//! gRPC proto generation [via `proto-from-methods` binary at build time].
+//! Method input types use `schemars::JsonSchema` derive - this is the single
+//! source of truth for both JSON Schema (exposed in `PluginSchema.methods.args`)
+//! and gRPC proto generation.
 
 use op_state_store::{FieldSchema, FieldType, MethodDecl, PluginSchema, SideEffect};
 use schemars::JsonSchema;
@@ -179,7 +179,7 @@ pub(crate) fn rovs_commands_schema() -> PluginSchema {
     let mut methods = HashMap::new();
     methods.insert(
         "create_bridge".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<CreateBridgeInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<CreateBridgeInput, super::plugin_scaffold_helpers::AckOutput>(
             "create_bridge",
             SideEffect::Mutation,
             false,
@@ -189,7 +189,7 @@ pub(crate) fn rovs_commands_schema() -> PluginSchema {
     );
     methods.insert(
         "delete_bridge".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<DeleteBridgeInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<DeleteBridgeInput, super::plugin_scaffold_helpers::AckOutput>(
             "delete_bridge",
             SideEffect::Mutation,
             false,
@@ -199,7 +199,7 @@ pub(crate) fn rovs_commands_schema() -> PluginSchema {
     );
     methods.insert(
         "add_port".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<AddPortInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<AddPortInput, super::plugin_scaffold_helpers::AckOutput>(
             "add_port",
             SideEffect::Mutation,
             false,
@@ -209,7 +209,7 @@ pub(crate) fn rovs_commands_schema() -> PluginSchema {
     );
     methods.insert(
         "remove_port".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<RemovePortInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<RemovePortInput, super::plugin_scaffold_helpers::AckOutput>(
             "remove_port",
             SideEffect::Mutation,
             false,
@@ -220,7 +220,7 @@ pub(crate) fn rovs_commands_schema() -> PluginSchema {
     // Use unit type () for methods with no arguments
     methods.insert(
         "list_bridges".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<()>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<(), super::plugin_scaffold_helpers::AckOutput>(
             "list_bridges",
             SideEffect::Read,
             true,
@@ -230,7 +230,7 @@ pub(crate) fn rovs_commands_schema() -> PluginSchema {
     );
     methods.insert(
         "list_ports".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<ListPortsInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<ListPortsInput, super::plugin_scaffold_helpers::AckOutput>(
             "list_ports",
             SideEffect::Read,
             true,
@@ -240,7 +240,7 @@ pub(crate) fn rovs_commands_schema() -> PluginSchema {
     );
     methods.insert(
         "list_dbs".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<()>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<(), super::plugin_scaffold_helpers::AckOutput>(
             "list_dbs",
             SideEffect::Read,
             true,

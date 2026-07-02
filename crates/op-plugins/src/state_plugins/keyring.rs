@@ -14,7 +14,7 @@ use async_trait::async_trait;
 use op_state::{
     ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
 };
-use op_state_store::{FieldSchema, FieldType, PluginSchema};
+use op_state_store::PluginSchema;
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
@@ -24,7 +24,7 @@ use zbus::{
 };
 
 /// Keyring state representation
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
 pub struct KeyringState {
     /// Available collections
     pub collections: Vec<CollectionInfo>,
@@ -33,7 +33,7 @@ pub struct KeyringState {
 }
 
 /// Information about a secret collection
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
 pub struct CollectionInfo {
     pub path: String,
     pub label: String,
@@ -115,31 +115,7 @@ impl StatePlugin for KeyringPlugin {
     }
 
     fn schema(&self) -> Option<PluginSchema> {
-        let any_field = |required: bool, description: &str, default: Option<Value>| FieldSchema {
-            field_type: FieldType::Any,
-            required,
-            description: description.to_string(),
-            default,
-            example: None,
-            constraints: Vec::new(),
-            read_only: false,
-            read_only_when: None,
-        };
-
-        Some(
-            PluginSchema::builder("keyring")
-                .version("0.1.0")
-                .description("Secret service collections state")
-                .field(
-                    "collections",
-                    any_field(true, "Secret collections", Some(json!([]))),
-                )
-                .field(
-                    "default_collection",
-                    any_field(false, "Default collection path", None),
-                )
-                .build(),
-        )
+        Some(keyring_schema())
     }
 
     fn capabilities(&self) -> PluginCapabilities {
@@ -215,6 +191,20 @@ impl StatePlugin for KeyringPlugin {
             "Keyring rollback is not supported for security reasons"
         ))
     }
+}
+
+pub(crate) fn keyring_schema() -> PluginSchema {
+    let mut schema = super::schemars_adapter::plugin_schema_from_json(
+        "keyring",
+        "0.1.0",
+        "Secret service collections state",
+        &serde_json::to_value(schemars::schema_for!(KeyringState)).unwrap(),
+    );
+    super::schemars_adapter::apply_state_defaults(
+        &mut schema,
+        &simd_json::serde::to_owned_value(&KeyringState::default()).unwrap(),
+    );
+    schema
 }
 
 #[cfg(test)]

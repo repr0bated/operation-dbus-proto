@@ -1484,7 +1484,7 @@ pub(crate) fn privacy_router_schema() -> PluginSchema {
     // Add D-Bus methods for privacy router
     schema.methods.insert(
         "enforce_policy".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<EnforcePolicyInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<EnforcePolicyInput, super::plugin_scaffold_helpers::AckOutput>(
             "EnforcePolicy",
             SideEffect::Mutation,
             false,
@@ -1494,7 +1494,7 @@ pub(crate) fn privacy_router_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "audit_request".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<AuditRequestInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<AuditRequestInput, super::plugin_scaffold_helpers::AckOutput>(
             "AuditRequest",
             SideEffect::Read,
             true,
@@ -1504,7 +1504,7 @@ pub(crate) fn privacy_router_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "log_decision".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<LogDecisionInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<LogDecisionInput, super::plugin_scaffold_helpers::AckOutput>(
             "LogDecision",
             SideEffect::Mutation,
             false,

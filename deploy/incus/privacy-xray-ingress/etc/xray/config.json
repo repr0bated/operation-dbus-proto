@@ -39,15 +39,12 @@ cat << 'XRAYCONFIG'
         ]
       },
       "streamSettings": {
-        "network": "grpc",
+        "network": "xhttp",
         "sockopt": { "tcpNoDelay": true },
-        "grpcSettings": {
-          "serviceName": "Ghostbridge.StateSync",
-          "multiMode": true,
-          "metadata": {
-            "X-Ghostbridge-Footprint": "d51501c285e50f44b63d2431494e5b6ae2c8b9057f00d91cc441b550680ab058",
-            "X-Ghostbridge-Trace-ID": "fb877c6e-0"
-          }
+        "xhttpSettings": {
+          "host": "xray.3tched.com",
+          "path": "/Ghostbridge.StateSync",
+          "mode": "auto"
         },
         "security": "reality",
         "realitySettings": {
