@@ -37,7 +37,18 @@ pub struct WireGuardDatabase {
 
 impl WireGuardDatabase {
     pub async fn new() -> Result<Self> {
-        let cozo = CozoGraphShuttle::from_env()
+        // `CozoGraphShuttle::from_env()` silently falls back to an in-memory store
+        // when the path env var is unset — unacceptable here, since that would
+        // defeat session persistence across a gateway restart without any error.
+        // Fail loudly instead of silently degrading.
+        let db_path = std::env::var("COGNITIVE_MCP_COZO_DB_PATH").map_err(|_| {
+            anyhow::anyhow!(
+                "COGNITIVE_MCP_COZO_DB_PATH must be set for op-gateway's WireGuard \
+                 session store; without it, sessions would silently live in memory \
+                 only and be lost on every restart"
+            )
+        })?;
+        let cozo = CozoGraphShuttle::new_persistent(std::path::PathBuf::from(db_path))
             .map_err(|e| anyhow::anyhow!("failed to open Cozo store: {e}"))?;
         Ok(Self {
             cozo: Arc::new(cozo),
@@ -65,19 +76,16 @@ impl WireGuardDatabase {
         self.store_wireguard_session(session).await
     }
 
+    /// Atomic partial-column update (not read-modify-write): a concurrent
+    /// `store_wireguard_session`/`update_wireguard_session` call (e.g. a key
+    /// rotation changing `flags`/`key_rotation_count`) can't be clobbered by a
+    /// stale copy of those fields being written back here.
     pub async fn update_session_last_used(&self, session_id: &str, last_used: u64) -> Result<()> {
         let cozo = self.cozo.clone();
         let session_id = session_id.to_string();
         tokio::task::spawn_blocking(move || {
-            if let Some(mut rec) = cozo
-                .get_wg_session(&session_id)
-                .map_err(|e| anyhow::anyhow!("get wg session: {e}"))?
-            {
-                rec.last_used = last_used;
-                cozo.put_wg_session(&rec)
-                    .map_err(|e| anyhow::anyhow!("update wg session last_used: {e}"))?;
-            }
-            Ok(())
+            cozo.update_wg_session_last_used(&session_id, last_used)
+                .map_err(|e| anyhow::anyhow!("update wg session last_used: {e}"))
         })
         .await
         .map_err(|e| anyhow::anyhow!("blocking task panicked: {e}"))?

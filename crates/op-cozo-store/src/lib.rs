@@ -878,6 +878,29 @@ impl CozoGraphShuttle {
         Ok(())
     }
 
+    /// Atomically bump only the `last_used` column of a WireGuard gateway session.
+    /// Uses Cozo's `:update` (partial-column update) rather than a read-modify-write
+    /// of the full record, so a concurrent `put_wg_session` (e.g. a key rotation
+    /// changing `flags`/`key_rotation_count`) can't be silently clobbered by a
+    /// stale copy of those fields being written back here.
+    pub fn update_wg_session_last_used(
+        &self,
+        session_id: &str,
+        last_used: u64,
+    ) -> std::result::Result<(), CozoError> {
+        let mut p: Params = BTreeMap::new();
+        p.insert("sid".into(), DataValue::Str(session_id.into()));
+        p.insert("last_used".into(), dv_int(last_used as i64));
+        cozo_run(
+            &self.db,
+            "?[session_id, last_used] <- [[$sid, $last_used]] \
+             :update wg_sessions { session_id => last_used }",
+            p,
+        )
+        .map_err(|e| CozoError::Other(format!("update wg session last_used: {e}")))?;
+        Ok(())
+    }
+
     /// Fetch a single WireGuard gateway session by session_id.
     pub fn get_wg_session(
         &self,
@@ -944,11 +967,23 @@ impl CozoGraphShuttle {
         )
         .map_err(|e| CozoError::Other(format!("delete wg session: {e}")))?;
 
+        // Only clear the peer -> session mapping if it still points at the session
+        // being deleted. Without this check, deleting an *expired* session whose
+        // peer has since re-authenticated into a newer session would wipe that
+        // newer session's mapping too — the derivation of the delete set from
+        // *wg_peer_sessions itself (matching on both peer_pubkey and session_id)
+        // makes this a single atomic conditional delete, not a check-then-act.
         let mut pp: Params = BTreeMap::new();
         pp.insert("peer".into(), DataValue::Str(peer_pubkey.into()));
+        pp.insert("sid".into(), DataValue::Str(session_id.into()));
         cozo_run(
             &self.db,
-            "?[peer_pubkey] <- [[$peer]] :rm wg_peer_sessions { peer_pubkey }",
+            r#"
+                matched[peer_pubkey] := *wg_peer_sessions[peer_pubkey, session_id],
+                                         peer_pubkey = $peer, session_id = $sid
+                ?[peer_pubkey] := matched[peer_pubkey]
+                :rm wg_peer_sessions { peer_pubkey }
+            "#,
             pp,
         )
         .map_err(|e| CozoError::Other(format!("delete wg peer session: {e}")))?;
