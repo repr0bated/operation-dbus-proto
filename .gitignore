@@ -43,6 +43,9 @@ wgcf-profile.conf
 client_secret*.json
 .env*
 
+# WireGuard client configs / QR codes (contain private keys)
+wireguard_clients/
+
 # Operation Dashboard UI submodule (if excluded)
 operation-dashboard-ui/
 

@@ -101,6 +101,11 @@ impl IdentityVault {
         };
         let json = serde_json::to_string_pretty(&file).context("serialize identity vault")?;
 
+        if let Some(parent) = self.path.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("create vault parent dir: {}", parent.display()))?;
+        }
+
         let tmp = self.path.with_extension("tmp");
         let mut f = fs::OpenOptions::new()
             .write(true)

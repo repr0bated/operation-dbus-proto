@@ -76,8 +76,8 @@ sleep 3
 
 # ─── add Unix socket proxy BEFORE removing NIC ────────────────────────────────
 # Incus proxy: host listens on /run/qdrant.sock, bridges to container TCP 6334.
-# Xray's ds outbound then proxies 127.0.0.1:$QDRANT_PORT → /run/qdrant.sock
-# via UNIX_SOCKET_ENDPOINTS=qdrant:/run/qdrant.sock:$QDRANT_PORT.
+# Xray's ds outbound then routes qdrant.ghostbridge.tech → /run/qdrant.sock
+# via UNIX_SOCKET_ENDPOINTS=qdrant:/run/qdrant.sock:qdrant.ghostbridge.tech.
 
 SOCKET_PATH="/run/qdrant.sock"
 
@@ -193,7 +193,7 @@ echo "════════════════════════�
 echo ""
 echo " Xray routes 127.0.0.1:${QDRANT_PORT} → ${SOCKET_PATH} via ds outbound."
 echo " Set in your xray environment:"
-echo "   UNIX_SOCKET_ENDPOINTS=qdrant:${SOCKET_PATH}:${QDRANT_PORT}"
+echo "   UNIX_SOCKET_ENDPOINTS=qdrant:${SOCKET_PATH}:qdrant.ghostbridge.tech"
 echo ""
 echo " rag-ingest / cognitive-mcp connects to:"
 echo "   COGNITIVE_MCP_QDRANT_URL=http://127.0.0.1:${QDRANT_PORT}  (default)"

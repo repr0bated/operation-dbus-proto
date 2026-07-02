@@ -44,6 +44,25 @@ pub struct PolicyVerdict {
     pub reason: String,
 }
 
+/// Full WireGuard gateway session record (mirrors op-gateway's `WireGuardSession`),
+/// persisted so a gateway restart doesn't drop live sessions. `flags_json` is the
+/// caller's flags map, pre-serialized to a JSON string.
+#[derive(Debug, Clone)]
+pub struct WgSessionRecord {
+    pub session_id: String,
+    pub peer_pubkey: String,
+    pub psk: String,
+    pub created_at: u64,
+    pub expires_at: u64,
+    pub is_active: bool,
+    pub last_used: u64,
+    pub client_ip: Option<String>,
+    pub client_version: Option<String>,
+    pub auth_method: String,
+    pub key_rotation_count: u32,
+    pub flags_json: String,
+}
+
 /// CozoDB graph database shuttle.
 ///
 /// Manages the unified Datalog relations:
@@ -173,6 +192,29 @@ impl CozoGraphShuttle {
                 wg_pubkey: String default "",
                 created_at: String default "",
                 expires_at: String default ""
+            }"#,
+            // full WireGuard gateway session record (op-gateway::WireGuardSession),
+            // persisted so restarts don't drop live sessions
+            r#":create wg_sessions {
+                session_id: String
+                =>
+                peer_pubkey: String default "",
+                psk: String default "",
+                created_at: Int default 0,
+                expires_at: Int default 0,
+                is_active: Bool default true,
+                last_used: Int default 0,
+                client_ip: String default "",
+                client_version: String default "",
+                auth_method: String default "",
+                key_rotation_count: Int default 0,
+                flags_json: String default "{}"
+            }"#,
+            // peer_pubkey → session_id, mirrors op-gateway's in-memory peer_sessions map
+            r#":create wg_peer_sessions {
+                peer_pubkey: String
+                =>
+                session_id: String default ""
             }"#,
             // named MCP memory contexts (replaces SQLite memory_namespaces)
             r#":create memory_namespaces {
@@ -775,6 +817,144 @@ impl CozoGraphShuttle {
         Ok(())
     }
 
+    // ── WireGuard gateway sessions ───────────────────────────────────────────────
+
+    /// Upsert a full WireGuard gateway session record and its peer_pubkey → session_id
+    /// mapping.
+    pub fn put_wg_session(&self, rec: &WgSessionRecord) -> std::result::Result<(), CozoError> {
+        let query = r#"
+            ?[session_id, peer_pubkey, psk, created_at, expires_at, is_active, last_used,
+              client_ip, client_version, auth_method, key_rotation_count, flags_json]
+                <- [[$sid, $peer, $psk, $created, $expires, $active, $last_used,
+                     $client_ip, $client_version, $auth_method, $rotations, $flags]]
+            :put wg_sessions {
+                session_id => peer_pubkey, psk, created_at, expires_at, is_active, last_used,
+                client_ip, client_version, auth_method, key_rotation_count, flags_json
+            }
+        "#;
+        let mut p: Params = BTreeMap::new();
+        p.insert("sid".into(), DataValue::Str(rec.session_id.as_str().into()));
+        p.insert(
+            "peer".into(),
+            DataValue::Str(rec.peer_pubkey.as_str().into()),
+        );
+        p.insert("psk".into(), DataValue::Str(rec.psk.as_str().into()));
+        p.insert("created".into(), dv_int(rec.created_at as i64));
+        p.insert("expires".into(), dv_int(rec.expires_at as i64));
+        p.insert("active".into(), DataValue::Bool(rec.is_active));
+        p.insert("last_used".into(), dv_int(rec.last_used as i64));
+        p.insert(
+            "client_ip".into(),
+            DataValue::Str(rec.client_ip.clone().unwrap_or_default().into()),
+        );
+        p.insert(
+            "client_version".into(),
+            DataValue::Str(rec.client_version.clone().unwrap_or_default().into()),
+        );
+        p.insert(
+            "auth_method".into(),
+            DataValue::Str(rec.auth_method.as_str().into()),
+        );
+        p.insert(
+            "rotations".into(),
+            dv_int(rec.key_rotation_count as i64),
+        );
+        p.insert("flags".into(), DataValue::Str(rec.flags_json.as_str().into()));
+        cozo_run(&self.db, query, p)
+            .map_err(|e| CozoError::Other(format!("put wg session: {e}")))?;
+
+        let mut pp: Params = BTreeMap::new();
+        pp.insert(
+            "peer".into(),
+            DataValue::Str(rec.peer_pubkey.as_str().into()),
+        );
+        pp.insert("sid".into(), DataValue::Str(rec.session_id.as_str().into()));
+        cozo_run(
+            &self.db,
+            "?[peer_pubkey, session_id] <- [[$peer, $sid]] :put wg_peer_sessions { peer_pubkey => session_id }",
+            pp,
+        )
+        .map_err(|e| CozoError::Other(format!("put wg peer session: {e}")))?;
+        Ok(())
+    }
+
+    /// Fetch a single WireGuard gateway session by session_id.
+    pub fn get_wg_session(
+        &self,
+        session_id: &str,
+    ) -> std::result::Result<Option<WgSessionRecord>, CozoError> {
+        let mut p: Params = BTreeMap::new();
+        p.insert("sid".into(), DataValue::Str(session_id.into()));
+        let r = cozo_run(
+            &self.db,
+            "?[session_id, peer_pubkey, psk, created_at, expires_at, is_active, last_used, \
+             client_ip, client_version, auth_method, key_rotation_count, flags_json] := \
+             *wg_sessions[session_id, peer_pubkey, psk, created_at, expires_at, is_active, \
+             last_used, client_ip, client_version, auth_method, key_rotation_count, flags_json], \
+             session_id = $sid",
+            p,
+        )
+        .map_err(|e| CozoError::Other(format!("get wg session: {e}")))?;
+        Ok(r.rows.first().map(row_to_wg_session))
+    }
+
+    /// List every persisted WireGuard gateway session (used to warm the in-memory
+    /// cache on `WireGuardAuthManager` startup).
+    pub fn list_wg_sessions(&self) -> std::result::Result<Vec<WgSessionRecord>, CozoError> {
+        let r = cozo_run(
+            &self.db,
+            "?[session_id, peer_pubkey, psk, created_at, expires_at, is_active, last_used, \
+             client_ip, client_version, auth_method, key_rotation_count, flags_json] := \
+             *wg_sessions[session_id, peer_pubkey, psk, created_at, expires_at, is_active, \
+             last_used, client_ip, client_version, auth_method, key_rotation_count, flags_json]",
+            BTreeMap::new(),
+        )
+        .map_err(|e| CozoError::Other(format!("list wg sessions: {e}")))?;
+        Ok(r.rows.iter().map(row_to_wg_session).collect())
+    }
+
+    /// Resolve a peer_pubkey to its current session_id, if any.
+    pub fn lookup_wg_peer_session(
+        &self,
+        peer_pubkey: &str,
+    ) -> std::result::Result<Option<String>, CozoError> {
+        let mut p: Params = BTreeMap::new();
+        p.insert("peer".into(), DataValue::Str(peer_pubkey.into()));
+        let r = cozo_run(
+            &self.db,
+            "?[session_id] := *wg_peer_sessions[peer_pubkey, session_id], peer_pubkey = $peer",
+            p,
+        )
+        .map_err(|e| CozoError::Other(format!("lookup wg peer session: {e}")))?;
+        Ok(r.rows.first().and_then(|row| dv_as_str(&row[0])).map(String::from))
+    }
+
+    /// Delete a WireGuard gateway session and its peer mapping.
+    pub fn delete_wg_session(
+        &self,
+        session_id: &str,
+        peer_pubkey: &str,
+    ) -> std::result::Result<(), CozoError> {
+        let mut p: Params = BTreeMap::new();
+        p.insert("sid".into(), DataValue::Str(session_id.into()));
+        cozo_run(
+            &self.db,
+            "?[session_id] <- [[$sid]] :rm wg_sessions { session_id }",
+            p,
+        )
+        .map_err(|e| CozoError::Other(format!("delete wg session: {e}")))?;
+
+        let mut pp: Params = BTreeMap::new();
+        pp.insert("peer".into(), DataValue::Str(peer_pubkey.into()));
+        cozo_run(
+            &self.db,
+            "?[peer_pubkey] <- [[$peer]] :rm wg_peer_sessions { peer_pubkey }",
+            pp,
+        )
+        .map_err(|e| CozoError::Other(format!("delete wg peer session: {e}")))?;
+        Ok(())
+    }
+
     /// Return a shared handle to the underlying DbInstance for advanced queries.
     pub fn db(&self) -> Arc<DbInstance> {
         self.db.clone()
@@ -796,6 +976,51 @@ fn dv_as_str(dv: &DataValue) -> Option<&str> {
         Some(s.as_str())
     } else {
         None
+    }
+}
+
+fn dv_as_int(dv: &DataValue) -> i64 {
+    match dv {
+        DataValue::Num(cozo::Num::Int(i)) => *i,
+        DataValue::Num(cozo::Num::Float(f)) => *f as i64,
+        _ => 0,
+    }
+}
+
+fn dv_as_bool(dv: &DataValue) -> bool {
+    matches!(dv, DataValue::Bool(true))
+}
+
+fn row_to_wg_session(row: &Vec<DataValue>) -> WgSessionRecord {
+    let s = |i: usize| dv_as_str(&row[i]).unwrap_or("").to_string();
+    let opt = |i: usize| {
+        let v = s(i);
+        if v.is_empty() {
+            None
+        } else {
+            Some(v)
+        }
+    };
+    WgSessionRecord {
+        session_id: s(0),
+        peer_pubkey: s(1),
+        psk: s(2),
+        created_at: dv_as_int(&row[3]) as u64,
+        expires_at: dv_as_int(&row[4]) as u64,
+        is_active: dv_as_bool(&row[5]),
+        last_used: dv_as_int(&row[6]) as u64,
+        client_ip: opt(7),
+        client_version: opt(8),
+        auth_method: s(9),
+        key_rotation_count: dv_as_int(&row[10]) as u32,
+        flags_json: {
+            let v = s(11);
+            if v.is_empty() {
+                "{}".to_string()
+            } else {
+                v
+            }
+        },
     }
 }
 

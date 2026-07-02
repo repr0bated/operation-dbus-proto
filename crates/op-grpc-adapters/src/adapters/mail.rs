@@ -318,18 +318,23 @@ impl MailService for MailAdapter {
         let (reader, mut writer) = tokio::io::split(stream);
         let mut lines = BufReader::new(reader).lines();
 
-        let smtp_cmd = |cmd: &str| {
-            let _ = cmd;
-        };
-        let _ = smtp_cmd;
-
-        // Read banner
-        lines.next_line().await.ok();
+        // Read banner (expect "220 ...")
+        let banner = lines
+            .next_line()
+            .await
+            .map_err(|e| Status::internal(format!("SMTP banner read failed: {}", e)))?
+            .ok_or_else(|| Status::internal("SMTP connection closed before banner"))?;
+        if !banner.starts_with("220") {
+            return Err(Status::internal(format!(
+                "unexpected SMTP banner: {}",
+                banner
+            )));
+        }
 
         let from = std::env::var("MAIL_FROM").unwrap_or_else(|_| "noreply@3tched.com".to_string());
         let msg_id = uuid::Uuid::new_v4().to_string();
 
-        for (cmd, _) in [
+        for (cmd, expected_code) in [
             ("EHLO localhost\r\n".to_string(), "250"),
             (format!("MAIL FROM:<{}>\r\n", from), "250"),
             (format!("RCPT TO:<{}>\r\n", r.to), "250"),
@@ -339,7 +344,18 @@ impl MailService for MailAdapter {
                 .write_all(cmd.as_bytes())
                 .await
                 .map_err(|e| Status::internal(e.to_string()))?;
-            lines.next_line().await.ok();
+            let response = lines
+                .next_line()
+                .await
+                .map_err(|e| Status::internal(format!("SMTP response read failed: {}", e)))?
+                .ok_or_else(|| Status::internal("SMTP connection closed unexpectedly"))?;
+            if !response.starts_with(expected_code) {
+                return Err(Status::internal(format!(
+                    "SMTP command {:?} rejected: {}",
+                    cmd.trim_end(),
+                    response
+                )));
+            }
         }
 
         let body = format!(
@@ -350,7 +366,17 @@ impl MailService for MailAdapter {
             .write_all(body.as_bytes())
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
-        lines.next_line().await.ok();
+        let data_response = lines
+            .next_line()
+            .await
+            .map_err(|e| Status::internal(format!("SMTP DATA response read failed: {}", e)))?
+            .ok_or_else(|| Status::internal("SMTP connection closed before DATA confirmation"))?;
+        if !data_response.starts_with("250") {
+            return Err(Status::internal(format!(
+                "message rejected by SMTP server: {}",
+                data_response
+            )));
+        }
 
         writer.write_all(b"QUIT\r\n").await.ok();
 

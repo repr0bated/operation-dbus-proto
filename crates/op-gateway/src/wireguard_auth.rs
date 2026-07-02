@@ -25,16 +25,22 @@ use ring::rand::{SecureRandom, SystemRandom};
 
 use crate::encrypted_storage::{EncryptedKeyStorage, EncryptedStorageConfig, KeyType};
 use anyhow::Result;
+use op_cozo_store::{CozoGraphShuttle, WgSessionRecord};
 
+/// WireGuard session persistence, backed by CozoDB (`op-cozo-store`) — this project
+/// never uses SQL/SQLite. Sessions are account-lifetime identity, not disposable web
+/// sessions, so they must survive a gateway restart.
 #[derive(Clone)]
 pub struct WireGuardDatabase {
-    sessions: Arc<RwLock<HashMap<String, WireGuardSession>>>,
+    cozo: Arc<CozoGraphShuttle>,
 }
 
 impl WireGuardDatabase {
     pub async fn new() -> Result<Self> {
+        let cozo = CozoGraphShuttle::from_env()
+            .map_err(|e| anyhow::anyhow!("failed to open Cozo store: {e}"))?;
         Ok(Self {
-            sessions: Arc::new(RwLock::new(HashMap::new())),
+            cozo: Arc::new(cozo),
         })
     }
 
@@ -43,33 +49,85 @@ impl WireGuardDatabase {
     }
 
     pub async fn store_wireguard_session(&self, session: &WireGuardSession) -> Result<()> {
-        self.sessions
-            .write()
-            .await
-            .insert(session.session_id.clone(), session.clone());
-        Ok(())
+        let rec = session_to_record(session)?;
+        self.cozo
+            .put_wg_session(&rec)
+            .map_err(|e| anyhow::anyhow!("store wg session: {e}"))
     }
 
     pub async fn update_wireguard_session(&self, session: &WireGuardSession) -> Result<()> {
-        self.store_wireguard_session(session).await?;
-        Ok(())
+        self.store_wireguard_session(session).await
     }
 
     pub async fn update_session_last_used(&self, session_id: &str, last_used: u64) -> Result<()> {
-        if let Some(session) = self.sessions.write().await.get_mut(session_id) {
-            session.last_used = last_used;
+        if let Some(mut rec) = self
+            .cozo
+            .get_wg_session(session_id)
+            .map_err(|e| anyhow::anyhow!("get wg session: {e}"))?
+        {
+            rec.last_used = last_used;
+            self.cozo
+                .put_wg_session(&rec)
+                .map_err(|e| anyhow::anyhow!("update wg session last_used: {e}"))?;
         }
         Ok(())
     }
 
     pub async fn load_wireguard_sessions(&self) -> Result<Vec<WireGuardSession>> {
-        Ok(self.sessions.read().await.values().cloned().collect())
+        self.cozo
+            .list_wg_sessions()
+            .map_err(|e| anyhow::anyhow!("list wg sessions: {e}"))?
+            .iter()
+            .map(record_to_session)
+            .collect()
     }
 
     pub async fn remove_wireguard_session(&self, session_id: &str) -> Result<()> {
-        self.sessions.write().await.remove(session_id);
+        if let Some(rec) = self
+            .cozo
+            .get_wg_session(session_id)
+            .map_err(|e| anyhow::anyhow!("get wg session: {e}"))?
+        {
+            self.cozo
+                .delete_wg_session(session_id, &rec.peer_pubkey)
+                .map_err(|e| anyhow::anyhow!("delete wg session: {e}"))?;
+        }
         Ok(())
     }
+}
+
+fn session_to_record(session: &WireGuardSession) -> Result<WgSessionRecord> {
+    Ok(WgSessionRecord {
+        session_id: session.session_id.clone(),
+        peer_pubkey: session.peer_pubkey.clone(),
+        psk: session.psk.clone(),
+        created_at: session.created_at,
+        expires_at: session.expires_at,
+        is_active: session.is_active,
+        last_used: session.last_used,
+        client_ip: session.client_ip.clone(),
+        client_version: session.client_version.clone(),
+        auth_method: session.auth_method.clone(),
+        key_rotation_count: session.key_rotation_count,
+        flags_json: serde_json::to_string(&session.flags)?,
+    })
+}
+
+fn record_to_session(rec: &WgSessionRecord) -> Result<WireGuardSession> {
+    Ok(WireGuardSession {
+        session_id: rec.session_id.clone(),
+        peer_pubkey: rec.peer_pubkey.clone(),
+        psk: rec.psk.clone(),
+        created_at: rec.created_at,
+        expires_at: rec.expires_at,
+        is_active: rec.is_active,
+        last_used: rec.last_used,
+        client_ip: rec.client_ip.clone(),
+        client_version: rec.client_version.clone(),
+        auth_method: rec.auth_method.clone(),
+        key_rotation_count: rec.key_rotation_count,
+        flags: serde_json::from_str(&rec.flags_json).unwrap_or_default(),
+    })
 }
 
 /// WireGuard session information

@@ -12,54 +12,86 @@ use crate::proto::{
 use async_trait::async_trait;
 use serde_json::Value as JsonValue;
 use std::pin::Pin;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::UnixStream;
 use tokio::process::Command;
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status};
 
-#[allow(dead_code)]
 const API_SOCK: &str = "/run/netmaker/api.sock";
 
 pub struct NetmakerAdapter {
-    client: reqwest::Client,
-    #[allow(dead_code)]
-    base_url: String,
+    socket_path: String,
 }
 
 impl NetmakerAdapter {
     pub fn new() -> Self {
-        // Route HTTP through the service endpoint exposed by the socket-backed
-        // registration path.
-        let client = reqwest::Client::builder().build().expect("reqwest client");
         Self {
-            client,
-            base_url: "http://localhost".to_string(),
+            socket_path: API_SOCK.to_string(),
         }
     }
 
+    /// Minimal HTTP/1.1 GET over the Netmaker container's unix domain socket
+    /// (containers on this project have no NIC/IP — everything routes over UDS).
     async fn get<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T, Status> {
         let master_key =
             std::env::var("NETMAKER_MASTER_KEY").unwrap_or_else(|_| "masterkey".to_string());
 
-        // The socket-backed registration path resolves the service endpoint;
-        // the adapter keeps a conventional HTTP client here.
-        let url = format!("http://127.0.0.1:8081{}", path);
-        let resp = self
-            .client
-            .get(&url)
-            .header("Authorization", format!("Bearer {}", master_key))
-            .send()
+        let mut stream = UnixStream::connect(&self.socket_path)
             .await
-            .map_err(|e| Status::unavailable(format!("Netmaker API unavailable: {}", e)))?;
+            .map_err(|e| Status::unavailable(format!("Netmaker API socket unavailable: {}", e)))?;
 
-        if !resp.status().is_success() {
+        let request = format!(
+            "GET {path} HTTP/1.1\r\n\
+             Host: localhost\r\n\
+             Authorization: Bearer {master_key}\r\n\
+             Accept: application/json\r\n\
+             Connection: close\r\n\r\n",
+            path = path,
+            master_key = master_key
+        );
+        stream
+            .write_all(request.as_bytes())
+            .await
+            .map_err(|e| Status::internal(format!("Netmaker API write failed: {}", e)))?;
+
+        let mut raw = Vec::new();
+        stream
+            .read_to_end(&mut raw)
+            .await
+            .map_err(|e| Status::internal(format!("Netmaker API read failed: {}", e)))?;
+
+        let split_at = find_subslice(&raw, b"\r\n\r\n")
+            .ok_or_else(|| Status::internal("malformed Netmaker API response"))?;
+        let head = String::from_utf8_lossy(&raw[..split_at]);
+        let body_raw = &raw[split_at + 4..];
+
+        let status_line = head
+            .lines()
+            .next()
+            .ok_or_else(|| Status::internal("empty Netmaker API response"))?;
+        let status_code: u16 = status_line
+            .split_whitespace()
+            .nth(1)
+            .and_then(|c| c.parse().ok())
+            .ok_or_else(|| Status::internal(format!("unparseable status line: {}", status_line)))?;
+        if !(200..300).contains(&status_code) {
             return Err(Status::internal(format!(
                 "Netmaker API error: {}",
-                resp.status()
+                status_code
             )));
         }
 
-        resp.json::<T>()
-            .await
+        let is_chunked = head
+            .lines()
+            .any(|l| l.to_ascii_lowercase().starts_with("transfer-encoding:") && l.to_ascii_lowercase().contains("chunked"));
+        let body = if is_chunked {
+            dechunk(body_raw)
+        } else {
+            body_raw.to_vec()
+        };
+
+        serde_json::from_slice(&body)
             .map_err(|e| Status::internal(format!("Netmaker API parse error: {}", e)))
     }
 
@@ -111,6 +143,38 @@ impl Default for NetmakerAdapter {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+/// Decode an HTTP/1.1 `Transfer-Encoding: chunked` body.
+fn dechunk(mut raw: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    loop {
+        let Some(line_end) = find_subslice(raw, b"\r\n") else {
+            break;
+        };
+        let size_line = String::from_utf8_lossy(&raw[..line_end]);
+        let size_hex = size_line.split(';').next().unwrap_or("").trim();
+        let Ok(size) = usize::from_str_radix(size_hex, 16) else {
+            break;
+        };
+        if size == 0 {
+            break;
+        }
+        let chunk_start = line_end + 2;
+        let chunk_end = chunk_start + size;
+        if chunk_end > raw.len() {
+            break;
+        }
+        out.extend_from_slice(&raw[chunk_start..chunk_end]);
+        raw = &raw[(chunk_end + 2).min(raw.len())..];
+    }
+    out
 }
 
 #[async_trait]

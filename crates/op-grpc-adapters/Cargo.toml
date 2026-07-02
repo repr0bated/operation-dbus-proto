@@ -42,10 +42,6 @@ async-smtp = { version = "0.9", default-features = false, features = ["runtime-t
 # MQTT
 rumqttc = { version = "0.24", features = ["use-rustls"] }
 
-# HTTP (netmaker REST, netmaker-ui)
-reqwest = { version = "0.12", features = ["json", "stream"] }
-bytes = { workspace = true }
 zbus = { workspace = true }
-
 [build-dependencies]
 tonic-build = { workspace = true }
