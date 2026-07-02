@@ -164,6 +164,79 @@ This prevents reflection from listing unmounted or inactive services while still
 
 The blob helper now also synthesizes a plugin-level `FileDescriptorSet` directly from `PluginSchema.methods`. This closes the self-contained blob identity gap: the blob no longer needs an externally supplied descriptor set. The remaining implementation step is to make the mounted tonic service generation use the same request/response message synthesis, because reflection must never advertise a typed body that the mounted route does not accept.
 
+## How To Call A Plugin Object
+
+The runtime contract is object-first. A plugin exists as a D-Bus object at:
+
+```text
+/org/opdbus/v1/plugins/<plugin_id>
+```
+
+The canonical bus name for the plugin tree is:
+
+```text
+org.opdbus.v1.plugins
+```
+
+Typical call patterns:
+
+### D-Bus method call
+
+Inspect the object first:
+
+```bash
+busctl --system introspect org.opdbus.v1.plugins /org/opdbus/v1/plugins/unix_socket
+```
+
+Call a plugin method by object path and interface:
+
+```bash
+busctl --system call \
+  org.opdbus.v1.plugins \
+  /org/opdbus/v1/plugins/unix_socket \
+  org.opdbus.v1.plugins.PluginV1 \
+  createunixsocket \
+  s a{sv}
+```
+
+The exact signature is derived from the plugin schema. For `createunixsocket`, the bridge accepts a structured payload with the container name and port list, and routes that through the `unix_socket` plugin.
+
+### gRPC bridge call
+
+The bridge exposes the typed `operation.v1.PluginService.CallMethod` RPC. The request contains:
+
+- `plugin_id`
+- `object_path`
+- `interface_name`
+- `method_name`
+- `arguments`
+
+Example shape:
+
+```json
+{
+  "plugin_id": "unix_socket",
+  "object_path": "/org/opdbus/v1/plugins/unix_socket",
+  "interface_name": "org.opdbus.PluginV1",
+  "method_name": "createunixsocket",
+  "arguments": [
+    { "name": "netmaker", "ports": [8081] }
+  ],
+  "actor_id": "netmaker-install",
+  "capability_id": "netmaker.socket.registration"
+}
+```
+
+### Reflection lookup
+
+Use `grpcurl` against the bridge when you want the generated method surface:
+
+```bash
+grpcurl -plaintext 127.0.0.1:18789 list operation.plugin.v1.ZeroclawPluginMethods
+```
+
+The reflection service advertises only active plugin blobs. If a plugin is not mounted, it should not appear in `ListServices`.
+
 ## Why tonic-reflection Builder Is Not Enough
 
 `tonic_reflection::server::Builder` accepts descriptor sets, indexes them, and returns a reflection service. Once built, that service has no supported mutation API.

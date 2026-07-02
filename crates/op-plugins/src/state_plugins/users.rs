@@ -7,15 +7,15 @@ use simd_json::prelude::*;
 
 use simd_json::OwnedValue as Value;
 
-use super::plugin_scaffold_helpers::{any_field, method_decl_from_schemars, simple_schema};
+use super::plugin_scaffold_helpers::{method_decl_from_schemars_with_output, AckOutput};
 use op_state_store::PluginSchema;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
 pub struct UsersState {
     pub users: Vec<UserConfig>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
 pub struct UserConfig {
     pub username: String,
     pub uid: Option<u32>,
@@ -154,17 +154,21 @@ impl StatePlugin for UsersPlugin {
 }
 
 pub(crate) fn users_schema() -> PluginSchema {
-    let mut schema = simple_schema(
+    let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "users",
+        "1.0.0",
         "User account declarations",
-        &[],
-        vec![("users", any_field(true, "Users list", Some(json!([]))))],
+        &serde_json::to_value(schemars::schema_for!(UsersState)).unwrap(),
+    );
+    super::schemars_adapter::apply_state_defaults(
+        &mut schema,
+        &simd_json::serde::to_owned_value(&UsersState::default()).unwrap(),
     );
 
     // CreateUser method - https://www.freedesktop.org/wiki/Software/systemd/
     schema.methods.insert(
         "create_user".to_string(),
-        method_decl_from_schemars::<CreateUserInput>(
+        method_decl_from_schemars_with_output::<CreateUserInput, AckOutput>(
             "CreateUser",
             op_state_store::SideEffect::Mutation,
             false,
@@ -176,7 +180,7 @@ pub(crate) fn users_schema() -> PluginSchema {
     // DeleteUser method
     schema.methods.insert(
         "delete_user".to_string(),
-        method_decl_from_schemars::<DeleteUserInput>(
+        method_decl_from_schemars_with_output::<DeleteUserInput, AckOutput>(
             "DeleteUser",
             op_state_store::SideEffect::Mutation,
             false,
@@ -188,7 +192,7 @@ pub(crate) fn users_schema() -> PluginSchema {
     // ModifyUser method
     schema.methods.insert(
         "modify_user".to_string(),
-        method_decl_from_schemars::<ModifyUserInput>(
+        method_decl_from_schemars_with_output::<ModifyUserInput, AckOutput>(
             "ModifyUser",
             op_state_store::SideEffect::Mutation,
             false,
@@ -200,7 +204,7 @@ pub(crate) fn users_schema() -> PluginSchema {
     // ListUsers method
     schema.methods.insert(
         "list_users".to_string(),
-        method_decl_from_schemars::<ListUsersInput>(
+        method_decl_from_schemars_with_output::<ListUsersInput, AckOutput>(
             "ListUsers",
             op_state_store::SideEffect::Read,
             true,

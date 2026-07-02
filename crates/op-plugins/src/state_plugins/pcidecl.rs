@@ -322,7 +322,7 @@ fn add_pcidecl_methods(schema: &mut PluginSchema) {
     // EnumerateDevices method
     schema.methods.insert(
         "enumerate_devices".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<EnumerateDevicesInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<EnumerateDevicesInput, super::plugin_scaffold_helpers::AckOutput>(
             "EnumerateDevices",
             SideEffect::Read,
             true,
@@ -333,7 +333,7 @@ fn add_pcidecl_methods(schema: &mut PluginSchema) {
     // GetDeviceInfo method
     schema.methods.insert(
         "get_device_info".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<GetDeviceInfoInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<GetDeviceInfoInput, super::plugin_scaffold_helpers::AckOutput>(
             "GetDeviceInfo",
             SideEffect::Read,
             true,

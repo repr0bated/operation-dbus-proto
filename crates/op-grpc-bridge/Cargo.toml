@@ -41,6 +41,7 @@ op-state = { path = "../op-state" }
 op-plugins = { path = "../op-plugins" }
 op-identity = { path = "../op-identity" }
 op-network = { path = "../op-network" }
+op-grpc-adapters = { path = "../op-grpc-adapters" }
 op-jsonrpc = { path = "../op-jsonrpc" }
 op-cognitive-mcp = { path = "../op-cognitive-mcp" }
 

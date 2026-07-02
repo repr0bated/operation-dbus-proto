@@ -1,4 +1,6 @@
-use super::plugin_scaffold_helpers::{method_decl_from_schemars, simple_schema};
+use super::plugin_scaffold_helpers::{
+    method_decl_from_schemars, method_decl_from_schemars_with_output, simple_schema,
+};
 use anyhow::Result;
 use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
@@ -143,7 +145,10 @@ pub(crate) fn proxy_server_schema() -> PluginSchema {
     // Reference: https://www.freedesktop.org/wiki/Specifications/ProxyServerSpec
     schema.methods.insert(
         "start_proxy".to_string(),
-        method_decl_from_schemars::<StartProxyInput>(
+        method_decl_from_schemars_with_output::<
+            StartProxyInput,
+            super::plugin_scaffold_helpers::AckOutput,
+        >(
             "start_proxy",
             SideEffect::Mutation,
             false,
@@ -153,7 +158,10 @@ pub(crate) fn proxy_server_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "stop_proxy".to_string(),
-        method_decl_from_schemars::<StopProxyInput>(
+        method_decl_from_schemars_with_output::<
+            StopProxyInput,
+            super::plugin_scaffold_helpers::AckOutput,
+        >(
             "stop_proxy",
             SideEffect::Mutation,
             false,
@@ -163,7 +171,10 @@ pub(crate) fn proxy_server_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "configure".to_string(),
-        method_decl_from_schemars::<ConfigureProxyInput>(
+        method_decl_from_schemars_with_output::<
+            ConfigureProxyInput,
+            super::plugin_scaffold_helpers::AckOutput,
+        >(
             "configure",
             SideEffect::Mutation,
             false,

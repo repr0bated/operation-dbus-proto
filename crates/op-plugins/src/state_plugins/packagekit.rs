@@ -447,7 +447,7 @@ pub(crate) fn packagekit_schema() -> PluginSchema {
     // Spec: https://www.freedesktop.org/software/PackageKit/gtk-doc/api-reference.html
     schema.methods.insert(
         "resolve".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<ResolvePackagesInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<ResolvePackagesInput, super::plugin_scaffold_helpers::AckOutput>(
             "Resolve",
             op_state_store::SideEffect::Read,
             true,
@@ -457,7 +457,7 @@ pub(crate) fn packagekit_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "install_packages".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<InstallPackagesInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<InstallPackagesInput, super::plugin_scaffold_helpers::AckOutput>(
             "InstallPackages",
             op_state_store::SideEffect::Mutation,
             false,
@@ -467,7 +467,7 @@ pub(crate) fn packagekit_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "remove_packages".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<RemovePackagesInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<RemovePackagesInput, super::plugin_scaffold_helpers::AckOutput>(
             "RemovePackages",
             op_state_store::SideEffect::Mutation,
             false,
@@ -477,7 +477,7 @@ pub(crate) fn packagekit_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "update_packages".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<UpdatePackagesInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<UpdatePackagesInput, super::plugin_scaffold_helpers::AckOutput>(
             "UpdatePackages",
             op_state_store::SideEffect::Mutation,
             false,
@@ -487,7 +487,7 @@ pub(crate) fn packagekit_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "get_updates".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<GetUpdatesInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<GetUpdatesInput, super::plugin_scaffold_helpers::AckOutput>(
             "GetUpdates",
             op_state_store::SideEffect::Read,
             true,
@@ -497,7 +497,7 @@ pub(crate) fn packagekit_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "search_names".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<SearchNamesInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<SearchNamesInput, super::plugin_scaffold_helpers::AckOutput>(
             "SearchNames",
             op_state_store::SideEffect::Read,
             true,

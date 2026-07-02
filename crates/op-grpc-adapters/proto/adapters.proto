@@ -78,6 +78,10 @@ service NetmakerService {
   rpc ListNodes(ListNodesRequest) returns (ListNodesResponse);
   rpc GetNode(GetNodeRequest) returns (GetNodeResponse);
   rpc ListHosts(ListHostsRequest) returns (ListHostsResponse);
+  rpc JoinNetwork(JoinNetworkRequest) returns (JoinNetworkResponse);
+  rpc LeaveNetwork(LeaveNetworkRequest) returns (LeaveNetworkResponse);
+  rpc RestartService(RestartServiceRequest) returns (RestartServiceResponse);
+  rpc ExecuteCommand(ExecuteCommandRequest) returns (ExecuteCommandResponse);
   rpc StreamEvents(StreamEventsRequest) returns (stream NetmakerEvent);
 }
 
@@ -108,6 +112,51 @@ message GetNodeResponse { Node node = 1; }
 message ListHostsRequest {}
 message Host { string id = 1; string name = 2; string public_key = 3; string version = 4; }
 message ListHostsResponse { repeated Host hosts = 1; }
+message JoinNetworkRequest { string network = 1; string token = 2; }
+message JoinNetworkResponse { bool success = 1; string message = 2; }
+message LeaveNetworkRequest { string network = 1; }
+message LeaveNetworkResponse { bool success = 1; string message = 2; }
+message RestartServiceRequest { string service = 1; }
+message RestartServiceResponse { bool success = 1; string message = 2; }
+message ExecuteCommandRequest {
+  oneof command {
+    JoinNetworkRequest join = 1;
+    LeaveNetworkRequest leave = 2;
+    RestartServiceRequest restart = 3;
+    ConnectRequest connect = 4;
+    DisconnectRequest disconnect = 5;
+    ListRequest list = 6;
+    PeersRequest peers = 7;
+    PingRequest ping = 8;
+    PullRequest pull = 9;
+    PushRequest push = 10;
+    RegisterRequest register = 11;
+    ServerRequest server = 12;
+    InstallRequest install = 13;
+    UninstallRequest uninstall = 14;
+    UseRequest use = 15;
+    VersionRequest version = 16;
+  }
+}
+message ConnectRequest { string network = 1; }
+message DisconnectRequest { string network = 1; }
+message ListRequest {}
+message PeersRequest {}
+message PingRequest { string peer = 1; }
+message PullRequest {}
+message PushRequest {}
+message RegisterRequest { string instance = 1; }
+message ServerRequest { string subcommand = 1; repeated string args = 2; }
+message InstallRequest {}
+message UninstallRequest {}
+message UseRequest { string version = 1; }
+message VersionRequest {}
+message ExecuteCommandResponse {
+  bool success = 1;
+  int32 exit_code = 2;
+  string stdout = 3;
+  string stderr = 4;
+}
 message StreamEventsRequest {}
 message NetmakerEvent { string event_type = 1; string payload_json = 2; }
 

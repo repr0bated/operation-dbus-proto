@@ -54,8 +54,10 @@ pub struct NetmakerState {
     pub dependencies: Vec<String>,
     /// Whether netclient is installed
     pub installed: bool,
-    /// Whether daemon is running
+    /// Whether the netclient service is running under s6
     pub daemon_running: bool,
+    /// Netclient control socket used by the runtime
+    pub control_socket: Option<String>,
     /// Connected networks
     pub networks: Vec<NetmakerNetwork>,
     /// Public IP address
@@ -67,79 +69,40 @@ pub struct NetmakerState {
     pub tools: JsonValue,
 }
 
-/// Service controller interface for managing daemon lifecycle
+/// Service controller interface for managing the netclient lifecycle.
 #[derive(Clone)]
 enum ServiceController {
-    /// systemd via org.freedesktop.systemd1
-    Systemd,
-    /// s6 via opdbus.v1.S6.Systemctl
+    /// s6 via org.opdbus.v1.S6.Systemctl
     S6 { connection: Connection },
 }
 
 impl ServiceController {
     /// Detect the appropriate service controller for this system
     async fn detect() -> Result<Self> {
-        // First check if s6-systemctl D-Bus service is available (Artix/Chimera)
-        if Path::new("/run/s6-rc").exists() || Path::new("/run/service").exists() {
-            match Connection::system().await {
-                Ok(conn) => {
-                    // Check if our s6-systemctl service is available
-                    let proxy = Proxy::new(
-                        &conn,
-                        "opdbus.v1",
-                        "/opdbus/v1/s6/systemctl",
-                        "opdbus.v1.S6.Systemctl",
-                    )
-                    .await;
-                    if proxy.is_ok() {
-                        return Ok(ServiceController::S6 { connection: conn });
-                    }
-                }
-                Err(e) => {
-                    tracing::debug!("Failed to connect to system D-Bus for s6: {}", e);
-                }
-            }
+        if !Path::new("/run/s6-rc").exists() && !Path::new("/run/service").exists() {
+            return Err(anyhow::anyhow!(
+                "s6 runtime not found; netclient is managed through org.opdbus.v1.S6.Systemctl"
+            ));
         }
 
-        // Fall back to systemd
-        Ok(ServiceController::Systemd)
+        let conn = Connection::system()
+            .await
+            .context("Failed to connect to system D-Bus for s6")?;
+        Proxy::new(
+            &conn,
+            "org.opdbus.v1.S6.Systemctl",
+            "/org/opdbus/v1/s6/systemctl",
+            "org.opdbus.v1.S6.Systemctl",
+        )
+        .await
+        .context("s6-systemctl D-Bus service is unavailable")?;
+
+        Ok(ServiceController::S6 { connection: conn })
     }
 
     /// Check if a service is active
     async fn is_active(&self, service: &str) -> Result<bool> {
         match self {
-            ServiceController::Systemd => {
-                let conn = Connection::system().await?;
-                let proxy = Proxy::new(
-                    &conn,
-                    "org.freedesktop.systemd1",
-                    "/org/freedesktop/systemd1",
-                    "org.freedesktop.systemd1.Manager",
-                )
-                .await?;
-
-                // Get unit path
-                let unit_path: zbus::zvariant::OwnedObjectPath = proxy
-                    .call("GetUnit", &(format!("{}.service", service),))
-                    .await
-                    .context(format!("Failed to get unit path for {}", service))?;
-
-                // Query ActiveState property
-                let unit_proxy = Proxy::new(
-                    &conn,
-                    "org.freedesktop.systemd1",
-                    unit_path.as_str(),
-                    "org.freedesktop.systemd1.Unit",
-                )
-                .await?;
-
-                let active_state: String = unit_proxy
-                    .get_property("ActiveState")
-                    .await
-                    .unwrap_or_else(|_| "unknown".to_string());
-
-                Ok(active_state == "active")
-            }
             ServiceController::S6 { connection } => {
                 let proxy = Proxy::new(
                     connection,
@@ -158,33 +121,6 @@ impl ServiceController {
     /// Enable and start a service (enable --now)
     async fn enable_and_start(&self, service: &str) -> Result<()> {
         match self {
-            ServiceController::Systemd => {
-                let conn = Connection::system().await?;
-                let proxy = Proxy::new(
-                    &conn,
-                    "org.freedesktop.systemd1",
-                    "/org/freedesktop/systemd1",
-                    "org.freedesktop.systemd1.Manager",
-                )
-                .await?;
-
-                // Enable unit
-                let _: (bool, Vec<(String, String, String)>) = proxy
-                    .call(
-                        "EnableUnitFiles",
-                        &(vec![format!("{}.service", service)], false, true),
-                    )
-                    .await
-                    .context(format!("Failed to enable unit {}", service))?;
-
-                // Start unit
-                let _: zbus::zvariant::OwnedObjectPath = proxy
-                    .call("StartUnit", &(format!("{}.service", service), "replace"))
-                    .await
-                    .context(format!("Failed to start unit {}", service))?;
-
-                Ok(())
-            }
             ServiceController::S6 { connection } => {
                 let proxy = Proxy::new(
                     connection,
@@ -233,6 +169,38 @@ impl NetmakerPlugin {
     async fn check_daemon_running() -> Result<bool> {
         let controller = ServiceController::detect().await?;
         controller.is_active("netclient").await
+    }
+
+    fn netclient_config_path() -> &'static str {
+        "/etc/netclient/netclient.json"
+    }
+
+    async fn read_netclient_config() -> Result<JsonValue> {
+        match tokio::fs::read_to_string(Self::netclient_config_path()).await {
+            Ok(content) => Ok(serde_json::from_str(&content)
+                .with_context(|| "Failed to parse /etc/netclient/netclient.json")?),
+            Err(_) => Ok(serde_json::json!({})),
+        }
+    }
+
+    async fn write_netclient_config(mut config: JsonValue) -> Result<()> {
+        if !config.is_object() {
+            config = serde_json::json!({});
+        }
+
+        tokio::fs::create_dir_all("/etc/netclient").await.ok();
+        tokio::fs::write(
+            Self::netclient_config_path(),
+            serde_json::to_string_pretty(&config)?,
+        )
+        .await
+        .context("Failed to write /etc/netclient/netclient.json")?;
+        Ok(())
+    }
+
+    async fn restart_netclient() -> Result<()> {
+        let controller = ServiceController::detect().await?;
+        controller.enable_and_start("netclient").await
     }
 
     /// Get current networks from netclient config files (AGENTS.md §4: no subprocess bypasses)
@@ -302,27 +270,30 @@ impl NetmakerPlugin {
     }
 
     /// Join a Netmaker network
-    /// Note: netclient enrollment requires the netclient CLI per Netmaker protocol.
-    /// AGENTS.md §4 forbids subprocess calls in plugin code; manual enrollment is required.
-    async fn join_network(&self, network: &str, _token: &str) -> Result<()> {
-        Err(anyhow::anyhow!(
-            "Netmaker network '{}' join requires netclient CLI (disabled per AGENTS.md §4). \
-             Run: netclient join -t <token> externally.",
-            network
-        ))
+    /// The control surface is the netclient config file plus the s6 restart path.
+    async fn join_network(&self, network: &str, token: &str) -> Result<()> {
+        let mut config = Self::read_netclient_config().await?;
+        config["enabled"] = serde_json::json!(true);
+        config["default_network"] = serde_json::json!(network);
+        config["enrollment_token"] = serde_json::json!(token);
+        config["interface"] = serde_json::json!("netmaker");
+        config["inittype"] = serde_json::json!(6);
+        Self::write_netclient_config(config).await?;
+        Self::restart_netclient().await?;
+        Ok(())
     }
 
     /// Leave a Netmaker network
-    /// Note: netclient leave requires the netclient CLI per Netmaker protocol.
-    /// AGENTS.md §4 forbids subprocess calls in plugin code; manual disconnection is required.
-    #[allow(dead_code)]
     async fn leave_network(&self, network: &str) -> Result<()> {
-        Err(anyhow::anyhow!(
-            "Netmaker network '{}' leave requires netclient CLI (disabled per AGENTS.md §4). \
-             Run: netclient leave '{}' externally.",
-            network,
-            network
-        ))
+        let mut config = Self::read_netclient_config().await?;
+        if config.get("default_network").and_then(|v| v.as_str()) == Some(network) {
+            config["default_network"] = serde_json::json!("");
+        }
+        config["enabled"] = serde_json::json!(false);
+        config["enrollment_token"] = serde_json::json!(null);
+        Self::write_netclient_config(config).await?;
+        Self::restart_netclient().await?;
+        Ok(())
     }
 
     pub(crate) fn current_state() -> NetmakerState {
@@ -363,6 +334,7 @@ impl NetmakerPlugin {
             dependencies: vec!["net".to_string(), "s6".to_string()],
             installed: false,
             daemon_running: false,
+            control_socket: Some("/var/run/netclient/netclient.sock".to_string()),
             networks: Vec::new(),
             public_ip: None,
             config: NetmakerConfig::default(),
@@ -607,7 +579,7 @@ pub(crate) fn netmaker_schema() -> PluginSchema {
     let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "netmaker",
         "1.0.0",
-        "Netmaker daemon state and execution schema",
+        "Netmaker state and execution schema backed by s6-managed netclient",
         &root,
     );
     schema.category = "net".to_string();
@@ -616,7 +588,7 @@ pub(crate) fn netmaker_schema() -> PluginSchema {
     }
     schema.methods.insert(
         "join_network".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<JoinNetworkInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<JoinNetworkInput, super::plugin_scaffold_helpers::AckOutput>(
             "join_network",
             op_state_store::SideEffect::Mutation,
             false,
@@ -626,7 +598,7 @@ pub(crate) fn netmaker_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "leave_network".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<LeaveNetworkInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<LeaveNetworkInput, super::plugin_scaffold_helpers::AckOutput>(
             "leave_network",
             op_state_store::SideEffect::Mutation,
             false,
@@ -636,7 +608,7 @@ pub(crate) fn netmaker_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "list_nodes".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<ListNodesInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<ListNodesInput, super::plugin_scaffold_helpers::AckOutput>(
             "list_nodes",
             op_state_store::SideEffect::Read,
             true,
@@ -646,7 +618,7 @@ pub(crate) fn netmaker_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "get_node".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<GetNodeInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<GetNodeInput, super::plugin_scaffold_helpers::AckOutput>(
             "get_node",
             op_state_store::SideEffect::Read,
             true,
@@ -656,7 +628,7 @@ pub(crate) fn netmaker_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "update_node".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<UpdateNodeInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<UpdateNodeInput, super::plugin_scaffold_helpers::AckOutput>(
             "update_node",
             op_state_store::SideEffect::Mutation,
             false,
@@ -666,7 +638,7 @@ pub(crate) fn netmaker_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "list_networks".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<ListNetworksInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<ListNetworksInput, super::plugin_scaffold_helpers::AckOutput>(
             "list_networks",
             op_state_store::SideEffect::Read,
             true,

@@ -131,7 +131,7 @@ pub(crate) fn fail2ban_schema() -> PluginSchema {
 
     schema.methods.insert(
         "ban_ip".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<BanIpInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<BanIpInput, super::plugin_scaffold_helpers::AckOutput>(
             "BanIp",
             op_state_store::SideEffect::Mutation,
             false,
@@ -141,7 +141,7 @@ pub(crate) fn fail2ban_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "unban_ip".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<BanIpInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<BanIpInput, super::plugin_scaffold_helpers::AckOutput>(
             "UnbanIp",
             op_state_store::SideEffect::Mutation,
             false,
@@ -151,7 +151,7 @@ pub(crate) fn fail2ban_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "get_jail_status".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<JailInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<JailInput, super::plugin_scaffold_helpers::AckOutput>(
             "GetJailStatus",
             op_state_store::SideEffect::Read,
             true,
@@ -161,7 +161,7 @@ pub(crate) fn fail2ban_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "reload".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<super::plugin_scaffold_helpers::EmptyInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<super::plugin_scaffold_helpers::EmptyInput, super::plugin_scaffold_helpers::AckOutput>(
             "Reload",
             op_state_store::SideEffect::Mutation,
             false,

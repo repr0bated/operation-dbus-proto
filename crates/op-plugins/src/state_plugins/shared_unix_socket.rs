@@ -43,7 +43,7 @@ pub struct SharedRegistration {
     /// plugin never binds or maps these ports.
     #[schemars(extend("x-oscal-subid" = "mut.service.shared-unix-socket.registration.ports@v1"))]
     pub ports: Vec<u16>,
-    /// Transport protocol carried over the shared socket (`grpc`, `jsonrpc`, …).
+    /// Transport protocol carried over the shared socket (`grpc`).
     #[serde(default = "default_protocol")]
     #[schemars(extend("x-oscal-subid" = "mut.service.shared-unix-socket.registration.protocol@v1"))]
     pub protocol: String,

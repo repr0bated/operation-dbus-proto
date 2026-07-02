@@ -1,5 +1,5 @@
 //! `blockchain` StatePlugin — exposes the live streaming-blockchain audit chain
-//! (`op-blockchain`) through the `org.dbus.v1.plugins` surface, reachable over
+//! (`op-blockchain`) through the `org.opdbus.v1.plugins` surface, reachable over
 //! `PluginService.CallMethod`.
 //!
 //! This is the correct home for the capability the Lovable frontend mistakenly

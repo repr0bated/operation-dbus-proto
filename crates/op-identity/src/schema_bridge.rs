@@ -567,7 +567,7 @@ fn build_xray_config(
         })
         .collect();
 
-    // Fallback grpc-bridge outbound if Gemma did not provide it.
+    // Fallback bridge outbound if Gemma did not provide it.
     let fallback_outbound = if seen_tags.contains("grpc-bridge") {
         String::new()
     } else {
@@ -578,26 +578,21 @@ fn build_xray_config(
       "protocol": "freedom",
       "settings": {{ "redirect": "{host}:{port}" }},
       "streamSettings": {{
-        "network": "grpc",
+        "network": "xhttp",
         "sockopt": {{ "tcpNoDelay": true, "mark": 255 }},
-        "grpcSettings": {{
-          "serviceName": "Ghostbridge.StateSync",
-          "multiMode": true,
-          "metadata": {{
-            "X-Ghostbridge-Footprint": "{footprint}",
-            "X-Ghostbridge-Trace-ID": "{trace_id}"
-          }}
+        "xhttpSettings": {{
+          "host": "{host}",
+          "path": "/Ghostbridge.StateSync",
+          "mode": "auto"
         }}
       }}
     }}"#,
             host = GRPC_BRIDGE_HOST,
             port = GRPC_BRIDGE_PORT,
-            footprint = footprint,
-            trace_id = trace_id,
         )
     };
 
-    // Final catch-all fallback to the grpc-bridge.
+    // Final catch-all fallback to the bridge.
     let fallback_rule = if seen_tags.contains("grpc-bridge") {
         String::from(
             r#",
@@ -712,7 +707,7 @@ fn build_xray_config(
 }
 
 /// Translate a Gemma route into an xray outbound JSON fragment.
-fn route_to_outbound(footprint: &str, trace_id: &str, route: &XrayRoute) -> Option<String> {
+fn route_to_outbound(_footprint: &str, _trace_id: &str, route: &XrayRoute) -> Option<String> {
     let tag = &route.tag;
     match &route.backend {
         GemmaBackend::Ingress => None,
@@ -735,15 +730,12 @@ fn route_to_outbound(footprint: &str, trace_id: &str, route: &XrayRoute) -> Opti
       "protocol": "freedom",
       "settings": {{ "redirect": "{host}:{port}" }},
       "streamSettings": {{
-        "network": "grpc",
+        "network": "xhttp",
         "sockopt": {{ "tcpNoDelay": true, "mark": 255 }},
-        "grpcSettings": {{
-          "serviceName": "{service_name}",
-          "multiMode": true,
-          "metadata": {{
-            "X-Ghostbridge-Footprint": "{footprint}",
-            "X-Ghostbridge-Trace-ID": "{trace_id}"
-          }}
+        "xhttpSettings": {{
+          "host": "{host}",
+          "path": "/{service_name}",
+          "mode": "auto"
         }}
       }}
     }}"#,
@@ -751,33 +743,27 @@ fn route_to_outbound(footprint: &str, trace_id: &str, route: &XrayRoute) -> Opti
             host = host,
             port = port,
             service_name = service_name,
-            footprint = footprint,
-            trace_id = trace_id,
         )),
-        GemmaBackend::Unix { path: _ } => Some(format!(
+        GemmaBackend::Unix { path: _path } => Some(format!(
             r#",
     {{
       "tag": "to-{tag}",
       "protocol": "freedom",
       "settings": {{ "redirect": "{host}:{port}" }},
       "streamSettings": {{
-        "network": "grpc",
+        "network": "xhttp",
         "sockopt": {{ "tcpNoDelay": true, "mark": 255 }},
-        "grpcSettings": {{
-          "serviceName": "Ghostbridge.{tag}",
-          "multiMode": true,
-          "metadata": {{
-            "X-Ghostbridge-Footprint": "{footprint}",
-            "X-Ghostbridge-Trace-ID": "{trace_id}"
-          }}
+        "xhttpSettings": {{
+          "host": "{host}",
+          "path": "{path}",
+          "mode": "auto"
         }}
       }}
     }}"#,
             tag = tag,
             host = GRPC_BRIDGE_HOST,
             port = GRPC_BRIDGE_PORT,
-            footprint = footprint,
-            trace_id = trace_id,
+            path = format!("/{tag}"),
         )),
         GemmaBackend::Dns { host, port } => Some(format!(
             r#",
@@ -1191,21 +1177,17 @@ mod xray_config_tests {
         let inbounds = v["inbounds"].as_array().unwrap();
         assert_eq!(inbounds.len(), 2, "no dokodemo socket inbounds expected");
 
-        // Each socket routes to the gRPC bridge (tonic-web) — xray does NOT
-        // dial unix sockets directly (domainsocket transport was removed in
-        // xray 26.x).  The bridge uses reflection to demux and dials the
-        // backend socket natively.
+        // Each socket routes through XHTTP — xray does not dial unix sockets
+        // directly in this branch.
         let outbounds = v["outbounds"].as_array().unwrap();
-        let qdrant = outbounds
+    let qdrant = outbounds
             .iter()
             .find(|o| o["tag"] == "to-qdrant")
             .expect("to-qdrant outbound");
-        assert_eq!(qdrant["streamSettings"]["network"], "grpc");
+        assert_eq!(qdrant["streamSettings"]["network"], "xhttp");
         assert_eq!(qdrant["settings"]["redirect"], "127.0.0.1:50051");
-        assert_eq!(
-            qdrant["streamSettings"]["grpcSettings"]["serviceName"],
-            "Ghostbridge.qdrant"
-        );
+        assert_eq!(qdrant["streamSettings"]["xhttpSettings"]["host"], "127.0.0.1");
+        assert_eq!(qdrant["streamSettings"]["xhttpSettings"]["mode"], "auto");
 
         // Each subdomain routes to its socket outbound off the shared ingress.
         let rules = v["routing"]["rules"].as_array().unwrap();
@@ -1235,9 +1217,8 @@ mod xray_config_tests {
             XrayRoute {
                 tag: "qdrant".into(),
                 subdomains: vec!["qdrant.ghostbridge.tech".into()],
-                backend: GemmaBackend::Tcp {
-                    host: "127.0.0.1".into(),
-                    port: 6334,
+                backend: GemmaBackend::Unix {
+                    path: "/run/qdrant.sock".into(),
                 },
             },
         ];
@@ -1247,6 +1228,12 @@ mod xray_config_tests {
         let outbounds = v["outbounds"].as_array().unwrap();
         assert!(outbounds.iter().any(|o| o["tag"] == "to-cognitive-mcp"));
         assert!(outbounds.iter().any(|o| o["tag"] == "to-qdrant"));
+        let qdrant = outbounds
+            .iter()
+            .find(|o| o["tag"] == "to-qdrant")
+            .expect("qdrant outbound");
+        assert_eq!(qdrant["streamSettings"]["network"], "xhttp");
+        assert_eq!(qdrant["streamSettings"]["xhttpSettings"]["path"], "/qdrant");
 
         let rules = v["routing"]["rules"].as_array().unwrap();
         assert!(rules.iter().any(|r| {

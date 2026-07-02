@@ -1,5 +1,5 @@
 //! `datastore` StatePlugin — projects the live canonical state store
-//! (`op-state-store`) through the `org.dbus.v1.plugins` surface (PluginService).
+//! (`op-state-store`) through the `org.opdbus.v1.plugins` surface (PluginService).
 //!
 //! This is the correct home for the capability the Lovable frontend mistakenly
 //! called as a standalone `operation.stores.v1.DataStoreService` gRPC package —

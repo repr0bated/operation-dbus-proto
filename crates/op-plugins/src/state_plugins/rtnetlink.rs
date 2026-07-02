@@ -434,7 +434,7 @@ pub(crate) fn rtnetlink_schema() -> PluginSchema {
 
     schema.methods.insert(
         "set_link_state".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<SetLinkStateInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<SetLinkStateInput, super::plugin_scaffold_helpers::AckOutput>(
             "set_link_state",
             op_state_store::SideEffect::Mutation,
             false,
@@ -444,7 +444,7 @@ pub(crate) fn rtnetlink_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "add_ipv4_address".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<AddIpv4AddressInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<AddIpv4AddressInput, super::plugin_scaffold_helpers::AckOutput>(
             "add_ipv4_address",
             op_state_store::SideEffect::Mutation,
             false,
@@ -454,7 +454,7 @@ pub(crate) fn rtnetlink_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "set_mac_address".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<SetMacAddressInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<SetMacAddressInput, super::plugin_scaffold_helpers::AckOutput>(
             "set_mac_address",
             op_state_store::SideEffect::Mutation,
             false,
@@ -464,7 +464,7 @@ pub(crate) fn rtnetlink_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "set_default_route".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<SetDefaultRouteInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<SetDefaultRouteInput, super::plugin_scaffold_helpers::AckOutput>(
             "set_default_route",
             op_state_store::SideEffect::Mutation,
             false,
@@ -474,7 +474,7 @@ pub(crate) fn rtnetlink_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "add_link".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<AddLinkInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<AddLinkInput, super::plugin_scaffold_helpers::AckOutput>(
             "add_link",
             op_state_store::SideEffect::Mutation,
             false,
@@ -484,7 +484,7 @@ pub(crate) fn rtnetlink_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "del_link".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<DelLinkInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<DelLinkInput, super::plugin_scaffold_helpers::AckOutput>(
             "del_link",
             op_state_store::SideEffect::Mutation,
             false,
@@ -494,7 +494,7 @@ pub(crate) fn rtnetlink_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "add_route".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<AddRouteInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<AddRouteInput, super::plugin_scaffold_helpers::AckOutput>(
             "add_route",
             op_state_store::SideEffect::Mutation,
             false,
@@ -504,7 +504,7 @@ pub(crate) fn rtnetlink_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "del_route".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<DelRouteInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<DelRouteInput, super::plugin_scaffold_helpers::AckOutput>(
             "del_route",
             op_state_store::SideEffect::Mutation,
             false,
@@ -514,7 +514,7 @@ pub(crate) fn rtnetlink_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "add_rule".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<AddRuleInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<AddRuleInput, super::plugin_scaffold_helpers::AckOutput>(
             "add_rule",
             op_state_store::SideEffect::Mutation,
             false,
