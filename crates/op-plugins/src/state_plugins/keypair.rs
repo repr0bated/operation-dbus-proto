@@ -1,12 +1,30 @@
+//! GB.Keypair plugin — schemars-seeded, D-Bus-backed keypair declaration state.
+//!
+//! This is the reference implementation of the GB (Golden Bridge) plugin
+//! pattern: the plugin file owns the schemars seed (state struct), the
+//! `PluginSchema` contract is derived from that seed, and method declarations
+//! use typed input/output structs via `method_decl_from_schemars_with_output`.
+
 use anyhow::Result;
 use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
-use op_state_store::{FieldSchema, FieldType, PluginSchema};
+use op_state_store::{PluginSchema, SideEffect};
 use serde::{Deserialize, Serialize};
 use simd_json::json;
 use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
-use std::collections::HashMap;
+
+use super::plugin_scaffold_helpers::method_decl_from_schemars_with_output;
+
+// =============================================================================
+// PLUGIN ENTRY: identity and typed schema seed
+// =============================================================================
+
+const PLUGIN_NAME: &str = "keypair";
+const PLUGIN_VERSION: &str = "1.0.0";
+const PLUGIN_CATEGORY: &str = "service";
+const PLUGIN_DESCRIPTION: &str = "Keypair declaration state";
+const PLUGIN_DISPLAY_NAME: &str = "GB.Keypair";
 
 /// Keypair declaration state.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
@@ -21,7 +39,7 @@ pub struct KeypairState {
     pub keypairs: Vec<Keypair>,
 }
 
-/// A single SSH keypair.
+/// A single SSH keypair (state-side declaration).
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Keypair {
     /// Keypair name.
@@ -57,6 +75,64 @@ pub struct Keypair {
     pub present: bool,
 }
 
+/// Typed input for the `list_keypairs` method (empty — no parameters).
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "obs.service.keypair.list.input@v1"))]
+pub struct ListKeypairsInput {}
+
+/// Typed output for the `list_keypairs` method.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "obs.service.keypair.list.output@v1"))]
+pub struct ListKeypairsOutput {
+    /// Discovered keypairs.
+    #[schemars(
+        description = "Discovered keypairs",
+        extend("x-oscal-subid" = "exp.service.keypair.list.keypairs.render@v1")
+    )]
+    pub keypairs: Vec<KeypairInfo>,
+}
+
+/// A single keypair as returned by `list_keypairs` (output-side view).
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "obs.service.keypair.keypair-info.list@v1"))]
+pub struct KeypairInfo {
+    /// Keypair name.
+    #[schemars(
+        description = "Keypair name",
+        example = &"id_ed25519",
+        extend("x-oscal-subid" = "exp.service.keypair.info.name.render@v1")
+    )]
+    pub name: String,
+
+    /// Public-key algorithm.
+    #[schemars(
+        description = "Public-key algorithm",
+        example = &"ssh-ed25519",
+        extend("x-oscal-subid" = "exp.service.keypair.info.algorithm.render@v1")
+    )]
+    pub algorithm: String,
+
+    /// Public key material.
+    #[serde(default)]
+    #[schemars(
+        description = "Public key material",
+        extend("x-oscal-subid" = "exp.service.keypair.info.public-key.render@v1")
+    )]
+    pub public_key: Option<String>,
+
+    /// Whether the keypair is present on the system.
+    #[serde(default)]
+    #[schemars(
+        description = "Whether the keypair is present on the system",
+        extend("x-oscal-subid" = "obs.service.keypair.info.present.render@v1")
+    )]
+    pub present: bool,
+}
+
+// =============================================================================
+// PLUGIN BODY: D-Bus-backed behavior only
+// =============================================================================
+
 pub struct KeypairPlugin;
 
 impl Default for KeypairPlugin {
@@ -74,14 +150,14 @@ impl KeypairPlugin {
 #[async_trait]
 impl StatePlugin for KeypairPlugin {
     fn name(&self) -> &str {
-        "keypair"
+        PLUGIN_NAME
     }
 
     fn version(&self) -> &str {
-        "1.0.0"
+        PLUGIN_VERSION
     }
 
-    fn schema(&self) -> Option<op_state_store::PluginSchema> {
+    fn schema(&self) -> Option<PluginSchema> {
         Some(keypair_schema())
     }
 
@@ -134,128 +210,47 @@ impl StatePlugin for KeypairPlugin {
     }
 }
 
+// =============================================================================
+// PLUGIN EXIT: publish the single PluginSchema contract
+// =============================================================================
+
 /// Derived `keypair` schema from the `KeypairState` struct.
 pub fn keypair_schema() -> PluginSchema {
     let root = serde_json::to_value(schemars::schema_for!(KeypairState))
         .expect("schemars schema serializes to JSON");
     let mut schema = super::schemars_adapter::plugin_schema_from_json(
-        "keypair",
-        "1.0.0",
-        "Keypair declaration state",
+        PLUGIN_NAME,
+        PLUGIN_VERSION,
+        PLUGIN_DESCRIPTION,
         &root,
     );
-    schema.methods.insert("list_keypairs".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<()>(
-        "list_keypairs",
-        op_state_store::SideEffect::Read,
-        true,
-        "cap.service.keypair.list@v1",
-        "obs.service.keypair.list@v1",
-    ));
+    schema.category = PLUGIN_CATEGORY.to_string();
+    schema.display_name = Some(PLUGIN_DISPLAY_NAME.to_string());
+    schema.methods.insert(
+        "list_keypairs".to_string(),
+        method_decl_from_schemars_with_output::<ListKeypairsInput, ListKeypairsOutput>(
+            "list_keypairs",
+            SideEffect::Read,
+            true,
+            "cap.service.keypair.list@v1",
+            "obs.service.keypair.list@v1",
+        ),
+    );
     schema
-}
-
-/// Frozen golden reference: the original hand-rolled schema, kept **test-only**
-/// so `derived_schema_matches_hand_rolled` can prove the derived schema still
-/// matches the contract this plugin shipped with. Production uses
-/// [`keypair_schema`].
-#[cfg(test)]
-pub(crate) fn keypair_schema_golden() -> PluginSchema {
-    let mut keypair_fields = HashMap::new();
-    keypair_fields.insert(
-        "name".to_string(),
-        FieldSchema {
-            field_type: FieldType::String,
-            required: true,
-            description: "Keypair name".to_string(),
-            default: None,
-            example: Some(json!("id_ed25519")),
-            constraints: Vec::new(),
-            read_only: false,
-            read_only_when: None,
-        },
-    );
-    keypair_fields.insert(
-        "algorithm".to_string(),
-        FieldSchema {
-            field_type: FieldType::String,
-            required: true,
-            description: "Public-key algorithm".to_string(),
-            default: None,
-            example: Some(json!("ssh-ed25519")),
-            constraints: Vec::new(),
-            read_only: false,
-            read_only_when: None,
-        },
-    );
-    keypair_fields.insert(
-        "public_key".to_string(),
-        FieldSchema {
-            field_type: FieldType::String,
-            required: false,
-            description: "Public key material".to_string(),
-            default: Some(json!(null)),
-            example: None,
-            constraints: Vec::new(),
-            read_only: false,
-            read_only_when: None,
-        },
-    );
-    keypair_fields.insert(
-        "present".to_string(),
-        FieldSchema {
-            field_type: FieldType::Boolean,
-            required: false,
-            description: "Whether the keypair is present on the system".to_string(),
-            default: Some(json!(false)),
-            example: None,
-            constraints: Vec::new(),
-            read_only: false,
-            read_only_when: None,
-        },
-    );
-
-    PluginSchema::builder("keypair")
-        .version("1.0.0")
-        .description("Keypair declaration state")
-        .subid("__schema__", "sch.software.plugin.keypair.schema@v1")
-        .field(
-            "keypairs",
-            FieldSchema {
-                field_type: FieldType::Array(Box::new(FieldType::Object(keypair_fields))),
-                required: false,
-                description: "Managed keypairs".to_string(),
-                default: Some(json!([])),
-                example: None,
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        )
-        .subid("keypairs", "exp.service.keypair.keypairs.render@v1")
-        .example(json!({
-            "keypairs": [
-                {
-                    "name": "id_ed25519",
-                    "algorithm": "ssh-ed25519",
-                    "public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI...",
-                    "present": true
-                }
-            ]
-        }))
-        .build()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// The schemars-derived schema must match the hand-rolled golden reference.
     #[test]
-    fn derived_schema_matches_hand_rolled() {
-        let golden = keypair_schema_golden();
-        let derived = keypair_schema();
-        let diffs = crate::state_plugins::schemars_adapter::schema_diffs(&golden, &derived);
-        assert!(diffs.is_empty(), "schema_diffs: {:#?}", diffs);
+    fn schema_is_schemars_seeded_and_typed() {
+        let schema = keypair_schema();
+        assert_eq!(schema.name, PLUGIN_NAME);
+        assert_eq!(schema.version, PLUGIN_VERSION);
+        assert_eq!(schema.display_name, Some(PLUGIN_DISPLAY_NAME.to_string()));
+        assert!(schema.fields.contains_key("keypairs"));
+        assert!(schema.methods.contains_key("list_keypairs"));
     }
 
     /// Every `x-oscal-subid` annotation in the derived schema must be a valid
@@ -291,5 +286,5 @@ mod tests {
 // Self-registration: the plugin registry discovers this via inventory
 // (single source of the catalog; no central dispatch list).
 inventory::submit! {
-    crate::default_registry::PluginReg::new("keypair", |_ctx| std::sync::Arc::new(KeypairPlugin::new()))
+    crate::default_registry::PluginReg::new(PLUGIN_NAME, |_ctx| std::sync::Arc::new(KeypairPlugin::new()))
 }

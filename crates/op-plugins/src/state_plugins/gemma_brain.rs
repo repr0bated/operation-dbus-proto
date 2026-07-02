@@ -265,12 +265,116 @@ impl StatePlugin for GemmaBrainPlugin {
 pub(crate) fn gemma_brain_schema() -> PluginSchema {
     let root = serde_json::to_value(schemars::schema_for!(GemmaBrainState))
         .expect("schemars schema serializes to JSON");
-    super::schemars_adapter::plugin_schema_from_json(
+    let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "gemma_brain",
         "1.0.0",
         "Gemma cognitive brain: tag routing, subid classification, reasoning perspectives, and UI-spec gallery; consumes the large_language_model plugin for inference",
         &root,
-    )
+    );
+
+    // Output structs
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct ClassifyOutput {
+        pub classification: serde_json::Value,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct RouteOutput {
+        pub route: serde_json::Value,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct ListPerspectivesOutput {
+        pub perspectives: Vec<serde_json::Value>,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct GetUiSpecOutput {
+        pub spec: Option<serde_json::Value>,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct ListTagsOutput {
+        pub tags: Vec<serde_json::Value>,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct AnalyzeIntentOutput {
+        pub intent: serde_json::Value,
+    }
+
+    // Add methods
+    use super::plugin_scaffold_helpers::method_decl_from_schemars_with_output;
+    use super::plugin_scaffold_helpers::AckOutput;
+    use op_state_store::SideEffect;
+
+    schema.methods.insert(
+        "classify".to_string(),
+        method_decl_from_schemars_with_output::<(), ClassifyOutput>(
+            "classify",
+            SideEffect::Mutation,
+            false,
+            "gemma.invoke",
+            "mut.service.gemma.classify@v1",
+        ),
+    );
+    schema.methods.insert(
+        "route".to_string(),
+        method_decl_from_schemars_with_output::<(), RouteOutput>(
+            "route",
+            SideEffect::Mutation,
+            false,
+            "gemma.invoke",
+            "mut.service.gemma.route@v1",
+        ),
+    );
+    schema.methods.insert(
+        "list_perspectives".to_string(),
+        method_decl_from_schemars_with_output::<(), ListPerspectivesOutput>(
+            "list_perspectives",
+            SideEffect::Read,
+            true,
+            "gemma.read",
+            "obs.service.gemma.perspective.list@v1",
+        ),
+    );
+    schema.methods.insert(
+        "get_ui_spec".to_string(),
+        method_decl_from_schemars_with_output::<(), GetUiSpecOutput>(
+            "get_ui_spec",
+            SideEffect::Read,
+            true,
+            "gemma.read",
+            "obs.service.gemma.ui-spec.get@v1",
+        ),
+    );
+    schema.methods.insert(
+        "list_tags".to_string(),
+        method_decl_from_schemars_with_output::<(), ListTagsOutput>(
+            "list_tags",
+            SideEffect::Read,
+            true,
+            "gemma.read",
+            "obs.service.gemma.tag.list@v1",
+        ),
+    );
+    schema.methods.insert(
+        "register_tag".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "register_tag",
+            SideEffect::Mutation,
+            false,
+            "gemma.invoke",
+            "mut.service.gemma.tag.register@v1",
+        ),
+    );
+    schema.methods.insert(
+        "analyze_intent".to_string(),
+        method_decl_from_schemars_with_output::<(), AnalyzeIntentOutput>(
+            "analyze_intent",
+            SideEffect::Mutation,
+            false,
+            "gemma.invoke",
+            "mut.service.gemma.intent.analyze@v1",
+        ),
+    );
+
+    schema
 }
 
 // Self-registration: the plugin registry discovers this via inventory

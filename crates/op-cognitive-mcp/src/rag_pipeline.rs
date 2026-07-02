@@ -6,6 +6,7 @@
 //!   repo, file_path, language, symbols, doc_comments, imports, tags,
 //!   is_test, line_start, line_end, chunk_index, total_chunks, content_hash
 
+use crate::voyage::VoyageClient;
 use anyhow::{Context, Result};
 use qdrant_client::{
     qdrant::{
@@ -16,8 +17,7 @@ use qdrant_client::{
     Payload, Qdrant, QdrantError,
 };
 use regex::Regex;
-use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
@@ -48,8 +48,6 @@ pub const DEFAULT_VOYAGE4_COLLECTIONS: &[&str] = &[
 const VECTOR_DIM: u64 = 1024; // voyage-4 default
 const CHUNK_LINES: usize = 80; // ~2 kB of code per chunk
 const OVERLAP_LINES: usize = 12;
-const VOYAGE_PUBLIC_URL: &str = "https://api.voyageai.com/v1/embeddings";
-const VOYAGE_MONGODB_URL: &str = "https://ai.mongodb.com/v1/embeddings";
 const VOYAGE_BATCH: usize = 32; // points per upsert batch
 const VOYAGE_RATE_DELAY_MS: u64 = 120; // ms between Voyage calls
 
@@ -271,47 +269,18 @@ impl CodeFilter {
 
 pub struct RagPipeline {
     qdrant: Qdrant,
-    voyage_key: String,
-    voyage_model: String,
-    http: Client,
+    voyage: VoyageClient,
 }
 
 impl RagPipeline {
     pub fn from_env() -> Result<Self> {
-        let voyage_key = std::env::var("COGNITIVE_MCP_VOYAGE_API_KEY")
-            .or_else(|_| std::env::var("VOYAGE_API_KEY"))
-            .or_else(|_| std::env::var("VOYAGE_API_KEY_RUST"))
-            .ok()
-            .or_else(voyage_key_from_file)
-            .context(
-                "Voyage API key not found: set COGNITIVE_MCP_VOYAGE_API_KEY, \
-                 VOYAGE_API_KEY, VOYAGE_API_KEY_RUST, \
-                 or place the key in ~/.ssh/mongo-voyage \
-                 (override path with COGNITIVE_MCP_VOYAGE_KEY_FILE)",
-            )?;
-        // Default: voyage-4 (balanced quality/cost in the 4-series).
-        // Override with COGNITIVE_MCP_VOYAGE_MODEL env var.
-        //
-        // Model selection guide (the 4-series trio is one shared embedding space —
-        // index with one, query with another, no re-vectorize):
-        //   • voyage-4-lite        – lowest cost, good general quality
-        //   • voyage-4             – balanced cost/quality (DEFAULT)
-        //   • voyage-4-large       – highest quality, highest cost
-        //
-        // Domain models (voyage-code-3/law-2/finance-2) are NOT used: code was
-        // re-vectorized into the voyage-4 space, so everything fuses in one space.
-        let voyage_model = std::env::var("COGNITIVE_MCP_VOYAGE_MODEL")
-            .or_else(|_| std::env::var("VOYAGE_MODEL"))
-            .unwrap_or_else(|_| "voyage-4".into());
-
+        // Config (endpoint/model/key) resolves through the embedding_model
+        // plugin's projection, falling back to its own env-var reads — see
+        // op_plugins::state_plugins::embedding_model::voyage_embed_params.
+        let voyage = VoyageClient::new()?;
         let qdrant = qdrant_client_from_env()?;
 
-        Ok(Self {
-            qdrant,
-            voyage_key,
-            voyage_model,
-            http: Client::new(),
-        })
+        Ok(Self { qdrant, voyage })
     }
 
     /// Ingest a single repomix file from the zip into Qdrant.
@@ -744,55 +713,11 @@ impl RagPipeline {
     }
 
     async fn embed_document(&self, text: &str) -> Result<Vec<f32>> {
-        self.embed(text, "document").await
+        self.voyage.embed(text, Some("document")).await
     }
 
     async fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
-        self.embed(text, "query").await
-    }
-
-    async fn embed(&self, text: &str, input_type: &str) -> Result<Vec<f32>> {
-        #[derive(Serialize)]
-        struct Req<'a> {
-            input: Vec<&'a str>,
-            model: &'a str,
-            input_type: &'a str,
-            truncation: bool,
-            output_dimension: u64,
-        }
-        #[derive(Deserialize)]
-        struct Resp {
-            data: Vec<EmbData>,
-        }
-        #[derive(Deserialize)]
-        struct EmbData {
-            embedding: Vec<f32>,
-        }
-
-        let url = voyage_url_for_key(&self.voyage_key);
-
-        let resp: Resp = self
-            .http
-            .post(url)
-            .bearer_auth(&self.voyage_key)
-            .json(&Req {
-                input: vec![text],
-                model: &self.voyage_model,
-                input_type,
-                truncation: true,
-                output_dimension: VECTOR_DIM,
-            })
-            .send()
-            .await?
-            .error_for_status()?
-            .json()
-            .await?;
-
-        resp.data
-            .into_iter()
-            .next()
-            .map(|d| d.embedding)
-            .context("Voyage returned no embeddings")
+        self.voyage.embed(text, Some("query")).await
     }
 }
 
@@ -1363,53 +1288,6 @@ pub fn qdrant_client_from_env() -> Result<Qdrant> {
     Qdrant::from_url(&url)
         .build()
         .context("Failed to build Qdrant client")
-}
-
-/// Load the Voyage API key from a secret file when env vars are unset.
-///
-/// Defaults to `~/.ssh/mongo-voyage`; override with the
-/// `COGNITIVE_MCP_VOYAGE_KEY_FILE` env var. The first non-empty line is used
-/// (so a key file with a trailing newline or comment lines works).
-fn voyage_key_from_file() -> Option<String> {
-    let path = std::env::var("COGNITIVE_MCP_VOYAGE_KEY_FILE")
-        .ok()
-        .map(std::path::PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| Path::new(&h).join(".ssh/mongo-voyage")))?;
-
-    let contents = std::fs::read_to_string(&path).ok()?;
-    // The creds file may contain multiple credential types (Atlas service
-    // account ID/secret, plus a Voyage API key).  We must skip service
-    // account lines and pick the actual API key.
-    let key = contents
-        .lines()
-        .map(str::trim)
-        .find(|l| {
-            !l.is_empty()
-                && !l.starts_with('#')
-                // skip Atlas service-account tokens
-                && !l.starts_with("mdb_sa_id_")
-                && !l.starts_with("mdb_sa_sk_")
-                // line should look like a Voyage key (MongoDB-hosted or public)
-                && (l.starts_with("al-") || l.starts_with("pa-"))
-        })?
-        .to_string();
-
-    if key.is_empty() {
-        None
-    } else {
-        info!(path = %path.display(), "Loaded Voyage API key from file");
-        Some(key)
-    }
-}
-
-/// Determine the correct Voyage endpoint for a given API key.
-fn voyage_url_for_key(key: &str) -> &'static str {
-    let trimmed = key.trim();
-    if trimmed.starts_with("al-") {
-        VOYAGE_MONGODB_URL
-    } else {
-        VOYAGE_PUBLIC_URL
-    }
 }
 
 /// Map a scored Qdrant point + payload into a `RagResult`.

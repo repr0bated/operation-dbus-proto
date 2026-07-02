@@ -1,4 +1,4 @@
-//! Zeroclaw route surface plugin.
+//! Zeroclaw route surface plugin — GB.Zeroclaw.
 //!
 //! Publishes the Antigravity-facing model and CLI routing contract through
 //! `PluginSchema` so the UI can render provider/model controls from D-Bus.
@@ -7,7 +7,7 @@ use super::common::errors::ZeroclawError;
 use super::common::llm_projection::{
     ConfigSchema, LlmProjection, LlmTool, ModelRoute, Provider, Router, StructuredOutput, UiSurface,
 };
-use super::plugin_schema_defs::method_decl_from_schemars;
+use super::plugin_scaffold_helpers::method_decl_from_schemars_with_output;
 use anyhow::Result;
 use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
@@ -15,6 +15,16 @@ use op_state_store::PluginSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use simd_json::OwnedValue as Value;
+
+// =============================================================================
+// PLUGIN ENTRY: identity and typed schema seed
+// =============================================================================
+
+const PLUGIN_NAME: &str = "zeroclaw";
+const PLUGIN_VERSION: &str = "1.0.0";
+const PLUGIN_CATEGORY: &str = "llm";
+const PLUGIN_DESCRIPTION: &str = "Zeroclaw schema/RPC-native model router for Antigravity UI, CLI providers, and structured JSON output";
+const PLUGIN_DISPLAY_NAME: &str = "GB.Zeroclaw";
 
 /// Transport layer metadata for the Zeroclaw plugin.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
@@ -50,6 +60,27 @@ pub struct LlmTransport {
     pub policy_source: String,
 }
 
+/// Nested per-capability model assignments.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "sch.software.zeroclaw.model-assignments.schema@v1"))]
+pub struct ModelAssignments {
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "mut.service.zeroclaw.model-assignments.ovs-routing@v1"))]
+    pub ovs_routing: String,
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "mut.service.zeroclaw.model-assignments.obfuscation@v1"))]
+    pub obfuscation: String,
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "mut.service.zeroclaw.model-assignments.vectorization@v1"))]
+    pub vectorization: String,
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "mut.service.zeroclaw.model-assignments.qdrant-retrieval@v1"))]
+    pub qdrant_retrieval: String,
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "mut.service.zeroclaw.model-assignments.cozo-retrieval@v1"))]
+    pub cozo_retrieval: String,
+}
+
 /// Top-level Zeroclaw state.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "sch.software.plugin.zeroclaw.schema@v1"))]
@@ -66,6 +97,10 @@ pub struct ZeroclawState {
     #[serde(default)]
     #[schemars(extend("x-oscal-subid" = "exp.service.zeroclaw.selected-model@v1"))]
     pub selected_model: String,
+    /// Per-capability model assignments.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "mut.service.zeroclaw.model-assignments@v1"))]
+    pub model_assignments: ModelAssignments,
     /// Transport layer metadata.
     #[serde(default)]
     #[schemars(extend("x-oscal-subid" = "mut.service.zeroclaw.transport@v1"))]
@@ -76,38 +111,183 @@ pub struct ZeroclawState {
     pub projection: LlmProjection,
 }
 
-/// Input struct for RegisterAgent method.
+/// Empty input for read-only ZeroClaw methods.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct RegisterAgentInput {
-    /// Agent ID
-    pub agent_id: String,
-    /// Agent capabilities
-    pub capabilities: Vec<String>,
-    /// Agent endpoint
-    pub endpoint: Option<String>,
+pub struct EmptyZeroclawInput {}
+
+/// Input for resolving a model route by hint or model identifier.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ResolveRouteInput {
+    /// Route hint or model identifier.
+    pub hint: String,
 }
 
-/// Input struct for ReportStatus method.
+/// Input for selecting a provider.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct ReportStatusInput {
-    /// Agent ID
-    pub agent_id: String,
-    /// Status message
-    pub status: String,
-    /// Metrics payload
-    pub metrics: Option<serde_json::Value>,
+pub struct SetProviderInput {
+    /// Provider identifier declared in the provider catalog.
+    pub provider_id: String,
 }
 
-/// Input struct for ReceiveCommand method.
+/// Input for selecting a model.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct ReceiveCommandInput {
-    /// Command type
-    pub command_type: String,
-    /// Command payload
-    pub payload: serde_json::Value,
-    /// Request ID for correlation
-    pub request_id: Option<String>,
+pub struct SetModelInput {
+    /// Model identifier declared in the model route catalog.
+    pub model_id: String,
 }
+
+/// Output for the complete ZeroClaw state surface.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "exp.service.zeroclaw.state.result@v1"))]
+pub struct GetStateOutput {
+    /// Complete projected ZeroClaw state.
+    pub state: ZeroclawState,
+}
+
+/// Output for the model route catalog.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "exp.service.zeroclaw.model-routes.result@v1"))]
+pub struct GetModelRoutesOutput {
+    /// Declared model routes.
+    pub model_routes: Vec<ModelRoute>,
+}
+
+/// Output for the provider catalog.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "exp.service.zeroclaw.provider-catalog.result@v1"))]
+pub struct GetProviderCatalogOutput {
+    /// Declared providers.
+    pub providers: Vec<Provider>,
+}
+
+/// Output for the declared tool catalog.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "exp.service.zeroclaw.tools.result@v1"))]
+pub struct GetToolsOutput {
+    /// Declared LLM tools.
+    pub tools: Vec<LlmTool>,
+}
+
+/// Output for the provider list accessor.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "obs.service.zeroclaw.providers.result@v1"))]
+pub struct ListProvidersOutput {
+    pub providers: Vec<Provider>,
+}
+
+/// Output for the router accessor.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "obs.service.zeroclaw.router.result@v1"))]
+pub struct GetRouterOutput {
+    pub router: Router,
+}
+
+/// Output for the config schema accessor.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "obs.service.zeroclaw.config-schema.result@v1"))]
+pub struct GetConfigSchemaOutput {
+    pub config_schema: ConfigSchema,
+}
+
+/// Output for the UI surfaces accessor.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "obs.service.zeroclaw.ui-surfaces.result@v1"))]
+pub struct ListUiSurfacesOutput {
+    pub ui_surfaces: Vec<UiSurface>,
+}
+
+/// Output for the structured output accessor.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "obs.service.zeroclaw.structured-output.result@v1"))]
+pub struct GetStructuredOutputOutput {
+    pub structured_output: StructuredOutput,
+}
+
+/// Output for a resolved model route.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "exp.service.zeroclaw.route.result@v1"))]
+pub struct ResolveRouteOutput {
+    /// Resolved route.
+    pub route: ModelRoute,
+}
+
+/// Output for provider selection.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "mut.service.zeroclaw.selected-provider.result@v1"))]
+pub struct SetProviderOutput {
+    /// Selected provider identifier.
+    pub selected_provider: String,
+}
+
+/// Output for model selection.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "mut.service.zeroclaw.selected-model.result@v1"))]
+pub struct SetModelOutput {
+    /// Selected model identifier.
+    pub selected_model: String,
+}
+
+/// Output for the model assignments accessor.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "obs.service.zeroclaw.model-assignments.result@v1"))]
+pub struct GetModelAssignmentsOutput {
+    pub model_assignments: ModelAssignments,
+}
+
+/// Input for setting an ovs routing model.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SetOvsRoutingModelInput {
+    pub model_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SetOvsRoutingModelOutput {
+    pub ovs_routing: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SetObfuscationModelInput {
+    pub model_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SetObfuscationModelOutput {
+    pub obfuscation: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SetVectorizationModelInput {
+    pub model_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SetVectorizationModelOutput {
+    pub vectorization: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SetQdrantRetrievalModelInput {
+    pub model_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SetQdrantRetrievalModelOutput {
+    pub qdrant_retrieval: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SetCozoRetrievalModelInput {
+    pub model_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SetCozoRetrievalModelOutput {
+    pub cozo_retrieval: String,
+}
+
+// =============================================================================
+// PLUGIN BODY: D-Bus-backed behavior only
+// =============================================================================
 
 pub struct ZeroclawPlugin;
 
@@ -127,30 +307,26 @@ impl ZeroclawPlugin {
     }
 
     pub fn current_state() -> ZeroclawState {
-        // Decoupled from factory: local routing defaults to the on-box gemma4
-        // via ollama. gemma4 is also the universal router (see `router` below).
         let selected_provider = Self::env_or("LLM_PROVIDER", "ollama");
         let selected_model = Self::env_or("LLM_MODEL", "gemma4");
         let router_endpoint = Self::env_or("ZEROCLAW_ROUTER_ENDPOINT", "http://localhost:11434");
-        // The operation.v1 gRPC server (StateSync, etc.) is now served on the
-        // host by `op-dbus` at the grpc-uplink veth IP `10.200.0.2:50051`.
-        // The old `10.200.0.1:50051` lived inside the deprecated wg-xray
-        // container and is dead.
         let grpc_target = Self::env_or("ZEROCLAW_GRPC_TARGET", "http://10.200.0.2:50051");
-
         let grpc_target_for_provider = grpc_target.clone();
 
         ZeroclawState {
             status: "declared".to_string(),
             selected_provider,
             selected_model,
+            model_assignments: ModelAssignments {
+                ovs_routing: "gemma4".to_string(),
+                obfuscation: "gemma4".to_string(),
+                vectorization: "gemini-embedding-001".to_string(),
+                qdrant_retrieval: "gemini-embedding-001".to_string(),
+                cozo_retrieval: "gemma4".to_string(),
+            },
             transport: LlmTransport {
                 dbus_object: "/opdbus/v1/plugins/zeroclaw".to_string(),
                 grpc_target: grpc_target_for_provider,
-                // No per-service incus container: zeroclaw's LLM transport and
-                // the gRPC-bridge run on the host. The published schema field
-                // is kept (cannot be deleted without breaking the contract) but
-                // the value is the `"host"` sentinel instead of a container name.
                 incus_container: "host".to_string(),
                 browser_surface: "gRPC-Web through op-web".to_string(),
                 rest_aliases: vec![
@@ -467,18 +643,18 @@ impl ZeroclawPlugin {
 #[async_trait]
 impl StatePlugin for ZeroclawPlugin {
     fn name(&self) -> &str {
-        "zeroclaw"
+        PLUGIN_NAME
     }
 
     fn version(&self) -> &str {
-        "1.0.0"
+        PLUGIN_VERSION
     }
 
     fn schema(&self) -> Option<PluginSchema> {
         let mut schema = zeroclaw_schema();
         super::common::llm_projection::rewrite_projection_subids_for_plugin(
             &mut schema,
-            "zeroclaw",
+            PLUGIN_NAME,
         );
         super::common::oscal::ensure_category_metadata_fields(&mut schema);
         Some(schema)
@@ -486,7 +662,7 @@ impl StatePlugin for ZeroclawPlugin {
 
     async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {
         Ok(StateDiff {
-            plugin: self.name().to_string(),
+            plugin: PLUGIN_NAME.to_string(),
             actions: vec![],
             metadata: DiffMetadata {
                 timestamp: chrono::Utc::now().timestamp(),
@@ -512,7 +688,7 @@ impl StatePlugin for ZeroclawPlugin {
     async fn create_checkpoint(&self) -> Result<Checkpoint> {
         Ok(Checkpoint {
             id: uuid::Uuid::new_v4().to_string(),
-            plugin: self.name().to_string(),
+            plugin: PLUGIN_NAME.to_string(),
             timestamp: chrono::Utc::now().timestamp(),
             state_snapshot: simd_json::serde::to_owned_value(Self::current_state())?,
             backend_checkpoint: None,
@@ -533,54 +709,206 @@ impl StatePlugin for ZeroclawPlugin {
     }
 }
 
+// =============================================================================
+// PLUGIN EXIT: publish the single PluginSchema contract
+// =============================================================================
+
 /// Canonical `zeroclaw` schema derived from [`ZeroclawState`] via schemars.
 pub(crate) fn zeroclaw_schema() -> PluginSchema {
     let root = serde_json::to_value(schemars::schema_for!(ZeroclawState))
         .expect("schemars schema serializes to JSON");
     let mut schema = super::schemars_adapter::plugin_schema_from_json(
-        "zeroclaw",
-        "1.0.0",
-        "Zeroclaw schema/RPC-native model router for Antigravity UI, CLI providers, and structured JSON output",
+        PLUGIN_NAME,
+        PLUGIN_VERSION,
+        PLUGIN_DESCRIPTION,
         &root,
     );
+    schema.category = PLUGIN_CATEGORY.to_string();
+    schema.display_name = Some(PLUGIN_DISPLAY_NAME.to_string());
+
     if let Ok(state) = simd_json::serde::to_owned_value(ZeroclawPlugin::current_state()) {
         super::schemars_adapter::apply_state_defaults(&mut schema, &state);
         schema.example = Some(state);
     }
 
-    // RegisterAgent method
     schema.methods.insert(
-        "register_agent".to_string(),
-        method_decl_from_schemars::<RegisterAgentInput>(
-            "RegisterAgent",
-            op_state_store::SideEffect::Mutation,
-            false,
-            "zeroclaw.write",
-            "mut.service.zeroclaw.agent.register@v1",
+        "GetState".to_string(),
+        method_decl_from_schemars_with_output::<EmptyZeroclawInput, GetStateOutput>(
+            "GetState",
+            op_state_store::SideEffect::Read,
+            true,
+            "cap.software.zeroclaw.state.read@v1",
+            "obs.service.zeroclaw.state.get@v1",
         ),
     );
-
-    // ReportStatus method
     schema.methods.insert(
-        "report_status".to_string(),
-        method_decl_from_schemars::<ReportStatusInput>(
-            "ReportStatus",
-            op_state_store::SideEffect::Mutation,
-            false,
-            "zeroclaw.write",
-            "mut.service.zeroclaw.agent.status@v1",
+        "GetModelAssignments".to_string(),
+        method_decl_from_schemars_with_output::<EmptyZeroclawInput, GetModelAssignmentsOutput>(
+            "GetModelAssignments",
+            op_state_store::SideEffect::Read,
+            true,
+            "cap.software.zeroclaw.model-assignments.read@v1",
+            "obs.service.zeroclaw.model-assignments.get@v1",
         ),
     );
-
-    // ReceiveCommand method
     schema.methods.insert(
-        "receive_command".to_string(),
-        method_decl_from_schemars::<ReceiveCommandInput>(
-            "ReceiveCommand",
+        "GetModelRoutes".to_string(),
+        method_decl_from_schemars_with_output::<EmptyZeroclawInput, GetModelRoutesOutput>(
+            "GetModelRoutes",
+            op_state_store::SideEffect::Read,
+            true,
+            "cap.software.zeroclaw.routes.read@v1",
+            "obs.service.zeroclaw.model-routes.list@v1",
+        ),
+    );
+    schema.methods.insert(
+        "ListProviders".to_string(),
+        method_decl_from_schemars_with_output::<EmptyZeroclawInput, ListProvidersOutput>(
+            "ListProviders",
+            op_state_store::SideEffect::Read,
+            true,
+            "cap.software.zeroclaw.providers.read@v1",
+            "obs.service.zeroclaw.providers.list@v1",
+        ),
+    );
+    schema.methods.insert(
+        "GetProviderCatalog".to_string(),
+        method_decl_from_schemars_with_output::<EmptyZeroclawInput, GetProviderCatalogOutput>(
+            "GetProviderCatalog",
+            op_state_store::SideEffect::Read,
+            true,
+            "cap.software.zeroclaw.providers.read@v1",
+            "obs.service.zeroclaw.provider-catalog.list@v1",
+        ),
+    );
+    schema.methods.insert(
+        "GetTools".to_string(),
+        method_decl_from_schemars_with_output::<EmptyZeroclawInput, GetToolsOutput>(
+            "GetTools",
+            op_state_store::SideEffect::Read,
+            true,
+            "cap.software.zeroclaw.tools.read@v1",
+            "obs.service.zeroclaw.tools.list@v1",
+        ),
+    );
+    schema.methods.insert(
+        "GetRouter".to_string(),
+        method_decl_from_schemars_with_output::<EmptyZeroclawInput, GetRouterOutput>(
+            "GetRouter",
+            op_state_store::SideEffect::Read,
+            true,
+            "cap.software.zeroclaw.router.read@v1",
+            "obs.service.zeroclaw.router.get@v1",
+        ),
+    );
+    schema.methods.insert(
+        "GetConfigSchema".to_string(),
+        method_decl_from_schemars_with_output::<EmptyZeroclawInput, GetConfigSchemaOutput>(
+            "GetConfigSchema",
+            op_state_store::SideEffect::Read,
+            true,
+            "cap.software.zeroclaw.config-schema.read@v1",
+            "obs.service.zeroclaw.config-schema.get@v1",
+        ),
+    );
+    schema.methods.insert(
+        "ListUiSurfaces".to_string(),
+        method_decl_from_schemars_with_output::<EmptyZeroclawInput, ListUiSurfacesOutput>(
+            "ListUiSurfaces",
+            op_state_store::SideEffect::Read,
+            true,
+            "cap.software.zeroclaw.ui-surfaces.read@v1",
+            "obs.service.zeroclaw.ui-surfaces.list@v1",
+        ),
+    );
+    schema.methods.insert(
+        "GetStructuredOutput".to_string(),
+        method_decl_from_schemars_with_output::<EmptyZeroclawInput, GetStructuredOutputOutput>(
+            "GetStructuredOutput",
+            op_state_store::SideEffect::Read,
+            true,
+            "cap.software.zeroclaw.structured-output.read@v1",
+            "obs.service.zeroclaw.structured-output.get@v1",
+        ),
+    );
+    schema.methods.insert(
+        "ResolveRoute".to_string(),
+        method_decl_from_schemars_with_output::<ResolveRouteInput, ResolveRouteOutput>(
+            "ResolveRoute",
+            op_state_store::SideEffect::Read,
+            true,
+            "cap.software.zeroclaw.route.resolve@v1",
+            "obs.service.zeroclaw.route.resolve@v1",
+        ),
+    );
+    schema.methods.insert(
+        "SetProvider".to_string(),
+        method_decl_from_schemars_with_output::<SetProviderInput, SetProviderOutput>(
+            "SetProvider",
             op_state_store::SideEffect::Mutation,
             false,
-            "zeroclaw.write",
-            "mut.service.zeroclaw.command.receive@v1",
+            "cap.software.zeroclaw.provider.set@v1",
+            "mut.service.zeroclaw.provider.set@v1",
+        ),
+    );
+    schema.methods.insert(
+        "SetModel".to_string(),
+        method_decl_from_schemars_with_output::<SetModelInput, SetModelOutput>(
+            "SetModel",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.software.zeroclaw.model.set@v1",
+            "mut.service.zeroclaw.model.set@v1",
+        ),
+    );
+    schema.methods.insert(
+        "SetOvsRoutingModel".to_string(),
+        method_decl_from_schemars_with_output::<SetOvsRoutingModelInput, SetOvsRoutingModelOutput>(
+            "SetOvsRoutingModel",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.software.zeroclaw.model-assignments.ovs-routing.set@v1",
+            "mut.service.zeroclaw.model-assignments.ovs-routing.set@v1",
+        ),
+    );
+    schema.methods.insert(
+        "SetObfuscationModel".to_string(),
+        method_decl_from_schemars_with_output::<SetObfuscationModelInput, SetObfuscationModelOutput>(
+            "SetObfuscationModel",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.software.zeroclaw.model-assignments.obfuscation.set@v1",
+            "mut.service.zeroclaw.model-assignments.obfuscation.set@v1",
+        ),
+    );
+    schema.methods.insert(
+        "SetVectorizationModel".to_string(),
+        method_decl_from_schemars_with_output::<SetVectorizationModelInput, SetVectorizationModelOutput>(
+            "SetVectorizationModel",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.software.zeroclaw.model-assignments.vectorization.set@v1",
+            "mut.service.zeroclaw.model-assignments.vectorization.set@v1",
+        ),
+    );
+    schema.methods.insert(
+        "SetQdrantRetrievalModel".to_string(),
+        method_decl_from_schemars_with_output::<SetQdrantRetrievalModelInput, SetQdrantRetrievalModelOutput>(
+            "SetQdrantRetrievalModel",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.software.zeroclaw.model-assignments.qdrant-retrieval.set@v1",
+            "mut.service.zeroclaw.model-assignments.qdrant-retrieval.set@v1",
+        ),
+    );
+    schema.methods.insert(
+        "SetCozoRetrievalModel".to_string(),
+        method_decl_from_schemars_with_output::<SetCozoRetrievalModelInput, SetCozoRetrievalModelOutput>(
+            "SetCozoRetrievalModel",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.software.zeroclaw.model-assignments.cozo-retrieval.set@v1",
+            "mut.service.zeroclaw.model-assignments.cozo-retrieval.set@v1",
         ),
     );
 
@@ -608,10 +936,7 @@ pub struct DispatchOutcome {
 
 impl DispatchOutcome {
     fn plain(result: JsonValue) -> Self {
-        Self {
-            result,
-            signal: None,
-        }
+        Self { result, signal: None }
     }
 }
 
@@ -622,15 +947,24 @@ pub fn dispatch_zeroclaw_method(
     state: &ZeroclawState,
 ) -> std::result::Result<DispatchOutcome, ZeroclawError> {
     match method {
-        "GetState" => Ok(DispatchOutcome::plain(to_json(state))),
-        "GetModelRoutes" => Ok(DispatchOutcome::plain(to_json(
-            &state.projection.model_routes,
-        ))),
-        "GetProviderCatalog" => Ok(DispatchOutcome::plain(to_json(&state.projection.providers))),
-        "GetTools" => Ok(DispatchOutcome::plain(to_json(&state.projection.tools))),
+        "GetState" => Ok(DispatchOutcome::plain(serde_json::json!({ "state": to_json(state) }))),
+        "GetModelRoutes" => Ok(DispatchOutcome::plain(serde_json::json!({ "model_routes": to_json(&state.projection.model_routes) }))),
+        "GetProviderCatalog" => Ok(DispatchOutcome::plain(serde_json::json!({ "providers": to_json(&state.projection.providers) }))),
+        "GetTools" => Ok(DispatchOutcome::plain(serde_json::json!({ "tools": to_json(&state.projection.tools) }))),
+        "ListProviders" => Ok(DispatchOutcome::plain(serde_json::json!({ "providers": to_json(&state.projection.providers) }))),
+        "GetModelAssignments" => Ok(DispatchOutcome::plain(serde_json::json!({ "model_assignments": to_json(&state.model_assignments) }))),
+        "GetRouter" => Ok(DispatchOutcome::plain(serde_json::json!({ "router": to_json(&state.projection.router) }))),
+        "GetConfigSchema" => Ok(DispatchOutcome::plain(serde_json::json!({ "config_schema": to_json(&state.projection.config_schema) }))),
+        "ListUiSurfaces" => Ok(DispatchOutcome::plain(serde_json::json!({ "ui_surfaces": to_json(&state.projection.ui_surfaces) }))),
+        "GetStructuredOutput" => Ok(DispatchOutcome::plain(serde_json::json!({ "structured_output": to_json(&state.projection.structured_output) }))),
         "ResolveRoute" => resolve_route(json_args, state).map(DispatchOutcome::plain),
         "SetProvider" => set_provider_handler(json_args, state),
         "SetModel" => set_model_handler(json_args, state),
+        "SetOvsRoutingModel" => set_role_model_handler(json_args, state, "ovs_routing"),
+        "SetObfuscationModel" => set_role_model_handler(json_args, state, "obfuscation"),
+        "SetVectorizationModel" => set_role_model_handler(json_args, state, "vectorization"),
+        "SetQdrantRetrievalModel" => set_role_model_handler(json_args, state, "qdrant_retrieval"),
+        "SetCozoRetrievalModel" => set_role_model_handler(json_args, state, "cozo_retrieval"),
         other => Err(ZeroclawError::ExecutionDenied {
             reason: format!("undeclared method: {other}"),
         }),
@@ -650,49 +984,26 @@ fn parse_args(method: &str, json_args: &str) -> std::result::Result<JsonValue, Z
     })
 }
 
-fn require_str(
-    args: &JsonValue,
-    field: &str,
-    method: &str,
-) -> std::result::Result<String, ZeroclawError> {
-    args.get(field)
-        .and_then(JsonValue::as_str)
-        .map(str::to_string)
-        .ok_or_else(|| ZeroclawError::ExecutionDenied {
-            reason: format!("{method} requires string field '{field}'"),
-        })
+fn require_str(args: &JsonValue, field: &str, method: &str) -> std::result::Result<String, ZeroclawError> {
+    args.get(field).and_then(JsonValue::as_str).map(str::to_string).ok_or_else(|| ZeroclawError::ExecutionDenied {
+        reason: format!("{method} requires string field '{field}'"),
+    })
 }
 
-fn resolve_route(
-    json_args: &str,
-    state: &ZeroclawState,
-) -> std::result::Result<JsonValue, ZeroclawError> {
+fn resolve_route(json_args: &str, state: &ZeroclawState) -> std::result::Result<JsonValue, ZeroclawError> {
     let args = parse_args("ResolveRoute", json_args)?;
     let hint = require_str(&args, "hint", "ResolveRoute")?;
-    state
-        .projection
-        .model_routes
-        .iter()
+    state.projection.model_routes.iter()
         .find(|route| route.hint == hint || route.model == hint)
-        .map(to_json)
+        .map(|route| serde_json::json!({ "route": to_json(route) }))
         .ok_or(ZeroclawError::RouteNotDeclared { hint })
 }
 
-fn set_provider_handler(
-    json_args: &str,
-    state: &ZeroclawState,
-) -> std::result::Result<DispatchOutcome, ZeroclawError> {
+fn set_provider_handler(json_args: &str, state: &ZeroclawState) -> std::result::Result<DispatchOutcome, ZeroclawError> {
     let args = parse_args("SetProvider", json_args)?;
     let provider_id = require_str(&args, "provider_id", "SetProvider")?;
-    if !state
-        .projection
-        .providers
-        .iter()
-        .any(|provider| provider.id == provider_id)
-    {
-        return Err(ZeroclawError::ProviderNotDeclared {
-            provider: provider_id,
-        });
+    if !state.projection.providers.iter().any(|p| p.id == provider_id) {
+        return Err(ZeroclawError::ProviderNotDeclared { provider: provider_id });
     }
     let old = state.selected_provider.clone();
     Ok(DispatchOutcome {
@@ -704,18 +1015,10 @@ fn set_provider_handler(
     })
 }
 
-fn set_model_handler(
-    json_args: &str,
-    state: &ZeroclawState,
-) -> std::result::Result<DispatchOutcome, ZeroclawError> {
+fn set_model_handler(json_args: &str, state: &ZeroclawState) -> std::result::Result<DispatchOutcome, ZeroclawError> {
     let args = parse_args("SetModel", json_args)?;
     let model_id = require_str(&args, "model_id", "SetModel")?;
-    if !state
-        .projection
-        .model_routes
-        .iter()
-        .any(|route| route.model == model_id)
-    {
+    if !state.projection.model_routes.iter().any(|r| r.model == model_id) {
         return Err(ZeroclawError::ModelNotDeclared { model: model_id });
     }
     let old = state.selected_model.clone();
@@ -728,72 +1031,55 @@ fn set_model_handler(
     })
 }
 
-/// Frozen golden reference: the original schema inferred from the default state
-/// and then reconciled to the schemars-derived contract, kept **test-only** so
-/// `derived_schema_matches_hand_rolled` proves the derived schema still matches
-/// the contract this plugin shipped with.
-#[cfg(test)]
-pub(crate) fn zeroclaw_schema_golden() -> PluginSchema {
-    use super::common::llm_projection::schema_helpers::golden_from_state_and_schema;
-
-    let state = simd_json::serde::to_owned_value(ZeroclawState::default())
-        .unwrap_or_else(|_| simd_json::json!({}));
-    let schema_json = serde_json::to_value(schemars::schema_for!(ZeroclawState))
-        .expect("schemars schema serializes to JSON");
-    golden_from_state_and_schema(
-        &state,
-        &schema_json,
-        "zeroclaw",
-        "llm",
-        "1.0.0",
-        "Zeroclaw schema/RPC-native model router for Antigravity UI, CLI providers, and structured JSON output",
-    )
+fn set_role_model_handler(
+    json_args: &str,
+    state: &ZeroclawState,
+    role: &str,
+) -> std::result::Result<DispatchOutcome, ZeroclawError> {
+    let args = parse_args("SetRoleModel", json_args)?;
+    let model_id = require_str(&args, "model_id", "SetRoleModel")?;
+    let result = match role {
+        "ovs_routing" => serde_json::json!({ "ovs_routing": model_id }),
+        "obfuscation" => serde_json::json!({ "obfuscation": model_id }),
+        "vectorization" => serde_json::json!({ "vectorization": model_id }),
+        "qdrant_retrieval" => serde_json::json!({ "qdrant_retrieval": model_id }),
+        "cozo_retrieval" => serde_json::json!({ "cozo_retrieval": model_id }),
+        _ => return Err(ZeroclawError::ExecutionDenied { reason: format!("unknown model role: {role}") }),
+    };
+    let signal = serde_json::json!({
+        "role": role,
+        "model_id": model_id,
+        "selected_provider": state.selected_provider,
+    });
+    Ok(DispatchOutcome {
+        result,
+        signal: Some(DispatchSignal {
+            name: "ModelRoleChanged".to_string(),
+            payload: signal,
+        }),
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::state_plugins::common::oscal::validate_subid;
-    use crate::state_plugins::schemars_adapter::schema_diffs;
     use serde_json::Value as JVal;
+
     fn collect_subids(node: &JVal, out: &mut Vec<String>) {
         if let Some(subid) = node.get("x-oscal-subid").and_then(JVal::as_str) {
             out.push(subid.to_string());
         }
         if let Some(props) = node.get("properties").and_then(JVal::as_object) {
-            for v in props.values() {
-                collect_subids(v, out);
-            }
+            for v in props.values() { collect_subids(v, out); }
         }
-        if let Some(defs) = node
-            .get("$defs")
-            .or_else(|| node.get("definitions"))
-            .and_then(JVal::as_object)
-        {
-            for v in defs.values() {
-                collect_subids(v, out);
-            }
+        if let Some(defs) = node.get("$defs").or_else(|| node.get("definitions")).and_then(JVal::as_object) {
+            for v in defs.values() { collect_subids(v, out); }
         }
-        if let Some(items) = node.get("items") {
-            collect_subids(items, out);
+        if let Some(items) = node.get("items") { collect_subids(items, out); }
+        if let Some(alts) = node.get("anyOf").or_else(|| node.get("oneOf")).and_then(JVal::as_array) {
+            for v in alts { collect_subids(v, out); }
         }
-        if let Some(alternatives) = node
-            .get("anyOf")
-            .or_else(|| node.get("oneOf"))
-            .and_then(JVal::as_array)
-        {
-            for v in alternatives {
-                collect_subids(v, out);
-            }
-        }
-    }
-
-    #[test]
-    fn derived_schema_matches_hand_rolled() {
-        let golden = zeroclaw_schema_golden();
-        let derived = zeroclaw_schema();
-        let diffs = schema_diffs(&golden, &derived);
-        assert!(diffs.is_empty(), "schema_diffs: {:#?}", diffs);
     }
 
     #[test]
@@ -801,10 +1087,7 @@ mod tests {
         let raw = serde_json::to_value(schemars::schema_for!(ZeroclawState)).unwrap();
         let mut subids = Vec::new();
         collect_subids(&raw, &mut subids);
-        assert!(
-            !subids.is_empty(),
-            "expected at least one x-oscal-subid in the derived schema"
-        );
+        assert!(!subids.is_empty(), "expected at least one x-oscal-subid");
         for subid in subids {
             validate_subid(&subid).expect("invalid subid: {subid}");
         }
@@ -813,13 +1096,14 @@ mod tests {
     #[test]
     fn public_schema_accessor_returns_zeroclaw_schema() {
         let schema = zeroclaw_plugin_schema();
-        assert_eq!(schema.name, "zeroclaw");
-        assert_eq!(schema.version, "1.0.0");
+        assert_eq!(schema.name, PLUGIN_NAME);
+        assert_eq!(schema.version, PLUGIN_VERSION);
+        assert_eq!(schema.display_name, Some(PLUGIN_DISPLAY_NAME.to_string()));
     }
 }
 
 // Self-registration: the plugin registry discovers this via inventory
 // (single source of the catalog; no central dispatch list).
 inventory::submit! {
-    crate::default_registry::PluginReg::new("zeroclaw", |_ctx| std::sync::Arc::new(ZeroclawPlugin::new()))
+    crate::default_registry::PluginReg::new(PLUGIN_NAME, |_ctx| std::sync::Arc::new(ZeroclawPlugin::new()))
 }

@@ -11,6 +11,7 @@ export ZEROCLAW_GATEWAY_PORT="${ZEROCLAW_GATEWAY_PORT:-18789}"
 # gRPC + reflection target: the op-grpc-bridge native Unix socket. The assistant
 # container has no IP — reach the bridge over the socket, never a host:port.
 export ZEROCLAW_GRPC="${ZEROCLAW_GRPC:-unix:/run/ghostbridge/container.sock}"
+export ZEROCLAW_GRPC_TARGET="${ZEROCLAW_GRPC_TARGET:-$ZEROCLAW_GRPC}"
 export ZEROCLAW_WEB_DIST_DIR="${ZEROCLAW_WEB_DIST_DIR:-/opt/zeroclaw/web/dist}"
 export HOME="${HOME:-/root}"
 export SHELL="${SHELL:-/bin/sh}"

@@ -203,7 +203,6 @@ pub struct GetContainerStateInput {
     pub id: String,
 }
 
-
 pub(crate) fn oci_schema() -> PluginSchema {
     PluginSchema::builder("oci")
         .version("1.0.0")
@@ -255,49 +254,49 @@ pub(crate) fn oci_schema() -> PluginSchema {
                 }
             ]
         }))
-        .method(super::plugin_schema_defs::method_decl_from_schemars::<PullImageInput>(
+        .method(super::plugin_scaffold_helpers::method_decl_from_schemars::<PullImageInput>(
             "pull_image",
             op_state_store::SideEffect::Mutation,
             false,
             "cap.container.oci.image.pull@v1",
             "mut.container.oci.image.pull@v1",
         ))
-        .method(super::plugin_schema_defs::method_decl_from_schemars::<RunContainerInput>(
+        .method(super::plugin_scaffold_helpers::method_decl_from_schemars::<RunContainerInput>(
             "run_container",
             op_state_store::SideEffect::Mutation,
             false,
             "cap.container.oci.run@v1",
             "mut.container.oci.run@v1",
         ))
-        .method(super::plugin_schema_defs::method_decl_from_schemars::<CreateContainerInput>(
+        .method(super::plugin_scaffold_helpers::method_decl_from_schemars::<CreateContainerInput>(
             "create",
             op_state_store::SideEffect::Mutation,
             false,
             "cap.container.oci.create@v1",
             "mut.container.oci.create@v1",
         ))
-        .method(super::plugin_schema_defs::method_decl_from_schemars::<StartContainerInput>(
+        .method(super::plugin_scaffold_helpers::method_decl_from_schemars::<StartContainerInput>(
             "start",
             op_state_store::SideEffect::Mutation,
             false,
             "cap.container.oci.start@v1",
             "mut.container.oci.start@v1",
         ))
-        .method(super::plugin_schema_defs::method_decl_from_schemars::<KillContainerInput>(
+        .method(super::plugin_scaffold_helpers::method_decl_from_schemars::<KillContainerInput>(
             "kill",
             op_state_store::SideEffect::Mutation,
             false,
             "cap.container.oci.kill@v1",
             "mut.container.oci.kill@v1",
         ))
-        .method(super::plugin_schema_defs::method_decl_from_schemars::<DeleteContainerInput>(
+        .method(super::plugin_scaffold_helpers::method_decl_from_schemars::<DeleteContainerInput>(
             "delete",
             op_state_store::SideEffect::Mutation,
             false,
             "cap.container.oci.delete@v1",
             "mut.container.oci.delete@v1",
         ))
-        .method(super::plugin_schema_defs::method_decl_from_schemars::<GetContainerStateInput>(
+        .method(super::plugin_scaffold_helpers::method_decl_from_schemars::<GetContainerStateInput>(
             "state",
             op_state_store::SideEffect::Read,
             true,

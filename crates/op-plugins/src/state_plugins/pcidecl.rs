@@ -9,8 +9,7 @@ use std::fs;
 use std::path::Path;
 
 use op_state::{
-    ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff,
-    StatePlugin,
+    ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
 };
 use op_state_store::{Constraint, FieldSchema, FieldType, PluginSchema, SideEffect};
 
@@ -139,35 +138,35 @@ impl StatePlugin for PciDeclPlugin {
 
     fn schema(&self) -> Option<PluginSchema> {
         let mut schema = PluginSchema::builder("pcidecl")
-                .version("1.0.0")
-                .description("PCI device declaration state")
-                .field(
-                    "version",
-                    FieldSchema {
-                        field_type: FieldType::Integer,
-                        required: false,
-                        description: "Schema version".to_string(),
-                        default: Some(simd_json::json!(1)),
-                        example: None,
-                        constraints: vec![Constraint::Min { value: 1.0 }],
-                        read_only: false,
-                        read_only_when: None,
-                    },
-                )
-                .field(
-                    "items",
-                    FieldSchema {
-                        field_type: FieldType::Any,
-                        required: true,
-                        description: "PCI declarations".to_string(),
-                        default: Some(simd_json::json!([])),
-                        example: None,
-                        constraints: Vec::new(),
-                        read_only: false,
-                        read_only_when: None,
-                    },
-                )
-                .build();
+            .version("1.0.0")
+            .description("PCI device declaration state")
+            .field(
+                "version",
+                FieldSchema {
+                    field_type: FieldType::Integer,
+                    required: false,
+                    description: "Schema version".to_string(),
+                    default: Some(simd_json::json!(1)),
+                    example: None,
+                    constraints: vec![Constraint::Min { value: 1.0 }],
+                    read_only: false,
+                    read_only_when: None,
+                },
+            )
+            .field(
+                "items",
+                FieldSchema {
+                    field_type: FieldType::Any,
+                    required: true,
+                    description: "PCI declarations".to_string(),
+                    default: Some(simd_json::json!([])),
+                    example: None,
+                    constraints: Vec::new(),
+                    read_only: false,
+                    read_only_when: None,
+                },
+            )
+            .build();
         // Add D-Bus methods for PCI devices
         add_pcidecl_methods(&mut schema);
         Some(schema)
@@ -323,7 +322,7 @@ fn add_pcidecl_methods(schema: &mut PluginSchema) {
     // EnumerateDevices method
     schema.methods.insert(
         "enumerate_devices".to_string(),
-        super::plugin_schema_defs::method_decl_from_schemars::<EnumerateDevicesInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<EnumerateDevicesInput>(
             "EnumerateDevices",
             SideEffect::Read,
             true,
@@ -334,7 +333,7 @@ fn add_pcidecl_methods(schema: &mut PluginSchema) {
     // GetDeviceInfo method
     schema.methods.insert(
         "get_device_info".to_string(),
-        super::plugin_schema_defs::method_decl_from_schemars::<GetDeviceInfoInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<GetDeviceInfoInput>(
             "GetDeviceInfo",
             SideEffect::Read,
             true,

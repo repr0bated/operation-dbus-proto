@@ -1,4 +1,4 @@
-//! Cognitive MCP state plugin
+//! Cognitive MCP state plugin — GB.CognitiveMcp.
 //!
 //! Tracks and manages the op-cognitive-mcp server: bind addresses, WireGuard
 //! identity, tool registrations, and gRPC/HTTP health.  Publishes live state
@@ -14,14 +14,28 @@ use op_state::{
     ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
 };
 use op_state_store::PluginSchema;
+use op_state_store::SideEffect;
 #[cfg(test)]
 use op_state_store::{Constraint, FieldSchema, FieldType};
 use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use simd_json::json;
+use simd_json::prelude::ValueAsScalar;
 use simd_json::{prelude::*, OwnedValue as Value};
 #[cfg(test)]
 use std::collections::HashMap;
+
+use super::plugin_scaffold_helpers::method_decl_from_schemars_with_output;
+
+// =============================================================================
+// PLUGIN ENTRY: identity and typed schema seed
+// =============================================================================
+
+const PLUGIN_NAME: &str = "cognitive_mcp";
+const PLUGIN_VERSION: &str = "2.0.0";
+const PLUGIN_CATEGORY: &str = "service";
+const PLUGIN_DESCRIPTION: &str = "Cognitive MCP server — memory, gRPC CognitiveToolService. THE PLUGIN IS THE SCHEMA: every method, tool, property, and field is declared here. Downstream inherits.";
+const PLUGIN_DISPLAY_NAME: &str = "GB.CognitiveMcp";
 
 const S6_SV_PATH: &str = "/run/service/op-cognitive-mcp";
 const ENV_DIR: &str = "/etc/s6/sv/op-cognitive-mcp/env";
@@ -75,6 +89,10 @@ impl Default for CognitiveMcpConfig {
 }
 
 // ── Plugin struct + service helpers ─────────────────────────────────────────
+
+// =============================================================================
+// PLUGIN BODY: D-Bus-backed behavior only
+// =============================================================================
 
 pub struct CognitiveMcpPlugin;
 
@@ -164,10 +182,10 @@ impl Default for CognitiveMcpPlugin {
 #[async_trait]
 impl StatePlugin for CognitiveMcpPlugin {
     fn name(&self) -> &str {
-        "cognitive_mcp"
+        PLUGIN_NAME
     }
     fn version(&self) -> &str {
-        "2.0.0"
+        PLUGIN_VERSION
     }
 
     fn schema(&self) -> Option<PluginSchema> {
@@ -723,6 +741,117 @@ pub struct CodeIndexInput {
     pub collection: Option<String>,
 }
 
+/// Output for GetConfig method
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct GetConfigOutput {
+    pub http: String,
+    pub grpc: String,
+    pub wg_interface: String,
+    pub http_enabled: bool,
+    pub grpc_enabled: bool,
+    pub dbus_enabled: bool,
+}
+
+/// Output for SetConfig method
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SetConfigOutput {
+    pub success: bool,
+    pub message: String,
+}
+
+/// Output for GetHealth method
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct GetHealthOutput {
+    pub healthy: bool,
+    pub running: bool,
+    pub auth_status: String,
+    pub queries_remaining: i64,
+    pub queries_limit: i64,
+}
+
+/// Output for ListTools method
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ListToolsOutput {
+    pub tools: Vec<String>,
+}
+
+/// Output for RegisterTool method
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct RegisterToolOutput {
+    pub success: bool,
+    pub tool_name: String,
+}
+
+/// Output for MemoryStore method
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct MemoryStoreOutput {
+    pub success: bool,
+    pub key: String,
+}
+
+/// Output for MemoryRetrieve method
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct MemoryRetrieveOutput {
+    pub success: bool,
+    pub value: Option<String>,
+    pub namespace: String,
+}
+
+/// Output for MemoryQuery method
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct MemoryQueryOutput {
+    pub results: Vec<String>,
+    pub count: usize,
+}
+
+/// Output for MemoryDelete method
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct MemoryDeleteOutput {
+    pub success: bool,
+    pub keys_deleted: usize,
+}
+
+/// Output for MemoryListNamespaces method
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct MemoryListNamespacesOutput {
+    pub namespaces: Vec<String>,
+}
+
+/// Output for CodeSearch method
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct CodeSearchOutput {
+    pub results: Vec<String>,
+    pub count: usize,
+}
+
+/// Output for CodeIndex method
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct CodeIndexOutput {
+    pub success: bool,
+    pub files_indexed: usize,
+}
+
+/// Output for CodeContext method
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct CodeContextOutput {
+    pub context: String,
+    pub sources: Vec<String>,
+}
+
+/// Output for GeminiQuery method
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct GeminiQueryOutput {
+    pub response: String,
+    pub citations: Vec<String>,
+}
+
+/// Output for RestartService method
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct RestartServiceOutput {
+    pub success: bool,
+    pub message: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "sch.software.plugin.cognitive-mcp.schema@v1"))]
 pub struct CognitiveMcpState {
@@ -778,15 +907,194 @@ pub struct CognitiveMcpState {
     pub code_index: Option<CodeIndexInput>,
 }
 
+// =============================================================================
+// PLUGIN EXIT: publish the single PluginSchema contract
+// =============================================================================
+
+// Handler audit (all 15 schema methods below) — where each is actually backed:
+// get_config              → cognitive_mcp.rs:current_config() (this file, StatePlugin)
+// set_config              → cognitive_mcp.rs:apply_state() (this file, StatePlugin)
+// get_health              → op-cognitive-mcp/grpc_service.rs:get_health (tonic RPC)
+// list_tools              → op-cognitive-mcp/dbus_interface.rs:list_tools (D-Bus)
+// register_tool           → op-cognitive-mcp/cognitive_tools.rs:RegisterToolTool
+//                           (stub — no dynamic tool-registration mechanism exists yet)
+// memory_store            → op-cognitive-mcp/cognitive_tools.rs:MemoryTool::op_store
+// memory_retrieve         → op-cognitive-mcp/cognitive_tools.rs:MemoryTool::op_retrieve
+// memory_query            → op-cognitive-mcp/cognitive_tools.rs:MemoryTool::op_query
+// memory_delete           → op-cognitive-mcp/cognitive_tools.rs:MemoryTool::op_delete
+// memory_list_namespaces  → op-cognitive-mcp/cognitive_tools.rs:MemoryTool::op_list_namespaces
+// code_search             → op-cognitive-mcp/code_tools.rs:CodeSearchTool
+// code_index              → op-cognitive-mcp/code_tools.rs:CodeIndexTool
+// code_context            → op-cognitive-mcp/code_tools.rs:CodeContextTool
+// gemini_query            → op-cognitive-mcp/grpc_service.rs:gemini_query (tonic RPC)
+// restart_service         → cognitive_mcp.rs:reload_service_dbus() (this file, StatePlugin)
 pub(crate) fn cognitive_mcp_schema() -> PluginSchema {
     let root = serde_json::to_value(schemars::schema_for!(CognitiveMcpState))
         .expect("schemars schema serializes to JSON");
-    super::schemars_adapter::plugin_schema_from_json(
-        "cognitive_mcp",
-        "2.0.0",
-        "Cognitive MCP server — memory, gRPC CognitiveToolService. THE PLUGIN IS THE SCHEMA: every method, tool, property, and field is declared here. Downstream inherits.",
+    let mut schema = super::schemars_adapter::plugin_schema_from_json(
+        PLUGIN_NAME,
+        PLUGIN_VERSION,
+        PLUGIN_DESCRIPTION,
         &root,
-    )
+    );
+    schema.category = PLUGIN_CATEGORY.to_string();
+    schema.display_name = Some(PLUGIN_DISPLAY_NAME.to_string());
+
+    // Add methods
+    use super::plugin_scaffold_helpers::method_decl_from_schemars_with_output;
+
+    schema.methods.insert(
+        "get_config".to_string(),
+        method_decl_from_schemars_with_output::<(), GetConfigOutput>(
+            "get_config",
+            SideEffect::Read,
+            true,
+            "cognitive_mcp.read",
+            "obs.service.cognitive-mcp.config.get@v1",
+        ),
+    );
+    schema.methods.insert(
+        "set_config".to_string(),
+        method_decl_from_schemars_with_output::<(), SetConfigOutput>(
+            "set_config",
+            SideEffect::Mutation,
+            false,
+            "cognitive_mcp.invoke",
+            "mut.service.cognitive-mcp.config.set@v1",
+        ),
+    );
+    schema.methods.insert(
+        "get_health".to_string(),
+        method_decl_from_schemars_with_output::<(), GetHealthOutput>(
+            "get_health",
+            SideEffect::Read,
+            true,
+            "cognitive_mcp.read",
+            "obs.service.cognitive-mcp.health@v1",
+        ),
+    );
+    schema.methods.insert(
+        "list_tools".to_string(),
+        method_decl_from_schemars_with_output::<(), ListToolsOutput>(
+            "list_tools",
+            SideEffect::Read,
+            true,
+            "cognitive_mcp.read",
+            "obs.service.cognitive-mcp.tool.list@v1",
+        ),
+    );
+    schema.methods.insert(
+        "register_tool".to_string(),
+        method_decl_from_schemars_with_output::<(), RegisterToolOutput>(
+            "register_tool",
+            SideEffect::Mutation,
+            false,
+            "cognitive_mcp.invoke",
+            "mut.service.cognitive-mcp.tool.register@v1",
+        ),
+    );
+    schema.methods.insert(
+        "memory_store".to_string(),
+        method_decl_from_schemars_with_output::<(), MemoryStoreOutput>(
+            "memory_store",
+            SideEffect::Mutation,
+            false,
+            "cognitive_mcp.invoke",
+            "mut.service.cognitive-mcp.memory.store@v1",
+        ),
+    );
+    schema.methods.insert(
+        "memory_retrieve".to_string(),
+        method_decl_from_schemars_with_output::<(), MemoryRetrieveOutput>(
+            "memory_retrieve",
+            SideEffect::Read,
+            true,
+            "cognitive_mcp.read",
+            "obs.service.cognitive-mcp.memory.retrieve@v1",
+        ),
+    );
+    schema.methods.insert(
+        "memory_query".to_string(),
+        method_decl_from_schemars_with_output::<(), MemoryQueryOutput>(
+            "memory_query",
+            SideEffect::Read,
+            true,
+            "cognitive_mcp.read",
+            "obs.service.cognitive-mcp.memory.query@v1",
+        ),
+    );
+    schema.methods.insert(
+        "memory_delete".to_string(),
+        method_decl_from_schemars_with_output::<(), MemoryDeleteOutput>(
+            "memory_delete",
+            SideEffect::Mutation,
+            true,
+            "cognitive_mcp.invoke",
+            "mut.service.cognitive-mcp.memory.delete@v1",
+        ),
+    );
+    schema.methods.insert(
+        "memory_list_namespaces".to_string(),
+        method_decl_from_schemars_with_output::<(), MemoryListNamespacesOutput>(
+            "memory_list_namespaces",
+            SideEffect::Read,
+            true,
+            "cognitive_mcp.read",
+            "obs.service.cognitive-mcp.memory.namespace.list@v1",
+        ),
+    );
+    schema.methods.insert(
+        "code_search".to_string(),
+        method_decl_from_schemars_with_output::<(), CodeSearchOutput>(
+            "code_search",
+            SideEffect::Read,
+            true,
+            "cognitive_mcp.read",
+            "obs.service.code-rag.search@v1",
+        ),
+    );
+    schema.methods.insert(
+        "code_index".to_string(),
+        method_decl_from_schemars_with_output::<(), CodeIndexOutput>(
+            "code_index",
+            SideEffect::Mutation,
+            false,
+            "cognitive_mcp.invoke",
+            "mut.service.code-rag.index@v1",
+        ),
+    );
+    schema.methods.insert(
+        "code_context".to_string(),
+        method_decl_from_schemars_with_output::<(), CodeContextOutput>(
+            "code_context",
+            SideEffect::Read,
+            true,
+            "cognitive_mcp.read",
+            "obs.service.code-context.get@v1",
+        ),
+    );
+    schema.methods.insert(
+        "gemini_query".to_string(),
+        method_decl_from_schemars_with_output::<(), GeminiQueryOutput>(
+            "gemini_query",
+            SideEffect::Mutation,
+            false,
+            "cognitive_mcp.invoke",
+            "mut.service.gemini.query@v1",
+        ),
+    );
+    schema.methods.insert(
+        "restart_service".to_string(),
+        method_decl_from_schemars_with_output::<(), RestartServiceOutput>(
+            "restart_service",
+            SideEffect::Mutation,
+            true,
+            "cognitive_mcp.invoke",
+            "mut.service.cognitive-mcp.restart@v1",
+        ),
+    );
+
+    schema
 }
 
 #[cfg(test)]
@@ -1675,5 +1983,5 @@ mod tests {
 // Self-registration: the plugin registry discovers this via inventory
 // (single source of the catalog; no central dispatch list).
 inventory::submit! {
-    crate::default_registry::PluginReg::new("cognitive_mcp", |_ctx| std::sync::Arc::new(CognitiveMcpPlugin::new()))
+    crate::default_registry::PluginReg::new(PLUGIN_NAME, |_ctx| std::sync::Arc::new(CognitiveMcpPlugin::new()))
 }

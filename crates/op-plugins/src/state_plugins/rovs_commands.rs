@@ -119,7 +119,11 @@ impl op_state::StatePlugin for RovsCommandsPlugin {
         Self::schema()
     }
 
-    async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> anyhow::Result<op_state::StateDiff> {
+    async fn calculate_diff(
+        &self,
+        _current: &Value,
+        _desired: &Value,
+    ) -> anyhow::Result<op_state::StateDiff> {
         Ok(op_state::StateDiff {
             plugin: self.name().to_string(),
             actions: vec![],
@@ -131,7 +135,10 @@ impl op_state::StatePlugin for RovsCommandsPlugin {
         })
     }
 
-    async fn apply_state(&self, _diff: &op_state::StateDiff) -> anyhow::Result<op_state::ApplyResult> {
+    async fn apply_state(
+        &self,
+        _diff: &op_state::StateDiff,
+    ) -> anyhow::Result<op_state::ApplyResult> {
         Ok(op_state::ApplyResult {
             success: true,
             changes_applied: vec![],
@@ -170,54 +177,109 @@ impl op_state::StatePlugin for RovsCommandsPlugin {
 
 pub(crate) fn rovs_commands_schema() -> PluginSchema {
     let mut methods = HashMap::new();
-    methods.insert("create_bridge".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<CreateBridgeInput>(
-        "create_bridge", SideEffect::Mutation, false,
-        "cap.network.ovsdb.bridge.create@v1", "mut.network.ovsdb.bridge.create@v1"));
-    methods.insert("delete_bridge".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<DeleteBridgeInput>(
-        "delete_bridge", SideEffect::Mutation, false,
-        "cap.network.ovsdb.bridge.delete@v1", "mut.network.ovsdb.bridge.delete@v1"));
-    methods.insert("add_port".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<AddPortInput>(
-        "add_port", SideEffect::Mutation, false,
-        "cap.network.ovsdb.port.add@v1", "mut.network.ovsdb.port.add@v1"));
-    methods.insert("remove_port".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<RemovePortInput>(
-        "remove_port", SideEffect::Mutation, false,
-        "cap.network.ovsdb.port.delete@v1", "mut.network.ovsdb.port.delete@v1"));
+    methods.insert(
+        "create_bridge".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<CreateBridgeInput>(
+            "create_bridge",
+            SideEffect::Mutation,
+            false,
+            "cap.network.ovsdb.bridge.create@v1",
+            "mut.network.ovsdb.bridge.create@v1",
+        ),
+    );
+    methods.insert(
+        "delete_bridge".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<DeleteBridgeInput>(
+            "delete_bridge",
+            SideEffect::Mutation,
+            false,
+            "cap.network.ovsdb.bridge.delete@v1",
+            "mut.network.ovsdb.bridge.delete@v1",
+        ),
+    );
+    methods.insert(
+        "add_port".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<AddPortInput>(
+            "add_port",
+            SideEffect::Mutation,
+            false,
+            "cap.network.ovsdb.port.add@v1",
+            "mut.network.ovsdb.port.add@v1",
+        ),
+    );
+    methods.insert(
+        "remove_port".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<RemovePortInput>(
+            "remove_port",
+            SideEffect::Mutation,
+            false,
+            "cap.network.ovsdb.port.delete@v1",
+            "mut.network.ovsdb.port.delete@v1",
+        ),
+    );
     // Use unit type () for methods with no arguments
-    methods.insert("list_bridges".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<()>(
-        "list_bridges", SideEffect::Read, true,
-        "cap.network.ovsdb.bridge.list@v1", "obs.network.ovsdb.bridge.list@v1"));
-    methods.insert("list_ports".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<ListPortsInput>(
-        "list_ports", SideEffect::Read, true,
-        "cap.network.ovsdb.port.list@v1", "obs.network.ovsdb.port.list@v1"));
-    methods.insert("list_dbs".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<()>(
-        "list_dbs", SideEffect::Read, true,
-        "cap.network.ovsdb.db.list@v1", "obs.network.ovsdb.db.list@v1"));
+    methods.insert(
+        "list_bridges".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<()>(
+            "list_bridges",
+            SideEffect::Read,
+            true,
+            "cap.network.ovsdb.bridge.list@v1",
+            "obs.network.ovsdb.bridge.list@v1",
+        ),
+    );
+    methods.insert(
+        "list_ports".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<ListPortsInput>(
+            "list_ports",
+            SideEffect::Read,
+            true,
+            "cap.network.ovsdb.port.list@v1",
+            "obs.network.ovsdb.port.list@v1",
+        ),
+    );
+    methods.insert(
+        "list_dbs".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<()>(
+            "list_dbs",
+            SideEffect::Read,
+            true,
+            "cap.network.ovsdb.db.list@v1",
+            "obs.network.ovsdb.db.list@v1",
+        ),
+    );
 
     PluginSchema::builder("rovs_commands")
         .version("1.0.0")
         .category("network")
         .description("Direct OVSDB command execution methods exposed via D-Bus by grpc-bridge")
         .dependency("net")
-        .field("available", FieldSchema {
-            field_type: FieldType::Boolean,
-            required: true,
-            description: "Plugin is available".to_string(),
-            default: Some(json!(true)),
-            example: Some(json!(true)),
-            constraints: Vec::new(),
-            read_only: true,
-            read_only_when: None,
-        })
-        .field("schema_version", FieldSchema {
-            field_type: FieldType::String,
-            required: false,
-            description: "Schema version".to_string(),
-            default: Some(json!("1.0.0")),
-            example: Some(json!("1.0.0")),
-            constraints: Vec::new(),
-            read_only: true,
-            read_only_when: None,
-        })
+        .field(
+            "available",
+            FieldSchema {
+                field_type: FieldType::Boolean,
+                required: true,
+                description: "Plugin is available".to_string(),
+                default: Some(json!(true)),
+                example: Some(json!(true)),
+                constraints: Vec::new(),
+                read_only: true,
+                read_only_when: None,
+            },
+        )
+        .field(
+            "schema_version",
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Schema version".to_string(),
+                default: Some(json!("1.0.0")),
+                example: Some(json!("1.0.0")),
+                constraints: Vec::new(),
+                read_only: true,
+                read_only_when: None,
+            },
+        )
         .methods(methods)
         .build()
 }

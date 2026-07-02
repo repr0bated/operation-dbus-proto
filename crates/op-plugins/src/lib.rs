@@ -3,6 +3,7 @@
     dead_code,
     unused_imports,
     unused_variables,
+    deprecated,
     clippy::derivable_impls,
     clippy::collapsible_if,
     clippy::large_enum_variant,
@@ -74,7 +75,7 @@ pub fn cognitive_mcp_plugin_schema() -> PluginSchema {
 /// plugin schema. This is the bootstrap counterpart to the MutationEngine's
 /// normal projection writes: it is used only when no live projection exists.
 pub fn projection_seed_state_from_schema(schema: &PluginSchema) -> simd_json::OwnedValue {
-    state_plugins::plugin_schema_defs::materialize_state_from_schema(schema)
+    state_plugins::plugin_scaffold_helpers::materialize_state_from_schema(schema)
 }
 
 // Re-export chat types
@@ -96,11 +97,11 @@ pub mod prelude {
         CognitiveMcpPlugin, CompactMcpPlugin, ConfigPlugin, CronPlugin, CtlPlaneChatbotPlugin,
         DnsResolverPlugin, EndpointPlugin, ExecutionResult, FactoryPlugin, Fail2banPlugin,
         FreeDesktopPlugin, FullSystemPlugin, GcloudAdcPlugin, HardwarePlugin, IncusPlugin,
-        KeypairPlugin, KeyringPlugin, KnowledgePlugin, Login1Plugin, LxcPlugin, MailServerPlugin,
+        KeypairPlugin, KeyringPlugin, Login1Plugin, MailServerPlugin,
         McpStatePlugin, MemoryPlugin, NetStatePlugin, NetmakerConfig, NetmakerPlugin,
-        OpenFlowObfuscationPlugin, OpenFlowPlugin, OvsBridgePlugin,
-        PackageKitPlugin, PciDeclPlugin, PrivacyRouterPlugin, PrivacyRoutesPlugin, ProcfsPlugin,
-        ProxmoxPlugin, ProxyServerPlugin, RovsCommandsPlugin, RtnetlinkPlugin, S6StatePlugin,
+        OpenFlowObfuscationPlugin, OpenFlowPlugin, OvsBridgePlugin, PackageKitPlugin,
+        PciDeclPlugin, PrivacyRouterPlugin, PrivacyRoutesPlugin, ProcfsPlugin,
+        ProxyServerPlugin, RovsCommandsPlugin, RtnetlinkPlugin, S6SystemctlPlugin,
         SchemaRendererPlugin, ServicePlugin, SessDeclPlugin, SoftwarePlugin, ToolDefinition,
         UnixSocketPlugin, UsersPlugin, WebUiPlugin, WireGuardPlugin, WorkflowsPlugin,
         ZeroclawPlugin,

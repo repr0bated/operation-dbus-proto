@@ -4497,6 +4497,7 @@ dependencies = [
  "op-state",
  "op-state-store",
  "prost 0.13.5",
+ "prost-reflect",
  "prost-types 0.13.5",
  "qdrant-client",
  "rcgen",

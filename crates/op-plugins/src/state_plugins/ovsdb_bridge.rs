@@ -4,7 +4,7 @@
 //! and projects it onto D-Bus via the mirror reconciliation loop. There is no
 //! desired-vs-current diff — the database is the desired state.
 
-use super::plugin_schema_defs::{any_field, simple_schema};
+use super::plugin_scaffold_helpers::{any_field, simple_schema};
 use anyhow::Result;
 use async_trait::async_trait;
 use op_network::rovs_proxy::OvsdbDbusClient;
@@ -373,107 +373,149 @@ pub(crate) fn ovsdb_bridge_schema() -> PluginSchema {
         )],
     );
 
-    schema.methods.insert("list_dbs".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<ListDbsInput>(
-        "list_dbs",
-        op_state_store::SideEffect::Read,
-        true,
-        "ovsdb.read",
-        "obs.network.ovsdb.dbs.list@v1",
-    ));
-    schema.methods.insert("get_schema".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<GetSchemaInput>(
-        "get_schema",
-        op_state_store::SideEffect::Read,
-        true,
-        "ovsdb.read",
-        "obs.network.ovsdb.schema.get@v1",
-    ));
-    schema.methods.insert("transact".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<TransactInput>(
-        "transact",
-        op_state_store::SideEffect::Mutation,
-        false,
-        "ovsdb.write",
-        "mut.network.ovsdb.transact@v1",
-    ));
-    schema.methods.insert("monitor".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<MonitorInput>(
-        "monitor",
-        op_state_store::SideEffect::Read,
-        false,
-        "ovsdb.read",
-        "obs.network.ovsdb.monitor@v1",
-    ));
-    schema.methods.insert("monitor_cond".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<MonitorCondInput>(
-        "monitor_cond",
-        op_state_store::SideEffect::Read,
-        false,
-        "ovsdb.read",
-        "obs.network.ovsdb.monitor_cond@v1",
-    ));
-    schema.methods.insert("lock".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<LockInput>(
-        "lock",
-        op_state_store::SideEffect::Mutation,
-        false,
-        "ovsdb.write",
-        "mut.network.ovsdb.lock@v1",
-    ));
-    schema.methods.insert("steal".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<StealInput>(
-        "steal",
-        op_state_store::SideEffect::Mutation,
-        false,
-        "ovsdb.write",
-        "mut.network.ovsdb.lock.steal@v1",
-    ));
-    schema.methods.insert("unlock".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<UnlockInput>(
-        "unlock",
-        op_state_store::SideEffect::Mutation,
-        false,
-        "ovsdb.write",
-        "mut.network.ovsdb.lock.unlock@v1",
-    ));
-    schema.methods.insert("echo".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<EchoInput>(
-        "echo",
-        op_state_store::SideEffect::Read,
-        true,
-        "ovsdb.read",
-        "obs.network.ovsdb.echo@v1",
-    ));
-    schema.methods.insert("cancel".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<CancelInput>(
-        "cancel",
-        op_state_store::SideEffect::Mutation,
-        false,
-        "ovsdb.write",
-        "mut.network.ovsdb.cancel@v1",
-    ));
+    schema.methods.insert(
+        "list_dbs".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<ListDbsInput>(
+            "list_dbs",
+            op_state_store::SideEffect::Read,
+            true,
+            "ovsdb.read",
+            "obs.network.ovsdb.dbs.list@v1",
+        ),
+    );
+    schema.methods.insert(
+        "get_schema".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<GetSchemaInput>(
+            "get_schema",
+            op_state_store::SideEffect::Read,
+            true,
+            "ovsdb.read",
+            "obs.network.ovsdb.schema.get@v1",
+        ),
+    );
+    schema.methods.insert(
+        "transact".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<TransactInput>(
+            "transact",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "ovsdb.write",
+            "mut.network.ovsdb.transact@v1",
+        ),
+    );
+    schema.methods.insert(
+        "monitor".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<MonitorInput>(
+            "monitor",
+            op_state_store::SideEffect::Read,
+            false,
+            "ovsdb.read",
+            "obs.network.ovsdb.monitor@v1",
+        ),
+    );
+    schema.methods.insert(
+        "monitor_cond".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<MonitorCondInput>(
+            "monitor_cond",
+            op_state_store::SideEffect::Read,
+            false,
+            "ovsdb.read",
+            "obs.network.ovsdb.monitor_cond@v1",
+        ),
+    );
+    schema.methods.insert(
+        "lock".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<LockInput>(
+            "lock",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "ovsdb.write",
+            "mut.network.ovsdb.lock@v1",
+        ),
+    );
+    schema.methods.insert(
+        "steal".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<StealInput>(
+            "steal",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "ovsdb.write",
+            "mut.network.ovsdb.lock.steal@v1",
+        ),
+    );
+    schema.methods.insert(
+        "unlock".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<UnlockInput>(
+            "unlock",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "ovsdb.write",
+            "mut.network.ovsdb.lock.unlock@v1",
+        ),
+    );
+    schema.methods.insert(
+        "echo".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<EchoInput>(
+            "echo",
+            op_state_store::SideEffect::Read,
+            true,
+            "ovsdb.read",
+            "obs.network.ovsdb.echo@v1",
+        ),
+    );
+    schema.methods.insert(
+        "cancel".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<CancelInput>(
+            "cancel",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "ovsdb.write",
+            "mut.network.ovsdb.cancel@v1",
+        ),
+    );
 
     // Add required methods: CreateBridge, DeleteBridge, AddPort, RemovePort
     // D-Bus method spec: https://www.opennetworking.org/wp-content/uploads/2014/10/of_spec_1_0.pdf
-    schema.methods.insert("create_bridge".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<CreateBridgeInput>(
-        "CreateBridge",
-        op_state_store::SideEffect::Mutation,
-        false,
-        "ovsdb.write",
-        "mut.network.ovsdb.bridge.create@v1",
-    ));
-    schema.methods.insert("delete_bridge".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<DeleteBridgeInput>(
-        "DeleteBridge",
-        op_state_store::SideEffect::Mutation,
-        false,
-        "ovsdb.write",
-        "mut.network.ovsdb.bridge.delete@v1",
-    ));
-    schema.methods.insert("add_port".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<AddPortInput>(
-        "AddPort",
-        op_state_store::SideEffect::Mutation,
-        false,
-        "ovsdb.write",
-        "mut.network.ovsdb.port.add@v1",
-    ));
-    schema.methods.insert("remove_port".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<RemovePortInput>(
-        "RemovePort",
-        op_state_store::SideEffect::Mutation,
-        false,
-        "ovsdb.write",
-        "mut.network.ovsdb.port.remove@v1",
-    ));
+    schema.methods.insert(
+        "create_bridge".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<CreateBridgeInput>(
+            "CreateBridge",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "ovsdb.write",
+            "mut.network.ovsdb.bridge.create@v1",
+        ),
+    );
+    schema.methods.insert(
+        "delete_bridge".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<DeleteBridgeInput>(
+            "DeleteBridge",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "ovsdb.write",
+            "mut.network.ovsdb.bridge.delete@v1",
+        ),
+    );
+    schema.methods.insert(
+        "add_port".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<AddPortInput>(
+            "AddPort",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "ovsdb.write",
+            "mut.network.ovsdb.port.add@v1",
+        ),
+    );
+    schema.methods.insert(
+        "remove_port".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<RemovePortInput>(
+            "RemovePort",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "ovsdb.write",
+            "mut.network.ovsdb.port.remove@v1",
+        ),
+    );
 
     schema
 }

@@ -1,43 +1,147 @@
-//! `persona` StatePlugin — projects the live agent-persona catalog from
-//! `op-agents` through the `org.dbus.v1.plugins` surface (PluginService).
+//! GB.Persona plugin — schemars-seeded, D-Bus-backed agent persona catalog.
 //!
-//! This is the correct home for the capability the Lovable frontend mistakenly
-//! called as a standalone `operation.agents.v1.PersonaService` gRPC package —
-//! there is no such proto and there must not be one. New backend capabilities
-//! register here as plugins (see OD-30 / [`crate::default_registry`]).
-//!
-//! The catalog is **live, not mocked**: the plugin's live state enumerates the
-//! real built-in agent personas via `op_agents::builtin_agent_descriptors()`,
-//! so the projection can never drift from the actual agent implementations. The
-//! persona set is defined in code (op-agents), so it is read-only: mutating a
-//! persona is rejected honestly rather than silently succeeding.
+//! Projects the live agent-persona catalog from `op-agents` through the
+//! `org.opdbus.v1.plugins` surface. The catalog is live, not mocked.
 
-use super::plugin_schema_defs::schema_from_state;
+use super::plugin_scaffold_helpers::{method_decl_from_schemars_with_output, AckOutput};
 use anyhow::Result;
 use async_trait::async_trait;
 use op_agents::builtin_agent_descriptors;
 use op_state::{
-    ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff,
-    StatePlugin,
+    ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
 };
 use op_state_store::{PluginSchema, SideEffect};
 use serde::{Deserialize, Serialize};
-use simd_json::{json, OwnedValue as Value};
+use simd_json::OwnedValue as Value;
 
+// =============================================================================
+// PLUGIN ENTRY: identity and typed schema seed
+// =============================================================================
+
+const PLUGIN_NAME: &str = "persona";
+const PLUGIN_VERSION: &str = "1.0.0";
+const PLUGIN_CATEGORY: &str = "agents";
+const PLUGIN_DESCRIPTION: &str = "Agent persona catalog — built-in agent types, names, descriptions, operations";
+const PLUGIN_DISPLAY_NAME: &str = "GB.Persona";
+
+/// A single agent persona.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "exp.agent.persona.persona.render@v1"))]
 pub struct Persona {
+    /// Agent type identifier.
+    #[schemars(
+        description = "Agent type identifier",
+        extend("x-oscal-subid" = "exp.agent.persona.agent-type.render@v1")
+    )]
     pub agent_type: String,
+
+    /// Display name.
+    #[schemars(
+        description = "Display name",
+        extend("x-oscal-subid" = "exp.agent.persona.name.render@v1")
+    )]
     pub name: String,
+
+    /// Description of the persona.
+    #[schemars(
+        description = "Description of the persona",
+        extend("x-oscal-subid" = "exp.agent.persona.description.render@v1")
+    )]
     pub description: String,
+
+    /// Supported operations.
+    #[serde(default)]
+    #[schemars(
+        description = "Supported operations",
+        extend("x-oscal-subid" = "exp.agent.persona.operations.render@v1")
+    )]
     pub operations: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Persona catalog live state.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "sch.agent.plugin.persona.schema@v1"))]
 pub struct PersonaState {
+    /// Current status.
+    #[schemars(
+        description = "Current status",
+        extend("x-oscal-subid" = "obs.agent.persona.status.observe@v1")
+    )]
     pub status: String,
+
+    /// Number of personas in the catalog.
+    #[schemars(
+        description = "Number of personas in the catalog",
+        extend("x-oscal-subid" = "obs.agent.persona.count.observe@v1")
+    )]
     pub persona_count: usize,
+
+    /// Available personas.
+    #[serde(default)]
+    #[schemars(
+        description = "Available personas",
+        extend("x-oscal-subid" = "exp.agent.persona.catalog.render@v1")
+    )]
     pub personas: Vec<Persona>,
 }
+
+// =============================================================================
+// METHOD INPUT/OUTPUT TYPES
+// =============================================================================
+
+/// Input for GetIdentity method.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "obs.agent.persona.identity.get.input@v1"))]
+pub struct GetIdentityInput {
+    /// Agent type to get identity for.
+    pub agent_type: String,
+}
+
+/// Output for GetIdentity method.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "obs.agent.persona.identity.get.output@v1"))]
+pub struct GetIdentityOutput {
+    /// The persona identity, if found.
+    pub persona: Option<Persona>,
+}
+
+/// Input for SetIdentity method.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "mut.agent.persona.identity.set.input@v1"))]
+pub struct SetIdentityInput {
+    /// Agent type to set identity for.
+    pub agent_type: String,
+    /// New name.
+    pub name: String,
+    /// New description (optional).
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+/// Input for Authenticate method.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "mut.agent.persona.authenticate.input@v1"))]
+pub struct AuthenticateInput {
+    /// Agent type to authenticate.
+    pub agent_type: String,
+    /// Credentials map.
+    pub credentials: std::collections::HashMap<String, String>,
+}
+
+/// Output for Authenticate method.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "obs.agent.persona.authenticate.output@v1"))]
+pub struct AuthenticateOutput {
+    /// Whether authentication succeeded.
+    pub authenticated: bool,
+    /// Auth token, if successful.
+    #[serde(default)]
+    pub token: Option<String>,
+}
+
+// =============================================================================
+// PLUGIN BODY: D-Bus-backed behavior only
+// =============================================================================
 
 pub struct PersonaPlugin;
 
@@ -53,8 +157,6 @@ impl PersonaPlugin {
     }
 
     /// Enumerate the live persona catalog from the real agent implementations.
-    /// Pure (no I/O) and deterministic, so it backs both the live state query
-    /// and the schema exemplar.
     fn live() -> PersonaState {
         let personas: Vec<Persona> = builtin_agent_descriptors()
             .into_iter()
@@ -76,11 +178,11 @@ impl PersonaPlugin {
 #[async_trait]
 impl StatePlugin for PersonaPlugin {
     fn name(&self) -> &str {
-        "persona"
+        PLUGIN_NAME
     }
 
     fn version(&self) -> &str {
-        "1.0.0"
+        PLUGIN_VERSION
     }
 
     fn schema(&self) -> Option<PluginSchema> {
@@ -88,10 +190,8 @@ impl StatePlugin for PersonaPlugin {
     }
 
     async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {
-        // The persona catalog is defined in code (op-agents); it is not runtime
-        // mutable, so there is never anything to apply.
         Ok(StateDiff {
-            plugin: self.name().to_string(),
+            plugin: PLUGIN_NAME.to_string(),
             actions: vec![StateAction::NoOp {
                 resource: "personas".to_string(),
             }],
@@ -104,8 +204,6 @@ impl StatePlugin for PersonaPlugin {
     }
 
     async fn apply_state(&self, diff: &StateDiff) -> Result<ApplyResult> {
-        // Honest read-only behavior: NoOp is fine; any real mutation is rejected
-        // with an explanation rather than pretending to succeed.
         let mut errors = Vec::new();
         for action in &diff.actions {
             match action {
@@ -133,7 +231,7 @@ impl StatePlugin for PersonaPlugin {
     async fn create_checkpoint(&self) -> Result<Checkpoint> {
         Ok(Checkpoint {
             id: uuid::Uuid::new_v4().to_string(),
-            plugin: self.name().to_string(),
+            plugin: PLUGIN_NAME.to_string(),
             timestamp: chrono::Utc::now().timestamp(),
             state_snapshot: simd_json::serde::to_owned_value(Self::live())?,
             backend_checkpoint: None,
@@ -141,7 +239,6 @@ impl StatePlugin for PersonaPlugin {
     }
 
     async fn rollback(&self, _checkpoint: &Checkpoint) -> Result<()> {
-        // Nothing to roll back: the catalog is code-defined.
         Ok(())
     }
 
@@ -155,43 +252,51 @@ impl StatePlugin for PersonaPlugin {
     }
 }
 
-pub(crate) fn persona_schema() -> PluginSchema {
-    let state =
-        simd_json::serde::to_owned_value(PersonaPlugin::live()).unwrap_or_else(|_| json!({}));
-    let mut schema = schema_from_state(
-        "persona",
-        "agents",
-        "1.0.0",
-        "Agent persona catalog — built-in agent types, names, descriptions, operations",
-        &state,
-    );
+// =============================================================================
+// PLUGIN EXIT: publish the single PluginSchema contract
+// =============================================================================
 
-    // Add D-Bus methods for persona
-    // https://docs.rs/crate/op-agents/latest/source/builtin_agents.rs
+pub fn persona_schema() -> PluginSchema {
+    let root = serde_json::to_value(schemars::schema_for!(PersonaState))
+        .expect("schemars schema serializes to JSON");
+    let mut schema = super::schemars_adapter::plugin_schema_from_json(
+        PLUGIN_NAME,
+        PLUGIN_VERSION,
+        PLUGIN_DESCRIPTION,
+        &root,
+    );
+    schema.category = PLUGIN_CATEGORY.to_string();
+    schema.display_name = Some(PLUGIN_DISPLAY_NAME.to_string());
+
+    // GetIdentity method
     schema.methods.insert(
         "get_identity".to_string(),
-        super::plugin_schema_defs::method_decl_from_schemars::<GetIdentityInput>(
-            "GetIdentity",
+        method_decl_from_schemars_with_output::<GetIdentityInput, GetIdentityOutput>(
+            "get_identity",
             SideEffect::Read,
             true,
             "persona.read",
             "obs.agent.persona.identity.get@v1",
         ),
     );
+
+    // SetIdentity method
     schema.methods.insert(
         "set_identity".to_string(),
-        super::plugin_schema_defs::method_decl_from_schemars::<SetIdentityInput>(
-            "SetIdentity",
+        method_decl_from_schemars_with_output::<SetIdentityInput, AckOutput>(
+            "set_identity",
             SideEffect::Mutation,
             false,
             "persona.write",
             "mut.agent.persona.identity.set@v1",
         ),
     );
+
+    // Authenticate method
     schema.methods.insert(
         "authenticate".to_string(),
-        super::plugin_schema_defs::method_decl_from_schemars::<AuthenticateInput>(
-            "Authenticate",
+        method_decl_from_schemars_with_output::<AuthenticateInput, AuthenticateOutput>(
+            "authenticate",
             SideEffect::Mutation,
             false,
             "persona.write",
@@ -202,38 +307,8 @@ pub(crate) fn persona_schema() -> PluginSchema {
     schema
 }
 
-/// Input struct for GetIdentity method
-/// D-Bus method spec: https://docs.rs/crate/op-agents/latest/source/builtin_agents.rs
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct GetIdentityInput {
-    /// Agent type to get identity for
-    pub agent_type: String,
-}
-
-/// Input struct for SetIdentity method
-/// D-Bus method spec: https://docs.rs/crate/op-agents/latest/source/builtin_agents.rs
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct SetIdentityInput {
-    /// Agent type to set identity for
-    pub agent_type: String,
-    /// New name
-    pub name: String,
-    /// New description
-    pub description: Option<String>,
-}
-
-/// Input struct for Authenticate method
-/// D-Bus method spec: https://docs.rs/crate/op-agents/latest/source/builtin_agents.rs
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct AuthenticateInput {
-    /// Agent type to authenticate
-    pub agent_type: String,
-    /// Credentials
-    pub credentials: std::collections::HashMap<String, String>,
-}
-
 // Self-registration: the plugin registry discovers this via inventory
 // (single source of the catalog; no central dispatch list).
 inventory::submit! {
-    crate::default_registry::PluginReg::new("persona", |_ctx| std::sync::Arc::new(PersonaPlugin::new()))
+    crate::default_registry::PluginReg::new(PLUGIN_NAME, |_ctx| std::sync::Arc::new(PersonaPlugin::new()))
 }

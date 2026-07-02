@@ -1,14 +1,15 @@
 # Netmaker — incus-compose (bketelsen/incus-compose v0.2.0)
 #
 # Step 1: incus-compose up  — creates containers with default NIC
-# Step 2: install.sh        — removes NIC, installs unix socket proxy devices,
-#                             wires wg-xray, restarts containers
+# Step 2: install.sh        — removes NIC, provisions containers, leaves
+#                             socket registration to the bridge/runtime
 #
 # Final topology (after install.sh):
-#   netmaker / netmaker-mq / netmaker-ui — loopback only, no NIC
-#   /run/netmaker/*.sock on host — incus proxy devices on each container
-#   wg-xray — mounts /run/netmaker, has container-side TCP→unix proxy devices
-#   xray — routes inbound ports to unix sockets via those TCP proxies
+#   netmaker / netmaker-mq / netmaker-ui / prometheus / grafana / exporter / caddy
+#     — loopback only, no NIC
+#   sockets owned by the bridge/runtime; no reverse proxy devices per container
+#   wg-xray — routes through the shared socket projection layer
+#   xray — routes inbound traffic through socket registration and reflection
 
 services:
   netmaker:
@@ -51,9 +52,9 @@ services:
       - nm-dnsconfig:/root/config/dnsconfig
 
   mq:
-    # eclipse-mosquitto OCI image incompatible with incus (missing /run in rootfs)
-    # use alpine/edge + apk install mosquitto instead
-    image: images:alpine/edge
+    # Debian/Ubuntu-compatible base so the container behavior matches the rest
+    # of the deployment estate and avoids Alpine-specific packaging.
+    image: images:debian/12
     container_name: mq
     restart: unless-stopped
     x-incus-storage: default
@@ -162,9 +163,6 @@ services:
         read_only: true
       - caddy_data:/data
       - caddy_conf:/config
-    ports:
-      - "80:80/tcp"
-      - "443:443/tcp"
 
 volumes:
   nm-sqldata:

@@ -52,7 +52,10 @@ pub fn generate_plugin_method_protos(plugin_schemas: &[(String, PluginSchema)]) 
     plugin_ids.sort();
 
     for plugin_id in plugin_ids {
-        let (_, schema) = plugin_schemas.iter().find(|(id, _)| id == plugin_id).unwrap();
+        let (_, schema) = plugin_schemas
+            .iter()
+            .find(|(id, _)| id == plugin_id)
+            .unwrap();
         generate_plugin_service(&mut output, plugin_id, schema);
     }
 
@@ -61,10 +64,18 @@ pub fn generate_plugin_method_protos(plugin_schemas: &[(String, PluginSchema)]) 
 
 /// Generate a service for a single plugin with typed method messages.
 fn generate_plugin_service(output: &mut String, plugin_id: &str, schema: &PluginSchema) {
-    writeln!(output, "// ================================================").unwrap();
+    writeln!(
+        output,
+        "// ================================================"
+    )
+    .unwrap();
     writeln!(output, "// Plugin: {}", plugin_id).unwrap();
     writeln!(output, "// {} service typed methods", schema.description).unwrap();
-    writeln!(output, "// ================================================").unwrap();
+    writeln!(
+        output,
+        "// ================================================"
+    )
+    .unwrap();
     writeln!(output).unwrap();
 
     let service_name = to_pascal_case(plugin_id);
@@ -124,7 +135,11 @@ impl ProtoGenerator {
 
         for (field_num, (field_name, field_schema)) in (1..).zip(fields) {
             let proto_type = self.field_type_to_proto(&field_schema.field_type);
-            let optional_marker = if field_schema.required { "" } else { "optional " };
+            let optional_marker = if field_schema.required {
+                ""
+            } else {
+                "optional "
+            };
             writeln!(
                 output,
                 "  {}{} {} = {};",
@@ -189,7 +204,11 @@ impl ProtoGenerator {
 
         for (field_num, (field_name, field_schema)) in (1..).zip(fields) {
             let proto_type = self.field_type_to_proto(&field_schema.field_type);
-            let optional_marker = if field_schema.required { "" } else { "optional " };
+            let optional_marker = if field_schema.required {
+                ""
+            } else {
+                "optional "
+            };
             writeln!(
                 output,
                 "  {}{} {} = {};",

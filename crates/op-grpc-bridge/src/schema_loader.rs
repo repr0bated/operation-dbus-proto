@@ -1,8 +1,8 @@
 //! SchemaLoader — reads a canonical PluginSchema from tmpfs.
 //!
-//! The SchemaEngine monolith at `/dev/shm/live-schema.json` is the source of
-//! truth. Per-plugin schema files are not accepted. Reloads are broadcast to
-//! `WatchSchema` streams via a tokio broadcast channel.
+//! The loader accepts either the live SchemaEngine catalog or a plugin-owned
+//! schema file. Reloads are broadcast to `WatchSchema` streams via a tokio
+//! broadcast channel.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
@@ -113,16 +113,11 @@ impl SchemaLoader {
             )
         })?;
         let plugin_id = self.plugin_id();
-        let value = if let Some(schema) = value
-            .as_object()
-            .and_then(|catalog| catalog.get(&plugin_id))
-            .and_then(first_schema_entry)
-            .cloned()
-        {
-            schema
+        let value = if let Some(schema) = extract_plugin_schema(&value, &plugin_id) {
+            schema.clone()
         } else {
             return Err(anyhow::anyhow!(
-                "live schema catalog at {} does not contain '{}'",
+                "schema file at {} does not contain '{}'",
                 path.display(),
                 plugin_id
             ));
@@ -242,6 +237,25 @@ fn first_schema_entry(value: &serde_json::Value) -> Option<&serde_json::Value> {
         .or(Some(value))
 }
 
+fn extract_plugin_schema<'a>(
+    value: &'a serde_json::Value,
+    plugin_id: &str,
+) -> Option<&'a serde_json::Value> {
+    if value
+        .as_object()
+        .and_then(|schema| schema.get("name"))
+        .and_then(|name| name.as_str())
+        .is_some_and(|name| name == plugin_id)
+    {
+        return Some(value);
+    }
+
+    value
+        .as_object()
+        .and_then(|catalog| catalog.get(plugin_id))
+        .and_then(first_schema_entry)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -259,6 +273,19 @@ mod tests {
         let path = dir.path().join("live-schema.json");
         let value = serde_json::json!({"name": "zeroclaw", "version": "1.0.0"});
         write_json(&path, &serde_json::json!({ "zeroclaw": [value.clone()] }));
+
+        let loader = SchemaLoader::new(&path).unwrap();
+        let loaded = loader.get().await;
+        assert_eq!(loaded, value);
+        assert_eq!(loader.health_status().await, "ok");
+    }
+
+    #[tokio::test]
+    async fn should_load_direct_plugin_schema_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("zeroclaw.json");
+        let value = serde_json::json!({"name": "zeroclaw", "version": "1.0.0"});
+        write_json(&path, &value);
 
         let loader = SchemaLoader::new(&path).unwrap();
         let loaded = loader.get().await;

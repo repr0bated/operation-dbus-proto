@@ -320,7 +320,7 @@ pub struct LlmProjection {
 
 #[cfg(test)]
 pub mod schema_helpers {
-    use crate::state_plugins::plugin_schema_defs::schema_from_state;
+    use crate::state_plugins::plugin_scaffold_helpers::schema_from_state;
     use crate::state_plugins::schemars_adapter::plugin_schema_from_json;
     use op_state_store::{FieldSchema, FieldType, PluginSchema};
     use serde_json::Value as JVal;

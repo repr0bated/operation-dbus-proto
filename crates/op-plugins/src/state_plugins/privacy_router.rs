@@ -13,10 +13,11 @@ use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use op_network::{openflow::OpenFlowClient, rovs_proxy::OvsdbDbusClient};
 use op_state::{
-    ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff,
-    StatePlugin,
+    ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
 };
-use op_state_store::{Constraint, FieldSchema, FieldType, PluginSchema, ReadOnlyCondition, SideEffect};
+use op_state_store::{
+    Constraint, FieldSchema, FieldType, PluginSchema, ReadOnlyCondition, SideEffect,
+};
 use serde::{Deserialize, Serialize};
 use simd_json::{json, prelude::*, OwnedValue as Value};
 use std::collections::{HashMap, HashSet};
@@ -1479,11 +1480,11 @@ pub(crate) fn privacy_router_schema() -> PluginSchema {
             }
         }))
         .build();
-    
+
     // Add D-Bus methods for privacy router
     schema.methods.insert(
         "enforce_policy".to_string(),
-        super::plugin_schema_defs::method_decl_from_schemars::<EnforcePolicyInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<EnforcePolicyInput>(
             "EnforcePolicy",
             SideEffect::Mutation,
             false,
@@ -1493,7 +1494,7 @@ pub(crate) fn privacy_router_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "audit_request".to_string(),
-        super::plugin_schema_defs::method_decl_from_schemars::<AuditRequestInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<AuditRequestInput>(
             "AuditRequest",
             SideEffect::Read,
             true,
@@ -1503,7 +1504,7 @@ pub(crate) fn privacy_router_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "log_decision".to_string(),
-        super::plugin_schema_defs::method_decl_from_schemars::<LogDecisionInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<LogDecisionInput>(
             "LogDecision",
             SideEffect::Mutation,
             false,
@@ -1511,7 +1512,7 @@ pub(crate) fn privacy_router_schema() -> PluginSchema {
             "mut.network.privacy.decision.log@v1",
         ),
     );
-    
+
     schema
 }
 

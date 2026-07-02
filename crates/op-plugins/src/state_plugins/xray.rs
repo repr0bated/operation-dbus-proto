@@ -5,7 +5,7 @@ use op_state_store::PluginSchema;
 use serde::{Deserialize, Serialize};
 use simd_json::OwnedValue as Value;
 
-use super::plugin_schema_defs::method_decl_from_schemars;
+use super::plugin_scaffold_helpers::method_decl_from_schemars;
 
 /// Xray proxy configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
@@ -495,7 +495,7 @@ pub(crate) fn xray_schema_golden() -> PluginSchema {
 
     schema.methods.insert(
         "add_user".to_string(),
-        super::plugin_schema_defs::method_decl_from_schemars::<UserInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<UserInput>(
             "AddUser",
             op_state_store::SideEffect::Mutation,
             false,
@@ -505,7 +505,7 @@ pub(crate) fn xray_schema_golden() -> PluginSchema {
     );
     schema.methods.insert(
         "remove_user".to_string(),
-        super::plugin_schema_defs::method_decl_from_schemars::<UserInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<UserInput>(
             "RemoveUser",
             op_state_store::SideEffect::Mutation,
             false,
@@ -515,7 +515,7 @@ pub(crate) fn xray_schema_golden() -> PluginSchema {
     );
     schema.methods.insert(
         "add_inbound".to_string(),
-        super::plugin_schema_defs::method_decl_from_schemars::<InboundInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<InboundInput>(
             "AddInbound",
             op_state_store::SideEffect::Mutation,
             false,
@@ -525,7 +525,7 @@ pub(crate) fn xray_schema_golden() -> PluginSchema {
     );
     schema.methods.insert(
         "get_stats".to_string(),
-        super::plugin_schema_defs::method_decl_from_schemars::<StatsInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<StatsInput>(
             "GetStats",
             op_state_store::SideEffect::Read,
             true,
@@ -535,7 +535,7 @@ pub(crate) fn xray_schema_golden() -> PluginSchema {
     );
     schema.methods.insert(
         "restart".to_string(),
-        super::plugin_schema_defs::method_decl_from_schemars::<super::plugin_schema_defs::EmptyInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<super::plugin_scaffold_helpers::EmptyInput>(
             "Restart",
             op_state_store::SideEffect::Mutation,
             false,

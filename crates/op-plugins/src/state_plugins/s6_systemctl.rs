@@ -1,30 +1,150 @@
-//! s6_systemctl plugin — projects the op-s6-systemctl D-Bus daemon state.
+//! s6_systemctl plugin — GB.S6Systemctl.
 //!
-//! Exposes the daemon's liveness, interface metadata, and a snapshot of all
+//! Projects the op-s6-systemctl D-Bus daemon state.
+//! Exposes daemon liveness, interface metadata, and a snapshot of all
 //! s6 service units so the UI can render a service manager panel from the schema.
-//!
-//! Schema-driven: every field here maps 1:1 to a UI widget in the schema renderer.
-//!
-//! OSCAL subids:
-//!   obs.service.s6_systemctl.status@v1   — daemon liveness + unit list
-//!   mut.service.s6_systemctl.start@v1    — start a unit via D-Bus
-//!   mut.service.s6_systemctl.stop@v1     — stop a unit via D-Bus
-//!   mut.service.s6_systemctl.restart@v1  — restart a unit via D-Bus
-//!   mut.service.s6_systemctl.enable@v1   — enable a unit via D-Bus
-//!   mut.service.s6_systemctl.disable@v1  — disable a unit via D-Bus
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use op_state::{
     ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
 };
-use op_state_store::{FieldSchema, FieldType, PluginSchema};
+use op_state_store::{PluginSchema, SideEffect};
 use serde::{Deserialize, Serialize};
 use simd_json::{json, OwnedValue as Value};
+use std::sync::Arc;
+use tokio::sync::OnceCell;
+use zbus::{proxy, Connection};
 
-// ── State structs ─────────────────────────────────────────────────────────────
+use super::plugin_scaffold_helpers::{method_decl_from_schemars_with_output, AckOutput};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+// =============================================================================
+// PLUGIN ENTRY: identity and typed schema seed
+// =============================================================================
+
+const PLUGIN_NAME: &str = "s6_systemctl";
+const PLUGIN_VERSION: &str = "1.0.0";
+const PLUGIN_CATEGORY: &str = "service";
+const PLUGIN_DESCRIPTION: &str = "s6 service manager — daemon status and unit control";
+const PLUGIN_DISPLAY_NAME: &str = "GB.S6Systemctl";
+
+/// D-Bus proxy for the canonical `op-s6-systemctl` daemon.
+#[proxy(
+    default_service = "org.opdbus.v1.S6.Systemctl",
+    default_path = "/org/opdbus/v1/s6/systemctl",
+    interface = "org.opdbus.v1.S6.Systemctl"
+)]
+trait S6Systemctl {
+    async fn start(&self, unit: &str) -> zbus::Result<(bool, String)>;
+    async fn stop(&self, unit: &str) -> zbus::Result<(bool, String)>;
+    async fn restart(&self, unit: &str) -> zbus::Result<(bool, String)>;
+    async fn reload(&self, unit: &str) -> zbus::Result<(bool, String)>;
+    async fn enable(&self, unit: &str) -> zbus::Result<(bool, String)>;
+    async fn disable(&self, unit: &str) -> zbus::Result<(bool, String)>;
+    async fn status(&self, unit: &str) -> zbus::Result<String>;
+    async fn is_active(&self, unit: &str) -> zbus::Result<String>;
+    async fn is_enabled_method(&self, unit: &str) -> zbus::Result<String>;
+    async fn list_units(&self) -> zbus::Result<String>;
+    async fn list_unit_files(&self) -> zbus::Result<String>;
+    async fn daemon_reload(&self) -> zbus::Result<(bool, String)>;
+}
+
+/// Lazy D-Bus client used by the `s6_systemctl` plugin and other service plugins.
+#[derive(Clone)]
+pub struct S6DbusClient {
+    proxy: Arc<OnceCell<S6SystemctlProxy<'static>>>,
+}
+
+impl Default for S6DbusClient {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl S6DbusClient {
+    pub fn new() -> Self {
+        Self {
+            proxy: Arc::new(OnceCell::new()),
+        }
+    }
+
+    async fn get_proxy(&self) -> Result<&S6SystemctlProxy<'static>> {
+        self.proxy
+            .get_or_try_init(|| async {
+                let conn = Connection::system()
+                    .await
+                    .context("connect to system D-Bus for S6Systemctl")?;
+                let proxy: S6SystemctlProxy<'static> = S6SystemctlProxy::new(&conn).await?;
+                Ok::<_, anyhow::Error>(proxy)
+            })
+            .await
+            .context("initialise S6Systemctl D-Bus proxy")
+    }
+
+    pub async fn start(&self, service: &str) -> Result<()> {
+        self.check_result("start", service, self.get_proxy().await?.start(service).await?)
+    }
+
+    pub async fn stop(&self, service: &str) -> Result<()> {
+        self.check_result("stop", service, self.get_proxy().await?.stop(service).await?)
+    }
+
+    pub async fn restart(&self, service: &str) -> Result<()> {
+        self.check_result("restart", service, self.get_proxy().await?.restart(service).await?)
+    }
+
+    pub async fn reload(&self, service: &str) -> Result<()> {
+        self.check_result("reload", service, self.get_proxy().await?.reload(service).await?)
+    }
+
+    pub async fn enable(&self, service: &str) -> Result<()> {
+        self.check_result("enable", service, self.get_proxy().await?.enable(service).await?)
+    }
+
+    pub async fn disable(&self, service: &str) -> Result<()> {
+        self.check_result("disable", service, self.get_proxy().await?.disable(service).await?)
+    }
+
+    pub async fn status(&self, service: &str) -> Result<String> {
+        Ok(self.get_proxy().await?.status(service).await?)
+    }
+
+    pub async fn is_active(&self, service: &str) -> Result<String> {
+        Ok(self.get_proxy().await?.is_active(service).await?)
+    }
+
+    pub async fn is_enabled(&self, service: &str) -> Result<String> {
+        Ok(self.get_proxy().await?.is_enabled_method(service).await?)
+    }
+
+    pub async fn list_units(&self) -> Result<Vec<serde_json::Value>> {
+        let raw = self.get_proxy().await?.list_units().await?;
+        Ok(serde_json::from_str(&raw).unwrap_or_default())
+    }
+
+    pub async fn list_unit_files(&self) -> Result<Vec<serde_json::Value>> {
+        let raw = self.get_proxy().await?.list_unit_files().await?;
+        Ok(serde_json::from_str(&raw).unwrap_or_default())
+    }
+
+    pub async fn daemon_reload(&self) -> Result<()> {
+        self.check_result("daemon-reload", "s6", self.get_proxy().await?.daemon_reload().await?)
+    }
+
+    fn check_result(&self, command: &str, service: &str, result: (bool, String)) -> Result<()> {
+        let (ok, message) = result;
+        if ok {
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("s6-systemctl {command} {service}: {message}"))
+        }
+    }
+}
+
+// ── State structs with schemars::JsonSchema ──────────────────────────────────
+
+/// Plugin state for the s6_systemctl projection.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, PartialEq)]
 pub struct S6SystemctlState {
     /// Whether the op-s6-systemctl D-Bus daemon is reachable.
     pub daemon_running: bool,
@@ -38,7 +158,8 @@ pub struct S6SystemctlState {
     pub units: Vec<S6UnitStatus>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// Status of a single s6 service unit.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, PartialEq)]
 pub struct S6UnitStatus {
     /// Service name (bare, no suffix).
     pub id: String,
@@ -49,22 +170,72 @@ pub struct S6UnitStatus {
     /// Whether the unit starts at boot.
     pub enabled: bool,
     /// Main PID if running.
+    #[serde(default)]
     pub main_pid: Option<u32>,
     /// Seconds the process has been up.
+    #[serde(default)]
     pub up_time: Option<String>,
 }
 
-// ── Plugin ────────────────────────────────────────────────────────────────────
+// ── Method input/output types ────────────────────────────────────────────────
 
-pub struct S6SystemctlPlugin;
+/// Input for unit-targeting methods (start, stop, restart, enable, disable, status, etc.).
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct UnitInput {
+    /// Service name.
+    pub name: String,
+}
+
+/// Output for status method.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct StatusOutput {
+    pub status: String,
+}
+
+/// Output for is_active method.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct IsActiveOutput {
+    pub active: bool,
+}
+
+/// Output for is_enabled method.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct IsEnabledOutput {
+    pub enabled: bool,
+}
+
+/// Output for list_units method.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ListUnitsOutput {
+    pub units: Vec<S6UnitStatus>,
+}
+
+/// Output for daemon_reload method.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct DaemonReloadOutput {
+    pub success: bool,
+    pub message: String,
+}
+
+/// Empty input for methods with no parameters.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct EmptyInput {}
+
+// =============================================================================
+// PLUGIN BODY: D-Bus-backed behavior only
+// =============================================================================
+
+pub struct S6SystemctlPlugin {
+    dbus: S6DbusClient,
+}
 
 impl S6SystemctlPlugin {
     pub fn new() -> Self {
-        Self
+        Self {
+            dbus: S6DbusClient::new(),
+        }
     }
 
-    /// Probe the daemon and enumerate units. Falls back to direct s6 CLI when
-    /// the daemon isn't on the bus yet.
     async fn collect_state(&self) -> S6SystemctlState {
         let daemon_running = self.probe_daemon().await;
         let units = self.enumerate_units(daemon_running).await;
@@ -78,9 +249,7 @@ impl S6SystemctlPlugin {
         }
     }
 
-    /// Check if the daemon is registered on the system bus.
     async fn probe_daemon(&self) -> bool {
-        use zbus::Connection;
         let Ok(conn) = Connection::system().await else {
             return false;
         };
@@ -95,88 +264,40 @@ impl S6SystemctlPlugin {
         .is_ok()
     }
 
-    /// Enumerate all units. Uses direct s6 CLI — no dependency on the daemon.
     async fn enumerate_units(&self, daemon_running: bool) -> Vec<S6UnitStatus> {
-        // Get running services
-        let running: std::collections::HashSet<String> = tokio::process::Command::new("s6-rc")
-            .args(["-a", "list"])
-            .output()
-            .await
-            .map(|o| {
-                String::from_utf8_lossy(&o.stdout)
-                    .lines()
-                    .map(|l| l.trim().to_string())
-                    .filter(|l| !l.is_empty())
-                    .collect()
-            })
-            .unwrap_or_default();
+        if !daemon_running {
+            return Vec::new();
+        }
 
-        // Get all available services from /etc/s6/sv
-        let mut all_names: Vec<String> = Vec::new();
-        if let Ok(mut dir) = tokio::fs::read_dir("/etc/s6/sv").await {
-            while let Ok(Some(entry)) = dir.next_entry().await {
-                if let Ok(name) = entry.file_name().into_string() {
-                    all_names.push(name);
-                }
+        let unit_files = self.dbus.list_unit_files().await.unwrap_or_default();
+        let live_units = self.dbus.list_units().await.unwrap_or_default();
+        let mut live_by_name = std::collections::HashMap::new();
+        for unit in live_units {
+            if let Some(name) = unit.get("name").and_then(|v| v.as_str()) {
+                live_by_name.insert(name.to_string(), unit);
             }
         }
-        all_names.sort();
 
         let mut units = Vec::new();
-        for name in all_names {
-            let is_active = running.contains(&name);
-            let enabled =
-                tokio::fs::metadata(format!("/etc/s6-rc/bundle/default/contents.d/{}", name))
-                    .await
-                    .is_ok();
-
-            // Get pid/uptime from s6-svstat if active
-            let (main_pid, up_time) = if is_active {
-                self.svstat_info(&name).await
-            } else {
-                (None, None)
+        for file in unit_files {
+            let Some(unit_file) = file.get("unit_file").and_then(|v| v.as_str()) else {
+                continue;
             };
-
-            let _ = daemon_running; // available for future D-Bus enrichment
+            let id = unit_file.strip_suffix(".service").unwrap_or(unit_file).to_string();
+            let enabled = file.get("state").and_then(|v| v.as_str()).is_some_and(|s| s == "enabled");
+            let live = live_by_name.get(&id);
 
             units.push(S6UnitStatus {
-                id: name,
-                active_state: if is_active {
-                    "active".to_string()
-                } else {
-                    "inactive".to_string()
-                },
-                sub_state: if is_active {
-                    "running".to_string()
-                } else {
-                    "dead".to_string()
-                },
+                id,
+                active_state: live.and_then(|u| u.get("active_state")).and_then(|v| v.as_str()).unwrap_or("inactive").to_string(),
+                sub_state: live.and_then(|u| u.get("sub_state")).and_then(|v| v.as_str()).unwrap_or("dead").to_string(),
                 enabled,
-                main_pid,
-                up_time,
+                main_pid: live.and_then(|u| u.get("main_pid")).and_then(|v| v.as_u64()).and_then(|p| u32::try_from(p).ok()),
+                up_time: live.and_then(|u| u.get("up_time")).and_then(|v| v.as_str()).map(str::to_string),
             });
         }
+        units.sort_by(|a, b| a.id.cmp(&b.id));
         units
-    }
-
-    async fn svstat_info(&self, name: &str) -> (Option<u32>, Option<String>) {
-        let path = format!("/etc/s6/sv/{}", name);
-        let Ok(output) = tokio::process::Command::new("s6-svstat")
-            .arg(&path)
-            .output()
-            .await
-        else {
-            return (None, None);
-        };
-        let text = String::from_utf8_lossy(&output.stdout);
-        // "up (pid 1234) 3600 seconds"
-        let pid = text
-            .split("pid ")
-            .nth(1)
-            .and_then(|s| s.split(')').next())
-            .and_then(|p| p.trim().parse::<u32>().ok());
-        let uptime = text.split_whitespace().rev().nth(1).map(|s| s.to_string());
-        (pid, uptime)
     }
 }
 
@@ -189,198 +310,20 @@ impl Default for S6SystemctlPlugin {
 #[async_trait]
 impl StatePlugin for S6SystemctlPlugin {
     fn name(&self) -> &str {
-        "s6_systemctl"
+        PLUGIN_NAME
     }
 
     fn version(&self) -> &str {
-        "1.0.0"
+        PLUGIN_VERSION
     }
 
     fn is_available(&self) -> bool {
-        // Available as long as s6 is installed; daemon liveness is a field in state
         std::path::Path::new("/etc/s6/sv").exists()
     }
 
     fn schema(&self) -> Option<PluginSchema> {
-        let mut schema = PluginSchema::builder("s6_systemctl")
-                .version("1.0.0")
-                .description("s6 service manager — daemon status and unit control")
-                .field(
-                    "daemon_running",
-                    FieldSchema {
-                        field_type: FieldType::Boolean,
-                        required: true,
-                        description: "Whether the op-s6-systemctl D-Bus daemon is reachable"
-                            .to_string(),
-                        default: Some(json!(false)),
-                        example: Some(json!(true)),
-                        constraints: Vec::new(),
-                        read_only: true,
-                        read_only_when: None,
-                    },
-                )
-                .field(
-                    "bus_name",
-                    FieldSchema {
-                        field_type: FieldType::String,
-                        required: true,
-                        description: "D-Bus well-known name the daemon registers".to_string(),
-                        default: Some(json!("org.opdbus.v1.S6.Systemctl")),
-                        example: None,
-                        constraints: Vec::new(),
-                        read_only: true,
-                        read_only_when: None,
-                    },
-                )
-                .field(
-                    "object_path",
-                    FieldSchema {
-                        field_type: FieldType::String,
-                        required: true,
-                        description: "D-Bus object path".to_string(),
-                        default: Some(json!("/org/opdbus/v1/s6/systemctl")),
-                        example: None,
-                        constraints: Vec::new(),
-                        read_only: true,
-                        read_only_when: None,
-                    },
-                )
-                .field(
-                    "interface",
-                    FieldSchema {
-                        field_type: FieldType::String,
-                        required: true,
-                        description: "D-Bus interface name".to_string(),
-                        default: Some(json!("org.opdbus.v1.S6.Systemctl")),
-                        example: None,
-                        constraints: Vec::new(),
-                        read_only: true,
-                        read_only_when: None,
-                    },
-                )
-                .field(
-                    "units",
-                    FieldSchema {
-                        field_type: FieldType::Any,
-                        required: true,
-                        description: "All s6 service units with live status".to_string(),
-                        default: Some(json!([])),
-                        example: Some(json!([{
-                            "id": "op-projection",
-                            "active_state": "active",
-                            "sub_state": "running",
-                            "enabled": true,
-                            "main_pid": 1234,
-                            "up_time": "3600"
-                        }])),
-                        constraints: Vec::new(),
-                        read_only: false,
-                        read_only_when: None,
-                    },
-                )
-                .build();
-
-        schema.methods.insert(
-            "start".to_string(),
-            super::plugin_schema_defs::method_decl_from_schemars::<UnitInput>(
-                "Start",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "s6.systemctl.write",
-                "mut.software.s6.systemctl.start@v1",
-            ),
-        );
-        schema.methods.insert(
-            "stop".to_string(),
-            super::plugin_schema_defs::method_decl_from_schemars::<UnitInput>(
-                "Stop",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "s6.systemctl.write",
-                "mut.software.s6.systemctl.stop@v1",
-            ),
-        );
-        schema.methods.insert(
-            "restart".to_string(),
-            super::plugin_schema_defs::method_decl_from_schemars::<UnitInput>(
-                "Restart",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "s6.systemctl.write",
-                "mut.software.s6.systemctl.restart@v1",
-            ),
-        );
-        schema.methods.insert(
-            "enable".to_string(),
-            super::plugin_schema_defs::method_decl_from_schemars::<UnitInput>(
-                "Enable",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "s6.systemctl.write",
-                "mut.software.s6.systemctl.enable@v1",
-            ),
-        );
-        schema.methods.insert(
-            "disable".to_string(),
-            super::plugin_schema_defs::method_decl_from_schemars::<UnitInput>(
-                "Disable",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "s6.systemctl.write",
-                "mut.software.s6.systemctl.disable@v1",
-            ),
-        );
-        schema.methods.insert(
-            "status".to_string(),
-            super::plugin_schema_defs::method_decl_from_schemars::<UnitInput>(
-                "Status",
-                op_state_store::SideEffect::Read,
-                true,
-                "s6.systemctl.read",
-                "obs.software.s6.systemctl.status@v1",
-            ),
-        );
-        schema.methods.insert(
-            "is_active".to_string(),
-            super::plugin_schema_defs::method_decl_from_schemars::<UnitInput>(
-                "IsActive",
-                op_state_store::SideEffect::Read,
-                true,
-                "s6.systemctl.read",
-                "obs.software.s6.systemctl.is_active@v1",
-            ),
-        );
-        schema.methods.insert(
-            "is_enabled".to_string(),
-            super::plugin_schema_defs::method_decl_from_schemars::<UnitInput>(
-                "IsEnabled",
-                op_state_store::SideEffect::Read,
-                true,
-                "s6.systemctl.read",
-                "obs.software.s6.systemctl.is_enabled@v1",
-            ),
-        );
-        schema.methods.insert(
-            "daemon_reload".to_string(),
-            super::plugin_schema_defs::method_decl_from_schemars::<super::plugin_schema_defs::EmptyInput>(
-                "DaemonReload",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "s6.systemctl.write",
-                "mut.software.s6.systemctl.daemon_reload@v1",
-            ),
-        );
-        schema.methods.insert(
-            "list_units".to_string(),
-            super::plugin_schema_defs::method_decl_from_schemars::<super::plugin_schema_defs::EmptyInput>(
-                "ListUnits",
-                op_state_store::SideEffect::Read,
-                true,
-                "s6.systemctl.read",
-                "obs.software.s6.systemctl.list_units@v1",
-            ),
-        );
-
+        let mut schema = s6_systemctl_schema();
+        super::common::oscal::ensure_category_metadata_fields(&mut schema);
         Some(schema)
     }
 
@@ -389,7 +332,6 @@ impl StatePlugin for S6SystemctlPlugin {
         let desired_s: S6SystemctlState = simd_json::serde::from_owned_value(desired.clone())?;
         let mut actions = Vec::new();
 
-        // Diff individual units
         let current_map: std::collections::HashMap<_, _> =
             current_s.units.iter().map(|u| (u.id.clone(), u)).collect();
 
@@ -407,7 +349,7 @@ impl StatePlugin for S6SystemctlPlugin {
         }
 
         Ok(StateDiff {
-            plugin: self.name().to_string(),
+            plugin: PLUGIN_NAME.to_string(),
             actions,
             metadata: DiffMetadata {
                 timestamp: chrono::Utc::now().timestamp(),
@@ -425,32 +367,28 @@ impl StatePlugin for S6SystemctlPlugin {
             if let StateAction::Modify { resource, changes } = action {
                 let unit: S6UnitStatus = simd_json::serde::from_owned_value(changes.clone())?;
 
-                let state_result = match unit.active_state.as_str() {
-                    "active" => {
-                        tokio::process::Command::new("s6")
-                            .args(["process", "start", resource])
-                            .status()
-                            .await
-                    }
-                    "inactive" => {
-                        tokio::process::Command::new("s6")
-                            .args(["process", "stop", resource])
-                            .status()
-                            .await
-                    }
-                    _ => {
-                        continue;
-                    }
-                };
+                match unit.active_state.as_str() {
+                    "active" => match self.dbus.start(resource).await {
+                        Ok(()) => changes_applied.push(format!("{} -> active", resource)),
+                        Err(e) => errors.push(format!("{}: {}", resource, e)),
+                    },
+                    "inactive" => match self.dbus.stop(resource).await {
+                        Ok(()) => changes_applied.push(format!("{} -> inactive", resource)),
+                        Err(e) => errors.push(format!("{}: {}", resource, e)),
+                    },
+                    _ => {}
+                }
 
-                match state_result {
-                    Ok(s) if s.success() => {
-                        changes_applied.push(format!("{} -> {}", resource, unit.active_state))
-                    }
-                    Ok(s) => errors.push(format!(
-                        "{}: s6 exited {}",
+                let enable_result = if unit.enabled {
+                    self.dbus.enable(resource).await
+                } else {
+                    self.dbus.disable(resource).await
+                };
+                match enable_result {
+                    Ok(()) => changes_applied.push(format!(
+                        "{} -> {}",
                         resource,
-                        s.code().unwrap_or(-1)
+                        if unit.enabled { "enabled" } else { "disabled" }
                     )),
                     Err(e) => errors.push(format!("{}: {}", resource, e)),
                 }
@@ -470,12 +408,11 @@ impl StatePlugin for S6SystemctlPlugin {
     }
 
     async fn create_checkpoint(&self) -> Result<Checkpoint> {
-        let state = simd_json::json!(null);
         Ok(Checkpoint {
-            id: format!("s6_systemctl-{}", chrono::Utc::now().timestamp()),
-            plugin: self.name().to_string(),
+            id: format!("{}-{}", PLUGIN_NAME, chrono::Utc::now().timestamp()),
+            plugin: PLUGIN_NAME.to_string(),
             timestamp: chrono::Utc::now().timestamp(),
-            state_snapshot: state,
+            state_snapshot: json!(null),
             backend_checkpoint: None,
         })
     }
@@ -484,15 +421,11 @@ impl StatePlugin for S6SystemctlPlugin {
         let old: S6SystemctlState =
             simd_json::serde::from_owned_value(checkpoint.state_snapshot.clone())?;
         for unit in old.units {
-            let cmd = match unit.active_state.as_str() {
-                "active" => "start",
-                "inactive" => "stop",
+            match unit.active_state.as_str() {
+                "active" => { let _ = self.dbus.start(&unit.id).await; }
+                "inactive" => { let _ = self.dbus.stop(&unit.id).await; }
                 _ => continue,
-            };
-            let _ = tokio::process::Command::new("s6")
-                .args(["process", cmd, &unit.id])
-                .status()
-                .await;
+            }
         }
         Ok(())
     }
@@ -507,13 +440,98 @@ impl StatePlugin for S6SystemctlPlugin {
     }
 }
 
+// =============================================================================
+// PLUGIN EXIT: publish the single PluginSchema contract
+// =============================================================================
+
+pub fn s6_systemctl_schema() -> PluginSchema {
+    let root = serde_json::to_value(schemars::schema_for!(S6SystemctlState))
+        .expect("schemars schema serializes to JSON");
+    let mut schema = super::schemars_adapter::plugin_schema_from_json(
+        PLUGIN_NAME,
+        PLUGIN_VERSION,
+        PLUGIN_DESCRIPTION,
+        &root,
+    );
+    schema.category = PLUGIN_CATEGORY.to_string();
+    schema.display_name = Some(PLUGIN_DISPLAY_NAME.to_string());
+
+    schema.methods.insert(
+        "start".to_string(),
+        method_decl_from_schemars_with_output::<UnitInput, AckOutput>(
+            "start", SideEffect::Mutation, false,
+            "s6.systemctl.write", "mut.software.s6.systemctl.start@v1",
+        ),
+    );
+    schema.methods.insert(
+        "stop".to_string(),
+        method_decl_from_schemars_with_output::<UnitInput, AckOutput>(
+            "stop", SideEffect::Mutation, false,
+            "s6.systemctl.write", "mut.software.s6.systemctl.stop@v1",
+        ),
+    );
+    schema.methods.insert(
+        "restart".to_string(),
+        method_decl_from_schemars_with_output::<UnitInput, AckOutput>(
+            "restart", SideEffect::Mutation, false,
+            "s6.systemctl.write", "mut.software.s6.systemctl.restart@v1",
+        ),
+    );
+    schema.methods.insert(
+        "enable".to_string(),
+        method_decl_from_schemars_with_output::<UnitInput, AckOutput>(
+            "enable", SideEffect::Mutation, false,
+            "s6.systemctl.write", "mut.software.s6.systemctl.enable@v1",
+        ),
+    );
+    schema.methods.insert(
+        "disable".to_string(),
+        method_decl_from_schemars_with_output::<UnitInput, AckOutput>(
+            "disable", SideEffect::Mutation, false,
+            "s6.systemctl.write", "mut.software.s6.systemctl.disable@v1",
+        ),
+    );
+    schema.methods.insert(
+        "status".to_string(),
+        method_decl_from_schemars_with_output::<UnitInput, StatusOutput>(
+            "status", SideEffect::Read, true,
+            "s6.systemctl.read", "obs.software.s6.systemctl.status@v1",
+        ),
+    );
+    schema.methods.insert(
+        "is_active".to_string(),
+        method_decl_from_schemars_with_output::<UnitInput, IsActiveOutput>(
+            "is_active", SideEffect::Read, true,
+            "s6.systemctl.read", "obs.software.s6.systemctl.is_active@v1",
+        ),
+    );
+    schema.methods.insert(
+        "is_enabled".to_string(),
+        method_decl_from_schemars_with_output::<UnitInput, IsEnabledOutput>(
+            "is_enabled", SideEffect::Read, true,
+            "s6.systemctl.read", "obs.software.s6.systemctl.is_enabled@v1",
+        ),
+    );
+    schema.methods.insert(
+        "daemon_reload".to_string(),
+        method_decl_from_schemars_with_output::<EmptyInput, DaemonReloadOutput>(
+            "daemon_reload", SideEffect::Mutation, false,
+            "s6.systemctl.write", "mut.software.s6.systemctl.daemon_reload@v1",
+        ),
+    );
+    schema.methods.insert(
+        "list_units".to_string(),
+        method_decl_from_schemars_with_output::<EmptyInput, ListUnitsOutput>(
+            "list_units", SideEffect::Read, true,
+            "s6.systemctl.read", "obs.software.s6.systemctl.list_units@v1",
+        ),
+    );
+
+    schema
+}
+
 // Self-registration: the plugin registry discovers this via inventory
 // (single source of the catalog; no central dispatch list).
 inventory::submit! {
-    crate::default_registry::PluginReg::new("s6_systemctl", |_ctx| std::sync::Arc::new(S6SystemctlPlugin::new()))
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
-pub struct UnitInput {
-    pub name: String,
+    crate::default_registry::PluginReg::new(PLUGIN_NAME, |_ctx| std::sync::Arc::new(S6SystemctlPlugin::new()))
 }

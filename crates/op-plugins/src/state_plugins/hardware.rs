@@ -293,12 +293,84 @@ impl StatePlugin for HardwarePlugin {
 pub fn hardware_schema() -> PluginSchema {
     let root = serde_json::to_value(schemars::schema_for!(HardwareState))
         .expect("schemars schema serializes to JSON");
-    super::schemars_adapter::plugin_schema_from_json(
+    let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "hardware",
         "1.0.0",
         "Hardware inventory snapshot",
         &root,
-    )
+    );
+
+    // Output structs
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct ListDevicesOutput {
+        pub devices: Vec<serde_json::Value>,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct GetDeviceOutput {
+        pub device: Option<serde_json::Value>,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct GetStatsOutput {
+        pub stats: serde_json::Value,
+    }
+
+    // Add methods
+    use super::plugin_scaffold_helpers::method_decl_from_schemars_with_output;
+    use super::plugin_scaffold_helpers::AckOutput;
+    use op_state_store::SideEffect;
+
+    schema.methods.insert(
+        "list_devices".to_string(),
+        method_decl_from_schemars_with_output::<(), ListDevicesOutput>(
+            "list_devices",
+            SideEffect::Read,
+            true,
+            "hardware.read",
+            "obs.service.hardware.device.list@v1",
+        ),
+    );
+    schema.methods.insert(
+        "get_device".to_string(),
+        method_decl_from_schemars_with_output::<(), GetDeviceOutput>(
+            "get_device",
+            SideEffect::Read,
+            true,
+            "hardware.read",
+            "obs.service.hardware.device.get@v1",
+        ),
+    );
+    schema.methods.insert(
+        "scan_hardware".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "scan_hardware",
+            SideEffect::Mutation,
+            false,
+            "hardware.invoke",
+            "mut.service.hardware.scan@v1",
+        ),
+    );
+    schema.methods.insert(
+        "get_stats".to_string(),
+        method_decl_from_schemars_with_output::<(), GetStatsOutput>(
+            "get_stats",
+            SideEffect::Read,
+            true,
+            "hardware.read",
+            "obs.service.hardware.stats@v1",
+        ),
+    );
+    schema.methods.insert(
+        "refresh_inventory".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "refresh_inventory",
+            SideEffect::Mutation,
+            false,
+            "hardware.invoke",
+            "mut.service.hardware.refresh@v1",
+        ),
+    );
+
+    schema
 }
 
 /// Frozen golden reference: the original hand-rolled schema, kept **test-only**
