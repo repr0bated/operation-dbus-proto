@@ -1,4 +1,3 @@
-use super::plugin_schema_defs::schema_from_state;
 use anyhow::Result;
 use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
@@ -6,7 +5,7 @@ use op_state_store::PluginSchema;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
-use simd_json::{json, OwnedValue as Value};
+use simd_json::OwnedValue as Value;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CreateSubvolumeInput {
@@ -196,100 +195,139 @@ impl StatePlugin for BtrfsPlugin {
 }
 
 pub(crate) fn btrfs_schema() -> PluginSchema {
-    let state = simd_json::serde::to_owned_value(super::btrfs_plugin::BtrfsPlugin::current_state())
-        .unwrap_or_else(|_| json!({}));
-    let mut schema = schema_from_state(
+    let root = serde_json::to_value(schemars::schema_for!(BtrfsState))
+        .expect("schemars schema serializes to JSON");
+    let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "btrfs",
-        "infrastructure",
         "1.0.0",
         "Btrfs filesystem — subvolumes, snapshots, send/receive, DR",
-        &state,
+        &root,
     );
+    schema.category = "infrastructure".to_string();
+    if let Ok(defaults) = simd_json::serde::to_owned_value(BtrfsPlugin::current_state()) {
+        super::schemars_adapter::apply_state_defaults(&mut schema, &defaults);
+    }
 
-    schema.methods.insert("create_subvolume".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<CreateSubvolumeInput>(
-        "create_subvolume",
-        op_state_store::SideEffect::Mutation,
-        false,
-        "cap.storage.btrfs.subvolume.create@v1",
-        "mut.storage.btrfs.subvolume.create@v1",
-    ));
-    schema.methods.insert("delete_subvolume".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<DeleteSubvolumeInput>(
-        "delete_subvolume",
-        op_state_store::SideEffect::Mutation,
-        false,
-        "cap.storage.btrfs.subvolume.delete@v1",
-        "mut.storage.btrfs.subvolume.delete@v1",
-    ));
-    schema.methods.insert("snapshot".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<SnapshotInput>(
-        "snapshot",
-        op_state_store::SideEffect::Mutation,
-        false,
-        "cap.storage.btrfs.snapshot.create@v1",
-        "mut.storage.btrfs.snapshot.create@v1",
-    ));
-    schema.methods.insert("list_subvolumes".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<ListSubvolumesInput>(
-        "list_subvolumes",
-        op_state_store::SideEffect::Read,
-        true,
-        "cap.storage.btrfs.subvolume.list@v1",
-        "obs.storage.btrfs.subvolume.list@v1",
-    ));
-    schema.methods.insert("scrub_start".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<ScrubStartInput>(
-        "scrub_start",
-        op_state_store::SideEffect::Mutation,
-        false,
-        "cap.storage.btrfs.scrub.start@v1",
-        "mut.storage.btrfs.scrub.start@v1",
-    ));
-    schema.methods.insert("scrub_status".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<ScrubStatusInput>(
-        "scrub_status",
-        op_state_store::SideEffect::Read,
-        true,
-        "cap.storage.btrfs.scrub.status@v1",
-        "obs.storage.btrfs.scrub.status@v1",
-    ));
-    schema.methods.insert("balance_start".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<BalanceStartInput>(
-        "balance_start",
-        op_state_store::SideEffect::Mutation,
-        false,
-        "cap.storage.btrfs.balance.start@v1",
-        "mut.storage.btrfs.balance.start@v1",
-    ));
-    schema.methods.insert("balance_status".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<BalanceStatusInput>(
-        "balance_status",
-        op_state_store::SideEffect::Read,
-        true,
-        "cap.storage.btrfs.balance.status@v1",
-        "obs.storage.btrfs.balance.status@v1",
-    ));
-    schema.methods.insert("filesystem_df".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<FilesystemDfInput>(
-        "filesystem_df",
-        op_state_store::SideEffect::Read,
-        true,
-        "cap.storage.btrfs.filesystem.df@v1",
-        "obs.storage.btrfs.filesystem.df@v1",
-    ));
-    schema.methods.insert("filesystem_usage".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<FilesystemUsageInput>(
-        "filesystem_usage",
-        op_state_store::SideEffect::Read,
-        true,
-        "cap.storage.btrfs.filesystem.usage@v1",
-        "obs.storage.btrfs.filesystem.usage@v1",
-    ));
-    schema.methods.insert("device_add".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<DeviceAddInput>(
-        "device_add",
-        op_state_store::SideEffect::Mutation,
-        false,
-        "cap.storage.btrfs.device.add@v1",
-        "mut.storage.btrfs.device.add@v1",
-    ));
-    schema.methods.insert("device_remove".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<DeviceRemoveInput>(
-        "device_remove",
-        op_state_store::SideEffect::Mutation,
-        false,
-        "cap.storage.btrfs.device.remove@v1",
-        "mut.storage.btrfs.device.remove@v1",
-    ));
+    schema.methods.insert(
+        "create_subvolume".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<CreateSubvolumeInput>(
+            "create_subvolume",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.storage.btrfs.subvolume.create@v1",
+            "mut.storage.btrfs.subvolume.create@v1",
+        ),
+    );
+    schema.methods.insert(
+        "delete_subvolume".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<DeleteSubvolumeInput>(
+            "delete_subvolume",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.storage.btrfs.subvolume.delete@v1",
+            "mut.storage.btrfs.subvolume.delete@v1",
+        ),
+    );
+    schema.methods.insert(
+        "snapshot".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<SnapshotInput>(
+            "snapshot",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.storage.btrfs.snapshot.create@v1",
+            "mut.storage.btrfs.snapshot.create@v1",
+        ),
+    );
+    schema.methods.insert(
+        "list_subvolumes".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<ListSubvolumesInput>(
+            "list_subvolumes",
+            op_state_store::SideEffect::Read,
+            true,
+            "cap.storage.btrfs.subvolume.list@v1",
+            "obs.storage.btrfs.subvolume.list@v1",
+        ),
+    );
+    schema.methods.insert(
+        "scrub_start".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<ScrubStartInput>(
+            "scrub_start",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.storage.btrfs.scrub.start@v1",
+            "mut.storage.btrfs.scrub.start@v1",
+        ),
+    );
+    schema.methods.insert(
+        "scrub_status".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<ScrubStatusInput>(
+            "scrub_status",
+            op_state_store::SideEffect::Read,
+            true,
+            "cap.storage.btrfs.scrub.status@v1",
+            "obs.storage.btrfs.scrub.status@v1",
+        ),
+    );
+    schema.methods.insert(
+        "balance_start".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<BalanceStartInput>(
+            "balance_start",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.storage.btrfs.balance.start@v1",
+            "mut.storage.btrfs.balance.start@v1",
+        ),
+    );
+    schema.methods.insert(
+        "balance_status".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<BalanceStatusInput>(
+            "balance_status",
+            op_state_store::SideEffect::Read,
+            true,
+            "cap.storage.btrfs.balance.status@v1",
+            "obs.storage.btrfs.balance.status@v1",
+        ),
+    );
+    schema.methods.insert(
+        "filesystem_df".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<FilesystemDfInput>(
+            "filesystem_df",
+            op_state_store::SideEffect::Read,
+            true,
+            "cap.storage.btrfs.filesystem.df@v1",
+            "obs.storage.btrfs.filesystem.df@v1",
+        ),
+    );
+    schema.methods.insert(
+        "filesystem_usage".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<FilesystemUsageInput>(
+            "filesystem_usage",
+            op_state_store::SideEffect::Read,
+            true,
+            "cap.storage.btrfs.filesystem.usage@v1",
+            "obs.storage.btrfs.filesystem.usage@v1",
+        ),
+    );
+    schema.methods.insert(
+        "device_add".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<DeviceAddInput>(
+            "device_add",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.storage.btrfs.device.add@v1",
+            "mut.storage.btrfs.device.add@v1",
+        ),
+    );
+    schema.methods.insert(
+        "device_remove".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<DeviceRemoveInput>(
+            "device_remove",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.storage.btrfs.device.remove@v1",
+            "mut.storage.btrfs.device.remove@v1",
+        ),
+    );
     schema
 }
 

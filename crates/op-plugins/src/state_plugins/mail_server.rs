@@ -542,7 +542,7 @@ pub(crate) fn mail_server_schema() -> PluginSchema {
 
     schema.methods.insert(
         "add_domain".to_string(),
-        super::plugin_schema_defs::method_decl_from_schemars::<DomainInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<DomainInput>(
             "AddDomain",
             op_state_store::SideEffect::Mutation,
             false,
@@ -552,7 +552,7 @@ pub(crate) fn mail_server_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "remove_domain".to_string(),
-        super::plugin_schema_defs::method_decl_from_schemars::<DomainInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<DomainInput>(
             "RemoveDomain",
             op_state_store::SideEffect::Mutation,
             false,
@@ -562,7 +562,7 @@ pub(crate) fn mail_server_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "add_mailbox".to_string(),
-        super::plugin_schema_defs::method_decl_from_schemars::<MailboxInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<MailboxInput>(
             "AddMailbox",
             op_state_store::SideEffect::Mutation,
             false,
@@ -572,7 +572,7 @@ pub(crate) fn mail_server_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "remove_mailbox".to_string(),
-        super::plugin_schema_defs::method_decl_from_schemars::<MailboxInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<MailboxInput>(
             "RemoveMailbox",
             op_state_store::SideEffect::Mutation,
             false,
@@ -582,7 +582,7 @@ pub(crate) fn mail_server_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "add_alias".to_string(),
-        super::plugin_schema_defs::method_decl_from_schemars::<AliasInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<AliasInput>(
             "AddAlias",
             op_state_store::SideEffect::Mutation,
             false,
@@ -592,7 +592,7 @@ pub(crate) fn mail_server_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "remove_alias".to_string(),
-        super::plugin_schema_defs::method_decl_from_schemars::<AliasInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<AliasInput>(
             "RemoveAlias",
             op_state_store::SideEffect::Mutation,
             false,
@@ -602,7 +602,7 @@ pub(crate) fn mail_server_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "set_quota".to_string(),
-        super::plugin_schema_defs::method_decl_from_schemars::<QuotaInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<QuotaInput>(
             "SetQuota",
             op_state_store::SideEffect::Mutation,
             false,
@@ -612,7 +612,7 @@ pub(crate) fn mail_server_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "get_queue".to_string(),
-        super::plugin_schema_defs::method_decl_from_schemars::<super::plugin_schema_defs::EmptyInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<super::plugin_scaffold_helpers::EmptyInput>(
             "GetQueue",
             op_state_store::SideEffect::Read,
             true,
@@ -622,7 +622,7 @@ pub(crate) fn mail_server_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "flush_queue".to_string(),
-        super::plugin_schema_defs::method_decl_from_schemars::<super::plugin_schema_defs::EmptyInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<super::plugin_scaffold_helpers::EmptyInput>(
             "FlushQueue",
             op_state_store::SideEffect::Mutation,
             false,
@@ -664,4 +664,3 @@ pub struct QuotaInput {
     pub user: String,
     pub quota_mb: u32,
 }
-

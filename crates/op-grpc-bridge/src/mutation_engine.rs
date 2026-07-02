@@ -899,9 +899,7 @@ impl MutationEngine {
                     }
                 }
             }
-            _ => {
-                serde_json::to_value(&parsed_value).unwrap_or(serde_json::Value::Null)
-            }
+            _ => serde_json::to_value(&parsed_value).unwrap_or(serde_json::Value::Null),
         };
 
         // Return a JSON result carrying the event accountability proof and the

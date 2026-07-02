@@ -13,12 +13,16 @@ use anyhow::Result;
 use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
 use op_state_store::PluginSchema;
+use op_state_store::SideEffect;
 #[cfg(test)]
 use op_state_store::{Constraint, FieldSchema, FieldType};
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
 use std::path::Path;
+
+use super::plugin_scaffold_helpers::method_decl_from_schemars_with_output;
+use super::plugin_scaffold_helpers::AckOutput;
 
 /// Manifest of the designated knowledge corpus.
 const MANIFEST_PATH: &str = "knowledge/notebooks.manifest.json";
@@ -198,7 +202,7 @@ impl NotebookLmPlugin {
             config: NotebookLmConfig {
                 cli: "nlm".to_string(),
                 transport: "nlm CLI / NotebookLM batchexecute".to_string(),
-                ingest_pipeline: "OD-23 (Voyage->Qdrant + Cozo graph)".to_string(),
+                ingest_pipeline: "OD-23 (embedding_model->Qdrant + Cozo graph)".to_string(),
             },
         }
     }
@@ -263,12 +267,556 @@ impl StatePlugin for NotebookLmPlugin {
 pub(crate) fn notebooklm_schema() -> PluginSchema {
     let root = serde_json::to_value(schemars::schema_for!(NotebookLmState))
         .expect("schemars schema serializes to JSON");
-    super::schemars_adapter::plugin_schema_from_json(
+    let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "notebooklm",
         "1.0.0",
         "NotebookLM knowledge notebooks — auth status, designated corpus, master notebook",
         &root,
-    )
+    );
+
+    // Add methods to schema with typed returns
+    schema.methods.insert(
+        "list_notebooks".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "list_notebooks",
+            SideEffect::Read,
+            true,
+            "notebooklm.read",
+            "obs.service.plugin.notebooklm.notebook.list@v1",
+        ),
+    );
+    schema.methods.insert(
+        "get_notebook".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "get_notebook",
+            SideEffect::Read,
+            true,
+            "notebooklm.read",
+            "obs.service.plugin.notebooklm.notebook.get@v1",
+        ),
+    );
+    schema.methods.insert(
+        "select_notebook".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "select_notebook",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.notebook.select@v1",
+        ),
+    );
+    schema.methods.insert(
+        "search_notebooks".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "search_notebooks",
+            SideEffect::Read,
+            true,
+            "notebooklm.read",
+            "obs.service.plugin.notebooklm.notebook.search@v1",
+        ),
+    );
+    schema.methods.insert(
+        "query_notebook".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "query_notebook",
+            SideEffect::Read,
+            true,
+            "notebooklm.read",
+            "obs.service.plugin.notebooklm.notebook.query@v1",
+        ),
+    );
+    schema.methods.insert(
+        "get_library_stats".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "get_library_stats",
+            SideEffect::Read,
+            true,
+            "notebooklm.read",
+            "obs.service.plugin.notebooklm.library.stats@v1",
+        ),
+    );
+    schema.methods.insert(
+        "cross_notebook_query".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "cross_notebook_query",
+            SideEffect::Read,
+            true,
+            "notebooklm.read",
+            "obs.service.plugin.notebooklm.cross.query@v1",
+        ),
+    );
+
+    // === Source methods (R/M) ===
+    schema.methods.insert(
+        "list_sources".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "list_sources",
+            SideEffect::Read,
+            true,
+            "notebooklm.read",
+            "obs.service.plugin.notebooklm.source.list@v1",
+        ),
+    );
+    schema.methods.insert(
+        "get_source_content".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "get_source_content",
+            SideEffect::Read,
+            true,
+            "notebooklm.read",
+            "obs.service.plugin.notebooklm.source.content@v1",
+        ),
+    );
+    schema.methods.insert(
+        "add_source_url".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "add_source_url",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.source.add-url@v1",
+        ),
+    );
+    schema.methods.insert(
+        "add_source_text".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "add_source_text",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.source.add-text@v1",
+        ),
+    );
+    schema.methods.insert(
+        "add_source_drive".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "add_source_drive",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.source.add-drive@v1",
+        ),
+    );
+    schema.methods.insert(
+        "add_source_file".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "add_source_file",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.source.add-file@v1",
+        ),
+    );
+    schema.methods.insert(
+        "delete_source".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "delete_source",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.source.delete@v1",
+        ),
+    );
+    schema.methods.insert(
+        "sync_drive_sources".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "sync_drive_sources",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.source.sync-drive@v1",
+        ),
+    );
+
+    // === Label methods (M) ===
+    schema.methods.insert(
+        "auto_label_sources".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "auto_label_sources",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.source.label-auto@v1",
+        ),
+    );
+    schema.methods.insert(
+        "create_label".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "create_label",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.source.label-create@v1",
+        ),
+    );
+    schema.methods.insert(
+        "rename_label".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "rename_label",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.source.label-rename@v1",
+        ),
+    );
+    schema.methods.insert(
+        "set_label_emoji".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "set_label_emoji",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.source.label-emoji@v1",
+        ),
+    );
+    schema.methods.insert(
+        "move_source_label".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "move_source_label",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.source.label-move@v1",
+        ),
+    );
+    schema.methods.insert(
+        "delete_label".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "delete_label",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.source.label-delete@v1",
+        ),
+    );
+
+    // === Studio content methods (M) ===
+    schema.methods.insert(
+        "create_audio".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "create_audio",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.studio.audio.create@v1",
+        ),
+    );
+    schema.methods.insert(
+        "create_video".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "create_video",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.studio.video.create@v1",
+        ),
+    );
+    schema.methods.insert(
+        "create_report".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "create_report",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.studio.report.create@v1",
+        ),
+    );
+    schema.methods.insert(
+        "create_quiz".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "create_quiz",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.studio.quiz.create@v1",
+        ),
+    );
+    schema.methods.insert(
+        "create_flashcards".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "create_flashcards",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.studio.flashcards.create@v1",
+        ),
+    );
+    schema.methods.insert(
+        "create_infographic".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "create_infographic",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.studio.infographic.create@v1",
+        ),
+    );
+    schema.methods.insert(
+        "create_mindmap".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "create_mindmap",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.studio.mindmap.create@v1",
+        ),
+    );
+    schema.methods.insert(
+        "create_slides".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "create_slides",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.studio.slides.create@v1",
+        ),
+    );
+    schema.methods.insert(
+        "revise_slides".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "revise_slides",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.studio.slides.revise@v1",
+        ),
+    );
+    schema.methods.insert(
+        "describe_studio".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "describe_studio",
+            SideEffect::Read,
+            true,
+            "notebooklm.read",
+            "obs.service.plugin.notebooklm.studio.describe@v1",
+        ),
+    );
+    schema.methods.insert(
+        "get_audio_status".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "get_audio_status",
+            SideEffect::Read,
+            true,
+            "notebooklm.read",
+            "obs.service.plugin.notebooklm.studio.audio.status@v1",
+        ),
+    );
+    schema.methods.insert(
+        "list_artifacts".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "list_artifacts",
+            SideEffect::Read,
+            true,
+            "notebooklm.read",
+            "obs.service.plugin.notebooklm.studio.artifact.list@v1",
+        ),
+    );
+    schema.methods.insert(
+        "download_artifact".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "download_artifact",
+            SideEffect::Read,
+            true,
+            "notebooklm.read",
+            "obs.service.plugin.notebooklm.studio.artifact.download@v1",
+        ),
+    );
+
+    // === Research / share / batch (M) ===
+    schema.methods.insert(
+        "start_research".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "start_research",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.research.start@v1",
+        ),
+    );
+    schema.methods.insert(
+        "import_research".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "import_research",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.research.import@v1",
+        ),
+    );
+    schema.methods.insert(
+        "share_public".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "share_public",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.share.public@v1",
+        ),
+    );
+    schema.methods.insert(
+        "share_invite".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "share_invite",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.share.invite@v1",
+        ),
+    );
+    schema.methods.insert(
+        "get_share_settings".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "get_share_settings",
+            SideEffect::Read,
+            true,
+            "notebooklm.read",
+            "obs.service.plugin.notebooklm.share.settings@v1",
+        ),
+    );
+    schema.methods.insert(
+        "disable_share".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "disable_share",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.share.disable@v1",
+        ),
+    );
+    schema.methods.insert(
+        "batch_operation".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "batch_operation",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.batch.run@v1",
+        ),
+    );
+    schema.methods.insert(
+        "run_pipeline".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "run_pipeline",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.pipeline.run@v1",
+        ),
+    );
+    schema.methods.insert(
+        "list_pipelines".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "list_pipelines",
+            SideEffect::Read,
+            true,
+            "notebooklm.read",
+            "obs.service.plugin.notebooklm.pipeline.list@v1",
+        ),
+    );
+    schema.methods.insert(
+        "tag_add".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "tag_add",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.tag.add@v1",
+        ),
+    );
+    schema.methods.insert(
+        "tag_list".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "tag_list",
+            SideEffect::Read,
+            true,
+            "notebooklm.read",
+            "obs.service.plugin.notebooklm.tag.list@v1",
+        ),
+    );
+    schema.methods.insert(
+        "tag_smart_select".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "tag_smart_select",
+            SideEffect::Read,
+            true,
+            "notebooklm.read",
+            "obs.service.plugin.notebooklm.tag.select@v1",
+        ),
+    );
+
+    // === Sessions / auth / health (R/M) ===
+    schema.methods.insert(
+        "list_sessions".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "list_sessions",
+            SideEffect::Read,
+            true,
+            "notebooklm.read",
+            "obs.service.plugin.notebooklm.session.list@v1",
+        ),
+    );
+    schema.methods.insert(
+        "close_session".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "close_session",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.session.close@v1",
+        ),
+    );
+    schema.methods.insert(
+        "reset_session".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "reset_session",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.session.reset@v1",
+        ),
+    );
+    schema.methods.insert(
+        "get_health".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "get_health",
+            SideEffect::Read,
+            true,
+            "notebooklm.read",
+            "obs.service.plugin.notebooklm.health@v1",
+        ),
+    );
+    schema.methods.insert(
+        "setup_auth".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "setup_auth",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.admin",
+            "mut.service.plugin.notebooklm.auth.setup@v1",
+        ),
+    );
+    schema.methods.insert(
+        "refresh_auth".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "refresh_auth",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.admin",
+            "mut.service.plugin.notebooklm.auth.refresh@v1",
+        ),
+    );
+    schema.methods.insert(
+        "reauth".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "reauth",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.admin",
+            "mut.service.plugin.notebooklm.auth.reauth@v1",
+        ),
+    );
+
+    schema
 }
 
 /// Hand-rolled golden reference for the NotebookLM schema. Kept test-only so the
@@ -540,6 +1088,549 @@ pub(crate) fn notebooklm_schema_golden() -> PluginSchema {
             "obs.service.notebooklm.config.query@v1".to_string(),
         ),
     ]);
+
+    // === Notebook methods (R) ===
+    schema.methods.insert(
+        "list_notebooks".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "list_notebooks",
+            SideEffect::Read,
+            true,
+            "notebooklm.read",
+            "obs.service.plugin.notebooklm.notebook.list@v1",
+        ),
+    );
+    schema.methods.insert(
+        "get_notebook".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "get_notebook",
+            SideEffect::Read,
+            true,
+            "notebooklm.read",
+            "obs.service.plugin.notebooklm.notebook.get@v1",
+        ),
+    );
+    schema.methods.insert(
+        "select_notebook".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "select_notebook",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.notebook.select@v1",
+        ),
+    );
+    schema.methods.insert(
+        "search_notebooks".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "search_notebooks",
+            SideEffect::Read,
+            true,
+            "notebooklm.read",
+            "obs.service.plugin.notebooklm.notebook.search@v1",
+        ),
+    );
+    schema.methods.insert(
+        "query_notebook".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "query_notebook",
+            SideEffect::Read,
+            true,
+            "notebooklm.read",
+            "obs.service.plugin.notebooklm.notebook.query@v1",
+        ),
+    );
+    schema.methods.insert(
+        "get_library_stats".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "get_library_stats",
+            SideEffect::Read,
+            true,
+            "notebooklm.read",
+            "obs.service.plugin.notebooklm.library.stats@v1",
+        ),
+    );
+    schema.methods.insert(
+        "cross_notebook_query".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "cross_notebook_query",
+            SideEffect::Read,
+            true,
+            "notebooklm.read",
+            "obs.service.plugin.notebooklm.cross.query@v1",
+        ),
+    );
+
+    // === Source methods (R/M) ===
+    schema.methods.insert(
+        "list_sources".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "list_sources",
+            SideEffect::Read,
+            true,
+            "notebooklm.read",
+            "obs.service.plugin.notebooklm.source.list@v1",
+        ),
+    );
+    schema.methods.insert(
+        "get_source_content".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "get_source_content",
+            SideEffect::Read,
+            true,
+            "notebooklm.read",
+            "obs.service.plugin.notebooklm.source.content@v1",
+        ),
+    );
+    schema.methods.insert(
+        "add_source_url".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "add_source_url",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.source.add-url@v1",
+        ),
+    );
+    schema.methods.insert(
+        "add_source_text".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "add_source_text",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.source.add-text@v1",
+        ),
+    );
+    schema.methods.insert(
+        "add_source_drive".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "add_source_drive",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.source.add-drive@v1",
+        ),
+    );
+    schema.methods.insert(
+        "add_source_file".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "add_source_file",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.source.add-file@v1",
+        ),
+    );
+    schema.methods.insert(
+        "delete_source".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "delete_source",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.source.delete@v1",
+        ),
+    );
+    schema.methods.insert(
+        "sync_drive_sources".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "sync_drive_sources",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.source.sync-drive@v1",
+        ),
+    );
+
+    // === Label methods (M) ===
+    schema.methods.insert(
+        "auto_label_sources".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "auto_label_sources",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.source.label-auto@v1",
+        ),
+    );
+    schema.methods.insert(
+        "create_label".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "create_label",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.source.label-create@v1",
+        ),
+    );
+    schema.methods.insert(
+        "rename_label".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "rename_label",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.source.label-rename@v1",
+        ),
+    );
+    schema.methods.insert(
+        "set_label_emoji".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "set_label_emoji",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.source.label-emoji@v1",
+        ),
+    );
+    schema.methods.insert(
+        "move_source_label".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "move_source_label",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.source.label-move@v1",
+        ),
+    );
+    schema.methods.insert(
+        "delete_label".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "delete_label",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.source.label-delete@v1",
+        ),
+    );
+
+    // === Studio content methods (M) ===
+    schema.methods.insert(
+        "create_audio".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "create_audio",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.studio.audio.create@v1",
+        ),
+    );
+    schema.methods.insert(
+        "create_video".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "create_video",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.studio.video.create@v1",
+        ),
+    );
+    schema.methods.insert(
+        "create_report".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "create_report",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.studio.report.create@v1",
+        ),
+    );
+    schema.methods.insert(
+        "create_quiz".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "create_quiz",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.studio.quiz.create@v1",
+        ),
+    );
+    schema.methods.insert(
+        "create_flashcards".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "create_flashcards",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.studio.flashcards.create@v1",
+        ),
+    );
+    schema.methods.insert(
+        "create_infographic".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "create_infographic",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.studio.infographic.create@v1",
+        ),
+    );
+    schema.methods.insert(
+        "create_mindmap".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "create_mindmap",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.studio.mindmap.create@v1",
+        ),
+    );
+    schema.methods.insert(
+        "create_slides".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "create_slides",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.studio.slides.create@v1",
+        ),
+    );
+    schema.methods.insert(
+        "revise_slides".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "revise_slides",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.studio.slides.revise@v1",
+        ),
+    );
+    schema.methods.insert(
+        "describe_studio".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "describe_studio",
+            SideEffect::Read,
+            true,
+            "notebooklm.read",
+            "obs.service.plugin.notebooklm.studio.describe@v1",
+        ),
+    );
+    schema.methods.insert(
+        "get_audio_status".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "get_audio_status",
+            SideEffect::Read,
+            true,
+            "notebooklm.read",
+            "obs.service.plugin.notebooklm.studio.audio.status@v1",
+        ),
+    );
+    schema.methods.insert(
+        "list_artifacts".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "list_artifacts",
+            SideEffect::Read,
+            true,
+            "notebooklm.read",
+            "obs.service.plugin.notebooklm.studio.artifact.list@v1",
+        ),
+    );
+    schema.methods.insert(
+        "download_artifact".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "download_artifact",
+            SideEffect::Read,
+            true,
+            "notebooklm.read",
+            "obs.service.plugin.notebooklm.studio.artifact.download@v1",
+        ),
+    );
+
+    // === Research / share / batch (M) ===
+    schema.methods.insert(
+        "start_research".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "start_research",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.research.start@v1",
+        ),
+    );
+    schema.methods.insert(
+        "import_research".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "import_research",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.research.import@v1",
+        ),
+    );
+    schema.methods.insert(
+        "share_public".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "share_public",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.share.public@v1",
+        ),
+    );
+    schema.methods.insert(
+        "share_invite".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "share_invite",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.share.invite@v1",
+        ),
+    );
+    schema.methods.insert(
+        "get_share_settings".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "get_share_settings",
+            SideEffect::Read,
+            true,
+            "notebooklm.read",
+            "obs.service.plugin.notebooklm.share.settings@v1",
+        ),
+    );
+    schema.methods.insert(
+        "disable_share".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "disable_share",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.share.disable@v1",
+        ),
+    );
+    schema.methods.insert(
+        "batch_operation".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "batch_operation",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.batch.run@v1",
+        ),
+    );
+    schema.methods.insert(
+        "run_pipeline".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "run_pipeline",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.pipeline.run@v1",
+        ),
+    );
+    schema.methods.insert(
+        "list_pipelines".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "list_pipelines",
+            SideEffect::Read,
+            true,
+            "notebooklm.read",
+            "obs.service.plugin.notebooklm.pipeline.list@v1",
+        ),
+    );
+    schema.methods.insert(
+        "tag_add".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "tag_add",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.tag.add@v1",
+        ),
+    );
+    schema.methods.insert(
+        "tag_list".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "tag_list",
+            SideEffect::Read,
+            true,
+            "notebooklm.read",
+            "obs.service.plugin.notebooklm.tag.list@v1",
+        ),
+    );
+    schema.methods.insert(
+        "tag_smart_select".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "tag_smart_select",
+            SideEffect::Read,
+            true,
+            "notebooklm.read",
+            "obs.service.plugin.notebooklm.tag.select@v1",
+        ),
+    );
+
+    // === Sessions / auth / health (R/M) ===
+    schema.methods.insert(
+        "list_sessions".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "list_sessions",
+            SideEffect::Read,
+            true,
+            "notebooklm.read",
+            "obs.service.plugin.notebooklm.session.list@v1",
+        ),
+    );
+    schema.methods.insert(
+        "close_session".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "close_session",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.session.close@v1",
+        ),
+    );
+    schema.methods.insert(
+        "reset_session".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "reset_session",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.invoke",
+            "mut.service.plugin.notebooklm.session.reset@v1",
+        ),
+    );
+    schema.methods.insert(
+        "get_health".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "get_health",
+            SideEffect::Read,
+            true,
+            "notebooklm.read",
+            "obs.service.plugin.notebooklm.health@v1",
+        ),
+    );
+    schema.methods.insert(
+        "setup_auth".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "setup_auth",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.admin",
+            "mut.service.plugin.notebooklm.auth.setup@v1",
+        ),
+    );
+    schema.methods.insert(
+        "refresh_auth".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "refresh_auth",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.admin",
+            "mut.service.plugin.notebooklm.auth.refresh@v1",
+        ),
+    );
+    schema.methods.insert(
+        "reauth".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "reauth",
+            SideEffect::Mutation,
+            false,
+            "notebooklm.admin",
+            "mut.service.plugin.notebooklm.auth.reauth@v1",
+        ),
+    );
+
     schema
 }
 

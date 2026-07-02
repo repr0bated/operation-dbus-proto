@@ -25,7 +25,6 @@ use simd_json::OwnedValue as Value;
 #[cfg(test)]
 use std::collections::HashMap;
 
-const DEFAULT_VOYAGE_MODEL: &str = "voyage-4-lite";
 const DEFAULT_COLLECTION: &str = "ctl_plane_reasoning_episodes";
 const DEFAULT_VECTOR_DIMS: u32 = 1024;
 const DEFAULT_DEDUP_WINDOW_HRS: u32 = 24;
@@ -38,8 +37,8 @@ const DEFAULT_INPUT_TYPE: &str = "document";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CtlPlaneChatbotConfig {
-    #[serde(default = "default_voyage_model")]
-    pub voyage_model: String,
+    #[serde(default = "default_embedding_plugin")]
+    pub embedding_plugin: String,
     #[serde(default = "default_collection")]
     pub qdrant_collection: String,
     #[serde(default)]
@@ -58,11 +57,14 @@ pub struct CtlPlaneChatbotConfig {
     pub vectorization_enabled: bool,
 }
 
-fn default_voyage_model() -> String {
-    DEFAULT_VOYAGE_MODEL.into()
+fn default_embedding_plugin() -> String {
+    "embedding_model".into()
 }
 fn default_collection() -> String {
     DEFAULT_COLLECTION.into()
+}
+fn default_chat_llm_plugin() -> String {
+    "large_language_model".into()
 }
 fn default_nesting_policy() -> String {
     DEFAULT_NESTING_POLICY.into()
@@ -80,7 +82,7 @@ fn default_true() -> bool {
 impl Default for CtlPlaneChatbotConfig {
     fn default() -> Self {
         Self {
-            voyage_model: default_voyage_model(),
+            embedding_plugin: default_embedding_plugin(),
             qdrant_collection: default_collection(),
             vector_dims: DEFAULT_VECTOR_DIMS,
             output_dtype: default_output_dtype(),
@@ -94,67 +96,6 @@ impl Default for CtlPlaneChatbotConfig {
 }
 
 // ── Schema state (schemars-derived) ─────────────────────────────────────────
-
-/// Interchangeable Voyage-4 embedding models.
-///
-/// `voyage-4-large`, `voyage-4` and `voyage-4-lite` share **one** embedding
-/// space: vectors from any of the three are directly comparable, so all three
-/// write to the *same* Qdrant collection at the *same* dimensionality
-/// ([`VoyageModel::SHARED_EMBEDDING_DIMS`]). Switching models is a quality/cost
-/// tradeoff only — it never requires re-vectorizing existing data.
-///
-/// `voyage-4-nano` is **deliberately excluded from this collection**, but for a
-/// different reason than the domain models: per Voyage, "all 4 series models are
-/// compatible with each other," so nano *is* in the same embedding space — it is
-/// just dimensionally **capped at ≤512** (128/256/512). Our collection is pinned
-/// at 1024, which nano cannot produce, so it can't join here. (It could join a
-/// 256/512 collection.) Adding it to the 1024 trio would force everything down to
-/// 512. Out for the 1024 setup — not out of the space.
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum VoyageModel {
-    #[serde(rename = "voyage-4-large")]
-    Voyage4Large,
-    #[serde(rename = "voyage-4")]
-    Voyage4,
-    #[serde(rename = "voyage-4-lite")]
-    Voyage4Lite,
-}
-
-impl Default for VoyageModel {
-    fn default() -> Self {
-        // POC target; cheapest of the shared-space trio.
-        VoyageModel::Voyage4Lite
-    }
-}
-
-impl VoyageModel {
-    /// The single shared embedding dimensionality for the interchangeable
-    /// voyage-4 trio. One collection, no re-index across models.
-    pub const SHARED_EMBEDDING_DIMS: u32 = 1024;
-
-    /// The interchangeable models, all in the shared embedding space.
-    pub const SHARED_SPACE: [VoyageModel; 3] = [
-        VoyageModel::Voyage4Large,
-        VoyageModel::Voyage4,
-        VoyageModel::Voyage4Lite,
-    ];
-
-    /// Canonical Voyage API model id.
-    pub fn model_id(&self) -> &'static str {
-        match self {
-            VoyageModel::Voyage4Large => "voyage-4-large",
-            VoyageModel::Voyage4 => "voyage-4",
-            VoyageModel::Voyage4Lite => "voyage-4-lite",
-        }
-    }
-
-    /// Output dimensionality. Identical across the trio so their vectors fuse
-    /// and compare in the same Qdrant collection.
-    pub fn dimensions(&self) -> u32 {
-        Self::SHARED_EMBEDDING_DIMS
-    }
-}
 
 /// Matryoshka output dimensions. A 2048-dim voyage-4 vector's leading *k* entries
 /// (256/512/1024) are themselves a valid k-dim embedding, so a collection can be
@@ -447,13 +388,26 @@ pub struct Significance {
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "sch.software.plugin.ctl-plane-chatbot.schema@v1"))]
 pub struct CtlPlaneChatbotState {
+    #[serde(default = "default_chat_llm_plugin")]
+    #[schemars(
+        description = "Generation plugin the chatbot delegates to for chat completion (default large_language_model). Provider/endpoint/runtime live there; the chatbot only selects its own model via chat_model.",
+        example = &"large_language_model",
+        extend("x-oscal-subid" = "mut.software.plugin.ctl-plane-chatbot.llm-plugin@v1")
+    )]
+    pub llm_plugin: String,
     #[serde(default)]
     #[schemars(
-        description = "Voyage embedding model for reasoning episodes (REQ-4). The three voyage-4 models share one embedding space (1024-dim, one Qdrant collection) — switching never requires re-vectorizing. voyage-4-nano is excluded (different dim). POC target: voyage-4-lite",
-        example = &"voyage-4",
-        extend("x-oscal-subid" = "mut.software.plugin.ctl-plane-chatbot.voyage-model@v1")
+        description = "The chatbot's own selectable generation model id — chosen independently of the unified system model. Empty falls back to the generation surface's resolved model; a value overrides it for the chatbot only.",
+        extend("x-oscal-subid" = "mut.software.plugin.ctl-plane-chatbot.chat-model@v1")
     )]
-    pub voyage_model: VoyageModel,
+    pub chat_model: String,
+    #[serde(default = "default_embedding_plugin")]
+    #[schemars(
+        description = "Embedding surface this chatbot delegates to for vectorizing reasoning episodes (default embedding_model). The model/provider/dimensions live in that plugin; the chatbot holds no embedding model of its own.",
+        example = &"embedding_model",
+        extend("x-oscal-subid" = "mut.software.plugin.ctl-plane-chatbot.embedding-plugin@v1")
+    )]
+    pub embedding_plugin: String,
     #[serde(default = "default_collection")]
     #[schemars(
         description = "Qdrant collection name (REQ-5). Separate from mutation/schema footprints",
@@ -607,7 +561,7 @@ impl StatePlugin for CtlPlaneChatbotPlugin {
                 }
             };
         }
-        field_diff!(voyage_model, "voyage_model");
+        field_diff!(embedding_plugin, "embedding_plugin");
         field_diff!(qdrant_collection, "qdrant_collection");
         field_diff!(vector_dims, "vector_dims");
         field_diff!(output_dtype, "output_dtype");
@@ -686,12 +640,116 @@ impl StatePlugin for CtlPlaneChatbotPlugin {
 pub(crate) fn ctl_plane_chatbot_schema() -> PluginSchema {
     let root = serde_json::to_value(schemars::schema_for!(CtlPlaneChatbotState))
         .expect("schemars schema serializes to JSON");
-    super::schemars_adapter::plugin_schema_from_json(
+    let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "ctl_plane_chatbot",
         "1.0.0",
         "Control-plane chatbot reasoning episodes — THE PLUGIN IS THE SCHEMA. Declares every episode field (REQ-2), PII tagging (REQ-8), significance classification (REQ-3), and vectorization pipeline config (REQ-4/5/6/7). Downstream (Qdrant, CozoDB, Accountability UI, EventChainService) inherits.",
         &root,
-    )
+    );
+
+    // Output structs
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct GetConfigOutput {
+        pub config: serde_json::Value,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct ListEpisodesOutput {
+        pub episodes: Vec<serde_json::Value>,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct GetEpisodeOutput {
+        pub episode: Option<serde_json::Value>,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct QueryContextOutput {
+        pub results: Vec<serde_json::Value>,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct ClassifySignificanceOutput {
+        pub significance: serde_json::Value,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct VectorizeOutput {
+        pub vector_id: String,
+    }
+
+    // Add methods
+    use super::plugin_scaffold_helpers::method_decl_from_schemars_with_output;
+    use super::plugin_scaffold_helpers::AckOutput;
+    use op_state_store::SideEffect;
+
+    schema.methods.insert(
+        "get_config".to_string(),
+        method_decl_from_schemars_with_output::<(), GetConfigOutput>(
+            "get_config",
+            SideEffect::Read,
+            true,
+            "chatbot.read",
+            "obs.service.ctl-plane-chatbot.config.get@v1",
+        ),
+    );
+    schema.methods.insert(
+        "set_config".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "set_config",
+            SideEffect::Mutation,
+            false,
+            "chatbot.invoke",
+            "mut.service.ctl-plane-chatbot.config.set@v1",
+        ),
+    );
+    schema.methods.insert(
+        "list_episodes".to_string(),
+        method_decl_from_schemars_with_output::<(), ListEpisodesOutput>(
+            "list_episodes",
+            SideEffect::Read,
+            true,
+            "chatbot.read",
+            "obs.service.ctl-plane-chatbot.episode.list@v1",
+        ),
+    );
+    schema.methods.insert(
+        "get_episode".to_string(),
+        method_decl_from_schemars_with_output::<(), GetEpisodeOutput>(
+            "get_episode",
+            SideEffect::Read,
+            true,
+            "chatbot.read",
+            "obs.service.ctl-plane-chatbot.episode.get@v1",
+        ),
+    );
+    schema.methods.insert(
+        "query_context".to_string(),
+        method_decl_from_schemars_with_output::<(), QueryContextOutput>(
+            "query_context",
+            SideEffect::Read,
+            true,
+            "chatbot.read",
+            "obs.service.ctl-plane-chatbot.context.query@v1",
+        ),
+    );
+    schema.methods.insert(
+        "classify_significance".to_string(),
+        method_decl_from_schemars_with_output::<(), ClassifySignificanceOutput>(
+            "classify_significance",
+            SideEffect::Mutation,
+            false,
+            "chatbot.invoke",
+            "mut.service.ctl-plane-chatbot.classify@v1",
+        ),
+    );
+    schema.methods.insert(
+        "vectorize".to_string(),
+        method_decl_from_schemars_with_output::<(), VectorizeOutput>(
+            "vectorize",
+            SideEffect::Mutation,
+            false,
+            "chatbot.invoke",
+            "mut.service.ctl-plane-chatbot.vectorize@v1",
+        ),
+    );
+
+    schema
 }
 
 /// Frozen golden reference for the `ctl_plane_chatbot` schema.
@@ -704,8 +762,16 @@ pub(crate) fn ctl_plane_chatbot_schema_golden() -> PluginSchema {
     );
     for (field, subid) in [
         (
-            "voyage_model",
-            "mut.software.plugin.ctl-plane-chatbot.voyage-model@v1",
+            "llm_plugin",
+            "mut.software.plugin.ctl-plane-chatbot.llm-plugin@v1",
+        ),
+        (
+            "chat_model",
+            "mut.software.plugin.ctl-plane-chatbot.chat-model@v1",
+        ),
+        (
+            "embedding_plugin",
+            "mut.software.plugin.ctl-plane-chatbot.embedding-plugin@v1",
         ),
         (
             "qdrant_collection",
@@ -1043,14 +1109,24 @@ fn ctl_plane_chatbot_schema_inner() -> PluginSchema {
     let schema = PluginSchema::builder("ctl_plane_chatbot")
         .version("1.0.0")
         .description("Control-plane chatbot reasoning episodes — THE PLUGIN IS THE SCHEMA. Declares every episode field (REQ-2), PII tagging (REQ-8), significance classification (REQ-3), and vectorization pipeline config (REQ-4/5/6/7). Downstream (Qdrant, CozoDB, Accountability UI, EventChainService) inherits.")
+        // ── Generation model binding (chatbot's own selectable model) ──────
+        .field("llm_plugin", FieldSchema {
+            field_type: FieldType::String, required: false,
+            description: "Generation plugin the chatbot delegates to for chat completion (default large_language_model). Provider/endpoint/runtime live there; the chatbot only selects its own model via chat_model.".to_string(),
+            default: Some(json!("large_language_model")), example: Some(json!("large_language_model")),
+            constraints: Vec::new(), read_only: false, read_only_when: None,
+        })
+        .field("chat_model", FieldSchema {
+            field_type: FieldType::String, required: false,
+            description: "The chatbot's own selectable generation model id — chosen independently of the unified system model. Empty falls back to the generation surface's resolved model; a value overrides it for the chatbot only.".to_string(),
+            default: Some(json!("")), example: None,
+            constraints: Vec::new(), read_only: false, read_only_when: None,
+        })
         // ── Pipeline config (tunable) ──────────────────────────────────────
-        .field("voyage_model", FieldSchema {
-            field_type: FieldType::Enum(vec![
-                "voyage-4-large".to_string(), "voyage-4".to_string(), "voyage-4-lite".to_string(),
-            ]),
-            required: false,
-            description: "Voyage embedding model for reasoning episodes (REQ-4). The three voyage-4 models share one embedding space (1024-dim, one Qdrant collection) — switching never requires re-vectorizing. voyage-4-nano is excluded (different dim). POC target: voyage-4-lite".to_string(),
-            default: Some(json!("voyage-4-lite")), example: Some(json!("voyage-4")),
+        .field("embedding_plugin", FieldSchema {
+            field_type: FieldType::String, required: false,
+            description: "Embedding surface this chatbot delegates to for vectorizing reasoning episodes (default embedding_model). The model/provider/dimensions live in that plugin; the chatbot holds no embedding model of its own.".to_string(),
+            default: Some(json!("embedding_model")), example: Some(json!("embedding_model")),
             constraints: Vec::new(), read_only: false, read_only_when: None,
         })
         .field("qdrant_collection", FieldSchema {

@@ -23,6 +23,7 @@ impl CognitiveToolRegistry {
         registry
             .register(Arc::new(MemoryTool::new(store.clone())) as BoxedTool)
             .await?;
+        registry.register(Arc::new(RegisterToolTool) as BoxedTool).await?;
         register_agent_tools(registry).await?;
         register_notebooklm_tools(registry).await?;
         Ok(())
@@ -118,6 +119,42 @@ impl Tool for MemoryTool {
             "stats" => self.op_stats().await,
             other => Err(anyhow::anyhow!("unknown operation: {}", other)),
         }
+    }
+}
+
+/// Stub for the `register_tool` schema method (cognitive_mcp_schema, subid
+/// mut.service.cognitive-mcp.tool.register@v1). No dynamic tool-registration
+/// mechanism exists yet — this establishes the contract as a real, reachable
+/// tool that returns a clear "not implemented" rather than a missing route.
+/// The schema is the authority; this implementation must catch up.
+pub struct RegisterToolTool;
+
+#[async_trait]
+impl Tool for RegisterToolTool {
+    fn name(&self) -> &str {
+        "register_tool"
+    }
+
+    fn description(&self) -> &str {
+        "Register a new MCP tool at runtime. Not yet implemented."
+    }
+
+    fn category(&self) -> &str {
+        "cognitive"
+    }
+
+    fn tags(&self) -> Vec<String> {
+        vec!["tool".to_string(), "registry".to_string()]
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({"type": "object", "additionalProperties": true})
+    }
+
+    async fn execute(&self, _input: Value) -> Result<Value> {
+        Err(anyhow::anyhow!(
+            "register_tool is not yet implemented — no dynamic tool-registration mechanism exists"
+        ))
     }
 }
 

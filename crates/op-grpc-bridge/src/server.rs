@@ -24,6 +24,7 @@ use crate::grpc_server::OperationGrpcServer;
 use crate::mutation_engine::MutationEngine;
 use crate::schema_loader::{SchemaLoader, SchemaReloadEvent};
 use crate::tracing::{GhostbridgeTraceLayer, TraceContext};
+use crate::zeroclaw_object_blob::ZeroclawObjectBlob;
 
 use crate::grpc_server::build_operation_routes;
 use crate::proto::zeroclaw::{
@@ -231,6 +232,36 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
             operation_server
         }
     };
+    match serde_json::from_value::<op_state_store::PluginSchema>(loader.get().await) {
+        Ok(schema) => {
+            let blob = ZeroclawObjectBlob::from_schema(schema.clone());
+            tracing::info!(
+                plugin_id = %blob.plugin_id,
+                schema_hash = %blob.schema_hash,
+                methods = blob.method_count(),
+                dbus_path = %blob.dbus.object_path,
+                grpc_service = %blob.grpc.service_name,
+                "zeroclaw D-Bus/gRPC object blob frozen"
+            );
+            if let Err(error) = operation_server
+                .register_plugin_methods(config.plugin_id.clone(), &schema)
+                .await
+            {
+                tracing::warn!(
+                    plugin_id = %config.plugin_id,
+                    %error,
+                    "failed to freeze zeroclaw method descriptors for gRPC reflection"
+                );
+            }
+        }
+        Err(error) => {
+            tracing::warn!(
+                plugin_id = %config.plugin_id,
+                %error,
+                "zeroclaw schema could not be parsed for gRPC reflection"
+            );
+        }
+    }
 
     // Unix socket listener for native gRPC.
     let unix_socket = config.unix_socket.clone();

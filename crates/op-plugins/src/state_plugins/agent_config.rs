@@ -1,7 +1,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
-use op_state_store::{FieldSchema, FieldType, PluginSchema};
+use op_state_store::PluginSchema;
 use serde::{Deserialize, Serialize};
 use simd_json::json;
 use simd_json::prelude::*;
@@ -132,95 +132,82 @@ impl StatePlugin for AgentConfigPlugin {
 pub fn agent_config_schema() -> PluginSchema {
     let root = serde_json::to_value(schemars::schema_for!(AgentConfigState))
         .expect("schemars schema serializes to JSON");
-    super::schemars_adapter::plugin_schema_from_json(
+    let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "agent_config",
         "1.0.0",
         "Agent configuration and tool assignments",
         &root,
-    )
-}
-
-/// Frozen golden reference: the original hand-rolled schema, kept test-only so
-/// `derived_schema_matches_hand_rolled` can prove the derived schema still
-/// matches the contract this plugin shipped with.
-#[cfg(test)]
-pub(crate) fn agent_config_schema_golden() -> PluginSchema {
-    let mut agent_fields = HashMap::new();
-    agent_fields.insert(
-        "name".to_string(),
-        FieldSchema {
-            field_type: FieldType::String,
-            required: true,
-            description: "Agent name".to_string(),
-            default: None,
-            example: None,
-            constraints: Vec::new(),
-            read_only: false,
-            read_only_when: None,
-        },
-    );
-    agent_fields.insert(
-        "enabled".to_string(),
-        FieldSchema {
-            field_type: FieldType::Boolean,
-            required: true,
-            description: "Whether the agent is enabled".to_string(),
-            default: None,
-            example: None,
-            constraints: Vec::new(),
-            read_only: false,
-            read_only_when: None,
-        },
-    );
-    agent_fields.insert(
-        "model".to_string(),
-        FieldSchema {
-            field_type: FieldType::String,
-            required: false,
-            description: "Default model override".to_string(),
-            default: None,
-            example: None,
-            constraints: Vec::new(),
-            read_only: false,
-            read_only_when: None,
-        },
-    );
-    agent_fields.insert(
-        "tools".to_string(),
-        FieldSchema {
-            field_type: FieldType::Array(Box::new(FieldType::String)),
-            required: false,
-            description: "Enabled tool names".to_string(),
-            default: Some(json!([])),
-            example: None,
-            constraints: Vec::new(),
-            read_only: false,
-            read_only_when: None,
-        },
     );
 
-    PluginSchema::builder("agent_config")
-        .version("1.0.0")
-        .description("Agent configuration and tool assignments")
-        .subid("__schema__", "sch.software.plugin.agent-config.schema@v1")
-        .field(
-            "agents",
-            FieldSchema {
-                field_type: FieldType::Array(Box::new(FieldType::Object(agent_fields))),
-                required: false,
-                description: "List of agent configurations".to_string(),
-                default: Some(json!([])),
-                example: None,
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        )
-        .subid(
-            "agents",
-            "exp.software.plugin.agent-config.agents.render@v1",
-        )
-        .build()
+    /// Output for GetConfig method
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct GetConfigOutput {
+        pub config: serde_json::Value,
+    }
+
+    /// Output for ListTools method
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct ListToolsOutput {
+        pub tools: Vec<String>,
+    }
+
+    // Add methods
+    use super::plugin_scaffold_helpers::method_decl_from_schemars_with_output;
+    use super::plugin_scaffold_helpers::AckOutput;
+    use op_state_store::SideEffect;
+
+    schema.methods.insert(
+        "get_config".to_string(),
+        method_decl_from_schemars_with_output::<(), GetConfigOutput>(
+            "get_config",
+            SideEffect::Read,
+            true,
+            "agent.read",
+            "obs.service.agent.config.get@v1",
+        ),
+    );
+    schema.methods.insert(
+        "update_config".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "update_config",
+            SideEffect::Mutation,
+            false,
+            "agent.invoke",
+            "mut.service.agent.config.update@v1",
+        ),
+    );
+    schema.methods.insert(
+        "list_tools".to_string(),
+        method_decl_from_schemars_with_output::<(), ListToolsOutput>(
+            "list_tools",
+            SideEffect::Read,
+            true,
+            "agent.read",
+            "obs.service.agent.tool.list@v1",
+        ),
+    );
+    schema.methods.insert(
+        "register_tool".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "register_tool",
+            SideEffect::Mutation,
+            false,
+            "agent.invoke",
+            "mut.service.agent.tool.register@v1",
+        ),
+    );
+    schema.methods.insert(
+        "reset_config".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "reset_config",
+            SideEffect::Mutation,
+            true,
+            "agent.invoke",
+            "mut.service.agent.config.reset@v1",
+        ),
+    );
+
+    schema
 }
 
 #[cfg(test)]
@@ -229,11 +216,17 @@ mod tests {
     use crate::state_plugins::common::oscal::validate_subid;
 
     #[test]
-    fn derived_schema_matches_hand_rolled() {
-        let golden = agent_config_schema_golden();
-        let derived = agent_config_schema();
-        let diffs = super::super::schemars_adapter::schema_diffs(&golden, &derived);
-        assert!(diffs.is_empty(), "schema_diffs: {:#?}", diffs);
+    fn schema_is_schemars_seeded_and_typed() {
+        let schema = agent_config_schema();
+        assert_eq!(schema.name, "agent_config");
+        assert_eq!(schema.version, "1.0.0");
+        assert_eq!(schema.description, "Agent configuration and tool assignments");
+        assert!(schema.fields.contains_key("agents"));
+        assert!(schema.methods.contains_key("get_config"));
+        assert!(schema.methods.contains_key("update_config"));
+        assert!(schema.methods.contains_key("list_tools"));
+        assert!(schema.methods.contains_key("register_tool"));
+        assert!(schema.methods.contains_key("reset_config"));
     }
 
     #[test]

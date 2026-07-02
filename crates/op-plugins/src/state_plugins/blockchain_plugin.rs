@@ -15,7 +15,7 @@
 //! `create_snapshot()` and `apply_state` writes the DR state through the chain.
 //! Nothing here is mocked.
 
-use super::plugin_schema_defs::schema_from_state;
+use super::plugin_scaffold_helpers::schema_from_state;
 use anyhow::Result;
 use async_trait::async_trait;
 use op_blockchain::StreamingBlockchain;
@@ -307,15 +307,110 @@ impl StatePlugin for BlockchainPlugin {
 }
 
 pub(crate) fn blockchain_schema() -> PluginSchema {
-    let state = simd_json::serde::to_owned_value(BlockchainPlugin::schema_exemplar())
-        .unwrap_or_else(|_| json!({}));
-    schema_from_state(
+    let root = serde_json::to_value(schemars::schema_for!(BlockchainState))
+        .expect("schemars schema serializes to JSON");
+    let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "blockchain",
-        "infrastructure",
         "1.0.0",
         "Streaming blockchain audit chain — snapshots, DR current-state, retention/interval",
-        &state,
-    )
+        &root,
+    );
+
+    // Output structs
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct ListSnapshotsOutput {
+        pub snapshots: Vec<serde_json::Value>,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct GetSnapshotOutput {
+        pub snapshot: Option<serde_json::Value>,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct GetCurrentStateOutput {
+        pub state: serde_json::Value,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct GetStatsOutput {
+        pub stats: serde_json::Value,
+    }
+
+    // Add methods
+    use super::plugin_scaffold_helpers::method_decl_from_schemars_with_output;
+    use super::plugin_scaffold_helpers::AckOutput;
+    use op_state_store::SideEffect;
+
+    schema.methods.insert(
+        "create_snapshot".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "create_snapshot",
+            SideEffect::Mutation,
+            false,
+            "blockchain.invoke",
+            "mut.service.blockchain.snapshot.create@v1",
+        ),
+    );
+    schema.methods.insert(
+        "list_snapshots".to_string(),
+        method_decl_from_schemars_with_output::<(), ListSnapshotsOutput>(
+            "list_snapshots",
+            SideEffect::Read,
+            true,
+            "blockchain.read",
+            "obs.service.blockchain.snapshot.list@v1",
+        ),
+    );
+    schema.methods.insert(
+        "get_snapshot".to_string(),
+        method_decl_from_schemars_with_output::<(), GetSnapshotOutput>(
+            "get_snapshot",
+            SideEffect::Read,
+            true,
+            "blockchain.read",
+            "obs.service.blockchain.snapshot.get@v1",
+        ),
+    );
+    schema.methods.insert(
+        "rollback".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "rollback",
+            SideEffect::Mutation,
+            true,
+            "blockchain.invoke",
+            "mut.service.blockchain.rollback@v1",
+        ),
+    );
+    schema.methods.insert(
+        "get_current_state".to_string(),
+        method_decl_from_schemars_with_output::<(), GetCurrentStateOutput>(
+            "get_current_state",
+            SideEffect::Read,
+            true,
+            "blockchain.read",
+            "obs.service.blockchain.state.get@v1",
+        ),
+    );
+    schema.methods.insert(
+        "set_retention".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "set_retention",
+            SideEffect::Mutation,
+            false,
+            "blockchain.invoke",
+            "mut.service.blockchain.retention.set@v1",
+        ),
+    );
+    schema.methods.insert(
+        "get_stats".to_string(),
+        method_decl_from_schemars_with_output::<(), GetStatsOutput>(
+            "get_stats",
+            SideEffect::Read,
+            true,
+            "blockchain.read",
+            "obs.service.blockchain.stats@v1",
+        ),
+    );
+
+    schema
 }
 
 // Self-registration: the plugin registry discovers this via inventory

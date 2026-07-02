@@ -7,7 +7,7 @@ use simd_json::prelude::*;
 
 use simd_json::OwnedValue as Value;
 
-use super::plugin_schema_defs::{any_field, method_decl_from_schemars, simple_schema};
+use super::plugin_scaffold_helpers::{any_field, method_decl_from_schemars, simple_schema};
 use op_state_store::PluginSchema;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

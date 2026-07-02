@@ -31,17 +31,21 @@ fn default_protocol() -> String {
 /// [`SHARED_UNIX_SOCKET`]. A registration is fully determined by its `name`
 /// (the container identity / sessionid) and its sorted, de-duplicated `ports`,
 /// so the same inputs always produce the same entry (idempotent, order-free).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "sch.software.shared-unix-socket.registration.schema@v1"))]
 pub struct SharedRegistration {
     /// Deterministic service name = the container identity (sessionid). Used as
     /// the demux/routing key on the shared socket and as the xray outbound tag.
+    #[schemars(extend("x-oscal-subid" = "mut.service.shared-unix-socket.registration.name@v1"))]
     pub name: String,
     /// Backend ports the service serves, sorted ascending and de-duplicated.
     /// Recorded metadata only — the bridge demuxes by reflection/identity; this
     /// plugin never binds or maps these ports.
+    #[schemars(extend("x-oscal-subid" = "mut.service.shared-unix-socket.registration.ports@v1"))]
     pub ports: Vec<u16>,
     /// Transport protocol carried over the shared socket (`grpc`, `jsonrpc`, …).
     #[serde(default = "default_protocol")]
+    #[schemars(extend("x-oscal-subid" = "mut.service.shared-unix-socket.registration.protocol@v1"))]
     pub protocol: String,
 }
 
@@ -60,13 +64,16 @@ impl SharedRegistration {
 }
 
 /// Runtime state: every service registered on the one shared socket.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "sch.software.plugin.shared-unix-socket.schema@v1"))]
 pub struct SharedUnixSocketState {
     /// Path of the single shared socket. Always [`SHARED_UNIX_SOCKET`]; surfaced
     /// in state so consumers read the path from the catalog, not a hardcode.
     #[serde(default = "shared_socket_path")]
+    #[schemars(extend("x-oscal-subid" = "src.service.shared-unix-socket.socket-path@v1"))]
     pub shared_socket: String,
     /// Deterministic registrations keyed by name, kept sorted by name.
+    #[schemars(extend("x-oscal-subid" = "obs.software.shared-unix-socket.registrations@v1"))]
     pub registrations: Vec<SharedRegistration>,
 }
 
@@ -181,6 +188,17 @@ impl SharedUnixSocketPlugin {
             },
         }
     }
+
+    /// Current live state of the shared socket, read from the active schema
+    /// catalog and normalized so `shared_socket` always carries the canonical
+    /// path. Inherent helper — not a `StatePlugin` trait method.
+    pub async fn query_current_state(&self) -> Result<Value> {
+        let mut state = Self::read_desired();
+        if state.shared_socket.is_empty() {
+            state.shared_socket = shared_socket_path();
+        }
+        Ok(simd_json::serde::to_owned_value(state)?)
+    }
 }
 
 impl Default for SharedUnixSocketPlugin {
@@ -200,15 +218,9 @@ impl StatePlugin for SharedUnixSocketPlugin {
     }
 
     fn schema(&self) -> Option<op_state_store::PluginSchema> {
-        Some(super::plugin_schema_defs::shared_unix_socket_plugin_schema())
-    }
-
-    async fn query_current_state(&self) -> Result<Value> {
-        let mut state = Self::read_desired();
-        if state.shared_socket.is_empty() {
-            state.shared_socket = shared_socket_path();
-        }
-        Ok(simd_json::serde::to_owned_value(state)?)
+        let mut schema = super::plugin_scaffold_helpers::shared_unix_socket_plugin_schema();
+        super::common::oscal::ensure_category_metadata_fields(&mut schema);
+        Some(schema)
     }
 
     async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {
@@ -260,6 +272,75 @@ impl StatePlugin for SharedUnixSocketPlugin {
     }
 }
 
+/// Canonical `shared_unix_socket` schema derived from [`SharedUnixSocketState`]
+/// via schemars, plus the callable method surface. `create_unix_socket` is the
+/// canonical `createunixsocket` — the deterministic registration on the one
+/// shared socket.
+pub(crate) fn shared_unix_socket_schema() -> op_state_store::PluginSchema {
+    let root = serde_json::to_value(schemars::schema_for!(SharedUnixSocketState))
+        .expect("schemars schema serializes to JSON");
+    let mut schema = super::schemars_adapter::plugin_schema_from_json(
+        "shared_unix_socket",
+        "1.0.0",
+        "The one shared container socket: deterministic (name, ports) registrations demuxed by identity; createunixsocket is the canonical registration method",
+        &root,
+    );
+
+    // Typed method inputs / outputs.
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct CreateUnixSocketInput {
+        /// Container identity (sessionid) to register on the shared socket.
+        pub name: String,
+        /// Backend ports the service serves (sorted + de-duplicated on registration).
+        pub ports: Vec<u16>,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct ListRegistrationsOutput {
+        pub registrations: Vec<SharedRegistration>,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct GetConfigOutput {
+        pub config: SharedUnixSocketState,
+    }
+
+    use super::plugin_scaffold_helpers::method_decl_from_schemars_with_output;
+    use super::plugin_scaffold_helpers::AckOutput;
+    use op_state_store::SideEffect;
+
+    schema.methods.insert(
+        "create_unix_socket".to_string(),
+        method_decl_from_schemars_with_output::<CreateUnixSocketInput, AckOutput>(
+            "create_unix_socket",
+            SideEffect::Mutation,
+            true,
+            "shared_unix_socket.invoke",
+            "mut.service.shared-unix-socket.create@v1",
+        ),
+    );
+    schema.methods.insert(
+        "list_registrations".to_string(),
+        method_decl_from_schemars_with_output::<(), ListRegistrationsOutput>(
+            "list_registrations",
+            SideEffect::Read,
+            true,
+            "shared_unix_socket.read",
+            "obs.service.shared-unix-socket.registrations.list@v1",
+        ),
+    );
+    schema.methods.insert(
+        "get_config".to_string(),
+        method_decl_from_schemars_with_output::<(), GetConfigOutput>(
+            "get_config",
+            SideEffect::Read,
+            true,
+            "shared_unix_socket.read",
+            "obs.service.shared-unix-socket.config.get@v1",
+        ),
+    );
+
+    schema
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -280,4 +361,10 @@ mod tests {
         assert!(first.success && second.success);
         assert_eq!(first.changes_applied, second.changes_applied);
     }
+}
+
+// Self-registration: the plugin registry discovers this via inventory
+// (single source of the catalog; no central dispatch list).
+inventory::submit! {
+    crate::default_registry::PluginReg::new("shared_unix_socket", |_ctx| std::sync::Arc::new(SharedUnixSocketPlugin::new()))
 }

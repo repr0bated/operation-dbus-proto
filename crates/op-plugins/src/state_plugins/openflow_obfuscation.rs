@@ -12,48 +12,64 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use op_state::{
-    ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff,
-    StatePlugin,
+    ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
 };
-use op_state_store::{FieldSchema, FieldType, PluginSchema, SideEffect};
+use op_state_store::{PluginSchema, SideEffect};
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
 
 /// OpenFlow obfuscation configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "sch.network.openflow-obfuscation.schema@v1"))]
 pub struct OpenFlowObfuscationConfig {
     /// OVS bridge to apply flows to
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "mut.network.openflow-obfuscation.bridge-name@v1"))]
     pub bridge_name: String,
 
     /// Obfuscation level (0-3)
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "mut.network.openflow-obfuscation.level@v1"))]
     pub obfuscation_level: u8,
 
     /// Enable security flows (always recommended)
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "obs.network.openflow-obfuscation.security-flows@v1"))]
     pub enable_security_flows: bool,
 
     /// Privacy socket ports for the tunnel chain
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "exp.network.openflow-obfuscation.privacy-ports@v1"))]
     pub privacy_ports: Vec<String>,
 
     /// Additional custom flows
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "exp.network.openflow-obfuscation.custom-flows@v1"))]
     pub custom_flows: Vec<OpenFlowRule>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "sch.network.openflow-obfuscation.rule.schema@v1"))]
 pub struct OpenFlowRule {
     /// Flow table (0-254)
+    #[schemars(extend("x-oscal-subid" = "obs.network.openflow-obfuscation.rule.table@v1"))]
     pub table: u8,
 
     /// Priority (0-65535)
+    #[schemars(extend("x-oscal-subid" = "obs.network.openflow-obfuscation.rule.priority@v1"))]
     pub priority: u16,
 
     /// Match criteria (e.g., "in_port=1,ip,tcp_dst=80")
+    #[schemars(extend("x-oscal-subid" = "exp.network.openflow-obfuscation.rule.match@v1"))]
     pub match_spec: String,
 
     /// Actions (e.g., "output:2,mod_nw_ttl:64")
+    #[schemars(extend("x-oscal-subid" = "exp.network.openflow-obfuscation.rule.actions@v1"))]
     pub actions: String,
 
     /// Description
+    #[schemars(extend("x-oscal-subid" = "exp.network.openflow-obfuscation.rule.description@v1"))]
     pub description: String,
 }
 
@@ -382,28 +398,19 @@ impl StatePlugin for OpenFlowObfuscationPlugin {
     }
 
     fn schema(&self) -> Option<PluginSchema> {
-        let mut schema = PluginSchema::builder("openflow_obfuscation")
-                .version("1.0.0")
-                .description("OpenFlow traffic obfuscation configuration")
-                .field(
-                    "config",
-                    FieldSchema {
-                        field_type: FieldType::Any,
-                        required: true,
-                        description: "Obfuscation config".to_string(),
-                        default: Some(json!({})),
-                        example: None,
-                        constraints: Vec::new(),
-                        read_only: false,
-                        read_only_when: None,
-                    },
-                )
-                .build();
-        
+        let root = serde_json::to_value(schemars::schema_for!(OpenFlowObfuscationConfig))
+            .expect("schemars schema serializes to JSON");
+        let mut schema = super::schemars_adapter::plugin_schema_from_json(
+            "openflow_obfuscation",
+            "1.0.0",
+            "OpenFlow traffic obfuscation configuration",
+            &root,
+        );
+
         // Add D-Bus methods for OpenFlow obfuscation - https://www.opennetworking.org/wp-content/uploads/2014/10/of_spec_1_0.pdf
         schema.methods.insert(
             "obfuscate_flow".to_string(),
-            super::plugin_schema_defs::method_decl_from_schemars::<ObfuscateFlowInput>(
+            super::plugin_scaffold_helpers::method_decl_from_schemars::<ObfuscateFlowInput>(
                 "ObfuscateFlow",
                 SideEffect::Mutation,
                 false,
@@ -413,7 +420,7 @@ impl StatePlugin for OpenFlowObfuscationPlugin {
         );
         schema.methods.insert(
             "deobfuscate_flow".to_string(),
-            super::plugin_schema_defs::method_decl_from_schemars::<DeobfuscateFlowInput>(
+            super::plugin_scaffold_helpers::method_decl_from_schemars::<DeobfuscateFlowInput>(
                 "DeobfuscateFlow",
                 SideEffect::Mutation,
                 false,
@@ -421,7 +428,7 @@ impl StatePlugin for OpenFlowObfuscationPlugin {
                 "mut.network.openflow.obfuscation.deobfuscate@v1",
             ),
         );
-        
+
         Some(schema)
     }
 

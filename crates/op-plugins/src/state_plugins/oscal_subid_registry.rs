@@ -390,12 +390,88 @@ pub struct OscalSubidRegistryEntry {
 pub(crate) fn oscal_subid_registry_schema() -> PluginSchema {
     let root = serde_json::to_value(schemars::schema_for!(OscalSubidRegistryEntry))
         .expect("schemars schema serializes to JSON");
-    super::schemars_adapter::plugin_schema_from_json(
+    let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "oscal_subid_registry",
         "1.0.0",
         "OSCAL subid registry — dual-identifier model for every system artifact. uuid = machine identity, subid = operational taxonomy key.",
         &root,
-    )
+    );
+
+    // Output structs
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct LookupOutput {
+        pub entry: Option<serde_json::Value>,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct ListByCategoryOutput {
+        pub entries: Vec<serde_json::Value>,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct ResolveOutput {
+        pub resolved: Option<serde_json::Value>,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct ExportOutput {
+        pub registry: serde_json::Value,
+    }
+
+    // Add methods
+    use super::plugin_scaffold_helpers::method_decl_from_schemars_with_output;
+    use super::plugin_scaffold_helpers::AckOutput;
+    use op_state_store::SideEffect;
+
+    schema.methods.insert(
+        "register".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "register",
+            SideEffect::Mutation,
+            false,
+            "oscal.invoke",
+            "mut.standard.oscal.subid.register@v1",
+        ),
+    );
+    schema.methods.insert(
+        "lookup".to_string(),
+        method_decl_from_schemars_with_output::<(), LookupOutput>(
+            "lookup",
+            SideEffect::Read,
+            true,
+            "oscal.read",
+            "obs.standard.oscal.subid.lookup@v1",
+        ),
+    );
+    schema.methods.insert(
+        "list_by_category".to_string(),
+        method_decl_from_schemars_with_output::<(), ListByCategoryOutput>(
+            "list_by_category",
+            SideEffect::Read,
+            true,
+            "oscal.read",
+            "obs.standard.oscal.category.list@v1",
+        ),
+    );
+    schema.methods.insert(
+        "resolve".to_string(),
+        method_decl_from_schemars_with_output::<(), ResolveOutput>(
+            "resolve",
+            SideEffect::Read,
+            true,
+            "oscal.read",
+            "obs.standard.oscal.subid.resolve@v1",
+        ),
+    );
+    schema.methods.insert(
+        "export".to_string(),
+        method_decl_from_schemars_with_output::<(), ExportOutput>(
+            "export",
+            SideEffect::Read,
+            true,
+            "oscal.read",
+            "obs.standard.oscal.export@v1",
+        ),
+    );
+
+    schema
 }
 
 pub struct OscalSubidRegistryPlugin;

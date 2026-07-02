@@ -431,70 +431,97 @@ pub(crate) fn rtnetlink_schema() -> PluginSchema {
             ]
         }))
         .build();
-    
-    schema.methods.insert("set_link_state".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<SetLinkStateInput>(
-        "set_link_state",
-        op_state_store::SideEffect::Mutation,
-        false,
-        "cap.network.rtnetlink.link-state.set@v1",
-        "mut.network.rtnetlink.link-state.set@v1",
-    ));
-    schema.methods.insert("add_ipv4_address".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<AddIpv4AddressInput>(
-        "add_ipv4_address",
-        op_state_store::SideEffect::Mutation,
-        false,
-        "cap.network.rtnetlink.ipv4-address.add@v1",
-        "mut.network.rtnetlink.ipv4-address.add@v1",
-    ));
-    schema.methods.insert("set_mac_address".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<SetMacAddressInput>(
-        "set_mac_address",
-        op_state_store::SideEffect::Mutation,
-        false,
-        "cap.network.rtnetlink.mac-address.set@v1",
-        "mut.network.rtnetlink.mac-address.set@v1",
-    ));
-    schema.methods.insert("set_default_route".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<SetDefaultRouteInput>(
-        "set_default_route",
-        op_state_store::SideEffect::Mutation,
-        false,
-        "cap.network.rtnetlink.default-route.set@v1",
-        "mut.network.rtnetlink.default-route.set@v1",
-    ));
-    schema.methods.insert("add_link".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<AddLinkInput>(
-        "add_link",
-        op_state_store::SideEffect::Mutation,
-        false,
-        "cap.network.rtnetlink.link.add@v1",
-        "mut.network.rtnetlink.link.add@v1",
-    ));
-    schema.methods.insert("del_link".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<DelLinkInput>(
-        "del_link",
-        op_state_store::SideEffect::Mutation,
-        false,
-        "cap.network.rtnetlink.link.del@v1",
-        "mut.network.rtnetlink.link.del@v1",
-    ));
-    schema.methods.insert("add_route".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<AddRouteInput>(
-        "add_route",
-        op_state_store::SideEffect::Mutation,
-        false,
-        "cap.network.rtnetlink.route.add@v1",
-        "mut.network.rtnetlink.route.add@v1",
-    ));
-    schema.methods.insert("del_route".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<DelRouteInput>(
-        "del_route",
-        op_state_store::SideEffect::Mutation,
-        false,
-        "cap.network.rtnetlink.route.del@v1",
-        "mut.network.rtnetlink.route.del@v1",
-    ));
-    schema.methods.insert("add_rule".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<AddRuleInput>(
-        "add_rule",
-        op_state_store::SideEffect::Mutation,
-        false,
-        "cap.network.rtnetlink.rule.add@v1",
-        "mut.network.rtnetlink.rule.add@v1",
-    ));
+
+    schema.methods.insert(
+        "set_link_state".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<SetLinkStateInput>(
+            "set_link_state",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.network.rtnetlink.link-state.set@v1",
+            "mut.network.rtnetlink.link-state.set@v1",
+        ),
+    );
+    schema.methods.insert(
+        "add_ipv4_address".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<AddIpv4AddressInput>(
+            "add_ipv4_address",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.network.rtnetlink.ipv4-address.add@v1",
+            "mut.network.rtnetlink.ipv4-address.add@v1",
+        ),
+    );
+    schema.methods.insert(
+        "set_mac_address".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<SetMacAddressInput>(
+            "set_mac_address",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.network.rtnetlink.mac-address.set@v1",
+            "mut.network.rtnetlink.mac-address.set@v1",
+        ),
+    );
+    schema.methods.insert(
+        "set_default_route".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<SetDefaultRouteInput>(
+            "set_default_route",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.network.rtnetlink.default-route.set@v1",
+            "mut.network.rtnetlink.default-route.set@v1",
+        ),
+    );
+    schema.methods.insert(
+        "add_link".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<AddLinkInput>(
+            "add_link",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.network.rtnetlink.link.add@v1",
+            "mut.network.rtnetlink.link.add@v1",
+        ),
+    );
+    schema.methods.insert(
+        "del_link".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<DelLinkInput>(
+            "del_link",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.network.rtnetlink.link.del@v1",
+            "mut.network.rtnetlink.link.del@v1",
+        ),
+    );
+    schema.methods.insert(
+        "add_route".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<AddRouteInput>(
+            "add_route",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.network.rtnetlink.route.add@v1",
+            "mut.network.rtnetlink.route.add@v1",
+        ),
+    );
+    schema.methods.insert(
+        "del_route".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<DelRouteInput>(
+            "del_route",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.network.rtnetlink.route.del@v1",
+            "mut.network.rtnetlink.route.del@v1",
+        ),
+    );
+    schema.methods.insert(
+        "add_rule".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<AddRuleInput>(
+            "add_rule",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.network.rtnetlink.rule.add@v1",
+            "mut.network.rtnetlink.rule.add@v1",
+        ),
+    );
     schema
 }
 

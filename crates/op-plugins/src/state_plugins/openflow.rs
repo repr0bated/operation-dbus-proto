@@ -8,14 +8,15 @@ use log;
 use op_state::{
     ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
 };
-use op_state_store::{Constraint, FieldSchema, FieldType, PluginSchema};
+use op_state_store::PluginSchema;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
 use std::collections::HashMap;
 
 /// OpenFlow controller configuration - Policy-based, not interface-based
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct OpenFlowConfig {
     /// Bridges managed by this controller
     pub bridges: Vec<BridgeFlowConfig>,
@@ -23,6 +24,10 @@ pub struct OpenFlowConfig {
     /// Controller endpoint (tcp:IP:PORT)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub controller_endpoint: Option<String>,
+
+    /// Legacy discovery toggle retained for compatibility.
+    #[serde(default)]
+    pub auto_discover_containers: bool,
 
     /// Enable security hardening flows (default: true)
     #[serde(default = "default_security_enabled")]
@@ -45,7 +50,7 @@ fn default_obfuscation_level() -> u8 {
 }
 
 /// Per-bridge flow configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct BridgeFlowConfig {
     /// Bridge name (e.g., "ovsbr0")
     pub name: String,
@@ -59,7 +64,7 @@ pub struct BridgeFlowConfig {
 }
 
 /// OpenFlow flow entry
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
 pub struct FlowEntry {
     /// Flow table number (0-254)
     pub table: u8,
@@ -120,7 +125,7 @@ pub enum FlowAction {
 /// TWO TYPES:
 /// 1. Privacy sockets (predefined): gbr_wg, gbr_xray, gbr_warp
 /// 2. Shared ingress sockets (one per bridge): ovsbr0-sock
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SocketPort {
     /// Port name:
     /// - Privacy: "gbr_wg", "gbr_xray", "gbr_warp" (predefined GhostBridge chain)
@@ -136,7 +141,7 @@ pub struct SocketPort {
 }
 
 /// Type of socket port
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
 pub enum SocketPortType {
     /// Privacy tunnel sockets (gbr_wg, gbr_xray, gbr_warp) - predefined GhostBridge chain
     Privacy,
@@ -1486,291 +1491,47 @@ impl StatePlugin for OpenFlowPlugin {
 }
 
 pub(crate) fn openflow_schema() -> PluginSchema {
-    let bridge_fields = {
-        let mut fields = HashMap::new();
-        fields.insert(
-            "name".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: true,
-                description: "Bridge name".to_string(),
-                default: None,
-                example: Some(json!("ovs-br0")),
-                constraints: Vec::new(),
-                read_only: true,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "datapath_id".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: false,
-                description: "Datapath ID".to_string(),
-                default: None,
-                example: Some(json!("0000000000000001")),
-                constraints: Vec::new(),
-                read_only: true,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "protocols".to_string(),
-            FieldSchema {
-                field_type: FieldType::Array(Box::new(FieldType::String)),
-                required: false,
-                description: "Supported OpenFlow protocols".to_string(),
-                default: Some(json!(["OpenFlow13"])),
-                example: Some(json!(["OpenFlow10", "OpenFlow13"])),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "flows".to_string(),
-            FieldSchema {
-                field_type: FieldType::Array(Box::new(FieldType::Object({
-                    let mut fields = HashMap::new();
-                    fields.insert(
-                        "table".to_string(),
-                        FieldSchema {
-                            field_type: FieldType::Integer,
-                            required: true,
-                            description: "OpenFlow table number".to_string(),
-                            default: Some(json!(0)),
-                            example: Some(json!(0)),
-                            constraints: vec![
-                                Constraint::Min { value: 0.0 },
-                                Constraint::Max { value: 254.0 },
-                            ],
-                            read_only: false,
-                            read_only_when: None,
-                        },
-                    );
-                    fields.insert(
-                        "priority".to_string(),
-                        FieldSchema {
-                            field_type: FieldType::Integer,
-                            required: true,
-                            description: "Flow priority".to_string(),
-                            default: Some(json!(100)),
-                            example: Some(json!(22000)),
-                            constraints: vec![
-                                Constraint::Min { value: 0.0 },
-                                Constraint::Max { value: 65535.0 },
-                            ],
-                            read_only: false,
-                            read_only_when: None,
-                        },
-                    );
-                    fields.insert(
-                        "match_fields".to_string(),
-                        FieldSchema {
-                            field_type: FieldType::Any,
-                            required: true,
-                            description: "OpenFlow match fields".to_string(),
-                            default: None,
-                            example: Some(
-                                json!({"in_port": "ovsbr0-sock", "nw_src": "10.100.0.2"}),
-                            ),
-                            constraints: Vec::new(),
-                            read_only: false,
-                            read_only_when: None,
-                        },
-                    );
-                    fields.insert(
-                        "actions".to_string(),
-                        FieldSchema {
-                            field_type: FieldType::Array(Box::new(FieldType::Any)),
-                            required: true,
-                            description: "OpenFlow actions".to_string(),
-                            default: None,
-                            example: Some(json!([{"type": "output", "port": "gbr_wg"}])),
-                            constraints: Vec::new(),
-                            read_only: false,
-                            read_only_when: None,
-                        },
-                    );
-                    fields.insert(
-                        "cookie".to_string(),
-                        FieldSchema {
-                            field_type: FieldType::Integer,
-                            required: false,
-                            description: "Flow cookie for idempotent route ownership".to_string(),
-                            default: None,
-                            example: Some(json!(5787125521171081216u64)),
-                            constraints: Vec::new(),
-                            read_only: false,
-                            read_only_when: None,
-                        },
-                    );
-                    fields.insert(
-                        "idle_timeout".to_string(),
-                        FieldSchema {
-                            field_type: FieldType::Integer,
-                            required: false,
-                            description: "Idle timeout in seconds".to_string(),
-                            default: Some(json!(0)),
-                            example: Some(json!(0)),
-                            constraints: Vec::new(),
-                            read_only: false,
-                            read_only_when: None,
-                        },
-                    );
-                    fields.insert(
-                        "hard_timeout".to_string(),
-                        FieldSchema {
-                            field_type: FieldType::Integer,
-                            required: false,
-                            description: "Hard timeout in seconds".to_string(),
-                            default: Some(json!(0)),
-                            example: Some(json!(0)),
-                            constraints: Vec::new(),
-                            read_only: false,
-                            read_only_when: None,
-                        },
-                    );
-                    fields
-                }))),
-                required: false,
-                description: "Flows managed for this bridge".to_string(),
-                default: Some(json!([])),
-                example: Some(json!([])),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "socket_ports".to_string(),
-            FieldSchema {
-                field_type: FieldType::Array(Box::new(FieldType::Object({
-                    let mut fields = HashMap::new();
-                    fields.insert(
-                        "name".to_string(),
-                        FieldSchema {
-                            field_type: FieldType::String,
-                            required: true,
-                            description: "OVS socket port name".to_string(),
-                            default: None,
-                            example: Some(json!("ovsbr0-sock")),
-                            constraints: Vec::new(),
-                            read_only: false,
-                            read_only_when: None,
-                        },
-                    );
-                    fields.insert(
-                        "container_name".to_string(),
-                        FieldSchema {
-                            field_type: FieldType::String,
-                            required: false,
-                            description: "Optional legacy container name bound to this port"
-                                .to_string(),
-                            default: None,
-                            example: Some(json!("privacy-user-abc")),
-                            constraints: Vec::new(),
-                            read_only: false,
-                            read_only_when: None,
-                        },
-                    );
-                    fields.insert(
-                        "port_type".to_string(),
-                        FieldSchema {
-                            field_type: FieldType::String,
-                            required: true,
-                            description: "Socket port role".to_string(),
-                            default: Some(json!("SharedIngress")),
-                            example: Some(json!("SharedIngress")),
-                            constraints: Vec::new(),
-                            read_only: false,
-                            read_only_when: None,
-                        },
-                    );
-                    fields.insert(
-                        "ofport".to_string(),
-                        FieldSchema {
-                            field_type: FieldType::Integer,
-                            required: false,
-                            description: "Resolved OpenFlow port number".to_string(),
-                            default: None,
-                            example: Some(json!(7)),
-                            constraints: Vec::new(),
-                            read_only: true,
-                            read_only_when: None,
-                        },
-                    );
-                    fields
-                }))),
-                required: false,
-                description: "Managed OVS socket ports for the bridge".to_string(),
-                default: Some(json!([])),
-                example: Some(json!([])),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields
-    };
+    let root = serde_json::to_value(schemars::schema_for!(OpenFlowConfig))
+        .expect("schemars schema serializes to JSON");
+    let mut schema = super::schemars_adapter::plugin_schema_from_json(
+        "openflow",
+        "1.0.0",
+        "OpenFlow flow table management",
+        &root,
+    );
+    schema.dependencies = vec!["net".to_string(), "privacy_routes".to_string()];
+    schema.example = Some(json!({
+        "bridges": [
+            {
+                "name": "ovsbr0",
+                "socket_ports": [
+                    {
+                        "name": "ovsbr0-sock",
+                        "port_type": "SharedIngress"
+                    }
+                ],
+                "flows": [
+                    {
+                        "table": 0,
+                        "priority": 22000,
+                        "match_fields": {"in_port": "ovsbr0-sock", "ip": "", "nw_src": "10.100.0.2"},
+                        "actions": [{"type": "output", "port": "gbr_wg"}],
+                        "cookie": 5787125521171081216u64,
+                        "idle_timeout": 0,
+                        "hard_timeout": 0
+                    }
+                ]
+            }
+        ],
+        "auto_discover_containers": false,
+        "enable_security_flows": false,
+        "obfuscation_level": 0
+    }));
 
-    let mut schema = PluginSchema::builder("openflow")
-        .version("1.0.0")
-        .description("OpenFlow flow table management")
-        .dependency("net")
-        .dependency("privacy_routes")
-        .array_field(
-            "bridges",
-            FieldType::Object(bridge_fields),
-            true,
-            "OVS bridges",
-        )
-        .string_field("controller_endpoint", false, "OpenFlow controller endpoint")
-        .boolean_field(
-            "auto_discover_containers",
-            false,
-            "Auto-create flows from discovered legacy container sockets",
-        )
-        .boolean_field(
-            "enable_security_flows",
-            false,
-            "Inject hardening flows before route flows",
-        )
-        .integer_field("obfuscation_level", false, "Traffic obfuscation level for generated flows")
-        .example(json!({
-            "bridges": [
-                {
-                    "name": "ovsbr0",
-                    "protocols": ["OpenFlow13"],
-                    "socket_ports": [
-                        {
-                            "name": "ovsbr0-sock",
-                            "port_type": "SharedIngress"
-                        }
-                    ],
-                    "flows": [
-                        {
-                            "table": 0,
-                            "priority": 22000,
-                            "match_fields": {"in_port": "ovsbr0-sock", "ip": "", "nw_src": "10.100.0.2"},
-                            "actions": [{"type": "output", "port": "gbr_wg"}],
-                            "cookie": 5787125521171081216u64,
-                            "idle_timeout": 0,
-                            "hard_timeout": 0
-                        }
-                    ]
-                }
-            ],
-            "auto_discover_containers": false,
-            "enable_security_flows": false,
-            "obfuscation_level": 0
-        }))
-        .build();
-    
     // Add D-Bus methods for OpenFlow - https://www.opennetworking.org/wp-content/uploads/2014/10/of_spec_1_0.pdf
     schema.methods.insert(
         "add_flow".to_string(),
-        super::plugin_schema_defs::method_decl_from_schemars::<AddFlowInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<AddFlowInput>(
             "AddFlow",
             op_state_store::SideEffect::Mutation,
             false,
@@ -1780,7 +1541,7 @@ pub(crate) fn openflow_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "delete_flow".to_string(),
-        super::plugin_schema_defs::method_decl_from_schemars::<DeleteFlowInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<DeleteFlowInput>(
             "DeleteFlow",
             op_state_store::SideEffect::Mutation,
             false,
@@ -1790,7 +1551,7 @@ pub(crate) fn openflow_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "modify_flow".to_string(),
-        super::plugin_schema_defs::method_decl_from_schemars::<ModifyFlowInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<ModifyFlowInput>(
             "ModifyFlow",
             op_state_store::SideEffect::Mutation,
             false,
@@ -1798,7 +1559,7 @@ pub(crate) fn openflow_schema() -> PluginSchema {
             "mut.network.openflow.flow.modify@v1",
         ),
     );
-    
+
     schema
 }
 
@@ -1823,7 +1584,6 @@ pub struct AddFlowInput {
     /// Hard timeout in seconds (0 = never expires)
     pub hard_timeout: Option<u32>,
 }
-
 
 /// Input struct for DeleteFlow method
 /// D-Bus method spec: https://www.opennetworking.org/wp-content/uploads/2014/10/of_spec_1_0.pdf
