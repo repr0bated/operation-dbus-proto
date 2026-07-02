@@ -351,33 +351,51 @@ impl WireGuardAuthManager {
         Ok(session)
     }
 
+    /// Minimum gap between persisted `last_used` writes for the same session.
+    /// A hot session gets validated on every request; without this, each one
+    /// would enqueue its own CozoDB disk write via `spawn_blocking`, capable of
+    /// saturating Tokio's blocking thread pool under load. The in-memory cache
+    /// is still updated on every call — only the Cozo flush is throttled.
+    const LAST_USED_FLUSH_COOLDOWN_SECS: u64 = 60;
+
     /// Validate a WireGuard session
     #[tracing::instrument(skip(self))]
     pub async fn validate_session(&self, session_id: &str) -> Result<bool> {
         debug!("Validating WireGuard session: {}", session_id);
 
-        let sessions = self.sessions.read().await;
-        if let Some(session) = sessions.get(session_id) {
-            let now = Self::current_timestamp();
-            let is_valid = session.is_active && session.expires_at > now;
-
-            if is_valid {
-                // Update last used timestamp (we'll do this in a separate task to avoid blocking)
-                tokio::spawn({
-                    let database = self.database.clone();
-                    let session_id = session_id.to_string();
-                    async move {
-                        if let Err(e) = database.update_session_last_used(&session_id, now).await {
-                            warn!("Failed to update session last used: {}", e);
-                        }
+        let now = Self::current_timestamp();
+        let (is_valid, should_flush) = {
+            let mut sessions = self.sessions.write().await;
+            match sessions.get_mut(session_id) {
+                Some(session) => {
+                    let valid = session.is_active && session.expires_at > now;
+                    let mut flush = false;
+                    if valid {
+                        flush = now.saturating_sub(session.last_used)
+                            >= Self::LAST_USED_FLUSH_COOLDOWN_SECS;
+                        session.last_used = now;
                     }
-                });
+                    (valid, flush)
+                }
+                None => (false, false),
             }
+        };
 
-            Ok(is_valid)
-        } else {
-            Ok(false)
+        if should_flush {
+            // Update the persisted last_used timestamp in a separate task to avoid
+            // blocking the caller on CozoDB disk I/O.
+            tokio::spawn({
+                let database = self.database.clone();
+                let session_id = session_id.to_string();
+                async move {
+                    if let Err(e) = database.update_session_last_used(&session_id, now).await {
+                        warn!("Failed to update session last used: {}", e);
+                    }
+                }
+            });
         }
+
+        Ok(is_valid)
     }
 
     /// Get session information
@@ -741,28 +759,34 @@ impl WireGuardAuthManager {
                     }
                 }
 
-                // Remove expired sessions
+                // Remove expired sessions. The in-memory removal happens under a
+                // short-lived write lock; the CozoDB deletes (blocking disk I/O via
+                // spawn_blocking) happen afterwards with no lock held, so concurrent
+                // validate_session/get_session/create_session calls aren't stalled
+                // for the duration of the disk deletes.
                 if !expired_sessions.is_empty() {
-                    let mut sessions_write = sessions.write().await;
-                    let mut peer_sessions_write = peer_sessions.write().await;
+                    {
+                        let mut sessions_write = sessions.write().await;
+                        let mut peer_sessions_write = peer_sessions.write().await;
 
-                    for (session_id, peer_pubkey) in expired_sessions {
-                        sessions_write.remove(&session_id);
-                        peer_sessions_write.remove(&peer_pubkey);
+                        for (session_id, peer_pubkey) in &expired_sessions {
+                            sessions_write.remove(session_id);
+                            peer_sessions_write.remove(peer_pubkey);
+                        }
 
-                        // Remove from database
-                        if let Err(e) = database.remove_wireguard_session(&session_id).await {
+                        let mut stats_lock = stats.lock().await;
+                        let active_sessions = sessions_write
+                            .values()
+                            .filter(|s| s.is_active && s.expires_at > now)
+                            .count() as u64;
+                        stats_lock.active_sessions = active_sessions;
+                    }
+
+                    for (session_id, _peer_pubkey) in &expired_sessions {
+                        if let Err(e) = database.remove_wireguard_session(session_id).await {
                             warn!("Failed to remove expired session from database: {}", e);
                         }
                     }
-
-                    // Update stats
-                    let mut stats_lock = stats.lock().await;
-                    let active_sessions = sessions_write
-                        .values()
-                        .filter(|s| s.is_active && s.expires_at > now)
-                        .count() as u64;
-                    stats_lock.active_sessions = active_sessions;
                 }
             }
         });
