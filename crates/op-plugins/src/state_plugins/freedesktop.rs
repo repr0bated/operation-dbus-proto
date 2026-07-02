@@ -142,8 +142,9 @@ impl FreeDesktopPlugin {
                 .version("1.0.0")
                 .category("system")
                 .description("FreeDesktop D-Bus standards implementation")
-                .method(super::plugin_scaffold_helpers::method_decl_from_schemars::<
+                .method(super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
                     GetManagedObjectsInput,
+                    super::plugin_scaffold_helpers::AckOutput,
                 >(
                     "GetManagedObjects",
                     op_state_store::SideEffect::Read,
@@ -151,8 +152,9 @@ impl FreeDesktopPlugin {
                     "freedesktop.read",
                     "obs.software.freedesktop.managed_objects.get@v1",
                 ))
-                .method(super::plugin_scaffold_helpers::method_decl_from_schemars::<
+                .method(super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
                     GetPropertyInput,
+                    super::plugin_scaffold_helpers::AckOutput,
                 >(
                     "Get",
                     op_state_store::SideEffect::Read,
@@ -160,8 +162,9 @@ impl FreeDesktopPlugin {
                     "freedesktop.read",
                     "obs.software.freedesktop.property.get@v1",
                 ))
-                .method(super::plugin_scaffold_helpers::method_decl_from_schemars::<
+                .method(super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
                     GetAllPropertiesInput,
+                    super::plugin_scaffold_helpers::AckOutput,
                 >(
                     "GetAll",
                     op_state_store::SideEffect::Read,
@@ -169,8 +172,9 @@ impl FreeDesktopPlugin {
                     "freedesktop.read",
                     "obs.software.freedesktop.properties.getall@v1",
                 ))
-                .method(super::plugin_scaffold_helpers::method_decl_from_schemars::<
+                .method(super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
                     SetPropertyInput,
+                    super::plugin_scaffold_helpers::AckOutput,
                 >(
                     "Set",
                     op_state_store::SideEffect::Mutation,
@@ -178,8 +182,9 @@ impl FreeDesktopPlugin {
                     "freedesktop.write",
                     "mut.software.freedesktop.property.set@v1",
                 ))
-                .method(super::plugin_scaffold_helpers::method_decl_from_schemars::<
+                .method(super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
                     IntrospectInput,
+                    super::plugin_scaffold_helpers::AckOutput,
                 >(
                     "Introspect",
                     op_state_store::SideEffect::Read,
@@ -187,8 +192,9 @@ impl FreeDesktopPlugin {
                     "freedesktop.read",
                     "obs.software.freedesktop.introspect@v1",
                 ))
-                .method(super::plugin_scaffold_helpers::method_decl_from_schemars::<
+                .method(super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
                     PingInput,
+                    super::plugin_scaffold_helpers::AckOutput,
                 >(
                     "Ping",
                     op_state_store::SideEffect::Read,
@@ -196,8 +202,9 @@ impl FreeDesktopPlugin {
                     "freedesktop.read",
                     "obs.software.freedesktop.ping@v1",
                 ))
-                .method(super::plugin_scaffold_helpers::method_decl_from_schemars::<
+                .method(super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
                     GetMachineIdInput,
+                    super::plugin_scaffold_helpers::AckOutput,
                 >(
                     "GetMachineId",
                     op_state_store::SideEffect::Read,

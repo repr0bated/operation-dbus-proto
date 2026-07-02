@@ -204,7 +204,7 @@ pub(crate) fn privacy_schema() -> PluginSchema {
     // Add D-Bus methods for privacy
     schema.methods.insert(
         "mask_data".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<MaskDataInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<MaskDataInput, super::plugin_scaffold_helpers::AckOutput>(
             "MaskData",
             SideEffect::Mutation,
             false,
@@ -214,7 +214,7 @@ pub(crate) fn privacy_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "unmask_data".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<UnmaskDataInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<UnmaskDataInput, super::plugin_scaffold_helpers::AckOutput>(
             "UnmaskData",
             SideEffect::Mutation,
             false,
@@ -224,7 +224,7 @@ pub(crate) fn privacy_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "get_policy".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<GetPolicyInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<GetPolicyInput, super::plugin_scaffold_helpers::AckOutput>(
             "GetPolicy",
             SideEffect::Read,
             true,

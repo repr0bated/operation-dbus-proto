@@ -8,9 +8,9 @@ use simd_json::json;
 use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
 
-use super::plugin_scaffold_helpers::{any_field, method_decl_from_schemars, simple_schema};
+use super::plugin_scaffold_helpers::{method_decl_from_schemars_with_output, AckOutput};
 
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
 pub struct SoftwareState {
     #[serde(default)]
     pub packages: Vec<PackageInfo>,
@@ -59,17 +59,15 @@ pub struct GetInfoInput {
     pub name: String,
 }
 
-/// Schema-only state for the `software` plugin. The runtime state is fully typed
-/// (`SoftwareState`), but the published schema contract preserves the original
-/// opaque `packages` field so the migration does not change the downstream UI.
+/// Published schema state for the `software` plugin.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "sch.software.plugin.software.schema@v1"))]
 pub struct SoftwareSchemaState {
     #[schemars(
         description = "Package list",
-        extend("default" = serde_json::json!([]), "x-oscal-subid" = "obs.software.plugin.software.packages@v1")
+        extend("x-oscal-subid" = "obs.software.plugin.software.packages@v1")
     )]
-    pub packages: JsonValue,
+    pub packages: Vec<PackageInfo>,
 }
 
 pub struct SoftwarePlugin;
@@ -185,25 +183,25 @@ impl StatePlugin for SoftwarePlugin {
 }
 
 pub(crate) fn software_schema() -> PluginSchema {
-    let mut schema = simple_schema(
+    let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "software",
+        "1.0.0",
         "Software package inventory",
-        &["os"],
-        vec![("packages", any_field(true, "Package list", Some(json!([]))))],
+        &serde_json::to_value(schemars::schema_for!(SoftwareSchemaState)).unwrap(),
     );
     schema.subids.insert(
         "__schema__".to_string(),
         "sch.software.plugin.software.schema@v1".to_string(),
     );
-    schema.subids.insert(
-        "packages".to_string(),
-        "obs.software.plugin.software.packages@v1".to_string(),
+    super::schemars_adapter::apply_state_defaults(
+        &mut schema,
+        &simd_json::serde::to_owned_value(&SoftwareState::default()).unwrap(),
     );
 
     // Install method - https://www.freedesktop.org/software/systemd/man/org.freedesktop.systemd1.html
     schema.methods.insert(
         "install".to_string(),
-        method_decl_from_schemars::<InstallInput>(
+        method_decl_from_schemars_with_output::<InstallInput, AckOutput>(
             "Install",
             op_state_store::SideEffect::Mutation,
             false,
@@ -215,7 +213,7 @@ pub(crate) fn software_schema() -> PluginSchema {
     // Uninstall method
     schema.methods.insert(
         "uninstall".to_string(),
-        method_decl_from_schemars::<UninstallInput>(
+        method_decl_from_schemars_with_output::<UninstallInput, AckOutput>(
             "Uninstall",
             op_state_store::SideEffect::Mutation,
             false,
@@ -227,7 +225,7 @@ pub(crate) fn software_schema() -> PluginSchema {
     // Update method
     schema.methods.insert(
         "update".to_string(),
-        method_decl_from_schemars::<UpdateInput>(
+        method_decl_from_schemars_with_output::<UpdateInput, AckOutput>(
             "Update",
             op_state_store::SideEffect::Mutation,
             false,
@@ -239,7 +237,7 @@ pub(crate) fn software_schema() -> PluginSchema {
     // GetInfo method
     schema.methods.insert(
         "get_info".to_string(),
-        method_decl_from_schemars::<GetInfoInput>(
+        method_decl_from_schemars_with_output::<GetInfoInput, AckOutput>(
             "GetInfo",
             op_state_store::SideEffect::Read,
             true,

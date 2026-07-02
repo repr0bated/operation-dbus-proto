@@ -11,6 +11,7 @@ register_socket_via_grpc() {
   local ports_csv="$2"
 
   if ! command -v grpcurl >/dev/null 2>&1; then
+    echo "WARN: grpcurl not found; skipping socket registration for ${name}" >&2
     return 0
   fi
 
@@ -49,14 +50,16 @@ cd "$SCRIPT_DIR"
 # "$INCUS_COMPOSE" up --cwd "$SCRIPT_DIR"
 
 # ── 3. Stop containers before rewiring network ────────────────────────────────
+# Netmaker stays on the pro license path; the install only rewires the socket
+# projection and removes the default container NICs.
 
-for ct in netmaker netmaker-mq netmaker-ui prometheus grafana netmaker-exporter caddy; do
+for ct in netmaker netmaker-mq netmaker-ui prometheus grafana netmaker-exporter; do
   sudo incus stop "$ct" --force 2>/dev/null || true
 done
 
 # ── 4. Remove default NIC from each container ─────────────────────────────────
 
-for ct in netmaker netmaker-mq netmaker-ui prometheus grafana netmaker-exporter caddy; do
+for ct in netmaker netmaker-mq netmaker-ui prometheus grafana netmaker-exporter; do
   if sudo incus config device show "$ct" 2>/dev/null | grep -q "^eth0:"; then
     sudo incus config device remove "$ct" eth0
     echo "[$ct] removed eth0"
@@ -71,14 +74,13 @@ register_socket_via_grpc "netmaker-ui" "80"
 register_socket_via_grpc "prometheus" "9090"
 register_socket_via_grpc "grafana" "3000"
 register_socket_via_grpc "netmaker-exporter" "8085"
-register_socket_via_grpc "caddy" "80,443"
 
-for ct in netmaker netmaker-mq netmaker-ui prometheus grafana netmaker-exporter caddy; do
+for ct in netmaker netmaker-mq netmaker-ui prometheus grafana netmaker-exporter; do
   sudo incus start "$ct"
 done
 
 # The bridge / projection layer owns socket registration. The installer only
-# provisions the containers and leaves the live socket projection to the
+# provisions the containers and asks the bridge to project the sockets into the
 # authoritative runtime path.
 
 # ── 6. Reload xray inside wg-xray ────────────────────────────────────────────

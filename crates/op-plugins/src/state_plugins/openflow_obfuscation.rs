@@ -410,7 +410,7 @@ impl StatePlugin for OpenFlowObfuscationPlugin {
         // Add D-Bus methods for OpenFlow obfuscation - https://www.opennetworking.org/wp-content/uploads/2014/10/of_spec_1_0.pdf
         schema.methods.insert(
             "obfuscate_flow".to_string(),
-            super::plugin_scaffold_helpers::method_decl_from_schemars::<ObfuscateFlowInput>(
+            super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<ObfuscateFlowInput, super::plugin_scaffold_helpers::AckOutput>(
                 "ObfuscateFlow",
                 SideEffect::Mutation,
                 false,
@@ -420,7 +420,7 @@ impl StatePlugin for OpenFlowObfuscationPlugin {
         );
         schema.methods.insert(
             "deobfuscate_flow".to_string(),
-            super::plugin_scaffold_helpers::method_decl_from_schemars::<DeobfuscateFlowInput>(
+            super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<DeobfuscateFlowInput, super::plugin_scaffold_helpers::AckOutput>(
                 "DeobfuscateFlow",
                 SideEffect::Mutation,
                 false,

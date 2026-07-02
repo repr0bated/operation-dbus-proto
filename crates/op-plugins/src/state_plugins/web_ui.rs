@@ -20,7 +20,9 @@ use simd_json::json;
 use simd_json::{prelude::*, OwnedValue as Value};
 use std::collections::HashMap;
 
-use super::plugin_scaffold_helpers::method_decl_from_schemars;
+use super::plugin_scaffold_helpers::{
+    method_decl_from_schemars, method_decl_from_schemars_with_output,
+};
 
 // ============================================================================
 // SECTION 1: IMMUTABLE IDENTITY (set once, never changes)
@@ -565,7 +567,7 @@ pub(crate) fn web_ui_schema() -> PluginSchema {
     // RenderPage method
     schema.methods.insert(
         "render_page".to_string(),
-        method_decl_from_schemars::<RenderPageInput>(
+        method_decl_from_schemars_with_output::<RenderPageInput, super::plugin_scaffold_helpers::AckOutput>(
             "RenderPage",
             op_state_store::SideEffect::Read,
             true,
@@ -577,7 +579,7 @@ pub(crate) fn web_ui_schema() -> PluginSchema {
     // HandleEvent method
     schema.methods.insert(
         "handle_event".to_string(),
-        method_decl_from_schemars::<HandleEventInput>(
+        method_decl_from_schemars_with_output::<HandleEventInput, super::plugin_scaffold_helpers::AckOutput>(
             "HandleEvent",
             op_state_store::SideEffect::Mutation,
             false,
@@ -589,7 +591,7 @@ pub(crate) fn web_ui_schema() -> PluginSchema {
     // UpdateComponent method
     schema.methods.insert(
         "update_component".to_string(),
-        method_decl_from_schemars::<UpdateComponentInput>(
+        method_decl_from_schemars_with_output::<UpdateComponentInput, super::plugin_scaffold_helpers::AckOutput>(
             "UpdateComponent",
             op_state_store::SideEffect::Mutation,
             false,

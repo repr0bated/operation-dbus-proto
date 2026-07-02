@@ -150,7 +150,7 @@ pub enum SocketPortType {
 }
 
 pub struct OpenFlowPlugin {
-    /// OVSDB client routed through the op-openvswitch-daemon over D-Bus.
+    /// OVSDB client routed through the `rovs_commands` plugin path over D-Bus.
     ovsdb_client: op_network::rovs_proxy::OvsdbDbusClient,
 }
 
@@ -1531,7 +1531,10 @@ pub(crate) fn openflow_schema() -> PluginSchema {
     // Add D-Bus methods for OpenFlow - https://www.opennetworking.org/wp-content/uploads/2014/10/of_spec_1_0.pdf
     schema.methods.insert(
         "add_flow".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<AddFlowInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+            AddFlowInput,
+            super::plugin_scaffold_helpers::AckOutput,
+        >(
             "AddFlow",
             op_state_store::SideEffect::Mutation,
             false,
@@ -1541,7 +1544,10 @@ pub(crate) fn openflow_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "delete_flow".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<DeleteFlowInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+            DeleteFlowInput,
+            super::plugin_scaffold_helpers::AckOutput,
+        >(
             "DeleteFlow",
             op_state_store::SideEffect::Mutation,
             false,
@@ -1551,7 +1557,10 @@ pub(crate) fn openflow_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "modify_flow".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<ModifyFlowInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+            ModifyFlowInput,
+            super::plugin_scaffold_helpers::AckOutput,
+        >(
             "ModifyFlow",
             op_state_store::SideEffect::Mutation,
             false,

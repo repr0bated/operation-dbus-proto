@@ -12,7 +12,9 @@ use std::path::Path;
 use std::sync::Arc;
 use tracing::{info, warn};
 
-use super::plugin_scaffold_helpers::method_decl_from_schemars;
+use super::plugin_scaffold_helpers::{
+    method_decl_from_schemars, method_decl_from_schemars_with_output,
+};
 
 /// The single active-schema catalog in shared memory. Every plugin reads its
 /// own slice by name from this one file — there is no per-plugin shm file and
@@ -63,7 +65,7 @@ pub struct SocketEndpoint {
     /// Transport protocol carried over the socket.
     #[serde(default = "default_protocol")]
     #[schemars(
-        description = "Transport protocol carried over the socket (grpc, jsonrpc, …)",
+        description = "Transport protocol carried over the socket (grpc)",
         extend("x-oscal-subid" = "mut.service.unix-socket.bind-protocol@v1")
     )]
     pub protocol: String,
@@ -102,7 +104,7 @@ pub struct BindInput {
     pub path: String,
     /// Backend ports
     pub ports: Vec<u16>,
-    /// Protocol (grpc, jsonrpc)
+    /// Protocol (grpc)
     #[serde(default)]
     pub protocol: String,
 }
@@ -167,7 +169,7 @@ pub fn unix_socket_schema_derived() -> PluginSchema {
     // Bind method - bind a socket to a path
     schema.methods.insert(
         "bind".to_string(),
-        method_decl_from_schemars::<BindInput>(
+        method_decl_from_schemars_with_output::<BindInput, super::plugin_scaffold_helpers::AckOutput>(
             "Bind",
             op_state_store::SideEffect::Mutation,
             false,
@@ -179,7 +181,7 @@ pub fn unix_socket_schema_derived() -> PluginSchema {
     // Listen method
     schema.methods.insert(
         "listen".to_string(),
-        method_decl_from_schemars::<ListenInput>(
+        method_decl_from_schemars_with_output::<ListenInput, super::plugin_scaffold_helpers::AckOutput>(
             "Listen",
             op_state_store::SideEffect::Mutation,
             false,
@@ -191,7 +193,7 @@ pub fn unix_socket_schema_derived() -> PluginSchema {
     // Accept method
     schema.methods.insert(
         "accept".to_string(),
-        method_decl_from_schemars::<AcceptInput>(
+        method_decl_from_schemars_with_output::<AcceptInput, super::plugin_scaffold_helpers::AckOutput>(
             "Accept",
             op_state_store::SideEffect::Read,
             true,
@@ -203,7 +205,7 @@ pub fn unix_socket_schema_derived() -> PluginSchema {
     // Close method
     schema.methods.insert(
         "close".to_string(),
-        method_decl_from_schemars::<CloseInput>(
+        method_decl_from_schemars_with_output::<CloseInput, super::plugin_scaffold_helpers::AckOutput>(
             "Close",
             op_state_store::SideEffect::Mutation,
             false,
@@ -666,7 +668,7 @@ pub(crate) fn unix_socket_schema() -> PluginSchema {
         FieldSchema {
             field_type: FieldType::String,
             required: false,
-            description: "Transport protocol carried over the socket (grpc, jsonrpc, …)"
+            description: "Transport protocol carried over the socket (grpc)"
                 .to_string(),
             default: Some(json!("grpc")),
             example: None,

@@ -625,7 +625,7 @@ pub(crate) fn s6_schema() -> PluginSchema {
 
     schema.methods.insert(
         "start".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<UnitInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<UnitInput, super::plugin_scaffold_helpers::AckOutput>(
             "Start",
             op_state_store::SideEffect::Mutation,
             false,
@@ -635,7 +635,7 @@ pub(crate) fn s6_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "stop".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<UnitInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<UnitInput, super::plugin_scaffold_helpers::AckOutput>(
             "Stop",
             op_state_store::SideEffect::Mutation,
             false,
@@ -645,7 +645,7 @@ pub(crate) fn s6_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "restart".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<UnitInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<UnitInput, super::plugin_scaffold_helpers::AckOutput>(
             "Restart",
             op_state_store::SideEffect::Mutation,
             false,
@@ -655,7 +655,7 @@ pub(crate) fn s6_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "enable".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<UnitInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<UnitInput, super::plugin_scaffold_helpers::AckOutput>(
             "Enable",
             op_state_store::SideEffect::Mutation,
             false,
@@ -665,7 +665,7 @@ pub(crate) fn s6_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "disable".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<UnitInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<UnitInput, super::plugin_scaffold_helpers::AckOutput>(
             "Disable",
             op_state_store::SideEffect::Mutation,
             false,
@@ -675,7 +675,7 @@ pub(crate) fn s6_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "status".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<UnitInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<UnitInput, super::plugin_scaffold_helpers::AckOutput>(
             "Status",
             op_state_store::SideEffect::Read,
             true,
@@ -685,7 +685,7 @@ pub(crate) fn s6_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "list_services".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<super::plugin_scaffold_helpers::EmptyInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<super::plugin_scaffold_helpers::EmptyInput, super::plugin_scaffold_helpers::AckOutput>(
             "ListServices",
             op_state_store::SideEffect::Read,
             true,
@@ -695,7 +695,7 @@ pub(crate) fn s6_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "signal".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<SignalInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<SignalInput, super::plugin_scaffold_helpers::AckOutput>(
             "Signal",
             op_state_store::SideEffect::Mutation,
             false,

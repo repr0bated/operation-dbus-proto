@@ -32,7 +32,7 @@ use tracing::{debug, info, warn};
 use zbus::{Connection, Proxy};
 
 /// Full system state for disaster recovery
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
 pub struct FullSystemState {
     /// State schema version
     pub version: u32,
@@ -65,10 +65,10 @@ pub struct FullSystemState {
     pub containers: ContainerState,
 
     /// Plugin-specific state (aggregated from all plugins)
-    pub plugins: HashMap<String, Value>,
+    pub plugins: HashMap<String, serde_json::Value>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SystemInfo {
     pub kernel_version: String,
     pub os_release: String,
@@ -77,7 +77,7 @@ pub struct SystemInfo {
     pub uptime_seconds: u64,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct NetworkState {
     pub interfaces: Vec<InterfaceInfo>,
     pub routes: Vec<RouteInfo>,
@@ -85,7 +85,7 @@ pub struct NetworkState {
     pub bridges: Vec<BridgeInfo>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct InterfaceInfo {
     pub name: String,
     pub mac: String,
@@ -94,7 +94,7 @@ pub struct InterfaceInfo {
     pub mtu: u32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct RouteInfo {
     pub destination: String,
     pub gateway: Option<String>,
@@ -102,14 +102,14 @@ pub struct RouteInfo {
     pub metric: u32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct BridgeInfo {
     pub name: String,
     pub ports: Vec<String>,
     pub bridge_type: String, // "linux" or "ovs"
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ServiceState {
     pub name: String,
     pub enabled: bool,
@@ -117,14 +117,14 @@ pub struct ServiceState {
     pub unit_type: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PackageInfo {
     pub name: String,
     pub version: String,
     pub arch: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct UserInfo {
     pub name: String,
     pub uid: u32,
@@ -134,13 +134,13 @@ pub struct UserInfo {
     pub groups: Vec<String>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct StorageState {
     pub mounts: Vec<MountInfo>,
     pub block_devices: Vec<BlockDeviceInfo>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct MountInfo {
     pub source: String,
     pub target: String,
@@ -148,7 +148,7 @@ pub struct MountInfo {
     pub options: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct BlockDeviceInfo {
     pub name: String,
     pub size_bytes: u64,
@@ -156,20 +156,20 @@ pub struct BlockDeviceInfo {
     pub mountpoint: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ContainerState {
     pub lxc: Vec<LxcContainerInfo>,
     pub docker: Vec<DockerContainerInfo>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct LxcContainerInfo {
     pub name: String,
     pub status: String,
-    pub config: Value,
+    pub config: serde_json::Value,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct DockerContainerInfo {
     pub id: String,
     pub name: String,
@@ -681,7 +681,7 @@ impl FullSystemPlugin {
                 state.lxc.push(LxcContainerInfo {
                     name,
                     status: "unknown".to_string(),
-                    config: json!({}),
+                    config: serde_json::json!({}),
                 });
             }
         }
@@ -728,79 +728,17 @@ impl StatePlugin for FullSystemPlugin {
     }
 
     fn schema(&self) -> Option<PluginSchema> {
-        let any_field = |required: bool, description: &str, default: Option<Value>| FieldSchema {
-            field_type: FieldType::Any,
-            required,
-            description: description.to_string(),
-            default,
-            example: None,
-            constraints: Vec::new(),
-            read_only: false,
-            read_only_when: None,
-        };
-
-        Some(
-            PluginSchema::builder("full_system")
-                .version("1.0.0")
-                .description("Full system recovery snapshot")
-                .field(
-                    "version",
-                    FieldSchema {
-                        field_type: FieldType::Integer,
-                        required: true,
-                        description: "Snapshot schema version".to_string(),
-                        default: Some(json!(1)),
-                        example: None,
-                        constraints: vec![Constraint::Min { value: 1.0 }],
-                        read_only: false,
-                        read_only_when: None,
-                    },
-                )
-                .field(
-                    "captured_at",
-                    FieldSchema {
-                        field_type: FieldType::String,
-                        required: false,
-                        description: "Capture timestamp".to_string(),
-                        default: None,
-                        example: None,
-                        constraints: Vec::new(),
-                        read_only: false,
-                        read_only_when: None,
-                    },
-                )
-                .field("hostname", any_field(true, "Host name", Some(json!(""))))
-                .field(
-                    "system",
-                    any_field(false, "System details", Some(json!({}))),
-                )
-                .field(
-                    "network",
-                    any_field(false, "Network snapshot", Some(json!({}))),
-                )
-                .field(
-                    "services",
-                    any_field(false, "Service snapshot", Some(json!([]))),
-                )
-                .field(
-                    "packages",
-                    any_field(false, "Package snapshot", Some(json!([]))),
-                )
-                .field("users", any_field(false, "User snapshot", Some(json!([]))))
-                .field(
-                    "storage",
-                    any_field(false, "Storage snapshot", Some(json!({}))),
-                )
-                .field(
-                    "containers",
-                    any_field(false, "Container snapshot", Some(json!({}))),
-                )
-                .field(
-                    "plugins",
-                    any_field(false, "Plugin snapshots", Some(json!({}))),
-                )
-                .build(),
-        )
+        let mut schema = super::schemars_adapter::plugin_schema_from_json(
+            "full_system",
+            "1.0.0",
+            "Full system recovery snapshot",
+            &serde_json::to_value(schemars::schema_for!(FullSystemState)).unwrap(),
+        );
+        super::schemars_adapter::apply_state_defaults(
+            &mut schema,
+            &simd_json::serde::to_owned_value(&FullSystemState::default()).unwrap(),
+        );
+        Some(schema)
     }
 
     async fn calculate_diff(&self, current: &Value, desired: &Value) -> Result<StateDiff> {

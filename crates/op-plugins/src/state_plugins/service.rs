@@ -1,6 +1,6 @@
 //! Service plugin - auto-generating, validating, init-agnostic service management.
 
-use super::plugin_scaffold_helpers::{any_field, method_decl_from_schemars, simple_schema};
+use super::plugin_scaffold_helpers::{method_decl_from_schemars_with_output, AckOutput};
 use crate::service_def::{
     ExecCommand, LogType, ReadyNotification, RestartPolicy, ServiceDef, ServiceName, ServiceType,
 };
@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use zbus::{Connection, Proxy};
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, JsonSchema)]
 pub struct ServiceLifecycle {
     pub last_active: Option<u64>,
     pub days_since_active: Option<u64>,
@@ -424,19 +424,28 @@ impl StatePlugin for ServicePlugin {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default, JsonSchema)]
+pub struct ServiceSchemaState {
+    pub services: serde_json::Value,
+}
+
 pub(crate) fn service_schema() -> PluginSchema {
-    let mut schema = simple_schema(
+    let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "service",
+        "1.0.0",
         "Service definition declarations",
-        &["net"],
-        vec![("services", any_field(true, "Service map", Some(json!({}))))],
+        &serde_json::to_value(schemars::schema_for!(ServiceSchemaState)).unwrap(),
+    );
+    super::schemars_adapter::apply_state_defaults(
+        &mut schema,
+        &simd_json::serde::to_owned_value(&ServiceSchemaState::default()).unwrap(),
     );
 
     // Add D-Bus methods for service lifecycle management
     // Reference: https://www.freedesktop.org/wiki/Software/systemd/
     schema.methods.insert(
         "init".to_string(),
-        method_decl_from_schemars::<InitInput>(
+        method_decl_from_schemars_with_output::<InitInput, AckOutput>(
             "init",
             SideEffect::Mutation,
             false,
@@ -446,7 +455,7 @@ pub(crate) fn service_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "run".to_string(),
-        method_decl_from_schemars::<RunInput>(
+        method_decl_from_schemars_with_output::<RunInput, AckOutput>(
             "run",
             SideEffect::Mutation,
             false,
@@ -456,7 +465,7 @@ pub(crate) fn service_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "shutdown".to_string(),
-        method_decl_from_schemars::<ShutdownInput>(
+        method_decl_from_schemars_with_output::<ShutdownInput, AckOutput>(
             "shutdown",
             SideEffect::Mutation,
             false,

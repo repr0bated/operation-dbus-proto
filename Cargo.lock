@@ -4471,6 +4471,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "zbus 5.16.0",
 ]
 
 [[package]]
@@ -4490,6 +4491,7 @@ dependencies = [
  "memmap2",
  "op-cognitive-mcp",
  "op-core",
+ "op-grpc-adapters",
  "op-identity",
  "op-jsonrpc",
  "op-network",
@@ -4772,43 +4774,6 @@ dependencies = [
  "simd-json",
  "thiserror 1.0.69",
  "tokio",
- "tracing",
- "tracing-subscriber",
- "uuid",
- "zbus 5.16.0",
-]
-
-[[package]]
-name = "op-openvswitch-daemon"
-version = "1.0.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "chrono",
- "futures",
- "libc",
- "log",
- "netlink-packet-route",
- "op-core",
- "op-dbus-model",
- "op-identity",
- "prost 0.13.5",
- "rovs-jsonrpc",
- "rovs-openflow",
- "rovs-ovsdb",
- "rovs-transport",
- "rovs-types",
- "rtnetlink",
- "serde",
- "serde_json",
- "simd-json",
- "thiserror 1.0.69",
- "tokio",
- "tokio-stream",
- "tonic",
- "tonic-build 0.12.3",
- "tonic-reflection",
- "tonic-web",
  "tracing",
  "tracing-subscriber",
  "uuid",

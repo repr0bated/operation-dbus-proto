@@ -1300,7 +1300,7 @@ pub(crate) fn incus_schema() -> PluginSchema {
     let mut methods = std::collections::HashMap::new();
     methods.insert(
         "create_instance".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<CreateInstanceInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<CreateInstanceInput, super::plugin_scaffold_helpers::AckOutput>(
             "create_instance",
             op_state_store::SideEffect::Mutation,
             false,
@@ -1310,7 +1310,7 @@ pub(crate) fn incus_schema() -> PluginSchema {
     );
     methods.insert(
         "modify_instance".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<ModifyInstanceInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<ModifyInstanceInput, super::plugin_scaffold_helpers::AckOutput>(
             "modify_instance",
             op_state_store::SideEffect::Mutation,
             false,
@@ -1320,7 +1320,7 @@ pub(crate) fn incus_schema() -> PluginSchema {
     );
     methods.insert(
         "delete_instance".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<DeleteInstanceInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<DeleteInstanceInput, super::plugin_scaffold_helpers::AckOutput>(
             "delete_instance",
             op_state_store::SideEffect::Mutation,
             false,
@@ -1330,7 +1330,7 @@ pub(crate) fn incus_schema() -> PluginSchema {
     );
     methods.insert(
         "start_instance".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<StartInstanceInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<StartInstanceInput, super::plugin_scaffold_helpers::AckOutput>(
             "start_instance",
             op_state_store::SideEffect::Mutation,
             false,
@@ -1340,7 +1340,7 @@ pub(crate) fn incus_schema() -> PluginSchema {
     );
     methods.insert(
         "stop_instance".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<StopInstanceInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<StopInstanceInput, super::plugin_scaffold_helpers::AckOutput>(
             "stop_instance",
             op_state_store::SideEffect::Mutation,
             false,
@@ -1350,7 +1350,7 @@ pub(crate) fn incus_schema() -> PluginSchema {
     );
     methods.insert(
         "restart_instance".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<RestartInstanceInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<RestartInstanceInput, super::plugin_scaffold_helpers::AckOutput>(
             "restart_instance",
             op_state_store::SideEffect::Mutation,
             false,
@@ -1360,7 +1360,7 @@ pub(crate) fn incus_schema() -> PluginSchema {
     );
     methods.insert(
         "freeze_instance".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<FreezeInstanceInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<FreezeInstanceInput, super::plugin_scaffold_helpers::AckOutput>(
             "freeze_instance",
             op_state_store::SideEffect::Mutation,
             false,
@@ -1370,7 +1370,7 @@ pub(crate) fn incus_schema() -> PluginSchema {
     );
     methods.insert(
         "unfreeze_instance".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<UnfreezeInstanceInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<UnfreezeInstanceInput, super::plugin_scaffold_helpers::AckOutput>(
             "unfreeze_instance",
             op_state_store::SideEffect::Mutation,
             false,
@@ -1380,7 +1380,7 @@ pub(crate) fn incus_schema() -> PluginSchema {
     );
     methods.insert(
         "snapshot_instance".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<SnapshotInstanceInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<SnapshotInstanceInput, super::plugin_scaffold_helpers::AckOutput>(
             "snapshot_instance",
             op_state_store::SideEffect::Mutation,
             false,
@@ -1390,7 +1390,7 @@ pub(crate) fn incus_schema() -> PluginSchema {
     );
     methods.insert(
         "exec_instance".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<ExecInstanceInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<ExecInstanceInput, super::plugin_scaffold_helpers::AckOutput>(
             "exec_instance",
             op_state_store::SideEffect::Mutation,
             false,
@@ -1400,7 +1400,7 @@ pub(crate) fn incus_schema() -> PluginSchema {
     );
     methods.insert(
         "add_device".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<AddDeviceInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<AddDeviceInput, super::plugin_scaffold_helpers::AckOutput>(
             "add_device",
             op_state_store::SideEffect::Mutation,
             false,
@@ -1410,7 +1410,7 @@ pub(crate) fn incus_schema() -> PluginSchema {
     );
     methods.insert(
         "remove_device".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<RemoveDeviceInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<RemoveDeviceInput, super::plugin_scaffold_helpers::AckOutput>(
             "remove_device",
             op_state_store::SideEffect::Mutation,
             false,
@@ -1420,7 +1420,7 @@ pub(crate) fn incus_schema() -> PluginSchema {
     );
     methods.insert(
         "update_device".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars::<UpdateDeviceInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<UpdateDeviceInput, super::plugin_scaffold_helpers::AckOutput>(
             "update_device",
             op_state_store::SideEffect::Mutation,
             false,
