@@ -318,18 +318,8 @@ impl MailService for MailAdapter {
         let (reader, mut writer) = tokio::io::split(stream);
         let mut lines = BufReader::new(reader).lines();
 
-        // Read banner (expect "220 ...")
-        let banner = lines
-            .next_line()
-            .await
-            .map_err(|e| Status::internal(format!("SMTP banner read failed: {}", e)))?
-            .ok_or_else(|| Status::internal("SMTP connection closed before banner"))?;
-        if !banner.starts_with("220") {
-            return Err(Status::internal(format!(
-                "unexpected SMTP banner: {}",
-                banner
-            )));
-        }
+        // Read banner (expect "220 ...", possibly multi-line)
+        read_smtp_response(&mut lines, "220").await?;
 
         let from = std::env::var("MAIL_FROM").unwrap_or_else(|_| "noreply@3tched.com".to_string());
         let msg_id = uuid::Uuid::new_v4().to_string();
@@ -344,18 +334,7 @@ impl MailService for MailAdapter {
                 .write_all(cmd.as_bytes())
                 .await
                 .map_err(|e| Status::internal(e.to_string()))?;
-            let response = lines
-                .next_line()
-                .await
-                .map_err(|e| Status::internal(format!("SMTP response read failed: {}", e)))?
-                .ok_or_else(|| Status::internal("SMTP connection closed unexpectedly"))?;
-            if !response.starts_with(expected_code) {
-                return Err(Status::internal(format!(
-                    "SMTP command {:?} rejected: {}",
-                    cmd.trim_end(),
-                    response
-                )));
-            }
+            read_smtp_response(&mut lines, expected_code).await?;
         }
 
         let body = format!(
@@ -366,17 +345,7 @@ impl MailService for MailAdapter {
             .write_all(body.as_bytes())
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
-        let data_response = lines
-            .next_line()
-            .await
-            .map_err(|e| Status::internal(format!("SMTP DATA response read failed: {}", e)))?
-            .ok_or_else(|| Status::internal("SMTP connection closed before DATA confirmation"))?;
-        if !data_response.starts_with("250") {
-            return Err(Status::internal(format!(
-                "message rejected by SMTP server: {}",
-                data_response
-            )));
-        }
+        read_smtp_response(&mut lines, "250").await?;
 
         writer.write_all(b"QUIT\r\n").await.ok();
 
@@ -385,4 +354,35 @@ impl MailService for MailAdapter {
             message_id: msg_id,
         }))
     }
+}
+
+/// Read a (possibly multi-line) SMTP response and verify every line carries
+/// `expected_code`. RFC 5321 continuation lines are formatted "CODE-text"; the
+/// final line of a response is "CODE text" or bare "CODE". Reading only one
+/// line per response leaves continuation lines (e.g. EHLO's capability list)
+/// unread in the buffer, desyncing every response read that follows.
+async fn read_smtp_response<R: tokio::io::AsyncBufRead + Unpin>(
+    lines: &mut tokio::io::Lines<R>,
+    expected_code: &str,
+) -> Result<String, Status> {
+    let last_line;
+    loop {
+        let line = lines
+            .next_line()
+            .await
+            .map_err(|e| Status::internal(format!("SMTP response read failed: {}", e)))?
+            .ok_or_else(|| Status::internal("SMTP connection closed unexpectedly"))?;
+        if !line.starts_with(expected_code) {
+            return Err(Status::internal(format!(
+                "unexpected SMTP response (wanted {}): {}",
+                expected_code, line
+            )));
+        }
+        let is_last = line.as_bytes().get(3) != Some(&b'-');
+        if is_last {
+            last_line = line;
+            break;
+        }
+    }
+    Ok(last_line)
 }

@@ -48,11 +48,17 @@ impl WireGuardDatabase {
         Ok(())
     }
 
+    /// CozoDB (sled-backed) calls are synchronous disk I/O — always run them via
+    /// `spawn_blocking` so they don't stall a Tokio worker thread.
     pub async fn store_wireguard_session(&self, session: &WireGuardSession) -> Result<()> {
         let rec = session_to_record(session)?;
-        self.cozo
-            .put_wg_session(&rec)
-            .map_err(|e| anyhow::anyhow!("store wg session: {e}"))
+        let cozo = self.cozo.clone();
+        tokio::task::spawn_blocking(move || {
+            cozo.put_wg_session(&rec)
+                .map_err(|e| anyhow::anyhow!("store wg session: {e}"))
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("blocking task panicked: {e}"))?
     }
 
     pub async fn update_wireguard_session(&self, session: &WireGuardSession) -> Result<()> {
@@ -60,39 +66,49 @@ impl WireGuardDatabase {
     }
 
     pub async fn update_session_last_used(&self, session_id: &str, last_used: u64) -> Result<()> {
-        if let Some(mut rec) = self
-            .cozo
-            .get_wg_session(session_id)
-            .map_err(|e| anyhow::anyhow!("get wg session: {e}"))?
-        {
-            rec.last_used = last_used;
-            self.cozo
-                .put_wg_session(&rec)
-                .map_err(|e| anyhow::anyhow!("update wg session last_used: {e}"))?;
-        }
-        Ok(())
+        let cozo = self.cozo.clone();
+        let session_id = session_id.to_string();
+        tokio::task::spawn_blocking(move || {
+            if let Some(mut rec) = cozo
+                .get_wg_session(&session_id)
+                .map_err(|e| anyhow::anyhow!("get wg session: {e}"))?
+            {
+                rec.last_used = last_used;
+                cozo.put_wg_session(&rec)
+                    .map_err(|e| anyhow::anyhow!("update wg session last_used: {e}"))?;
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("blocking task panicked: {e}"))?
     }
 
     pub async fn load_wireguard_sessions(&self) -> Result<Vec<WireGuardSession>> {
-        self.cozo
-            .list_wg_sessions()
-            .map_err(|e| anyhow::anyhow!("list wg sessions: {e}"))?
-            .iter()
-            .map(record_to_session)
-            .collect()
+        let cozo = self.cozo.clone();
+        let recs: Vec<WgSessionRecord> = tokio::task::spawn_blocking(move || {
+            cozo.list_wg_sessions()
+                .map_err(|e| anyhow::anyhow!("list wg sessions: {e}"))
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("blocking task panicked: {e}"))??;
+        recs.iter().map(record_to_session).collect()
     }
 
     pub async fn remove_wireguard_session(&self, session_id: &str) -> Result<()> {
-        if let Some(rec) = self
-            .cozo
-            .get_wg_session(session_id)
-            .map_err(|e| anyhow::anyhow!("get wg session: {e}"))?
-        {
-            self.cozo
-                .delete_wg_session(session_id, &rec.peer_pubkey)
-                .map_err(|e| anyhow::anyhow!("delete wg session: {e}"))?;
-        }
-        Ok(())
+        let cozo = self.cozo.clone();
+        let session_id = session_id.to_string();
+        tokio::task::spawn_blocking(move || {
+            if let Some(rec) = cozo
+                .get_wg_session(&session_id)
+                .map_err(|e| anyhow::anyhow!("get wg session: {e}"))?
+            {
+                cozo.delete_wg_session(&session_id, &rec.peer_pubkey)
+                    .map_err(|e| anyhow::anyhow!("delete wg session: {e}"))?;
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("blocking task panicked: {e}"))?
     }
 }
 
