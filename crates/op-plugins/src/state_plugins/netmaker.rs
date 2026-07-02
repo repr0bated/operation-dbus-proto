@@ -601,59 +601,79 @@ pub struct UpdateNodeInput {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ListNetworksInput {}
 
-
 pub(crate) fn netmaker_schema() -> PluginSchema {
-    let state = simd_json::serde::to_owned_value(NetmakerPlugin::current_state())
-        .unwrap_or_else(|_| simd_json::json!({}));
-    let mut schema = super::plugin_schema_defs::schema_from_state(
+    let root = serde_json::to_value(schemars::schema_for!(NetmakerState))
+        .expect("schemars schema serializes to JSON");
+    let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "netmaker",
-        "net",
         "1.0.0",
         "Netmaker daemon state and execution schema",
-        &state,
+        &root,
     );
-    schema.methods.insert("join_network".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<JoinNetworkInput>(
-        "join_network",
-        op_state_store::SideEffect::Mutation,
-        false,
-        "cap.network.netmaker.network.join@v1",
-        "mut.network.netmaker.network.join@v1",
-    ));
-    schema.methods.insert("leave_network".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<LeaveNetworkInput>(
-        "leave_network",
-        op_state_store::SideEffect::Mutation,
-        false,
-        "cap.network.netmaker.network.leave@v1",
-        "mut.network.netmaker.network.leave@v1",
-    ));
-    schema.methods.insert("list_nodes".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<ListNodesInput>(
-        "list_nodes",
-        op_state_store::SideEffect::Read,
-        true,
-        "cap.network.netmaker.nodes.list@v1",
-        "obs.network.netmaker.nodes.list@v1",
-    ));
-    schema.methods.insert("get_node".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<GetNodeInput>(
-        "get_node",
-        op_state_store::SideEffect::Read,
-        true,
-        "cap.network.netmaker.node.get@v1",
-        "obs.network.netmaker.node.get@v1",
-    ));
-    schema.methods.insert("update_node".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<UpdateNodeInput>(
-        "update_node",
-        op_state_store::SideEffect::Mutation,
-        false,
-        "cap.network.netmaker.node.update@v1",
-        "mut.network.netmaker.node.update@v1",
-    ));
-    schema.methods.insert("list_networks".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<ListNetworksInput>(
-        "list_networks",
-        op_state_store::SideEffect::Read,
-        true,
-        "cap.network.netmaker.networks.list@v1",
-        "obs.network.netmaker.networks.list@v1",
-    ));
+    schema.category = "net".to_string();
+    if let Ok(defaults) = simd_json::serde::to_owned_value(NetmakerPlugin::current_state()) {
+        super::schemars_adapter::apply_state_defaults(&mut schema, &defaults);
+    }
+    schema.methods.insert(
+        "join_network".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<JoinNetworkInput>(
+            "join_network",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.network.netmaker.network.join@v1",
+            "mut.network.netmaker.network.join@v1",
+        ),
+    );
+    schema.methods.insert(
+        "leave_network".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<LeaveNetworkInput>(
+            "leave_network",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.network.netmaker.network.leave@v1",
+            "mut.network.netmaker.network.leave@v1",
+        ),
+    );
+    schema.methods.insert(
+        "list_nodes".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<ListNodesInput>(
+            "list_nodes",
+            op_state_store::SideEffect::Read,
+            true,
+            "cap.network.netmaker.nodes.list@v1",
+            "obs.network.netmaker.nodes.list@v1",
+        ),
+    );
+    schema.methods.insert(
+        "get_node".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<GetNodeInput>(
+            "get_node",
+            op_state_store::SideEffect::Read,
+            true,
+            "cap.network.netmaker.node.get@v1",
+            "obs.network.netmaker.node.get@v1",
+        ),
+    );
+    schema.methods.insert(
+        "update_node".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<UpdateNodeInput>(
+            "update_node",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.network.netmaker.node.update@v1",
+            "mut.network.netmaker.node.update@v1",
+        ),
+    );
+    schema.methods.insert(
+        "list_networks".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<ListNetworksInput>(
+            "list_networks",
+            op_state_store::SideEffect::Read,
+            true,
+            "cap.network.netmaker.networks.list@v1",
+            "obs.network.netmaker.networks.list@v1",
+        ),
+    );
     schema
 }
 

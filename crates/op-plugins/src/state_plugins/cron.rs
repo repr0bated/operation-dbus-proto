@@ -232,12 +232,124 @@ impl StatePlugin for CronPlugin {
 pub(crate) fn cron_schema() -> PluginSchema {
     let root = serde_json::to_value(schemars::schema_for!(CronState))
         .expect("schemars schema serializes to JSON");
-    super::schemars_adapter::plugin_schema_from_json(
+    let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "cron",
         "1.0.0",
         "Cron scheduler — jobs, schedules, execution history",
         &root,
-    )
+    );
+
+    // Output structs for methods that return data
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct ListJobsOutput {
+        pub jobs: Vec<serde_json::Value>,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct GetJobOutput {
+        pub job: Option<serde_json::Value>,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct GetHistoryOutput {
+        pub history: Vec<serde_json::Value>,
+    }
+
+    // Add methods with typed returns
+    use super::plugin_scaffold_helpers::method_decl_from_schemars_with_output;
+    use super::plugin_scaffold_helpers::AckOutput;
+    use op_state_store::SideEffect;
+
+    schema.methods.insert(
+        "list_jobs".to_string(),
+        method_decl_from_schemars_with_output::<(), ListJobsOutput>(
+            "list_jobs",
+            SideEffect::Read,
+            true,
+            "cron.read",
+            "obs.service.cron.job.list@v1",
+        ),
+    );
+    schema.methods.insert(
+        "get_job".to_string(),
+        method_decl_from_schemars_with_output::<(), GetJobOutput>(
+            "get_job",
+            SideEffect::Read,
+            true,
+            "cron.read",
+            "obs.service.cron.job.get@v1",
+        ),
+    );
+    schema.methods.insert(
+        "create_job".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "create_job",
+            SideEffect::Mutation,
+            false,
+            "cron.invoke",
+            "mut.service.cron.job.create@v1",
+        ),
+    );
+    schema.methods.insert(
+        "update_job".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "update_job",
+            SideEffect::Mutation,
+            false,
+            "cron.invoke",
+            "mut.service.cron.job.update@v1",
+        ),
+    );
+    schema.methods.insert(
+        "delete_job".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "delete_job",
+            SideEffect::Mutation,
+            true,
+            "cron.invoke",
+            "mut.service.cron.job.delete@v1",
+        ),
+    );
+    schema.methods.insert(
+        "enable_job".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "enable_job",
+            SideEffect::Mutation,
+            false,
+            "cron.invoke",
+            "mut.service.cron.job.enable@v1",
+        ),
+    );
+    schema.methods.insert(
+        "disable_job".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "disable_job",
+            SideEffect::Mutation,
+            false,
+            "cron.invoke",
+            "mut.service.cron.job.disable@v1",
+        ),
+    );
+    schema.methods.insert(
+        "run_job".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "run_job",
+            SideEffect::Mutation,
+            false,
+            "cron.invoke",
+            "mut.service.cron.job.run@v1",
+        ),
+    );
+    schema.methods.insert(
+        "get_history".to_string(),
+        method_decl_from_schemars_with_output::<(), GetHistoryOutput>(
+            "get_history",
+            SideEffect::Read,
+            true,
+            "cron.read",
+            "obs.service.cron.history.get@v1",
+        ),
+    );
+
+    schema
 }
 
 /// Hand-rolled golden reference for the cron schema. Kept test-only so the

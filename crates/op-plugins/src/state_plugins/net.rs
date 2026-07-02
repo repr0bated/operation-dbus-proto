@@ -981,20 +981,26 @@ pub(crate) fn net_schema() -> PluginSchema {
         "Network interface management via rtnetlink",
         &root,
     );
-    schema.methods.insert("apply_interface".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<ApplyInterfaceInput>(
-        "apply_interface",
-        op_state_store::SideEffect::Mutation,
-        false,
-        "cap.network.interface.apply@v1",
-        "mut.network.interface.apply@v1",
-    ));
-    schema.methods.insert("delete_ovs_bridge".to_string(), super::plugin_schema_defs::method_decl_from_schemars::<DeleteOvsBridgeInput>(
-        "delete_ovs_bridge",
-        op_state_store::SideEffect::Mutation,
-        false,
-        "cap.network.ovs-bridge.delete@v1",
-        "mut.network.ovs-bridge.delete@v1",
-    ));
+    schema.methods.insert(
+        "apply_interface".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<ApplyInterfaceInput>(
+            "apply_interface",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.network.interface.apply@v1",
+            "mut.network.interface.apply@v1",
+        ),
+    );
+    schema.methods.insert(
+        "delete_ovs_bridge".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<DeleteOvsBridgeInput>(
+            "delete_ovs_bridge",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.network.ovs-bridge.delete@v1",
+            "mut.network.ovs-bridge.delete@v1",
+        ),
+    );
     schema
 }
 

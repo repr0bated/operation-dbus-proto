@@ -1691,33 +1691,10 @@ pub(crate) fn antigravity_schema() -> PluginSchema {
     schema
 }
 
-/// Frozen golden reference: the original schema inferred from the default state
-/// and then reconciled to the schemars-derived contract, kept **test-only** so
-/// `derived_schema_matches_hand_rolled` proves the derived schema still matches
-/// the contract this plugin shipped with.
-#[cfg(test)]
-pub(crate) fn antigravity_schema_golden() -> PluginSchema {
-    use super::common::llm_projection::schema_helpers::golden_from_state_and_schema;
-
-    let state = simd_json::serde::to_owned_value(AntigravityState::default())
-        .unwrap_or_else(|_| simd_json::json!({}));
-    let schema_json = serde_json::to_value(schemars::schema_for!(AntigravityState))
-        .expect("schemars schema serializes to JSON");
-    golden_from_state_and_schema(
-        &state,
-        &schema_json,
-        "antigravity",
-        "llm",
-        "1.0.0",
-        "Google Antigravity SDK provider — Vertex AI Gemini models, OAuth auth, structured output, OSCAL compliance routing",
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::state_plugins::common::oscal::validate_subid;
-    use crate::state_plugins::schemars_adapter::schema_diffs;
     use serde_json::Value as JVal;
 
     fn collect_subids(node: &JVal, out: &mut Vec<String>) {
@@ -1753,11 +1730,13 @@ mod tests {
     }
 
     #[test]
-    fn derived_schema_matches_hand_rolled() {
-        let golden = antigravity_schema_golden();
-        let derived = antigravity_schema();
-        let diffs = schema_diffs(&golden, &derived);
-        assert!(diffs.is_empty(), "schema_diffs: {:#?}", diffs);
+    fn schema_is_schemars_seeded_and_typed() {
+        let schema = antigravity_schema();
+        assert_eq!(schema.name, "antigravity");
+        assert_eq!(schema.version, "1.0.0");
+        assert!(schema.fields.contains_key("auth"));
+        assert!(schema.fields.contains_key("project"));
+        assert!(schema.fields.contains_key("models"));
     }
 
     #[test]

@@ -80,6 +80,28 @@ fn resolve_bind(addr: &str, wg_ip: Option<&str>) -> String {
     addr.to_string()
 }
 
+/// Resolve bind config (http/grpc addresses, wg_interface) from the
+/// `cognitive_mcp` plugin's live `/dev/shm` projection when present. Falls
+/// back to the already-parsed CLI/env values unchanged, so a cold start
+/// (before the projection is first seeded by op-grpc-bridge) behaves exactly
+/// as it did before this wiring existed.
+///
+/// OSCAL subid: obs.service.cognitive-mcp.bind-config.resolve@v1
+fn cognitive_mcp_bind_config(cli: &Cli) -> op_plugins::state_plugins::cognitive_mcp::CognitiveMcpConfig {
+    use op_plugins::state_plugins::cognitive_mcp::CognitiveMcpConfig;
+
+    op_core::projection_shm::read_projection_bytes("cognitive_mcp")
+        .and_then(|bytes| serde_json::from_slice::<CognitiveMcpConfig>(&bytes).ok())
+        .unwrap_or_else(|| CognitiveMcpConfig {
+            http: cli.http.clone(),
+            grpc: cli.grpc.clone(),
+            wg_interface: cli.wg_interface.clone(),
+            http_enabled: !cli.no_http,
+            grpc_enabled: !cli.no_grpc,
+            dbus_enabled: true,
+        })
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
@@ -98,16 +120,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .finish();
     tracing::subscriber::set_global_default(subscriber)?;
 
+    // Resolve bind config from the cognitive_mcp plugin's live projection when
+    // present (op-grpc-bridge seeds/updates it); falls back to the CLI/env
+    // values above, unchanged, when the projection is absent (cold start).
+    let bind_config = cognitive_mcp_bind_config(&cli);
+
     // ── WireGuard identity ────────────────────────────────────────────────────
     // 1. Detect local WG IP for bind address resolution.
     // 2. Write canonical IdentitySled to /dev/shm for Ghostbridge auth.
-    let wg_id = WireGuardIdentity::with_interface(&cli.wg_interface);
+    let wg_id = WireGuardIdentity::with_interface(&bind_config.wg_interface);
     let wg_ip = wg_id.get_local_ip();
 
     match wg_id.get_local_pubkey() {
         Ok(pubkey) => {
             info!(
-                interface = %cli.wg_interface,
+                interface = %bind_config.wg_interface,
                 pubkey = %pubkey,
                 wg_ip = ?wg_ip,
                 "Writing WireGuard identity sled to /dev/shm/plugin_schema.dat"
@@ -121,7 +148,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Err(e) => {
             warn!(
-                interface = %cli.wg_interface,
+                interface = %bind_config.wg_interface,
                 error = %e,
                 "Could not read WireGuard public key — identity sled not written; \
                  set WG_PUBKEY env var to override"
@@ -130,8 +157,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Resolve bind addresses: promote 0.0.0.0 defaults to WG interface IP.
-    let http_addr = resolve_bind(&cli.http, wg_ip.as_deref());
-    let grpc_addr = resolve_bind(&cli.grpc, wg_ip.as_deref());
+    let http_addr = resolve_bind(&bind_config.http, wg_ip.as_deref());
+    let grpc_addr = resolve_bind(&bind_config.grpc, wg_ip.as_deref());
 
     info!(
         http = %http_addr,

@@ -22,22 +22,37 @@
 //! ```
 
 pub mod chat_service;
+pub mod callable_reflection;
 pub mod dbus_object;
+pub mod dynamic_reflection;
 pub mod grpc_client;
 pub mod grpc_server;
 pub mod interceptor;
 pub mod mutation_engine;
+pub mod per_plugin_reflection;
+pub mod plugin_grpc_gen;
+pub mod plugin_object_blob;
 pub mod proto_gen;
 pub mod schema_loader;
 pub mod server;
 pub mod shared_socket;
 pub mod tracing;
+pub mod zeroclaw_object_blob;
 
 // Re-export main types
 pub use grpc_client::{GrpcClientPool, RemoteEndpoint, RemoteOperationClient};
 pub use grpc_server::{run_grpc_server, OperationGrpcServer, PluginSchemaProvider};
 pub use interceptor::ghostbridge_interceptor;
 pub use mutation_engine::{ChangeSource, ChangeType, MutationEngine, StateChange};
+pub use per_plugin_reflection::{
+    generate_all_method_protos_for_plugin, generate_reflection_file_descriptor_set,
+    MethodReflectionMeta, PerMethodReflectionConfig, PerMethodReflectionRegistry,
+    to_method_service_name,
+};
+pub use plugin_grpc_gen::{
+    generate_method_file_descriptor, generate_method_proto, generate_plugin_method_protos,
+    MethodServiceRegistry, MethodServiceLifecycleEvent, PerMethodGrpcServices,
+};
 pub use proto_gen::{ProtoGenConfig, ProtoGenerator};
 pub use server::{run_zeroclaw_server, ServerConfig};
 
@@ -68,6 +83,11 @@ pub mod proto {
     /// ChatService — operator-to-system chat interface (delegator, forced tool calling).
     pub mod chat {
         tonic::include_proto!("op_chat.chat");
+    }
+
+    /// Build-time generated PluginSchema method services.
+    pub mod plugin_methods {
+        tonic::include_proto!("operation.plugin.v1");
     }
 
     /// Combined FileDescriptorSet covering all domain protos (including chat).

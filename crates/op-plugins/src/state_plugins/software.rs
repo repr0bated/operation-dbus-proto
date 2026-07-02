@@ -8,7 +8,7 @@ use simd_json::json;
 use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
 
-use super::plugin_schema_defs::{any_field, method_decl_from_schemars, simple_schema};
+use super::plugin_scaffold_helpers::{any_field, method_decl_from_schemars, simple_schema};
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SoftwareState {
@@ -189,10 +189,15 @@ pub(crate) fn software_schema() -> PluginSchema {
         "software",
         "Software package inventory",
         &["os"],
-        vec![(
-            "packages",
-            any_field(true, "Package list", Some(json!([]))),
-        )],
+        vec![("packages", any_field(true, "Package list", Some(json!([]))))],
+    );
+    schema.subids.insert(
+        "__schema__".to_string(),
+        "sch.software.plugin.software.schema@v1".to_string(),
+    );
+    schema.subids.insert(
+        "packages".to_string(),
+        "obs.software.plugin.software.packages@v1".to_string(),
     );
 
     // Install method - https://www.freedesktop.org/software/systemd/man/org.freedesktop.systemd1.html

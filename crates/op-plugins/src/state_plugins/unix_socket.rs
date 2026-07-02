@@ -12,7 +12,7 @@ use std::path::Path;
 use std::sync::Arc;
 use tracing::{info, warn};
 
-use super::plugin_schema_defs::method_decl_from_schemars;
+use super::plugin_scaffold_helpers::method_decl_from_schemars;
 
 /// The single active-schema catalog in shared memory. Every plugin reads its
 /// own slice by name from this one file — there is no per-plugin shm file and
@@ -700,6 +700,37 @@ pub(crate) fn unix_socket_schema() -> PluginSchema {
             "The shared socket endpoint (one socket, all services route through it by domain)",
         )
         .subid("sockets", "mut.service.unix-socket.bind@v1")
+        // createunixsocket is a mut.* action (register a container/service on the
+        // shared socket), so it requires actor_id/capability_id accountability
+        // fields per AGENTS.md §4a — mirrored here from
+        // `ensure_category_metadata_fields`, called by the derived path.
+        .subid("createunixsocket", "mut.service.unix-socket.create-socket@v1")
+        .field(
+            "actor_id",
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Actor identifier for mutation accountability".to_string(),
+                default: None,
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        )
+        .field(
+            "capability_id",
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Capability identifier authorizing the mutation".to_string(),
+                default: None,
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        )
         .example(json!({
             "sockets": [
                 {

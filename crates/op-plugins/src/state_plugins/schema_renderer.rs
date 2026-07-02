@@ -193,6 +193,72 @@ pub(crate) fn schema_renderer_schema() -> PluginSchema {
     let state = simd_json::serde::to_owned_value(&SchemaRendererState::default())
         .expect("SchemaRendererState default serializes");
     super::schemars_adapter::apply_state_defaults(&mut schema, &state);
+
+    // Output structs
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct RenderSchemaOutput {
+        pub rendering: serde_json::Value,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct ListGalleriesOutput {
+        pub galleries: Vec<serde_json::Value>,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct GetRenderingOutput {
+        pub rendering: Option<serde_json::Value>,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct ValidateSchemaOutput {
+        pub valid: bool,
+        pub errors: Vec<String>,
+    }
+
+    // Add methods
+    use super::plugin_scaffold_helpers::method_decl_from_schemars_with_output;
+    use super::plugin_scaffold_helpers::AckOutput;
+    use op_state_store::SideEffect;
+
+    schema.methods.insert(
+        "render_schema".to_string(),
+        method_decl_from_schemars_with_output::<(), RenderSchemaOutput>(
+            "render_schema",
+            SideEffect::Read,
+            true,
+            "schema_renderer.read",
+            "obs.service.schema.renderer.render@v1",
+        ),
+    );
+    schema.methods.insert(
+        "list_galleries".to_string(),
+        method_decl_from_schemars_with_output::<(), ListGalleriesOutput>(
+            "list_galleries",
+            SideEffect::Read,
+            true,
+            "schema_renderer.read",
+            "obs.service.schema.gallery.list@v1",
+        ),
+    );
+    schema.methods.insert(
+        "get_rendering".to_string(),
+        method_decl_from_schemars_with_output::<(), GetRenderingOutput>(
+            "get_rendering",
+            SideEffect::Read,
+            true,
+            "schema_renderer.read",
+            "obs.service.schema.rendering.get@v1",
+        ),
+    );
+    schema.methods.insert(
+        "validate_schema".to_string(),
+        method_decl_from_schemars_with_output::<(), ValidateSchemaOutput>(
+            "validate_schema",
+            SideEffect::Read,
+            true,
+            "schema_renderer.read",
+            "obs.service.schema.validate@v1",
+        ),
+    );
+
     schema
 }
 

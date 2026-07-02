@@ -227,7 +227,7 @@ pub(crate) fn procfs_schema() -> PluginSchema {
 
     schema.methods.insert(
         "list_processes".to_string(),
-        super::plugin_schema_defs::method_decl_from_schemars::<super::plugin_schema_defs::EmptyInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<super::plugin_scaffold_helpers::EmptyInput>(
             "ListProcesses",
             op_state_store::SideEffect::Read,
             true,
@@ -237,7 +237,7 @@ pub(crate) fn procfs_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "get_process_info".to_string(),
-        super::plugin_schema_defs::method_decl_from_schemars::<ProcessInfoInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<ProcessInfoInput>(
             "GetProcessInfo",
             op_state_store::SideEffect::Read,
             true,
@@ -247,7 +247,7 @@ pub(crate) fn procfs_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "get_meminfo".to_string(),
-        super::plugin_schema_defs::method_decl_from_schemars::<super::plugin_schema_defs::EmptyInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<super::plugin_scaffold_helpers::EmptyInput>(
             "GetMeminfo",
             op_state_store::SideEffect::Read,
             true,
@@ -257,7 +257,7 @@ pub(crate) fn procfs_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "get_cpuinfo".to_string(),
-        super::plugin_schema_defs::method_decl_from_schemars::<super::plugin_schema_defs::EmptyInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<super::plugin_scaffold_helpers::EmptyInput>(
             "GetCpuinfo",
             op_state_store::SideEffect::Read,
             true,
@@ -267,7 +267,7 @@ pub(crate) fn procfs_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "get_loadavg".to_string(),
-        super::plugin_schema_defs::method_decl_from_schemars::<super::plugin_schema_defs::EmptyInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<super::plugin_scaffold_helpers::EmptyInput>(
             "GetLoadavg",
             op_state_store::SideEffect::Read,
             true,
@@ -277,7 +277,7 @@ pub(crate) fn procfs_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "get_uptime".to_string(),
-        super::plugin_schema_defs::method_decl_from_schemars::<super::plugin_schema_defs::EmptyInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<super::plugin_scaffold_helpers::EmptyInput>(
             "GetUptime",
             op_state_store::SideEffect::Read,
             true,
@@ -287,7 +287,7 @@ pub(crate) fn procfs_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "get_net_dev".to_string(),
-        super::plugin_schema_defs::method_decl_from_schemars::<super::plugin_schema_defs::EmptyInput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<super::plugin_scaffold_helpers::EmptyInput>(
             "GetNetDev",
             op_state_store::SideEffect::Read,
             true,
@@ -303,7 +303,6 @@ pub(crate) fn procfs_schema() -> PluginSchema {
 pub struct ProcessInfoInput {
     pub pid: i32,
 }
-
 
 /// Hand-rolled golden reference for the procfs schema. Kept test-only so the
 /// derived schema can be proven field-for-field equivalent to the original

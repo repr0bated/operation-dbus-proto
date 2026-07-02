@@ -743,6 +743,7 @@ mod tests {
             category: "accountability".into(),
             version: "1.0.0".into(),
             description: "Human reviewable reasoning episodes".into(),
+            display_name: None,
             fields,
             dependencies: vec!["op-grpc-bridge".into(), "op-state-store".into()],
             example: None,

@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use op_state::{
     ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
 };
-use op_state_store::{FieldSchema, FieldType, PluginSchema};
+use op_state_store::PluginSchema;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use simd_json::{json, prelude::*, OwnedValue as Value};
@@ -20,7 +20,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use super::incus_device::{Device, NamedDevice};
 
 /// Top-level state representing all Incus instances on the system.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct IncusState {
     pub instances: Vec<IncusInstance>,
 }
@@ -33,7 +33,7 @@ pub struct IncusState {
 /// `type: proxy`. The previous non-standard `sockets`/`IncusProxySocket` field is
 /// gone; a container's relationship to the shared `container.sock` is resolved
 /// by name at the projection/gemma layer, not embedded here.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct IncusInstance {
     pub name: String,
     /// Instance status: "Running", "Stopped", "Frozen"
@@ -1129,21 +1129,6 @@ mod tests {
     }
 }
 
-/// The `Object` field type for a [`NamedDevice`] (`{ name, device: oneOf<…> }`),
-/// derived from the schemars schema so the `device` member renders as the
-/// `FieldType::OneOf` discriminated union of all Incus device types.
-fn named_device_object() -> FieldType {
-    let root = serde_json::to_value(schemars::schema_for!(NamedDevice))
-        .expect("NamedDevice schema serializes to JSON");
-    let schema = super::schemars_adapter::plugin_schema_from_json(
-        "incus_device",
-        "1.0.0",
-        "Typed Incus device",
-        &root,
-    );
-    FieldType::Object(schema.fields)
-}
-
 // =============================================================================
 // Method input types - single source of truth via schemars
 // =============================================================================
@@ -1252,118 +1237,43 @@ pub struct UpdateDeviceInput {
 }
 
 pub(crate) fn incus_schema() -> PluginSchema {
-    let instance_fields = {
-        let mut fields = HashMap::new();
-        fields.insert(
-            "name".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: true,
-                description: "Instance name".to_string(),
-                default: None,
-                example: Some(json!("privacy-user-123")),
-                constraints: Vec::new(),
-                read_only: true,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "status".to_string(),
-            FieldSchema {
-                field_type: FieldType::Enum(vec![
-                    "Running".to_string(),
-                    "Stopped".to_string(),
-                    "Frozen".to_string(),
-                ]),
-                required: true,
-                description: "Instance status".to_string(),
-                default: Some(json!("Stopped")),
-                example: Some(json!("Running")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "type".to_string(),
-            FieldSchema {
-                field_type: FieldType::Enum(vec![
-                    "container".to_string(),
-                    "virtual-machine".to_string(),
-                ]),
-                required: true,
-                description: "Instance type".to_string(),
-                default: Some(json!("container")),
-                example: Some(json!("container")),
-                constraints: Vec::new(),
-                read_only: true,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "image".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: false,
-                description: "Source image reference".to_string(),
-                default: None,
-                example: Some(json!("images:debian/13")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "storage_pool".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: false,
-                description: "Preferred Incus storage pool for initial creation".to_string(),
-                default: None,
-                example: Some(json!("registration")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "profiles".to_string(),
-            FieldSchema {
-                field_type: FieldType::Array(Box::new(FieldType::String)),
-                required: false,
-                description: "Applied Incus profiles".to_string(),
-                default: Some(json!(["default"])),
-                example: Some(json!(["default"])),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "config".to_string(),
-            FieldSchema {
-                field_type: FieldType::Any,
-                required: false,
-                description: "Instance configuration map".to_string(),
-                default: Some(json!({})),
-                example: Some(json!({"limits.cpu": "2"})),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "devices".to_string(),
-            FieldSchema {
-                field_type: FieldType::Array(Box::new(named_device_object())),
-                required: false,
-                description: "Typed device definitions. Each entry is a named device whose `device` is the discriminated Incus device union (nic, disk, proxy, gpu, …).".to_string(),
-                default: Some(json!([])),
-                example: Some(json!([
+    let root = serde_json::to_value(schemars::schema_for!(IncusState))
+        .expect("schemars schema serializes to JSON");
+    let mut schema = super::schemars_adapter::plugin_schema_from_json(
+        "incus",
+        "1.0.0",
+        "Incus instance management",
+        &root,
+    );
+    schema.example = Some(json!({
+        "instances": [
+            {
+                "name": "privacy-user-123",
+                "status": "Running",
+                "type": "container",
+                "image": "images:debian/13",
+                "storage_pool": "registration",
+                "profiles": ["default"],
+                "config": { "limits.cpu": "2" },
+                "devices": [
                     {
                         "name": "eth0",
-                        "device": { "type": "nic", "nictype": "bridged", "parent": "ovsbr0" }
-                    },
+                        "device": {
+                            "type": "nic",
+                            "nictype": "bridged",
+                            "parent": "ovsbr0"
+                        }
+                    }
+                ]
+            },
+            {
+                "name": "netmaker",
+                "status": "Running",
+                "type": "container",
+                "image": "docker.io/gravitl/netmaker:v1.5.1",
+                "profiles": ["default"],
+                "config": { "boot.autostart": "true" },
+                "devices": [
                     {
                         "name": "api-sock",
                         "device": {
@@ -1374,286 +1284,152 @@ pub(crate) fn incus_schema() -> PluginSchema {
                             "gid": "0",
                             "mode": "0660"
                         }
+                    },
+                    {
+                        "name": "sqldata",
+                        "device": {
+                            "type": "disk",
+                            "path": "/root/data",
+                            "source": "nm-sqldata"
+                        }
                     }
-                ])),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "description".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: false,
-                description: "Human-readable instance description".to_string(),
-                default: None,
-                example: Some(json!("Mail server")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "architecture".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: false,
-                description: "CPU architecture (e.g. x86_64)".to_string(),
-                default: None,
-                example: Some(json!("x86_64")),
-                constraints: Vec::new(),
-                read_only: true,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "ephemeral".to_string(),
-            FieldSchema {
-                field_type: FieldType::Boolean,
-                required: false,
-                description: "Delete instance on shutdown".to_string(),
-                default: Some(json!(false)),
-                example: Some(json!(false)),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "stateful".to_string(),
-            FieldSchema {
-                field_type: FieldType::Boolean,
-                required: false,
-                description: "Whether saved state exists on disk".to_string(),
-                default: Some(json!(false)),
-                example: Some(json!(false)),
-                constraints: Vec::new(),
-                read_only: true,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "created_at".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: false,
-                description: "Creation timestamp (ISO8601)".to_string(),
-                default: None,
-                example: Some(json!("2024-01-01T00:00:00Z")),
-                constraints: Vec::new(),
-                read_only: true,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "last_used_at".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: false,
-                description: "Last start timestamp (ISO8601)".to_string(),
-                default: None,
-                example: Some(json!("2024-01-01T00:00:00Z")),
-                constraints: Vec::new(),
-                read_only: true,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "location".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: false,
-                description: "Cluster member name (absent on single-node)".to_string(),
-                default: None,
-                example: Some(json!("node-1")),
-                constraints: Vec::new(),
-                read_only: true,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "project".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: false,
-                description: "Incus project name (absent when default)".to_string(),
-                default: None,
-                example: Some(json!("staging")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "status_code".to_string(),
-            FieldSchema {
-                field_type: FieldType::Integer,
-                required: false,
-                description: "Numeric Incus status code (read-only)".to_string(),
-                default: None,
-                example: Some(json!(103)),
-                constraints: Vec::new(),
-                read_only: true,
-                read_only_when: None,
-            },
-        );
-        fields
-    };
-
-    PluginSchema::builder("incus")
-        .version("1.0.0")
-        .description("Incus instance management")
-        .array_field(
-            "instances",
-            FieldType::Object(instance_fields),
-            true,
-            "List of Incus instances",
-        )
-        .example(json!({
-            "instances": [
-                {
-                    "name": "privacy-user-123",
-                    "status": "Running",
-                    "type": "container",
-                    "image": "images:debian/13",
-                    "storage_pool": "registration",
-                    "profiles": ["default"],
-                    "config": { "limits.cpu": "2" },
-                    "devices": [
-                        {
-                            "name": "eth0",
-                            "device": {
-                                "type": "nic",
-                                "nictype": "bridged",
-                                "parent": "ovsbr0"
-                            }
-                        }
-                    ]
-                },
-                {
-                    "name": "netmaker",
-                    "status": "Running",
-                    "type": "container",
-                    "image": "docker.io/gravitl/netmaker:v1.5.1",
-                    "profiles": ["default"],
-                    "config": { "boot.autostart": "true" },
-                    "devices": [
-                        {
-                            "name": "api-sock",
-                            "device": {
-                                "type": "proxy",
-                                "listen": "unix:/run/netmaker/api.sock",
-                                "connect": "tcp:127.0.0.1:8081",
-                                "uid": "0",
-                                "gid": "0",
-                                "mode": "0660"
-                            }
-                        },
-                        {
-                            "name": "sqldata",
-                            "device": {
-                                "type": "disk",
-                                "path": "/root/data",
-                                "source": "nm-sqldata"
-                            }
-                        }
-                    ]
-                }
-            ]
-        }))
-        .method(super::plugin_schema_defs::method_decl_from_schemars::<CreateInstanceInput>(
+                ]
+            }
+        ]
+    }));
+    let mut methods = std::collections::HashMap::new();
+    methods.insert(
+        "create_instance".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<CreateInstanceInput>(
             "create_instance",
             op_state_store::SideEffect::Mutation,
             false,
             "cap.service.incus.instance.create@v1",
             "mut.service.incus.instance.create@v1",
-        ))
-        .method(super::plugin_schema_defs::method_decl_from_schemars::<ModifyInstanceInput>(
+        ),
+    );
+    methods.insert(
+        "modify_instance".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<ModifyInstanceInput>(
             "modify_instance",
             op_state_store::SideEffect::Mutation,
             false,
             "cap.service.incus.instance.modify@v1",
             "mut.service.incus.instance.modify@v1",
-        ))
-        .method(super::plugin_schema_defs::method_decl_from_schemars::<DeleteInstanceInput>(
+        ),
+    );
+    methods.insert(
+        "delete_instance".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<DeleteInstanceInput>(
             "delete_instance",
             op_state_store::SideEffect::Mutation,
             false,
             "cap.service.incus.instance.delete@v1",
             "mut.service.incus.instance.delete@v1",
-        ))
-        .method(super::plugin_schema_defs::method_decl_from_schemars::<StartInstanceInput>(
+        ),
+    );
+    methods.insert(
+        "start_instance".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<StartInstanceInput>(
             "start_instance",
             op_state_store::SideEffect::Mutation,
             false,
             "cap.service.incus.instance.start@v1",
             "mut.service.incus.instance.start@v1",
-        ))
-        .method(super::plugin_schema_defs::method_decl_from_schemars::<StopInstanceInput>(
+        ),
+    );
+    methods.insert(
+        "stop_instance".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<StopInstanceInput>(
             "stop_instance",
             op_state_store::SideEffect::Mutation,
             false,
             "cap.service.incus.instance.stop@v1",
             "mut.service.incus.instance.stop@v1",
-        ))
-        .method(super::plugin_schema_defs::method_decl_from_schemars::<RestartInstanceInput>(
+        ),
+    );
+    methods.insert(
+        "restart_instance".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<RestartInstanceInput>(
             "restart_instance",
             op_state_store::SideEffect::Mutation,
             false,
             "cap.service.incus.instance.restart@v1",
             "mut.service.incus.instance.restart@v1",
-        ))
-        .method(super::plugin_schema_defs::method_decl_from_schemars::<FreezeInstanceInput>(
+        ),
+    );
+    methods.insert(
+        "freeze_instance".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<FreezeInstanceInput>(
             "freeze_instance",
             op_state_store::SideEffect::Mutation,
             false,
             "cap.service.incus.instance.freeze@v1",
             "mut.service.incus.instance.freeze@v1",
-        ))
-        .method(super::plugin_schema_defs::method_decl_from_schemars::<UnfreezeInstanceInput>(
+        ),
+    );
+    methods.insert(
+        "unfreeze_instance".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<UnfreezeInstanceInput>(
             "unfreeze_instance",
             op_state_store::SideEffect::Mutation,
             false,
             "cap.service.incus.instance.unfreeze@v1",
             "mut.service.incus.instance.unfreeze@v1",
-        ))
-        .method(super::plugin_schema_defs::method_decl_from_schemars::<SnapshotInstanceInput>(
+        ),
+    );
+    methods.insert(
+        "snapshot_instance".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<SnapshotInstanceInput>(
             "snapshot_instance",
             op_state_store::SideEffect::Mutation,
             false,
             "cap.service.incus.instance.snapshot@v1",
             "mut.service.incus.instance.snapshot@v1",
-        ))
-        .method(super::plugin_schema_defs::method_decl_from_schemars::<ExecInstanceInput>(
+        ),
+    );
+    methods.insert(
+        "exec_instance".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<ExecInstanceInput>(
             "exec_instance",
             op_state_store::SideEffect::Mutation,
             false,
             "cap.service.incus.instance.exec@v1",
             "mut.service.incus.instance.exec@v1",
-        ))
-        .method(super::plugin_schema_defs::method_decl_from_schemars::<AddDeviceInput>(
+        ),
+    );
+    methods.insert(
+        "add_device".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<AddDeviceInput>(
             "add_device",
             op_state_store::SideEffect::Mutation,
             false,
             "cap.service.incus.device.add@v1",
             "mut.service.incus.device.add@v1",
-        ))
-        .method(super::plugin_schema_defs::method_decl_from_schemars::<RemoveDeviceInput>(
+        ),
+    );
+    methods.insert(
+        "remove_device".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<RemoveDeviceInput>(
             "remove_device",
             op_state_store::SideEffect::Mutation,
             false,
             "cap.service.incus.device.remove@v1",
             "mut.service.incus.device.remove@v1",
-        ))
-        .method(super::plugin_schema_defs::method_decl_from_schemars::<UpdateDeviceInput>(
+        ),
+    );
+    methods.insert(
+        "update_device".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars::<UpdateDeviceInput>(
             "update_device",
             op_state_store::SideEffect::Mutation,
             false,
             "cap.service.incus.device.update@v1",
             "mut.service.incus.device.update@v1",
-        ))
-        .build()
+        ),
+    );
+    schema = schema.with_methods(methods);
+    schema
 }
 
 // Self-registration: the plugin registry discovers this via inventory

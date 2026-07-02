@@ -132,7 +132,8 @@ impl DataStorePlugin {
     async fn read_live(&self) -> anyhow::Result<DataStoreState> {
         let export = self.store.export_canonical().await?;
 
-        let mut namespace_counts: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+        let mut namespace_counts: std::collections::BTreeMap<String, usize> =
+            std::collections::BTreeMap::new();
         let objects: Vec<ObjectRef> = export
             .objects
             .iter()
@@ -197,7 +198,11 @@ impl StatePlugin for DataStorePlugin {
         Some(schema)
     }
 
-    async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> anyhow::Result<StateDiff> {
+    async fn calculate_diff(
+        &self,
+        _current: &Value,
+        _desired: &Value,
+    ) -> anyhow::Result<StateDiff> {
         // Writes flow through the MutationEngine / owning plugins, not through a
         // whole-store diff. Always NoOp here.
         Ok(StateDiff {
@@ -255,12 +260,92 @@ impl StatePlugin for DataStorePlugin {
 pub(crate) fn datastore_schema() -> PluginSchema {
     let root = serde_json::to_value(schemars::schema_for!(DataStoreState))
         .expect("schemars schema serializes to JSON");
-    super::schemars_adapter::plugin_schema_from_json(
+    let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "datastore",
         "1.0.0",
         "Canonical state store — object index, per-namespace counts, execution/blockchain rows",
         &root,
-    )
+    );
+
+    // Output structs
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct ListObjectsOutput {
+        pub objects: Vec<serde_json::Value>,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct GetObjectOutput {
+        pub object: Option<serde_json::Value>,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct QueryOutput {
+        pub results: Vec<serde_json::Value>,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct GetStatsOutput {
+        pub stats: serde_json::Value,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct ExportOutput {
+        pub data: serde_json::Value,
+    }
+
+    // Add methods
+    use super::plugin_scaffold_helpers::method_decl_from_schemars_with_output;
+    use super::plugin_scaffold_helpers::AckOutput;
+    use op_state_store::SideEffect;
+
+    schema.methods.insert(
+        "list_objects".to_string(),
+        method_decl_from_schemars_with_output::<(), ListObjectsOutput>(
+            "list_objects",
+            SideEffect::Read,
+            true,
+            "datastore.read",
+            "obs.service.datastore.object.list@v1",
+        ),
+    );
+    schema.methods.insert(
+        "get_object".to_string(),
+        method_decl_from_schemars_with_output::<(), GetObjectOutput>(
+            "get_object",
+            SideEffect::Read,
+            true,
+            "datastore.read",
+            "obs.service.datastore.object.get@v1",
+        ),
+    );
+    schema.methods.insert(
+        "query".to_string(),
+        method_decl_from_schemars_with_output::<(), QueryOutput>(
+            "query",
+            SideEffect::Read,
+            true,
+            "datastore.read",
+            "obs.service.datastore.query@v1",
+        ),
+    );
+    schema.methods.insert(
+        "get_stats".to_string(),
+        method_decl_from_schemars_with_output::<(), GetStatsOutput>(
+            "get_stats",
+            SideEffect::Read,
+            true,
+            "datastore.read",
+            "obs.service.datastore.stats@v1",
+        ),
+    );
+    schema.methods.insert(
+        "export".to_string(),
+        method_decl_from_schemars_with_output::<(), ExportOutput>(
+            "export",
+            SideEffect::Read,
+            true,
+            "datastore.read",
+            "obs.service.datastore.export@v1",
+        ),
+    );
+
+    schema
 }
 
 // Self-registration: the plugin registry discovers this via inventory

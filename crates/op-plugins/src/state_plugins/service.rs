@@ -1,6 +1,6 @@
 //! Service plugin - auto-generating, validating, init-agnostic service management.
 
-use super::plugin_schema_defs::{any_field, method_decl_from_schemars, simple_schema};
+use super::plugin_scaffold_helpers::{any_field, method_decl_from_schemars, simple_schema};
 use crate::service_def::{
     ExecCommand, LogType, ReadyNotification, RestartPolicy, ServiceDef, ServiceName, ServiceType,
 };
@@ -310,13 +310,17 @@ impl ServicePlugin {
 
     /// List running s6 services via D-Bus.
     async fn list_s6_services(&self) -> Result<Vec<String>> {
-        let client = crate::state_plugins::s6::S6DbusClient::new();
+        let client = crate::state_plugins::s6_systemctl::S6DbusClient::new();
         let units = client.list_units().await.unwrap_or_default();
         let mut running = Vec::new();
         for unit in units {
             if let Some(name) = unit.get("name").and_then(|v| v.as_str()) {
-                if let Some(active) = unit.get("active").and_then(|v| v.as_str()) {
-                    if active == "true" || active == "up" {
+                if let Some(active) = unit
+                    .get("active_state")
+                    .or_else(|| unit.get("active"))
+                    .and_then(|v| v.as_str())
+                {
+                    if active == "active" || active == "true" || active == "up" {
                         running.push(name.to_string());
                     }
                 }
@@ -427,31 +431,40 @@ pub(crate) fn service_schema() -> PluginSchema {
         &["net"],
         vec![("services", any_field(true, "Service map", Some(json!({}))))],
     );
-    
+
     // Add D-Bus methods for service lifecycle management
     // Reference: https://www.freedesktop.org/wiki/Software/systemd/
-    schema.methods.insert("init".to_string(), method_decl_from_schemars::<InitInput>(
-        "init",
-        SideEffect::Mutation,
-        false,
-        "cap.service.lifecycle.init@v1",
-        "mut.service.lifecycle.init@v1",
-    ));
-    schema.methods.insert("run".to_string(), method_decl_from_schemars::<RunInput>(
-        "run",
-        SideEffect::Mutation,
-        false,
-        "cap.service.lifecycle.run@v1",
-        "mut.service.lifecycle.run@v1",
-    ));
-    schema.methods.insert("shutdown".to_string(), method_decl_from_schemars::<ShutdownInput>(
-        "shutdown",
-        SideEffect::Mutation,
-        false,
-        "cap.service.lifecycle.shutdown@v1",
-        "mut.service.lifecycle.shutdown@v1",
-    ));
-    
+    schema.methods.insert(
+        "init".to_string(),
+        method_decl_from_schemars::<InitInput>(
+            "init",
+            SideEffect::Mutation,
+            false,
+            "cap.service.lifecycle.init@v1",
+            "mut.service.lifecycle.init@v1",
+        ),
+    );
+    schema.methods.insert(
+        "run".to_string(),
+        method_decl_from_schemars::<RunInput>(
+            "run",
+            SideEffect::Mutation,
+            false,
+            "cap.service.lifecycle.run@v1",
+            "mut.service.lifecycle.run@v1",
+        ),
+    );
+    schema.methods.insert(
+        "shutdown".to_string(),
+        method_decl_from_schemars::<ShutdownInput>(
+            "shutdown",
+            SideEffect::Mutation,
+            false,
+            "cap.service.lifecycle.shutdown@v1",
+            "mut.service.lifecycle.shutdown@v1",
+        ),
+    );
+
     schema
 }
 

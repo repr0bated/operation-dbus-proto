@@ -1,4 +1,4 @@
-use super::plugin_schema_defs::{simple_schema, method_decl_from_schemars};
+use super::plugin_scaffold_helpers::{method_decl_from_schemars, simple_schema};
 use anyhow::Result;
 use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
@@ -10,8 +10,13 @@ use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "sch.network.proxy-server.schema@v1"))]
 pub struct ProxyServerState {
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "obs.network.proxy-server.enabled@v1"))]
     pub enabled: bool,
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "obs.network.proxy-server.port@v1"))]
     pub port: u16,
 }
 
@@ -125,67 +130,48 @@ impl StatePlugin for ProxyServerPlugin {
 }
 
 pub(crate) fn proxy_server_schema() -> PluginSchema {
-    let mut schema = simple_schema(
+    let root = serde_json::to_value(schemars::schema_for!(ProxyServerState))
+        .expect("schemars schema serializes to JSON");
+    let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "proxy_server",
+        "1.0.0",
         "Proxy server runtime config",
-        &["net"],
-        vec![
-            (
-                "enabled",
-                FieldSchema {
-                    field_type: FieldType::Boolean,
-                    required: true,
-                    description: "Enable proxy".to_string(),
-                    default: Some(json!(false)),
-                    example: None,
-                    constraints: Vec::new(),
-                    read_only: false,
-                    read_only_when: None,
-                },
-            ),
-            (
-                "port",
-                FieldSchema {
-                    field_type: FieldType::Integer,
-                    required: true,
-                    description: "Proxy port".to_string(),
-                    default: Some(json!(8080)),
-                    example: None,
-                    constraints: vec![
-                        Constraint::Min { value: 1.0 },
-                        Constraint::Max { value: 65535.0 },
-                    ],
-                    read_only: false,
-                    read_only_when: None,
-                },
-            ),
-        ],
+        &root,
     );
-    
+
     // Add D-Bus methods for proxy lifecycle management
     // Reference: https://www.freedesktop.org/wiki/Specifications/ProxyServerSpec
-    schema.methods.insert("start_proxy".to_string(), method_decl_from_schemars::<StartProxyInput>(
-        "start_proxy",
-        SideEffect::Mutation,
-        false,
-        "cap.network.proxy.start@v1",
-        "mut.network.proxy.start@v1",
-    ));
-    schema.methods.insert("stop_proxy".to_string(), method_decl_from_schemars::<StopProxyInput>(
-        "stop_proxy",
-        SideEffect::Mutation,
-        false,
-        "cap.network.proxy.stop@v1",
-        "mut.network.proxy.stop@v1",
-    ));
-    schema.methods.insert("configure".to_string(), method_decl_from_schemars::<ConfigureProxyInput>(
-        "configure",
-        SideEffect::Mutation,
-        false,
-        "cap.network.proxy.configure@v1",
-        "mut.network.proxy.configure@v1",
-    ));
-    
+    schema.methods.insert(
+        "start_proxy".to_string(),
+        method_decl_from_schemars::<StartProxyInput>(
+            "start_proxy",
+            SideEffect::Mutation,
+            false,
+            "cap.network.proxy.start@v1",
+            "mut.network.proxy.start@v1",
+        ),
+    );
+    schema.methods.insert(
+        "stop_proxy".to_string(),
+        method_decl_from_schemars::<StopProxyInput>(
+            "stop_proxy",
+            SideEffect::Mutation,
+            false,
+            "cap.network.proxy.stop@v1",
+            "mut.network.proxy.stop@v1",
+        ),
+    );
+    schema.methods.insert(
+        "configure".to_string(),
+        method_decl_from_schemars::<ConfigureProxyInput>(
+            "configure",
+            SideEffect::Mutation,
+            false,
+            "cap.network.proxy.configure@v1",
+            "mut.network.proxy.configure@v1",
+        ),
+    );
+
     schema
 }
 

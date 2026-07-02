@@ -20,7 +20,7 @@ use simd_json::json;
 use simd_json::{prelude::*, OwnedValue as Value};
 use std::collections::HashMap;
 
-use super::plugin_schema_defs::method_decl_from_schemars;
+use super::plugin_scaffold_helpers::method_decl_from_schemars;
 
 // ============================================================================
 // SECTION 1: IMMUTABLE IDENTITY (set once, never changes)

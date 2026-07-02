@@ -3,13 +3,17 @@
 use std::collections::{BTreeMap, HashMap};
 use std::convert::TryFrom;
 use std::pin::Pin;
+use std::sync::OnceLock;
 use std::sync::Arc;
 
 use async_stream::stream;
 use chrono::{DateTime, Utc};
 use futures::StreamExt as _;
 use op_cognitive_mcp::QdrantSemanticShuttle;
-use prost_types::{Struct as ProstStruct, Timestamp as ProstTimestamp, Value as ProstValue};
+use prost::Message;
+use prost_types::{
+    Struct as ProstStruct, Timestamp as ProstTimestamp, Value as ProstValue,
+};
 use serde_json::Value as JsonValue;
 use simd_json::prelude::{ValueAsContainer, ValueAsScalar};
 use tokio::sync::{broadcast, RwLock};
@@ -19,10 +23,15 @@ use tonic::{Request, Response, Status};
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
+use prost_reflect::{DescriptorPool, DynamicMessage};
+use serde::de::DeserializeSeed;
 
 use crate::interceptor::{self, GhostbridgeIdentity};
 
+use crate::dynamic_reflection::{ActiveReflectionCatalog, DynamicReflectionService};
 use crate::mutation_engine::{ChangeType, MutationEngine};
+use crate::plugin_object_blob::{blobify_plugin_schema, DbusObjectIdentity};
+use crate::plugin_grpc_gen::MethodServiceRegistry;
 use crate::proto::{
     event_chain_service_server::EventChainService, ovsdb_mirror_server::OvsdbMirror,
     plugin_service_server::PluginService, runtime_mirror_server::RuntimeMirror,
@@ -51,7 +60,7 @@ use crate::proto::{
     SubscribeEventsRequest, SubscribeRequest, SubscribeSignalsRequest, TagLock as ProtoTagLock,
     VerifyChainRequest, VerifyChainResponse,
 };
-use op_state_store::{Decision, DenyReason, MerkleProof};
+use op_state_store::{Decision, DenyReason, MerkleProof, PluginSchema};
 use zbus::zvariant::{Array as ZArray, OwnedValue as ZOwnedValue, Str as ZStr, Value as ZValue};
 use zbus::{Connection, Proxy};
 
@@ -326,6 +335,9 @@ impl RegistryInner {
 // gRPC server implementation for operation services
 // =============================================================================
 
+use crate::per_plugin_reflection::PerMethodReflectionRegistry;
+use crate::plugin_grpc_gen::PerMethodGrpcServices;
+
 #[derive(Clone)]
 pub struct OperationGrpcServer {
     mutation_engine: Arc<MutationEngine>,
@@ -335,6 +347,12 @@ pub struct OperationGrpcServer {
     chain_events: broadcast::Sender<ProtoChainEvent>,
     /// Component registry state (shared across clones)
     registry: Arc<RwLock<RegistryInner>>,
+    /// Per-method gRPC services (frozen at D-Bus object creation)
+    per_method_services: Arc<PerMethodGrpcServices>,
+    /// Per-method reflection registry
+    per_method_reflection: Arc<PerMethodReflectionRegistry>,
+    /// Active D-Bus object blobs backing gRPC reflection discovery.
+    active_reflection: ActiveReflectionCatalog,
 }
 
 impl OperationGrpcServer {
@@ -347,6 +365,9 @@ impl OperationGrpcServer {
             semantic_shuttle: None,
             chain_events: chain_tx,
             registry: Arc::new(RwLock::new(registry)),
+            per_method_services: PerMethodGrpcServices::new(),
+            per_method_reflection: Arc::new(PerMethodReflectionRegistry::new()),
+            active_reflection: ActiveReflectionCatalog::new(),
         }
     }
 
@@ -362,12 +383,52 @@ impl OperationGrpcServer {
             semantic_shuttle: None,
             chain_events: chain_tx,
             registry: Arc::new(RwLock::new(registry)),
+            per_method_services: PerMethodGrpcServices::new(),
+            per_method_reflection: Arc::new(PerMethodReflectionRegistry::new()),
+            active_reflection: ActiveReflectionCatalog::new(),
         }
     }
 
     pub fn with_semantic_shuttle(mut self, semantic_shuttle: Arc<QdrantSemanticShuttle>) -> Self {
         self.semantic_shuttle = Some(semantic_shuttle);
         self
+    }
+
+    /// Freeze all plugin method descriptors from the configured schema provider.
+    ///
+    /// tonic-reflection is immutable once mounted. This must run before
+    /// `build_operation_routes` creates the reflection service.
+    pub async fn freeze_plugin_method_reflection(&self) {
+        for plugin in self.plugin_provider.list_plugins().await {
+            let Some((schema_json, _, _)) = self.plugin_provider.get_schema(&plugin.id).await
+            else {
+                warn!(
+                    plugin_id = %plugin.id,
+                    "plugin schema missing while freezing gRPC reflection methods"
+                );
+                continue;
+            };
+            let Ok(schema) = serde_json::from_str::<PluginSchema>(&schema_json) else {
+                warn!(
+                    plugin_id = %plugin.id,
+                    "plugin schema could not be parsed while freezing gRPC reflection methods"
+                );
+                continue;
+            };
+            if schema.methods.is_empty() {
+                continue;
+            }
+            if let Err(error) = self
+                .register_plugin_methods(plugin.id.clone(), &schema)
+                .await
+            {
+                warn!(
+                    plugin_id = %plugin.id,
+                    %error,
+                    "failed to freeze plugin method descriptors for gRPC reflection"
+                );
+            }
+        }
     }
 
     /// Snapshot of all registered components plus a live-update receiver.
@@ -386,7 +447,184 @@ impl OperationGrpcServer {
         let rx = inner.watch_tx.subscribe();
         (snapshot, rx)
     }
+
+    /// Register a plugin's methods as per-method gRPC services.
+    ///
+    /// This is called at D-Bus object creation time. Each method gets its own
+    /// gRPC service generated and frozen. The reflection service is updated
+    /// to include these new method services.
+    pub async fn register_plugin_methods(
+        &self,
+        plugin_id: String,
+        schema: &PluginSchema,
+    ) -> Result<Vec<MethodServiceRegistry>, anyhow::Error> {
+        // Create frozen services for all methods
+        let registries = self
+            .per_method_services
+            .create_frozen_services(plugin_id.clone(), schema)
+            .await?;
+
+        // Register each method with the reflection registry
+        for registry in &registries {
+            self.per_method_reflection
+                .register(
+                    plugin_id.clone(),
+                    registry.method_name.clone(),
+                    registry.subid.clone(),
+                    registry.required_capability.clone(),
+                    registry.schema_version.clone(),
+                )
+                .await;
+        }
+
+        let blob = blobify_plugin_schema(
+            &plugin_id,
+            schema.clone(),
+            DbusObjectIdentity {
+                bus_name: "org.opdbus.v1.plugins".to_string(),
+                object_path: format!("/org/opdbus/v1/plugins/{}", plugin_id.replace('.', "/")),
+                interface_name: "org.opdbus.v1.Plugin".to_string(),
+            },
+            "operation.plugin.v1",
+            &format!(
+                "operation.plugin.v1.{}PluginMethods",
+                crate::plugin_object_blob::to_pascal_ident(&plugin_id)
+            ),
+        );
+        self.active_reflection.upsert_blob(blob).await;
+
+        Ok(registries)
+    }
+
+    /// Get the per-method services registry.
+    pub fn per_method_services(&self) -> Arc<PerMethodGrpcServices> {
+        self.per_method_services.clone()
+    }
+
+    /// Get the per-method reflection registry.
+    pub fn per_method_reflection(&self) -> Arc<PerMethodReflectionRegistry> {
+        self.per_method_reflection.clone()
+    }
+
+    pub fn active_reflection(&self) -> ActiveReflectionCatalog {
+        self.active_reflection.clone()
+    }
+
+    /// Generate the reflection file descriptor set for mounted services.
+    ///
+    /// The build script compiles the generated `operation.plugin.v1` plugin
+    /// method services into the static descriptor set. Do not append synthetic
+    /// `operation.method.*` descriptors here unless those services are mounted
+    /// too; reflection must not advertise routes clients cannot call.
+    pub fn generate_combined_reflection_descriptor(&self) -> Vec<u8> {
+        crate::callable_reflection::descriptor_bytes()
+    }
+
+    pub(crate) async fn call_generated_plugin_method_typed<Req, Res>(
+        &self,
+        plugin_id: &'static str,
+        method_name: &'static str,
+        request_message_name: &'static str,
+        response_message_name: &'static str,
+        request: Request<Req>,
+    ) -> Result<Response<Res>, Status>
+    where
+        Req: prost::Message + Default,
+        Res: prost::Message + Default,
+    {
+        let identity = request.extensions().get::<GhostbridgeIdentity>().cloned();
+        if let Err(error) = enforce_bridge_capability(plugin_id, method_name, None, identity.as_ref())
+        {
+            return Err(Status::permission_denied(error.message));
+        }
+
+        let request_bytes = request.into_inner().encode_to_vec();
+        let request_desc = plugin_descriptor_pool()
+            .get_message_by_name(request_message_name)
+            .ok_or_else(|| {
+                Status::internal(format!(
+                    "missing request descriptor for {plugin_id}.{method_name}"
+                ))
+            })?;
+        let request_dynamic = DynamicMessage::decode(request_desc, request_bytes.as_slice())
+            .map_err(|error| {
+                Status::internal(format!(
+                    "failed to decode typed request for {plugin_id}.{method_name}: {error}"
+                ))
+            })?;
+        let json_args = serde_json::to_string(&request_dynamic).map_err(|error| {
+            Status::internal(format!(
+                "failed to serialize typed request for {plugin_id}.{method_name}: {error}"
+            ))
+        })?;
+
+        let result = self
+            .mutation_engine
+            .dispatch_method_call(
+                plugin_id,
+                method_name,
+                &json_args,
+                None,
+                "grpc:operation.plugin.v1",
+            )
+            .await
+            .map_err(|error| {
+                Status::internal(format!(
+                    "plugin method {}.{} failed: {}",
+                    plugin_id, method_name, error
+                ))
+            })?;
+
+        let result_json = serde_json::to_string(&result).map_err(|error| {
+            Status::internal(format!(
+                "failed to serialize method result for {plugin_id}.{method_name}: {error}"
+            ))
+        })?;
+        let response_desc = plugin_descriptor_pool()
+            .get_message_by_name(response_message_name)
+            .ok_or_else(|| {
+                Status::internal(format!(
+                    "missing response descriptor for {plugin_id}.{method_name}"
+                ))
+            })?;
+        let mut deserializer = serde_json::de::Deserializer::from_str(&result_json);
+        let response_dynamic = response_desc
+            .deserialize(&mut deserializer)
+            .map_err(|error| {
+                Status::internal(format!(
+                    "failed to deserialize typed response for {plugin_id}.{method_name}: {error}"
+                ))
+            })?;
+        deserializer.end().map_err(|error| {
+            Status::internal(format!(
+                "failed to finish typed response decode for {plugin_id}.{method_name}: {error}"
+            ))
+        })?;
+
+        let mut bytes = Vec::new();
+        response_dynamic.encode(&mut bytes).map_err(|error| {
+            Status::internal(format!(
+                "failed to encode typed response for {plugin_id}.{method_name}: {error}"
+            ))
+        })?;
+        let response = Res::decode(bytes.as_slice()).map_err(|error| {
+            Status::internal(format!(
+                "failed to decode typed response for {plugin_id}.{method_name}: {error}"
+            ))
+        })?;
+        Ok(Response::new(response))
+    }
 }
+
+fn plugin_descriptor_pool() -> &'static DescriptorPool {
+    static POOL: OnceLock<DescriptorPool> = OnceLock::new();
+    POOL.get_or_init(|| {
+        DescriptorPool::decode(crate::proto::FILE_DESCRIPTOR_SET)
+            .expect("decode combined plugin descriptor pool")
+    })
+}
+
+include!(concat!(env!("OUT_DIR"), "/plugin_method_routes.rs"));
 
 /// Mount the COMPLETE Operation gRPC service surface onto a `tonic::service::Routes`.
 ///
@@ -420,16 +658,22 @@ pub fn build_operation_routes(server: OperationGrpcServer) -> tonic::service::Ro
     use crate::proto::runtime_mirror_server::RuntimeMirrorServer;
     use crate::proto::state_sync_server::StateSyncServer;
 
-    // Reflection — exposes combined FileDescriptorSet covering all domain protos.
-    // Enables grpcurl discovery and drives MCP tool auto-registration in op-chat.
-    let reflection = tonic_reflection::server::Builder::configure()
-        .register_encoded_file_descriptor_set(crate::proto::FILE_DESCRIPTOR_SET)
-        .build_v1()
-        .expect("failed to build reflection service");
+    // Reflection — exposes the static FileDescriptorSet snapshot covering all
+    // domain protos plus any per-method descriptors frozen before route build.
+    // tonic-reflection cannot be mutated after the service is mounted, so D-Bus
+    // object creation must call `register_plugin_methods` before this point when
+    // per-method services should be visible to grpcurl/MCP clients.
+    let descriptor = server.generate_combined_reflection_descriptor();
+    let descriptor: &'static [u8] = Box::leak(descriptor.into_boxed_slice());
+    let reflection_v1 = DynamicReflectionService::new(server.active_reflection()).into_v1_server();
+    let reflection_v1alpha = tonic_reflection::server::Builder::configure()
+        .register_encoded_file_descriptor_set(descriptor)
+        .build_v1alpha()
+        .expect("failed to build v1alpha reflection service");
 
     let intercept = interceptor::ghostbridge_interceptor;
 
-    tonic::service::Routes::new(tonic_web::enable(StateSyncServer::with_interceptor(
+    let routes = tonic::service::Routes::new(tonic_web::enable(StateSyncServer::with_interceptor(
         server.clone(),
         intercept,
     )))
@@ -469,8 +713,12 @@ pub fn build_operation_routes(server: OperationGrpcServer) -> tonic::service::Ro
         crate::proto::chat::chat_service_server::ChatServiceServer::new(
             crate::chat_service::ChatServiceImpl::new(),
         ),
-    ))
-    .add_service(tonic_web::enable(reflection))
+    ));
+
+    let routes = add_routes(routes, server.clone());
+    routes
+        .add_service(tonic_web::enable(reflection_v1))
+        .add_service(tonic_web::enable(reflection_v1alpha))
 }
 
 /// Run gRPC server for all Operation services.
@@ -513,6 +761,7 @@ pub async fn run_grpc_server(
             server
         }
     };
+    server.freeze_plugin_method_reflection().await;
 
     // Health — standard gRPC health protocol for deploy verification and LB probes.
     let (mut health_reporter, health_service) = tonic_health::server::health_reporter();

@@ -187,6 +187,10 @@ pub struct PluginSchema {
     pub version: String,
     /// Description
     pub description: String,
+    /// Display name for UI/contract surfaces (e.g. "GB.Keypair"). Display-only;
+    /// does not affect D-Bus path or interface name. None = use `name`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
     /// Fields in the plugin state
     pub fields: HashMap<String, FieldSchema>,
     /// Dependencies on other plugins
@@ -708,6 +712,7 @@ pub struct PluginSchemaBuilder {
     category: String,
     version: String,
     description: String,
+    display_name: Option<String>,
     fields: HashMap<String, FieldSchema>,
     dependencies: Vec<String>,
     example: Option<Value>,
@@ -727,6 +732,7 @@ impl PluginSchemaBuilder {
             category: default_category(),
             version: "1.0.0".to_string(),
             description: String::new(),
+            display_name: None,
             fields: HashMap::new(),
             dependencies: Vec::new(),
             example: None,
@@ -752,6 +758,12 @@ impl PluginSchemaBuilder {
 
     pub fn description(mut self, description: &str) -> Self {
         self.description = description.to_string();
+        self
+    }
+
+    /// Set the display name (e.g. "GB.Keypair"). Display-only.
+    pub fn display_name(mut self, display_name: &str) -> Self {
+        self.display_name = Some(display_name.to_string());
         self
     }
 
@@ -936,6 +948,7 @@ impl PluginSchemaBuilder {
             category: self.category,
             version: self.version,
             description: self.description,
+            display_name: self.display_name,
             fields: self.fields,
             dependencies: self.dependencies,
             example: self.example,
@@ -1228,7 +1241,6 @@ pub fn builtin_plugin_schemas() -> Vec<PluginSchema> {
         "full_system",
         "gcloud_adc",
         "hardware",
-        "keypair",
         "keyring",
         "login1",
         "mcp",
@@ -1261,7 +1273,6 @@ fn builtin_plugin_schema_from_canonical_name(name: &str) -> Option<PluginSchema>
         "full_system" => create_full_system_schema(),
         "gcloud_adc" => create_gcloud_adc_schema(),
         "hardware" => create_hardware_schema(),
-        "keypair" => create_keypair_schema(),
         "keyring" => create_keyring_schema(),
         "login1" => create_login1_schema(),
         "mcp" => create_mcp_schema(),
@@ -1596,18 +1607,6 @@ fn create_hardware_schema() -> PluginSchema {
             ("memory", any_field(true, "Memory info", Some(json!({})))),
             ("disks", any_field(true, "Disk list", Some(json!([])))),
         ],
-    )
-}
-
-fn create_keypair_schema() -> PluginSchema {
-    simple_schema(
-        "keypair",
-        "Keypair declaration state",
-        &[],
-        vec![(
-            "keypairs",
-            any_field(true, "Managed keypairs", Some(json!([]))),
-        )],
     )
 }
 
@@ -5098,8 +5097,8 @@ mod tests {
         // R1.2: MethodDecl MUST contain all seven fields
         let decl = MethodDecl {
             name: "SetKey".to_string(),
-            args: serde_json::json!({"type": "object"}),
-            returns: Some(serde_json::json!({"type": "string"})),
+            args: json!({"type": "object"}),
+            returns: Some(json!({"type": "string"})),
             side_effect: SideEffect::Mutation,
             idempotent: false,
             required_capability: Some("wireguard.admin".to_string()),
@@ -5119,7 +5118,7 @@ mod tests {
         // R1.3: SignalDecl MUST contain name, payload, subid
         let sig = SignalDecl {
             name: "KeyRotated".to_string(),
-            payload: Some(serde_json::json!({"type": "string"})),
+            payload: Some(json!({"type": "string"})),
             subid: "evt.network.wireguard.key-rotated@v1".to_string(),
         };
         assert!(!sig.name.is_empty());
@@ -5205,14 +5204,14 @@ mod tests {
             "SetKey".to_string(),
             MethodDecl {
                 name: "SetKey".to_string(),
-                args: serde_json::json!({
+                args: json!({
                     "type": "object",
                     "properties": {
                         "key": {"type": "string"}
                     },
                     "required": ["key"]
                 }),
-                returns: Some(serde_json::json!({"type": "string"})),
+                returns: Some(json!({"type": "string"})),
                 side_effect: SideEffect::Mutation,
                 idempotent: false,
                 required_capability: Some("wireguard.admin".to_string()),
@@ -5223,8 +5222,8 @@ mod tests {
             "GetStatus".to_string(),
             MethodDecl {
                 name: "GetStatus".to_string(),
-                args: serde_json::json!({"type": "object"}),
-                returns: Some(serde_json::json!({"type": "string"})),
+                args: json!({"type": "object"}),
+                returns: Some(json!({"type": "string"})),
                 side_effect: SideEffect::Read,
                 idempotent: true,
                 required_capability: None,
@@ -5234,7 +5233,7 @@ mod tests {
 
         let signals = vec![SignalDecl {
             name: "KeyRotated".to_string(),
-            payload: Some(serde_json::json!({"type": "string"})),
+            payload: Some(json!({"type": "string"})),
             subid: "evt.network.wireguard.key-rotated@v1".to_string(),
         }];
 

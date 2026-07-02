@@ -383,7 +383,6 @@ mod tests {
             "net",
             "openflow",
             "privacy_router",
-            "proxmox",
             "hardware",
             "software",
             "users",

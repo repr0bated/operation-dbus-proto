@@ -1,12 +1,7 @@
 use anyhow::{Context, Result};
+use op_plugins::state_plugins::embedding_model::{voyage_embed_params, VoyageModel};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use std::env;
-
-/// Default public Voyage AI endpoint.
-const VOYAGE_PUBLIC_URL: &str = "https://api.voyageai.com/v1/embeddings";
-/// MongoDB-hosted Voyage AI endpoint (for keys prefixed with `al-`).
-const VOYAGE_MONGODB_URL: &str = "https://ai.mongodb.com/v1/embeddings";
 
 /// Voyage AI client for text embeddings
 pub struct VoyageClient {
@@ -21,6 +16,11 @@ struct EmbeddingRequest<'a> {
     input: Vec<&'a str>,
     model: &'a str,
     input_type: Option<&'a str>,
+    /// Pinned to the shared-space dimension so callers always land in the same
+    /// Qdrant collection regardless of which model in the trio is active —
+    /// without this, Voyage returns each model's native (differing) dimension.
+    truncation: bool,
+    output_dimension: u32,
 }
 
 #[derive(Deserialize)]
@@ -34,30 +34,27 @@ struct EmbeddingResponse {
 }
 
 impl VoyageClient {
-    /// Create a new Voyage client.
-    ///
-    /// Auto-detects the endpoint: MongoDB-hosted keys (`al-*`) route to
-    /// `https://ai.mongodb.com/v1/embeddings`; all others use the public
-    /// `https://api.voyageai.com/v1/embeddings` endpoint.
-    pub fn new() -> Result<Self> {
-        let api_key = env::var("COGNITIVE_MCP_VOYAGE_API_KEY")
-            .or_else(|_| env::var("VOYAGE_API_KEY"))
-            .or_else(|_| env::var("VOYAGE_API_KEY_RUST"))
-            .context(
-                "Voyage API key not found: set COGNITIVE_MCP_VOYAGE_API_KEY, \
-                 VOYAGE_API_KEY, or VOYAGE_API_KEY_RUST",
-            )?;
-        let model = env::var("COGNITIVE_MCP_VOYAGE_MODEL")
-            .or_else(|_| env::var("VOYAGE_MODEL"))
-            .unwrap_or_else(|_| "voyage-4".to_string());
-        let base_url = voyage_url_for_key(&api_key);
-
-        Ok(Self {
+    /// Construct directly from resolved call-time parameters (endpoint,
+    /// model, key) — the primary path, used when the `embedding_model`
+    /// plugin's config is available.
+    pub fn from_params(endpoint: String, api_key: String, model: String) -> Self {
+        Self {
             client: Client::new(),
             api_key,
             model,
-            base_url,
-        })
+            base_url: endpoint,
+        }
+    }
+
+    /// Create a new Voyage client by resolving config through the
+    /// `embedding_model` plugin (projection, falling back to its own env-var
+    /// reads — see [`op_plugins::state_plugins::embedding_model::voyage_embed_params`]).
+    pub fn new() -> Result<Self> {
+        let params = voyage_embed_params().context(
+            "Voyage API key not found: set COGNITIVE_MCP_VOYAGE_API_KEY, \
+             VOYAGE_API_KEY, or VOYAGE_API_KEY_RUST",
+        )?;
+        Ok(Self::from_params(params.endpoint, params.api_key, params.model_id))
     }
 
     /// Embed text using Voyage API
@@ -66,6 +63,8 @@ impl VoyageClient {
             input: vec![text],
             model: &self.model,
             input_type,
+            truncation: true,
+            output_dimension: VoyageModel::SHARED_EMBEDDING_DIMS,
         };
 
         let resp = self
@@ -87,15 +86,5 @@ impl VoyageClient {
             .next()
             .map(|d| d.embedding)
             .context("Voyage API returned no embeddings")
-    }
-}
-
-/// Determine the correct Voyage endpoint for a given API key.
-fn voyage_url_for_key(key: &str) -> String {
-    let trimmed = key.trim();
-    if trimmed.starts_with("al-") {
-        VOYAGE_MONGODB_URL.to_string()
-    } else {
-        VOYAGE_PUBLIC_URL.to_string()
     }
 }

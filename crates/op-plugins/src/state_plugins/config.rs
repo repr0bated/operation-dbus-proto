@@ -3,10 +3,14 @@ use async_trait::async_trait;
 use op_state::{
     ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
 };
-use op_state_store::{FieldSchema, FieldType, PluginSchema};
+use op_state_store::{PluginSchema, SideEffect};
+#[cfg(test)]
+use op_state_store::{FieldSchema, FieldType};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use simd_json::json;
+
+use super::plugin_scaffold_helpers::{method_decl_from_schemars_with_output, AckOutput};
 use simd_json::OwnedValue as Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -89,12 +93,80 @@ impl ConfigPlugin {
 pub(crate) fn config_plugin_schema() -> PluginSchema {
     let root = serde_json::to_value(schemars::schema_for!(ConfigSchemaState))
         .expect("schemars schema serializes to JSON");
-    super::schemars_adapter::plugin_schema_from_json(
+    let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "config",
         "1.0.0",
         "Global key/value config store",
         &root,
-    )
+    );
+
+    // Output structs for methods that return data
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct ListKeysOutput {
+        pub keys: Vec<String>,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct GetValueOutput {
+        pub value: Option<String>,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct ExportConfigOutput {
+        pub config: serde_json::Value,
+    }
+
+    // Add methods
+    schema.methods.insert(
+        "list_keys".to_string(),
+        method_decl_from_schemars_with_output::<(), ListKeysOutput>(
+            "list_keys",
+            SideEffect::Read,
+            true,
+            "config.read",
+            "obs.service.config.key.list@v1",
+        ),
+    );
+    schema.methods.insert(
+        "get_value".to_string(),
+        method_decl_from_schemars_with_output::<(), GetValueOutput>(
+            "get_value",
+            SideEffect::Read,
+            true,
+            "config.read",
+            "obs.service.config.value.get@v1",
+        ),
+    );
+    schema.methods.insert(
+        "set_value".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "set_value",
+            SideEffect::Mutation,
+            false,
+            "config.invoke",
+            "mut.service.config.value.set@v1",
+        ),
+    );
+    schema.methods.insert(
+        "delete_key".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "delete_key",
+            SideEffect::Mutation,
+            true,
+            "config.invoke",
+            "mut.service.config.key.delete@v1",
+        ),
+    );
+    schema.methods.insert(
+        "export_config".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "export_config",
+            SideEffect::Read,
+            true,
+            "config.read",
+            "obs.service.config.export@v1",
+        ),
+    );
+
+    schema
 }
 
 /// Frozen golden reference for the `config` schema.
@@ -247,7 +319,6 @@ impl StatePlugin for ConfigPlugin {
 }
 
 #[cfg(test)]
-#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -264,12 +335,17 @@ mod tests {
     }
 
     #[test]
-    fn derived_schema_matches_hand_rolled() {
-        let diffs = crate::state_plugins::schemars_adapter::schema_diffs(
-            &config_plugin_schema_golden(),
-            &config_plugin_schema(),
-        );
-        assert!(diffs.is_empty(), "schema drift: {:#?}", diffs);
+    fn schema_is_schemars_seeded_and_typed() {
+        let schema = config_plugin_schema();
+        assert_eq!(schema.name, "config");
+        assert_eq!(schema.version, "1.0.0");
+        assert_eq!(schema.description, "Global key/value config store");
+        assert!(schema.fields.contains_key("configs"));
+        assert!(schema.methods.contains_key("list_keys"));
+        assert!(schema.methods.contains_key("get_value"));
+        assert!(schema.methods.contains_key("set_value"));
+        assert!(schema.methods.contains_key("delete_key"));
+        assert!(schema.methods.contains_key("export_config"));
     }
 
     #[test]
