@@ -2,11 +2,14 @@
 //
 // Current architecture (Artix Linux + s6 + Incus + rovs):
 // - Host runs ovsbr0 via OVSDB (datapath=system or netdev for AF_XDP)
-// - All privacy services (Xray, mail) run inside Incus containers
+// - All privacy services (Xray, mail) run on the HOST (xray via the
+//   `gbr-xray` s6 service); the deprecated `wg-xray` Incus container is
+//   stopped and no longer referenced.
 // - Containers have NO host interface — they communicate via Unix sockets
 //   through OVS internal ports using OpenFlow routing
-// - Xray ingress lives in wg-xray Incus container, NOT on host
-// - OpenFlow controller (also in wg-xray container) drives forwarding
+// - Xray ingress now runs on the host (gbr-xray service), NOT inside a
+//   container.
+// - OpenFlow controller now runs on the host as well.
 // - priv_* internal ports are created by ovs-attach-ports.sh
 
 use anyhow::{Context, Result};
@@ -22,8 +25,12 @@ const DEFAULT_PRIVACY_PORTS: &[&str] = &[
     "ovsbr0-mgmt",
     "ovsbr0-sock",
 ];
-const DEFAULT_MGMT_CIDR: &str = "10.200.0.1/24"; // Xray ingress IP (inside wg-xray container)
-const DEFAULT_OPENFLOW_CONTROLLER: &str = "10.200.0.1:6653"; // Controller inside wg-xray
+// TODO(host-xray): These constants still reference the old wg-xray container
+// IP `10.200.0.1`. Xray ingress / OpenFlow controller now run on the host
+// (the host grpc-uplink veth IP is `10.200.0.2`). Repoint these once the
+// exact on-host xray ingress / OpenFlow controller addresses are confirmed.
+const DEFAULT_MGMT_CIDR: &str = "10.200.0.1/24"; // Xray ingress IP (was inside wg-xray; now on host — TODO: confirm new value)
+const DEFAULT_OPENFLOW_CONTROLLER: &str = "10.200.0.1:6653"; // Controller (was inside wg-xray; now on host — TODO: confirm new value)
 const DEFAULT_DATAPATH_TYPE: &str = "system";
 const DEFAULT_FAIL_MODE: &str = "standalone";
 
@@ -56,7 +63,7 @@ impl PrivacyNetworkHostConfig {
             openflow_controller: std::env::var("PRIVACY_OPENFLOW_CONTROLLER")
                 .unwrap_or_else(|_| DEFAULT_OPENFLOW_CONTROLLER.to_string()),
             xray_ingress_ip: std::env::var("XRAY_INGRESS_IP")
-                .unwrap_or_else(|_| "10.200.0.1".to_string()),
+                .unwrap_or_else(|_| "10.200.0.1".to_string()), // TODO(host-xray): was wg-xray container IP; xray now runs on host (gbr-xray). Confirm new value.
             datapath_type: std::env::var("PRIVACY_DATAPATH_TYPE")
                 .unwrap_or_else(|_| DEFAULT_DATAPATH_TYPE.to_string()),
             fail_mode: std::env::var("PRIVACY_FAIL_MODE")
@@ -117,9 +124,9 @@ async fn ensure_host_privacy_network_with_config(cfg: &PrivacyNetworkHostConfig)
         .await
         .context("Failed to list bridge ports")?;
 
-    // NOTE: wgcf/Xray run inside Incus containers (wg-xray), not as host interfaces.
-    // Container traffic reaches the bridge via Unix sockets + OpenFlow routing.
-    // Do NOT attach wgcf as a host port — it does not exist on the host.
+    // NOTE: wgcf/Xray now run on the host (gbr-xray s6 service), not as
+    // container interfaces. The deprecated wg-xray container is no longer
+    // referenced. Host traffic reaches the bridge via OVS internal ports.
 
     // Ensure all privacy internal ports exist (created by ovs-attach-ports.sh)
     for port in &cfg.privacy_ports {
@@ -148,22 +155,25 @@ async fn ensure_host_privacy_network_with_config(cfg: &PrivacyNetworkHostConfig)
     }
 
     // Verify Xray ingress is available on the management IP
-    // NOTE: Xray runs inside the wg-xray Incus container, not on the host.
-    // The management IP is reachable through OVS internal ports + OpenFlow.
+    // NOTE: Xray now runs on the host via the gbr-xray s6 service (the
+    // deprecated wg-xray container is gone). The management IP is reachable
+    // through OVS internal ports + OpenFlow.
+    // TODO(host-xray): confirm the on-host xray ingress management IP.
     info!(
-        "Privacy network ready. Xray ingress (in wg-xray container) should be listening on {}",
+        "Privacy network ready. Xray ingress (on host, gbr-xray) should be listening on {}",
         cfg.xray_ingress_ip
     );
 
     // Probe OpenFlow controller if available
-    // NOTE: Controller runs inside wg-xray container, reachable via OVS tunnel.
+    // NOTE: Controller now runs on the host, reachable via OVS tunnel.
+    // TODO(host-xray): confirm the on-host OpenFlow controller address.
     if let Ok(controller_addr) = cfg.openflow_controller.parse::<std::net::SocketAddr>() {
         match OpenFlowClient::connect(controller_addr).await {
-            Ok(_) => info!("OpenFlow controller reachable (via container path)"),
+            Ok(_) => info!("OpenFlow controller reachable (via host path)"),
             Err(e) => warn!("OpenFlow controller not ready yet: {}", e),
         }
     }
 
-    info!("OVS privacy fabric provisioning complete (containerized services via Unix sockets)");
+    info!("OVS privacy fabric provisioning complete (host services via OVS internal ports)");
     Ok(())
 }

@@ -1,0 +1,137 @@
+{
+  "version": 1,
+  "steps": [
+    {
+      "id": "8ee3b67e-088f-486d-9905-c9c1e35962d8",
+      "name": "Requirements phase",
+      "description": "Analyze existing codebase (op-gateway, op-mcp, op-dbus-model) and generate initial requirements.md (PRD).",
+      "status": "Completed",
+      "sort_order": 0,
+      "start_new_chat": false,
+      "stop_after_completion": false,
+      "created_at": "2026-04-04T11:46:02.446821033Z",
+      "updated_at": "2026-04-04T11:46:10.753811585Z"
+    },
+    {
+      "id": "7afcd83a-3c4a-4679-8c18-b7832857ac37",
+      "name": "Technical Specification phase",
+      "description": "Define the technical approach for scanning and generating specifications in spec.md.",
+      "status": "Completed",
+      "sort_order": 1,
+      "start_new_chat": false,
+      "stop_after_completion": false,
+      "created_at": "2026-04-04T11:46:02.446821033Z",
+      "updated_at": "2026-04-04T11:46:10.843427064Z"
+    },
+    {
+      "id": "6c797dee-e34d-4e66-9eb9-f6ded690f4c6",
+      "name": "Planning phase",
+      "description": "Break down the work into concrete implementation tasks in plan.md.",
+      "status": "Completed",
+      "sort_order": 2,
+      "start_new_chat": false,
+      "stop_after_completion": false,
+      "created_at": "2026-04-04T11:46:02.446821033Z",
+      "updated_at": "2026-04-04T11:46:10.908578190Z"
+    },
+    {
+      "id": "167b62bf-3d3f-4912-9265-918e5ed22af1",
+      "name": "Generate core specifications (gateway, mcp, model)",
+      "description": "Generate detailed specs (requirements, design, tasks) for op-gateway, op-mcp, and op-dbus-model.",
+      "status": "Completed",
+      "sort_order": 3,
+      "start_new_chat": false,
+      "stop_after_completion": false,
+      "created_at": "2026-04-04T11:46:02.446821033Z",
+      "updated_at": "2026-04-04T11:46:10.915125928Z"
+    },
+    {
+      "id": "4d3604cd-3bb1-43e7-8e86-38804356e58c",
+      "name": "Generate op-introspection specifications",
+      "description": "Analyze and generate specs for the op-introspection crate.",
+      "status": "Completed",
+      "sort_order": 4,
+      "start_new_chat": false,
+      "stop_after_completion": false,
+      "created_at": "2026-04-04T11:46:02.446821033Z",
+      "updated_at": "2026-04-04T11:46:10.996017747Z"
+    },
+    {
+      "id": "279d8b90-c485-4c43-88d6-829e5b1c3829",
+      "name": "Generate op-state-store specifications",
+      "description": "Analyze and generate specs for the op-state-store crate.",
+      "status": "Completed",
+      "sort_order": 5,
+      "start_new_chat": false,
+      "stop_after_completion": false,
+      "created_at": "2026-04-04T11:46:02.446821033Z",
+      "updated_at": "2026-04-04T11:46:11.040819720Z"
+    },
+    {
+      "id": "6f2a3d15-644e-4dc2-8020-013350248983",
+      "name": "Review and Finalize",
+      "description": "Perform a final consistency check across all generated specifications in .kiro/specs/.",
+      "status": "Completed",
+      "sort_order": 6,
+      "start_new_chat": false,
+      "stop_after_completion": false,
+      "created_at": "2026-04-04T11:46:02.446821033Z",
+      "updated_at": "2026-04-04T11:46:11.105813890Z"
+    },
+    {
+      "id": "720e2e4e-428f-4968-8e14-533c525f9adb",
+      "name": "Generate specifications for op-core",
+      "description": "Analyze crates/op-core and create requirements.md, design.md, and tasks.md in .kiro/specs/op-core/.",
+      "status": "Completed",
+      "sort_order": 7,
+      "start_new_chat": false,
+      "stop_after_completion": false,
+      "created_at": "2026-04-04T11:52:16.797300811Z",
+      "updated_at": "2026-04-04T11:52:37.798449477Z"
+    },
+    {
+      "id": "797f3c1d-05e6-4660-9ce2-7e36abdb348c",
+      "name": "Generate specifications for root op-* components",
+      "description": "Analyze op-api, op-worker, op-cli, op-storage, op-parser and create specs in respective .kiro/specs/ directories.",
+      "status": "Completed",
+      "sort_order": 8,
+      "start_new_chat": false,
+      "stop_after_completion": false,
+      "created_at": "2026-04-04T11:52:16.797300811Z",
+      "updated_at": "2026-04-04T11:54:17.079634660Z"
+    },
+    {
+      "id": "0a56f417-0eed-4cb7-977f-b3ff78b66e82",
+      "name": "Generate specifications for op-execution-tracker",
+      "description": "Analyze crates/op-execution-tracker and create specs in .kiro/specs/op-execution-tracker/.",
+      "status": "Completed",
+      "sort_order": 9,
+      "start_new_chat": false,
+      "stop_after_completion": false,
+      "created_at": "2026-04-04T11:52:16.797300811Z",
+      "updated_at": "2026-04-04T11:54:34.672270630Z"
+    },
+    {
+      "id": "5a873049-cc1f-4e01-a131-3d80a75ac007",
+      "name": "Generate specifications for op-plugins",
+      "description": "Analyze crates/op-plugins and create specs in .kiro/specs/op-plugins/.",
+      "status": "Completed",
+      "sort_order": 10,
+      "start_new_chat": false,
+      "stop_after_completion": false,
+      "created_at": "2026-04-04T11:52:16.797300811Z",
+      "updated_at": "2026-04-04T11:54:52.776963146Z"
+    },
+    {
+      "id": "34acd910-f3a3-4c59-b97a-8515a9af1efc",
+      "name": "Final Review and Task Completion",
+      "description": "Perform a final review of all new specifications and mark the task as done.",
+      "status": "Completed",
+      "sort_order": 11,
+      "start_new_chat": false,
+      "stop_after_completion": false,
+      "created_at": "2026-04-04T11:52:16.797300811Z",
+      "updated_at": "2026-04-04T11:55:13.665428729Z"
+    }
+  ]
+}

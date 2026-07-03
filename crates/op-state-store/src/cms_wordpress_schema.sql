@@ -363,7 +363,7 @@ SELECT id, 'WCProduct', 'WPPost', TRUE,
          "tax_status": {"type": "string", "default": "taxable"},
          "tax_class": {"type": "string"},
          "downloadable": {"type": "bool", "default": false},
-         "virtual": {"type": "bool", "default": false"},
+         "virtual": {"type": "bool", "default": false},
          "product_attributes": {"type": "dict"},
          "variations": {"type": "array"}
        }')

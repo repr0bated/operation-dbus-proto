@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use tonic::transport::Server;
+use tonic_web::enable as tw_enable;
 use tracing::info;
 
 use super::agent_service::AgentServiceImpl;
@@ -14,6 +15,7 @@ use super::orchestrator_service::OrchestratorServiceImpl;
 use super::proto::{
     agent_service_server::AgentServiceServer, cache_service_server::CacheServiceServer,
     mcp_service_server::McpServiceServer, orchestrator_service_server::OrchestratorServiceServer,
+    FILE_DESCRIPTOR_SET,
 };
 
 /// Server configuration
@@ -98,26 +100,48 @@ impl GrpcServer {
         self.mcp_service.clone()
     }
 
-    /// Start the gRPC server
+    /// Start the gRPC server (with gRPC-Web, reflection, and health)
     pub async fn serve(self) -> Result<()> {
         let addr = self.config.listen_addr;
 
         info!("Starting gRPC server on {}", addr);
 
+        let reflection = tonic_reflection::server::Builder::configure()
+            .register_encoded_file_descriptor_set(FILE_DESCRIPTOR_SET)
+            .build_v1()
+            .expect("failed to build cache reflection service");
+
+        let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
+        health_reporter
+            .set_serving::<AgentServiceServer<AgentServiceImpl>>()
+            .await;
+        health_reporter
+            .set_serving::<CacheServiceServer<CacheServiceImpl>>()
+            .await;
+        health_reporter
+            .set_serving::<OrchestratorServiceServer<OrchestratorServiceImpl>>()
+            .await;
+        health_reporter
+            .set_serving::<McpServiceServer<McpServiceImpl>>()
+            .await;
+
         Server::builder()
-            .add_service(AgentServiceServer::from_arc(self.agent_service))
-            .add_service(CacheServiceServer::from_arc(self.cache_service))
-            .add_service(OrchestratorServiceServer::from_arc(
+            .accept_http1(true)
+            .add_service(tw_enable(AgentServiceServer::from_arc(self.agent_service)))
+            .add_service(tw_enable(CacheServiceServer::from_arc(self.cache_service)))
+            .add_service(tw_enable(OrchestratorServiceServer::from_arc(
                 self.orchestrator_service,
-            ))
-            .add_service(McpServiceServer::from_arc(self.mcp_service))
+            )))
+            .add_service(tw_enable(McpServiceServer::from_arc(self.mcp_service)))
+            .add_service(tw_enable(reflection))
+            .add_service(tw_enable(health_service))
             .serve(addr)
             .await?;
 
         Ok(())
     }
 
-    /// Serve with graceful shutdown
+    /// Serve with graceful shutdown (with gRPC-Web, reflection, and health)
     pub async fn serve_with_shutdown(
         self,
         shutdown: impl std::future::Future<Output = ()>,
@@ -126,13 +150,35 @@ impl GrpcServer {
 
         info!("Starting gRPC server on {} (with graceful shutdown)", addr);
 
+        let reflection = tonic_reflection::server::Builder::configure()
+            .register_encoded_file_descriptor_set(FILE_DESCRIPTOR_SET)
+            .build_v1()
+            .expect("failed to build cache reflection service");
+
+        let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
+        health_reporter
+            .set_serving::<AgentServiceServer<AgentServiceImpl>>()
+            .await;
+        health_reporter
+            .set_serving::<CacheServiceServer<CacheServiceImpl>>()
+            .await;
+        health_reporter
+            .set_serving::<OrchestratorServiceServer<OrchestratorServiceImpl>>()
+            .await;
+        health_reporter
+            .set_serving::<McpServiceServer<McpServiceImpl>>()
+            .await;
+
         Server::builder()
-            .add_service(AgentServiceServer::from_arc(self.agent_service))
-            .add_service(CacheServiceServer::from_arc(self.cache_service))
-            .add_service(OrchestratorServiceServer::from_arc(
+            .accept_http1(true)
+            .add_service(tw_enable(AgentServiceServer::from_arc(self.agent_service)))
+            .add_service(tw_enable(CacheServiceServer::from_arc(self.cache_service)))
+            .add_service(tw_enable(OrchestratorServiceServer::from_arc(
                 self.orchestrator_service,
-            ))
-            .add_service(McpServiceServer::from_arc(self.mcp_service))
+            )))
+            .add_service(tw_enable(McpServiceServer::from_arc(self.mcp_service)))
+            .add_service(tw_enable(reflection))
+            .add_service(tw_enable(health_service))
             .serve_with_shutdown(addr, shutdown)
             .await?;
 

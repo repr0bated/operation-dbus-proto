@@ -1,0 +1,16 @@
+Subject: GhostBridge x Netmaker: our platform use case
+
+Hi,
+
+Ahead of our call, I wanted to send the full context deck.
+
+This is our Netmaker use case.
+
+Netmaker is part of the backbone of GhostBridge, the platform as a service we are building: transport, identity root, and link zero of a governed AI control plane. On top of that mesh, GhostBridge adds schema authority, A.N.N.A. Scribe/Snowball accountability, OSCAL policy gating, and confrontable AI evidence.
+
+I am sending the deck now so the meeting can be questions, architecture, and engineering detail. No pre-work is required. I will answer questions live.
+
+The attached HTML deck is self-contained: no remote assets, no tracking, no external dependencies. I also attached a PDF fallback.
+
+Best,
+Jeremy

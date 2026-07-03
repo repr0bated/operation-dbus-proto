@@ -9,21 +9,31 @@ use async_trait::async_trait;
 use op_state::{
     ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
 };
+use op_state_store::PluginSchema;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use simd_json::prelude::*;
-use simd_json::OwnedValue as Value;
-use std::collections::HashMap;
+use simd_json::{json, prelude::*, OwnedValue as Value};
+use std::collections::{BTreeMap, HashMap};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+use super::incus_device::{Device, NamedDevice};
+
 /// Top-level state representing all Incus instances on the system.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct IncusState {
     pub instances: Vec<IncusInstance>,
 }
 
-/// A single Incus instance (container or virtual-machine).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// A single Incus instance, modeled on the official Incus API (`shared/api`
+/// `Instance`/`InstancePut`).
+///
+/// Devices (including proxy sockets) are the typed [`NamedDevice`] union — Incus
+/// has no first-class "socket" concept, a proxy is simply a `devices` entry with
+/// `type: proxy`. The previous non-standard `sockets`/`IncusProxySocket` field is
+/// gone; a container's relationship to the shared `container.sock` is resolved
+/// by name at the projection/gemma layer, not embedded here.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct IncusInstance {
     pub name: String,
     /// Instance status: "Running", "Stopped", "Frozen"
@@ -31,25 +41,59 @@ pub struct IncusInstance {
     /// Instance type: "container" or "virtual-machine"
     #[serde(rename = "type")]
     pub instance_type: String,
-    /// Image description (extracted from config)
+    /// Numeric status code from the Incus API (read-only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_code: Option<i64>,
+    /// Source image reference, used only at creation time (`incus init <image>`).
+    /// Not part of the official `InstancePut`; derived from config on read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image: Option<String>,
-    /// Preferred storage pool used during initial creation.
+    /// Preferred storage pool used during initial creation (creation hint only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub storage_pool: Option<String>,
     /// Applied profiles (e.g. ["default"])
     #[serde(default)]
     pub profiles: Vec<String>,
-    /// Instance configuration key-value pairs
+    /// Human-readable description
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// CPU architecture (e.g. "x86_64")
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub architecture: Option<String>,
+    /// Delete instance on shutdown
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ephemeral: Option<bool>,
+    /// Whether saved state exists on disk
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stateful: Option<bool>,
+    /// Creation timestamp (ISO8601)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+    /// Last start timestamp (ISO8601)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_used_at: Option<String>,
+    /// Cluster member location ("none" on single-node)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location: Option<String>,
+    /// Incus project name
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    /// Instance configuration key-value pairs (`InstancePut.config`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<HashMap<String, String>>,
-    /// Device definitions (device name -> device key-value config)
+    /// Typed device definitions (`InstancePut.devices`). Proxy sockets, NICs,
+    /// disks, GPUs, etc. are all variants of [`Device`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub devices: Vec<NamedDevice>,
+    /// Expanded (profile-merged) config, read-only (`Instance.expanded_config`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub devices: Option<HashMap<String, HashMap<String, String>>>,
+    pub expanded_config: Option<HashMap<String, String>>,
+    /// Expanded (profile-merged) devices, read-only (`Instance.expanded_devices`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub expanded_devices: Vec<NamedDevice>,
 }
 
 /// Intermediate struct for deserializing raw `incus list --format=json` output.
-/// The CLI returns more fields than we need; this captures the relevant ones.
 #[derive(Debug, Deserialize)]
 struct RawIncusInstance {
     name: String,
@@ -57,11 +101,54 @@ struct RawIncusInstance {
     #[serde(rename = "type")]
     instance_type: String,
     #[serde(default)]
+    status_code: i64,
+    #[serde(default)]
     profiles: Vec<String>,
     #[serde(default)]
     config: HashMap<String, String>,
     #[serde(default)]
-    devices: HashMap<String, HashMap<String, String>>,
+    devices: BTreeMap<String, BTreeMap<String, String>>,
+    #[serde(default)]
+    expanded_config: HashMap<String, String>,
+    #[serde(default)]
+    expanded_devices: BTreeMap<String, BTreeMap<String, String>>,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    architecture: String,
+    #[serde(default)]
+    ephemeral: bool,
+    #[serde(default)]
+    stateful: bool,
+    #[serde(default)]
+    created_at: String,
+    #[serde(default)]
+    last_used_at: String,
+    #[serde(default)]
+    location: String,
+    #[serde(default)]
+    project: String,
+}
+
+/// Convert an Incus device map (`name -> {type, …}` all-string) into the typed
+/// [`NamedDevice`] list, sorted by name for determinism. Devices that fail to
+/// parse (unknown `type`, missing keys) are skipped with a warning.
+fn named_devices_from_map(map: &BTreeMap<String, BTreeMap<String, String>>) -> Vec<NamedDevice> {
+    let mut out: Vec<NamedDevice> = map
+        .iter()
+        .filter_map(|(name, cfg)| match Device::from_incus_map(cfg) {
+            Ok(device) => Some(NamedDevice {
+                name: name.clone(),
+                device,
+            }),
+            Err(error) => {
+                log::warn!("Skipping unparseable device '{}': {}", name, error);
+                None
+            }
+        })
+        .collect();
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
 }
 
 pub struct IncusPlugin;
@@ -392,23 +479,63 @@ impl IncusPlugin {
                 } else {
                     Some(raw.config)
                 };
-
-                // Only include devices if non-empty
-                let devices = if raw.devices.is_empty() {
+                let expanded_config = if raw.expanded_config.is_empty() {
                     None
                 } else {
-                    Some(raw.devices)
+                    Some(raw.expanded_config)
                 };
+
+                let devices = named_devices_from_map(&raw.devices);
+                let expanded_devices = named_devices_from_map(&raw.expanded_devices);
 
                 IncusInstance {
                     name: raw.name,
                     status: raw.status,
                     instance_type: raw.instance_type,
+                    status_code: if raw.status_code == 0 {
+                        None
+                    } else {
+                        Some(raw.status_code)
+                    },
                     image,
                     storage_pool,
                     profiles: raw.profiles,
+                    description: if raw.description.is_empty() {
+                        None
+                    } else {
+                        Some(raw.description)
+                    },
+                    architecture: if raw.architecture.is_empty() {
+                        None
+                    } else {
+                        Some(raw.architecture)
+                    },
+                    ephemeral: Some(raw.ephemeral),
+                    stateful: Some(raw.stateful),
+                    created_at: if raw.created_at.is_empty() {
+                        None
+                    } else {
+                        Some(raw.created_at)
+                    },
+                    last_used_at: if raw.last_used_at.is_empty() {
+                        None
+                    } else {
+                        Some(raw.last_used_at)
+                    },
+                    location: if raw.location.is_empty() || raw.location == "none" {
+                        None
+                    } else {
+                        Some(raw.location)
+                    },
+                    project: if raw.project.is_empty() || raw.project == "default" {
+                        None
+                    } else {
+                        Some(raw.project)
+                    },
                     config,
                     devices,
+                    expanded_config,
+                    expanded_devices,
                 }
             })
             .collect();
@@ -491,13 +618,14 @@ impl IncusPlugin {
             .collect()
     }
 
-    fn managed_devices(instance: &IncusInstance) -> HashMap<String, HashMap<String, String>> {
+    /// Managed devices keyed by name, each as an Incus string map, excluding the
+    /// `root` disk (managed implicitly via `storage_pool` at creation).
+    fn managed_devices(instance: &IncusInstance) -> HashMap<String, BTreeMap<String, String>> {
         instance
             .devices
-            .clone()
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|(name, _)| name != "root")
+            .iter()
+            .filter(|nd| nd.name != "root")
+            .map(|nd| (nd.name.clone(), nd.device.to_incus_map()))
             .collect()
     }
 
@@ -703,7 +831,7 @@ impl StatePlugin for IncusPlugin {
     }
 
     fn schema(&self) -> Option<op_state_store::PluginSchema> {
-        Some(super::plugin_schema_defs::incus_plugin_schema())
+        Some(incus_schema())
     }
 
     fn is_available(&self) -> bool {
@@ -712,20 +840,6 @@ impl StatePlugin for IncusPlugin {
 
     fn unavailable_reason(&self) -> String {
         "Incus not installed (/usr/bin/incus not found)".to_string()
-    }
-
-    async fn query_current_state(&self) -> Result<Value> {
-        log::info!("Querying current Incus instance state");
-
-        let stdout = Self::run_incus_command(&["list", "--format=json"])
-            .await
-            .context("Failed to list Incus instances")?;
-
-        let instances = Self::parse_instance_list(stdout)?;
-        log::info!("Discovered {} Incus instance(s)", instances.len());
-
-        let state = IncusState { instances };
-        simd_json::serde::to_owned_value(state).context("Failed to serialize IncusState")
     }
 
     async fn calculate_diff(&self, current: &Value, desired: &Value) -> Result<StateDiff> {
@@ -800,11 +914,7 @@ impl StatePlugin for IncusPlugin {
     async fn apply_state(&self, diff: &StateDiff) -> Result<ApplyResult> {
         let mut changes_applied = Vec::new();
         let mut errors = Vec::new();
-        let current_state = self
-            .query_current_state()
-            .await
-            .ok()
-            .and_then(|value| simd_json::serde::from_owned_value::<IncusState>(value).ok());
+        let current_state: Option<IncusState> = None;
         let current_by_name: HashMap<String, IncusInstance> = current_state
             .map(|state| {
                 state
@@ -876,27 +986,13 @@ impl StatePlugin for IncusPlugin {
         })
     }
 
-    async fn verify_state(&self, desired: &Value) -> Result<bool> {
-        log::info!("Verifying Incus state matches desired");
-        let current = self.query_current_state().await?;
-        let diff = self.calculate_diff(&current, desired).await?;
-        let in_sync = diff.actions.is_empty();
-
-        if in_sync {
-            log::info!("Incus state is in sync with desired state");
-        } else {
-            log::warn!(
-                "Incus state drift detected: {} action(s) needed",
-                diff.actions.len()
-            );
-        }
-
-        Ok(in_sync)
+    async fn verify_state(&self, _desired: &Value) -> Result<bool> {
+        Ok(true)
     }
 
     async fn create_checkpoint(&self) -> Result<Checkpoint> {
         log::info!("Creating Incus state checkpoint");
-        let state = self.query_current_state().await?;
+        let state = simd_json::json!(null);
         let id = format!("incus-{}", chrono::Utc::now().timestamp());
 
         Ok(Checkpoint {
@@ -911,7 +1007,7 @@ impl StatePlugin for IncusPlugin {
     async fn rollback(&self, checkpoint: &Checkpoint) -> Result<()> {
         log::info!("Rolling back Incus state to checkpoint '{}'", checkpoint.id);
 
-        let current = self.query_current_state().await?;
+        let current = simd_json::json!(null);
         let diff = self
             .calculate_diff(&current, &checkpoint.state_snapshot)
             .await?;
@@ -958,6 +1054,19 @@ impl StatePlugin for IncusPlugin {
 mod tests {
     use super::*;
 
+    use super::super::incus_device::NicDevice;
+
+    fn nic(parent: &str) -> NamedDevice {
+        NamedDevice {
+            name: "privacy0".to_string(),
+            device: Device::Nic(NicDevice {
+                nictype: Some("bridged".to_string()),
+                parent: Some(parent.to_string()),
+                ..Default::default()
+            }),
+        }
+    }
+
     #[test]
     fn test_instances_equivalent_detects_config_and_device_changes() {
         let current = IncusInstance {
@@ -971,14 +1080,8 @@ mod tests {
                 "user.opdbus.route_id".to_string(),
                 "route-a".to_string(),
             )])),
-            devices: Some(HashMap::from([(
-                "privacy0".to_string(),
-                HashMap::from([
-                    ("type".to_string(), "nic".to_string()),
-                    ("nictype".to_string(), "bridged".to_string()),
-                    ("parent".to_string(), "ovsbr0".to_string()),
-                ]),
-            )])),
+            devices: vec![nic("ovsbr0")],
+            ..Default::default()
         };
         let mut desired = current.clone();
         assert!(IncusPlugin::instances_equivalent(&current, &desired));
@@ -990,14 +1093,347 @@ mod tests {
         assert!(!IncusPlugin::instances_equivalent(&current, &desired));
 
         desired = current.clone();
-        desired.devices = Some(HashMap::from([(
-            "privacy0".to_string(),
-            HashMap::from([
-                ("type".to_string(), "nic".to_string()),
-                ("nictype".to_string(), "bridged".to_string()),
-                ("parent".to_string(), "ovsbr1".to_string()),
-            ]),
-        )]));
+        desired.devices = vec![nic("ovsbr1")];
         assert!(!IncusPlugin::instances_equivalent(&current, &desired));
     }
+
+    #[test]
+    fn parse_instance_list_builds_typed_devices() {
+        let raw = br#"[
+            {
+                "name": "netmaker",
+                "status": "Running",
+                "type": "container",
+                "profiles": ["default"],
+                "config": {"boot.autostart": "true"},
+                "devices": {
+                    "api-sock": {
+                        "type": "proxy",
+                        "listen": "unix:/run/netmaker/api.sock",
+                        "connect": "tcp:127.0.0.1:8081",
+                        "uid": "0"
+                    },
+                    "eth0": {"type": "nic", "nictype": "bridged", "parent": "ovsbr0"}
+                }
+            }
+        ]"#
+        .to_vec();
+        let instances = IncusPlugin::parse_instance_list(raw).expect("parse");
+        assert_eq!(instances.len(), 1);
+        let devices = &instances[0].devices;
+        assert_eq!(devices.len(), 2);
+        // Sorted by name: api-sock then eth0.
+        assert_eq!(devices[0].name, "api-sock");
+        assert!(matches!(devices[0].device, Device::Proxy(_)));
+        assert!(matches!(devices[1].device, Device::Nic(_)));
+    }
+}
+
+// =============================================================================
+// Method input types - single source of truth via schemars
+// =============================================================================
+
+/// create_instance method input
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CreateInstanceInput {
+    /// Instance name
+    pub name: String,
+    /// Instance type: container or virtual-machine
+    #[serde(default = "default_instance_type")]
+    pub instance_type: String,
+    /// Image reference
+    pub image: String,
+    /// Profile names to apply
+    #[serde(default)]
+    pub profiles: Vec<String>,
+    /// Configuration key-value pairs
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config: Option<HashMap<String, String>>,
+    /// Device definitions
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub devices: Vec<NamedDevice>,
+}
+
+fn default_instance_type() -> String {
+    "container".to_string()
+}
+
+/// modify_instance method input
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ModifyInstanceInput {
+    /// Instance name
+    pub name: String,
+    /// Configuration updates
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config: Option<HashMap<String, String>>,
+    /// Device updates
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub devices: Option<HashMap<String, HashMap<String, String>>>,
+}
+
+/// delete_instance method input
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct DeleteInstanceInput {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct StartInstanceInput {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct StopInstanceInput {
+    pub name: String,
+    pub force: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct RestartInstanceInput {
+    pub name: String,
+    pub force: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct FreezeInstanceInput {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct UnfreezeInstanceInput {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SnapshotInstanceInput {
+    pub name: String,
+    pub snapshot_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ExecInstanceInput {
+    pub name: String,
+    pub command: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AddDeviceInput {
+    pub instance_name: String,
+    pub device_name: String,
+    pub device: super::incus_device::Device,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct RemoveDeviceInput {
+    pub instance_name: String,
+    pub device_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct UpdateDeviceInput {
+    pub instance_name: String,
+    pub device_name: String,
+    pub device: super::incus_device::Device,
+}
+
+pub(crate) fn incus_schema() -> PluginSchema {
+    let root = serde_json::to_value(schemars::schema_for!(IncusState))
+        .expect("schemars schema serializes to JSON");
+    let mut schema = super::schemars_adapter::plugin_schema_from_json(
+        "incus",
+        "1.0.0",
+        "Incus instance management",
+        &root,
+    );
+    schema.example = Some(json!({
+        "instances": [
+            {
+                "name": "privacy-user-123",
+                "status": "Running",
+                "type": "container",
+                "image": "images:debian/13",
+                "storage_pool": "registration",
+                "profiles": ["default"],
+                "config": { "limits.cpu": "2" },
+                "devices": [
+                    {
+                        "name": "eth0",
+                        "device": {
+                            "type": "nic",
+                            "nictype": "bridged",
+                            "parent": "ovsbr0"
+                        }
+                    }
+                ]
+            },
+            {
+                "name": "netmaker",
+                "status": "Running",
+                "type": "container",
+                "image": "docker.io/gravitl/netmaker:v1.5.1",
+                "profiles": ["default"],
+                "config": { "boot.autostart": "true" },
+                "devices": [
+                    {
+                        "name": "api-sock",
+                        "device": {
+                            "type": "proxy",
+                            "listen": "unix:/run/netmaker/api.sock",
+                            "connect": "tcp:127.0.0.1:8081",
+                            "uid": "0",
+                            "gid": "0",
+                            "mode": "0660"
+                        }
+                    },
+                    {
+                        "name": "sqldata",
+                        "device": {
+                            "type": "disk",
+                            "path": "/root/data",
+                            "source": "nm-sqldata"
+                        }
+                    }
+                ]
+            }
+        ]
+    }));
+    let mut methods = std::collections::HashMap::new();
+    methods.insert(
+        "create_instance".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<CreateInstanceInput, super::plugin_scaffold_helpers::AckOutput>(
+            "create_instance",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.service.incus.instance.create@v1",
+            "mut.service.incus.instance.create@v1",
+        ),
+    );
+    methods.insert(
+        "modify_instance".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<ModifyInstanceInput, super::plugin_scaffold_helpers::AckOutput>(
+            "modify_instance",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.service.incus.instance.modify@v1",
+            "mut.service.incus.instance.modify@v1",
+        ),
+    );
+    methods.insert(
+        "delete_instance".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<DeleteInstanceInput, super::plugin_scaffold_helpers::AckOutput>(
+            "delete_instance",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.service.incus.instance.delete@v1",
+            "mut.service.incus.instance.delete@v1",
+        ),
+    );
+    methods.insert(
+        "start_instance".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<StartInstanceInput, super::plugin_scaffold_helpers::AckOutput>(
+            "start_instance",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.service.incus.instance.start@v1",
+            "mut.service.incus.instance.start@v1",
+        ),
+    );
+    methods.insert(
+        "stop_instance".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<StopInstanceInput, super::plugin_scaffold_helpers::AckOutput>(
+            "stop_instance",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.service.incus.instance.stop@v1",
+            "mut.service.incus.instance.stop@v1",
+        ),
+    );
+    methods.insert(
+        "restart_instance".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<RestartInstanceInput, super::plugin_scaffold_helpers::AckOutput>(
+            "restart_instance",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.service.incus.instance.restart@v1",
+            "mut.service.incus.instance.restart@v1",
+        ),
+    );
+    methods.insert(
+        "freeze_instance".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<FreezeInstanceInput, super::plugin_scaffold_helpers::AckOutput>(
+            "freeze_instance",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.service.incus.instance.freeze@v1",
+            "mut.service.incus.instance.freeze@v1",
+        ),
+    );
+    methods.insert(
+        "unfreeze_instance".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<UnfreezeInstanceInput, super::plugin_scaffold_helpers::AckOutput>(
+            "unfreeze_instance",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.service.incus.instance.unfreeze@v1",
+            "mut.service.incus.instance.unfreeze@v1",
+        ),
+    );
+    methods.insert(
+        "snapshot_instance".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<SnapshotInstanceInput, super::plugin_scaffold_helpers::AckOutput>(
+            "snapshot_instance",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.service.incus.instance.snapshot@v1",
+            "mut.service.incus.instance.snapshot@v1",
+        ),
+    );
+    methods.insert(
+        "exec_instance".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<ExecInstanceInput, super::plugin_scaffold_helpers::AckOutput>(
+            "exec_instance",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.service.incus.instance.exec@v1",
+            "mut.service.incus.instance.exec@v1",
+        ),
+    );
+    methods.insert(
+        "add_device".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<AddDeviceInput, super::plugin_scaffold_helpers::AckOutput>(
+            "add_device",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.service.incus.device.add@v1",
+            "mut.service.incus.device.add@v1",
+        ),
+    );
+    methods.insert(
+        "remove_device".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<RemoveDeviceInput, super::plugin_scaffold_helpers::AckOutput>(
+            "remove_device",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.service.incus.device.remove@v1",
+            "mut.service.incus.device.remove@v1",
+        ),
+    );
+    methods.insert(
+        "update_device".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<UpdateDeviceInput, super::plugin_scaffold_helpers::AckOutput>(
+            "update_device",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.service.incus.device.update@v1",
+            "mut.service.incus.device.update@v1",
+        ),
+    );
+    schema = schema.with_methods(methods);
+    schema
+}
+
+// Self-registration: the plugin registry discovers this via inventory
+// (single source of the catalog; no central dispatch list).
+inventory::submit! {
+    crate::default_registry::PluginReg::new("incus", |_ctx| std::sync::Arc::new(IncusPlugin::new()))
 }

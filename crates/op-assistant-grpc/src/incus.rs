@@ -1,26 +1,37 @@
-//! wg-xray container endpoint + Xray schema-tag routing.
+//! Host gRPC-bridge endpoint + Xray schema-tag routing.
 //!
-//! Topology observed via `incus info wg-xray` + `systemctl cat ...`:
+//! Topology (current — xray + gRPC-bridge run on the host):
 //!
-//! - The privileged `wg-xray` Incus container runs `op-grpc-bridge` on
-//!   `10.200.0.1:50051` (the `grpc-uplink` bridge IP, eth0 inside the CT).
-//! - Xray runs alongside in the same CT and applies OpenFlow + PluginSchema
-//!   tags to route traffic to WireGuard peers / wgcf egress.
-//! - D-Bus session + system sockets are bind-mounted from the host, so D-Bus
-//!   IPC works transparently across the container boundary.
+//! - The `wg-xray` Incus container is DEPRECATED and STOPPED. Do not
+//!   reference it.
+//! - Xray runs on the HOST via the `gbr-xray` s6 service
+//!   (config: `/dev/shm/xray-ghostbridge.json` or `/etc/xray/config.json`).
+//! - The operation.v1 gRPC server (StateSync, etc., port 50051) runs on the
+//!   HOST served by `op-dbus` at `10.200.0.2:50051` (the `grpc-uplink` veth
+//!   IP). The old `10.200.0.1:50051` lived inside the wg-xray container and
+//!   is dead.
+//! - Xray applies OpenFlow + PluginSchema tags to route traffic to WireGuard
+//!   peers / wgcf egress.
 //!
-//! Outbound RPC calls from this crate target the bridge IP directly and carry
-//! `x-ghostbridge-footprint` / `x-ghostbridge-trace-id` headers sourced from
-//! `/dev/shm/plugin_schema.dat` so Xray's OpenFlow rules can route them.
+//! Outbound RPC calls from this crate target the on-host operation.v1
+//! endpoint directly and carry `x-ghostbridge-footprint` /
+//! `x-ghostbridge-trace-id` headers sourced from `/dev/shm/plugin_schema.dat`
+//! so Xray's OpenFlow rules can route them.
 
 use crate::error::{AssistantError, Result};
 use std::fs::File;
 use std::io::Read;
 
-/// Default `op-grpc-bridge` endpoint inside the `wg-xray` container.
-pub const DEFAULT_WG_XRAY_ENDPOINT: &str = "http://10.200.0.1:50051";
-/// Xray SOCKS/MCP control plane (host-side proxy device, see
-/// `incus config device show wg-xray`).
+/// Default on-host operation.v1 gRPC endpoint served by `op-dbus` at the
+/// `grpc-uplink` veth IP `10.200.0.2:50051`.
+///
+/// (Renamed from `DEFAULT_WG_XRAY_ENDPOINT`; the wg-xray container is
+/// deprecated. The alias is preserved for downstream callers.)
+pub const DEFAULT_GRPC_ENDPOINT: &str = "http://10.200.0.2:50051";
+/// Backwards-compatible alias for callers that still reference the old
+/// `DEFAULT_WG_XRAY_ENDPOINT` name.
+pub const DEFAULT_WG_XRAY_ENDPOINT: &str = DEFAULT_GRPC_ENDPOINT;
+/// Xray SOCKS/MCP control plane (host-side proxy device).
 pub const DEFAULT_XRAY_MCP_ENDPOINT: &str = "tcp://127.0.0.1:1081";
 
 pub const ENV_RPC_ENDPOINT: &str = "OP_ASSISTANT_RPC_ENDPOINT";

@@ -19,3 +19,7 @@ zbus = { workspace = true }
 [[bin]]
 name = "op-s6-systemctl"
 path = "src/main.rs"
+
+[[bin]]
+name = "s6d"
+path = "src/bin/s6d.rs"

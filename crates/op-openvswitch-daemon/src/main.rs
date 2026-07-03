@@ -14,6 +14,7 @@ use std::path::Path;
 use tracing::{info, warn};
 use zbus::connection::Connection;
 
+mod container;
 mod dbus;
 mod execution;
 mod grpc;
@@ -68,8 +69,12 @@ impl Args {
 
 // ── Socket discovery ────────────────────────────────────────────────────────
 
-const DEFAULT_OVS_SOCKET: &str = "/var/run/openvswitch/db.sock";
-const OVS_SOCKET_PATHS: &[&str] = &["/run/openvswitch/db.sock", "/var/run/openvswitch/db.sock"];
+const DEFAULT_OVS_SOCKET: &str = "/usr/local/var/run/openvswitch/db.sock";
+const OVS_SOCKET_PATHS: &[&str] = &[
+    "/usr/local/var/run/openvswitch/db.sock",
+    "/run/openvswitch/db.sock",
+    "/var/run/openvswitch/db.sock",
+];
 
 fn find_ovs_socket() -> String {
     OVS_SOCKET_PATHS
@@ -103,6 +108,10 @@ async fn main() -> Result<()> {
         );
     }
 
+    // Connect to the system D-Bus bus.
+    // The projection server owns org.opdbus.v1.plugins on the system bus;
+    // we request the distinct name org.opdbus.v1.plugins.ovsdb on the same
+    // bus so rovs/* objects are reachable by clients dialing that name.
     let conn = Connection::system()
         .await
         .context("Failed to connect to system D-Bus")?;
@@ -135,10 +144,10 @@ async fn main() -> Result<()> {
         .await
         .context("Failed to register /org/opdbus/execution")?;
 
-    // Request single well-known bus name.
-    conn.request_name("org.opdbus.v1")
+    // Request the ovsdb plugin bus name — NOT org.opdbus.v1 (owned by op-dbus-mirror).
+    conn.request_name("org.opdbus.v1.plugins.ovsdb")
         .await
-        .context("Failed to request bus name org.opdbus.v1")?;
+        .context("Failed to request bus name org.opdbus.v1.plugins.ovsdb")?;
 
     info!("D-Bus services registered:");
     info!("  /org/opdbus/rovs/jsonrpc  -> org.opdbus.rovs.jsonrpc");

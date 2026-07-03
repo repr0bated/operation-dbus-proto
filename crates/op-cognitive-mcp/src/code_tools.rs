@@ -14,7 +14,7 @@
 //!   subid: `src.software.workspace.index@v1`
 
 use crate::context_awareness::{ActivityType, ContextAwarenessEngine};
-use crate::rag_pipeline::{CodeFilter, RagPipeline, RagResult};
+use crate::rag_pipeline::{CodeFilter, RagPipeline, RagResult, RetrievalMode, RetrievalProfile};
 use anyhow::Result;
 use async_trait::async_trait;
 use op_mcp::tool_registry::{BoxedTool, Tool, ToolRegistry};
@@ -86,26 +86,35 @@ impl Tool for CodeSearchTool {
             .get("query")
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow::anyhow!("missing query"))?;
+        let profile = retrieval_profile_from(&input, RetrievalMode::Search);
         let limit = input
             .get("limit")
             .and_then(Value::as_u64)
-            .unwrap_or(8)
+            .unwrap_or(profile.limit)
             .clamp(1, 50);
         let filter = filter_from(&input, false);
+        let collections = collections_from(&input, &self.collection, &profile);
 
-        let results = if input.get("fused").and_then(Value::as_bool).unwrap_or(true) {
+        let results = if collections.len() > 1 {
             self.rag
-                .query_fused(&self.collection, query, limit, &filter)
+                .query_fused_collections(&collections, query, limit, profile.fetch_limit, &filter)
+                .await?
+        } else if input.get("fused").and_then(Value::as_bool).unwrap_or(true) {
+            self.rag
+                .query_fused(&collections[0], query, limit, &filter)
                 .await?
         } else {
             self.rag
-                .query_filtered(&self.collection, query, limit, &filter)
+                .query_filtered(&collections[0], query, limit, &filter)
                 .await?
         };
 
         Ok(json!({
             "count": results.len(),
-            "collection": self.collection,
+            "collections": collections,
+            "retrieval_mode": profile.mode.as_str(),
+            "rerank_enabled": profile.rerank_enabled,
+            "kiro_lsp_state_dir": profile.kiro_lsp_state_dir,
             "results": results_to_simd(&results),
         }))
     }
@@ -157,10 +166,11 @@ impl Tool for CodeContextTool {
             .and_then(Value::as_str)
             .map(ActivityType::parse)
             .unwrap_or(ActivityType::Query);
+        let profile = retrieval_profile_from(&input, RetrievalMode::Completion);
         let limit = input
             .get("limit")
             .and_then(Value::as_u64)
-            .unwrap_or(6)
+            .unwrap_or(profile.limit)
             .clamp(1, 50);
 
         // Record the activity so stuck/error/topic detection stays current.
@@ -174,9 +184,10 @@ impl Tool for CodeContextTool {
             .await;
 
         let filter = filter_from(&input, false);
+        let collections = collections_from(&input, &self.collection, &profile);
         let (results, retrieval_error) = match self
             .rag
-            .query_fused(&self.collection, query, limit, &filter)
+            .query_fused_collections(&collections, query, limit, profile.fetch_limit, &filter)
             .await
         {
             Ok(results) => (results, None),
@@ -197,6 +208,10 @@ impl Tool for CodeContextTool {
 
         Ok(json!({
             "count": results.len(),
+            "collections": collections,
+            "retrieval_mode": profile.mode.as_str(),
+            "rerank_enabled": profile.rerank_enabled,
+            "kiro_lsp_state_dir": profile.kiro_lsp_state_dir,
             "session_id": session_id,
             "signals": serde_to_simd(&signals),
             "results": results_to_simd(&results),
@@ -328,6 +343,39 @@ fn filter_from(input: &Value, default_exclude_tests: bool) -> CodeFilter {
             .and_then(Value::as_bool)
             .unwrap_or(default_exclude_tests),
     }
+}
+
+fn retrieval_profile_from(input: &Value, default_mode: RetrievalMode) -> RetrievalProfile {
+    let mode = input
+        .get("retrieval_mode")
+        .or_else(|| input.get("mode"))
+        .and_then(Value::as_str)
+        .map(RetrievalMode::parse)
+        .unwrap_or(default_mode);
+    RetrievalProfile::from_env(mode)
+}
+
+fn collections_from(input: &Value, fallback: &str, profile: &RetrievalProfile) -> Vec<String> {
+    if let Some(collection) = input.get("collection").and_then(Value::as_str) {
+        return vec![collection.to_string()];
+    }
+
+    if let Some(collections) = input.get("collections").and_then(Value::as_array) {
+        let parsed: Vec<String> = collections
+            .iter()
+            .filter_map(Value::as_str)
+            .map(String::from)
+            .collect();
+        if !parsed.is_empty() {
+            return parsed;
+        }
+    }
+
+    if !profile.collections.is_empty() {
+        return profile.collections.clone();
+    }
+
+    vec![fallback.to_string()]
 }
 
 fn results_to_simd(results: &[RagResult]) -> Value {

@@ -1,3 +1,11 @@
 [submodule "ui/axon-trace-ui"]
 	path = archive/ui/axon-trace-ui
 	url = https://github.com/repr0bated/axon-trace-ui.git
+[submodule "lovable"]
+	path = lovable
+	url = https://github.com/3tched-com/axon-trace-ui-2ba47a08.git
+	branch = zeroclaw
+[submodule "operation-dashboard-ui-07"]
+	path = operation-dashboard-ui-07
+	url = https://github.com/repr0bated/operation-dashboard-ui-07.git
+	branch = zeroclaw

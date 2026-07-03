@@ -6,6 +6,7 @@
 //!   repo, file_path, language, symbols, doc_comments, imports, tags,
 //!   is_test, line_start, line_end, chunk_index, total_chunks, content_hash
 
+use crate::voyage::VoyageClient;
 use anyhow::{Context, Result};
 use qdrant_client::{
     qdrant::{
@@ -13,11 +14,10 @@ use qdrant_client::{
         Filter, PointStruct, ScoredPoint, SearchPointsBuilder, UpsertPointsBuilder,
         VectorParamsBuilder, VectorsConfig,
     },
-    Payload, Qdrant,
+    Payload, Qdrant, QdrantError,
 };
 use regex::Regex;
-use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
@@ -31,11 +31,23 @@ use tracing::{info, warn};
 // ─── constants ───────────────────────────────────────────────────────────────
 
 pub const DEFAULT_COLLECTION: &str = "repomix_rag";
+/// The fused voyage-4 retrieval set — one shared embedding space, so `_large`
+/// and `_lite` collections compare directly. Best available tier per language:
+/// go/python/rust were re-vectorized to voyage-4-large (see ../logs
+/// vectorize_lsp_4large_*), the rest remain voyage-4-lite. Rust replaced its old
+/// voyage-code-3 solo collection here.
+pub const DEFAULT_VOYAGE4_COLLECTIONS: &[&str] = &[
+    "repos_lsp_c_cpp_voyage_4_lite",
+    "repos_lsp_go_voyage_4_large",
+    "repos_lsp_java_voyage_4_lite",
+    "repos_lsp_python_voyage_4_large",
+    "repos_lsp_rust_voyage_4_large",
+    "repos_lsp_typescript_voyage_4_lite",
+    "repos_specs_docs_voyage_4_lite",
+];
 const VECTOR_DIM: u64 = 1024; // voyage-4 default
 const CHUNK_LINES: usize = 80; // ~2 kB of code per chunk
 const OVERLAP_LINES: usize = 12;
-const VOYAGE_PUBLIC_URL: &str = "https://api.voyageai.com/v1/embeddings";
-const VOYAGE_MONGODB_URL: &str = "https://ai.mongodb.com/v1/embeddings";
 const VOYAGE_BATCH: usize = 32; // points per upsert batch
 const VOYAGE_RATE_DELAY_MS: u64 = 120; // ms between Voyage calls
 
@@ -108,6 +120,7 @@ pub struct IngestStats {
 /// RAG query result returned by `RagPipeline::query`.
 #[derive(Debug, Clone, Serialize)]
 pub struct RagResult {
+    pub retrieval_collection: String,
     pub score: f32,
     pub repo: String,
     pub file_path: String,
@@ -139,6 +152,76 @@ pub struct CodeFilter {
     pub path_contains: Option<String>,
     pub symbol_contains: Option<String>,
     pub exclude_tests: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RetrievalMode {
+    Completion,
+    Search,
+    Deep,
+}
+
+impl RetrievalMode {
+    pub fn parse(value: &str) -> Self {
+        match value {
+            "completion" | "complete" | "autocomplete" => Self::Completion,
+            "deep" | "chat" | "edit" => Self::Deep,
+            _ => Self::Search,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Completion => "completion",
+            Self::Search => "search",
+            Self::Deep => "deep",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RetrievalProfile {
+    pub mode: RetrievalMode,
+    pub collections: Vec<String>,
+    pub limit: u64,
+    pub fetch_limit: u64,
+    pub rerank_enabled: bool,
+    pub kiro_lsp_state_dir: String,
+}
+
+impl RetrievalProfile {
+    pub fn from_env(mode: RetrievalMode) -> Self {
+        let limit = match mode {
+            RetrievalMode::Completion => env_u64("COGNITIVE_MCP_COMPLETION_TOP_K", 12),
+            RetrievalMode::Search => env_u64("COGNITIVE_MCP_SEARCH_TOP_K", 12),
+            RetrievalMode::Deep => env_u64("COGNITIVE_MCP_DEEP_TOP_K", 50),
+        }
+        .clamp(1, 100);
+
+        let fetch_limit = match mode {
+            RetrievalMode::Completion => limit,
+            RetrievalMode::Search => limit.saturating_mul(3).clamp(limit, 64),
+            RetrievalMode::Deep => env_u64("COGNITIVE_MCP_DEEP_FETCH_K", 50).clamp(limit, 100),
+        };
+
+        let rerank_mode =
+            std::env::var("COGNITIVE_MCP_RERANK_MODE").unwrap_or_else(|_| "auto".into());
+        let rerank_enabled = match mode {
+            RetrievalMode::Completion => rerank_mode == "always",
+            RetrievalMode::Search => rerank_mode == "always",
+            RetrievalMode::Deep => rerank_mode == "always" || rerank_mode == "auto",
+        };
+
+        Self {
+            mode,
+            collections: default_collections_for_mode(mode),
+            limit,
+            fetch_limit,
+            rerank_enabled,
+            kiro_lsp_state_dir: std::env::var("COGNITIVE_MCP_KIRO_LSP_STATE_DIR")
+                .unwrap_or_else(|_| "/home/jeremy/git/logs/kiro-lsp-state".into()),
+        }
+    }
 }
 
 impl CodeFilter {
@@ -186,46 +269,18 @@ impl CodeFilter {
 
 pub struct RagPipeline {
     qdrant: Qdrant,
-    voyage_key: String,
-    voyage_model: String,
-    http: Client,
+    voyage: VoyageClient,
 }
 
 impl RagPipeline {
     pub fn from_env() -> Result<Self> {
-        let voyage_key = std::env::var("VOYAGE_API_KEY")
-            .or_else(|_| std::env::var("COGNITIVE_MCP_VOYAGE_API_KEY"))
-            .ok()
-            .or_else(voyage_key_from_file)
-            .context(
-                "Voyage API key not found: set VOYAGE_API_KEY, \
-                 or place the key in ~/.ssh/mongo-voyage \
-                 (override path with COGNITIVE_MCP_VOYAGE_KEY_FILE)",
-            )?;
-        // Default: voyage-4 (balanced quality/cost in the 4-series).
-        // Override with COGNITIVE_MCP_VOYAGE_MODEL env var.
-        //
-        // Model selection guide (all 4-series are cross-compatible):
-        //   • voyage-4-lite        – lowest cost, good general quality
-        //   • voyage-4             – balanced cost/quality (DEFAULT)
-        //   • voyage-4-large       – highest quality, highest cost
-        //   • voyage-code-3        – best for code retrieval, premium price
-        //
-        // Because 4-series embeddings are cross-compatible, you can index
-        // with voyage-4 and later query with voyage-code-3 (or vice versa)
-        // without rebuilding the Qdrant collection.
-        let voyage_model = std::env::var("COGNITIVE_MCP_VOYAGE_MODEL")
-            .or_else(|_| std::env::var("VOYAGE_MODEL"))
-            .unwrap_or_else(|_| "voyage-4".into());
-
+        // Config (endpoint/model/key) resolves through the embedding_model
+        // plugin's projection, falling back to its own env-var reads — see
+        // op_plugins::state_plugins::embedding_model::voyage_embed_params.
+        let voyage = VoyageClient::new()?;
         let qdrant = qdrant_client_from_env()?;
 
-        Ok(Self {
-            qdrant,
-            voyage_key,
-            voyage_model,
-            http: Client::new(),
-        })
+        Ok(Self { qdrant, voyage })
     }
 
     /// Ingest a single repomix file from the zip into Qdrant.
@@ -334,6 +389,8 @@ impl RagPipeline {
         limit: u64,
         repo_filter: Option<&str>,
     ) -> Result<Vec<RagResult>> {
+        self.ensure_collection(collection).await?;
+
         let vector = self.embed_query(query_text).await?;
 
         let mut builder = SearchPointsBuilder::new(collection, vector, limit).with_payload(true);
@@ -360,6 +417,8 @@ impl RagPipeline {
         limit: u64,
         filter: &CodeFilter,
     ) -> Result<Vec<RagResult>> {
+        self.ensure_collection(collection).await?;
+
         let vector = self.embed_query(query_text).await?;
         let fetch = limit.saturating_mul(3).max(limit);
 
@@ -394,10 +453,78 @@ impl RagPipeline {
         limit: u64,
         filter: &CodeFilter,
     ) -> Result<Vec<RagResult>> {
-        let vector = self.embed_query(query_text).await?;
-        let fetch = limit.saturating_mul(4).clamp(limit, 64);
+        self.ensure_collection(collection).await?;
 
-        let mut builder = SearchPointsBuilder::new(collection, vector, fetch).with_payload(true);
+        let vector = self.embed_query(query_text).await?;
+        self.query_fused_with_vector(
+            collection,
+            query_text,
+            limit,
+            limit.saturating_mul(4).clamp(limit, 64),
+            filter,
+            &vector,
+        )
+        .await
+    }
+
+    /// Fused retrieval across compatible collections. The query is embedded
+    /// once, then reused for each collection to keep completion requests cheap.
+    pub async fn query_fused_collections(
+        &self,
+        collections: &[String],
+        query_text: &str,
+        limit: u64,
+        fetch_limit: u64,
+        filter: &CodeFilter,
+    ) -> Result<Vec<RagResult>> {
+        let vector = self.embed_query(query_text).await?;
+        let mut all = Vec::new();
+
+        for collection in collections {
+            match self
+                .query_fused_with_vector(
+                    collection,
+                    query_text,
+                    limit,
+                    fetch_limit,
+                    filter,
+                    &vector,
+                )
+                .await
+            {
+                Ok(mut results) => all.append(&mut results),
+                Err(err) => warn!(
+                    collection = %collection,
+                    error = %err,
+                    "Code-RAG collection search failed"
+                ),
+            }
+        }
+
+        all.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        dedupe_results_by_file(&mut all);
+        all.truncate(limit as usize);
+        Ok(all)
+    }
+
+    async fn query_fused_with_vector(
+        &self,
+        collection: &str,
+        query_text: &str,
+        limit: u64,
+        fetch_limit: u64,
+        filter: &CodeFilter,
+        vector: &[f32],
+    ) -> Result<Vec<RagResult>> {
+        self.ensure_collection(collection).await?;
+        let fetch = fetch_limit.clamp(limit, 100);
+
+        let mut builder =
+            SearchPointsBuilder::new(collection, vector.to_vec(), fetch).with_payload(true);
         if let Some(f) = filter.qdrant_filter() {
             builder = builder.filter(f);
         }
@@ -414,6 +541,7 @@ impl RagPipeline {
         let mut best: HashMap<String, RagResult> = HashMap::new();
         for pt in response.result {
             let mut r = point_to_result(pt);
+            r.retrieval_collection = collection.to_string();
             if !filter.post_matches(&r) {
                 continue;
             }
@@ -540,7 +668,8 @@ impl RagPipeline {
 
     async fn ensure_collection(&self, name: &str) -> Result<()> {
         if !self.qdrant.collection_exists(name).await? {
-            self.qdrant
+            match self
+                .qdrant
                 .create_collection(CreateCollectionBuilder::new(name).vectors_config(
                     VectorsConfig {
                         config: Some(VectorsConfigEnum::Params(
@@ -548,8 +677,17 @@ impl RagPipeline {
                         )),
                     },
                 ))
-                .await?;
-            info!(collection = %name, "Created Qdrant collection");
+                .await
+            {
+                Ok(_) => info!(collection = %name, "Created Qdrant collection"),
+                Err(err) if is_already_exists(&err) => {
+                    tracing::debug!(
+                        collection = %name,
+                        "Qdrant collection was created concurrently"
+                    );
+                }
+                Err(err) => return Err(err.into()),
+            }
         }
         Ok(())
     }
@@ -560,12 +698,13 @@ impl RagPipeline {
         batch: &mut Vec<PointStruct>,
         stats: &mut IngestStats,
     ) {
+        let count = batch.len();
         match self
             .qdrant
             .upsert_points(UpsertPointsBuilder::new(collection, std::mem::take(batch)))
             .await
         {
-            Ok(_) => stats.chunks_upserted += VOYAGE_BATCH.min(batch.capacity()),
+            Ok(_) => stats.chunks_upserted += count,
             Err(e) => {
                 warn!(error = %e, "Qdrant upsert failed");
                 stats.errors += 1;
@@ -574,55 +713,84 @@ impl RagPipeline {
     }
 
     async fn embed_document(&self, text: &str) -> Result<Vec<f32>> {
-        self.embed(text, "document").await
+        self.voyage.embed(text, Some("document")).await
     }
 
     async fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
-        self.embed(text, "query").await
+        self.voyage.embed(text, Some("query")).await
+    }
+}
+
+pub fn default_collection_from_env() -> String {
+    std::env::var("COGNITIVE_MCP_RAG_COLLECTION")
+        .or_else(|_| std::env::var("COGNITIVE_MCP_REPOMIX_COLLECTION"))
+        .unwrap_or_else(|_| DEFAULT_COLLECTION.to_string())
+}
+
+pub fn default_collections_for_mode(mode: RetrievalMode) -> Vec<String> {
+    let env_key = match mode {
+        RetrievalMode::Completion => "COGNITIVE_MCP_COMPLETION_COLLECTIONS",
+        RetrievalMode::Search => "COGNITIVE_MCP_SEARCH_COLLECTIONS",
+        RetrievalMode::Deep => "COGNITIVE_MCP_DEEP_COLLECTIONS",
+    };
+
+    if let Ok(value) = std::env::var(env_key) {
+        let collections = split_collection_list(&value);
+        if !collections.is_empty() {
+            return collections;
+        }
     }
 
-    async fn embed(&self, text: &str, input_type: &str) -> Result<Vec<f32>> {
-        #[derive(Serialize)]
-        struct Req<'a> {
-            input: Vec<&'a str>,
-            model: &'a str,
-            input_type: &'a str,
-            truncation: bool,
-            output_dimension: u64,
+    if let Ok(value) = std::env::var("COGNITIVE_MCP_RAG_COLLECTIONS") {
+        let collections = split_collection_list(&value);
+        if !collections.is_empty() {
+            return collections;
         }
-        #[derive(Deserialize)]
-        struct Resp {
-            data: Vec<EmbData>,
+    }
+
+    match mode {
+        RetrievalMode::Completion | RetrievalMode::Search => DEFAULT_VOYAGE4_COLLECTIONS
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect(),
+        RetrievalMode::Deep => vec![default_collection_from_env()],
+    }
+}
+
+fn split_collection_list(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .collect()
+}
+
+fn env_u64(key: &str, default: u64) -> u64 {
+    std::env::var(key)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
+}
+
+fn dedupe_results_by_file(results: &mut Vec<RagResult>) {
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    results.retain(|result| {
+        let key = format!(
+            "{}:{}:{}",
+            result.retrieval_collection, result.repo, result.file_path
+        );
+        seen.insert(key)
+    });
+}
+
+fn is_already_exists(err: &QdrantError) -> bool {
+    match err {
+        QdrantError::ResponseError { status }
+        | QdrantError::ResourceExhaustedError { status, .. } => {
+            status.code() == tonic::Code::AlreadyExists
         }
-        #[derive(Deserialize)]
-        struct EmbData {
-            embedding: Vec<f32>,
-        }
-
-        let url = voyage_url_for_key(&self.voyage_key);
-
-        let resp: Resp = self
-            .http
-            .post(url)
-            .bearer_auth(&self.voyage_key)
-            .json(&Req {
-                input: vec![text],
-                model: &self.voyage_model,
-                input_type,
-                truncation: true,
-                output_dimension: VECTOR_DIM,
-            })
-            .send()
-            .await?
-            .error_for_status()?
-            .json()
-            .await?;
-
-        resp.data
-            .into_iter()
-            .next()
-            .map(|d| d.embedding)
-            .context("Voyage returned no embeddings")
+        _ => false,
     }
 }
 
@@ -1122,57 +1290,11 @@ pub fn qdrant_client_from_env() -> Result<Qdrant> {
         .context("Failed to build Qdrant client")
 }
 
-/// Load the Voyage API key from a secret file when env vars are unset.
-///
-/// Defaults to `~/.ssh/mongo-voyage`; override with the
-/// `COGNITIVE_MCP_VOYAGE_KEY_FILE` env var. The first non-empty line is used
-/// (so a key file with a trailing newline or comment lines works).
-fn voyage_key_from_file() -> Option<String> {
-    let path = std::env::var("COGNITIVE_MCP_VOYAGE_KEY_FILE")
-        .ok()
-        .map(std::path::PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| Path::new(&h).join(".ssh/mongo-voyage")))?;
-
-    let contents = std::fs::read_to_string(&path).ok()?;
-    // The creds file may contain multiple credential types (Atlas service
-    // account ID/secret, plus a Voyage API key).  We must skip service
-    // account lines and pick the actual API key.
-    let key = contents
-        .lines()
-        .map(str::trim)
-        .find(|l| {
-            !l.is_empty()
-                && !l.starts_with('#')
-                // skip Atlas service-account tokens
-                && !l.starts_with("mdb_sa_id_")
-                && !l.starts_with("mdb_sa_sk_")
-                // line should look like a Voyage key (MongoDB-hosted or public)
-                && (l.starts_with("al-") || l.starts_with("pa-"))
-        })?
-        .to_string();
-
-    if key.is_empty() {
-        None
-    } else {
-        info!(path = %path.display(), "Loaded Voyage API key from file");
-        Some(key)
-    }
-}
-
-/// Determine the correct Voyage endpoint for a given API key.
-fn voyage_url_for_key(key: &str) -> &'static str {
-    let trimmed = key.trim();
-    if trimmed.starts_with("al-") {
-        VOYAGE_MONGODB_URL
-    } else {
-        VOYAGE_PUBLIC_URL
-    }
-}
-
 /// Map a scored Qdrant point + payload into a `RagResult`.
 fn point_to_result(pt: ScoredPoint) -> RagResult {
     let p = serde_json::to_value(&pt.payload).unwrap_or_default();
     RagResult {
+        retrieval_collection: str_field(&p, "retrieval_collection"),
         score: pt.score,
         repo: str_field(&p, "repo"),
         file_path: str_field(&p, "file_path"),

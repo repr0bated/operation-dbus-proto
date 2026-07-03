@@ -14,7 +14,7 @@
 | `COGNITIVE_MCP_NOTEBOOKLM_DISABLED_TOOLS` | `crates/op-cognitive-mcp/src/notebooklm.rs:51` | Handled via `.ok()` (resolves to `Option<String>`). |
 | `NOTEBOOKLM_COOKIE` | `crates/op-cognitive-mcp/src/notebooklm.rs:64` | Checked with `if let Ok(cookie)`. |
 | `VOYAGE_API_KEY` | `crates/op-cognitive-mcp/src/voyage.rs:36` | No default. Propagated via `anyhow::Result`. |
-| `VOYAGE_MODEL` | `crates/op-cognitive-mcp/src/voyage.rs:38` | Defaults to `"voyage-law-2"`. |
+| `VOYAGE_MODEL` | `crates/op-cognitive-mcp/src/voyage.rs:50` | Defaults to `"voyage-4"` (also reads `COGNITIVE_MCP_VOYAGE_MODEL` first). Was `"voyage-law-2"` in an earlier revision — corrected. |
 | `COGNITIVE_MCP_QDRANT_URL` | `crates/op-cognitive-mcp/src/qdrant_shuttle.rs:41` | Defaults to `"http://127.0.0.1:6334"`. |
 | `COGNITIVE_MCP_QDRANT_COLLECTION` | `crates/op-cognitive-mcp/src/qdrant_shuttle.rs:43` | Defaults to `"ctl_plane_reasoning_episodes"`. |
 | `COGNITIVE_MCP_SCHEMA_SLED_PATH` | `crates/op-cognitive-mcp/src/qdrant_shuttle.rs:45` | Defaults to `"/dev/shm/plugin_schema.dat"`. |

@@ -32,7 +32,8 @@ const FIXED_BASE_PROMPT: &str = r#"3tched AI infrastructure platform — Artix L
 
 Capabilities:
 - **OVS management** via rovs suite (rovs-ovsdb, rovs-openflow) — bridges, ports, flows, AF_XDP uplink
-- **Container orchestration** via Incus (`assistant`, `wg-xray`, `mail-3tched`)
+- **Container orchestration** via Incus (`assistant`, `mail-3tched`)
+- **Xray + gRPC-bridge on the HOST** — xray via the `gbr-xray` s6 service; the operation.v1 gRPC server (StateSync) at `10.200.0.2:50051` is served on the host by `op-dbus`. The deprecated `wg-xray` Incus container is stopped.
 - **Service management** via s6 — NOT systemd, NOT systemctl
 - **Network configuration** via rtnetlink and Generic Netlink
 - **D-Bus** system bus for inter-process communication
@@ -204,8 +205,8 @@ eth0      148.113.204.83/32   Physical NIC, XDP program id 54 attached
 INTERFACE      ADDRESS              TYPE              PURPOSE
 ────────────────────────────────────────────────────────────────────────────
 eth0           148.113.204.83/32   Physical / XDP    WAN uplink
-grpc-uplink    10.200.0.2/30       veth pair         gRPC transport to wg-xray
-               peer 10.200.0.1/32
+grpc-uplink    10.200.0.2/30       veth pair         gRPC transport to host op-dbus (operation.v1)
+               peer 10.200.0.1/32                     (deprecated: was wg-xray container)
 netmaker       100.90.37.254/32    WireGuard         Netmaker mesh (privacy-mesh)
                10.0.0.0/24 scope
                100.90.37.0/24 scope
@@ -220,7 +221,7 @@ BRIDGE     DATAPATH   FAIL_MODE    DESCRIPTION
 ovsbr0     netdev     standalone   Switching fabric
 ```
 - AF_XDP uplink: `eth0` attached via `op-ovsbr0-afxdp` (migrates management IP to/from bridge)
-- veth port: `grpc-uplink` (connects to wg-xray container at 10.200.0.1)
+- veth port: `grpc-uplink` (host op-dbus operation.v1 gRPC at 10.200.0.2:50051)
 - Managed via rovs suite — no ovs-vsctl
 
 ### Port Naming Convention
@@ -241,17 +242,17 @@ mon-     300    10.30.2.128/25    Monitoring/observability
 NAME           STATE     IP                    PURPOSE
 ──────────────────────────────────────────────────────────────────────
 assistant      RUNNING   (mesh only)           AI workspace / chatbot
-wg-xray        RUNNING   15.235.37.41 (eth0)   WireGuard + Xray egress
-                         10.200.0.1 (eth0)     gRPC bridge peer
-                         10.0.0.1 (wg0)        WireGuard server
 mail-3tched    ERROR     —                     Mail server (needs repair)
 ```
+Note: the `wg-xray` container is DEPRECATED and stopped. Xray + the gRPC-bridge
+now run on the host (xray via the `gbr-xray` s6 service; operation.v1 gRPC at
+`10.200.0.2:50051` served by `op-dbus`).
 
 ### Traffic Flow
 ```
 GhostBridge (gb-*) → ovsbr0 → netmaker (WireGuard) → encrypted mesh
-gRPC traffic       → grpc-uplink veth → wg-xray container (10.200.0.1:50051)
-Xray/privacy egress→ wg-xray → 15.235.37.41 → internet
+gRPC traffic       → grpc-uplink veth → host op-dbus (10.200.0.2:50051)
+Xray/privacy egress→ host gbr-xray service → internet
 Mesh access        → netmaker 100.90.37.254 → WireGuard peers
 ```
 
@@ -290,7 +291,8 @@ When properly configured:
 - ovsbr0 UP with datapath=netdev, grpc-uplink as veth port
 - eth0 AF_XDP program attached (id 54), management IP on ovsbr0 internal port when bridge is up
 - netmaker UP, 100.90.37.254/32, WireGuard mesh active
-- wg-xray container RUNNING with 15.235.37.41 and 10.200.0.1
+- Xray + gRPC-bridge running on the HOST (gbr-xray s6 service; operation.v1
+  gRPC at 10.200.0.2:50051 served by op-dbus); the wg-xray container is stopped
 - All OVS operations via rovs suite — never ovs-vsctl or ovsdb-client
 - All service management via s6 — never systemctl
 "#;

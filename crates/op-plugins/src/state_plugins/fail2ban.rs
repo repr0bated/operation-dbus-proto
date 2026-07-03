@@ -2,18 +2,28 @@ use anyhow::Result;
 use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
 use op_state_store::PluginSchema;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use simd_json::{json, OwnedValue as Value};
+use serde_json::json;
+use serde_json::Value as JsonValue;
+use simd_json::OwnedValue as Value;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "sch.security.plugin.fail2ban.schema@v1"))]
 pub struct Fail2banState {
     pub status: String,
-    pub jails: Value,
-    pub bans: Value,
-    pub filters: Value,
-    pub actions: Value,
-    pub logs: Value,
-    pub config: Value,
+    #[schemars(with = "serde_json::Value")]
+    pub jails: JsonValue,
+    #[schemars(with = "serde_json::Value")]
+    pub bans: JsonValue,
+    #[schemars(with = "serde_json::Value")]
+    pub filters: JsonValue,
+    #[schemars(with = "serde_json::Value")]
+    pub actions: JsonValue,
+    #[schemars(with = "serde_json::Value")]
+    pub logs: JsonValue,
+    #[schemars(with = "serde_json::Value")]
+    pub config: JsonValue,
 }
 
 pub struct Fail2banPlugin;
@@ -59,10 +69,7 @@ impl StatePlugin for Fail2banPlugin {
         "1.0.0"
     }
     fn schema(&self) -> Option<PluginSchema> {
-        Some(super::plugin_schema_defs::fail2ban_plugin_schema())
-    }
-    async fn query_current_state(&self) -> Result<Value> {
-        Ok(simd_json::serde::to_owned_value(Self::current_state())?)
+        Some(fail2ban_schema())
     }
     async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {
         Ok(StateDiff {
@@ -106,4 +113,79 @@ impl StatePlugin for Fail2banPlugin {
             atomic_operations: false,
         }
     }
+}
+
+pub(crate) fn fail2ban_schema() -> PluginSchema {
+    let root = serde_json::to_value(schemars::schema_for!(Fail2banState))
+        .expect("schemars schema serializes to JSON");
+    let mut schema = super::schemars_adapter::plugin_schema_from_json(
+        "fail2ban",
+        "1.0.0",
+        "Fail2ban intrusion prevention — jails, bans, filters, actions",
+        &root,
+    );
+    schema.category = "security".to_string();
+    if let Ok(defaults) = simd_json::serde::to_owned_value(Fail2banPlugin::current_state()) {
+        super::schemars_adapter::apply_state_defaults(&mut schema, &defaults);
+    }
+
+    schema.methods.insert(
+        "ban_ip".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<BanIpInput, super::plugin_scaffold_helpers::AckOutput>(
+            "BanIp",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "fail2ban.write",
+            "mut.security.fail2ban.ip.ban@v1",
+        ),
+    );
+    schema.methods.insert(
+        "unban_ip".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<BanIpInput, super::plugin_scaffold_helpers::AckOutput>(
+            "UnbanIp",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "fail2ban.write",
+            "mut.security.fail2ban.ip.unban@v1",
+        ),
+    );
+    schema.methods.insert(
+        "get_jail_status".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<JailInput, super::plugin_scaffold_helpers::AckOutput>(
+            "GetJailStatus",
+            op_state_store::SideEffect::Read,
+            true,
+            "fail2ban.read",
+            "obs.security.fail2ban.jail.status@v1",
+        ),
+    );
+    schema.methods.insert(
+        "reload".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<super::plugin_scaffold_helpers::EmptyInput, super::plugin_scaffold_helpers::AckOutput>(
+            "Reload",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "fail2ban.write",
+            "mut.security.fail2ban.service.reload@v1",
+        ),
+    );
+
+    schema
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct JailInput {
+    pub jail: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct BanIpInput {
+    pub jail: String,
+    pub ip: String,
+}
+
+// Self-registration: the plugin registry discovers this via inventory
+// (single source of the catalog; no central dispatch list).
+inventory::submit! {
+    crate::default_registry::PluginReg::new("fail2ban", |_ctx| std::sync::Arc::new(Fail2banPlugin::new()))
 }

@@ -1,0 +1,126 @@
+{
+  "log": {
+    "loglevel": "warning",
+    "access": "/var/log/xray/access.log",
+    "error": "/var/log/xray/error.log"
+  },
+  "inbounds": [
+    {
+      "tag": "op-tls",
+      "listen": "0.0.0.0",
+      "port": 443,
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "id": "f997ea91-94bb-4078-b172-649cd21a7647"
+          }
+        ],
+        "decryption": "none",
+        "fallbacks": [
+          {
+            "dest": 18789
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "tls",
+        "tlsSettings": {
+          "alpn": [
+            "h2",
+            "http/1.1"
+          ],
+          "certificates": [
+            {
+              "certificateFile": "/etc/ssl/xray/3tched.com.pem",
+              "keyFile": "/etc/ssl/xray/3tched.com.key"
+            },
+            {
+              "certificateFile": "/etc/ssl/xray/ghostbridge.tech.pem",
+              "keyFile": "/etc/ssl/xray/ghostbridge.tech.key"
+            }
+          ]
+        }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls",
+          "quic"
+        ],
+        "routeOnly": true
+      }
+    },
+    {
+      "tag": "ghostbridge-reality",
+      "listen": "0.0.0.0",
+      "port": 8443,
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "id": "f997ea91-94bb-4078-b172-649cd21a7647",
+            "flow": "xtls-rprx-vision"
+          }
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "dest": "www.microsoft.com:443",
+          "serverNames": [
+            "www.microsoft.com"
+          ],
+          "privateKey": "*******************************************",
+          "shortIds": [
+            "821c52c7ba699c33"
+          ]
+        }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls",
+          "quic"
+        ],
+        "routeOnly": true
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "tag": "direct",
+      "protocol": "freedom",
+      "settings": {}
+    },
+    {
+      "tag": "block",
+      "protocol": "blackhole"
+    },
+    {
+      "tag": "grpc-bridge-out",
+      "protocol": "freedom",
+      "settings": {
+        "redirect": "127.0.0.1:18789"
+      }
+    }
+  ],
+  "routing": {
+    "domainStrategy": "AsIs",
+    "rules": [
+      {
+        "type": "field",
+        "inboundTag": [
+          "op-tls",
+          "ghostbridge-reality"
+        ],
+        "outboundTag": "grpc-bridge-out"
+      }
+    ]
+  }
+}

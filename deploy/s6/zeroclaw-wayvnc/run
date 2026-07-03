@@ -1,0 +1,50 @@
+#!/bin/sh
+# 🟢 🛷 Zeroclaw WayVNC — VNC view into the isolated headless Wayland Sled.
+#
+# Binds to loopback by default. CRD/X11 remains untouched because DISPLAY is
+# explicitly unset and only WAYLAND_DISPLAY=zeroclaw-wayland is exported.
+
+set -eu
+exec 2>&1
+
+[ -r /etc/op-dbus/environment ] && . /etc/op-dbus/environment
+[ -r /etc/ghostbridge/zeroclaw-wayland.env ] && . /etc/ghostbridge/zeroclaw-wayland.env
+
+OP_ZEROCLAW_USER="${OP_ZEROCLAW_USER:-jeremy}"
+OP_ZEROCLAW_GROUP="${OP_ZEROCLAW_GROUP:-$OP_ZEROCLAW_USER}"
+ZEROCLAW_WAYLAND_DISPLAY="${ZEROCLAW_WAYLAND_DISPLAY:-zeroclaw-wayland}"
+ZEROCLAW_WAYVNC_HOST="${ZEROCLAW_WAYVNC_HOST:-127.0.0.1}"
+ZEROCLAW_WAYVNC_PORT="${ZEROCLAW_WAYVNC_PORT:-5901}"
+ZEROCLAW_WAYVNC_EXTRA_ARGS="${ZEROCLAW_WAYVNC_EXTRA_ARGS:-}"
+PATH="${PATH:-/usr/local/sbin:/usr/local/bin:/usr/bin:/bin:/home/${OP_ZEROCLAW_USER}/.local/bin}"
+
+if ! command -v wayvnc >/dev/null 2>&1; then
+  echo "wayvnc is required for zeroclaw-wayvnc"
+  exit 127
+fi
+
+uid="$(id -u "$OP_ZEROCLAW_USER")"
+runtime_dir="${XDG_RUNTIME_DIR:-/run/user/${uid}}"
+socket_path="${runtime_dir}/${ZEROCLAW_WAYLAND_DISPLAY}"
+
+i=0
+while [ ! -S "$socket_path" ]; do
+  i=$((i + 1))
+  if [ "$i" -gt 200 ]; then
+    echo "Wayland socket not ready: $socket_path"
+    exit 1
+  fi
+  sleep 0.1
+done
+
+unset DISPLAY
+
+# shellcheck disable=SC2086
+exec s6-setuidgid "$OP_ZEROCLAW_USER" env \
+  HOME="/home/${OP_ZEROCLAW_USER}" \
+  USER="$OP_ZEROCLAW_USER" \
+  LOGNAME="$OP_ZEROCLAW_USER" \
+  PATH="$PATH" \
+  XDG_RUNTIME_DIR="$runtime_dir" \
+  WAYLAND_DISPLAY="$ZEROCLAW_WAYLAND_DISPLAY" \
+  wayvnc ${ZEROCLAW_WAYVNC_EXTRA_ARGS} "$ZEROCLAW_WAYVNC_HOST" "$ZEROCLAW_WAYVNC_PORT"

@@ -1,0 +1,21 @@
+#!/bin/sh
+# zeroclaw - Antigravity/ZeroClaw gateway (host-native, replaces openclaw + container zeroclaw)
+# Per AGENTS.md: secrets live in /etc/ghostbridge/*.env, never in unit files.
+
+if [ -f /etc/ghostbridge/zeroclaw.env ]; then
+    . /etc/ghostbridge/zeroclaw.env
+fi
+
+export ZEROCLAW_GATEWAY_HOST="${ZEROCLAW_GATEWAY_HOST:-0.0.0.0}"
+export ZEROCLAW_GATEWAY_PORT="${ZEROCLAW_GATEWAY_PORT:-18789}"
+# gRPC + reflection target: the op-grpc-bridge native Unix socket. The assistant
+# container has no IP — reach the bridge over the socket, never a host:port.
+export ZEROCLAW_GRPC="${ZEROCLAW_GRPC:-unix:/run/ghostbridge/container.sock}"
+export ZEROCLAW_GRPC_TARGET="${ZEROCLAW_GRPC_TARGET:-$ZEROCLAW_GRPC}"
+export ZEROCLAW_WEB_DIST_DIR="${ZEROCLAW_WEB_DIST_DIR:-/opt/zeroclaw/web/dist}"
+export HOME="${HOME:-/root}"
+export SHELL="${SHELL:-/bin/sh}"
+export PATH="${PATH:-/usr/local/sbin:/usr/local/bin:/usr/bin:/bin:/home/jeremy/.cargo/bin}"
+
+exec 2>&1
+exec /home/jeremy/.cargo/bin/zeroclaw daemon

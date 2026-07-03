@@ -35,7 +35,7 @@ pub async fn dashboard_metrics_handler(
     let active_connections = get_vpn_peer_count();
 
     // Try to read system stats from the D-Bus projection cache first.
-    // These are live procfs projections from org.opdbus.v1 /opdbus/v1/plugins/procfs/*.
+    // These are live procfs projections from org.opdbus.v1 /org/opdbus/v1/plugins/procfs/*.
     let mem_proj =
         projection_client::get_projection(&state.projection_cache, "system.memory").await;
     let load_proj = projection_client::get_projection(&state.projection_cache, "system.load").await;

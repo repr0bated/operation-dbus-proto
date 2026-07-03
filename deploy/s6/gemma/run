@@ -1,0 +1,21 @@
+#!/bin/sh
+exec 2>&1
+set -eu
+
+PATH="${PATH:-/usr/local/sbin:/usr/local/bin:/usr/bin:/bin}"
+
+GEMMA_BIN="${GEMMA_BIN:-/usr/local/bin/op-gemma}"
+SHUTTLE_BIN="${SHUTTLE_BIN:-/usr/local/bin/op-identity-shuttle}"
+GEMMA_INTERVAL_SECONDS="${GEMMA_INTERVAL_SECONDS:-300}"
+
+if [ -f /etc/ghostbridge/xray.env ]; then
+    . /etc/ghostbridge/xray.env
+fi
+
+while :; do
+    "$GEMMA_BIN"
+
+    "$SHUTTLE_BIN"
+
+    sleep "$GEMMA_INTERVAL_SECONDS"
+done

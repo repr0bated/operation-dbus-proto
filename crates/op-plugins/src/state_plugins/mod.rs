@@ -1,60 +1,79 @@
-//! State plugins - each manages a domain via native protocols
+//! State plugins - each manages a domain via native protocols.
 //!
-//! These plugins implement the StatePlugin trait from op-state
+//! Each plugin implements the `StatePlugin` trait from `op-state` and
+//! self-registers with the loader via `inventory::submit!` (see
+//! `default_registry::PluginReg`) co-located with its own definition — there is
+//! no central dispatch list.
+//!
+//! This module is just the module tree plus the public type re-exports. Adding a
+//! plugin means adding its `pub mod` here and a `submit!` in that module; it does
+//! NOT mean editing a catalog.
 
+// ---------------------------------------------------------------------------
+// Module tree (plugins + shared helpers). Keep alphabetical.
+// ---------------------------------------------------------------------------
+pub mod adc;
+pub mod agent_config;
+pub mod antigravity;
+pub mod antigravity_chat;
+pub mod blockchain_plugin;
+pub mod btrfs_plugin;
+pub mod cognitive_mcp;
+pub mod common;
+pub mod compact_mcp;
+pub mod config;
+pub mod cozo;
+pub mod cron;
+pub mod ctl_plane_chatbot;
+pub mod datastore;
 pub mod dnsresolver;
+pub mod embedding_model;
+pub mod endpoint;
+pub mod factory;
+pub mod fail2ban;
+pub mod freedesktop;
 pub mod full_system;
-pub mod keyring;
-pub use keyring::KeyringPlugin;
+pub mod keypair;
+pub mod gcloud_adc;
+pub mod gemma_brain;
+pub mod hardware;
 pub mod incus;
+pub mod incus_device;
+pub mod json_render;
+pub mod keyring;
+pub mod large_language_model;
 pub mod login1;
-pub mod lxc;
+pub mod mail_server;
 pub mod mcp;
+pub mod memory_plugin;
 pub mod net;
 pub mod netmaker;
+pub mod notebooklm;
+pub mod oci;
 pub mod openflow;
 pub mod openflow_obfuscation;
+pub mod oscal_subid_registry;
+pub mod ovsdb_bridge;
 pub mod packagekit;
 pub mod pcidecl;
-// pub mod privacy;
-pub mod adc;
-pub mod config;
-pub mod endpoint;
-pub mod gcloud_adc;
-pub mod keypair;
-pub(crate) mod plugin_schema_defs;
+pub mod persona;
+pub(crate) mod plugin_scaffold_helpers;
 pub mod privacy_router;
 pub mod privacy_routes;
 pub mod procfs;
 pub mod proxy_server;
-pub mod s6;
-pub mod service;
-pub mod sessdecl;
-// pub mod systemd;
-// pub mod systemd_networkd;
-
-pub mod agent_config;
-pub mod antigravity;
-pub mod antigravity_chat;
-pub mod btrfs_plugin;
-pub mod cognitive_mcp;
-pub mod compact_mcp;
-pub mod cron;
-pub mod factory;
-pub mod fail2ban;
-pub mod hardware;
-pub mod knowledge_plugin;
-pub mod mail_server;
-pub mod memory_plugin;
-pub mod ovsdb_bridge;
-pub mod ovsdb_daemon;
-pub mod proxmox;
+pub mod qdrant;
 pub mod rovs_commands;
 pub mod rtnetlink;
+pub mod s6_systemctl;
 pub mod schema_contract;
 pub mod schema_renderer;
+pub mod schemars_adapter;
+pub mod service;
+pub mod sessdecl;
 pub mod software;
 pub mod unix_socket;
+pub mod shared_unix_socket;
 pub mod users;
 pub mod web_ui;
 pub mod wgcf;
@@ -62,68 +81,63 @@ pub mod wireguard;
 pub mod workflows_plugin;
 pub mod xray;
 pub mod zeroclaw;
+
+// ---------------------------------------------------------------------------
+// Public type re-exports (consumed by `crate::prelude` and other crates).
+// Plugins reached only through the loader/inventory do not need a re-export.
+// Keep alphabetical by type.
+// ---------------------------------------------------------------------------
+pub use adc::AdcPlugin;
+pub use agent_config::AgentConfigPlugin;
 pub use antigravity::AntigravityPlugin;
 pub use antigravity_chat::AntigravityChatPlugin;
 pub use btrfs_plugin::BtrfsPlugin;
+pub use cognitive_mcp::CognitiveMcpPlugin;
+pub use compact_mcp::CompactMcpPlugin;
+pub use config::ConfigPlugin;
+pub use cozo::CozoPlugin;
 pub use cron::CronPlugin;
+pub use ctl_plane_chatbot::CtlPlaneChatbotPlugin;
+pub use dnsresolver::DnsResolverPlugin;
+pub use endpoint::EndpointPlugin;
 pub use factory::FactoryPlugin;
 pub use fail2ban::Fail2banPlugin;
-pub use knowledge_plugin::KnowledgePlugin;
-pub use memory_plugin::MemoryPlugin;
-pub use schema_renderer::SchemaRendererPlugin;
-pub use workflows_plugin::WorkflowsPlugin;
-
-// Re-export plugin types
-pub use dnsresolver::DnsResolverPlugin;
+pub use freedesktop::FreeDesktopPlugin;
 pub use full_system::FullSystemPlugin;
+pub use keypair::KeypairPlugin;
+pub use gcloud_adc::GcloudAdcPlugin;
+pub use hardware::HardwarePlugin;
 pub use incus::IncusPlugin;
+pub use json_render::JsonRenderPlugin;
+pub use keyring::KeyringPlugin;
 pub use login1::Login1Plugin;
-pub use lxc::LxcPlugin;
+pub use mail_server::MailServerPlugin;
 pub use mcp::McpStatePlugin;
 pub use mcp::{ExecutionResult, ToolDefinition};
+pub use memory_plugin::MemoryPlugin;
 pub use net::NetStatePlugin;
 pub use netmaker::{NetmakerConfig, NetmakerPlugin};
 pub use openflow::OpenFlowPlugin;
 pub use openflow_obfuscation::OpenFlowObfuscationPlugin;
+pub use ovsdb_bridge::OvsBridgePlugin;
 pub use packagekit::PackageKitPlugin;
 pub use pcidecl::PciDeclPlugin;
-// pub use privacy::PrivacyPlugin;
-pub use adc::AdcPlugin;
-pub use agent_config::AgentConfigPlugin;
-pub use cognitive_mcp::CognitiveMcpPlugin;
-pub use compact_mcp::CompactMcpPlugin;
-pub use config::ConfigPlugin;
-pub use endpoint::EndpointPlugin;
-pub use gcloud_adc::GcloudAdcPlugin;
-pub use hardware::HardwarePlugin;
-pub use keypair::KeypairPlugin;
-pub use ovsdb_bridge::OvsBridgePlugin;
-pub use ovsdb_daemon::OvsdbDaemonPlugin;
 pub use privacy_router::PrivacyRouterPlugin;
 pub use privacy_routes::PrivacyRoutesPlugin;
 pub use procfs::ProcfsPlugin;
-pub use rovs_commands::RovsCommandsPlugin;
-// pub use netmaker::NetmakerPlugin;
-pub use proxmox::ProxmoxPlugin;
 pub use proxy_server::ProxyServerPlugin;
+pub use qdrant::QdrantPlugin;
+pub use rovs_commands::RovsCommandsPlugin;
 pub use rtnetlink::RtnetlinkPlugin;
-pub use s6::S6StatePlugin;
+pub use s6_systemctl::S6SystemctlPlugin;
+pub use schema_renderer::SchemaRendererPlugin;
 pub use service::ServicePlugin;
 pub use sessdecl::SessDeclPlugin;
 pub use software::SoftwarePlugin;
-// pub use systemd::SystemdStatePlugin;
-pub use mail_server::MailServerPlugin;
 pub use unix_socket::UnixSocketPlugin;
+pub use shared_unix_socket::SharedUnixSocketPlugin;
 pub use users::UsersPlugin;
 pub use web_ui::WebUiPlugin;
-pub use wgcf::WgcfPlugin;
 pub use wireguard::WireGuardPlugin;
-pub use xray::XrayPlugin;
+pub use workflows_plugin::WorkflowsPlugin;
 pub use zeroclaw::ZeroclawPlugin;
-// pub use systemd_networkd::SystemdNetworkdPlugin; // TODO: Plugin not yet implemented
-
-pub mod ctl_plane_chatbot;
-pub use ctl_plane_chatbot::CtlPlaneChatbotPlugin;
-
-pub mod freedesktop;
-pub use freedesktop::FreeDesktopPlugin;

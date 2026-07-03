@@ -326,11 +326,6 @@ impl StatePlugin for SystemdStatePlugin {
         "1.0.0"
     }
 
-    async fn query_current_state(&self) -> Result<Value> {
-        // For now, return empty state - full implementation would list all units
-        let config = SystemdConfig { units: None };
-        Ok(simd_json::serde::to_owned_value(config)?)
-    }
 
     async fn calculate_diff(&self, current: &Value, desired: &Value) -> Result<StateDiff> {
         let current_config: SystemdConfig = simd_json::serde::from_owned_value(current.clone())?;
@@ -414,7 +409,7 @@ impl StatePlugin for SystemdStatePlugin {
     }
 
     async fn create_checkpoint(&self) -> Result<Checkpoint> {
-        let current = self.query_current_state().await?;
+        let current = simd_json::json!(null);
         Ok(Checkpoint {
             id: format!("systemd-{}", chrono::Utc::now().timestamp()),
             plugin: self.name().to_string(),

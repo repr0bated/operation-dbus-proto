@@ -6,15 +6,17 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
+use op_state_store::{FieldSchema, PluginSchema};
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
-use simd_json::OwnedValue as Value;
+use simd_json::{json, OwnedValue as Value};
 use std::collections::HashMap;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// Top-level state for the mail server plugin.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+/// See: https://doc.dovecot.org/configuration_manual/references/
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, Default)]
 pub struct MailServerState {
     /// Incus container name running the mail stack
     pub container_name: String,
@@ -40,7 +42,8 @@ pub struct MailServerState {
 }
 
 /// Mail protocol endpoints.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+/// See: https://doc.dovecot.org/configuration_manual/references/
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
 pub struct MailEndpoints {
     /// SMTP submission port (587)
     pub smtp_submission: Option<String>,
@@ -257,47 +260,7 @@ impl StatePlugin for MailServerPlugin {
     }
 
     fn schema(&self) -> Option<op_state_store::PluginSchema> {
-        Some(super::plugin_schema_defs::mail_server_plugin_schema())
-    }
-
-    async fn query_current_state(&self) -> Result<Value> {
-        let mut state = Self::default_state();
-
-        match self.query_container_status(&state.container_name).await {
-            Ok((status, ip)) => {
-                state.container_status = status;
-                state.container_ip = ip;
-            }
-            Err(e) => {
-                state.container_status = "Error".to_string();
-                state.last_error = Some(e.to_string());
-            }
-        }
-
-        if state.container_status == "Running" {
-            let (healthy, err) = self.check_mail_health(&state.container_name).await;
-            state.healthy = healthy;
-            state.last_error = err;
-        }
-
-        // Query container devices from Incus REST API (AGENTS.md §4: no subprocess bypasses)
-        if let Ok(config) = Self::incus_api_get(&format!(
-            "/1.0/instances/{}?recursion=1",
-            state.container_name
-        ))
-        .await
-        {
-            if let Some(devices) = config.get("devices") {
-                if let Ok(dev_map) = simd_json::serde::from_owned_value::<
-                    HashMap<String, HashMap<String, String>>,
-                >(devices.clone())
-                {
-                    state.devices = Some(dev_map);
-                }
-            }
-        }
-
-        Ok(simd_json::serde::to_owned_value(state)?)
+        Some(mail_server_schema())
     }
 
     async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {
@@ -347,4 +310,357 @@ impl StatePlugin for MailServerPlugin {
             atomic_operations: false,
         }
     }
+}
+
+pub(crate) fn mail_server_schema() -> PluginSchema {
+    use op_state_store::FieldType;
+
+    let endpoint_fields = {
+        let mut fields = HashMap::new();
+        fields.insert(
+            "smtp_submission".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "SMTP submission endpoint (port 587)".to_string(),
+                default: Some(json!("0.0.0.0:587")),
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "smtp_tls".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "SMTP TLS endpoint (port 465)".to_string(),
+                default: Some(json!("0.0.0.0:465")),
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "imap".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "IMAP endpoint (port 143)".to_string(),
+                default: Some(json!("0.0.0.0:143")),
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "imaps".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "IMAPS endpoint (port 993)".to_string(),
+                default: Some(json!("0.0.0.0:993")),
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "dovecot_lmtp".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Dovecot LMTP unix socket path inside container".to_string(),
+                default: Some(json!("/var/spool/postfix/private/dovecot-lmtp")),
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "postfix_pickup".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Postfix pickup unix socket path inside container".to_string(),
+                default: Some(json!("/var/spool/postfix/private/pickup")),
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields
+    };
+
+    let mut schema = PluginSchema::builder("mail_server")
+        .version("1.0.0")
+        .description("Mail server container state and D-Bus registration for 3tched.com")
+        .dependency("incus")
+        .dependency("unix_socket")
+        .field(
+            "container_name",
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "Incus container name running the mail stack".to_string(),
+                default: Some(json!("mail-3tched")),
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        )
+        .field(
+            "container_status",
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "Container runtime status".to_string(),
+                default: Some(json!("Unknown")),
+                example: None,
+                constraints: Vec::new(),
+                read_only: true,
+                read_only_when: None,
+            },
+        )
+        .field(
+            "domain",
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "Primary mail domain".to_string(),
+                default: Some(json!("3tched.com")),
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        )
+        .field(
+            "xray_socket_path",
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "Unix socket path for Xray naive routing integration".to_string(),
+                default: Some(json!("/run/xray/mail-naive.sock")),
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        )
+        .field(
+            "dbus_service_name",
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "D-Bus service name registered for this mail instance".to_string(),
+                default: Some(json!("org.opdbus.MailServer.3tched")),
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        )
+        .field(
+            "endpoints",
+            FieldSchema {
+                field_type: FieldType::Object(endpoint_fields),
+                required: true,
+                description: "Active mail service endpoints".to_string(),
+                default: Some(json!({})),
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        )
+        .field(
+            "container_ip",
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Container IPv4 address".to_string(),
+                default: None,
+                example: None,
+                constraints: Vec::new(),
+                read_only: true,
+                read_only_when: None,
+            },
+        )
+        .field(
+            "healthy",
+            FieldSchema {
+                field_type: FieldType::Boolean,
+                required: true,
+                description: "Whether the mail stack is healthy".to_string(),
+                default: Some(json!(false)),
+                example: None,
+                constraints: Vec::new(),
+                read_only: true,
+                read_only_when: None,
+            },
+        )
+        .field(
+            "last_error",
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Last error message if unhealthy".to_string(),
+                default: None,
+                example: None,
+                constraints: Vec::new(),
+                read_only: true,
+                read_only_when: None,
+            },
+        )
+        .example(json!({
+            "container_name": "mail-3tched",
+            "container_status": "Running",
+            "domain": "3tched.com",
+            "xray_socket_path": "/run/xray/mail-naive.sock",
+            "dbus_service_name": "org.opdbus.MailServer.3tched",
+            "endpoints": {
+                "smtp_submission": "0.0.0.0:587",
+                "smtp_tls": "0.0.0.0:465",
+                "imap": "0.0.0.0:143",
+                "imaps": "0.0.0.0:993",
+                "dovecot_lmtp": "/var/spool/postfix/private/dovecot-lmtp",
+                "postfix_pickup": "/var/spool/postfix/private/pickup"
+            },
+            "container_ip": "10.200.0.2",
+            "healthy": true,
+            "last_error": null
+        }))
+        .build();
+
+    schema.methods.insert(
+        "add_domain".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<DomainInput, super::plugin_scaffold_helpers::AckOutput>(
+            "AddDomain",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "mail.write",
+            "mut.service.mail.domain.add@v1",
+        ),
+    );
+    schema.methods.insert(
+        "remove_domain".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<DomainInput, super::plugin_scaffold_helpers::AckOutput>(
+            "RemoveDomain",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "mail.write",
+            "mut.service.mail.domain.remove@v1",
+        ),
+    );
+    schema.methods.insert(
+        "add_mailbox".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<MailboxInput, super::plugin_scaffold_helpers::AckOutput>(
+            "AddMailbox",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "mail.write",
+            "mut.service.mail.mailbox.add@v1",
+        ),
+    );
+    schema.methods.insert(
+        "remove_mailbox".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<MailboxInput, super::plugin_scaffold_helpers::AckOutput>(
+            "RemoveMailbox",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "mail.write",
+            "mut.service.mail.mailbox.remove@v1",
+        ),
+    );
+    schema.methods.insert(
+        "add_alias".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<AliasInput, super::plugin_scaffold_helpers::AckOutput>(
+            "AddAlias",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "mail.write",
+            "mut.service.mail.alias.add@v1",
+        ),
+    );
+    schema.methods.insert(
+        "remove_alias".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<AliasInput, super::plugin_scaffold_helpers::AckOutput>(
+            "RemoveAlias",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "mail.write",
+            "mut.service.mail.alias.remove@v1",
+        ),
+    );
+    schema.methods.insert(
+        "set_quota".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<QuotaInput, super::plugin_scaffold_helpers::AckOutput>(
+            "SetQuota",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "mail.write",
+            "mut.service.mail.quota.set@v1",
+        ),
+    );
+    schema.methods.insert(
+        "get_queue".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<super::plugin_scaffold_helpers::EmptyInput, super::plugin_scaffold_helpers::AckOutput>(
+            "GetQueue",
+            op_state_store::SideEffect::Read,
+            true,
+            "mail.read",
+            "obs.service.mail.queue.get@v1",
+        ),
+    );
+    schema.methods.insert(
+        "flush_queue".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<super::plugin_scaffold_helpers::EmptyInput, super::plugin_scaffold_helpers::AckOutput>(
+            "FlushQueue",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "mail.write",
+            "mut.service.mail.queue.flush@v1",
+        ),
+    );
+
+    schema
+}
+
+// Self-registration: the plugin registry discovers this via inventory
+// (single source of the catalog; no central dispatch list).
+inventory::submit! {
+    crate::default_registry::PluginReg::new("mail_server", |_ctx| std::sync::Arc::new(MailServerPlugin::new()))
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct DomainInput {
+    pub domain: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct MailboxInput {
+    pub domain: String,
+    pub user: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct AliasInput {
+    pub domain: String,
+    pub alias: String,
+    pub destination: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct QuotaInput {
+    pub domain: String,
+    pub user: String,
+    pub quota_mb: u32,
 }

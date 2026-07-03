@@ -9,6 +9,7 @@
 
 pub mod actor;
 pub mod agent_tools;
+pub mod chat_service;
 pub mod forced_execution;
 pub mod forced_tool_pipeline;
 pub mod mcp_server;
@@ -21,6 +22,7 @@ pub mod tool_executor;
 
 pub use actor::{ChatActor, ChatActorConfig, ChatActorHandle, RpcRequest, RpcResponse};
 pub use agent_tools::{register_all_agent_tools, register_context_agents};
+pub use chat_service::ChatServiceImpl;
 pub use forced_execution::{
     ForcedExecutionOrchestrator, HallucinationCheck, HallucinationIssue, HallucinationType,
     IssueSeverity, ToolCall, ToolCallResult,
@@ -34,3 +36,6 @@ pub use orchestration::{
 pub use session::SessionManager;
 pub use system_prompt::{create_session_with_system_prompt, generate_system_prompt};
 pub use tool_executor::TrackedToolExecutor;
+
+/// File descriptor set for tonic-reflection (includes chat + orchestration protos).
+pub use orchestration::proto::FILE_DESCRIPTOR_SET;

@@ -22,9 +22,6 @@ zeroize = { version = "1.6", features = ["zeroize_derive"] }
 base64 = "0.22"
 hex = "0.4"
 
-# Database
-sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
-
 # Logging
 tracing = "0.1"
 
