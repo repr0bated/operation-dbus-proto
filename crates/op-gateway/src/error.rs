@@ -10,8 +10,6 @@ pub enum GatewayError {
     Crypto(String),
     #[error("storage error: {0}")]
     Storage(String),
-    #[error("database error: {0}")]
-    Database(#[from] sqlx::Error),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
     #[error("internal error: {0}")]

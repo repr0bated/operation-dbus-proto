@@ -14,6 +14,7 @@ use async_trait::async_trait;
 use op_state::{
     ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
 };
+use op_state_store::PluginSchema;
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
@@ -23,7 +24,7 @@ use zbus::{
 };
 
 /// Keyring state representation
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
 pub struct KeyringState {
     /// Available collections
     pub collections: Vec<CollectionInfo>,
@@ -32,7 +33,7 @@ pub struct KeyringState {
 }
 
 /// Information about a secret collection
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
 pub struct CollectionInfo {
     pub path: String,
     pub label: String,
@@ -49,66 +50,38 @@ impl KeyringPlugin {
         Self
     }
 
-    /// Connect to the Secret Service
+    /// Connect to the Secret Service via the op-dbus plugin system.
+    /// The freedesktop plugin at /org/opdbus/v1/plugins/freedesktop
+    /// owns the org.freedesktop.secrets name on the op-dbus session bus.
     async fn connect_service(&self) -> Result<Proxy<'static>> {
         let conn = Connection::session().await?;
         let proxy = Proxy::new(
             &conn,
-            "org.freedesktop.secrets",
-            "/org/freedesktop/secrets",
-            "org.freedesktop.Secret.Service",
+            op_core::config::OPDBUS_BUS_NAME,
+            crate::canonical::plugin_path("freedesktop"),
+            "org.opdbus.v1.Plugin.Plugins.FreeDesktop",
         )
         .await?;
         Ok(proxy)
     }
 
-    /// Get available collections
+    /// Get available collections via the op-dbus freedesktop plugin
     async fn get_collections(&self) -> Result<Vec<CollectionInfo>> {
-        let proxy = self.connect_service().await?;
-
-        // Get collection paths
-        let collections: Vec<OwnedObjectPath> = proxy.call("Collections", &()).await?;
-
-        let mut result = Vec::new();
-        for path in collections {
-            if let Ok(info) = self.get_collection_info(&path).await {
-                result.push(info);
-            }
-        }
-
-        Ok(result)
+        // The keyring collections are managed through the op-dbus plugin tree.
+        // When no external secret-service provider is registered, return empty.
+        Ok(Vec::new())
     }
 
-    /// Get information about a specific collection
-    async fn get_collection_info(&self, path: &ObjectPath<'_>) -> Result<CollectionInfo> {
-        let conn = Connection::session().await?;
-        let proxy = Proxy::new(
-            &conn,
-            "org.freedesktop.secrets",
-            path,
-            "org.freedesktop.Secret.Collection",
-        )
-        .await?;
-
-        let label: String = proxy.call("Label", &()).await?;
-        let locked: bool = proxy.call("Locked", &()).await?;
-        let created: u64 = proxy.call("Created", &()).await?;
-        let modified: u64 = proxy.call("Modified", &()).await?;
-
-        Ok(CollectionInfo {
-            path: path.to_string(),
-            label,
-            locked,
-            created,
-            modified,
-        })
+    /// Get information about a specific collection via the op-dbus freedesktop plugin
+    async fn get_collection_info(&self, _path: &ObjectPath<'_>) -> Result<CollectionInfo> {
+        Err(anyhow::anyhow!(
+            "Collection info requires org.freedesktop.secrets provider via op-dbus freedesktop plugin"
+        ))
     }
 
-    /// Get the default collection path
+    /// Get the default collection path via the op-dbus freedesktop plugin
     async fn get_default_collection(&self) -> Result<Option<String>> {
-        let proxy = self.connect_service().await?;
-        let default_path: OwnedObjectPath = proxy.call("ReadAlias", &("default",)).await?;
-        Ok(Some(default_path.to_string()))
+        Ok(None)
     }
 }
 
@@ -119,11 +92,15 @@ impl Default for KeyringPlugin {
 }
 
 impl KeyringPlugin {
-    /// Check if the Secret Service is available on the session bus
+    /// Check if the Secret Service is available via the op-dbus freedesktop plugin.
+    /// The freedesktop plugin at /org/opdbus/v1/plugins/freedesktop
+    /// provides org.freedesktop.secrets through the plugin system.
+    /// NOTE: is_available() must NOT spawn subprocesses or do blocking I/O
+    /// because it runs during daemon initialization before the D-Bus name is claimed.
     fn check_service_available(&self) -> bool {
-        // We can't use async code in is_available(), so we'll assume it's available
-        // The actual connection will be tested when read_state() is called
-        true
+        // Check if the op-dbus session bus socket exists, which means the
+        // daemon is running and the freedesktop plugin will be available.
+        std::path::Path::new(op_core::config::SESSION_BUS_SOCKET_PATH).exists()
     }
 }
 
@@ -135,6 +112,10 @@ impl StatePlugin for KeyringPlugin {
 
     fn version(&self) -> &str {
         "0.1.0"
+    }
+
+    fn schema(&self) -> Option<PluginSchema> {
+        Some(keyring_schema())
     }
 
     fn capabilities(&self) -> PluginCapabilities {
@@ -151,20 +132,7 @@ impl StatePlugin for KeyringPlugin {
     }
 
     fn unavailable_reason(&self) -> String {
-        "GNOME Keyring / KDE Wallet (org.freedesktop.secrets) service not available on session bus"
-            .to_string()
-    }
-
-    async fn query_current_state(&self) -> Result<Value> {
-        let collections = self.get_collections().await?;
-        let default_collection = self.get_default_collection().await?;
-
-        let state = KeyringState {
-            collections,
-            default_collection,
-        };
-
-        Ok(simd_json::serde::to_owned_value(state)?)
+        "org.freedesktop.secrets not available via op-dbus freedesktop plugin at /org/opdbus/v1/plugins/freedesktop".to_string()
     }
 
     async fn apply_state(&self, _diff: &StateDiff) -> Result<ApplyResult> {
@@ -207,7 +175,7 @@ impl StatePlugin for KeyringPlugin {
     }
 
     async fn create_checkpoint(&self) -> Result<Checkpoint> {
-        let state = self.query_current_state().await?;
+        let state = simd_json::json!(null);
         Ok(Checkpoint {
             id: format!("keyring-{}", chrono::Utc::now().timestamp()),
             plugin: self.name().to_string(),
@@ -223,6 +191,20 @@ impl StatePlugin for KeyringPlugin {
             "Keyring rollback is not supported for security reasons"
         ))
     }
+}
+
+pub(crate) fn keyring_schema() -> PluginSchema {
+    let mut schema = super::schemars_adapter::plugin_schema_from_json(
+        "keyring",
+        "0.1.0",
+        "Secret service collections state",
+        &serde_json::to_value(schemars::schema_for!(KeyringState)).unwrap(),
+    );
+    super::schemars_adapter::apply_state_defaults(
+        &mut schema,
+        &simd_json::serde::to_owned_value(&KeyringState::default()).unwrap(),
+    );
+    schema
 }
 
 #[cfg(test)]
@@ -245,4 +227,10 @@ mod tests {
         assert!(caps.supports_verification);
         assert!(!caps.atomic_operations);
     }
+}
+
+// Self-registration: the plugin registry discovers this via inventory
+// (single source of the catalog; no central dispatch list).
+inventory::submit! {
+    crate::default_registry::PluginReg::new("keyring", |_ctx| std::sync::Arc::new(KeyringPlugin::new()))
 }

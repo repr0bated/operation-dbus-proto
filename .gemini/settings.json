@@ -1,12 +1,9 @@
 {
   "mcpServers": {
     "cognitive-mcp": {
-      "url": "http://127.0.0.1:3003/mcp",
-      "type": "http",
-      "headers": {
-        "x-ghostbridge-footprint": "gemini-cli",
-        "x-ghostbridge-trace-id": "gemini-cli"
-      },
+      "type": "stdio",
+      "command": "cognitive-mcp-server",
+      "args": ["--stdio"],
       "trust": true
     }
   }

@@ -3,9 +3,9 @@
 //! Exposes OVSDB and NonNet JSON-RPC methods as D-Bus interfaces
 //! for a true 1:1 mirror of the JSON-RPC API.
 //!
-//! Authoritative Path: D-Bus method → SchemaEngine.mutate → RCP Database → EventChain
+//! Authoritative Path: D-Bus method → MutationEngine.mutate → RCP Database → EventChain
 
-use op_grpc_bridge::{ChangeType, SchemaEngine};
+use op_grpc_bridge::{ChangeType, MutationEngine};
 use op_jsonrpc::nonnet::NonNetDb;
 use op_jsonrpc::protocol::JsonRpcRequest;
 use op_network::rovs_proxy::OvsdbDbusClient;
@@ -18,14 +18,14 @@ fn str_to_simd(s: &str) -> Result<simd_json::OwnedValue, zbus::fdo::Error> {
     simd_json::to_owned_value(&mut bytes).map_err(|e| zbus::fdo::Error::InvalidArgs(e.to_string()))
 }
 
-/// OVSDB D-Bus interface - mirrors JSON-RPC methods
+/// OVSDB D-Bus interface - mirrors JSON-RPC methods at /org/opdbus/v1/mirror/ovsdb
 pub struct OvsdbInterface {
     pub client: Arc<OvsdbDbusClient>,
-    pub schema_engine: Option<Arc<SchemaEngine>>,
+    pub schema_engine: Option<Arc<MutationEngine>>,
 }
 
 impl OvsdbInterface {
-    pub fn new(client: Arc<OvsdbDbusClient>, schema_engine: Option<Arc<SchemaEngine>>) -> Self {
+    pub fn new(client: Arc<OvsdbDbusClient>, schema_engine: Option<Arc<MutationEngine>>) -> Self {
         Self {
             client,
             schema_engine,
@@ -33,18 +33,18 @@ impl OvsdbInterface {
     }
 }
 
-#[interface(name = "org.opdbus.OvsdbV1")]
+#[interface(name = "org.opdbus.mirror.OvsdbV1")]
 impl OvsdbInterface {
     /// Execute JSON-RPC transact on OVSDB
     async fn transact(&self, operations: String) -> zbus::fdo::Result<String> {
         let operations_val = str_to_simd(&operations)?;
 
-        // Route through SchemaEngine for authoritative recording if available
+        // Route through MutationEngine for authoritative recording if available
         if let Some(engine) = &self.schema_engine {
             match engine
                 .mutate(
                     "net".to_string(),
-                    "/org/opdbus/v1/ovsdb".to_string(),
+                    "/org/opdbus/v1/mirror/ovsdb".to_string(),
                     ChangeType::MethodCall,
                     Some("transact".to_string()),
                     operations_val,
@@ -94,7 +94,7 @@ impl OvsdbInterface {
             engine
                 .mutate(
                     "net".to_string(),
-                    "/org/opdbus/v1/ovsdb".to_string(),
+                    "/org/opdbus/v1/mirror/ovsdb".to_string(),
                     ChangeType::MethodCall,
                     Some("create_bridge".to_string()),
                     simd_json::json!(name),
@@ -126,7 +126,7 @@ impl OvsdbInterface {
             engine
                 .mutate(
                     "net".to_string(),
-                    "/org/opdbus/v1/ovsdb".to_string(),
+                    "/org/opdbus/v1/mirror/ovsdb".to_string(),
                     ChangeType::MethodCall,
                     Some("add_port".to_string()),
                     simd_json::json!([bridge, port]),
@@ -161,14 +161,14 @@ impl OvsdbInterface {
     }
 }
 
-/// NonNet D-Bus interface - mirrors JSON-RPC methods
+/// NonNet D-Bus interface - mirrors JSON-RPC methods at /org/opdbus/v1/mirror/nonnet
 pub struct NonNetInterface {
     pub nonnet: Arc<NonNetDb>,
-    pub schema_engine: Option<Arc<SchemaEngine>>,
+    pub schema_engine: Option<Arc<MutationEngine>>,
 }
 
 impl NonNetInterface {
-    pub fn new(nonnet: Arc<NonNetDb>, schema_engine: Option<Arc<SchemaEngine>>) -> Self {
+    pub fn new(nonnet: Arc<NonNetDb>, schema_engine: Option<Arc<MutationEngine>>) -> Self {
         Self {
             nonnet,
             schema_engine,
@@ -176,7 +176,7 @@ impl NonNetInterface {
     }
 }
 
-#[interface(name = "org.opdbus.NonNetV1")]
+#[interface(name = "org.opdbus.mirror.NonNetV1")]
 impl NonNetInterface {
     /// Execute JSON-RPC transact on NonNet
     async fn transact(&self, request: String) -> zbus::fdo::Result<String> {
@@ -196,7 +196,7 @@ impl NonNetInterface {
                 match engine
                     .mutate(
                         "nonnet".to_string(),
-                        "/org/opdbus/v1/nonnet".to_string(),
+                        "/org/opdbus/v1/mirror/nonnet".to_string(),
                         ChangeType::MethodCall,
                         Some(json_req.method.clone()),
                         req_simd,

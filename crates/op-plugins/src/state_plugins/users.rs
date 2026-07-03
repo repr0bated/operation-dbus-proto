@@ -2,15 +2,20 @@ use anyhow::Result;
 use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
 use serde::{Deserialize, Serialize};
+use simd_json::json;
 use simd_json::prelude::*;
+
 use simd_json::OwnedValue as Value;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+use super::plugin_scaffold_helpers::{method_decl_from_schemars_with_output, AckOutput};
+use op_state_store::PluginSchema;
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
 pub struct UsersState {
     pub users: Vec<UserConfig>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
 pub struct UserConfig {
     pub username: String,
     pub uid: Option<u32>,
@@ -18,6 +23,57 @@ pub struct UserConfig {
     pub groups: Vec<String>,
     pub shell: Option<String>,
     pub present: bool,
+}
+
+/// Input struct for CreateUser method.
+/// See: https://www.freedesktop.org/wiki/Software/systemd/
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct CreateUserInput {
+    /// Username to create
+    pub username: String,
+    /// User ID (optional, auto-assigned if not provided)
+    pub uid: Option<u32>,
+    /// Primary group ID (optional)
+    pub gid: Option<u32>,
+    /// Additional groups
+    #[serde(default)]
+    pub groups: Vec<String>,
+    /// Login shell
+    pub shell: Option<String>,
+}
+
+/// Input struct for DeleteUser method.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct DeleteUserInput {
+    /// Username to delete
+    pub username: String,
+    /// Remove home directory
+    #[serde(default)]
+    pub remove_home: bool,
+}
+
+/// Input struct for ModifyUser method.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ModifyUserInput {
+    /// Username to modify
+    pub username: String,
+    /// New login shell
+    pub shell: Option<String>,
+    /// New primary group
+    pub gid: Option<u32>,
+    /// Groups to add
+    #[serde(default)]
+    pub add_groups: Vec<String>,
+    /// Groups to remove
+    #[serde(default)]
+    pub remove_groups: Vec<String>,
+}
+
+/// Input struct for ListUsers method.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ListUsersInput {
+    /// Filter by group (optional)
+    pub group: Option<String>,
 }
 
 pub struct UsersPlugin;
@@ -45,30 +101,7 @@ impl StatePlugin for UsersPlugin {
     }
 
     fn schema(&self) -> Option<op_state_store::PluginSchema> {
-        Some(super::plugin_schema_defs::users_plugin_schema())
-    }
-
-    async fn query_current_state(&self) -> Result<Value> {
-        let content = tokio::fs::read_to_string("/etc/passwd")
-            .await
-            .unwrap_or_default();
-        let mut users = Vec::new();
-
-        for line in content.lines() {
-            let parts: Vec<&str> = line.split(':').collect();
-            if parts.len() >= 7 {
-                users.push(UserConfig {
-                    username: parts[0].to_string(),
-                    uid: parts[2].parse().ok(),
-                    gid: parts[3].parse().ok(),
-                    groups: vec![],
-                    shell: Some(parts[6].to_string()),
-                    present: true,
-                });
-            }
-        }
-
-        Ok(simd_json::serde::to_owned_value(UsersState { users })?)
+        Some(users_schema())
     }
 
     async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {
@@ -118,4 +151,73 @@ impl StatePlugin for UsersPlugin {
             atomic_operations: false,
         }
     }
+}
+
+pub(crate) fn users_schema() -> PluginSchema {
+    let mut schema = super::schemars_adapter::plugin_schema_from_json(
+        "users",
+        "1.0.0",
+        "User account declarations",
+        &serde_json::to_value(schemars::schema_for!(UsersState)).unwrap(),
+    );
+    super::schemars_adapter::apply_state_defaults(
+        &mut schema,
+        &simd_json::serde::to_owned_value(&UsersState::default()).unwrap(),
+    );
+
+    // CreateUser method - https://www.freedesktop.org/wiki/Software/systemd/
+    schema.methods.insert(
+        "create_user".to_string(),
+        method_decl_from_schemars_with_output::<CreateUserInput, AckOutput>(
+            "CreateUser",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "users.write",
+            "mut.software.plugin.users.create@v1",
+        ),
+    );
+
+    // DeleteUser method
+    schema.methods.insert(
+        "delete_user".to_string(),
+        method_decl_from_schemars_with_output::<DeleteUserInput, AckOutput>(
+            "DeleteUser",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "users.write",
+            "mut.software.plugin.users.delete@v1",
+        ),
+    );
+
+    // ModifyUser method
+    schema.methods.insert(
+        "modify_user".to_string(),
+        method_decl_from_schemars_with_output::<ModifyUserInput, AckOutput>(
+            "ModifyUser",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "users.write",
+            "mut.software.plugin.users.modify@v1",
+        ),
+    );
+
+    // ListUsers method
+    schema.methods.insert(
+        "list_users".to_string(),
+        method_decl_from_schemars_with_output::<ListUsersInput, AckOutput>(
+            "ListUsers",
+            op_state_store::SideEffect::Read,
+            true,
+            "users.read",
+            "obs.software.plugin.users.list@v1",
+        ),
+    );
+
+    schema
+}
+
+// Self-registration: the plugin registry discovers this via inventory
+// (single source of the catalog; no central dispatch list).
+inventory::submit! {
+    crate::default_registry::PluginReg::new("users", |_ctx| std::sync::Arc::new(UsersPlugin::new()))
 }

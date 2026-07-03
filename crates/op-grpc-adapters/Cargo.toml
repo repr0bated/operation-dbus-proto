@@ -1,0 +1,51 @@
+[package]
+name = "op-grpc-adapters"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "gRPC adapters — wraps mail, netmaker, MQTT and other services behind a uniform Tonic gRPC interface with Ghostbridge identity headers and reflection"
+
+[[bin]]
+name = "op-grpc-adapters"
+path = "src/main.rs"
+
+[dependencies]
+op-identity = { path = "../op-identity" }
+op-core = { workspace = true }
+
+tonic = { workspace = true }
+tonic-web = { workspace = true }
+tonic-reflection = { workspace = true }
+tonic-health = { workspace = true }
+prost = { workspace = true }
+prost-types = { workspace = true }
+
+tokio = { workspace = true }
+tokio-stream = { workspace = true }
+async-trait = { workspace = true }
+futures = { workspace = true }
+async-stream = "0.3"
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+hex = { workspace = true }
+
+# Mail (IMAP/SMTP)
+async-imap = { version = "0.9", default-features = false, features = ["runtime-tokio"] }
+async-smtp = { version = "0.9", default-features = false, features = ["runtime-tokio"] }
+
+# MQTT
+rumqttc = { version = "0.24", features = ["use-rustls"] }
+
+# HTTP (netmaker REST, netmaker-ui)
+reqwest = { version = "0.12", features = ["json", "stream"] }
+bytes = { workspace = true }
+zbus = { workspace = true }
+
+[build-dependencies]
+tonic-build = { workspace = true }

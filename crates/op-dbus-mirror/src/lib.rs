@@ -1,6 +1,6 @@
 //! op-dbus-mirror: 1:1 D-Bus publication of internal databases
 //!
-//! This crate publishes the internal OVSDB and NonNet database structures as a
+//! This crate publishes the internal OVSDB database structure as a
 //! D-Bus object hierarchy without introducing a second source of truth.
 
 use anyhow::Result;
@@ -32,12 +32,11 @@ use managed_objects::{
     PROJECTED_IFACE,
 };
 use op_core::types::BusType;
-use op_grpc_bridge::{OperationGrpcServer, SchemaEngine};
-use op_jsonrpc::nonnet::NonNetDb;
+use op_grpc_bridge::{MutationEngine, OperationGrpcServer};
 use op_network::rovs_proxy::OvsdbDbusClient;
-use op_state::manager::StateManager;
+use op_state_store::PluginSchema;
 use procfs::Current as _;
-use serde_json::{Map, Value};
+use serde_json::Value;
 use std::collections::HashSet;
 use std::sync::Arc;
 use zbus::zvariant::{ObjectPath, OwnedObjectPath};
@@ -61,8 +60,7 @@ pub mod tree;
 /// internal databases.
 pub struct DbusMirror {
     ovsdb: Arc<OvsdbDbusClient>,
-    nonnet: Arc<NonNetDb>,
-    schema_engine: Option<Arc<SchemaEngine>>,
+    schema_engine: Option<Arc<MutationEngine>>,
     connection: Connection,
     /// Published D-Bus object paths managed by this service.
     published_objects: DashMap<String, ()>,
@@ -72,8 +70,6 @@ pub struct DbusMirror {
     /// Optional handle to the gRPC server so the ComponentRegistry can be
     /// mirrored into the D-Bus tree under /org/opdbus/v1/registry/.
     grpc_server: Option<Arc<OperationGrpcServer>>,
-    /// StateManager for enumerating all registered plugins (active or not).
-    state_manager: Option<Arc<StateManager>>,
     /// Current data and sequence numbers per object path
     current_data: DashMap<String, (Value, u64)>,
     /// Per-session state keyed by peer name
@@ -85,23 +81,20 @@ impl DbusMirror {
     pub async fn new(
         bus_type: BusType,
         ovsdb: Arc<OvsdbDbusClient>,
-        nonnet: Arc<NonNetDb>,
-        schema_engine: Option<Arc<SchemaEngine>>,
+        schema_engine: Option<Arc<MutationEngine>>,
     ) -> std::result::Result<Self, MirrorError> {
         let connection = match bus_type {
-            BusType::System => Builder::system()?.name("org.opdbus.v1")?.build().await?,
-            BusType::Session => Builder::session()?.name("org.opdbus.v1")?.build().await?,
+            BusType::System => Builder::system()?.build().await?,
+            BusType::Session => Builder::session()?.build().await?,
         };
 
         Ok(Self {
             ovsdb,
-            nonnet,
             schema_engine,
             connection,
             published_objects: DashMap::new(),
             plugin_registry: Arc::new(DashMap::new()),
             grpc_server: None,
-            state_manager: None,
             current_data: DashMap::new(),
             sessions: DashMap::new(),
         })
@@ -113,13 +106,6 @@ impl DbusMirror {
         self
     }
 
-    /// Attach the StateManager so all registered plugins are always visible in
-    /// the managed objects tree (active or not).
-    pub fn with_state_manager(mut self, state_manager: Arc<StateManager>) -> Self {
-        self.state_manager = Some(state_manager);
-        self
-    }
-
     /// Start the mirror service.
     ///
     /// Performs an initial full-tree publication and then enters an event-driven
@@ -127,24 +113,11 @@ impl DbusMirror {
     pub async fn start(self: Arc<Self>) -> std::result::Result<(), MirrorError> {
         tracing::info!("Starting D-Bus mirror publication service...");
 
-        // Initial full sync
-        if let Err(e) = self.refresh_full_tree().await {
-            tracing::error!("Initial D-Bus mirror sync failed: {}", e);
-        }
-
         // Register ObjectManager at the root to manage EVERYTHING.
         let om = ObjectManagerInterface::new(self.plugin_registry.clone());
         self.connection
             .object_server()
             .at("/org/opdbus/v1", om)
-            .await?;
-
-        // Register PluginsV1 at the canonical plugins path.
-        let plugin_iface = plugin_interface::PluginInterface::new();
-        let plugin_snap = plugin_iface.snapshot_handle();
-        self.connection
-            .object_server()
-            .at("/org/opdbus/v1/plugins", plugin_iface)
             .await?;
 
         // Register mirror-management interface
@@ -162,22 +135,21 @@ impl DbusMirror {
             .at("/org/opdbus/v1/ovsdb", ovsdb_interface)
             .await?;
 
-        // Register NonNet JSON-RPC interface at /org/opdbus/v1/nonnet
-        let nonnet_interface = jsonrpc_interface::NonNetInterface::new(
-            self.nonnet.clone(),
-            self.schema_engine.clone(),
-        );
+        // The mirror owns org.opdbus.v1.mirror (NOT org.opdbus.v1.plugins,
+        // which is the sole property of the projection server).
         self.connection
-            .object_server()
-            .at("/org/opdbus/v1/nonnet", nonnet_interface)
+            .request_name(op_core::config::MIRROR_BUS_NAME)
             .await?;
+
+        // Initial full sync
+        if let Err(e) = self.refresh_full_tree().await {
+            tracing::error!("Initial D-Bus mirror sync failed: {}", e);
+        }
 
         // Create event dispatcher
         let dispatcher = crate::event_dispatcher::EventDispatcher::new(
             self.clone(),
             self.ovsdb.clone(),
-            self.nonnet.clone(),
-            self.state_manager.clone(),
             self.grpc_server.clone(),
         );
 
@@ -198,9 +170,6 @@ impl DbusMirror {
         if let Err(e) = dispatcher.run_event_loop().await {
             tracing::error!("Event loop failed: {}", e);
         }
-
-        // Populate fixed objects immediately on startup.
-        self.refresh_plugin_snapshot(&plugin_snap).await;
 
         // Watch ComponentRegistry for live register/deregister events
         if let Some(grpc) = &self.grpc_server {
@@ -260,12 +229,6 @@ impl DbusMirror {
             tracing::warn!("Procfs snapshot failed: {}", e);
         }
 
-        // 3. Scan NonNet (Authoritative for Plugins not in Enterprise DB)
-        tracing::info!("DEBUG: Publishing NonNet snapshot");
-        if let Err(e) = self.publish_nonnet_snapshot(&mut active_paths).await {
-            tracing::warn!("NonNet snapshot failed: {}", e);
-        }
-
         // 4. gRPC ComponentRegistry snapshot (host/plugin now use fixed objects)
         if let Err(e) = self.publish_registry_snapshot(&mut active_paths).await {
             tracing::warn!("ComponentRegistry snapshot failed: {}", e);
@@ -286,12 +249,7 @@ impl DbusMirror {
             tracing::warn!("Process snapshot failed: {}", e);
         }
 
-        // 8. Keep plugin objects published even when a plugin is currently inactive.
-        if let Err(e) = self.publish_plugin_snapshot(&mut active_paths).await {
-            tracing::warn!("Plugin snapshot failed: {}", e);
-        }
-
-        // 9. Remove any D-Bus objects that no longer exist in any authority
+        // 8. Remove any D-Bus objects that no longer exist in any authority
         self.remove_stale_publications(&active_paths).await?;
 
         Ok(())
@@ -441,123 +399,6 @@ impl DbusMirror {
                         )
                         .await?;
                         active_paths.insert(ovs_path);
-                    }
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    async fn publish_nonnet_snapshot(&self, active_paths: &mut HashSet<String>) -> Result<()> {
-        tracing::info!("DEBUG: NonNet snapshot started");
-        self.publish_object(
-            "/org/opdbus/v1/nonnet",
-            serde_json::json!({
-                "kind": "database_root",
-                "source": "nonnet",
-            }),
-        )
-        .await?;
-        active_paths.insert("/org/opdbus/v1/nonnet".to_string());
-
-        let request = op_jsonrpc::protocol::JsonRpcRequest::new("list_dbs", simd_json::json!([]));
-        let response = self.nonnet.handle_request(request).await;
-
-        let dbs: Vec<Value> = response
-            .result
-            .and_then(|v| serde_json::to_value(&v).ok())
-            .and_then(|v| v.as_array().map(|a| a.to_vec()))
-            .unwrap_or_default();
-
-        tracing::info!("DEBUG: NonNet has {} databases", dbs.len());
-
-        for db_name_val in dbs {
-            if let Some(db_name) = db_name_val.as_str() {
-                tracing::info!("DEBUG: Scanning NonNet DB: {}", db_name);
-                let db_path = format!(
-                    "/org/opdbus/v1/nonnet/{}",
-                    Self::sanitize_dbus_path_segment(db_name)
-                );
-                self.publish_object(
-                    &db_path,
-                    serde_json::json!({
-                        "kind": "database",
-                        "database": db_name,
-                        "source": "nonnet",
-                    }),
-                )
-                .await?;
-                active_paths.insert(db_path.clone());
-
-                let schema_req = op_jsonrpc::protocol::JsonRpcRequest::new(
-                    "get_schema",
-                    simd_json::json!([db_name]),
-                );
-                let schema_resp = self.nonnet.handle_request(schema_req).await;
-
-                let schema_serde: Option<Value> = schema_resp
-                    .result
-                    .and_then(|v| serde_json::to_value(&v).ok());
-                if let Some(tables) =
-                    schema_serde.and_then(|s| s.get("tables").and_then(|v| v.as_object().cloned()))
-                {
-                    tracing::info!("DEBUG: NonNet DB {} has {} tables", db_name, tables.len());
-                    let table_names: Vec<String> = tables.keys().map(|k| k.to_string()).collect();
-                    for table_name in table_names {
-                        let table_path = format!(
-                            "{}/{}",
-                            db_path,
-                            Self::sanitize_dbus_path_segment(&table_name)
-                        );
-                        let dump_req = op_jsonrpc::protocol::JsonRpcRequest::new(
-                            "transact",
-                            simd_json::json!([
-                                db_name,
-                                {
-                                    "op": "select",
-                                    "table": table_name,
-                                    "where": []
-                                }
-                            ]),
-                        );
-                        let dump_resp = self.nonnet.handle_request(dump_req).await;
-
-                        let rows = dump_resp.result.and_then(|v| serde_json::to_value(&v).ok());
-                        let rows = rows
-                            .as_ref()
-                            .and_then(|r| r.as_array())
-                            .and_then(|results| results.first())
-                            .and_then(|result| result.get("rows"))
-                            .and_then(|v| v.as_array().map(|a| a.to_vec()))
-                            .unwrap_or_default();
-
-                        self.publish_object(
-                            &table_path,
-                            serde_json::json!({
-                                "kind": "table",
-                                "database": db_name,
-                                "table": table_name,
-                                "row_count": rows.len(),
-                            }),
-                        )
-                        .await?;
-                        active_paths.insert(table_path.clone());
-
-                        tracing::info!(
-                            "DEBUG: NonNet DB {} table {} has {} rows",
-                            db_name,
-                            table_name,
-                            rows.len()
-                        );
-                        for (idx, row) in rows.into_iter().enumerate() {
-                            let id = Self::extract_uuid(&row);
-                            let id = if id == "unknown" { idx.to_string() } else { id };
-                            let path =
-                                format!("{}/{}", table_path, Self::sanitize_dbus_path_segment(&id));
-                            self.publish_object(&path, row).await?;
-                            active_paths.insert(path);
-                        }
                     }
                 }
             }
@@ -832,13 +673,18 @@ impl DbusMirror {
     }
 
     fn plugin_dbus_path(plugin_id: &str) -> String {
-        format!("/org/opdbus/v1/plugins/{}", Self::sanitize_dbus_path_segment(plugin_id))
+        format!(
+            "/org/opdbus/v1/plugins/{}",
+            Self::sanitize_dbus_path_segment(plugin_id)
+        )
     }
 
     fn is_permanent_plugin_path(path: &str) -> bool {
         const CANONICAL: &str = "/org/opdbus/v1/plugins/";
         const LEGACY: &str = "/org/opdbus/v1/plugin/plugins/";
-        if let Some(remainder) = path.strip_prefix(CANONICAL).or_else(|| path.strip_prefix(LEGACY))
+        if let Some(remainder) = path
+            .strip_prefix(CANONICAL)
+            .or_else(|| path.strip_prefix(LEGACY))
         {
             !remainder.is_empty() && !remainder.contains('/')
         } else {
@@ -892,89 +738,6 @@ impl DbusMirror {
         }
         map.insert("metadata".into(), Value::Object(meta));
         Value::Object(map)
-    }
-
-    /// Push current plugin state into the fixed PluginInterface object.
-    async fn refresh_plugin_snapshot(&self, handle: &plugin_interface::PluginSnapshot) {
-        let sm = match &self.state_manager {
-            Some(sm) => sm.clone(),
-            None => return,
-        };
-        let live_state_raw = sm.query_current_state().await.unwrap_or_default();
-        let live_state: std::collections::HashMap<String, Value> = live_state_raw
-            .into_iter()
-            .map(|(k, v)| (k, serde_json::to_value(&v).unwrap_or_default()))
-            .collect();
-        let mut map = std::collections::HashMap::new();
-        for name in sm.list_plugins() {
-            let json = match live_state.get(&name) {
-                Some(state) => {
-                    let mut obj = match state {
-                        Value::Object(o) => o.clone(),
-                        other => {
-                            let mut m = Map::new();
-                            m.insert("state".into(), other.clone());
-                            m
-                        }
-                    };
-                    obj.insert("active".into(), Value::from(true));
-                    serde_json::to_string(&Value::Object(obj)).unwrap_or_default()
-                }
-                None => format!("{{\"active\":false,\"name\":{:?}}}", name),
-            };
-            map.insert(name, json);
-        }
-        *handle.write().await = map;
-    }
-
-    /// Publish every registered plugin as a stable D-Bus object.
-    ///
-    /// If a plugin cannot currently provide state, it still appears in the tree
-    /// with `active: false`.
-    async fn publish_plugin_snapshot(&self, active_paths: &mut HashSet<String>) -> Result<()> {
-        let sm = match &self.state_manager {
-            Some(sm) => sm.clone(),
-            None => return Ok(()),
-        };
-
-        let live_state_raw = sm.query_current_state().await.unwrap_or_default();
-        let live_state: std::collections::HashMap<String, Value> = live_state_raw
-            .into_iter()
-            .map(|(k, v)| (k, serde_json::to_value(&v).unwrap_or_default()))
-            .collect();
-
-        for plugin_name in sm.list_plugins() {
-            let path = Self::plugin_dbus_path(&plugin_name);
-            let data = match live_state.get(&plugin_name) {
-                Some(state) => {
-                    let mut obj = match state {
-                        Value::Object(o) => o.clone(),
-                        other => {
-                            let mut m = Map::new();
-                            m.insert("state".into(), other.clone());
-                            m
-                        }
-                    };
-                    obj.insert("active".into(), Value::from(true));
-                    obj.insert("name".into(), Value::from(plugin_name.clone()));
-                    Value::Object(obj)
-                }
-                None => serde_json::json!({
-                    "active": false,
-                    "name": plugin_name.clone(),
-                }),
-            };
-
-            self.publish_object(&path, data.clone()).await?;
-            active_paths.insert(path.clone());
-
-            if live_state.contains_key(&plugin_name) {
-                self.publish_plugin_children(&path, &data, active_paths)
-                    .await?;
-            }
-        }
-
-        Ok(())
     }
 
     async fn publish_plugin_children(
@@ -1040,6 +803,7 @@ impl DbusMirror {
     }
 
     async fn publish_object(&self, path: &str, data: Value) -> Result<()> {
+        let schema = Self::schema_for_object_path(path);
         // Get current data and sequence from the store
         let mut entry = self
             .current_data
@@ -1070,14 +834,16 @@ impl DbusMirror {
                     let emitter = iface_ref.signal_emitter();
                     let _ = iface_ref.get().await.data_updated(emitter).await;
                     // Ensure the ObjectManager knows the properties changed as well
-                    self.register_in_object_manager(path, &data).await;
+                    self.register_in_object_manager(path, &data, schema.as_ref())
+                        .await;
                 }
             } else {
-                let obj = object::MirrorObject::new(data.clone());
+                let obj = object::MirrorObject::with_schema(data.clone(), schema.clone());
                 self.connection.object_server().at(path, obj).await?;
                 self.published_objects.insert(path.to_string(), ());
 
-                self.register_in_object_manager(path, &data).await;
+                self.register_in_object_manager(path, &data, schema.as_ref())
+                    .await;
             }
         }
 
@@ -1112,7 +878,12 @@ impl DbusMirror {
 
     /// Insert a plugin object into the ObjectManager registry and emit
     /// `InterfacesAdded` if the ObjectManager interface is already up.
-    async fn register_in_object_manager(&self, path: &str, data: &Value) {
+    async fn register_in_object_manager(
+        &self,
+        path: &str,
+        data: &Value,
+        schema: Option<&PluginSchema>,
+    ) {
         let op = match OwnedObjectPath::try_from(path.to_string()) {
             Ok(p) => p,
             Err(e) => {
@@ -1122,9 +893,21 @@ impl DbusMirror {
         };
 
         let json_str = serde_json::to_string(data).unwrap_or_default();
+        let schema_json = schema.and_then(|schema| serde_json::to_string(schema).ok());
+        let methods_json = schema.and_then(|schema| serde_json::to_string(&schema.methods).ok());
+        let signals_json = schema.and_then(|schema| serde_json::to_string(&schema.signals).ok());
+        let guarantees_json =
+            schema.and_then(|schema| serde_json::to_string(&schema.guarantees).ok());
+        let iface_map = build_interface_map(
+            &json_str,
+            schema_json.as_deref(),
+            methods_json.as_deref(),
+            signals_json.as_deref(),
+            guarantees_json.as_deref(),
+        );
         let existed = self
             .plugin_registry
-            .insert(op.clone(), build_interface_map(&json_str))
+            .insert(op.clone(), iface_map.clone())
             .is_some();
 
         // Best-effort: emit InterfacesAdded only when the object first appears.
@@ -1140,12 +923,8 @@ impl DbusMirror {
         {
             Ok(iface_ref) => {
                 let emitter = iface_ref.signal_emitter();
-                if let Err(e) = ObjectManagerInterface::interfaces_added(
-                    emitter,
-                    op,
-                    build_interface_map(&json_str),
-                )
-                .await
+                if let Err(e) =
+                    ObjectManagerInterface::interfaces_added(emitter, op, iface_map).await
                 {
                     tracing::warn!("InterfacesAdded signal failed for {path}: {e}");
                 }
@@ -1155,6 +934,11 @@ impl DbusMirror {
                 // so GetManagedObjects will return this entry once it comes up.
             }
         }
+    }
+
+    fn schema_for_object_path(path: &str) -> Option<PluginSchema> {
+        let plugin_id = object::plugin_id_from_path(path)?;
+        object::read_plugin_schema(&plugin_id)
     }
 
     /// Remove a plugin object from the ObjectManager registry and emit

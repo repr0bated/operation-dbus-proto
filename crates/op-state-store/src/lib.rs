@@ -1,13 +1,9 @@
 #![recursion_limit = "512"]
 
-//! OP State Store - Execution State Tracking and Job Ledger
-//!
-//! Provides persistent storage for execution jobs with state transitions:
-//! REQUESTED → DISPATCHED → RUNNING → COMPLETED/FAILED
+//! OP State Store - schema, in-memory state, and event-chain primitives.
 //!
 //! Features:
-//! - SQLite persistent storage
-//! - Redis real-time stream
+//! - In-memory StateStore implementation for ephemeral runtime wiring
 //! - Prometheus metrics
 //! - Plugin schema catalog with JSON Schema 2026 support
 //! - Disaster recovery export/import
@@ -22,10 +18,8 @@ pub mod execution_job;
 pub mod memory_store;
 pub mod metrics;
 pub mod plugin_schema;
-pub mod redis_stream;
 pub mod schema_shuttle;
 pub mod schema_validator;
-pub mod sqlite_store;
 pub mod state_store;
 
 pub use disaster_recovery::{
@@ -41,15 +35,14 @@ pub use execution_job::{ExecutionJob, ExecutionResult, ExecutionStatus};
 pub use memory_store::MemoryStore;
 pub use plugin_schema::{
     builtin_plugin_schema, builtin_plugin_schemas, dialects, Constraint, FieldSchema, FieldType,
-    PluginSchema, ReadOnlyCondition, SchemaCatalog, SchemaLoadError, SchemaRegistry,
+    MethodDecl, PluginCapabilities, PluginSchema, ReadOnlyCondition, SchemaCatalog,
+    SchemaLoadError, SchemaRegistry, SideEffect, SignalDecl,
     ValidationResult as SchemaValidationResult, DEFAULT_SCHEMA_DIALECT,
 };
-pub use redis_stream::RedisStream;
 pub use schema_shuttle::{IdentitySled, SchemaShuttle};
 pub use schema_validator::{
     canonicalize_json, SchemaValidator, ValidationError, ValidationReport, ValidatorError,
 };
-pub use sqlite_store::SqliteStore;
 pub use state_store::StateStore;
 
 use serde::{Deserialize, Serialize};

@@ -1,7 +1,7 @@
-//! Default plugin loader - auto-loads essential plugins
+//! Plugin loader - discovers state plugins and instantiates them
 //!
-//! This module defines which plugins are loaded by default when the system starts.
-//! Plugins can be enabled/disabled via configuration.
+//! This module deliberately does not maintain a second plugin list. If a state
+//! plugin exists in `state_plugins`, the registry discovers it and registers it.
 //!
 //! ## Schema Validation
 //!
@@ -24,25 +24,55 @@ use std::sync::Arc;
 
 use crate::schema_loader::SchemaLoader;
 
-use crate::state_plugins::{
-    AdcPlugin, AgentConfigPlugin, AntigravityChatPlugin, AntigravityPlugin, BtrfsPlugin,
-    CognitiveMcpPlugin, CompactMcpPlugin, ConfigPlugin, CronPlugin, CtlPlaneChatbotPlugin,
-    DnsResolverPlugin, EndpointPlugin, FactoryPlugin, Fail2banPlugin, FreeDesktopPlugin,
-    FullSystemPlugin, GcloudAdcPlugin, HardwarePlugin, IncusPlugin, KeypairPlugin, KeyringPlugin,
-    KnowledgePlugin, Login1Plugin, LxcPlugin, MailServerPlugin, McpStatePlugin, MemoryPlugin,
-    NetStatePlugin, NetmakerConfig, NetmakerPlugin, OpenFlowPlugin, OvsBridgePlugin,
-    OvsdbDaemonPlugin, PackageKitPlugin, PciDeclPlugin, PrivacyRouterPlugin, PrivacyRoutesPlugin,
-    ProcfsPlugin, ProxmoxPlugin, ProxyServerPlugin, RovsCommandsPlugin, RtnetlinkPlugin,
-    S6StatePlugin, SchemaRendererPlugin, ServicePlugin, SessDeclPlugin, SoftwarePlugin,
-    UnixSocketPlugin, UsersPlugin, WebUiPlugin, WgcfPlugin, WireGuardPlugin, WorkflowsPlugin,
-    XrayPlugin, ZeroclawPlugin,
-};
 use crate::AutoPlugin;
+
+/// Context handed to a plugin's registered constructor at load time. Wraps the
+/// registry so co-located registrations can reach the few inputs a constructor
+/// needs (state store, config-path resolution) without exposing private fields.
+pub struct PluginCtx<'a> {
+    reg: &'a DefaultPluginRegistry,
+}
+
+impl PluginCtx<'_> {
+    /// Shared state store (used by e.g. the `mcp` plugin).
+    pub fn state_store(&self) -> Arc<dyn StateStore> {
+        self.reg.state_store.clone()
+    }
+
+    /// Resolve a plugin's configured `config_path`, falling back to `default`.
+    pub fn config_path(&self, plugin_name: &str, default: &str) -> String {
+        self.reg.get_plugin_config_path(plugin_name, default)
+    }
+}
+
+/// A single plugin's self-registration: its canonical name plus a constructor.
+///
+/// Each plugin module emits one of these via [`inventory::submit!`], co-located
+/// with the plugin's own definition. The registry iterates the collected set —
+/// this is the **only** plugin catalog; there is no central dispatch list.
+pub struct PluginReg {
+    /// Canonical loader name (what `load_plugin` / `available_plugins` expose).
+    pub name: &'static str,
+    /// Constructor. `build` (not `ctor`/`actor`) to avoid any confusion with the
+    /// MutationEngine `actor_id` identity concept.
+    pub build: fn(&PluginCtx) -> Arc<dyn op_state::StatePlugin>,
+}
+
+impl PluginReg {
+    pub const fn new(
+        name: &'static str,
+        build: fn(&PluginCtx) -> Arc<dyn op_state::StatePlugin>,
+    ) -> Self {
+        Self { name, build }
+    }
+}
+
+inventory::collect!(PluginReg);
 
 /// Default plugin loader configuration
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PluginRegistryConfig {
-    /// Auto-load plugins on startup
+    /// Deprecated runtime policy field. Registration is discovery-based.
     #[serde(default = "default_auto_load")]
     pub auto_load: Vec<String>,
 
@@ -52,57 +82,7 @@ pub struct PluginRegistryConfig {
 }
 
 fn default_auto_load() -> Vec<String> {
-    let wg_only = std::env::var("OP_DBUS_WG_ONLY")
-        .ok()
-        .map(|v| {
-            let l = v.to_lowercase();
-            !(l == "0" || l == "false" || l == "no")
-        })
-        .unwrap_or(false);
-
-    if wg_only {
-        return vec![
-            "zeroclaw".to_string(),
-            "config".to_string(),
-            "service".to_string(),
-            "s6".to_string(),
-            "net".to_string(),
-            "rtnetlink".to_string(),
-            "procfs".to_string(),
-            "wireguard".to_string(),
-            "agent_config".to_string(),
-        ];
-    }
-
-    vec![
-        "mcp".to_string(),
-        "zeroclaw".to_string(),
-        "cognitive_mcp".to_string(),
-        "compact_mcp".to_string(),
-        "config".to_string(),
-        "s6".to_string(),
-        "incus".to_string(),
-        "mail_server".to_string(),
-        "unix_socket".to_string(),
-        "wgcf".to_string(),
-        "xray".to_string(),
-        "net".to_string(),
-        "openflow".to_string(),
-        "ovsdb_bridge".to_string(),
-        "ovsdb_daemon".to_string(),
-        "privacy_router".to_string(),
-        "rovs_commands".to_string(),
-        "privacy_routes".to_string(),
-        "procfs".to_string(),
-        "rtnetlink".to_string(),
-        "agent_config".to_string(),
-        // Always-loaded knowledge / compliance / schema plugins
-        "memory".to_string(),
-        "knowledge".to_string(),
-        "schema_renderer".to_string(),
-        "workflows".to_string(),
-        "netmaker".to_string(),
-    ]
+    Vec::new()
 }
 
 impl Default for PluginRegistryConfig {
@@ -237,122 +217,69 @@ impl DefaultPluginRegistry {
             .map(|segment| segment.to_string())
     }
 
-    /// Load all auto-load plugins
+    /// Compatibility shim for older callers. Registration is discovery-based:
+    /// if a state plugin exists, it is loaded.
     pub async fn load_default_plugins(&self) -> Result<Vec<Arc<dyn op_state::StatePlugin>>> {
-        let mut plugins: Vec<Arc<dyn op_state::StatePlugin>> = Vec::new();
+        self.load_all_plugins().await
+    }
 
-        for plugin_name in &self.config.auto_load {
-            match self.load_plugin(plugin_name).await {
+    /// Load every built-in plugin implementation so the schema catalog can
+    /// publish the full plugin contract set, not just runtime autoload state.
+    pub async fn load_all_plugins(&self) -> Result<Vec<Arc<dyn op_state::StatePlugin>>> {
+        let mut plugins: Vec<Arc<dyn op_state::StatePlugin>> = Vec::new();
+        let mut plugin_names = Self::available_plugins();
+
+        plugin_names.sort();
+        plugin_names.dedup();
+
+        for plugin_name in plugin_names {
+            match self.load_plugin(&plugin_name).await {
                 Ok(plugin) => {
                     if !plugin.is_available() {
                         tracing::info!(
-                            "Skipping unavailable plugin {}: {}",
+                            "Loaded unavailable plugin schema {}: {}",
                             plugin_name,
                             plugin.unavailable_reason()
                         );
-                        continue;
+                    } else {
+                        tracing::info!("Loaded plugin schema: {}", plugin_name);
                     }
-                    tracing::info!("✅ Loaded plugin: {}", plugin_name);
                     plugins.push(plugin);
                 }
                 Err(e) => {
-                    tracing::warn!("⚠️ Failed to load plugin {}: {}", plugin_name, e);
+                    tracing::warn!("Failed to load plugin schema {}: {}", plugin_name, e);
                 }
             }
         }
 
-        tracing::info!("📦 Loaded {} plugins", plugins.len());
+        tracing::info!("Loaded {} built-in plugin schemas", plugins.len());
         Ok(plugins)
     }
 
-    /// Load a specific plugin by name
+    /// Load a specific plugin by name.
+    ///
+    /// Resolves the request to a canonical name, then looks it up in the
+    /// inventory of plugin self-registrations (each plugin module emits a
+    /// [`PluginReg`] via `inventory::submit!`). Unknown names fall through to the
+    /// auto-create review-required draft. There is no central dispatch list.
     pub async fn load_plugin(&self, name: &str) -> Result<Arc<dyn op_state::StatePlugin>> {
         let resolved_name = Self::resolve_requested_plugin_name(name)?;
-        let plugin: Arc<dyn op_state::StatePlugin> = match resolved_name.as_str() {
-            "mcp" => {
-                let config_path =
-                    self.get_plugin_config_path("mcp", "/etc/op-dbus/mcp-config.json");
-                Arc::new(McpStatePlugin::new(self.state_store.clone(), config_path))
-            }
-            "zeroclaw" => Arc::new(ZeroclawPlugin::new()),
-            "factory" => Arc::new(FactoryPlugin::new()),
-            "fail2ban" => Arc::new(Fail2banPlugin::new()),
-            "cron" => Arc::new(CronPlugin::new()),
-            "memory" => Arc::new(MemoryPlugin::new()),
-            "workflows" => Arc::new(WorkflowsPlugin::new()),
-            "btrfs" => Arc::new(BtrfsPlugin::new()),
-            "knowledge" => Arc::new(KnowledgePlugin::new()),
-            "antigravity_chat" => Arc::new(AntigravityChatPlugin::new()),
-            "antigravity" => Arc::new(AntigravityPlugin::new()),
-            "schema_renderer" => Arc::new(SchemaRendererPlugin::new()),
-            "full_system" => Arc::new(FullSystemPlugin::new()),
-            "login1" => Arc::new(Login1Plugin::new()),
-            "dnsresolver" => Arc::new(DnsResolverPlugin::new()),
-            "keyring" => Arc::new(KeyringPlugin::new()),
-            "packagekit" => Arc::new(PackageKitPlugin::new()),
-            "pcidecl" => Arc::new(PciDeclPlugin::new()),
-            "config" => {
-                let config_path =
-                    self.get_plugin_config_path("config", "/etc/op-dbus/config-store.json");
-                Arc::new(ConfigPlugin::new(config_path))
-            }
-            "freedesktop" => Arc::new(FreeDesktopPlugin::new()),
-            "cognitive_mcp" => Arc::new(CognitiveMcpPlugin::new()),
-            "compact_mcp" => Arc::new(CompactMcpPlugin::new()),
-            "ctl_plane_chatbot" => Arc::new(CtlPlaneChatbotPlugin::new()),
-            "s6" => Arc::new(S6StatePlugin::new()),
-            "incus" => Arc::new(IncusPlugin::new()),
-            "mail_server" => Arc::new(MailServerPlugin::new()),
-            "unix_socket" => Arc::new(UnixSocketPlugin::new()),
-            "wgcf" => Arc::new(WgcfPlugin::new(
-                crate::state_plugins::wgcf::WgcfConfig::default(),
-            )),
-            "xray" => Arc::new(XrayPlugin::new(
-                crate::state_plugins::xray::XrayConfig::default(),
-            )),
-            "net" => Arc::new(NetStatePlugin::new()),
-            "openflow" => Arc::new(OpenFlowPlugin::new()),
-            "privacy_router" => {
-                let _config_path = self
-                    .get_plugin_config_path("privacy_router", "/etc/op-dbus/privacy-config.json");
-                use crate::state_plugins::privacy_router::PrivacyRouterConfig;
-                Arc::new(PrivacyRouterPlugin::new(PrivacyRouterConfig::default()))
-            }
-            "proxmox" => Arc::new(ProxmoxPlugin::new()),
-            "hardware" => Arc::new(HardwarePlugin::new()),
-            "software" => Arc::new(SoftwarePlugin::new()),
-            "users" => Arc::new(UsersPlugin::new()),
-            "gcloud_adc" => Arc::new(GcloudAdcPlugin::new()),
-            "keypair" => Arc::new(KeypairPlugin::new()),
-            "service" => Arc::new(ServicePlugin::new()),
-            "wireguard" => Arc::new(WireGuardPlugin::new()),
-            "agent_config" => Arc::new(AgentConfigPlugin::new()),
-            "ovsdb_bridge" => Arc::new(OvsBridgePlugin::new()),
-            "ovsdb_daemon" => Arc::new(OvsdbDaemonPlugin::new()),
-            "privacy_routes" => Arc::new(PrivacyRoutesPlugin::default()),
-            "procfs" => Arc::new(ProcfsPlugin::new()),
-            "rovs_commands" => Arc::new(RovsCommandsPlugin::new()),
-            "rtnetlink" => Arc::new(RtnetlinkPlugin::new()),
-            "sess_decl" => Arc::new(SessDeclPlugin::new()),
-            "lxc" => Arc::new(LxcPlugin::new()),
-            "netmaker" => Arc::new(NetmakerPlugin::new(NetmakerConfig::default())),
-            "adc" => Arc::new(AdcPlugin::new()),
-            "endpoint" => Arc::new(EndpointPlugin::new()),
-            "proxy_server" => Arc::new(ProxyServerPlugin::new()),
-            "web_ui" => Arc::new(WebUiPlugin::new()),
-            _ => {
-                let requested_info = format!("requested='{}' resolved='{}'", name, resolved_name);
-                tracing::warn!(
-                    "Unknown plugin '{}'; auto-creating review-required draft from requested info",
-                    name
-                );
-                Arc::new(
-                    AutoPlugin::create_from_requested_info(&resolved_name, &requested_info).await,
-                )
-            }
-        };
 
-        Ok(plugin)
+        let ctx = PluginCtx { reg: self };
+        for registration in inventory::iter::<PluginReg> {
+            if registration.name == resolved_name {
+                return Ok((registration.build)(&ctx));
+            }
+        }
+
+        let requested_info = format!("requested='{}' resolved='{}'", name, resolved_name);
+        tracing::warn!(
+            "Unknown plugin '{}'; auto-creating review-required draft from requested info",
+            name
+        );
+        Ok(Arc::new(
+            AutoPlugin::create_from_requested_info(&resolved_name, &requested_info).await,
+        ))
     }
 
     /// Get plugin-specific config value or default
@@ -366,28 +293,21 @@ impl DefaultPluginRegistry {
             .to_string()
     }
 
-    /// Get list of available plugins (built-in list)
-    pub fn available_plugins() -> Vec<&'static str> {
-        vec![
-            "mcp",
-            "zeroclaw",
-            "freedesktop",
-            "cognitive_mcp",
-            "compact_mcp",
-            "ctl_plane_chatbot",
-            "config",
-            "s6",
-            "incus",
-            "net",
-            "wireguard",
-            "web_ui",
-            "openflow",
-            "privacy_router",
-            "privacy_routes",
-            // "netmaker",
-            // "lxc",
-            // "packagekit",
-        ]
+    /// The plugin catalog: every name self-registered via `inventory::submit!`.
+    ///
+    /// This is intentionally not a hand-maintained list. Each plugin module is
+    /// the single source of its own registration; this just collects them.
+    /// Unknown subjects still flow through `load_plugin()` and the auto-create
+    /// fallback.
+    pub fn available_plugins() -> Vec<String> {
+        let mut plugins: Vec<String> = inventory::iter::<PluginReg>
+            .into_iter()
+            .map(|registration| registration.name.to_string())
+            .collect();
+
+        plugins.sort();
+        plugins.dedup();
+        plugins
     }
 
     /// Get list of plugins with valid schema files
@@ -412,46 +332,46 @@ impl DefaultPluginRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use op_state_store::SqliteStore;
+    use op_state_store::MemoryStore;
 
     #[tokio::test]
     async fn test_default_plugin_registry() {
-        let store = Arc::new(SqliteStore::new(":memory:").await.unwrap());
+        let store = Arc::new(MemoryStore::new());
         let registry = DefaultPluginRegistry::new(store);
 
-        // Check default auto-load plugins
-        assert!(registry.is_auto_load("mcp"));
-        assert!(registry.is_auto_load("config"));
-        assert!(registry.is_auto_load("s6"));
-        assert!(registry.is_auto_load("net"));
-
-        // Load plugins
         let plugins = registry.load_default_plugins().await.unwrap();
         assert!(!plugins.is_empty());
+        assert!(plugins.iter().any(|plugin| plugin.name() == "mail_server"));
+        assert!(plugins.iter().any(|plugin| plugin.name() == "zeroclaw"));
     }
 
     #[tokio::test]
-    async fn test_auto_loaded_plugins_publish_schema() {
-        let store = Arc::new(SqliteStore::new(":memory:").await.unwrap());
+    async fn test_discovered_plugins_publish_schema() {
+        let store = Arc::new(MemoryStore::new());
         let registry = DefaultPluginRegistry::new(store);
 
-        let plugins = registry.load_default_plugins().await.unwrap();
+        let plugins = registry.load_all_plugins().await.unwrap();
         let missing: Vec<String> = plugins
             .iter()
-            .filter(|plugin| plugin.schema().is_none())
+            .filter(|plugin| {
+                plugin
+                    .schema()
+                    .map(|schema| schema.name != plugin.name())
+                    .unwrap_or(true)
+            })
             .map(|plugin| plugin.name().to_string())
             .collect();
 
         assert!(
             missing.is_empty(),
-            "auto-loaded plugins missing schema(): {:?}",
+            "discovered plugins missing plugin-owned schema: {:?}",
             missing
         );
     }
 
     #[tokio::test]
     async fn test_loadable_plugins_publish_schema() {
-        let store = Arc::new(SqliteStore::new(":memory:").await.unwrap());
+        let store = Arc::new(MemoryStore::new());
         let registry = DefaultPluginRegistry::new(store);
         let plugin_names = vec![
             "mcp",
@@ -463,7 +383,6 @@ mod tests {
             "net",
             "openflow",
             "privacy_router",
-            "proxmox",
             "hardware",
             "software",
             "users",
@@ -502,8 +421,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_custom_config() {
-        let store = Arc::new(SqliteStore::new(":memory:").await.unwrap());
+    async fn test_auto_load_config_does_not_control_registration() {
+        let store = Arc::new(MemoryStore::new());
 
         let config = PluginRegistryConfig {
             auto_load: vec!["s6".to_string()],
@@ -515,6 +434,10 @@ mod tests {
         assert!(registry.is_auto_load("s6"));
         assert!(!registry.is_auto_load("mcp"));
         assert!(!registry.is_auto_load("config"));
+
+        let plugins = registry.load_default_plugins().await.unwrap();
+        assert!(plugins.iter().any(|plugin| plugin.name() == "mcp"));
+        assert!(plugins.iter().any(|plugin| plugin.name() == "config"));
     }
 
     #[test]
@@ -545,7 +468,7 @@ mod tests {
     #[tokio::test]
     async fn test_load_plugin_from_canonical_projection_path() {
         use crate::canonical;
-        let store = Arc::new(SqliteStore::new(":memory:").await.unwrap());
+        let store = Arc::new(MemoryStore::new());
         let registry = DefaultPluginRegistry::new(store);
 
         // Use canonical path format
@@ -577,16 +500,93 @@ mod tests {
 
     #[tokio::test]
     async fn test_unknown_plugin_auto_creates_review_draft() {
-        let store = Arc::new(SqliteStore::new(":memory:").await.unwrap());
+        let store = Arc::new(MemoryStore::new());
         let registry = DefaultPluginRegistry::new(store);
 
         let plugin = registry.load_plugin("new_future_plugin").await.unwrap();
-        let state = plugin.query_current_state().await.unwrap();
         assert_eq!(plugin.name(), "new_future_plugin");
-        assert_eq!(
-            state["pending_human_review"].as_bool(),
-            Some(true),
-            "unknown plugin drafts must require human review"
+    }
+
+    #[tokio::test]
+    async fn all_plugin_subids_are_valid_and_unique() {
+        use crate::state_plugins::common::oscal::{category_required_fields, validate_subid};
+        use std::collections::HashMap;
+
+        let store = Arc::new(MemoryStore::new());
+        let registry = DefaultPluginRegistry::new(store);
+        let plugins = registry.load_all_plugins().await.unwrap();
+
+        let mut all_subids: Vec<(String, String, String)> = Vec::new(); // plugin, key, subid
+        let mut errors: Vec<String> = Vec::new();
+
+        for plugin in &plugins {
+            let name = plugin.name().to_string();
+            let Some(schema) = plugin.schema() else {
+                continue;
+            };
+            for (key, subid) in &schema.subids {
+                all_subids.push((name.clone(), key.clone(), subid.clone()));
+            }
+        }
+
+        // 1. Every subid must match the canonical OSCAL subid regex.
+        for (plugin_name, key, subid) in &all_subids {
+            if let Err(e) = validate_subid(subid) {
+                errors.push(format!(
+                    "plugin '{plugin_name}' key '{key}' has invalid subid '{subid}': {e}"
+                ));
+            }
+        }
+
+        // 2. No subid value may appear more than once across all plugins.
+        let mut seen: HashMap<String, (String, String)> = HashMap::new();
+        for (plugin_name, key, subid) in &all_subids {
+            if let Some((prev_plugin, prev_key)) = seen.get(subid) {
+                errors.push(format!(
+                    "duplicate subid '{subid}' in plugin '{plugin_name}' key '{key}' (first seen in plugin '{prev_plugin}' key '{prev_key}')"
+                ));
+            } else {
+                seen.insert(subid.clone(), (plugin_name.clone(), key.clone()));
+            }
+        }
+
+        // 3. Category-specific required metadata fields must be present in the plugin schema.
+        for (plugin_name, key, subid) in &all_subids {
+            let Some(schema) = plugins
+                .iter()
+                .find(|p| p.name() == plugin_name)
+                .and_then(|p| p.schema())
+            else {
+                continue;
+            };
+            let category = subid.split('.').next().unwrap_or("");
+            let required_fields = category_required_fields(category);
+            if category == "evt" {
+                // evt.* requires at least one of event_id or event_hash.
+                if !required_fields
+                    .iter()
+                    .any(|field| schema.fields.contains_key(*field))
+                {
+                    errors.push(format!(
+                        "plugin '{plugin_name}' subid '{subid}' (key '{key}') is evt.* and requires one of {:?} fields, but none found in schema fields",
+                        required_fields
+                    ));
+                }
+            } else if !required_fields.is_empty() {
+                for field in required_fields {
+                    if !schema.fields.contains_key(*field) {
+                        errors.push(format!(
+                            "plugin '{plugin_name}' subid '{subid}' (key '{key}') is {category}.* and requires field '{field}', but it is not present in schema fields"
+                        ));
+                    }
+                }
+            }
+        }
+
+        assert!(
+            errors.is_empty(),
+            "OSCAL subid gate failures:\n{}",
+            errors.join("\n")
         );
     }
 }

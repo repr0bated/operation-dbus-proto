@@ -4,7 +4,6 @@
 //! which allows the UI and `op-plugins` to run system commands natively over
 //! D-Bus, without shelling out in the application layer.
 
-use anyhow::Result;
 use tracing::debug;
 use zbus::interface;
 

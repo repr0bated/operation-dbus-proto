@@ -1,11 +1,14 @@
 //! Service plugin - auto-generating, validating, init-agnostic service management.
 
+use super::plugin_scaffold_helpers::{method_decl_from_schemars_with_output, AckOutput};
 use crate::service_def::{
     ExecCommand, LogType, ReadyNotification, RestartPolicy, ServiceDef, ServiceName, ServiceType,
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
+use op_state_store::{FieldSchema, FieldType, PluginSchema, SideEffect};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use simd_json::{json, OwnedValue as Value};
 use std::collections::HashMap;
@@ -13,12 +16,45 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use zbus::{Connection, Proxy};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, JsonSchema)]
 pub struct ServiceLifecycle {
     pub last_active: Option<u64>,
     pub days_since_active: Option<u64>,
     pub is_orphaned: bool,
     pub orphan_reason: Option<String>,
+}
+
+// D-Bus method input types for Service lifecycle operations
+// Reference: https://www.freedesktop.org/wiki/Software/systemd/
+
+/// Init method input - initialize a service definition
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct InitInput {
+    /// Service name
+    pub name: String,
+    /// Service type (simple, forking, oneshot, etc.)
+    #[serde(default)]
+    pub service_type: String,
+}
+
+/// Run method input - start/running a service
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct RunInput {
+    /// Service name
+    pub name: String,
+    /// Arguments to pass
+    #[serde(default)]
+    pub args: Vec<String>,
+}
+
+/// Shutdown method input - stop a service
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ShutdownInput {
+    /// Service name
+    pub name: String,
+    /// Force stop (SIGKILL)
+    #[serde(default)]
+    pub force: bool,
 }
 
 /// Path to the s6-rc live database.
@@ -274,13 +310,17 @@ impl ServicePlugin {
 
     /// List running s6 services via D-Bus.
     async fn list_s6_services(&self) -> Result<Vec<String>> {
-        let client = crate::state_plugins::s6::S6DbusClient::new();
+        let client = crate::state_plugins::s6_systemctl::S6DbusClient::new();
         let units = client.list_units().await.unwrap_or_default();
         let mut running = Vec::new();
         for unit in units {
             if let Some(name) = unit.get("name").and_then(|v| v.as_str()) {
-                if let Some(active) = unit.get("active").and_then(|v| v.as_str()) {
-                    if active == "true" || active == "up" {
+                if let Some(active) = unit
+                    .get("active_state")
+                    .or_else(|| unit.get("active"))
+                    .and_then(|v| v.as_str())
+                {
+                    if active == "active" || active == "true" || active == "up" {
                         running.push(name.to_string());
                     }
                 }
@@ -332,24 +372,7 @@ impl StatePlugin for ServicePlugin {
     }
 
     fn schema(&self) -> Option<op_state_store::PluginSchema> {
-        Some(super::plugin_schema_defs::service_plugin_schema())
-    }
-
-    async fn query_current_state(&self) -> Result<Value> {
-        let mut services = HashMap::new();
-
-        let service_list = match self.backend {
-            ServiceBackend::Systemd => self.list_systemd_services().await.unwrap_or_default(),
-            ServiceBackend::S6 => self.list_s6_services().await?,
-        };
-
-        for svc_name in service_list {
-            if let Ok(lifecycle) = self.check_lifecycle(&svc_name).await {
-                services.insert(svc_name, json!({ "lifecycle": lifecycle }));
-            }
-        }
-
-        Ok(json!({ "services": services }))
+        Some(service_schema())
     }
 
     async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {
@@ -399,4 +422,63 @@ impl StatePlugin for ServicePlugin {
             atomic_operations: false,
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, JsonSchema)]
+pub struct ServiceSchemaState {
+    pub services: serde_json::Value,
+}
+
+pub(crate) fn service_schema() -> PluginSchema {
+    let mut schema = super::schemars_adapter::plugin_schema_from_json(
+        "service",
+        "1.0.0",
+        "Service definition declarations",
+        &serde_json::to_value(schemars::schema_for!(ServiceSchemaState)).unwrap(),
+    );
+    super::schemars_adapter::apply_state_defaults(
+        &mut schema,
+        &simd_json::serde::to_owned_value(&ServiceSchemaState::default()).unwrap(),
+    );
+
+    // Add D-Bus methods for service lifecycle management
+    // Reference: https://www.freedesktop.org/wiki/Software/systemd/
+    schema.methods.insert(
+        "init".to_string(),
+        method_decl_from_schemars_with_output::<InitInput, AckOutput>(
+            "init",
+            SideEffect::Mutation,
+            false,
+            "cap.service.lifecycle.init@v1",
+            "mut.service.lifecycle.init@v1",
+        ),
+    );
+    schema.methods.insert(
+        "run".to_string(),
+        method_decl_from_schemars_with_output::<RunInput, AckOutput>(
+            "run",
+            SideEffect::Mutation,
+            false,
+            "cap.service.lifecycle.run@v1",
+            "mut.service.lifecycle.run@v1",
+        ),
+    );
+    schema.methods.insert(
+        "shutdown".to_string(),
+        method_decl_from_schemars_with_output::<ShutdownInput, AckOutput>(
+            "shutdown",
+            SideEffect::Mutation,
+            false,
+            "cap.service.lifecycle.shutdown@v1",
+            "mut.service.lifecycle.shutdown@v1",
+        ),
+    );
+
+    schema
+}
+
+// Self-registration: the plugin registry discovers this via inventory
+// (single source of the catalog; no central dispatch list).
+inventory::submit! {
+    crate::default_registry::PluginReg::new("service", |_ctx| std::sync::Arc::new(ServicePlugin::new()))
 }

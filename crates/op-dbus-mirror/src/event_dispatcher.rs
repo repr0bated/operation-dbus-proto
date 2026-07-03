@@ -1,9 +1,7 @@
 //! EventDispatcher module for unified event dispatch
 
 use anyhow::Result;
-use op_jsonrpc::nonnet::NonNetDb;
 use op_network::rovs_proxy::OvsdbDbusClient;
-use op_state::manager::StateManager;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::broadcast;
@@ -11,10 +9,8 @@ use tracing::{info, warn};
 
 use crate::event::MirrorEvent;
 use crate::event_sources::component_registry;
-use crate::event_sources::nonnet;
 use crate::event_sources::ovsdb;
 use crate::event_sources::procfs;
-use crate::event_sources::state_manager;
 use crate::DbusMirror;
 
 /// Event dispatcher that wires all event sources to the broadcast channel
@@ -22,8 +18,6 @@ pub struct EventDispatcher {
     pub broadcast_tx: broadcast::Sender<MirrorEvent>,
     mirror: Arc<DbusMirror>,
     ovsdb_client: Arc<OvsdbDbusClient>,
-    nonnet_db: Arc<NonNetDb>,
-    state_manager: Option<Arc<StateManager>>,
     grpc_server: Option<Arc<op_grpc_bridge::OperationGrpcServer>>,
     /// Sequence numbers per object path
     sequence_numbers: Arc<std::sync::Mutex<HashMap<String, u64>>>,
@@ -34,8 +28,6 @@ impl EventDispatcher {
     pub fn new(
         mirror: Arc<DbusMirror>,
         ovsdb_client: Arc<OvsdbDbusClient>,
-        nonnet_db: Arc<NonNetDb>,
-        state_manager: Option<Arc<StateManager>>,
         grpc_server: Option<Arc<op_grpc_bridge::OperationGrpcServer>>,
     ) -> Self {
         let (broadcast_tx, _) = broadcast::channel(1000);
@@ -43,8 +35,6 @@ impl EventDispatcher {
             broadcast_tx,
             mirror,
             ovsdb_client,
-            nonnet_db,
-            state_manager,
             grpc_server,
             sequence_numbers: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
@@ -57,18 +47,9 @@ impl EventDispatcher {
         // Spawn OVSDB monitor
         ovsdb::spawn_ovsdb_monitor(self.ovsdb_client.clone(), self.broadcast_tx.clone()).await?;
 
-        // Spawn NonNetDb watcher
-        nonnet::spawn_nonnet_watcher(self.nonnet_db.clone(), self.broadcast_tx.clone()).await?;
-
         // Spawn procfs watchers
         procfs::spawn_procfs_inotify_watchers(self.broadcast_tx.clone()).await?;
         procfs::spawn_procfs_loadavg_timer(self.broadcast_tx.clone()).await?;
-
-        // Spawn StateManager watcher
-        if let Some(sm) = &self.state_manager {
-            state_manager::spawn_state_manager_watcher(sm.clone(), self.broadcast_tx.clone())
-                .await?;
-        }
 
         // Spawn ComponentRegistry watcher
         if let Some(grpc) = &self.grpc_server {

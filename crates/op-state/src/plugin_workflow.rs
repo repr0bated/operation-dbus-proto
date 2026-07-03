@@ -149,12 +149,11 @@ impl Node for WorkflowPluginNode {
             return Ok(serde_json::Value::String("skipped".to_string()));
         }
 
-        // Query current state
-        let current_state = self.plugin.query_current_state().await?;
+        // No current state to query — schema is the source of truth
+        let current_state = simd_json::json!(null);
         log::debug!(
-            "📊 Plugin '{}' current state: {:?}",
+            "Plugin '{}' state: schema-driven, no held state",
             self.plugin.name(),
-            current_state
         );
 
         // For workflow execution, we assume the "desired" state comes from inputs

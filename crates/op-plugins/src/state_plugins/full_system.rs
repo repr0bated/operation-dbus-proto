@@ -20,6 +20,7 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, StateAction, StateDiff, StatePlugin};
+use op_state_store::{Constraint, FieldSchema, FieldType, PluginSchema};
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
@@ -31,7 +32,7 @@ use tracing::{debug, info, warn};
 use zbus::{Connection, Proxy};
 
 /// Full system state for disaster recovery
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
 pub struct FullSystemState {
     /// State schema version
     pub version: u32,
@@ -64,10 +65,10 @@ pub struct FullSystemState {
     pub containers: ContainerState,
 
     /// Plugin-specific state (aggregated from all plugins)
-    pub plugins: HashMap<String, Value>,
+    pub plugins: HashMap<String, serde_json::Value>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SystemInfo {
     pub kernel_version: String,
     pub os_release: String,
@@ -76,7 +77,7 @@ pub struct SystemInfo {
     pub uptime_seconds: u64,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct NetworkState {
     pub interfaces: Vec<InterfaceInfo>,
     pub routes: Vec<RouteInfo>,
@@ -84,7 +85,7 @@ pub struct NetworkState {
     pub bridges: Vec<BridgeInfo>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct InterfaceInfo {
     pub name: String,
     pub mac: String,
@@ -93,7 +94,7 @@ pub struct InterfaceInfo {
     pub mtu: u32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct RouteInfo {
     pub destination: String,
     pub gateway: Option<String>,
@@ -101,14 +102,14 @@ pub struct RouteInfo {
     pub metric: u32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct BridgeInfo {
     pub name: String,
     pub ports: Vec<String>,
     pub bridge_type: String, // "linux" or "ovs"
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ServiceState {
     pub name: String,
     pub enabled: bool,
@@ -116,14 +117,14 @@ pub struct ServiceState {
     pub unit_type: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PackageInfo {
     pub name: String,
     pub version: String,
     pub arch: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct UserInfo {
     pub name: String,
     pub uid: u32,
@@ -133,13 +134,13 @@ pub struct UserInfo {
     pub groups: Vec<String>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct StorageState {
     pub mounts: Vec<MountInfo>,
     pub block_devices: Vec<BlockDeviceInfo>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct MountInfo {
     pub source: String,
     pub target: String,
@@ -147,7 +148,7 @@ pub struct MountInfo {
     pub options: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct BlockDeviceInfo {
     pub name: String,
     pub size_bytes: u64,
@@ -155,20 +156,20 @@ pub struct BlockDeviceInfo {
     pub mountpoint: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ContainerState {
     pub lxc: Vec<LxcContainerInfo>,
     pub docker: Vec<DockerContainerInfo>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct LxcContainerInfo {
     pub name: String,
     pub status: String,
-    pub config: Value,
+    pub config: serde_json::Value,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct DockerContainerInfo {
     pub id: String,
     pub name: String,
@@ -384,6 +385,27 @@ impl FullSystemPlugin {
         let conn = Connection::system()
             .await
             .context("Failed to connect to system D-Bus")?;
+
+        // On non-systemd hosts (e.g. Artix s6-rc), org.freedesktop.systemd1 is
+        // not owned. Skip silently instead of hanging on a method call that
+        // will never be answered.
+        let dbus_proxy = Proxy::new(
+            &conn,
+            "org.freedesktop.DBus",
+            "/org/freedesktop/DBus",
+            "org.freedesktop.DBus",
+        )
+        .await
+        .context("Failed to create D-Bus proxy")?;
+        let names: Vec<String> = dbus_proxy
+            .call("ListActivatableNames", &())
+            .await
+            .unwrap_or_default();
+        if !names.iter().any(|n| n == "org.freedesktop.systemd1") {
+            debug!("org.freedesktop.systemd1 not available — skipping service capture (non-systemd host)");
+            return Ok(services);
+        }
+
         let proxy = Proxy::new(
             &conn,
             "org.freedesktop.systemd1",
@@ -659,7 +681,7 @@ impl FullSystemPlugin {
                 state.lxc.push(LxcContainerInfo {
                     name,
                     status: "unknown".to_string(),
-                    config: json!({}),
+                    config: serde_json::json!({}),
                 });
             }
         }
@@ -705,9 +727,18 @@ impl StatePlugin for FullSystemPlugin {
         "1.0.0"
     }
 
-    async fn query_current_state(&self) -> Result<Value> {
-        let state = self.capture_full_state().await?;
-        Ok(simd_json::serde::to_owned_value(state)?)
+    fn schema(&self) -> Option<PluginSchema> {
+        let mut schema = super::schemars_adapter::plugin_schema_from_json(
+            "full_system",
+            "1.0.0",
+            "Full system recovery snapshot",
+            &serde_json::to_value(schemars::schema_for!(FullSystemState)).unwrap(),
+        );
+        super::schemars_adapter::apply_state_defaults(
+            &mut schema,
+            &simd_json::serde::to_owned_value(&FullSystemState::default()).unwrap(),
+        );
+        Some(schema)
     }
 
     async fn calculate_diff(&self, current: &Value, desired: &Value) -> Result<StateDiff> {
@@ -841,4 +872,10 @@ mod tests {
         let info = info.unwrap();
         assert!(!info.kernel_version.is_empty());
     }
+}
+
+// Self-registration: the plugin registry discovers this via inventory
+// (single source of the catalog; no central dispatch list).
+inventory::submit! {
+    crate::default_registry::PluginReg::new("full_system", |_ctx| std::sync::Arc::new(FullSystemPlugin::new()))
 }

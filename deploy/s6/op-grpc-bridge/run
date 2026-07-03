@@ -12,10 +12,13 @@ exec 2>&1
 if [ -r /etc/op-dbus/environment ]; then
   set -a
   . /etc/op-dbus/environment
+export DBUS_SESSION_BUS_ADDRESS
   set +a
 fi
 
-export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/op-dbus/session-bus.sock}"
+[ -r /etc/op-dbus/environment ] && . /etc/op-dbus/environment
+export DBUS_SESSION_BUS_ADDRESS
+: "${DBUS_SESSION_BUS_ADDRESS:?DBUS_SESSION_BUS_ADDRESS must be set in /etc/op-dbus/environment}"
 export GRPC_BIND="${GRPC_BIND:-127.0.0.1:18789}"
 export RUST_LOG="${RUST_LOG:-op_grpc_bridge=info,info}"
 

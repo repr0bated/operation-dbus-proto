@@ -1,8 +1,10 @@
 //! op-assistant-grpc — gRPC gateway for the self-hosted Assistant.
 //!
-//! Routes gRPC calls through the wg-xray Incus container's `op-grpc-bridge`
-//! endpoint (default `10.200.0.1:50051`) with D-Bus-first transport and
-//! ghostbridge schema-tag header injection for Xray OpenFlow routing.
+//! Routes gRPC calls through the on-host operation.v1 gRPC server served by
+//! `op-dbus` (default `10.200.0.2:50051` on the `grpc-uplink` veth) with
+//! D-Bus-first transport and ghostbridge schema-tag header injection for
+//! Xray OpenFlow routing. The deprecated `wg-xray` Incus container endpoint
+//! (`10.200.0.1:50051`) is dead; xray + the gRPC-bridge now run on the host.
 
 use anyhow::Result;
 use op_assistant_grpc::{run_grpc_server, ServerConfig};

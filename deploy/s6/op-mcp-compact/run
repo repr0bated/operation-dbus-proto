@@ -2,7 +2,9 @@
 exec 2>&1
 export HOME="${HOME:-/home/jeremy}"
 export DBUS_SYSTEM_BUS_ADDRESS="${DBUS_SYSTEM_BUS_ADDRESS:-unix:path=/run/dbus/system_bus_socket}"
-export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/op-dbus/session-bus.sock}"
+[ -r /etc/op-dbus/environment ] && . /etc/op-dbus/environment
+export DBUS_SESSION_BUS_ADDRESS
+: "${DBUS_SESSION_BUS_ADDRESS:?DBUS_SESSION_BUS_ADDRESS must be set in /etc/op-dbus/environment}"
 export WG_INTERFACE="${WG_INTERFACE:-wg-chatbot}"
 if [ -z "${WG_PUBKEY:-}" ] && command -v wg >/dev/null 2>&1; then
     WG_PUBKEY="$(wg show "$WG_INTERFACE" public-key 2>/dev/null || true)"

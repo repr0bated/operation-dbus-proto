@@ -1,48 +1,41 @@
+//! Plugin state client — routes reads/writes through the gRPC MutationEngine
+//! (the single write door) instead of the excised D-Bus StateManager.
+//!
+//! Reads go to `RemoteOperationClient::get_state` (state_cache, the mutation
+//! fold). Writes go to `RemoteOperationClient::set_state` (ApplyPatch through
+//! the MutationEngine → EventChain → shm projection). No second write door,
+//! no StateManager, no drift.
+
 use anyhow::{Context, Result};
+use op_grpc_bridge::{GrpcClientPool, RemoteOperationClient};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
-use simd_json::OwnedValue as Value;
-use std::collections::HashMap;
-use zbus::{Connection, Proxy};
+use std::sync::{Arc, OnceLock};
 
-#[derive(Debug, serde::Deserialize)]
-struct QueryStateResponse {
-    plugins: HashMap<String, Value>,
-}
+static GRPC_CLIENT: OnceLock<RemoteOperationClient> = OnceLock::new();
 
-async fn proxy(connection: &Connection) -> Result<Proxy<'_>> {
-    let proxy = Proxy::new(
-        connection,
-        "org.opdbus.v1",
-        "/org/opdbus/v1/state",
-        "org.opdbus.StateManager",
-    )
-    .await
-    .context("create StateManager D-Bus proxy")?;
-    Ok(proxy)
+/// Lazily initialize a singleton RemoteOperationClient backed by the
+/// MutationEngine's gRPC endpoint (env `OP_DBUS_GRPC_ADDR`, default
+/// `127.0.0.1:50051`).
+fn client() -> &'static RemoteOperationClient {
+    GRPC_CLIENT.get_or_init(|| {
+        let grpc_addr =
+            std::env::var("OP_DBUS_GRPC_ADDR").unwrap_or_else(|_| "127.0.0.1:50051".to_string());
+        let pool = Arc::new(GrpcClientPool::new());
+        RemoteOperationClient::new(pool, &grpc_addr, "op-web")
+    })
 }
 
 pub async fn query_plugin_state<T>(plugin_id: &str) -> Result<Option<T>>
 where
     T: DeserializeOwned,
 {
-    let connection = Connection::system()
-        .await
-        .context("connect to system D-Bus for StateManager access")?;
-    let proxy = proxy(&connection).await?;
-    let state_json: String = proxy
-        .call("QueryState", &())
-        .await
-        .context("query current state from StateManager")?;
-    let query_state: QueryStateResponse =
-        serde_json::from_str(&state_json).context("parse StateManager query_state payload")?;
-
-    if let Some(existing) = query_state.plugins.get(plugin_id) {
-        let value = simd_json::serde::from_owned_value(existing.clone())
-            .with_context(|| format!("parse {} plugin state", plugin_id))?;
-        Ok(Some(value))
-    } else {
-        Ok(None)
+    match client().get_state(plugin_id, "").await {
+        Ok(state) => match simd_json::serde::from_owned_value::<T>(state) {
+            Ok(value) => Ok(Some(value)),
+            Err(_) => Ok(None),
+        },
+        Err(_) => Ok(None),
     }
 }
 
@@ -50,22 +43,11 @@ pub async fn apply_plugin_state<T>(plugin_id: &str, value: &T) -> Result<()>
 where
     T: Serialize,
 {
-    let connection = Connection::system()
-        .await
-        .context("connect to system D-Bus for StateManager access")?;
-    let proxy = proxy(&connection).await?;
-    let value = simd_json::serde::to_owned_value(value)
+    let state = simd_json::serde::to_owned_value(value)
         .with_context(|| format!("serialize {} plugin state", plugin_id))?;
-    let request = simd_json::json!({
-        "plugin_id": plugin_id,
-        "value": value,
-    });
-    let request_json = simd_json::to_string(&request)
-        .with_context(|| format!("encode {} contract mutation", plugin_id))?;
-
-    let _: String = proxy
-        .call("ApplyContractMutation", &(request_json,))
+    client()
+        .set_state(plugin_id, "", state, "op-web", "")
         .await
-        .with_context(|| format!("apply {} contract mutation", plugin_id))?;
+        .map_err(|e| anyhow::anyhow!("apply {} state via gRPC: {}", plugin_id, e))?;
     Ok(())
 }

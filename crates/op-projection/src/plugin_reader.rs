@@ -3,13 +3,14 @@
 //! This module implements the `PluginReader` trait by loading the default
 //! runtime plugins, querying their live state, and emitting both top-level
 //! plugin state entities and nested object projections.
+#![allow(dead_code, unused_imports)]
 
 use crate::data_models::{FieldSchema, FieldType, PluginSchema};
 use crate::interfaces::{PluginLifecycleEvent, PluginReader, RawEntity, SourceReader};
 use anyhow::{Context, Result};
 use op_plugins::DefaultPluginRegistry;
 use op_state::StatePlugin;
-use op_state_store::{builtin_plugin_schema, MemoryStore, StateStore};
+use op_state_store::{MemoryStore, StateStore};
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
 use std::future::Future;
@@ -19,6 +20,7 @@ use tracing::{debug, info, warn};
 struct LoadedPlugin {
     name: String,
     schema: Option<PluginSchema>,
+    #[allow(dead_code)]
     plugin: Arc<dyn StatePlugin>,
 }
 
@@ -59,12 +61,12 @@ impl SystemPluginReader {
         let state_store: Arc<dyn StateStore> = Arc::new(MemoryStore::new());
 
         let registry = DefaultPluginRegistry::new(state_store);
-        let plugins = registry.load_default_plugins().await?;
+        let plugins = registry.load_all_plugins().await?;
         let plugins = plugins
             .into_iter()
             .map(|plugin| {
                 let name = plugin.name().to_string();
-                let schema = plugin.schema().or_else(|| builtin_plugin_schema(&name));
+                let schema = Self::plugin_owned_schema(&name, plugin.schema());
 
                 if schema.is_none() {
                     warn!(
@@ -140,6 +142,62 @@ impl SystemPluginReader {
         schemas
     }
 
+    /// Returns `(plugin_id, Option<PluginSchema>)` pairs for every loaded
+    /// plugin.  Plugins returning `None` from `schema()` are included with
+    /// `None` so the SHM writer can skip them.
+    pub fn plugin_schemas_with_ids(&self) -> Vec<(String, Option<PluginSchema>)> {
+        self.plugins
+            .iter()
+            .map(|plugin| (plugin.name.clone(), plugin.schema.clone()))
+            .collect()
+    }
+
+    /// Snapshots the present-state of every loaded plugin and returns it as
+    /// `(plugin_id, serde_json::Value)` pairs. Plugins whose checkpoint
+    /// snapshot fails are skipped with a warning.
+    pub async fn plugin_present_states(&self) -> Vec<(String, serde_json::Value)> {
+        let mut result = Vec::new();
+        for plugin in &self.plugins {
+            match plugin.plugin.create_checkpoint().await {
+                Ok(checkpoint) => {
+                    // Convert simd_json::OwnedValue to serde_json::Value via
+                    // string round-trip.
+                    let json_str = match simd_json::to_string(&checkpoint.state_snapshot) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            warn!(
+                                plugin_id = %plugin.name,
+                                error = %e,
+                                "Failed to serialize plugin state for SHM"
+                            );
+                            continue;
+                        }
+                    };
+                    let value: serde_json::Value = match serde_json::from_str(&json_str) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            warn!(
+                                plugin_id = %plugin.name,
+                                error = %e,
+                                "Failed to parse plugin state as serde_json"
+                            );
+                            continue;
+                        }
+                    };
+                    result.push((plugin.name.clone(), value));
+                }
+                Err(e) => {
+                    warn!(
+                        plugin_id = %plugin.name,
+                        error = %e,
+                        "Failed to snapshot plugin state for SHM present-state"
+                    );
+                }
+            }
+        }
+        result
+    }
+
     /// Reads all plugin-backed projection entities asynchronously.
     pub async fn read_all_async(&self) -> Result<Vec<RawEntity>> {
         let mut entities = Vec::new();
@@ -183,13 +241,28 @@ impl SystemPluginReader {
             .await
             .with_context(|| format!("failed to auto-load requested plugin '{}'", plugin_id))?;
         let name = plugin.name().to_string();
-        let schema = plugin.schema().or_else(|| builtin_plugin_schema(&name));
+        let schema = Self::plugin_owned_schema(&name, plugin.schema());
 
         Ok(LoadedPlugin {
             name,
             schema,
             plugin,
         })
+    }
+
+    fn plugin_owned_schema(plugin_id: &str, schema: Option<PluginSchema>) -> Option<PluginSchema> {
+        match schema {
+            Some(schema) if schema.name == plugin_id => Some(schema),
+            Some(schema) => {
+                warn!(
+                    plugin_id,
+                    schema_name = %schema.name,
+                    "Ignoring schema whose name does not match the owning plugin"
+                );
+                None
+            }
+            None => None,
+        }
     }
 
     /// Reads nested object projections for a single plugin asynchronously.
@@ -213,38 +286,11 @@ impl SystemPluginReader {
             .collect())
     }
 
-    async fn read_loaded_plugin(&self, plugin: &LoadedPlugin) -> Result<Vec<RawEntity>> {
-        let state = match plugin.plugin.query_current_state().await {
-            Ok(state) => state,
-            Err(error) => {
-                warn!(
-                    plugin_id = %plugin.name,
-                    error = %error,
-                    "Skipping plugin projection because state query failed"
-                );
-                return Ok(Vec::new());
-            }
-        };
-
-        let entity_type = plugin
-            .schema
-            .as_ref()
-            .map(|schema| schema.name.clone())
-            .unwrap_or_else(|| plugin.name.clone());
-        let mut entities = vec![RawEntity {
-            entity_type,
-            entity_id: plugin.name.clone(),
-            data: state.clone(),
-            source: self.source.clone(),
-        }];
-
-        entities.extend(Self::collect_nested_entities(
-            &plugin.name,
-            &state,
-            &self.source,
-        ));
-
-        Ok(entities)
+    async fn read_loaded_plugin(&self, _plugin: &LoadedPlugin) -> Result<Vec<RawEntity>> {
+        // Schema is the source of truth — no query_current_state to call.
+        // Plugin state comes from shm (written by mutations), not from
+        // querying the plugin instance.
+        Ok(Vec::new())
     }
 
     fn collect_nested_entities(plugin_id: &str, state: &Value, source: &str) -> Vec<RawEntity> {
@@ -327,7 +373,15 @@ impl SystemPluginReader {
 
                 for (index, child) in array.iter().enumerate() {
                     if child.is_object() || child.is_array() {
-                        let child_path = format!("{}/{}", path, index);
+                        // Use the object's "id" field as the path segment when available,
+                        // so D-Bus paths are named (e.g. /providers/antigravity) instead of
+                        // opaque numeric indexes (e.g. /providers/3).
+                        let segment = ["id", "name", "label", "key", "path", "domain", "host"]
+                            .iter()
+                            .find_map(|&field| child.get(field).and_then(|v| v.as_str()))
+                            .map(|s| s.replace(['/', ' ', ':'], "_"))
+                            .unwrap_or_else(|| index.to_string());
+                        let child_path = format!("{}/{}", path, segment);
                         Self::collect_nested_entities_recursive(
                             entities,
                             plugin_id,

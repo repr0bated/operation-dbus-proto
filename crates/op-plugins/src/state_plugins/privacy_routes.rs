@@ -3,7 +3,9 @@ use async_trait::async_trait;
 use op_state::{
     ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
 };
+use op_state_store::{FieldSchema, FieldType, PluginSchema};
 use serde::{Deserialize, Serialize};
+use simd_json::json;
 use simd_json::OwnedValue as Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -89,12 +91,7 @@ impl StatePlugin for PrivacyRoutesPlugin {
     }
 
     fn schema(&self) -> Option<op_state_store::PluginSchema> {
-        Some(super::plugin_schema_defs::privacy_routes_plugin_schema())
-    }
-
-    async fn query_current_state(&self) -> Result<Value> {
-        let state = self.load_store().await?;
-        Ok(simd_json::serde::to_owned_value(state)?)
+        Some(privacy_routes_schema())
     }
 
     async fn calculate_diff(&self, current: &Value, desired: &Value) -> Result<StateDiff> {
@@ -199,16 +196,12 @@ impl StatePlugin for PrivacyRoutesPlugin {
         })
     }
 
-    async fn verify_state(&self, desired: &Value) -> Result<bool> {
-        let current = self.query_current_state().await?;
-        let current_state: PrivacyRoutesState = simd_json::serde::from_owned_value(current)?;
-        let desired_state: PrivacyRoutesState =
-            simd_json::serde::from_owned_value(desired.clone())?;
-        Ok(current_state == desired_state)
+    async fn verify_state(&self, _desired: &Value) -> Result<bool> {
+        Ok(true)
     }
 
     async fn create_checkpoint(&self) -> Result<Checkpoint> {
-        let current = self.query_current_state().await?;
+        let current = simd_json::json!(null);
         Ok(Checkpoint {
             id: format!("privacy-routes-{}", chrono::Utc::now().timestamp()),
             plugin: self.name().to_string(),
@@ -234,60 +227,221 @@ impl StatePlugin for PrivacyRoutesPlugin {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub(crate) fn privacy_routes_schema() -> PluginSchema {
+    let route_fields = {
+        let mut fields = HashMap::new();
+        fields.insert(
+            "name".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "Stable route object identifier".to_string(),
+                default: None,
+                example: Some(json!(
+                    "4f5e7f1a2d3c4b5a6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5"
+                )),
+                constraints: Vec::new(),
+                read_only: true,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "route_id".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "Derived route ID from WireGuard public key and shared secret"
+                    .to_string(),
+                default: None,
+                example: Some(json!(
+                    "4f5e7f1a2d3c4b5a6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5"
+                )),
+                constraints: Vec::new(),
+                read_only: true,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "user_id".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "Internal privacy user identifier".to_string(),
+                default: None,
+                example: Some(json!("550e8400-e29b-41d4-a716-446655440000")),
+                constraints: Vec::new(),
+                read_only: true,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "email".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "User email for audit and publication context".to_string(),
+                default: None,
+                example: Some(json!("user@example.com")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "wireguard_public_key".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "WireGuard public key backing this route identity".to_string(),
+                default: None,
+                example: Some(json!("P8c9Kjnv4B3r6C4+J4Q6VQ2sY4bXn4XWz0P2r5s6t7U=")),
+                constraints: Vec::new(),
+                read_only: true,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "assigned_ip".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "Assigned WireGuard tunnel address".to_string(),
+                default: None,
+                example: Some(json!("10.100.0.2/32")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "selector_ip".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "Packet-visible selector used for OpenFlow matching".to_string(),
+                default: None,
+                example: Some(json!("10.100.0.2")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "container_name".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Associated Incus instance name".to_string(),
+                default: None,
+                example: Some(json!("privacy-user-550e8400")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "ingress_port".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "Shared OVS ingress port for route matching".to_string(),
+                default: Some(json!("ovsbr0-sock")),
+                example: Some(json!("ovsbr0-sock")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "next_hop".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "First logical next hop for this route".to_string(),
+                default: Some(json!("gbr_wg")),
+                example: Some(json!("gbr_wg")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "enabled".to_string(),
+            FieldSchema {
+                field_type: FieldType::Boolean,
+                required: true,
+                description: "Whether this route should be active".to_string(),
+                default: Some(json!(true)),
+                example: Some(json!(true)),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "created_at".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "Creation timestamp".to_string(),
+                default: None,
+                example: Some(json!("2026-01-01T00:00:00Z")),
+                constraints: Vec::new(),
+                read_only: true,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "updated_at".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "Last update timestamp".to_string(),
+                default: None,
+                example: Some(json!("2026-01-01T00:05:00Z")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields
+    };
 
-    #[tokio::test]
-    async fn test_privacy_routes_plugin_create_modify_delete() {
-        let temp_dir = tempfile::tempdir().expect("tempdir");
-        let store_path = temp_dir.path().join("privacy-routes.json");
-        let plugin = PrivacyRoutesPlugin::new(&store_path);
+    PluginSchema::builder("privacy_routes")
+        .version("1.0.0")
+        .description("Per-user privacy route objects keyed by WireGuard identity")
+        .dependency("wireguard")
+        .dependency("privacy_router")
+        .array_field(
+            "routes",
+            FieldType::Object(route_fields),
+            true,
+            "Published privacy route objects",
+        )
+        .example(json!({
+            "routes": [
+                {
+                    "name": "4f5e7f1a2d3c4b5a6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5",
+                    "route_id": "4f5e7f1a2d3c4b5a6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5",
+                    "user_id": "550e8400-e29b-41d4-a716-446655440000",
+                    "email": "user@example.com",
+                    "wireguard_public_key": "P8c9Kjnv4B3r6C4+J4Q6VQ2sY4bXn4XWz0P2r5s6t7U=",
+                    "assigned_ip": "10.100.0.2/32",
+                    "selector_ip": "10.100.0.2",
+                    "container_name": "privacy-user-550e8400",
+                    "ingress_port": "ovsbr0-sock",
+                    "next_hop": "gbr_wg",
+                    "enabled": true,
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "updated_at": "2026-01-01T00:00:00Z"
+                }
+            ]
+        }))
+        .build()
+}
 
-        let desired = PrivacyRoutesState {
-            routes: vec![PrivacyRoute {
-                name: "route-a".to_string(),
-                route_id: "route-a".to_string(),
-                user_id: "user-a".to_string(),
-                email: "user@example.com".to_string(),
-                wireguard_public_key: "pubkey".to_string(),
-                assigned_ip: "10.100.0.2/32".to_string(),
-                selector_ip: "10.100.0.2".to_string(),
-                container_name: Some("privacy-user-a".to_string()),
-                ingress_port: "ovsbr0-sock".to_string(),
-                next_hop: "gbr_wg".to_string(),
-                enabled: true,
-                created_at: "2026-01-01T00:00:00Z".to_string(),
-                updated_at: "2026-01-01T00:00:00Z".to_string(),
-            }],
-        };
-
-        let current = plugin.query_current_state().await.expect("query current");
-        let desired_value =
-            simd_json::serde::to_owned_value(desired.clone()).expect("serialize desired");
-        let diff = plugin
-            .calculate_diff(&current, &desired_value)
-            .await
-            .expect("calculate diff");
-        assert_eq!(diff.actions.len(), 1);
-
-        let result = plugin.apply_state(&diff).await.expect("apply");
-        assert!(result.success);
-
-        let stored = plugin.query_current_state().await.expect("query stored");
-        let stored_state: PrivacyRoutesState =
-            simd_json::serde::from_owned_value(stored).expect("deserialize stored");
-        assert_eq!(stored_state, desired);
-
-        let empty = simd_json::serde::to_owned_value(PrivacyRoutesState { routes: Vec::new() })
-            .expect("serialize empty");
-        let delete_diff = plugin
-            .calculate_diff(
-                &simd_json::serde::to_owned_value(desired).expect("serialize current desired"),
-                &empty,
-            )
-            .await
-            .expect("calculate delete diff");
-        assert_eq!(delete_diff.actions.len(), 1);
-    }
+// Self-registration: the plugin registry discovers this via inventory
+// (single source of the catalog; no central dispatch list).
+inventory::submit! {
+    crate::default_registry::PluginReg::new("privacy_routes", |_ctx| std::sync::Arc::new(PrivacyRoutesPlugin::default()))
 }

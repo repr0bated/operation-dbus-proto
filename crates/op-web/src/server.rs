@@ -100,9 +100,6 @@ impl WebServer {
             .route("/ws", get(ws_handler))
             .with_state(self.state.clone());
 
-        // Serve embedded UI (compiled into binary from ui/dist)
-        app = app.fallback(crate::embedded_ui::serve_embedded_ui);
-
         // Build middleware stack with consistent types
         let middleware = ServiceBuilder::new()
             .layer(TraceLayer::new_for_http())
@@ -159,5 +156,3 @@ impl WebServer {
         .await
     }
 }
-
-// UI is embedded via rust-embed in embedded_ui.rs

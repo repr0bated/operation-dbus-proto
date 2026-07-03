@@ -1,6 +1,7 @@
 #!/bin/bash
-# Setup reverse proxy and Cloudflare DNS for registration.3tched.com
-# Uses credentials from ~/.bash_secrets
+# Setup Cloudflare DNS for registration.3tched.com
+# The backend transport is socket-projected through the bridge; this script
+# only publishes the public DNS record for the already-provisioned service.
 
 set -e
 
@@ -16,8 +17,6 @@ else
 fi
 
 DOMAIN="registration.3tched.com"
-WEB_PORT="7010"
-
 detect_public_ipv4() {
     ip -4 route get 1.1.1.1 2>/dev/null | awk '/src/ {for (i = 1; i <= NF; i++) if ($i == "src") {print $(i + 1); exit}}'
 }
@@ -32,26 +31,8 @@ fi
 
 echo "Domain: $DOMAIN"
 echo "Proxy IP: $PROXY_IP"
-echo "Web Port: $WEB_PORT"
+echo "Public transport: bridge-owned unix socket"
 echo ""
-
-# Create nginx config directory if it doesn't exist
-sudo mkdir -p /etc/nginx/http.d
-
-# Install nginx config
-echo "📋 Installing nginx reverse proxy config..."
-sudo cp deploy/nginx/registration-3tched.conf /etc/nginx/http.d/registration-3tched.conf
-sudo install -d /var/www/registration
-sudo install -m 0644 deploy/registration/index.html /var/www/registration/index.html
-
-# Test nginx config
-echo "🔧 Testing nginx configuration..."
-if sudo nginx -t; then
-    echo "✅ Nginx config is valid"
-else
-    echo "❌ Nginx config has errors"
-    exit 1
-fi
 
 # Create Cloudflare DNS record using API
 echo "☁️  Creating Cloudflare DNS record for $DOMAIN..."
@@ -90,24 +71,11 @@ fi
 echo ""
 echo "✅ Cloudflare DNS record created (proxied through Cloudflare)"
 
-# Reload nginx
-echo "🔄 Reloading nginx..."
-sudo nginx -s reload
-
 echo ""
 echo "🎉 Setup complete!"
 echo ""
 echo "Your registration service is now available at:"
 echo "https://registration.3tched.com"
 echo ""
-echo "Magic link endpoints:"
-echo "• Signup: https://registration.3tched.com/api/privacy/signup"
-echo "• Verify: https://registration.3tched.com/privacy/verify?token=XXX"
-echo ""
-echo "Make sure op-web is running on port 7010:"
-echo "curl -I http://127.0.0.1:7010/health"
-echo ""
-
-# Make sure op-web listens on all interfaces
-echo "⚠️  Make sure op-web is configured to listen on 0.0.0.0, not just 127.0.0.1"
-echo "Check your environment: OP_DBUS_WEB_HOST=0.0.0.0"
+echo "Magic link endpoints are expected to be served through the bridge-owned socket."
+echo "Ensure the registration plugin is registered via the unix_socket plugin path."

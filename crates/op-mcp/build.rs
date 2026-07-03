@@ -14,10 +14,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Ensure output directory exists
             std::fs::create_dir_all("src/grpc/generated")?;
 
+            let out_dir = std::path::PathBuf::from(std::env::var("OUT_DIR")?);
+
             tonic_build::configure()
                 .build_server(true)
                 .build_client(true)
                 .out_dir("src/grpc/generated")
+                .file_descriptor_set_path(out_dir.join("mcp_descriptor.bin"))
                 .compile_protos(&[proto_file], &["proto"])?;
 
             println!("cargo:warning=gRPC proto compiled successfully");

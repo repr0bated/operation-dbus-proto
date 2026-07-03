@@ -1,0 +1,14 @@
+#!/bin/sh
+exec 2>&1
+set -eu
+
+service="${SERVICE_NAME:-$(basename "$(pwd)")}"
+service="${service%-log}"
+directives="${OP_S6_LOG_DIRECTIVES:-n10 s2000000 T}"
+
+if install -d -m 0750 -o s6log -g s6log "/var/log/${service}" 2>/dev/null; then
+    exec s6-setuidgid s6log s6-log -d3 -b -- ${directives} "/var/log/${service}"
+fi
+
+install -d -m 0750 -o s6log -g s6log "/run/log/${service}"
+exec s6-setuidgid s6log s6-log -d3 -b -- ${directives} "/run/log/${service}"

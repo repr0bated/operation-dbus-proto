@@ -1,9 +1,20 @@
 //! op-xdp-wg — Rust orchestration for the wg-xray XDP container path.
 //!
+//! **DEPRECATED CONTAINER PATH:** The `wg-xray` Incus container is deprecated
+//! and stopped. Xray now runs on the HOST via the `gbr-xray` s6 service, so
+//! the container-targeted XDP orchestration in this binary is no longer the
+//! active path for xray ingress. The code is retained for historical
+//! reference and potential host-side adaptation; `CT = "wg-xray"` below is
+//! kept as-is because the orchestration helpers still reference it.
+//!
+//! TODO(host-xdp): When a clear host-side interface name for xray XDP is
+//! confirmed, repoint the orchestration to drive the host path directly
+//! instead of the deprecated container.
+//!
 //! This binary keeps the existing interface names:
 //! - host uplink: `eth0`
 //! - Incus host-side peer: `veth-warp`
-//! - container: `wg-xray`
+//! - container: `wg-xray` (deprecated)
 //!
 //! The BPF program runs on host `eth0` and redirects matching traffic to the
 //! Incus peer `veth-warp`. The Incus hook order is explicit:

@@ -1,7 +1,7 @@
 //! gRPC Server Transport with Infrastructure Integration
 
 #[cfg(feature = "grpc")]
-use crate::grpc::proto::mcp_service_server::McpServiceServer;
+use crate::grpc::proto::{mcp_service_server::McpServiceServer, FILE_DESCRIPTOR_SET};
 #[cfg(feature = "grpc")]
 use crate::grpc::service::{GrpcInfrastructure, McpGrpcService};
 use crate::ServerMode; // Unified ServerMode from lib.rs
@@ -148,6 +148,8 @@ impl GrpcTransport {
             address = %addr,
             mode = %self.config.mode,
             tls = %self.config.tls_enabled,
+            reflection = %self.config.enable_reflection,
+            health = %self.config.enable_health,
             "Starting gRPC MCP server"
         );
 
@@ -155,18 +157,37 @@ impl GrpcTransport {
             .max_decoding_message_size(self.config.max_message_size)
             .max_encoding_message_size(self.config.max_message_size);
 
-        Server::builder()
+        let mut builder = Server::builder()
+            .accept_http1(true)
             .timeout(self.config.request_timeout)
             .max_concurrent_streams(self.config.max_concurrent_streams)
             .http2_keepalive_interval(Some(self.config.keepalive_interval))
             .http2_keepalive_timeout(Some(self.config.keepalive_timeout))
-            .add_service(mcp_service)
-            .serve(addr)
-            .await
-            .map_err(|e| {
-                error!(error = %e, "gRPC server error");
-                anyhow::anyhow!("gRPC server error: {}", e)
-            })?;
+            .add_service(tonic_web::enable(mcp_service));
+
+        if self.config.enable_reflection {
+            let reflection = tonic_reflection::server::Builder::configure()
+                .register_encoded_file_descriptor_set(FILE_DESCRIPTOR_SET)
+                .build_v1()
+                .map_err(|e| {
+                    error!(error = %e, "reflection build failed");
+                    anyhow::anyhow!("reflection build failed: {}", e)
+                })?;
+            builder = builder.add_service(tonic_web::enable(reflection));
+        }
+
+        if self.config.enable_health {
+            let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
+            health_reporter
+                .set_serving::<McpServiceServer<McpGrpcService>>()
+                .await;
+            builder = builder.add_service(tonic_web::enable(health_service));
+        }
+
+        builder.serve(addr).await.map_err(|e| {
+            error!(error = %e, "gRPC server error");
+            anyhow::anyhow!("gRPC server error: {}", e)
+        })?;
 
         Ok(())
     }
@@ -177,17 +198,42 @@ impl GrpcTransport {
     {
         let addr = self.config.address;
 
-        info!(address = %addr, "Starting gRPC MCP server with graceful shutdown");
+        info!(
+            address = %addr,
+            reflection = %self.config.enable_reflection,
+            health = %self.config.enable_health,
+            "Starting gRPC MCP server with graceful shutdown"
+        );
 
         let mcp_service = McpServiceServer::new(self.service)
             .max_decoding_message_size(self.config.max_message_size)
             .max_encoding_message_size(self.config.max_message_size);
 
-        Server::builder()
+        let mut builder = Server::builder()
+            .accept_http1(true)
             .timeout(self.config.request_timeout)
-            .add_service(mcp_service)
-            .serve_with_shutdown(addr, shutdown)
-            .await?;
+            .add_service(tonic_web::enable(mcp_service));
+
+        if self.config.enable_reflection {
+            let reflection = tonic_reflection::server::Builder::configure()
+                .register_encoded_file_descriptor_set(FILE_DESCRIPTOR_SET)
+                .build_v1()
+                .map_err(|e| {
+                    error!(error = %e, "reflection build failed");
+                    anyhow::anyhow!("reflection build failed: {}", e)
+                })?;
+            builder = builder.add_service(tonic_web::enable(reflection));
+        }
+
+        if self.config.enable_health {
+            let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
+            health_reporter
+                .set_serving::<McpServiceServer<McpGrpcService>>()
+                .await;
+            builder = builder.add_service(tonic_web::enable(health_service));
+        }
+
+        builder.serve_with_shutdown(addr, shutdown).await?;
 
         info!("gRPC server shut down gracefully");
         Ok(())
@@ -214,7 +260,8 @@ pub async fn run_grpc_server_lightweight(address: SocketAddr, mode: ServerMode) 
     info!(address = %address, mode = %mode, "Starting lightweight gRPC server");
 
     Server::builder()
-        .add_service(McpServiceServer::new(service))
+        .accept_http1(true)
+        .add_service(tonic_web::enable(McpServiceServer::new(service)))
         .serve(address)
         .await?;
 

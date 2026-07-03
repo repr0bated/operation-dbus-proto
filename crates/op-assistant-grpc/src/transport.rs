@@ -14,8 +14,10 @@ use std::time::Duration;
 
 pub const DEFAULT_DBUS_NAME: &str = "ai.assistant.v1";
 pub const DEFAULT_DBUS_PATH: &str = "/ai/assistant";
-/// Default RPC endpoint targets `op-grpc-bridge` inside the `wg-xray`
-/// Incus container (`10.200.0.1:50051` on the `grpc-uplink` host bridge).
+/// Default RPC endpoint targets the on-host operation.v1 gRPC server served
+/// by `op-dbus` at `10.200.0.2:50051` (the `grpc-uplink` veth IP). The
+/// deprecated `10.200.0.1:50051` lived inside the wg-xray container and is
+/// dead.
 pub const DEFAULT_RPC_ENDPOINT: &str = DEFAULT_WG_XRAY_ENDPOINT;
 pub const DEFAULT_HTTP_TIMEOUT_SECS: u64 = 30;
 

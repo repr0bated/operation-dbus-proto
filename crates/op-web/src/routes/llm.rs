@@ -9,7 +9,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use std::sync::Arc;
-use tracing::{error, info};
+use tracing::error;
 
 use crate::state::AppState;
 use op_llm::ProviderType;
@@ -46,20 +46,6 @@ pub struct ModelInfo {
     pub source: Option<String>,
 }
 
-/// Provider switch request
-#[derive(Debug, Deserialize)]
-pub struct SwitchProviderRequest {
-    pub provider: String,
-}
-
-/// Model switch request
-#[derive(Debug, Deserialize)]
-pub struct SwitchModelRequest {
-    pub model: String,
-    #[serde(default)]
-    pub non_sandboxed: bool,
-}
-
 /// Query params for models endpoint
 #[derive(Debug, Deserialize)]
 pub struct ModelsQuery {
@@ -87,8 +73,8 @@ pub async fn get_llm_status(Extension(state): Extension<Arc<AppState>>) -> impl 
 
 /// Build the model list from the zeroclaw plugin projection (`model_routes`).
 ///
-/// The zeroclaw plugin is the single source of truth: its `query_current_state`
-/// is projected verbatim at `/opdbus/v1/plugins/zeroclaw`. We read it from
+/// The zeroclaw plugin is the single source of truth: its live state
+/// is projected verbatim at `/org/opdbus/v1/plugins/zeroclaw`. We read it from
 /// the projection cache and surface each route as a selectable model.
 async fn models_from_zeroclaw(state: &AppState) -> Option<Vec<ModelInfo>> {
     let routes = crate::zeroclaw_routes::routes(&state.projection_cache).await?;
@@ -236,89 +222,6 @@ pub async fn get_models(
                 })),
             )
                 .into_response()
-        }
-    }
-}
-
-/// POST /api/llm/provider - Switch provider
-pub async fn switch_provider(
-    Extension(state): Extension<Arc<AppState>>,
-    Json(req): Json<SwitchProviderRequest>,
-) -> impl IntoResponse {
-    let provider_type = match req.provider.parse::<ProviderType>() {
-        Ok(pt) => pt,
-        Err(_) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(simd_json::json!({ "error": format!("Unknown provider: {}", req.provider) })),
-            );
-        }
-    };
-
-    match state
-        .chat_manager
-        .switch_provider(provider_type.clone())
-        .await
-    {
-        Ok(_) => {
-            info!("Switched to provider: {}", provider_type);
-            (
-                StatusCode::OK,
-                Json(simd_json::json!({
-                    "success": true,
-                    "provider": provider_type.to_string()
-                })),
-            )
-        }
-        Err(e) => {
-            error!("Failed to switch provider: {}", e);
-            (
-                StatusCode::BAD_REQUEST,
-                Json(simd_json::json!({ "error": e.to_string() })),
-            )
-        }
-    }
-}
-
-/// POST /api/llm/model - Switch model
-pub async fn switch_model(
-    Extension(state): Extension<Arc<AppState>>,
-    Json(req): Json<SwitchModelRequest>,
-) -> impl IntoResponse {
-    if let Err(e) =
-        crate::zeroclaw_routes::ensure_model_available(&state.projection_cache, &req.model).await
-    {
-        return (
-            StatusCode::CONFLICT,
-            Json(simd_json::json!({ "error": e.to_string(), "model": req.model })),
-        );
-    }
-
-    match state
-        .chat_manager
-        .switch_model_with_options(&req.model, Some(req.non_sandboxed))
-        .await
-    {
-        Ok(_) => {
-            info!(
-                "Switched to model: {} (non_sandboxed={})",
-                req.model, req.non_sandboxed
-            );
-            (
-                StatusCode::OK,
-                Json(simd_json::json!({
-                    "success": true,
-                    "model": req.model,
-                    "non_sandboxed": req.non_sandboxed
-                })),
-            )
-        }
-        Err(e) => {
-            error!("Failed to switch model: {}", e);
-            (
-                StatusCode::BAD_REQUEST,
-                Json(simd_json::json!({ "error": e.to_string() })),
-            )
         }
     }
 }

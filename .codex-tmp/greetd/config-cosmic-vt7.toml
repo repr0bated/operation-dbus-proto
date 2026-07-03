@@ -1,0 +1,12 @@
+# COSMIC local login through greetd on VT7.
+[terminal]
+vt = 7
+switch = true
+
+[general]
+source_profile = true
+runfile = "/run/greetd-cosmic-vt7.run"
+
+[default_session]
+command = "cosmic-greeter-start"
+user = "cosmic-greeter"

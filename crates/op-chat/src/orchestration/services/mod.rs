@@ -16,8 +16,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use tokio::sync::{broadcast, RwLock};
-use tonic_web;
 use tonic_reflection;
+use tonic_web;
 
 use super::grpc_pool::GrpcAgentPool;
 use super::proto::op_chat_orchestration::AgentStatusEvent;
@@ -169,8 +169,7 @@ pub async fn run_orchestration_server(
 
     tracing::info!(%addr, "Starting orchestration gRPC server");
 
-    const FILE_DESCRIPTOR_SET: &[u8] =
-        tonic::include_file_descriptor_set!("op_chat_descriptor");
+    const FILE_DESCRIPTOR_SET: &[u8] = tonic::include_file_descriptor_set!("op_chat_descriptor");
 
     let reflection = tonic_reflection::server::Builder::configure()
         .register_encoded_file_descriptor_set(FILE_DESCRIPTOR_SET)
@@ -179,14 +178,30 @@ pub async fn run_orchestration_server(
 
     tonic::transport::Server::builder()
         .accept_http1(true)
-        .add_service(tonic_web::enable(AgentLifecycleServer::from_arc(server.clone())))
-        .add_service(tonic_web::enable(AgentExecutionServer::from_arc(server.clone())))
-        .add_service(tonic_web::enable(MemoryServiceServer::from_arc(server.clone())))
-        .add_service(tonic_web::enable(SequentialThinkingServiceServer::from_arc(server.clone())))
-        .add_service(tonic_web::enable(ContextManagerServiceServer::from_arc(server.clone())))
-        .add_service(tonic_web::enable(RustProServiceServer::from_arc(server.clone())))
-        .add_service(tonic_web::enable(BackendArchitectServiceServer::from_arc(server.clone())))
-        .add_service(tonic_web::enable(WorkstackServiceServer::from_arc(server.clone())))
+        .add_service(tonic_web::enable(AgentLifecycleServer::from_arc(
+            server.clone(),
+        )))
+        .add_service(tonic_web::enable(AgentExecutionServer::from_arc(
+            server.clone(),
+        )))
+        .add_service(tonic_web::enable(MemoryServiceServer::from_arc(
+            server.clone(),
+        )))
+        .add_service(tonic_web::enable(
+            SequentialThinkingServiceServer::from_arc(server.clone()),
+        ))
+        .add_service(tonic_web::enable(ContextManagerServiceServer::from_arc(
+            server.clone(),
+        )))
+        .add_service(tonic_web::enable(RustProServiceServer::from_arc(
+            server.clone(),
+        )))
+        .add_service(tonic_web::enable(BackendArchitectServiceServer::from_arc(
+            server.clone(),
+        )))
+        .add_service(tonic_web::enable(WorkstackServiceServer::from_arc(
+            server.clone(),
+        )))
         .add_service(tonic_web::enable(reflection))
         .serve(addr)
         .await

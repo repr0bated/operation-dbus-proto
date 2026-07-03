@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 const PLUGIN_ROOT: &str = "/org/opdbus/v1/plugins";
-const OPDBUS_DEST: &str = "org.opdbus.v1";
+const OPDBUS_DEST: &str = op_core::config::OPDBUS_BUS_NAME;
 const PROJECTED_IFACE: &str = "org.opdbus.ProjectedObjectV1";
 
 #[derive(Clone)]

@@ -229,10 +229,6 @@ impl StatePlugin for AutoPlugin {
         Some(self.schema.clone())
     }
 
-    async fn query_current_state(&self) -> Result<Value> {
-        Ok(self.current_state.read().await.clone())
-    }
-
     async fn calculate_diff(
         &self,
         current: &Value,

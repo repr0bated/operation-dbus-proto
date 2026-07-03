@@ -3,8 +3,8 @@
 //! Provides D-Bus interfaces for managing the Xray proxy daemon lifecycle.
 //! Replaces direct subprocess spawning with a schema-driven D-Bus service.
 //!
-//! D-Bus object path: /opdbus/v1/xray
-//! Interface: org.opdbus.v1.Xray
+//! D-Bus object path: /org/opdbus/v1/plugins/xray
+//! Interface: opdbus.v1.Xray
 //!
 //! ## Architecture
 //!
@@ -107,7 +107,7 @@ async fn main() -> Result<()> {
 
     // Serve the XrayService on the connection
     conn.object_server()
-        .at("/opdbus/v1/xray", service)
+        .at("/org/opdbus/v1/plugins/xray", service)
         .await
         .context("Failed to register D-Bus object")?;
 
@@ -116,8 +116,8 @@ async fn main() -> Result<()> {
         .await
         .context("Failed to request bus name")?;
 
-    info!("D-Bus service registered at /opdbus/v1/xray");
-    info!("Interface: org.opdbus.v1.Xray");
+    info!("D-Bus service registered at /org/opdbus/v1/plugins/xray");
+    info!("Interface: opdbus.v1.Xray");
 
     // Set up signal handlers for graceful shutdown
     let mut sigterm = signal::unix::signal(signal::unix::SignalKind::terminate())

@@ -4,13 +4,117 @@
 //! and projects it onto D-Bus via the mirror reconciliation loop. There is no
 //! desired-vs-current diff — the database is the desired state.
 
+use super::plugin_scaffold_helpers::method_decl_from_schemars_with_output;
 use anyhow::Result;
 use async_trait::async_trait;
 use op_network::rovs_proxy::OvsdbDbusClient;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
+use op_state_store::PluginSchema;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use simd_json::prelude::*;
+use simd_json::json;
 use simd_json::OwnedValue as Value;
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ListDbsInput {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GetSchemaInput {
+    pub db_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TransactInput {
+    pub db_name: String,
+    pub operations: Vec<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct MonitorInput {
+    pub db_name: String,
+    pub monitor_id: String,
+    pub monitor_requests: std::collections::HashMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct MonitorCondInput {
+    pub db_name: String,
+    pub monitor_id: String,
+    pub monitor_cond_requests: std::collections::HashMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct LockInput {
+    pub lock_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct StealInput {
+    pub lock_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct UnlockInput {
+    pub lock_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct EchoInput {
+    pub params: Vec<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CancelInput {
+    pub id: String,
+}
+
+/// Input struct for CreateBridge method
+/// D-Bus method spec: https://www.opennetworking.org/wp-content/uploads/2014/10/of_spec_1_0.pdf
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CreateBridgeInput {
+    /// Bridge name
+    pub name: String,
+    /// Datapath type (e.g., "system", "internal")
+    pub datapath_type: Option<String>,
+    /// Fail mode (secure or standalone)
+    pub fail_mode: Option<String>,
+    /// Enable STP
+    pub stp_enable: Option<bool>,
+}
+
+/// Input struct for DeleteBridge method
+/// D-Bus method spec: https://www.opennetworking.org/wp-content/uploads/2014/10/of_spec_1_0.pdf
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct DeleteBridgeInput {
+    /// Bridge name to delete
+    pub name: String,
+}
+
+/// Input struct for AddPort method
+/// D-Bus method spec: https://www.opennetworking.org/wp-content/uploads/2014/10/of_spec_1_0.pdf
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AddPortInput {
+    /// Bridge name
+    pub bridge: String,
+    /// Port name
+    pub port: String,
+    /// Interface name
+    pub interface: Option<String>,
+    /// VLAN tag (optional)
+    pub tag: Option<i32>,
+}
+
+/// Input struct for RemovePort method
+/// D-Bus method spec: https://www.opennetworking.org/wp-content/uploads/2014/10/of_spec_1_0.pdf
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct RemovePortInput {
+    /// Bridge name
+    pub bridge: String,
+    /// Port name to remove
+    pub port: String,
+}
+
+use simd_json::prelude::*;
 use std::sync::Arc;
 
 // ============================================================================
@@ -18,13 +122,13 @@ use std::sync::Arc;
 // ============================================================================
 
 /// Full OVS state — 1:1 projection of what ovsdb-server reports.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct OvsBridgeState {
     pub bridges: Vec<BridgeConfig>,
 }
 
 /// RFC 7047 Bridge table row.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct BridgeConfig {
     pub name: String,
     #[serde(default)]
@@ -44,7 +148,7 @@ pub struct BridgeConfig {
 }
 
 /// RFC 7047 Port table row.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PortConfig {
     pub name: String,
     #[serde(default)]
@@ -60,7 +164,7 @@ pub struct PortConfig {
 }
 
 /// RFC 7047 Interface table row.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct InterfaceConfig {
     pub name: String,
     /// "system" | "internal" | "patch" | "vxlan" | "gre" | "geneve" | ""
@@ -188,7 +292,7 @@ impl StatePlugin for OvsBridgePlugin {
     }
 
     fn schema(&self) -> Option<op_state_store::PluginSchema> {
-        Some(super::plugin_schema_defs::ovsdb_bridge_plugin_schema())
+        Some(ovsdb_bridge_schema())
     }
 
     fn is_available(&self) -> bool {
@@ -200,10 +304,6 @@ impl StatePlugin for OvsBridgePlugin {
     }
 
     /// Query reality — dump OVSDB Bridge/Port/Interface tables.
-    async fn query_current_state(&self) -> Result<Value> {
-        let state = self.query_bridges().await?;
-        Ok(simd_json::serde::to_owned_value(state)?)
-    }
 
     /// Reconciliation, not diff. OVSDB is the DB — the "desired" parameter
     /// is what the D-Bus mirror currently shows. We return actions needed
@@ -238,7 +338,7 @@ impl StatePlugin for OvsBridgePlugin {
     }
 
     async fn create_checkpoint(&self) -> Result<Checkpoint> {
-        let state = self.query_current_state().await?;
+        let state = simd_json::json!(null);
         Ok(Checkpoint {
             id: uuid::Uuid::new_v4().to_string(),
             plugin: self.name().to_string(),
@@ -260,4 +360,169 @@ impl StatePlugin for OvsBridgePlugin {
             atomic_operations: true,
         }
     }
+}
+
+pub(crate) fn ovsdb_bridge_schema() -> PluginSchema {
+    let mut schema = super::schemars_adapter::plugin_schema_from_json(
+        "ovsdb_bridge",
+        "1.0.0",
+        "OVS bridge declarations",
+        &serde_json::to_value(schemars::schema_for!(OvsBridgeState)).unwrap(),
+    );
+    super::schemars_adapter::apply_state_defaults(
+        &mut schema,
+        &simd_json::serde::to_owned_value(&OvsBridgeState::default()).unwrap(),
+    );
+
+    schema.methods.insert(
+        "list_dbs".to_string(),
+        method_decl_from_schemars_with_output::<ListDbsInput, super::plugin_scaffold_helpers::AckOutput>(
+            "list_dbs",
+            op_state_store::SideEffect::Read,
+            true,
+            "ovsdb.read",
+            "obs.network.ovsdb.dbs.list@v1",
+        ),
+    );
+    schema.methods.insert(
+        "get_schema".to_string(),
+        method_decl_from_schemars_with_output::<GetSchemaInput, super::plugin_scaffold_helpers::AckOutput>(
+            "get_schema",
+            op_state_store::SideEffect::Read,
+            true,
+            "ovsdb.read",
+            "obs.network.ovsdb.schema.get@v1",
+        ),
+    );
+    schema.methods.insert(
+        "transact".to_string(),
+        method_decl_from_schemars_with_output::<TransactInput, super::plugin_scaffold_helpers::AckOutput>(
+            "transact",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "ovsdb.write",
+            "mut.network.ovsdb.transact@v1",
+        ),
+    );
+    schema.methods.insert(
+        "monitor".to_string(),
+        method_decl_from_schemars_with_output::<MonitorInput, super::plugin_scaffold_helpers::AckOutput>(
+            "monitor",
+            op_state_store::SideEffect::Read,
+            false,
+            "ovsdb.read",
+            "obs.network.ovsdb.monitor@v1",
+        ),
+    );
+    schema.methods.insert(
+        "monitor_cond".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<MonitorCondInput, super::plugin_scaffold_helpers::AckOutput>(
+            "monitor_cond",
+            op_state_store::SideEffect::Read,
+            false,
+            "ovsdb.read",
+            "obs.network.ovsdb.monitor_cond@v1",
+        ),
+    );
+    schema.methods.insert(
+        "lock".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<LockInput, super::plugin_scaffold_helpers::AckOutput>(
+            "lock",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "ovsdb.write",
+            "mut.network.ovsdb.lock@v1",
+        ),
+    );
+    schema.methods.insert(
+        "steal".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<StealInput, super::plugin_scaffold_helpers::AckOutput>(
+            "steal",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "ovsdb.write",
+            "mut.network.ovsdb.lock.steal@v1",
+        ),
+    );
+    schema.methods.insert(
+        "unlock".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<UnlockInput, super::plugin_scaffold_helpers::AckOutput>(
+            "unlock",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "ovsdb.write",
+            "mut.network.ovsdb.lock.unlock@v1",
+        ),
+    );
+    schema.methods.insert(
+        "echo".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<EchoInput, super::plugin_scaffold_helpers::AckOutput>(
+            "echo",
+            op_state_store::SideEffect::Read,
+            true,
+            "ovsdb.read",
+            "obs.network.ovsdb.echo@v1",
+        ),
+    );
+    schema.methods.insert(
+        "cancel".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<CancelInput, super::plugin_scaffold_helpers::AckOutput>(
+            "cancel",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "ovsdb.write",
+            "mut.network.ovsdb.cancel@v1",
+        ),
+    );
+
+    // Add required methods: CreateBridge, DeleteBridge, AddPort, RemovePort
+    // D-Bus method spec: https://www.opennetworking.org/wp-content/uploads/2014/10/of_spec_1_0.pdf
+    schema.methods.insert(
+        "create_bridge".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<CreateBridgeInput, super::plugin_scaffold_helpers::AckOutput>(
+            "CreateBridge",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "ovsdb.write",
+            "mut.network.ovsdb.bridge.create@v1",
+        ),
+    );
+    schema.methods.insert(
+        "delete_bridge".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<DeleteBridgeInput, super::plugin_scaffold_helpers::AckOutput>(
+            "DeleteBridge",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "ovsdb.write",
+            "mut.network.ovsdb.bridge.delete@v1",
+        ),
+    );
+    schema.methods.insert(
+        "add_port".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<AddPortInput, super::plugin_scaffold_helpers::AckOutput>(
+            "AddPort",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "ovsdb.write",
+            "mut.network.ovsdb.port.add@v1",
+        ),
+    );
+    schema.methods.insert(
+        "remove_port".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<RemovePortInput, super::plugin_scaffold_helpers::AckOutput>(
+            "RemovePort",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "ovsdb.write",
+            "mut.network.ovsdb.port.remove@v1",
+        ),
+    );
+
+    schema
+}
+
+// Self-registration: the plugin registry discovers this via inventory
+// (single source of the catalog; no central dispatch list).
+inventory::submit! {
+    crate::default_registry::PluginReg::new("ovsdb_bridge", |_ctx| std::sync::Arc::new(OvsBridgePlugin::new()))
 }

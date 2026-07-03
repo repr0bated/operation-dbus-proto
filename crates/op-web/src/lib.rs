@@ -27,7 +27,6 @@
 
 pub mod chat_store;
 pub mod email;
-pub mod embedded_ui;
 pub mod groups_admin;
 pub mod handlers;
 pub mod mcp;
@@ -50,7 +49,6 @@ pub mod websocket;
 pub mod wireguard;
 pub mod zeroclaw_routes;
 
-pub use embedded_ui::{serve_embedded_ui, ui_available, UiAssets};
 pub use orchestrator::UnifiedOrchestrator;
 pub use state::AppState;
 

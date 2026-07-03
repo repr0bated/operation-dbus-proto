@@ -18,13 +18,13 @@ pub enum MirrorEvent {
         delta: Value,
         sequence: u64,
     },
-    /// StateManager plugin event
+    /// Plugin state/projection change event
     Plugin {
         plugin_id: String,
         delta: Value,
         sequence: u64,
     },
-    /// ComponentRegistry event
+    /// ComponentRegistry event mirrored from the gRPC registry service
     Registry {
         event: Box<op_grpc_bridge::proto::registry::RegistryEvent>,
         sequence: u64,
@@ -42,25 +42,31 @@ pub enum MirrorEvent {
 }
 
 impl MirrorEvent {
-    /// Get the target path for this event
+    /// Get the target path for this event (mirror namespace)
     pub fn target_path(&self) -> Option<String> {
         match self {
             MirrorEvent::OvsdbRow {
                 table_name, uuid, ..
-            } => Some(format!("/org/opdbus/v1/ovsdb/{}/{}", table_name, uuid)),
-            MirrorEvent::NonNet { key, .. } => Some(format!("/org/opdbus/v1/nonnet/{}", key)),
+            } => Some(format!(
+                "/org/opdbus/v1/mirror/ovsdb/{}/{}",
+                table_name, uuid
+            )),
+            MirrorEvent::NonNet { key, .. } => {
+                Some(format!("/org/opdbus/v1/mirror/nonnet/{}", key))
+            }
             MirrorEvent::Plugin { plugin_id, .. } => {
                 Some(format!("/org/opdbus/v1/plugins/{}", plugin_id))
             }
-            MirrorEvent::Registry { event, .. } => {
-                let component = event.component.as_ref()?;
-                let safe = component.component_id.replace(['.', '-', ':'], "_");
-                Some(format!("/org/opdbus/v1/registry/{}", safe))
-            }
-            MirrorEvent::ProcMem { .. } => Some("/org/opdbus/v1/host/meminfo".to_string()),
-            MirrorEvent::ProcLoad { .. } => Some("/org/opdbus/v1/host/loadavg".to_string()),
+            MirrorEvent::Registry { event, .. } => event.component.as_ref().map(|component| {
+                format!(
+                    "/org/opdbus/v1/registry/components/{}",
+                    component.component_id
+                )
+            }),
+            MirrorEvent::ProcMem { .. } => Some("/org/opdbus/v1/mirror/host/meminfo".to_string()),
+            MirrorEvent::ProcLoad { .. } => Some("/org/opdbus/v1/mirror/host/loadavg".to_string()),
             MirrorEvent::ProcStatic { section, .. } => {
-                Some(format!("/org/opdbus/v1/host/{}", section))
+                Some(format!("/org/opdbus/v1/mirror/host/{}", section))
             }
         }
     }
