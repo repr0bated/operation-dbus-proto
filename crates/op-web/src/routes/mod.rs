@@ -276,7 +276,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
 
     // Use filesystem static files if available, otherwise fallback to embedded UI
     let static_dir =
-        std::env::var("OP_WEB_STATIC_DIR").unwrap_or_else(|_| "lovable/dist".to_string());
+        std::env::var("OP_WEB_STATIC_DIR").unwrap_or_else(|_| "ui/dist".to_string());
     let static_index = std::path::Path::new(&static_dir).join("index.html");
     if static_index.exists() {
         router = router

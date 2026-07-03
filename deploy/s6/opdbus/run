@@ -17,8 +17,7 @@ wg-quick up "${IFACE}"
 ip route replace 10.0.0.0/24 dev opdbus 2>/dev/null || true
 ip route replace 10.0.0.1/32 dev opdbus 2>/dev/null || true
 
-# Refresh identity sled from opdbus interface
+# Refresh identity sled from opdbus interface (tmpfs only — zero-disk rule, Req 7)
 /usr/local/bin/op-identity-sled --iface opdbus --refresh --path /dev/shm/plugin_schema.dat 2>/dev/null || true
-cp /dev/shm/plugin_schema.dat /var/lib/op-dbus/plugin_schema.dat 2>/dev/null || true
 
 exec pause

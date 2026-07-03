@@ -29,13 +29,12 @@ use crate::state_plugins::{
     CognitiveMcpPlugin, CompactMcpPlugin, ConfigPlugin, CronPlugin, CtlPlaneChatbotPlugin,
     DnsResolverPlugin, EndpointPlugin, FactoryPlugin, Fail2banPlugin, FreeDesktopPlugin,
     FullSystemPlugin, GcloudAdcPlugin, HardwarePlugin, IncusPlugin, KeypairPlugin, KeyringPlugin,
-    KnowledgePlugin, Login1Plugin, LxcPlugin, MailServerPlugin, McpStatePlugin, MemoryPlugin,
+    KnowledgePlugin, Login1Plugin, MailServerPlugin, McpStatePlugin, MemoryPlugin,
     NetStatePlugin, NetmakerConfig, NetmakerPlugin, OpenFlowPlugin, OvsBridgePlugin,
-    OvsdbDaemonPlugin, PackageKitPlugin, PciDeclPlugin, PrivacyRouterPlugin, PrivacyRoutesPlugin,
-    ProcfsPlugin, ProxmoxPlugin, ProxyServerPlugin, RovsCommandsPlugin, RtnetlinkPlugin,
-    S6StatePlugin, SchemaRendererPlugin, ServicePlugin, SessDeclPlugin, SoftwarePlugin,
-    UnixSocketPlugin, UsersPlugin, WebUiPlugin, WgcfPlugin, WireGuardPlugin, WorkflowsPlugin,
-    XrayPlugin, ZeroclawPlugin,
+    OvsdbDaemonPlugin, PackageKitPlugin, PciDeclPlugin, ProcfsPlugin, ProxyServerPlugin,
+    RovsCommandsPlugin, RtnetlinkPlugin, S6StatePlugin, SchemaRendererPlugin, ServicePlugin,
+    SessDeclPlugin, SoftwarePlugin, UnixSocketPlugin, UsersPlugin, WebUiPlugin, WgcfPlugin,
+    WireGuardPlugin, WorkflowsPlugin, XrayPlugin, ZeroclawPlugin,
 };
 use crate::AutoPlugin;
 
@@ -90,9 +89,7 @@ fn default_auto_load() -> Vec<String> {
         "openflow".to_string(),
         "ovsdb_bridge".to_string(),
         "ovsdb_daemon".to_string(),
-        "privacy_router".to_string(),
         "rovs_commands".to_string(),
-        "privacy_routes".to_string(),
         "procfs".to_string(),
         "rtnetlink".to_string(),
         "agent_config".to_string(),
@@ -215,8 +212,6 @@ impl DefaultPluginRegistry {
             "systemd" | "dinit" | "service_s6" => "s6",
             "web_ui" | "webui" => "web_ui",
             "mail" | "mailserver" => "mail_server",
-            "privacyroutes" => "privacy_routes",
-            "privacyrouter" => "privacy_router",
             "ovsbridge" => "ovsdb_bridge",
             "rtnet" => "rtnetlink",
             "sessdecl" => "sess_decl",
@@ -312,13 +307,6 @@ impl DefaultPluginRegistry {
             )),
             "net" => Arc::new(NetStatePlugin::new()),
             "openflow" => Arc::new(OpenFlowPlugin::new()),
-            "privacy_router" => {
-                let _config_path = self
-                    .get_plugin_config_path("privacy_router", "/etc/op-dbus/privacy-config.json");
-                use crate::state_plugins::privacy_router::PrivacyRouterConfig;
-                Arc::new(PrivacyRouterPlugin::new(PrivacyRouterConfig::default()))
-            }
-            "proxmox" => Arc::new(ProxmoxPlugin::new()),
             "hardware" => Arc::new(HardwarePlugin::new()),
             "software" => Arc::new(SoftwarePlugin::new()),
             "users" => Arc::new(UsersPlugin::new()),
@@ -329,12 +317,10 @@ impl DefaultPluginRegistry {
             "agent_config" => Arc::new(AgentConfigPlugin::new()),
             "ovsdb_bridge" => Arc::new(OvsBridgePlugin::new()),
             "ovsdb_daemon" => Arc::new(OvsdbDaemonPlugin::new()),
-            "privacy_routes" => Arc::new(PrivacyRoutesPlugin::default()),
             "procfs" => Arc::new(ProcfsPlugin::new()),
             "rovs_commands" => Arc::new(RovsCommandsPlugin::new()),
             "rtnetlink" => Arc::new(RtnetlinkPlugin::new()),
             "sess_decl" => Arc::new(SessDeclPlugin::new()),
-            "lxc" => Arc::new(LxcPlugin::new()),
             "netmaker" => Arc::new(NetmakerPlugin::new(NetmakerConfig::default())),
             "adc" => Arc::new(AdcPlugin::new()),
             "endpoint" => Arc::new(EndpointPlugin::new()),
@@ -382,10 +368,7 @@ impl DefaultPluginRegistry {
             "wireguard",
             "web_ui",
             "openflow",
-            "privacy_router",
-            "privacy_routes",
             // "netmaker",
-            // "lxc",
             // "packagekit",
         ]
     }
@@ -462,8 +445,6 @@ mod tests {
             "incus",
             "net",
             "openflow",
-            "privacy_router",
-            "proxmox",
             "hardware",
             "software",
             "users",
@@ -473,7 +454,6 @@ mod tests {
             "wireguard",
             "agent_config",
             "ovsdb_bridge",
-            "privacy_routes",
             "procfs",
             "rtnetlink",
             "sess_decl",

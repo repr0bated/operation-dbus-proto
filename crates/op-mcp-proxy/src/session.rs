@@ -1,7 +1,22 @@
-//! Session management using WireGuard pubkey as identity.
+//! [DEPRECATED + INCORRECT MODEL - DO NOT USE]
 //!
-//! Sessions are created when a WireGuard peer connects and
-//! destroyed on disconnect or timeout.
+//! This entire module (and crate `op-mcp-proxy`) is deprecated and should be removed.
+//! zeroclaw already provides the equivalent functionality.
+//!
+//! ## Correct Zero-Trust + Identity Model (the actual system):
+//! - The whole basis is **WireGuard key-backed identity**.
+//! - `wg connects` → `xray verifies identity via wg keypair` → injects headers proving trusted source:
+//!   - Ghostbridge headers (X-Ghostbridge-Footprint, X-Ghostbridge-Trace-ID)
+//!   - or X-WireGuard-Pubkey
+//! - Along with NextDNS info.
+//! - This is recorded to the **identity sled**, which also keeps the **Snowball ledger**.
+//! - The "session" lifespan is **persistent for the life of the account** (not some short-lived SQL session row with timeout).
+//!
+//! There is **no SQL** for this. `SqlitePluginCatalog` and similar legacy stores are obsolete.
+//! Durable identity + snowball lives in the sled. Other user/privacy graph data may use Cozo, but
+//! the authoritative account/identity ledger + footprint proof is the WG-key + identity-sled + snowball.
+//!
+//! Never re-implement "sessions" or "users" using rusqlite or short-lived rows. This old code is left only as a marker.
 
 use std::path::PathBuf;
 use std::process::Command;

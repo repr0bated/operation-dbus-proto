@@ -1,7 +1,15 @@
-use op_state_store::{Constraint, FieldSchema, FieldType, PluginSchema, ReadOnlyCondition};
+use op_state_store::{Constraint, FieldSchema, FieldType, MethodDecl, PluginSchema, SideEffect};
+use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
 use std::collections::HashMap;
+
+#[allow(unused_imports)]
+use serde_json; // kept for adapter demo (plugin_schema_from_json requires a JVal root)
+
+// Full schemars JSON-walking adapter (recovered from clean tree / agy runs).
+// Use for static derivation of schemas that have a schemars-generated root JSON.
+pub(crate) use super::schemars_adapter::{apply_state_defaults, plugin_schema_from_json};
 
 /// Format a plugin's live state into a `PluginSchema`.
 ///
@@ -105,6 +113,43 @@ fn simple_schema(
     }
     builder.build()
 }
+
+/// Create a MethodDecl from a schemars-typed input struct.
+///
+/// This is the canonical pattern (the one the good factory work used).
+/// Define method inputs as Rust structs with `#[derive(schemars::JsonSchema)]`,
+/// then use this function to generate properly typed method declarations.
+/// The resulting schema drives D-Bus method validation and gRPC exposure.
+/// Recover of the canonical helper used by the "good" factory work.
+///
+/// In production trees this uses `schemars::schema_for!(Input)` to produce
+/// a precise args schema. In current workspace the dependency is indirect, so
+/// we fall back to the explicit loose-but-named form while keeping the API.
+pub fn method_decl_from_schemars<Input>(
+    name: &str,
+    side_effect: SideEffect,
+    idempotent: bool,
+    required_capability: &str,
+    subid: &str,
+) -> MethodDecl {
+    // TODO: when schemars (and JsonSchema derives on Input types) is on the crate graph,
+    // upgrade to:
+    //   let root = serde_json::to_value(schemars::schema_for!(Input)).unwrap();
+    //   let args_schema = plugin_schema_from_json(...);  // via schemars_adapter walk
+    // Then use `args_schema.fields` to produce a precise MethodDecl args shape.
+    // The adapter handles oneOf, x-oscal-subid, constraints, etc.
+    MethodDecl {
+        name: name.to_string(),
+        args: json!({"type": "object", "additionalProperties": true}),
+        returns: Some(json!({ "type": "object", "additionalProperties": true })),
+        side_effect,
+        idempotent,
+        required_capability: if required_capability.is_empty() { None } else { Some(required_capability.to_string()) },
+        subid: subid.to_string(),
+    }
+}
+
+
 
 pub(crate) fn adc_plugin_schema() -> PluginSchema {
     simple_schema(
@@ -227,18 +272,6 @@ pub(crate) fn ovsdb_bridge_plugin_schema() -> PluginSchema {
         vec![(
             "bridges",
             any_field(true, "Bridge declarations", Some(json!([]))),
-        )],
-    )
-}
-
-pub(crate) fn proxmox_plugin_schema() -> PluginSchema {
-    simple_schema(
-        "proxmox",
-        "Proxmox container declarations",
-        &["net"],
-        vec![(
-            "containers",
-            any_field(true, "Container declarations", Some(json!([]))),
         )],
     )
 }
@@ -1229,298 +1262,6 @@ pub(crate) fn s6_plugin_schema() -> PluginSchema {
         .build()
 }
 
-pub(crate) fn privacy_router_plugin_schema() -> PluginSchema {
-    let wireguard_fields = {
-        let mut fields = HashMap::new();
-        fields.insert(
-            "enabled".to_string(),
-            FieldSchema {
-                field_type: FieldType::Boolean,
-                required: true,
-                description: "Enable WireGuard tunnel".to_string(),
-                default: Some(json!(true)),
-                example: Some(json!(true)),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "container_id".to_string(),
-            FieldSchema {
-                field_type: FieldType::Integer,
-                required: false,
-                description: "Container VMID for WireGuard".to_string(),
-                default: Some(json!(100)),
-                example: Some(json!(100)),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: Some(ReadOnlyCondition {
-                    property: "enabled".to_string(),
-                    value: "true".to_string(),
-                }),
-            },
-        );
-        fields.insert(
-            "listen_port".to_string(),
-            FieldSchema {
-                field_type: FieldType::Integer,
-                required: false,
-                description: "WireGuard listen port".to_string(),
-                default: Some(json!(51820)),
-                example: Some(json!(51820)),
-                constraints: vec![
-                    Constraint::Min { value: 1.0 },
-                    Constraint::Max { value: 65535.0 },
-                ],
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "socket_port".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: false,
-                description: "Host-side bridge port name for the WireGuard ingress container"
-                    .to_string(),
-                default: Some(json!("gbr_wg")),
-                example: Some(json!("gbr_wg")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields
-    };
-
-    let warp_fields = {
-        let mut fields = HashMap::new();
-        fields.insert(
-            "enabled".to_string(),
-            FieldSchema {
-                field_type: FieldType::Boolean,
-                required: true,
-                description: "Enable Cloudflare WARP tunnel".to_string(),
-                default: Some(json!(true)),
-                example: Some(json!(true)),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "bridge_interface".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: false,
-                description: "Host WireGuard interface bridged into OVS for WARP egress"
-                    .to_string(),
-                default: Some(json!("wgcf")),
-                example: Some(json!("wgcf")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "netclient_network".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: false,
-                description: "Netclient network name for the WARP egress interface"
-                    .to_string(),
-                default: Some(json!("gbr_warp")),
-                example: Some(json!("gbr_warp")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields
-    };
-
-    let xray_fields = {
-        let mut fields = HashMap::new();
-        fields.insert(
-            "enabled".to_string(),
-            FieldSchema {
-                field_type: FieldType::Boolean,
-                required: true,
-                description: "Enable system XRay client tunnel".to_string(),
-                default: Some(json!(true)),
-                example: Some(json!(true)),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "container_id".to_string(),
-            FieldSchema {
-                field_type: FieldType::Integer,
-                required: false,
-                description: "Container VMID for the local XRay client".to_string(),
-                default: Some(json!(101)),
-                example: Some(json!(101)),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: Some(ReadOnlyCondition {
-                    property: "enabled".to_string(),
-                    value: "true".to_string(),
-                }),
-            },
-        );
-        fields.insert(
-            "socket_port".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: false,
-                description: "Host-side bridge port for the local XRay client".to_string(),
-                default: Some(json!("gbr_xray")),
-                example: Some(json!("gbr_xray")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "socks_port".to_string(),
-            FieldSchema {
-                field_type: FieldType::Integer,
-                required: false,
-                description: "SOCKS listener port exposed by the local XRay client".to_string(),
-                default: Some(json!(1080)),
-                example: Some(json!(1080)),
-                constraints: vec![
-                    Constraint::Min { value: 1.0 },
-                    Constraint::Max { value: 65535.0 },
-                ],
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "vps_address".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: false,
-                description: "Remote XRay server hostname or IP".to_string(),
-                default: Some(json!("vps.example.com")),
-                example: Some(json!("vps.example.com")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "vps_port".to_string(),
-            FieldSchema {
-                field_type: FieldType::Integer,
-                required: false,
-                description: "Remote XRay server port".to_string(),
-                default: Some(json!(443)),
-                example: Some(json!(443)),
-                constraints: vec![
-                    Constraint::Min { value: 1.0 },
-                    Constraint::Max { value: 65535.0 },
-                ],
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields
-    };
-
-    let vps_fields = {
-        let mut fields = HashMap::new();
-        fields.insert(
-            "xray_server".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: true,
-                description: "Remote XRay server hostname or IP".to_string(),
-                default: Some(json!("vps.example.com")),
-                example: Some(json!("vps.example.com")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "xray_port".to_string(),
-            FieldSchema {
-                field_type: FieldType::Integer,
-                required: true,
-                description: "Remote XRay server port".to_string(),
-                default: Some(json!(443)),
-                example: Some(json!(443)),
-                constraints: vec![
-                    Constraint::Min { value: 1.0 },
-                    Constraint::Max { value: 65535.0 },
-                ],
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields
-    };
-
-    PluginSchema::builder("privacy_router")
-        .version("1.1.0")
-        .description("System privacy fabric (WireGuard/XRay ingress, WARP bridge, XRay egress)")
-        .dependency("incus")
-        .dependency("openflow")
-        .dependency("privacy_routes")
-        .string_field("bridge_name", true, "OVS bridge for privacy network")
-        .object_field(
-            "wireguard",
-            wireguard_fields,
-            true,
-            "WireGuard tunnel config",
-        )
-        .object_field("warp", warp_fields, true, "Cloudflare WARP bridge config")
-        .object_field(
-            "xray",
-            xray_fields,
-            true,
-            "XRay REALITY egress client config",
-        )
-        .object_field(
-            "vps",
-            vps_fields,
-            true,
-            "Remote XRay server endpoint config",
-        )
-        .example(json!({
-            "bridge_name": "ovsbr0",
-            "wireguard": {
-                "enabled": true,
-                "container_id": 100,
-                "socket_port": "gbr_wg",
-                "listen_port": 51820
-            },
-            "warp": {
-                "enabled": true,
-                "bridge_interface": "wgcf",
-                "netclient_network": "gbr_warp"
-            },
-            "xray": {
-                "enabled": true,
-                "container_id": 101,
-                "socket_port": "gbr_xray",
-                "socks_port": 1080,
-                "vps_address": "vps.example.com",
-                "vps_port": 443
-            },
-            "vps": {
-                "xray_server": "vps.example.com",
-                "xray_port": 443
-            }
-        }))
-        .build()
-}
-
 pub(crate) fn unix_socket_plugin_schema() -> PluginSchema {
     let mut socket_fields = HashMap::new();
     socket_fields.insert(
@@ -1620,219 +1361,6 @@ pub(crate) fn unix_socket_plugin_schema() -> PluginSchema {
                     "port": 80,
                     "protocol": "http",
                     "label": "netmaker-ui"
-                }
-            ]
-        }))
-        .build()
-}
-
-pub(crate) fn privacy_routes_plugin_schema() -> PluginSchema {
-    let route_fields = {
-        let mut fields = HashMap::new();
-        fields.insert(
-            "name".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: true,
-                description: "Stable route object identifier".to_string(),
-                default: None,
-                example: Some(json!(
-                    "4f5e7f1a2d3c4b5a6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5"
-                )),
-                constraints: Vec::new(),
-                read_only: true,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "route_id".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: true,
-                description: "Derived route ID from WireGuard public key and shared secret"
-                    .to_string(),
-                default: None,
-                example: Some(json!(
-                    "4f5e7f1a2d3c4b5a6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5"
-                )),
-                constraints: Vec::new(),
-                read_only: true,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "user_id".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: true,
-                description: "Internal privacy user identifier".to_string(),
-                default: None,
-                example: Some(json!("550e8400-e29b-41d4-a716-446655440000")),
-                constraints: Vec::new(),
-                read_only: true,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "email".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: true,
-                description: "User email for audit and publication context".to_string(),
-                default: None,
-                example: Some(json!("user@example.com")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "wireguard_public_key".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: true,
-                description: "WireGuard public key backing this route identity".to_string(),
-                default: None,
-                example: Some(json!("P8c9Kjnv4B3r6C4+J4Q6VQ2sY4bXn4XWz0P2r5s6t7U=")),
-                constraints: Vec::new(),
-                read_only: true,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "assigned_ip".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: true,
-                description: "Assigned WireGuard tunnel address".to_string(),
-                default: None,
-                example: Some(json!("10.100.0.2/32")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "selector_ip".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: true,
-                description: "Packet-visible selector used for OpenFlow matching".to_string(),
-                default: None,
-                example: Some(json!("10.100.0.2")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "container_name".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: false,
-                description: "Associated Incus instance name".to_string(),
-                default: None,
-                example: Some(json!("privacy-user-550e8400")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "ingress_port".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: true,
-                description: "Shared OVS ingress port for route matching".to_string(),
-                default: Some(json!("ovsbr0-sock")),
-                example: Some(json!("ovsbr0-sock")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "next_hop".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: true,
-                description: "First logical next hop for this route".to_string(),
-                default: Some(json!("gbr_wg")),
-                example: Some(json!("gbr_wg")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "enabled".to_string(),
-            FieldSchema {
-                field_type: FieldType::Boolean,
-                required: true,
-                description: "Whether this route should be active".to_string(),
-                default: Some(json!(true)),
-                example: Some(json!(true)),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "created_at".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: true,
-                description: "Creation timestamp".to_string(),
-                default: None,
-                example: Some(json!("2026-01-01T00:00:00Z")),
-                constraints: Vec::new(),
-                read_only: true,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "updated_at".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: true,
-                description: "Last update timestamp".to_string(),
-                default: None,
-                example: Some(json!("2026-01-01T00:05:00Z")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields
-    };
-
-    PluginSchema::builder("privacy_routes")
-        .version("1.0.0")
-        .description("Per-user privacy route objects keyed by WireGuard identity")
-        .dependency("wireguard")
-        .dependency("privacy_router")
-        .array_field(
-            "routes",
-            FieldType::Object(route_fields),
-            true,
-            "Published privacy route objects",
-        )
-        .example(json!({
-            "routes": [
-                {
-                    "name": "4f5e7f1a2d3c4b5a6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5",
-                    "route_id": "4f5e7f1a2d3c4b5a6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5",
-                    "user_id": "550e8400-e29b-41d4-a716-446655440000",
-                    "email": "user@example.com",
-                    "wireguard_public_key": "P8c9Kjnv4B3r6C4+J4Q6VQ2sY4bXn4XWz0P2r5s6t7U=",
-                    "assigned_ip": "10.100.0.2/32",
-                    "selector_ip": "10.100.0.2",
-                    "container_name": "privacy-user-550e8400",
-                    "ingress_port": "ovsbr0-sock",
-                    "next_hop": "gbr_wg",
-                    "enabled": true,
-                    "created_at": "2026-01-01T00:00:00Z",
-                    "updated_at": "2026-01-01T00:00:00Z"
                 }
             ]
         }))
@@ -2374,169 +1902,344 @@ pub(crate) fn cognitive_mcp_plugin_schema() -> PluginSchema {
     // ── code_search tool input (subid obs.service.code-rag.search@v1) ──────
     let code_search_input_fields = {
         let mut fields = HashMap::new();
-        fields.insert("query".to_string(), FieldSchema {
-            field_type: FieldType::String, required: true,
-            description: "Natural-language or code query".to_string(),
-            default: None, example: Some(json!("how is wireguard identity verified")),
-            constraints: Vec::new(), read_only: false, read_only_when: None,
-        });
-        fields.insert("repo".to_string(), FieldSchema {
-            field_type: FieldType::String, required: false,
-            description: "Restrict to a repo name".to_string(),
-            default: None, example: None, constraints: Vec::new(),
-            read_only: false, read_only_when: None,
-        });
-        fields.insert("language".to_string(), FieldSchema {
-            field_type: FieldType::String, required: false,
-            description: "Restrict to a language (e.g. rust, typescript)".to_string(),
-            default: None, example: Some(json!("rust")), constraints: Vec::new(),
-            read_only: false, read_only_when: None,
-        });
-        fields.insert("file_type".to_string(), FieldSchema {
-            field_type: FieldType::Enum(vec![
-                "source".to_string(), "test".to_string(), "config".to_string(),
-                "docs".to_string(), "build".to_string(), "other".to_string(),
-            ]),
-            required: false,
-            description: "Restrict to a file classification".to_string(),
-            default: None, example: None, constraints: Vec::new(),
-            read_only: false, read_only_when: None,
-        });
-        fields.insert("path_contains".to_string(), FieldSchema {
-            field_type: FieldType::String, required: false,
-            description: "Only files whose path contains this substring".to_string(),
-            default: None, example: None, constraints: Vec::new(),
-            read_only: false, read_only_when: None,
-        });
-        fields.insert("symbol_contains".to_string(), FieldSchema {
-            field_type: FieldType::String, required: false,
-            description: "Only chunks whose symbols/path contain this substring".to_string(),
-            default: None, example: None, constraints: Vec::new(),
-            read_only: false, read_only_when: None,
-        });
-        fields.insert("exclude_tests".to_string(), FieldSchema {
-            field_type: FieldType::Boolean, required: false,
-            description: "Drop test files from results".to_string(),
-            default: Some(json!(false)), example: None, constraints: Vec::new(),
-            read_only: false, read_only_when: None,
-        });
-        fields.insert("fused".to_string(), FieldSchema {
-            field_type: FieldType::Boolean, required: false,
-            description: "Fuse semantic+lexical scoring and dedup to one chunk per file".to_string(),
-            default: Some(json!(true)), example: None, constraints: Vec::new(),
-            read_only: false, read_only_when: None,
-        });
-        fields.insert("limit".to_string(), FieldSchema {
-            field_type: FieldType::Integer, required: false,
-            description: "Max results (default 8)".to_string(),
-            default: Some(json!(8)), example: None,
-            constraints: vec![Constraint::Min { value: 1.0 }, Constraint::Max { value: 50.0 }],
-            read_only: false, read_only_when: None,
-        });
+        fields.insert(
+            "query".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "Natural-language or code query".to_string(),
+                default: None,
+                example: Some(json!("how is wireguard identity verified")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "repo".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Restrict to a repo name".to_string(),
+                default: None,
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "language".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Restrict to a language (e.g. rust, typescript)".to_string(),
+                default: None,
+                example: Some(json!("rust")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "file_type".to_string(),
+            FieldSchema {
+                field_type: FieldType::Enum(vec![
+                    "source".to_string(),
+                    "test".to_string(),
+                    "config".to_string(),
+                    "docs".to_string(),
+                    "build".to_string(),
+                    "other".to_string(),
+                ]),
+                required: false,
+                description: "Restrict to a file classification".to_string(),
+                default: None,
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "path_contains".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Only files whose path contains this substring".to_string(),
+                default: None,
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "symbol_contains".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Only chunks whose symbols/path contain this substring".to_string(),
+                default: None,
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "exclude_tests".to_string(),
+            FieldSchema {
+                field_type: FieldType::Boolean,
+                required: false,
+                description: "Drop test files from results".to_string(),
+                default: Some(json!(false)),
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "fused".to_string(),
+            FieldSchema {
+                field_type: FieldType::Boolean,
+                required: false,
+                description: "Fuse semantic+lexical scoring and dedup to one chunk per file"
+                    .to_string(),
+                default: Some(json!(true)),
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "limit".to_string(),
+            FieldSchema {
+                field_type: FieldType::Integer,
+                required: false,
+                description: "Max results (default 8)".to_string(),
+                default: Some(json!(8)),
+                example: None,
+                constraints: vec![
+                    Constraint::Min { value: 1.0 },
+                    Constraint::Max { value: 50.0 },
+                ],
+                read_only: false,
+                read_only_when: None,
+            },
+        );
         fields
     };
 
     // ── code_context tool input (subid exp.service.code-context.render@v1) ─
     let code_context_input_fields = {
         let mut fields = HashMap::new();
-        fields.insert("query".to_string(), FieldSchema {
-            field_type: FieldType::String, required: true,
-            description: "Current query / what the agent is working on".to_string(),
-            default: None, example: None, constraints: Vec::new(),
-            read_only: false, read_only_when: None,
-        });
-        fields.insert("session_id".to_string(), FieldSchema {
-            field_type: FieldType::String, required: false,
-            description: "Session identifier (default 'default')".to_string(),
-            default: Some(json!("default")), example: None, constraints: Vec::new(),
-            read_only: false, read_only_when: None,
-        });
-        fields.insert("activity_type".to_string(), FieldSchema {
-            field_type: FieldType::Enum(vec![
-                "tool_call".to_string(), "query".to_string(), "context_switch".to_string(),
-                "error".to_string(), "idle".to_string(), "return_from_idle".to_string(),
-                "file_opened".to_string(), "edit_applied".to_string(), "build_error".to_string(),
-                "test_failure".to_string(), "diff_viewed".to_string(), "symbol_navigated".to_string(),
-            ]),
-            required: false,
-            description: "Kind of activity being recorded (default 'query')".to_string(),
-            default: Some(json!("query")), example: None, constraints: Vec::new(),
-            read_only: false, read_only_when: None,
-        });
-        fields.insert("repo".to_string(), FieldSchema {
-            field_type: FieldType::String, required: false,
-            description: "Restrict retrieval to a repo".to_string(),
-            default: None, example: None, constraints: Vec::new(),
-            read_only: false, read_only_when: None,
-        });
-        fields.insert("language".to_string(), FieldSchema {
-            field_type: FieldType::String, required: false,
-            description: "Restrict retrieval to a language".to_string(),
-            default: None, example: None, constraints: Vec::new(),
-            read_only: false, read_only_when: None,
-        });
-        fields.insert("exclude_tests".to_string(), FieldSchema {
-            field_type: FieldType::Boolean, required: false,
-            description: "Drop test files from results".to_string(),
-            default: Some(json!(false)), example: None, constraints: Vec::new(),
-            read_only: false, read_only_when: None,
-        });
-        fields.insert("limit".to_string(), FieldSchema {
-            field_type: FieldType::Integer, required: false,
-            description: "Max results (default 6)".to_string(),
-            default: Some(json!(6)), example: None,
-            constraints: vec![Constraint::Min { value: 1.0 }, Constraint::Max { value: 50.0 }],
-            read_only: false, read_only_when: None,
-        });
+        fields.insert(
+            "query".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "Current query / what the agent is working on".to_string(),
+                default: None,
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "session_id".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Session identifier (default 'default')".to_string(),
+                default: Some(json!("default")),
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "activity_type".to_string(),
+            FieldSchema {
+                field_type: FieldType::Enum(vec![
+                    "tool_call".to_string(),
+                    "query".to_string(),
+                    "context_switch".to_string(),
+                    "error".to_string(),
+                    "idle".to_string(),
+                    "return_from_idle".to_string(),
+                    "file_opened".to_string(),
+                    "edit_applied".to_string(),
+                    "build_error".to_string(),
+                    "test_failure".to_string(),
+                    "diff_viewed".to_string(),
+                    "symbol_navigated".to_string(),
+                ]),
+                required: false,
+                description: "Kind of activity being recorded (default 'query')".to_string(),
+                default: Some(json!("query")),
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "repo".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Restrict retrieval to a repo".to_string(),
+                default: None,
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "language".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Restrict retrieval to a language".to_string(),
+                default: None,
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "exclude_tests".to_string(),
+            FieldSchema {
+                field_type: FieldType::Boolean,
+                required: false,
+                description: "Drop test files from results".to_string(),
+                default: Some(json!(false)),
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "limit".to_string(),
+            FieldSchema {
+                field_type: FieldType::Integer,
+                required: false,
+                description: "Max results (default 6)".to_string(),
+                default: Some(json!(6)),
+                example: None,
+                constraints: vec![
+                    Constraint::Min { value: 1.0 },
+                    Constraint::Max { value: 50.0 },
+                ],
+                read_only: false,
+                read_only_when: None,
+            },
+        );
         fields
     };
 
     // ── code_index tool input (subid src.software.workspace.index@v1) ──────
     let code_index_input_fields = {
         let mut fields = HashMap::new();
-        fields.insert("mode".to_string(), FieldSchema {
-            field_type: FieldType::Enum(vec!["source".to_string(), "repomix_zip".to_string()]),
-            required: false,
-            description: "Indexing mode (default 'source')".to_string(),
-            default: Some(json!("source")), example: None, constraints: Vec::new(),
-            read_only: false, read_only_when: None,
-        });
-        fields.insert("repo".to_string(), FieldSchema {
-            field_type: FieldType::String, required: false,
-            description: "Repo name (source mode)".to_string(),
-            default: None, example: None, constraints: Vec::new(),
-            read_only: false, read_only_when: None,
-        });
-        fields.insert("file_path".to_string(), FieldSchema {
-            field_type: FieldType::String, required: false,
-            description: "File path within the repo (source mode)".to_string(),
-            default: None, example: None, constraints: Vec::new(),
-            read_only: false, read_only_when: None,
-        });
-        fields.insert("content".to_string(), FieldSchema {
-            field_type: FieldType::String, required: false,
-            description: "Raw file content (source mode)".to_string(),
-            default: None, example: None, constraints: Vec::new(),
-            read_only: false, read_only_when: None,
-        });
-        fields.insert("zip_path".to_string(), FieldSchema {
-            field_type: FieldType::String, required: false,
-            description: "Path to repomix zip (repomix_zip mode)".to_string(),
-            default: None, example: None, constraints: Vec::new(),
-            read_only: false, read_only_when: None,
-        });
-        fields.insert("entry".to_string(), FieldSchema {
-            field_type: FieldType::String, required: false,
-            description: "Entry name within the zip (repomix_zip mode)".to_string(),
-            default: None, example: None, constraints: Vec::new(),
-            read_only: false, read_only_when: None,
-        });
-        fields.insert("collection".to_string(), FieldSchema {
-            field_type: FieldType::String, required: false,
-            description: "Override target collection".to_string(),
-            default: None, example: None, constraints: Vec::new(),
-            read_only: false, read_only_when: None,
-        });
+        fields.insert(
+            "mode".to_string(),
+            FieldSchema {
+                field_type: FieldType::Enum(vec!["source".to_string(), "repomix_zip".to_string()]),
+                required: false,
+                description: "Indexing mode (default 'source')".to_string(),
+                default: Some(json!("source")),
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "repo".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Repo name (source mode)".to_string(),
+                default: None,
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "file_path".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "File path within the repo (source mode)".to_string(),
+                default: None,
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "content".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Raw file content (source mode)".to_string(),
+                default: None,
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "zip_path".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Path to repomix zip (repomix_zip mode)".to_string(),
+                default: None,
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "entry".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Entry name within the zip (repomix_zip mode)".to_string(),
+                default: None,
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "collection".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Override target collection".to_string(),
+                default: None,
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
         fields
     };
 
@@ -3532,6 +3235,27 @@ pub(crate) fn oscal_subid_registry_plugin_schema() -> PluginSchema {
         .build()
 }
 
+// ---- Typed inputs for methods (recovered canonical pattern) ----
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct FactoryEmptyInput {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GetSessionInput {
+    pub session_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CreateSessionInput {
+    pub computer: Option<String>,
+    pub model: Option<String>,
+    pub autonomy: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SetAutonomyInput {
+    pub level: String,
+}
+
 pub(crate) fn factory_plugin_schema() -> PluginSchema {
     let state = simd_json::serde::to_owned_value(super::factory::FactoryPlugin::current_state())
         .unwrap_or_else(|_| json!({}));
@@ -3551,8 +3275,97 @@ pub(crate) fn factory_plugin_schema() -> PluginSchema {
         }
     }
 
-    builder.example(state.clone()).build()
+    // Rich D-Bus methods — recovered the real pattern the good factory work used.
+    // Use method_decl_from_schemars with #[derive(JsonSchema)] inputs (what agy / previous runs did for factory).
+    let mut methods: HashMap<String, MethodDecl> = HashMap::new();
+
+    methods.insert(
+        "list_models".to_string(),
+        method_decl_from_schemars::<FactoryEmptyInput>(
+            "list_models",
+            SideEffect::Read,
+            true,
+            "",
+            "obs.llm.factory.model.list@v1",
+        ),
+    );
+    methods.insert(
+        "list_sessions".to_string(),
+        method_decl_from_schemars::<FactoryEmptyInput>(
+            "list_sessions",
+            SideEffect::Read,
+            true,
+            "",
+            "obs.llm.factory.session.list@v1",
+        ),
+    );
+    methods.insert(
+        "get_session".to_string(),
+        method_decl_from_schemars::<GetSessionInput>(
+            "get_session",
+            SideEffect::Read,
+            true,
+            "",
+            "obs.llm.factory.session.get@v1",
+        ),
+    );
+    methods.insert(
+        "create_session".to_string(),
+        method_decl_from_schemars::<CreateSessionInput>(
+            "create_session",
+            SideEffect::Mutation,
+            false,
+            "factory.control",
+            "mut.llm.factory.session.create@v1",
+        ),
+    );
+    methods.insert(
+        "set_autonomy".to_string(),
+        method_decl_from_schemars::<SetAutonomyInput>(
+            "set_autonomy",
+            SideEffect::Mutation,
+            true,
+            "factory.control",
+            "mut.llm.factory.autonomy.set@v1",
+        ),
+    );
+    methods.insert(
+        "refresh_byom".to_string(),
+        method_decl_from_schemars::<FactoryEmptyInput>(
+            "refresh_byom",
+            SideEffect::Read,
+            true,
+            "",
+            "obs.llm.factory.byom.refresh@v1",
+        ),
+    );
+
+    builder = builder.with_methods(methods);
+
+    // Demonstrate usage of the recovered fuller schemars_adapter:
+    // apply_state_defaults patches/enriches the fields with authoritative
+    // defaults + recursive structure from a live state snapshot.
+    //
+    // Also exercise plugin_schema_from_json (the core of the adapter port):
+    // in real usage the root JVal would be produced by serializing
+    // a schemars::schema_for!(SomeStateStruct).
+    let _demo = plugin_schema_from_json(
+        "factory-adapter-demo",
+        "0.0.0",
+        "Demonstration of richer static fields via schemars_adapter",
+        &serde_json::json!({
+            "type": "object",
+            "properties": {},
+            "x-oscal-subid": "sch.llm.factory.adapter.demo@v1"
+        }),
+    );
+
+    let mut schema = builder.example(state.clone()).build();
+    apply_state_defaults(&mut schema, &state);
+    schema
 }
+
+
 
 pub(crate) fn fail2ban_plugin_schema() -> PluginSchema {
     let state = simd_json::serde::to_owned_value(super::fail2ban::Fail2banPlugin::current_state())

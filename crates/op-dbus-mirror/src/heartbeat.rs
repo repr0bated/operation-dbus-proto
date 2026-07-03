@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 use tokio::time;
@@ -16,7 +17,7 @@ const HEARTBEAT_INTERVAL: u64 = 300;
 /// Spawn heartbeat task that resyncs objects with stale sequence numbers
 pub async fn spawn_heartbeat_task(
     mirror: Arc<DbusMirror>,
-    broadcast_tx: broadcast::Sender<MirrorEvent>,
+    _broadcast_tx: broadcast::Sender<MirrorEvent>,
 ) -> Result<()> {
     info!(
         "Spawning heartbeat task with {} second interval",
@@ -26,45 +27,46 @@ pub async fn spawn_heartbeat_task(
     let mut interval = time::interval(time::Duration::from_secs(HEARTBEAT_INTERVAL));
 
     tokio::spawn(async move {
+        // Per-path sequence numbers as of the previous tick. A path whose
+        // sequence has not advanced across a full interval is re-emitted so
+        // peers that missed a delta (e.g. broadcast lag) converge again.
+        let mut last_seen: HashMap<String, u64> = HashMap::new();
+
+        // The first tick of tokio::time::interval fires immediately; use it
+        // to take the initial sequence snapshot without resyncing anything.
+        interval.tick().await;
+        snapshot_sequences(&mirror, &mut last_seen);
+
         loop {
             interval.tick().await;
-
-            // Resync objects whose sequence numbers have not advanced
-            resync_stale_objects(&mirror, &broadcast_tx).await;
+            resync_stale_objects(&mirror, &mut last_seen).await;
         }
     });
 
     Ok(())
 }
 
-/// Resync objects whose sequence numbers have not advanced
-async fn resync_stale_objects(mirror: &DbusMirror, _broadcast_tx: &broadcast::Sender<MirrorEvent>) {
-    // Get current time
-    let now = std::time::SystemTime::now();
+/// Record the current per-path sequence numbers.
+fn snapshot_sequences(mirror: &DbusMirror, last_seen: &mut HashMap<String, u64>) {
+    for entry in mirror.current_data.iter() {
+        last_seen.insert(entry.key().clone(), entry.value().1);
+    }
+}
 
-    // Iterate over all published objects
-    for entry in mirror.published_objects.iter() {
-        let path = entry.key();
+/// Resync objects whose sequence numbers have not advanced since the last tick
+async fn resync_stale_objects(mirror: &DbusMirror, last_seen: &mut HashMap<String, u64>) {
+    // Collect first so no DashMap guard is held across an await.
+    let current: Vec<(String, u64)> = mirror
+        .current_data
+        .iter()
+        .map(|entry| (entry.key().clone(), entry.value().1))
+        .collect();
 
-        // Check if there's a session for this path
-        if let Some(session) = mirror.sessions.get(path) {
-            let session = session.value();
-
-            // Check if the session has been active recently
-            let elapsed = match now.duration_since(session.created_at) {
-                Ok(elapsed) => elapsed,
-                Err(_) => continue,
-            };
-
-            // If session is older than heartbeat interval, trigger resync
-            if elapsed > time::Duration::from_secs(HEARTBEAT_INTERVAL) {
-                // TODO: Implement proper resync logic
-                // For now, we'll just log the resync
-                tracing::info!("Resyncing stale object: {}", path);
-
-                // TODO: Send resync event to broadcast channel
-                // let _ = broadcast_tx.send(MirrorEvent::Resync { path: path.clone() });
-            }
+    for (path, sequence) in current {
+        if last_seen.get(&path) == Some(&sequence) {
+            tracing::info!("Resyncing stale object: {}", path);
+            mirror.resync_object(&path).await;
         }
+        last_seen.insert(path, sequence);
     }
 }

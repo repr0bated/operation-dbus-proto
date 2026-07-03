@@ -1,6 +1,6 @@
 //! D-Bus Projection Client — reads live plugin projections from the /opdbus/v1/plugins tree.
 //!
-//! Plugin paths are derived at runtime from /dev/shm/live-schema.json.
+//! Plugin paths are derived at runtime from the schema blob in shared memory.
 //! Every key in the schema catalog maps to /opdbus/v1/plugins/<plugin_id>.
 //! No hardcoded paths — if it's not in the schema, it doesn't exist.
 
@@ -20,10 +20,10 @@ const PROJECTED_OBJECT_IFACE: &str = "org.opdbus.ProjectedObjectV1";
 const SHM_SCHEMA_PATH: &str = "/dev/shm/live-schema.json";
 
 fn plugin_ids_from_schema() -> Vec<String> {
-    let bytes = match std::fs::read(SHM_SCHEMA_PATH) {
+    let bytes = match op_identity::read_schema_blob().or_else(|_| std::fs::read(SHM_SCHEMA_PATH)) {
         Ok(b) => b,
         Err(e) => {
-            warn!(error = %e, "Could not read live schema; no projections will be cached");
+            warn!(error = %e, "Could not read schema blob; no projections will be cached");
             return vec![];
         }
     };

@@ -506,7 +506,7 @@ impl OvsdbDbusClient {
     }
 
     /// Find bridge UUID by name
-    async fn find_bridge_uuid(&self, name: &str) -> Result<String> {
+    pub async fn find_bridge_uuid(&self, name: &str) -> Result<String> {
         let operations = json!([{
             "op": "select",
             "table": "Bridge",
@@ -515,7 +515,6 @@ impl OvsdbDbusClient {
         }]);
 
         let result = self.transact("Open_vSwitch", operations).await?;
-
         if let Some(rows) = result[0]["rows"].as_array() {
             if let Some(first_row) = rows.first() {
                 if let Some(uuid_array) = first_row["_uuid"].as_array() {
@@ -525,8 +524,49 @@ impl OvsdbDbusClient {
                 }
             }
         }
-
         Err(anyhow::anyhow!("Bridge '{}' not found", name))
+    }
+
+    /// List ports on a bridge by name
+    pub async fn list_bridge_ports(&self, bridge_name: &str) -> Result<Vec<String>> {
+        let bridge_uuid = self.find_bridge_uuid(bridge_name).await?;
+
+        let operations = json!([{
+            "op": "select",
+            "table": "Bridge",
+            "where": [["_uuid", "==", ["uuid", &bridge_uuid]]],
+            "columns": ["ports"]
+        }]);
+
+        let result = self.transact("Open_vSwitch", operations).await?;
+
+        let mut port_uuids = Vec::new();
+        if let Some(rows) = result[0]["rows"].as_array() {
+            if let Some(first_row) = rows.first() {
+                port_uuids = Self::extract_uuid_set(&first_row["ports"]);
+            }
+        }
+
+        let mut port_names = Vec::new();
+        for port_uuid in port_uuids {
+            let ops = json!([{
+                "op": "select",
+                "table": "Port",
+                "where": [["_uuid", "==", ["uuid", &port_uuid]]],
+                "columns": ["name"]
+            }]);
+
+            let result = self.transact("Open_vSwitch", ops).await?;
+            if let Some(rows) = result[0]["rows"].as_array() {
+                if let Some(first_row) = rows.first() {
+                    if let Some(name) = first_row["name"].as_str() {
+                        port_names.push(name.to_string());
+                    }
+                }
+            }
+        }
+
+        Ok(port_names)
     }
 
     fn sanitize_ref(input: &str) -> String {
@@ -552,7 +592,7 @@ impl OvsdbDbusClient {
         Self::extract_uuid_atom(value).into_iter().collect()
     }
 
-    fn extract_uuid_atom(value: &Value) -> Option<String> {
+    pub fn extract_uuid_atom(value: &Value) -> Option<String> {
         let arr = value.as_array()?;
         if arr.len() == 2 && (arr[0] == "uuid" || arr[0] == "named-uuid") {
             return arr[1].as_str().map(|s| s.to_string());

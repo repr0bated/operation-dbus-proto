@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use op_grpc_bridge::{grpc_server::run_grpc_server, schema_engine::SchemaEngine};
 use op_jsonrpc::nonnet::NonNetDb;
-use op_network::rovs_proxy::OvsdbDbusClient;
+use op_network::ovsdb::OvsdbClient;
 use op_state_store::{ChainConfig, EventChain};
 use tokio::sync::RwLock;
 
@@ -31,7 +31,7 @@ async fn main() -> anyhow::Result<()> {
 
     // ── Build SchemaEngine (authoritative mutation pipeline) ─────────────────
     let event_chain = Arc::new(RwLock::new(EventChain::new(ChainConfig::default())));
-    let ovsdb = Arc::new(OvsdbDbusClient::new());
+    let ovsdb = Arc::new(OvsdbClient::new());
     let nonnet = Arc::new(NonNetDb::new());
     let schema_engine = Arc::new(SchemaEngine::new(event_chain, ovsdb, nonnet));
 

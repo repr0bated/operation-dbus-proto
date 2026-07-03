@@ -34,7 +34,7 @@ use managed_objects::{
 use op_core::types::BusType;
 use op_grpc_bridge::{OperationGrpcServer, SchemaEngine};
 use op_jsonrpc::nonnet::NonNetDb;
-use op_network::rovs_proxy::OvsdbDbusClient;
+use op_network::ovsdb::OvsdbClient;
 use op_state::manager::StateManager;
 use procfs::Current as _;
 use serde_json::{Map, Value};
@@ -43,12 +43,26 @@ use std::sync::Arc;
 use zbus::zvariant::{ObjectPath, OwnedObjectPath};
 use zbus::{connection::Builder, Connection};
 
+/// Construct a JsonRpcRequest from serde_json params, avoiding simd_json.
+fn jsonrpc_request(method: &str, params: Value) -> op_jsonrpc::protocol::JsonRpcRequest {
+    let json = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": method,
+        "params": params,
+        "id": 0
+    });
+    serde_json::from_str(&json.to_string()).unwrap_or_else(|_| {
+        // Fallback: construct a minimal valid request via serde
+        serde_json::from_str(r#"{"jsonrpc":"2.0","method":"list_dbs","params":[],"id":0}"#)
+            .expect("hardcoded JSON-RPC fallback is valid")
+    })
+}
+
 pub mod dbus_interface;
 pub mod event;
 pub mod event_dispatcher;
 pub mod event_sources;
 pub mod heartbeat;
-pub mod jsonrpc_interface;
 pub mod managed_objects;
 pub mod object;
 pub mod plugin_interface;
@@ -60,9 +74,9 @@ pub mod tree;
 /// Responsible for maintaining a 1:1 D-Bus object view of authoritative
 /// internal databases.
 pub struct DbusMirror {
-    ovsdb: Arc<OvsdbDbusClient>,
+    ovsdb: Arc<OvsdbClient>,
     nonnet: Arc<NonNetDb>,
-    schema_engine: Option<Arc<SchemaEngine>>,
+    pub schema_engine: Option<Arc<SchemaEngine>>,
     connection: Connection,
     /// Published D-Bus object paths managed by this service.
     published_objects: DashMap<String, ()>,
@@ -84,7 +98,7 @@ impl DbusMirror {
     /// Create a new D-Bus publication service.
     pub async fn new(
         bus_type: BusType,
-        ovsdb: Arc<OvsdbDbusClient>,
+        ovsdb: Arc<OvsdbClient>,
         nonnet: Arc<NonNetDb>,
         schema_engine: Option<Arc<SchemaEngine>>,
     ) -> std::result::Result<Self, MirrorError> {
@@ -154,28 +168,12 @@ impl DbusMirror {
             .at("/org/opdbus/v1", interface)
             .await?;
 
-        // Register OVSDB JSON-RPC interface at /org/opdbus/v1/ovsdb
-        let ovsdb_interface =
-            jsonrpc_interface::OvsdbInterface::new(self.ovsdb.clone(), self.schema_engine.clone());
-        self.connection
-            .object_server()
-            .at("/org/opdbus/v1/ovsdb", ovsdb_interface)
-            .await?;
-
-        // Register NonNet JSON-RPC interface at /org/opdbus/v1/nonnet
-        let nonnet_interface = jsonrpc_interface::NonNetInterface::new(
-            self.nonnet.clone(),
-            self.schema_engine.clone(),
-        );
-        self.connection
-            .object_server()
-            .at("/org/opdbus/v1/nonnet", nonnet_interface)
-            .await?;
+        // OVSDB and NonNet D-Bus interfaces are created by the gRPC bridge
+        // (SchemaEngine) using schema reflection — not hand-coded here.
 
         // Create event dispatcher
         let dispatcher = crate::event_dispatcher::EventDispatcher::new(
             self.clone(),
-            self.ovsdb.clone(),
             self.nonnet.clone(),
             self.state_manager.clone(),
             self.grpc_server.clone(),
@@ -192,11 +190,6 @@ impl DbusMirror {
                 .await
         {
             tracing::error!("Failed to spawn heartbeat task: {}", e);
-        }
-
-        // Run event loop
-        if let Err(e) = dispatcher.run_event_loop().await {
-            tracing::error!("Event loop failed: {}", e);
         }
 
         // Populate fixed objects immediately on startup.
@@ -223,6 +216,11 @@ impl DbusMirror {
                     }
                 }
             });
+        }
+
+        // Run event loop (blocks for the lifetime of the service)
+        if let Err(e) = dispatcher.run_event_loop().await {
+            tracing::error!("Event loop failed: {}", e);
         }
 
         std::future::pending::<()>().await;
@@ -461,7 +459,7 @@ impl DbusMirror {
         .await?;
         active_paths.insert("/org/opdbus/v1/nonnet".to_string());
 
-        let request = op_jsonrpc::protocol::JsonRpcRequest::new("list_dbs", simd_json::json!([]));
+        let request = jsonrpc_request("list_dbs", serde_json::json!([]));
         let response = self.nonnet.handle_request(request).await;
 
         let dbs: Vec<Value> = response
@@ -490,9 +488,9 @@ impl DbusMirror {
                 .await?;
                 active_paths.insert(db_path.clone());
 
-                let schema_req = op_jsonrpc::protocol::JsonRpcRequest::new(
+                let schema_req = jsonrpc_request(
                     "get_schema",
-                    simd_json::json!([db_name]),
+                    serde_json::json!([db_name]),
                 );
                 let schema_resp = self.nonnet.handle_request(schema_req).await;
 
@@ -510,9 +508,9 @@ impl DbusMirror {
                             db_path,
                             Self::sanitize_dbus_path_segment(&table_name)
                         );
-                        let dump_req = op_jsonrpc::protocol::JsonRpcRequest::new(
+                        let dump_req = jsonrpc_request(
                             "transact",
-                            simd_json::json!([
+                            serde_json::json!([
                                 db_name,
                                 {
                                     "op": "select",
@@ -832,13 +830,18 @@ impl DbusMirror {
     }
 
     fn plugin_dbus_path(plugin_id: &str) -> String {
-        format!("/org/opdbus/v1/plugins/{}", Self::sanitize_dbus_path_segment(plugin_id))
+        format!(
+            "/org/opdbus/v1/plugins/{}",
+            Self::sanitize_dbus_path_segment(plugin_id)
+        )
     }
 
     fn is_permanent_plugin_path(path: &str) -> bool {
         const CANONICAL: &str = "/org/opdbus/v1/plugins/";
         const LEGACY: &str = "/org/opdbus/v1/plugin/plugins/";
-        if let Some(remainder) = path.strip_prefix(CANONICAL).or_else(|| path.strip_prefix(LEGACY))
+        if let Some(remainder) = path
+            .strip_prefix(CANONICAL)
+            .or_else(|| path.strip_prefix(LEGACY))
         {
             !remainder.is_empty() && !remainder.contains('/')
         } else {
@@ -1157,6 +1160,56 @@ impl DbusMirror {
         }
     }
 
+    /// Emit `InterfacesRemoved` for a path WITHOUT touching the registry.
+    /// Used when a session is destroyed (queue overflow) and its peers must
+    /// be told delivery for these objects has stopped — the objects
+    /// themselves remain published for other peers.
+    async fn emit_interfaces_removed(&self, path: &str) {
+        let op = match OwnedObjectPath::try_from(path.to_string()) {
+            Ok(p) => p,
+            Err(_) => return,
+        };
+
+        if let Ok(iface_ref) = self
+            .connection
+            .object_server()
+            .interface::<_, ObjectManagerInterface>(OBJECT_MANAGER_PATH)
+            .await
+        {
+            let emitter = iface_ref.signal_emitter();
+            let interfaces = vec![PROJECTED_IFACE.to_string()];
+            if let Err(e) =
+                ObjectManagerInterface::interfaces_removed(emitter, op, interfaces).await
+            {
+                tracing::warn!("InterfacesRemoved signal failed for {path}: {e}");
+            }
+        }
+    }
+
+    /// Re-emit the current state of a published object unconditionally —
+    /// the heartbeat safety net for peers that missed a delta.
+    async fn resync_object(&self, path: &str) {
+        let data = match self.current_data.get(path) {
+            Some(entry) => entry.value().0.clone(),
+            None => return,
+        };
+
+        if !self.published_objects.contains_key(path) {
+            return;
+        }
+
+        if let Ok(iface_ref) = self
+            .connection
+            .object_server()
+            .interface::<_, object::MirrorObject>(path)
+            .await
+        {
+            let _ = iface_ref.get_mut().await.update_data(data.clone());
+            let emitter = iface_ref.signal_emitter();
+            let _ = iface_ref.get().await.data_updated(emitter).await;
+        }
+    }
+
     /// Remove a plugin object from the ObjectManager registry and emit
     /// `InterfacesRemoved`.
     async fn deregister_from_object_manager(&self, path: &str) {
@@ -1230,6 +1283,32 @@ impl DbusMirror {
     /// additional interfaces on the same bus name.
     pub fn connection(&self) -> &Connection {
         &self.connection
+    }
+
+    /// Get or create a MirrorSession for an account.
+    ///
+    /// Sessions are persistent for the life of the account — they are not
+    /// created/destroyed on individual D-Bus connections. If no session
+    /// exists for the given account identifier, one is created with an
+    /// empty subscribed-paths set and zero sequence numbers.
+    pub fn get_or_create_session(&self, account_id: &str) {
+        self.sessions
+            .entry(account_id.to_string())
+            .or_insert_with(|| session::MirrorSession::new(account_id.to_string()));
+    }
+
+    /// Destroy a MirrorSession for an account.
+    ///
+    /// Sessions are only destroyed when the account itself is deleted or
+    /// when the event queue overflows (Property 3). InterfacesRemoved is
+    /// emitted for all subscribed paths so peers know delivery has stopped.
+    pub async fn destroy_session(&self, account_id: &str) {
+        if let Some((_, session)) = self.sessions.remove(account_id) {
+            for path in &session.subscribed_paths {
+                self.emit_interfaces_removed(path).await;
+            }
+            tracing::info!("Destroyed session for account {}", account_id);
+        }
     }
 
     fn extract_uuid(row: &Value) -> String {

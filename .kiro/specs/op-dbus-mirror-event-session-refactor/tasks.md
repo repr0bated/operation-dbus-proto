@@ -17,11 +17,11 @@ This refactoring transforms `crates/op-dbus-mirror` from a 30-second polling loo
     - Add `inotify = "0.10"` dependency
     - _Requirements: 5.1, 5.2_
   
-  - [x] 1.3 Remove simd-json dependency from op-dbus-mirror Cargo.toml
+  - [ ] 1.3 Remove simd-json dependency from op-dbus-mirror Cargo.toml
     - Remove `simd-json = { version = "0.13", features = ["serde"] }` from dependencies
     - _Requirements: 10.1_
 
-- [x] 2. Create MirrorSession struct and DashMap storage
+- [-] 2. Create MirrorSession struct and DashMap storage
   - [x] 2.1 Create session.rs module with MirrorSession struct
     - Define `MirrorSession` struct with peer_name, subscribed_paths, last_acked_sequence, pending_events, created_at, event_count
     - Derive Debug for all public types
@@ -62,11 +62,13 @@ This refactoring transforms `crates/op-dbus-mirror` from a 30-second polling loo
     - Increment and store sequence number
     - _Requirements: 7.3, 7.4, 7.6_
 
-- [x] 5. Wire OVSDB event feed
+- [-] 5. Wire OVSDB event feed
   - [x] 5.1 Implement OVSDB monitor integration
     - Call `OvsdbClient::monitor_db("Open_vSwitch")` on startup
     - Convert OVSDB updates to MirrorEvent::OvsdbRow
     - Send to broadcast channel
+    - Implemented as polling loop (dump_db every 5s) since daemon
+      notification methods are stubs.
     - _Requirements: 3.1, 3.2, 3.5, 15_
 
 - [x] 6. Wire NonNetDb watch feed
@@ -156,17 +158,17 @@ This refactoring transforms `crates/op-dbus-mirror` from a 30-second polling loo
     - _Requirements: 7.2, 7.5, 7.6_
 
 - [-] 13. Replace simd_json with serde_json
-  - [x] 13.1 Replace simd_json imports with serde_json
+  - [-] 13.1 Replace simd_json imports with serde_json
     - Remove `use simd_json::prelude::*`
     - Replace `use simd_json::OwnedValue as Value` with `use serde_json::Value`
     - _Requirements: 10.4_
   
-  - [x] 13.2 Replace simd_json macros with serde_json
+  - [-] 13.2 Replace simd_json macros with serde_json
     - Replace `simd_json::json!` with `serde_json::json!`
     - Replace `simd_json::owned::Object` with `serde_json::Map`
     - _Requirements: 10.2, 10.3_
   
-  - [x] 13.3 Replace simd_json serialization
+  - [-] 13.3 Replace simd_json serialization
     - Replace `simd_json::to_string` with `serde_json::to_string`
     - Replace `simd_json::from_str` with `serde_json::from_str`
     - _Requirements: 10.5, 10.6_
@@ -183,13 +185,13 @@ This refactoring transforms `crates/op-dbus-mirror` from a 30-second polling loo
     - _Requirements: 7.3, 9.3_
 
 - [-] 15. Architecture documentation
-  - [x] 15.1 Create session lifecycle documentation
+  - [ ] 15.1 Create session lifecycle documentation
     - Explain MirrorSession lifecycle (creation, subscription, event queue management, destruction)
     - Document 500-event queue limit and InterfacesRemoved on overflow
     - Document NameOwnerChanged signal handling for session cleanup
     - _Requirements: 14.1_
   
-  - [x] 15.2 Create event source mapping documentation
+  - [ ] 15.2 Create event source mapping documentation
     - Map each data source to its event feed mechanism
     - Document OVSDB monitor_db, NonNetDb watch, procfs inotify/timer, StateManager watch, ComponentRegistry broadcast
     - Explain how poll loop is replaced by event-driven dispatch
@@ -335,7 +337,7 @@ This refactoring transforms `crates/op-dbus-mirror` from a 30-second polling loo
     - Test concurrent peer handling
     - _Requirements: NFR 1.1, NFR 1.2, NFR 1.3_
 
-- [x] 18. Checkpoint - Ensure all tests pass
+- [ ] 18. Checkpoint - Ensure all tests pass
   - Run `cargo test --workspace --all-targets --all-features`
   - Ensure all property tests pass (100+ iterations each)
   - Ensure all unit tests pass

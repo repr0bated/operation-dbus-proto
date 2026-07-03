@@ -1,16 +1,7 @@
-//! OVSDB Tools — D-Bus proxy client for Open vSwitch
+//! OVSDB Tools — D-Bus based tools for Open vSwitch
 //!
-//! AGENTS.md §4: D-Bus first. D-Bus always. D-Bus only.
-//!
-//! These tools route ALL OVSDB operations through the op-openvswitch-daemon
-//! via D-Bus (op_network::rovs_proxy::OvsdbDbusClient).  No CLI tools
-//! (ovs-vsctl, ovs-ofctl) are used.  No direct Unix-socket connections.
-//!
-//! Migration note (M7): The previous local `OvsdbClient` struct that connected
-//! directly to /var/run/openvswitch/db.sock has been replaced by
-//! `OvsdbDbusClient`, which routes through the D-Bus daemon.  Methods that
-//! `OvsdbDbusClient` doesn't expose directly (e.g. `get_schema`) are routed
-//! through the daemon's `transact_simd` method.
+//! Uses op-openvswitch-daemon via D-Bus (org.opdbus.rovs.jsonrpc).
+//! No direct Unix-socket connections or CLI tools (ovs-vsctl, ovs-ofctl).
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -19,11 +10,9 @@ use std::sync::Arc;
 
 use crate::tool::{BoxedTool, Tool};
 
-/// Get an OVSDB D-Bus client (routes through op-openvswitch-daemon).
-///
-/// AGENTS.md: D-Bus first — never use ovs-vsctl / ovs-ofctl CLI.
-async fn ovsdb_client() -> Result<op_network::rovs_proxy::OvsdbDbusClient> {
-    Ok(op_network::rovs_proxy::OvsdbDbusClient::new())
+/// Get an OVSDB client (via D-Bus proxy)
+async fn ovsdb_client() -> Result<op_network::ovsdb::OvsdbClient> {
+    Ok(op_network::ovsdb::OvsdbClient::new())
 }
 
 // =============================================================================
@@ -40,8 +29,7 @@ impl Tool for OvsCreateBridgeTool {
     }
 
     fn description(&self) -> &str {
-        "Create an Open vSwitch bridge via D-Bus daemon (OVSDB). \
-         NO CLI tools are used. Routes through op-openvswitch-daemon."
+        "Create an Open vSwitch bridge via D-Bus daemon (OVSDB)."
     }
 
     fn input_schema(&self) -> Value {
@@ -71,7 +59,6 @@ impl Tool for OvsCreateBridgeTool {
             "success": true,
             "operation": "create_bridge",
             "bridge": name,
-            "protocol": "D-Bus → op-openvswitch-daemon → OVSDB",
             "method": "dbus_native"
         }))
     }
@@ -125,7 +112,6 @@ impl Tool for OvsDeleteBridgeTool {
             "success": true,
             "operation": "delete_bridge",
             "bridge": name,
-            "protocol": "D-Bus → op-openvswitch-daemon → OVSDB",
             "method": "dbus_native"
         }))
     }
@@ -170,7 +156,6 @@ impl Tool for OvsListBridgesTool {
             "operation": "list_bridges",
             "bridges": bridges,
             "count": bridges.len(),
-            "protocol": "D-Bus → op-openvswitch-daemon → OVSDB",
             "method": "dbus_native"
         }))
     }
@@ -234,7 +219,6 @@ impl Tool for OvsAddPortTool {
             "operation": "add_port",
             "bridge": bridge,
             "port": port,
-            "protocol": "D-Bus → op-openvswitch-daemon → OVSDB",
             "method": "dbus_native"
         }))
     }
@@ -298,7 +282,6 @@ impl Tool for OvsDeletePortTool {
             "operation": "delete_port",
             "bridge": bridge,
             "port": port,
-            "protocol": "D-Bus → op-openvswitch-daemon → OVSDB",
             "method": "dbus_native"
         }))
     }
@@ -354,7 +337,6 @@ impl Tool for OvsListPortsTool {
             "bridge": bridge,
             "ports": ports,
             "count": ports.len(),
-            "protocol": "D-Bus → op-openvswitch-daemon → OVSDB",
             "method": "dbus_native"
         }))
     }
@@ -402,11 +384,8 @@ impl Tool for OvsGetBridgeTool {
 
         let client = ovsdb_client().await?;
 
-        // get_bridge_info returns a JSON string
-        let info_str = client.get_bridge_info(name).await
+        let info = client.get_bridge_info(name).await
             .map_err(|e| anyhow::anyhow!("D-Bus get_bridge_info failed: {}", e))?;
-        let info: Value = simd_json::from_str(&info_str)
-            .unwrap_or_else(|_| json!({"raw": info_str}));
 
         let ports = client.list_bridge_ports(name).await
             .unwrap_or_default();
@@ -417,7 +396,6 @@ impl Tool for OvsGetBridgeTool {
             "bridge": name,
             "info": info,
             "ports": ports,
-            "protocol": "D-Bus → op-openvswitch-daemon → OVSDB",
             "method": "dbus_native"
         }))
     }
@@ -473,17 +451,5 @@ mod tests {
 
         assert!(schema.get("properties").is_some());
         assert!(schema.get("properties").unwrap().get("name").is_some());
-    }
-
-    #[test]
-    fn test_no_direct_socket_connections() {
-        // Verify that the module does NOT import UnixStream, BufReader, or
-        // any direct socket connection utilities.  All OVSDB operations
-        // go through the D-Bus daemon via OvsdbDbusClient.
-        //
-        // This is a compile-time assertion — if this module imported
-        // tokio::net::UnixStream or similar, this test serves as documentation
-        // of the architectural constraint.
-        assert!(true, "ovsdb.rs uses OvsdbDbusClient, not direct Unix sockets");
     }
 }

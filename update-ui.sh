@@ -4,7 +4,7 @@ set -e
 echo "🚀 Updating embedded UI crate from operation-dashboard-ui submodule..."
 
 # Define directories
-SOURCE_DIR="operation-dashboard-ui"
+SOURCE_DIR="operation-dashboard-ui-07"
 CRATE_UI_DIR="crates/op-web/ui"
 
 # Ensure the submodule exists and is populated

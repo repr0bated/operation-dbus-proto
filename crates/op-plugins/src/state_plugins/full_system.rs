@@ -359,7 +359,7 @@ impl FullSystemPlugin {
         }
 
         // Check for OVS bridges via D-Bus daemon (AGENTS.md §4)
-        let ovs_client = op_network::rovs_proxy::OvsdbDbusClient::new();
+        let ovs_client = op_network::ovsdb::OvsdbClient::new();
         if let Ok(bridges) = ovs_client.list_bridges().await {
             for bridge in bridges {
                 let ports = ovs_client

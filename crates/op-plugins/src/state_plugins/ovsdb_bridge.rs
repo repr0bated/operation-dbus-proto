@@ -6,10 +6,9 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use op_network::rovs_proxy::OvsdbDbusClient;
+use op_network::ovsdb::OvsdbClient;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
 use serde::{Deserialize, Serialize};
-use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
 use std::sync::Arc;
 
@@ -83,7 +82,7 @@ pub struct InterfaceConfig {
 // ============================================================================
 
 pub struct OvsBridgePlugin {
-    ovsdb: Arc<OvsdbDbusClient>,
+    ovsdb: Arc<OvsdbClient>,
 }
 
 impl Default for OvsBridgePlugin {
@@ -95,7 +94,7 @@ impl Default for OvsBridgePlugin {
 impl OvsBridgePlugin {
     pub fn new() -> Self {
         Self {
-            ovsdb: Arc::new(OvsdbDbusClient::new()),
+            ovsdb: Arc::new(OvsdbClient::new()),
         }
     }
 
@@ -108,7 +107,7 @@ impl OvsBridgePlugin {
             // Bridge-level properties
             let bridge_info = self.ovsdb.get_bridge_info(&bname).await.ok();
             let (datapath_type, fail_mode, stp_enable, mcast_snooping_enable) =
-                Self::parse_bridge_props(&bridge_info);
+                Self::parse_bridge_props(bridge_info.as_ref().unwrap_or(&serde_json::Value::Null));
 
             // Ports
             let port_names = self
@@ -150,30 +149,26 @@ impl OvsBridgePlugin {
         Ok(OvsBridgeState { bridges })
     }
 
-    fn parse_bridge_props(info: &Option<String>) -> (String, Option<String>, bool, bool) {
-        let Some(ref info_str) = info else {
+    fn parse_bridge_props(info: &serde_json::Value) -> (String, Option<String>, bool, bool) {
+        if info.is_null() {
             return (String::new(), None, false, false);
-        };
-        let v: std::result::Result<Value, _> = serde_json::from_str(info_str);
-        match v {
-            Ok(row) => (
-                row.get("datapath_type")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string(),
-                row.get("fail_mode")
-                    .and_then(|v| v.as_str())
-                    .filter(|s| !s.is_empty())
-                    .map(|s| s.to_string()),
-                row.get("stp_enable")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false),
-                row.get("mcast_snooping_enable")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false),
-            ),
-            Err(_) => (String::new(), None, false, false),
         }
+        (
+            info.get("datapath_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            info.get("fail_mode")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string()),
+            info.get("stp_enable")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+            info.get("mcast_snooping_enable")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+        )
     }
 }
 
