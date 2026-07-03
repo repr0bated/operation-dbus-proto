@@ -2,9 +2,7 @@
 
 use anyhow::Result;
 use op_jsonrpc::nonnet::NonNetDb;
-use op_network::rovs_proxy::OvsdbDbusClient;
 use op_state::manager::StateManager;
-use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 use tracing::{info, warn};
@@ -21,19 +19,15 @@ use crate::DbusMirror;
 pub struct EventDispatcher {
     pub broadcast_tx: broadcast::Sender<MirrorEvent>,
     mirror: Arc<DbusMirror>,
-    ovsdb_client: Arc<OvsdbDbusClient>,
     nonnet_db: Arc<NonNetDb>,
     state_manager: Option<Arc<StateManager>>,
     grpc_server: Option<Arc<op_grpc_bridge::OperationGrpcServer>>,
-    /// Sequence numbers per object path
-    sequence_numbers: Arc<std::sync::Mutex<HashMap<String, u64>>>,
 }
 
 impl EventDispatcher {
     /// Create a new EventDispatcher
     pub fn new(
         mirror: Arc<DbusMirror>,
-        ovsdb_client: Arc<OvsdbDbusClient>,
         nonnet_db: Arc<NonNetDb>,
         state_manager: Option<Arc<StateManager>>,
         grpc_server: Option<Arc<op_grpc_bridge::OperationGrpcServer>>,
@@ -42,11 +36,9 @@ impl EventDispatcher {
         Self {
             broadcast_tx,
             mirror,
-            ovsdb_client,
             nonnet_db,
             state_manager,
             grpc_server,
-            sequence_numbers: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -54,8 +46,12 @@ impl EventDispatcher {
     pub async fn spawn_event_sources(&self) -> Result<()> {
         info!("Spawning all event sources");
 
-        // Spawn OVSDB monitor
-        ovsdb::spawn_ovsdb_monitor(self.ovsdb_client.clone(), self.broadcast_tx.clone()).await?;
+        // Spawn OVSDB monitor via SchemaEngine change_tx (shm-driven, no polling)
+        if let Some(se) = &self.mirror.schema_engine {
+            ovsdb::spawn_ovsdb_monitor(se.clone(), self.broadcast_tx.clone()).await?;
+        } else {
+            warn!("No SchemaEngine attached — OVSDB event feed disabled");
+        }
 
         // Spawn NonNetDb watcher
         nonnet::spawn_nonnet_watcher(self.nonnet_db.clone(), self.broadcast_tx.clone()).await?;
@@ -110,44 +106,37 @@ impl EventDispatcher {
     /// Publish delta for an event
     async fn publish_delta(&self, event: &MirrorEvent) -> Result<()> {
         if let Some(path) = event.target_path() {
-            // Get current sequence number and increment (scoped to avoid holding guard across .await)
-            let _current_seq = {
-                let mut seq_map = self.sequence_numbers.lock().unwrap();
-                let sequence = seq_map.entry(path.clone()).or_insert(0);
-                *sequence += 1;
-                *sequence
-            };
-
-            // Update current_data with new value and sequence
-            let event_seq = event.sequence();
-            if let Some(mut entry) = self.mirror.current_data.get_mut(&path) {
-                let (data, seq) = &mut *entry;
-                *data = event.delta();
-                *seq = event_seq;
-            } else {
-                self.mirror
-                    .current_data
-                    .insert(path.clone(), (event.delta(), event_seq));
-            }
-
-            // Update session pending queues
+            // Queue the event only for sessions subscribed to this path
+            // (exact match or subtree).
             let mut sessions_to_drop: Vec<String> = Vec::new();
             for mut session_entry in self.mirror.sessions.iter_mut() {
-                session_entry.value_mut().add_event(event.clone());
+                let session = session_entry.value_mut();
+                let subscribed = session
+                    .subscribed_paths
+                    .iter()
+                    .any(|p| path == *p || path.starts_with(&format!("{}/", p)));
+                if !subscribed {
+                    continue;
+                }
 
-                if session_entry.value().is_queue_full() {
-                    warn!(
-                        "Session {} queue full, dropping",
-                        session_entry.value().peer_name
-                    );
+                session.add_event(event.clone());
+
+                if session.is_queue_full() {
+                    warn!("Session {} queue full, dropping", session.peer_name);
                     sessions_to_drop.push(session_entry.key().clone());
                 }
             }
             for key in sessions_to_drop {
-                self.mirror.sessions.remove(&key);
+                if let Some((_, session)) = self.mirror.sessions.remove(&key) {
+                    for p in &session.subscribed_paths {
+                        self.mirror.emit_interfaces_removed(p).await;
+                    }
+                }
             }
 
-            // Emit PropertiesChanged with only changed fields
+            // publish_object owns current_data: it detects the change,
+            // increments the per-path sequence, and emits
+            // PropertiesChanged/InterfacesAdded only when data changed.
             self.mirror.publish_object(&path, event.delta()).await?;
         }
 

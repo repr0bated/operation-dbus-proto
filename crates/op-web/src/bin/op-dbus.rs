@@ -12,7 +12,7 @@ use tracing_subscriber::{EnvFilter, FmtSubscriber};
 use op_grpc_bridge::run_grpc_server;
 use op_grpc_bridge::SchemaEngine;
 use op_jsonrpc::nonnet::NonNetDb;
-use op_network::rovs_proxy::OvsdbDbusClient;
+use op_network::ovsdb::OvsdbClient;
 use op_state_store::{ChainConfig, EventChain};
 use tokio::sync::RwLock;
 
@@ -34,7 +34,7 @@ async fn main() -> anyhow::Result<()> {
     });
 
     let chain = Arc::new(RwLock::new(EventChain::new(ChainConfig::default())));
-    let ovsdb = Arc::new(OvsdbDbusClient::new());
+    let ovsdb = Arc::new(OvsdbClient::new());
     let nonnet = Arc::new(NonNetDb::new());
     let engine = Arc::new(SchemaEngine::new(chain, ovsdb, nonnet));
 

@@ -240,12 +240,11 @@ fn json_error_response(status: StatusCode, message: &str) -> Response {
 /// Read zeroclaw schema directly from shared memory (Absolute Base)
 /// Per AGENTS.md: "The Absolute Base: PluginSchema is the single source of truth"
 fn read_zeroclaw_from_shm() -> Option<Value> {
-    use std::fs;
-
     const SHM_SCHEMA_PATH: &str = "/dev/shm/live-schema.json";
 
-    let content = fs::read_to_string(SHM_SCHEMA_PATH).ok()?;
-    let mut bytes = content.into_bytes();
+    let mut bytes = op_identity::read_schema_blob()
+        .or_else(|_| std::fs::read(SHM_SCHEMA_PATH))
+        .ok()?;
     let schema: Value = simd_json::to_owned_value(&mut bytes).ok()?;
 
     // Extract zeroclaw from the schema examples (the canonical source)

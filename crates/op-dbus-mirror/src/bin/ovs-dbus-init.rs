@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use op_core::types::BusType;
 use op_dbus_mirror::DbusMirror;
 use op_jsonrpc::nonnet::NonNetDb;
-use op_network::rovs_proxy::OvsdbDbusClient;
+use op_network::ovsdb::OvsdbClient;
 use op_plugins::default_registry::DefaultPluginRegistry;
 use op_state::manager::StateManager;
 use op_state_store::SqliteStore;
@@ -27,7 +27,7 @@ async fn main() -> Result<()> {
 
     tracing::info!(bus = %bus_type, "starting op-dbus-mirror (event-driven)");
 
-    let ovsdb = Arc::new(OvsdbDbusClient::new());
+    let ovsdb = Arc::new(OvsdbClient::new());
     let nonnet = Arc::new(NonNetDb::new());
     let state_manager = Arc::new(StateManager::new());
 

@@ -7,6 +7,7 @@ use memmap2::MmapOptions;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 
+use crate::schema_bridge::read_schema_blob;
 use crate::IdentitySled;
 
 /// The genesis "Snowball" session record, created by A.N.N.A. Scribe when a WireGuard
@@ -64,14 +65,18 @@ impl AnnaScribe {
         }
 
         // The Strike/Etch: Bind the WireGuard Key to the Blake3 hash of the
-        // canonical schema catalog in shared memory. This makes the sled footprint
-        // a direct function of the single source of truth (/dev/shm/live-schema.json).
-        let schema_catalog_hash = match std::fs::read("/dev/shm/live-schema.json") {
-            Ok(bytes) => blake3::hash(&bytes),
-            Err(_) => {
-                return Err("A.N.N.A. Scribe: Schema catalog missing from shared memory. Connection Rejected.".to_string());
-            }
-        };
+        // canonical schema blob in shared memory. This makes the sled footprint
+        // a direct function of the single source of truth in The Sled.
+        let schema_catalog_hash =
+            match read_schema_blob().or_else(|_| std::fs::read("/dev/shm/live-schema.json")) {
+                Ok(bytes) => blake3::hash(&bytes),
+                Err(_) => {
+                    return Err(
+                    "A.N.N.A. Scribe: Schema blob missing from shared memory. Connection Rejected."
+                        .to_string(),
+                );
+                }
+            };
 
         let mut hasher = blake3::Hasher::new();
         hasher.update(wg_pubkey.as_bytes());
@@ -87,11 +92,12 @@ impl AnnaScribe {
     }
 
     /// THE STRIKE/ETCH: Generates the cryptographic hash (footprint) for the identity.
-    /// Binds the WireGuard public key to the Blake3 hash of the canonical schema catalog
-    /// in shared memory (/dev/shm/live-schema.json), plus the mutation index.
+    /// Binds the WireGuard public key to the Blake3 hash of the canonical schema blob
+    /// in shared memory, plus the mutation index.
     /// This makes the sled footprint a direct function of the single source of truth.
     pub fn etch_footprint(sled: &IdentitySled) -> [u8; 32] {
-        let schema_catalog_hash = std::fs::read("/dev/shm/live-schema.json")
+        let schema_catalog_hash = read_schema_blob()
+            .or_else(|_| std::fs::read("/dev/shm/live-schema.json"))
             .map(|bytes| blake3::hash(&bytes))
             .unwrap_or_else(|_| blake3::Hash::from([0u8; 32]));
 
@@ -129,6 +135,13 @@ mod tests {
 
     #[test]
     fn test_notarize_arrival_rejects_missing_schema() {
+        // Only meaningful on hosts without a live sled in shared memory;
+        // with a running daemon the schema file exists and arrival is
+        // notarized normally.
+        if std::path::Path::new("/dev/shm/plugin_schema.dat").exists() {
+            eprintln!("skipping: live IdentitySled present in shared memory");
+            return;
+        }
         let result = AnnaScribe::notarize_arrival("test-pubkey-abc");
         assert!(result.is_err());
         assert!(result

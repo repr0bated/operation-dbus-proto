@@ -27,12 +27,18 @@ pub mod interceptor;
 pub mod proto_gen;
 pub mod schema_engine;
 
+// Object blob recovered artifacts (schema-coupled D-Bus + gRPC reflection units)
+pub mod plugin_object_blob;
+pub mod zeroclaw_object_blob;
+
 // Re-export main types
 pub use grpc_client::{GrpcClientPool, RemoteEndpoint, RemoteOperationClient};
 pub use grpc_server::{run_grpc_server, OperationGrpcServer, PluginSchemaProvider};
 pub use interceptor::ghostbridge_interceptor;
 pub use proto_gen::{ProtoGenConfig, ProtoGenerator};
 pub use schema_engine::{ChangeSource, ChangeType, SchemaEngine, StateChange};
+pub use plugin_object_blob::{DbusObjectIdentity, PluginObjectBlob, BlobMethod};
+pub use zeroclaw_object_blob::ZeroclawObjectBlob;
 
 /// Generated protobuf types — one sub-module per domain proto.
 /// All are compiled into the combined operation_descriptor.bin for reflection.

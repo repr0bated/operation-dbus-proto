@@ -23,7 +23,6 @@ pub mod memory_store;
 pub mod metrics;
 pub mod plugin_schema;
 pub mod redis_stream;
-pub mod schema_shuttle;
 pub mod schema_validator;
 pub mod sqlite_store;
 pub mod state_store;
@@ -40,12 +39,12 @@ pub use event_chain::{
 pub use execution_job::{ExecutionJob, ExecutionResult, ExecutionStatus};
 pub use memory_store::MemoryStore;
 pub use plugin_schema::{
-    builtin_plugin_schema, builtin_plugin_schemas, dialects, Constraint, FieldSchema, FieldType,
-    PluginSchema, ReadOnlyCondition, SchemaCatalog, SchemaLoadError, SchemaRegistry,
+    builtin_plugin_schema, builtin_plugin_schemas, dialects,     Constraint, FieldSchema, FieldType,
+    MethodDecl, PluginCapabilities, PluginSchema, ReadOnlyCondition, SchemaCatalog,
+    SchemaLoadError, SchemaRegistry, SideEffect, SignalDecl,
     ValidationResult as SchemaValidationResult, DEFAULT_SCHEMA_DIALECT,
 };
 pub use redis_stream::RedisStream;
-pub use schema_shuttle::{IdentitySled, SchemaShuttle};
 pub use schema_validator::{
     canonicalize_json, SchemaValidator, ValidationError, ValidationReport, ValidatorError,
 };

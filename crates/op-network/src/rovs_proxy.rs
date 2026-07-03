@@ -1,820 +1,359 @@
-//! D-Bus proxies for the op-openvswitch-daemon
+//! D-Bus proxies for op-openvswitch-daemon
 //!
-//! These zbus proxy types allow any crate in the workspace to call the
-//! hypervisor daemon through D-Bus instead of directly linking rovs_ovsdb
-//! or shelling out to ovs-vsctl / ovs-ofctl.
+//! These zbus proxies provide consumer-side access to the `org.opdbus.rovs.jsonrpc`
+//! and `org.opdbus.rovs.openflow` interfaces exposed by op-openvswitch-daemon.
 //!
-//! Locked design (AGENTS.md §4):
-//! - Daemon paths: `/org/opdbus/rovs/jsonrpc` and `/org/opdbus/rovs/openflow`
-//! - Interfaces: `org.opdbus.rovs.jsonrpc` and `org.opdbus.rovs.openflow`
-//! - The daemon is a pure passthrough; business logic stays in the plugins.
+//! Per AGENTS.md §4: D-Bus is the ONLY control plane.
 
-use anyhow::{Context, Result};
-use std::sync::Arc;
-use zbus::{proxy, Connection};
+use anyhow::{anyhow, Result};
+use tracing::debug;
 
-// ── RovsJsonRpcProxy ──────────────────────────────────────────────────────────
+const ROV_JSONRPC_BUS_NAME: &str = "org.opdbus.v1";
+const ROV_JSONRPC_OBJECT_PATH: &str = "/opdbus/v1/plugins/rovs_daemon/jsonrpc";
+const ROV_JSONRPC_INTERFACE: &str = "org.opdbus.rovs.jsonrpc";
 
-/// Proxy for the OVSDB JSON-RPC passthrough interface.
-///
-/// D-Bus destination: `org.opdbus.v1`
-/// Object path: `/org/opdbus/rovs/jsonrpc`
-/// Interface: `org.opdbus.rovs.jsonrpc`
-#[proxy(
-    default_service = "org.opdbus.v1",
-    default_path = "/org/opdbus/rovs/jsonrpc",
-    interface = "org.opdbus.rovs.jsonrpc"
-)]
-pub trait RovsJsonRpc {
-    /// Execute a raw OVSDB JSON-RPC `transact`.
-    ///
-    /// `method` is the JSON-RPC method name (e.g. `"transact"`).
-    /// `params_json` is the JSON-encoded parameter array.
-    /// Returns the JSON-encoded result.
-    async fn transact(&self, method: &str, params_json: &str) -> zbus::Result<String>;
+const ROV_OPENFLOW_BUS_NAME: &str = "org.opdbus.v1";
+const ROV_OPENFLOW_OBJECT_PATH: &str = "/opdbus/v1/plugins/rovs_daemon/openflow";
+const ROV_OPENFLOW_INTERFACE: &str = "org.opdbus.rovs.openflow";
 
-    /// Execute a one-way OVSDB JSON-RPC `notify`.
-    async fn notify(&self, method: &str, params_json: &str) -> zbus::Result<()>;
-
-    /// Return the next JSON-RPC request id.
-    async fn next_id(&self) -> zbus::Result<u64>;
-
-    /// Send a raw JSON-RPC message string and return the response string.
-    async fn send_message(&self, msg: &str) -> zbus::Result<String>;
-
-    /// Receive a raw JSON-RPC message string.
-    async fn recv_message(&self) -> zbus::Result<String>;
-
-    /// Poll whether notification queue has pending items.
-    async fn has_pending_notifications(&self) -> zbus::Result<bool>;
-
-    /// Return the count of pending notifications.
-    async fn pending_notification_count(&self) -> zbus::Result<u64>;
-
-    /// Pop one notification from the queue as a JSON string.
-    async fn pop_notification(&self) -> zbus::Result<String>;
-
-    /// Drain all pending notifications as a JSON array string.
-    async fn drain_notifications(&self) -> zbus::Result<String>;
-
-    /// Open a new named stream / monitor.
-    async fn new_stream(&self, stream: &str) -> zbus::Result<String>;
-
-    /// Daemon status JSON.
-    async fn status(&self) -> zbus::Result<String>;
+/// RovsJsonRpcProxy - D-Bus proxy for JSON-RPC operations
+#[derive(Debug)]
+pub struct RovsJsonRpcProxy {
+    proxy: zbus::Proxy<'static>,
 }
 
-/// Convenience constructor: build a `RovsJsonRpcProxy` on the system bus.
-pub async fn jsonrpc_proxy() -> Result<RovsJsonRpcProxy<'static>> {
-    let conn = Connection::system()
-        .await
-        .context("connect to system D-Bus for RovsJsonRpcProxy")?;
-    Ok(RovsJsonRpcProxy::new(&conn).await?)
-}
-
-// ── RovsOpenFlowProxy ─────────────────────────────────────────────────────────
-
-/// Proxy for the OpenFlow passthrough interface.
-///
-/// D-Bus destination: `org.opdbus.v1`
-/// Object path: `/org/opdbus/rovs/openflow`
-/// Interface: `org.opdbus.rovs.openflow`
-#[proxy(
-    default_service = "org.opdbus.v1",
-    default_path = "/org/opdbus/rovs/openflow",
-    interface = "org.opdbus.rovs.openflow"
-)]
-pub trait RovsOpenFlow {
-    /// Connect to a switch at `addr` (e.g. `"tcp:127.0.0.1:6653"`).
-    /// Returns connection handle id or error JSON.
-    async fn connect(&self, addr: &str) -> zbus::Result<String>;
-
-    /// Return negotiated OpenFlow version JSON.
-    async fn version(&self) -> zbus::Result<String>;
-
-    /// Send a flow_mod. `flow_json` is a JSON-encoded Flow struct.
-    async fn send_flow(&self, flow_json: &str) -> zbus::Result<String>;
-
-    /// Send a flow_mod and wait for barrier reply.
-    async fn send_flow_sync(&self, flow_json: &str) -> zbus::Result<String>;
-
-    /// Raw `ovs-ofctl` passthrough (temporary until pure OpenFlow binary is wired).
-    /// `bridge` is the bridge name, `args_json` is a JSON array of extra CLI args.
-    async fn ofctl(&self, bridge: &str, args_json: &str) -> zbus::Result<String>;
-
-    /// Send an echo request, return echo reply JSON.
-    async fn echo(&self) -> zbus::Result<String>;
-
-    /// Send a barrier request, return barrier reply JSON.
-    async fn barrier(&self) -> zbus::Result<String>;
-
-    /// Dump all flows. Returns JSON array of FlowStatsEntry.
-    async fn dump_flows(&self) -> zbus::Result<Vec<String>>;
-
-    /// Dump flows matching a filter request JSON.
-    async fn dump_flows_filtered(&self, request: &str) -> zbus::Result<Vec<String>>;
-
-    /// Block until a PacketIn message arrives. Returns JSON PacketIn.
-    async fn recv_packet_in(&self) -> zbus::Result<String>;
-
-    /// Non-blocking try-receive PacketIn. Returns JSON or empty string.
-    async fn try_recv_packet_in(&self) -> zbus::Result<String>;
-
-    /// Start flow monitor with request JSON. Returns initial updates.
-    async fn monitor_flows(&self, request: &str) -> zbus::Result<Vec<String>>;
-
-    /// Block until flow updates arrive. Returns JSON array of FlowUpdate.
-    async fn recv_flow_updates(&self) -> zbus::Result<Vec<String>>;
-
-    /// Send a packet_out. `packet_out_json` is JSON-encoded PacketOut.
-    async fn send_packet_out(&self, packet_out_json: &str) -> zbus::Result<String>;
-
-    /// Controller status JSON.
-    async fn status(&self) -> zbus::Result<String>;
-}
-
-/// Convenience constructor: build a `RovsOpenFlowProxy` on the system bus.
-pub async fn openflow_proxy() -> Result<RovsOpenFlowProxy<'static>> {
-    let conn = Connection::system()
-        .await
-        .context("connect to system D-Bus for RovsOpenFlowProxy")?;
-    Ok(RovsOpenFlowProxy::new(&conn).await?)
-}
-
-// ── Unified helper ────────────────────────────────────────────────────────────
-
-/// Ensure the op-openvswitch-daemon is reachable on D-Bus before proceeding.
-///
-/// This is the preferred entry-point for plugins: call this, then use the
-/// returned proxies instead of `OvsdbClient` or `Command::new("ovs-vsctl")`.
-pub async fn ensure_proxies() -> Result<(RovsJsonRpcProxy<'static>, RovsOpenFlowProxy<'static>)> {
-    let json = jsonrpc_proxy().await?;
-    let of = openflow_proxy().await?;
-    Ok((json, of))
-}
-
-// ── OvsdbDbusClient ─────────────────────────────────────────────────────────
-
-/// High-level OVSDB client that routes through the D-Bus daemon.
-///
-/// Mirrors the `OvsdbClient` API so plugin migrations are mechanical.
-///
-/// Construction is **synchronous** (like the original `OvsdbClient`) — the
-/// underlying D-Bus connection is established lazily on the first async call.
-/// This lets `StatePlugin::new()` stay sync.
-#[derive(Clone)]
-pub struct OvsdbDbusClient {
-    proxy: Arc<tokio::sync::OnceCell<RovsJsonRpcProxy<'static>>>,
-}
-
-impl Default for OvsdbDbusClient {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl OvsdbDbusClient {
-    /// Synchronous constructor — D-Bus connection is deferred until first use.
-    pub fn new() -> Self {
-        Self {
-            proxy: Arc::new(tokio::sync::OnceCell::new()),
-        }
-    }
-
-    /// Internal: get or create the proxy.
-    async fn get_proxy(&self) -> Result<&RovsJsonRpcProxy<'static>> {
-        self.proxy
-            .get_or_try_init(|| async { jsonrpc_proxy().await })
+impl RovsJsonRpcProxy {
+    /// Create a new proxy on the system bus
+    pub async fn new() -> Result<Self> {
+        let conn = zbus::Connection::system()
             .await
-            .context("connect to op-openvswitch-daemon via D-Bus")
-    }
+            .map_err(|e| anyhow!("Failed to connect to system D-Bus: {}", e))?;
 
-    // ── Internal: build & send a transact ───────────────────────────────
-
-    async fn transact_one(&self, op: serde_json::Value) -> Result<serde_json::Value> {
-        let proxy = self.get_proxy().await?;
-        let params = serde_json::json!(["Open_vSwitch", op]);
-        let raw = proxy
-            .transact("transact", &params.to_string())
+        let proxy: zbus::Proxy<'_> = zbus::proxy::Builder::new(&conn)
+            .destination(ROV_JSONRPC_BUS_NAME)?
+            .path(ROV_JSONRPC_OBJECT_PATH)?
+            .interface(ROV_JSONRPC_INTERFACE)?
+            .build()
             .await
-            .context("D-Bus transact call failed")?;
-        let val: serde_json::Value = serde_json::from_str(&raw)
-            .with_context(|| format!("daemon returned invalid JSON: {}", raw))?;
-        Ok(val)
+            .map_err(|e| anyhow!("Failed to build RovsJsonRpcProxy: {}", e))?;
+
+        Ok(Self { proxy })
     }
 
-    async fn transact_many(&self, ops: Vec<serde_json::Value>) -> Result<serde_json::Value> {
-        let proxy = self.get_proxy().await?;
-        let params = serde_json::json!(["Open_vSwitch", ops]);
-        let raw = proxy
-            .transact("transact", &params.to_string())
+    /// Execute a JSON-RPC transact
+    pub async fn transact(&self, method: &str, params_json: &str) -> Result<String> {
+        debug!("jsonrpc.transact method={} params_len={}", method, params_json.len());
+        let result: String = self
+            .proxy
+            .call("Transact", &(method, params_json))
             .await
-            .context("D-Bus transact call failed")?;
-        let val: serde_json::Value = serde_json::from_str(&raw)
-            .with_context(|| format!("daemon returned invalid JSON: {}", raw))?;
-        Ok(val)
+            .map_err(|e| anyhow!("Transact call failed: {}", e))?;
+        Ok(result)
     }
 
-    // ── Read helpers ──────────────────────────────────────────────────────
-
-    /// Return `true` if the daemon (and OVSDB) is reachable.
-    pub async fn list_dbs(&self) -> Result<Vec<String>> {
-        let proxy = self.get_proxy().await?;
-        let raw = proxy
-            .transact("list_dbs", "[]")
+    /// Send a raw message
+    pub async fn send_message(&self, msg: &str) -> Result<String> {
+        debug!("jsonrpc.send_message len={}", msg.len());
+        let result: String = self
+            .proxy
+            .call("SendMessage", &(msg,))
             .await
-            .context("list_dbs D-Bus call failed")?;
-        let val: serde_json::Value = serde_json::from_str(&raw)?;
-        Ok(val
-            .as_array()
-            .cloned()
-            .unwrap_or_default()
-            .iter()
-            .filter_map(|v| v.as_str().map(String::from))
-            .collect())
+            .map_err(|e| anyhow!("SendMessage call failed: {}", e))?;
+        Ok(result)
     }
 
-    /// Return `true` if a bridge with the given name exists.
-    pub async fn bridge_exists(&self, bridge_name: &str) -> Result<bool> {
-        let result = self
-            .transact_one(serde_json::json!({
-                "op": "select",
-                "table": "Bridge",
-                "where": [["name", "==", bridge_name]],
-                "columns": ["_uuid"]
-            }))
-            .await?;
-        Ok(result
-            .get("rows")
-            .and_then(|r| r.as_array())
-            .map(|a| !a.is_empty())
-            .unwrap_or(false))
+    /// Receive a message
+    pub async fn recv_message(&self) -> Result<String> {
+        let result: String = self
+            .proxy
+            .call("RecvMessage", &())
+            .await
+            .map_err(|e| anyhow!("RecvMessage call failed: {}", e))?;
+        Ok(result)
     }
 
-    /// Return the names of all bridges.
-    pub async fn list_bridges(&self) -> Result<Vec<String>> {
-        let result = self
-            .transact_one(serde_json::json!({
-                "op": "select",
-                "table": "Bridge",
-                "where": [],
-                "columns": ["name"]
-            }))
-            .await?;
-        Ok(result
-            .get("rows")
-            .and_then(|r| r.as_array())
-            .cloned()
-            .unwrap_or_default()
-            .iter()
-            .filter_map(|r| r.get("name").and_then(|v| v.as_str()).map(String::from))
-            .collect())
+    /// Get next request id
+    pub async fn next_id(&self) -> Result<u64> {
+        let result: String = self
+            .proxy
+            .call("NextId", &())
+            .await
+            .map_err(|e| anyhow!("NextId call failed: {}", e))?;
+        result.parse().map_err(|e| anyhow!("Failed to parse NextId result: {}", e))
     }
 
-    /// Return the names of all ports on a bridge.
-    pub async fn list_bridge_ports(&self, bridge_name: &str) -> Result<Vec<String>> {
-        let bridge_result = self
-            .transact_one(serde_json::json!({
-                "op": "select",
-                "table": "Bridge",
-                "where": [["name", "==", bridge_name]],
-                "columns": ["ports"]
-            }))
-            .await?;
-        let bridge_rows = bridge_result.get("rows").and_then(|r| r.as_array());
-        let port_uuids: Vec<String> = match bridge_rows {
-            Some(rows) if !rows.is_empty() => {
-                let mut uuids = Vec::new();
-                if let Some(ports) = rows[0].get("ports") {
-                    Self::collect_uuids(ports, &mut uuids);
-                }
-                uuids
-            }
-            _ => return Ok(Vec::new()),
-        };
-
-        let mut names = Vec::new();
-        for uuid in port_uuids {
-            let result = self
-                .transact_one(serde_json::json!({
-                    "op": "select",
-                    "table": "Port",
-                    "where": [["_uuid", "==", ["uuid", uuid]]],
-                    "columns": ["name"]
-                }))
-                .await?;
-            if let Some(row) = result
-                .get("rows")
-                .and_then(|r| r.as_array())
-                .and_then(|a| a.first())
-            {
-                if let Some(n) = row.get("name").and_then(|v| v.as_str()) {
-                    names.push(n.to_string());
-                }
-            }
-        }
-        Ok(names)
+    /// Check for pending notifications
+    pub async fn has_pending_notifications(&self) -> Result<bool> {
+        let result: bool = self
+            .proxy
+            .call("HasPendingNotifications", &())
+            .await
+            .map_err(|e| anyhow!("HasPendingNotifications call failed: {}", e))?;
+        Ok(result)
     }
 
-    /// Return the raw JSON row for a bridge.
-    pub async fn get_bridge_info(&self, bridge_name: &str) -> Result<String> {
-        let result = self
-            .transact_one(serde_json::json!({
-                "op": "select",
-                "table": "Bridge",
-                "where": [["name", "==", bridge_name]],
-                "columns": []
-            }))
-            .await?;
-        Ok(serde_json::to_string_pretty(&result)?)
+    /// Get pending notification count
+    pub async fn pending_notification_count(&self) -> Result<u64> {
+        let result: String = self
+            .proxy
+            .call("PendingNotificationCount", &())
+            .await
+            .map_err(|e| anyhow!("PendingNotificationCount call failed: {}", e))?;
+        result.parse().map_err(|e| anyhow!("Failed to parse pending count: {}", e))
     }
 
-    // ── Mutation helpers ──────────────────────────────────────────────────
-
-    /// Create a bridge if it does not exist.
-    pub async fn create_bridge(&self, bridge_name: &str) -> Result<()> {
-        if self.bridge_exists(bridge_name).await? {
-            log::info!("Bridge {} already exists, skipping creation", bridge_name);
-            return Ok(());
-        }
-        let ops = vec![
-            serde_json::json!({
-                "op": "insert",
-                "table": "Bridge",
-                "row": { "name": bridge_name, "stp_enable": false },
-                "uuid-name": "new_bridge"
-            }),
-            serde_json::json!({
-                "op": "mutate",
-                "table": "Open_vSwitch",
-                "where": [],
-                "mutations": [["bridges", "insert", ["named-uuid", "new_bridge"]]]
-            }),
-        ];
-        let result = self.transact_many(ops).await?;
-        Self::check_errors(&result)?;
-        log::info!("Bridge {} created via D-Bus daemon", bridge_name);
-        Ok(())
+    /// Pop one notification
+    pub async fn pop_notification(&self) -> Result<String> {
+        let result: String = self
+            .proxy
+            .call("PopNotification", &())
+            .await
+            .map_err(|e| anyhow!("PopNotification call failed: {}", e))?;
+        Ok(result)
     }
 
-    /// Delete a bridge and its ports/interfaces.
-    pub async fn delete_bridge(&self, bridge_name: &str) -> Result<()> {
-        let bridge_result = self
-            .transact_one(serde_json::json!({
-                "op": "select",
-                "table": "Bridge",
-                "where": [["name", "==", bridge_name]],
-                "columns": ["_uuid", "ports"]
-            }))
-            .await?;
-        let bridge_rows = bridge_result.get("rows").and_then(|r| r.as_array());
-        let (bridge_uuid, bridge_row) = match bridge_rows {
-            Some(rows) if !rows.is_empty() => {
-                let uuid = rows[0]
-                    .get("_uuid")
-                    .and_then(|u| u.as_array())
-                    .and_then(|a| a.get(1))
-                    .and_then(|v| v.as_str())
-                    .map(String::from)
-                    .ok_or_else(|| anyhow::anyhow!("bridge UUID not found"))?;
-                (uuid, &rows[0])
-            }
-            _ => return Err(anyhow::anyhow!("Bridge '{}' not found", bridge_name)),
-        };
-
-        let mut port_uuids: Vec<String> = Vec::new();
-        if let Some(ports) = bridge_row.get("ports") {
-            Self::collect_uuids(ports, &mut port_uuids);
-        }
-
-        let mut iface_uuids: Vec<String> = Vec::new();
-        for port_uuid in &port_uuids {
-            let port_result = self
-                .transact_one(serde_json::json!({
-                    "op": "select",
-                    "table": "Port",
-                    "where": [["_uuid", "==", ["uuid", port_uuid.clone()]]],
-                    "columns": ["interfaces"]
-                }))
-                .await?;
-            if let Some(rows) = port_result.get("rows").and_then(|r| r.as_array()) {
-                if let Some(row) = rows.first() {
-                    if let Some(ifaces) = row.get("interfaces") {
-                        Self::collect_uuids(ifaces, &mut iface_uuids);
-                    }
-                }
-            }
-        }
-
-        let mut ops = vec![
-            serde_json::json!({
-                "op": "mutate",
-                "table": "Open_vSwitch",
-                "where": [],
-                "mutations": [["bridges", "delete", ["uuid", bridge_uuid.clone()]]]
-            }),
-            serde_json::json!({
-                "op": "delete",
-                "table": "Bridge",
-                "where": [["_uuid", "==", ["uuid", bridge_uuid]]]
-            }),
-        ];
-        for port_uuid in &port_uuids {
-            ops.push(serde_json::json!({
-                "op": "delete",
-                "table": "Port",
-                "where": [["_uuid", "==", ["uuid", port_uuid]]]
-            }));
-        }
-        for iface_uuid in &iface_uuids {
-            ops.push(serde_json::json!({
-                "op": "delete",
-                "table": "Interface",
-                "where": [["_uuid", "==", ["uuid", iface_uuid]]]
-            }));
-        }
-
-        let result = self.transact_many(ops).await?;
-        Self::check_errors(&result)?;
-        log::info!("Bridge {} deleted via D-Bus daemon", bridge_name);
-        Ok(())
+    /// Drain all notifications
+    pub async fn drain_notifications(&self) -> Result<String> {
+        let result: String = self
+            .proxy
+            .call("DrainNotifications", &())
+            .await
+            .map_err(|e| anyhow!("DrainNotifications call failed: {}", e))?;
+        Ok(result)
     }
 
-    /// Add a system port to a bridge.
-    pub async fn add_port(&self, bridge_name: &str, port_name: &str) -> Result<()> {
-        let ops = vec![
-            serde_json::json!({
-                "op": "insert",
-                "table": "Interface",
-                "row": { "name": port_name, "type": "system" },
-                "uuid-name": "new_iface"
-            }),
-            serde_json::json!({
-                "op": "insert",
-                "table": "Port",
-                "row": {
-                    "name": port_name,
-                    "interfaces": ["set", [["named-uuid", "new_iface"]]]
-                },
-                "uuid-name": "new_port"
-            }),
-            serde_json::json!({
-                "op": "mutate",
-                "table": "Bridge",
-                "where": [["name", "==", bridge_name]],
-                "mutations": [["ports", "insert", ["named-uuid", "new_port"]]]
-            }),
-        ];
-        let result = self.transact_many(ops).await?;
-        Self::check_errors(&result)?;
-        log::info!(
-            "Port {} added to bridge {} via D-Bus daemon",
-            port_name,
-            bridge_name
+    /// Open a new stream
+    pub async fn new_stream(&self, stream: &str) -> Result<String> {
+        debug!("jsonrpc.new_stream stream={}", stream);
+        let result: String = self
+            .proxy
+            .call("NewStream", &(stream,))
+            .await
+            .map_err(|e| anyhow!("NewStream call failed: {}", e))?;
+        Ok(result)
+    }
+}
+
+/// RovsOpenFlowProxy - D-Bus proxy for OpenFlow operations
+#[derive(Debug)]
+pub struct RovsOpenFlowProxy {
+    proxy: zbus::Proxy<'static>,
+}
+
+impl RovsOpenFlowProxy {
+    /// Create a new proxy on the system bus
+    pub async fn new() -> Result<Self> {
+        let conn = zbus::Connection::system()
+            .await
+            .map_err(|e| anyhow!("Failed to connect to system D-Bus: {}", e))?;
+
+        let proxy: zbus::Proxy<'_> = zbus::proxy::Builder::new(&conn)
+            .destination(ROV_OPENFLOW_BUS_NAME)?
+            .path(ROV_OPENFLOW_OBJECT_PATH)?
+            .interface(ROV_OPENFLOW_INTERFACE)?
+            .build()
+            .await
+            .map_err(|e| anyhow!("Failed to build RovsOpenFlowProxy: {}", e))?;
+
+        Ok(Self { proxy })
+    }
+
+    /// Connect to an OpenFlow switch
+    pub async fn connect(&self, addr: &str) -> Result<String> {
+        debug!("openflow.connect addr={}", addr);
+        let result: String = self
+            .proxy
+            .call("Connect", &(addr,))
+            .await
+            .map_err(|e| anyhow!("Connect call failed: {}", e))?;
+        Ok(result)
+    }
+
+    /// Get OpenFlow version
+    pub async fn version(&self, conn_id: u64) -> Result<String> {
+        debug!("openflow.version conn_id={}", conn_id);
+        let result: String = self
+            .proxy
+            .call("Version", &(conn_id,))
+            .await
+            .map_err(|e| anyhow!("Version call failed: {}", e))?;
+        Ok(result)
+    }
+
+    /// Send a flow
+    pub async fn send_flow(&self, conn_id: u64, flow_json: &str) -> Result<String> {
+        debug!(
+            "openflow.send_flow conn_id={} len={}",
+            conn_id,
+            flow_json.len()
         );
-        Ok(())
-    }
-
-    // ── Private helpers ───────────────────────────────────────────────────
-
-    /// Recursively collect UUID strings from an OVSDB set value.
-    fn collect_uuids(value: &serde_json::Value, out: &mut Vec<String>) {
-        if let Some(arr) = value.as_array() {
-            if arr.len() == 2 {
-                if arr[0] == "uuid" {
-                    if let Some(s) = arr[1].as_str() {
-                        out.push(s.to_string());
-                    }
-                } else if arr[0] == "set" {
-                    if let Some(items) = arr[1].as_array() {
-                        for item in items {
-                            Self::collect_uuids(item, out);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    /// Check a transact result for per-operation error objects.
-    fn check_errors(result: &serde_json::Value) -> Result<()> {
-        if let Some(results) = result.as_array() {
-            for (i, op_result) in results.iter().enumerate() {
-                if let Some(error) = op_result.get("error") {
-                    if !error.is_null() {
-                        let details = op_result
-                            .get("details")
-                            .and_then(|d| d.as_str())
-                            .unwrap_or("no details");
-                        return Err(anyhow::anyhow!(
-                            "OVSDB operation {} failed: {} ({})",
-                            i,
-                            error,
-                            details
-                        ));
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// Set the `type` column on an Interface row (e.g. "internal", "system").
-    pub async fn set_interface_type(&self, iface_name: &str, iface_type: &str) -> Result<()> {
-        let ops = vec![serde_json::json!({
-            "op": "update",
-            "table": "Interface",
-            "where": [["name", "==", iface_name]],
-            "row": { "type": iface_type }
-        })];
-        let result = self.transact_many(ops).await?;
-        Self::check_errors(&result)?;
-        log::info!(
-            "Interface {} type set to {} via D-Bus daemon",
-            iface_name,
-            iface_type
-        );
-        Ok(())
-    }
-
-    /// Set a bridge property (e.g., "datapath_type", "fail_mode").
-    pub async fn set_bridge_property(
-        &self,
-        bridge_name: &str,
-        property: &str,
-        value: &str,
-    ) -> Result<()> {
-        let ops = vec![serde_json::json!({
-            "op": "update",
-            "table": "Bridge",
-            "where": [["name", "==", bridge_name]],
-            "row": { property: value }
-        })];
-        let result = self.transact_many(ops).await?;
-        Self::check_errors(&result)?;
-        log::info!(
-            "Bridge {} property {} set to {} via D-Bus daemon",
-            bridge_name,
-            property,
-            value
-        );
-        Ok(())
-    }
-
-    /// Delete a port from a bridge and remove associated Interface.
-    pub async fn delete_port(&self, bridge_name: &str, port_name: &str) -> Result<()> {
-        // First get the port UUID and its interface UUID
-        let port_result = self
-            .transact_one(serde_json::json!({
-                "op": "select",
-                "table": "Port",
-                "where": [["name", "==", port_name]],
-                "columns": ["_uuid", "interfaces"]
-            }))
-            .await?;
-
-        let port_uuid = port_result
-            .get("rows")
-            .and_then(|r| r.as_array())
-            .and_then(|a| a.first())
-            .and_then(|row| row.get("_uuid"))
-            .and_then(|u| u.as_array())
-            .and_then(|a| a.get(1))
-            .and_then(|u| u.as_str())
-            .map(String::from)
-            .ok_or_else(|| anyhow::anyhow!("Port '{}' not found", port_name))?;
-
-        // Get interface UUIDs from port
-        let mut iface_uuids: Vec<String> = Vec::new();
-        if let Some(rows) = port_result.get("rows").and_then(|r| r.as_array()) {
-            if let Some(row) = rows.first() {
-                if let Some(ifaces) = row.get("interfaces") {
-                    Self::collect_uuids(ifaces, &mut iface_uuids);
-                }
-            }
-        }
-
-        // Build delete operations: remove from bridge, delete port, delete interfaces
-        let mut ops = vec![
-            serde_json::json!({
-                "op": "mutate",
-                "table": "Bridge",
-                "where": [["name", "==", bridge_name]],
-                "mutations": [["ports", "delete", ["uuid", port_uuid.clone()]]]
-            }),
-            serde_json::json!({
-                "op": "delete",
-                "table": "Port",
-                "where": [["_uuid", "==", ["uuid", port_uuid]]]
-            }),
-        ];
-
-        for iface_uuid in iface_uuids {
-            ops.push(serde_json::json!({
-                "op": "delete",
-                "table": "Interface",
-                "where": [["_uuid", "==", ["uuid", iface_uuid]]]
-            }));
-        }
-
-        let result = self.transact_many(ops).await?;
-        Self::check_errors(&result)?;
-        log::info!(
-            "Port {} deleted from bridge {} via D-Bus daemon",
-            port_name,
-            bridge_name
-        );
-        Ok(())
-    }
-
-    /// Add a port with specific type to a bridge.
-    pub async fn add_port_with_type(
-        &self,
-        bridge_name: &str,
-        port_name: &str,
-        port_type: Option<&str>,
-    ) -> Result<()> {
-        let ops = match port_type {
-            Some(ptype) => vec![
-                serde_json::json!({
-                    "op": "insert",
-                    "table": "Interface",
-                    "row": { "name": port_name, "type": ptype },
-                    "uuid-name": "new_iface"
-                }),
-                serde_json::json!({
-                    "op": "insert",
-                    "table": "Port",
-                    "row": {
-                        "name": port_name,
-                        "interfaces": ["set", [["named-uuid", "new_iface"]]]
-                    },
-                    "uuid-name": "new_port"
-                }),
-                serde_json::json!({
-                    "op": "mutate",
-                    "table": "Bridge",
-                    "where": [["name", "==", bridge_name]],
-                    "mutations": [["ports", "insert", ["named-uuid", "new_port"]]]
-                }),
-            ],
-            None => vec![
-                serde_json::json!({
-                    "op": "insert",
-                    "table": "Interface",
-                    "row": { "name": port_name },
-                    "uuid-name": "new_iface"
-                }),
-                serde_json::json!({
-                    "op": "insert",
-                    "table": "Port",
-                    "row": {
-                        "name": port_name,
-                        "interfaces": ["set", [["named-uuid", "new_iface"]]]
-                    },
-                    "uuid-name": "new_port"
-                }),
-                serde_json::json!({
-                    "op": "mutate",
-                    "table": "Bridge",
-                    "where": [["name", "==", bridge_name]],
-                    "mutations": [["ports", "insert", ["named-uuid", "new_port"]]]
-                }),
-            ],
-        };
-
-        let result = self.transact_many(ops).await?;
-        Self::check_errors(&result)?;
-        log::info!(
-            "Port {} added to bridge {} via D-Bus daemon",
-            port_name,
-            bridge_name
-        );
-        Ok(())
-    }
-
-    /// Dump the contents of an OVSDB database as JSON.
-    /// Returns a JSON object with database contents.
-    pub async fn dump_db(&self, database: &str) -> Result<serde_json::Value> {
-        // Query all tables in the database
-        let tables_result = self
-            .transact_one(serde_json::json!({
-                "op": "select",
-                "table": "Open_vSwitch",
-                "where": [],
-                "columns": []
-            }))
-            .await?;
-
-        // Build a dump structure with all tables
-        let mut dump = serde_json::json!({
-            "database": database,
-            "tables": {}
-        });
-
-        // Get list of tables from the database schema
-        let schema_result = self
-            .transact_one(serde_json::json!({
-                "op": "get_schema",
-                "id": "dump"
-            }))
-            .await?;
-
-        if let Some(tables) = schema_result.get("tables").and_then(|t| t.as_object()) {
-            for table_name in tables.keys() {
-                let table_data = self
-                    .transact_one(serde_json::json!({
-                        "op": "select",
-                        "table": table_name,
-                        "where": [],
-                        "columns": []
-                    }))
-                    .await?;
-
-                if let Some(rows) = table_data.get("rows") {
-                    dump["tables"][table_name] = rows.clone();
-                }
-            }
-        }
-
-        Ok(dump)
-    }
-
-    /// Monitor OVSDB for changes to a database.
-    /// Returns a broadcast receiver that will receive JSON updates.
-    /// NOTE: This is a compatibility shim. In the new architecture, use gRPC streaming
-    /// (op-openvswitch-daemon/src/grpc_streaming.rs) for production monitoring.
-    pub async fn monitor_db(
-        &self,
-        database: &str,
-    ) -> Result<tokio::sync::broadcast::Receiver<serde_json::Value>> {
-        let proxy = self.get_proxy().await?;
-        // Create a stream/monitor subscription via D-Bus
-        let _stream_id = proxy
-            .new_stream(database)
+        let result: String = self
+            .proxy
+            .call("SendFlow", &(conn_id, flow_json))
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to create OVSDB monitor stream: {}", e))?;
-
-        // Create a broadcast channel for updates
-        // In a full implementation, this would be connected to the daemon's notification stream
-        let (tx, rx) = tokio::sync::broadcast::channel(128);
-
-        // Spawn a task that polls for notifications from the daemon
-        let proxy_clone = self.proxy.clone();
-        tokio::spawn(async move {
-            loop {
-                match proxy_clone.get() {
-                    Some(proxy) => {
-                        // Check if there are pending notifications
-                        match proxy.has_pending_notifications().await {
-                            Ok(true) => {
-                                let drain_result: zbus::Result<String> =
-                                    proxy.drain_notifications().await;
-                                match drain_result {
-                                    Ok(json_str) => {
-                                        if let Ok(json) =
-                                            serde_json::from_str::<serde_json::Value>(&json_str)
-                                        {
-                                            let _ = tx.send(json);
-                                        }
-                                    }
-                                    Err(e) => {
-                                        log::warn!("Failed to drain notifications: {}", e);
-                                    }
-                                }
-                            }
-                            Ok(false) => {
-                                // No notifications pending, wait a bit
-                                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                            }
-                            Err(e) => {
-                                log::warn!("Failed to check for pending notifications: {}", e);
-                                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                            }
-                        }
-                    }
-                    None => {
-                        log::warn!("Proxy not available for monitoring");
-                        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                    }
-                }
-            }
-        });
-
-        Ok(rx)
+            .map_err(|e| anyhow!("SendFlow call failed: {}", e))?;
+        Ok(result)
     }
 
-    /// Compatibility shim for plugins that pass `simd_json::OwnedValue`.
-    /// Converts to `serde_json::Value` and routes through the D-Bus daemon.
-    pub async fn transact_simd(
-        &self,
-        operations: simd_json::OwnedValue,
-    ) -> Result<serde_json::Value> {
-        let text = simd_json::to_string(&operations)
-            .context("failed to serialize simd_json operations to JSON text")?;
-        let converted: serde_json::Value = serde_json::from_str(&text)
-            .context("failed to deserialize simd_json operations as serde_json::Value")?;
-        self.transact_many(converted.as_array().cloned().unwrap_or_default())
+    /// Send a flow synchronously
+    pub async fn send_flow_sync(&self, conn_id: u64, flow_json: &str) -> Result<String> {
+        debug!("openflow.send_flow_sync conn_id={}", conn_id);
+        let result: String = self
+            .proxy
+            .call("SendFlowSync", &(conn_id, flow_json))
             .await
+            .map_err(|e| anyhow!("SendFlowSync call failed: {}", e))?;
+        Ok(result)
     }
+
+    /// Send an echo request
+    pub async fn echo(&self, conn_id: u64) -> Result<String> {
+        debug!("openflow.echo conn_id={}", conn_id);
+        let result: String = self
+            .proxy
+            .call("Echo", &(conn_id,))
+            .await
+            .map_err(|e| anyhow!("Echo call failed: {}", e))?;
+        Ok(result)
+    }
+
+    /// Send a barrier request
+    pub async fn barrier(&self, conn_id: u64) -> Result<String> {
+        debug!("openflow.barrier conn_id={}", conn_id);
+        let result: String = self
+            .proxy
+            .call("Barrier", &(conn_id,))
+            .await
+            .map_err(|e| anyhow!("Barrier call failed: {}", e))?;
+        Ok(result)
+    }
+
+    /// Dump all flows
+    pub async fn dump_flows(&self, conn_id: u64) -> Result<Vec<String>> {
+        debug!("openflow.dump_flows conn_id={}", conn_id);
+        let result: Vec<String> = self
+            .proxy
+            .call("DumpFlows", &(conn_id,))
+            .await
+            .map_err(|e| anyhow!("DumpFlows call failed: {}", e))?;
+        Ok(result)
+    }
+
+    /// Dump flows with a filter
+    pub async fn dump_flows_filtered(&self, conn_id: u64, request: &str) -> Result<Vec<String>> {
+        debug!("openflow.dump_flows_filtered conn_id={}", conn_id);
+        let result: Vec<String> = self
+            .proxy
+            .call("DumpFlowsFiltered", &(conn_id, request))
+            .await
+            .map_err(|e| anyhow!("DumpFlowsFiltered call failed: {}", e))?;
+        Ok(result)
+    }
+
+    /// Receive a packet-in message
+    pub async fn recv_packet_in(&self, conn_id: u64) -> Result<String> {
+        debug!("openflow.recv_packet_in conn_id={}", conn_id);
+        let result: String = self
+            .proxy
+            .call("RecvPacketIn", &(conn_id,))
+            .await
+            .map_err(|e| anyhow!("RecvPacketIn call failed: {}", e))?;
+        Ok(result)
+    }
+
+    /// Try to receive a packet-in message (non-blocking)
+    pub async fn try_recv_packet_in(&self, conn_id: u64) -> Result<Option<String>> {
+        debug!("openflow.try_recv_packet_in conn_id={}", conn_id);
+        let result: String = self
+            .proxy
+            .call("TryRecvPacketIn", &(conn_id,))
+            .await
+            .map_err(|e| anyhow!("TryRecvPacketIn call failed: {}", e))?;
+        
+        if result.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(result))
+        }
+    }
+
+    /// Monitor flows
+    pub async fn monitor_flows(&self, conn_id: u64, request: &str) -> Result<Vec<String>> {
+        debug!("openflow.monitor_flows conn_id={}", conn_id);
+        let result: Vec<String> = self
+            .proxy
+            .call("MonitorFlows", &(conn_id, request))
+            .await
+            .map_err(|e| anyhow!("MonitorFlows call failed: {}", e))?;
+        Ok(result)
+    }
+
+    /// Receive flow updates
+    pub async fn recv_flow_updates(&self, conn_id: u64) -> Result<Vec<String>> {
+        debug!("openflow.recv_flow_updates conn_id={}", conn_id);
+        let result: Vec<String> = self
+            .proxy
+            .call("RecvFlowUpdates", &(conn_id,))
+            .await
+            .map_err(|e| anyhow!("RecvFlowUpdates call failed: {}", e))?;
+        Ok(result)
+    }
+
+    /// Send a packet-out
+    pub async fn send_packet_out(&self, conn_id: u64, packet_out_json: &str) -> Result<String> {
+        debug!("openflow.send_packet_out conn_id={}", conn_id);
+        let result: String = self
+            .proxy
+            .call("SendPacketOut", &(conn_id, packet_out_json))
+            .await
+            .map_err(|e| anyhow!("SendPacketOut call failed: {}", e))?;
+        Ok(result)
+    }
+}
+
+/// Convenience constructor: build a RovsOpenFlowProxy on the system bus.
+pub async fn openflow_proxy() -> Result<RovsOpenFlowProxy> {
+    RovsOpenFlowProxy::new().await
+}
+
+/// Convenience constructor: build a RovsJsonRpcProxy on the system bus.
+pub async fn jsonrpc_proxy() -> Result<RovsJsonRpcProxy> {
+    RovsJsonRpcProxy::new().await
+}
+
+/// Ensure both proxies are available.
+pub async fn ensure_proxies() -> Result<(RovsJsonRpcProxy, RovsOpenFlowProxy)> {
+    let jsonrpc = RovsJsonRpcProxy::new().await?;
+    let openflow = RovsOpenFlowProxy::new().await?;
+    Ok((jsonrpc, openflow))
+}
+
+/// Helper to parse flow stats from JSON string
+pub fn flow_stats_to_json(entry: &rovs_openflow::FlowStatsEntry) -> String {
+    serde_json::json!({
+        "table_id": entry.table_id,
+        "duration_sec": entry.duration_sec,
+        "duration_nsec": entry.duration_nsec,
+        "priority": entry.priority,
+        "idle_timeout": entry.idle_timeout,
+        "hard_timeout": entry.hard_timeout,
+        "flags": entry.flags,
+        "cookie": entry.cookie,
+        "packet_count": entry.packet_count,
+        "byte_count": entry.byte_count,
+        "match_fields_hex": bytes_to_hex(&entry.match_fields.encode()),
+        "instructions_hex": bytes_to_hex(&entry.instructions),
+    })
+    .to_string()
+}
+
+/// Simple hex encoder
+fn bytes_to_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        s.push(HEX[(b >> 4) as usize] as char);
+        s.push(HEX[(b & 0xF) as usize] as char);
+    }
+    s
 }

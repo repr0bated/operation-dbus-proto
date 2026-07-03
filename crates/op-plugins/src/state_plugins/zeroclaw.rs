@@ -23,6 +23,11 @@ pub struct ZeroclawState {
     pub config_schema: Value,
     pub ui_surfaces: Value,
     pub structured_output: Value,
+    /// Blob deployment metadata (gemma4 complete blob refs from architecture)
+    pub blob: Value,
+    /// Full serialized PluginObjectBlob for the gemma4 deployment (recovered architecture)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub object_blob: Option<Value>,
 }
 
 pub struct ZeroclawPlugin;
@@ -48,8 +53,21 @@ impl ZeroclawPlugin {
         let selected_provider = Self::env_or("LLM_PROVIDER", "ollama");
         let selected_model = Self::env_or("LLM_MODEL", "gemma4");
         let router_endpoint = Self::env_or("ZEROCLAW_ROUTER_ENDPOINT", "http://localhost:11434");
-        let wg_xray_target = Self::env_or("ZEROCLAW_WG_XRAY_TARGET", "wg-xray");
-        let grpc_target = Self::env_or("ZEROCLAW_GRPC_TARGET", "http://10.200.0.1:50051");
+        // Legacy container target (wg-xray etc.) is orthogonal to the gemma4 blob.
+        // The blob on host is a btrfs subvolume (see deploy/deploy-blob-gemma4.sh).
+        let _legacy_wg_target = Self::env_or("ZEROCLAW_WG_XRAY_TARGET", "");
+        let grpc_target = Self::env_or("ZEROCLAW_GRPC_TARGET", "http://127.0.0.1:50051");
+        let target = Self::env_or("ZEROCLAW_TARGET", "local");
+
+        // A gemma4 blob is "complete" when its btrfs subvolume is present and mounted
+        // at the conventional location. Inside the subvolume lives the frozen unit
+        // (models, manifests, object_blob contract). All runtime mutations still
+        // happen exclusively over D-Bus, gRPC, and JSON-RPC — never by direct writes
+        // into the mounted subvol from the services.
+        let blob_mount = "/opt/op-dbus/blobs/zeroclaw-gemma4";
+        let gemma4_blob_complete =
+            std::path::Path::new(blob_mount).exists()
+            && (selected_provider == "ollama" && selected_model.starts_with("gemma"));
 
         ZeroclawState {
             status: "declared".to_string(),
@@ -58,7 +76,10 @@ impl ZeroclawPlugin {
             transport: json!({
                 "dbus_object": "/opdbus/v1/plugins/zeroclaw",
                 "grpc_target": grpc_target,
-                "incus_container": wg_xray_target,
+                "target": target,
+                // Live mutations occur only over D-Bus(zbus) + gRPC + JSON-RPC.
+                // The gemma4 blob is a separate btrfs subvolume that can be mounted.
+                "legacy_wg_xray": Self::env_or("ZEROCLAW_WG_XRAY_TARGET", ""),
                 "browser_surface": "gRPC-Web through op-web",
                 "rest_aliases": ["/api/zeroclaw/chat", "/api/llm/chat"],
                 // Canonical OSCAL/subid mapping authority — referenced, never copied.
@@ -263,6 +284,44 @@ impl ZeroclawPlugin {
                 "ui_renderer": "JsonRenderer",
                 "required": true
             }),
+            blob: json!({
+                "kind": "zeroclaw-gemma4-ollama",
+                "status": if gemma4_blob_complete { "complete" } else { "declared" },
+                "model_ref": "gemma4:12b",
+                "provider": "ollama",
+                "router": "gemma4",
+                "btrfs_subvol_hint": "/opt/op-dbus/blobs/zeroclaw-gemma4",
+                "note": "The gemma4 zeroclaw blob is a btrfs subvolume (mountable as subvol or extendable). Live state and routing mutations happen exclusively via D-Bus (zbus) + gRPC + JSON-RPC. No direct mutation inside the subvol from the services."
+            }),
+            object_blob: Some(json!({
+                "plugin_id": "zeroclaw",
+                "schema_version": "1.0.0",
+                "schema_hash": "live-from-current-state",
+                "schema_json": { "note": "Recovered PluginObjectBlob shape. Schema recovered via uniform plugin + schemars current_state pipeline." },
+                "dbus": {
+                    "bus_name": "org.opdbus.v1.plugins",
+                    "object_path": "/org/opdbus/v1/plugins/zeroclaw",
+                    "interface_name": "org.opdbus.v1.Plugin"
+                },
+                "grpc": {
+                    "package": "operation.plugin.v1",
+                    "service_name": "operation.plugin.v1.ZeroclawPluginMethods",
+                    "descriptor_set": []
+                },
+                "methods": [
+                    { "schema_name": "query_current_state", "grpc_name": "QueryCurrentState", "subid": "obs.service.zeroclaw.state", "grpc_path": "/operation.plugin.v1/ZeroclawPluginMethods/QueryCurrentState" },
+                    { "schema_name": "chat", "grpc_name": "Chat", "subid": "mut.service.zeroclaw.chat", "grpc_path": "/operation.plugin.v1/ZeroclawPluginMethods/Chat" }
+                ],
+                "gemma4_blob": {
+                    "model": "gemma4:12b",
+                    "provider": "ollama",
+                    "local_endpoint": router_endpoint,
+                    "frozen_router_role": "context_aware_allocator",
+                    "active": gemma4_blob_complete,
+                    "btrfs_subvol": true,
+                    "note": "The containing directory is (or links to) a btrfs subvolume created by deploy-blob-gemma4.sh. Can be mounted as a subvolume or used to extend filesystems. All mutation flows over D-Bus/gRPC."
+                }
+            })),
         }
     }
 }

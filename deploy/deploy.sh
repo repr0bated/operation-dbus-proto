@@ -4,7 +4,8 @@
 # Usage:
 #   sudo ./deploy/deploy.sh [--skip-network] [SERVICE|all]
 #
-# Services: op-dbus, op-web-server, op-chat, op-services, op-projection, op-dbus-mirror
+# Services: op-dbus, op-web-server, op-chat, op-services, op-projection,
+# op-dbus-mirror, op-grpc-bridge, op-mcp-compact
 
 set -euo pipefail
 
@@ -15,12 +16,17 @@ S6_SV="/etc/s6/sv"
 S6_DB="/etc/s6/db"
 
 SERVICES=(
+    "op-identity:op-identity-sled:opdbus"
     "op-web:op-dbus:op-dbus"
     "op-web:op-web-server:op-web-server"
     "op-chat:op-chat:chatmanager"
     "op-dbus-mirror:ovs-dbus-init:op-dbus-mirror"
     "op-projection:projection_server:op-projection"
+    "op-grpc-bridge:op-grpc-bridge-zeroclaw:op-grpc-bridge-zeroclaw"
+    "op-mcp:op-mcp-server:op-mcp-compact"
     "op-cognitive-mcp:op-cognitive-mcp:op-cognitive-mcp"
+    # Blob gemma4+zeroclaw complete deployments are handled by btrfs subvols + helpers (see docs/BLOB_ARCHITECTURE_SYNTHESIS.md + crate op-projection/src/blob.rs)
+#   Example: btrfs subvol create /mnt/btrfs-root/@blob-zeroclaw-gemma4 ; mount ... ; materialize the PluginObjectBlob there.
 )
 
 # ---------------------------------------------------------------------------
@@ -90,7 +96,9 @@ install_system_files() {
             continue
         fi
         install -d "${S6_SV}/${svc}"
-        cp -a "${svc_dir}/." "${S6_SV}/${svc}/"
+        if [[ "$(readlink -f "$svc_dir")" != "$(readlink -f "${S6_SV}/${svc}")" ]]; then
+            cp -a "${svc_dir}/." "${S6_SV}/${svc}/"
+        fi
         chmod 0755 "${S6_SV}/${svc}/run" 2>/dev/null || true
         chmod 0755 "${S6_SV}/${svc}/up" 2>/dev/null || true
         chmod 0755 "${S6_SV}/${svc}/shell_up" 2>/dev/null || true

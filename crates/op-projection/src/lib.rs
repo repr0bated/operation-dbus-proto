@@ -38,6 +38,7 @@ pub mod projection_engine;
 pub mod projection_store;
 pub mod schema_engine;
 pub mod schema_validator;
+pub mod blob;
 
 // Re-export core types
 pub mod sled_reader;

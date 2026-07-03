@@ -21,6 +21,8 @@ serde_json = "1"
 anyhow    = "1"
 dirs      = "5"
 hostname  = "0.4"
+# DEPRECATED: rusqlite only here for the legacy op-mcp-proxy/session.rs which is obsolete.
+# Actual user/session storage is in Cozo. Do not add more SQL usage anywhere.
 rusqlite  = { workspace = true, features = ["bundled"] }
 chrono    = { version = "0.4", features = ["serde"] }
 uuid      = { version = "1.6", features = ["v4", "serde"] }

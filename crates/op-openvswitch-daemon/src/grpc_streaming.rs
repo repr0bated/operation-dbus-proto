@@ -58,16 +58,19 @@ impl EventBus {
     }
 
     /// Publish an OVSDB update to all subscribers
+    #[allow(dead_code)]
     pub fn publish_ovsdb(&self, update: OvsdbUpdate) {
         let _ = self.ovsdb_tx.send(update);
     }
 
     /// Publish a flow update to all subscribers
+    #[allow(dead_code)]
     pub fn publish_flow(&self, update: FlowUpdate) {
         let _ = self.flow_tx.send(update);
     }
 
     /// Publish a topology event to all subscribers
+    #[allow(dead_code)]
     pub fn publish_topology(&self, event: TopologyEvent) {
         let _ = self.topology_tx.send(event);
     }
@@ -100,6 +103,7 @@ impl StreamingService {
     }
 
     /// Decrement subscription count
+    #[allow(dead_code)]
     async fn dec_subs(&self) {
         let mut subs = self.active_subscriptions.write().await;
         *subs -= 1;
@@ -152,6 +156,7 @@ impl OvsdbStreamService for StreamingService {
         });
 
         let service = self.clone();
+        #[allow(clippy::result_large_err)]
         let stream = stream.map(move |item| {
             // This is a bit of a hack - we need to keep the service alive
             // In practice, we'd use a proper shutdown signal
@@ -239,6 +244,7 @@ pub mod bridge {
     use chrono::Utc;
 
     /// Convert OVSDB monitor JSON into OvsdbUpdate protobuf
+    #[allow(dead_code)]
     pub fn ovsdb_json_to_update(
         database: &str,
         table: &str,
@@ -275,6 +281,7 @@ pub mod bridge {
     }
 
     /// Create a topology event for bridge changes
+    #[allow(dead_code)]
     pub fn topology_bridge_event(
         event_type: proto::topology_event::EventType,
         bridge_name: &str,
@@ -289,6 +296,7 @@ pub mod bridge {
     }
 
     /// Create a topology event for port changes
+    #[allow(dead_code)]
     pub fn topology_port_event(
         event_type: proto::topology_event::EventType,
         port_name: &str,

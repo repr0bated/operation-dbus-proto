@@ -81,6 +81,22 @@ impl StateManager {
         }
     }
 
+    /// Deregister a plugin
+    pub fn deregister_plugin(&self, name: &str) -> bool {
+        let removed = self.plugins.write().remove(name).is_some();
+
+        // Fire watch broadcast
+        if removed {
+            if let Some(tx) = &self.watch_tx {
+                let _ = tx.send(PluginEvent {
+                    plugin_id: name.to_string(),
+                    operation: PluginOperation::Deregister,
+                });
+            }
+        }
+        removed
+    }
+
     /// Get a plugin by name
     pub fn get_plugin(&self, name: &str) -> Option<Arc<dyn StatePlugin>> {
         self.plugins.read().get(name).cloned()

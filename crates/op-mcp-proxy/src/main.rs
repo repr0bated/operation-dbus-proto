@@ -1,10 +1,17 @@
-//! MCP Proxy – thin shim with optional direct-to-subscription mode.
+//! [DEPRECATED] MCP Proxy – thin shim. REMOVE ME.
 //!
-//! Routing:
-//!   - gRPC calls → op-dbus at 10.200.0.2:50051 with Ghostbridge metadata headers
-//!     (x-ghostbridge-footprint, x-ghostbridge-trace-id) sourced from the identity sled.
-//!   - LLM HTTP calls → Xray SOCKS5 at 10.200.0.1:1080 when sled is valid,
-//!     so they pass through NextDNS + the privacy stack.
+//! This crate is deprecated. zeroclaw already owns the equivalent functionality.
+//!
+//! Correct identity foundation (do not contradict this in code/docs):
+//! - WireGuard key-backed identity is the root.
+//! - wg connect → xray validates wg keypair + injects trusted source headers
+//!   (Ghostbridge headers + NextDNS info).
+//! - Recorded in **identity sled** + **Snowball ledger** (persistent for account lifetime).
+//! - No SQL for users/sessions. Legacy SQL catalogs are obsolete.
+//!
+//! compact-mcp (loopback only) and any op-mcp-proxy style shims are not for external routing.
+//!
+//! Routing below is historical/legacy only.
 
 use op_cache::proto::{mcp_service_client::McpServiceClient, McpRequest};
 use simd_json::prelude::*;

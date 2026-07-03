@@ -97,7 +97,7 @@ impl PluginSchemaProvider for SchemaCatalogPluginProvider {
 struct SchemaCatalogPluginProvider;
 
 fn read_live_schema_plugins() -> Vec<PluginInfo> {
-    let Ok(bytes) = std::fs::read(LIVE_SCHEMA_PATH) else {
+    let Some(bytes) = read_schema_catalog_bytes() else {
         return Vec::new();
     };
     let Ok(root) = serde_json::from_slice::<JsonValue>(&bytes) else {
@@ -117,7 +117,7 @@ fn read_live_schema_plugins() -> Vec<PluginInfo> {
 }
 
 fn read_live_schema(plugin_id: &str) -> Option<(String, String, String)> {
-    let bytes = std::fs::read(LIVE_SCHEMA_PATH).ok()?;
+    let bytes = read_schema_catalog_bytes()?;
     let root = serde_json::from_slice::<JsonValue>(&bytes).ok()?;
     let schema = root
         .as_object()?
@@ -134,6 +134,12 @@ fn read_live_schema(plugin_id: &str) -> Option<(String, String, String)> {
         "operation.pluginschema+json".to_string(),
         version,
     ))
+}
+
+fn read_schema_catalog_bytes() -> Option<Vec<u8>> {
+    op_identity::read_schema_blob()
+        .or_else(|_| std::fs::read(LIVE_SCHEMA_PATH))
+        .ok()
 }
 
 fn plugin_info_from_schema(id: &str, schema: &JsonValue) -> PluginInfo {

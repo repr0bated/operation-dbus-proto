@@ -18,7 +18,7 @@ use zbus::{Connection, Proxy};
 use base64::Engine;
 use op_identity::{read_sled, write_sled_full};
 use op_jsonrpc::nonnet::NonNetDb;
-use op_network::rovs_proxy::OvsdbDbusClient;
+use op_network::ovsdb::OvsdbClient;
 use op_state_store::{Decision, EventChain, OperationType};
 
 /// A state change projected from the authoritative system bus
@@ -71,7 +71,7 @@ pub struct SchemaEngine {
     dbus_call_limiter: Arc<Semaphore>,
 
     /// Authoritative RCP stores
-    pub ovsdb: Arc<OvsdbDbusClient>,
+    pub ovsdb: Arc<OvsdbClient>,
     pub nonnet: Arc<NonNetDb>,
 }
 
@@ -121,7 +121,7 @@ impl SchemaEngine {
     /// Create a new authoritative Schema Engine
     pub fn new(
         event_chain: Arc<RwLock<EventChain>>,
-        ovsdb: Arc<OvsdbDbusClient>,
+        ovsdb: Arc<OvsdbClient>,
         nonnet: Arc<NonNetDb>,
     ) -> Self {
         let (change_tx, _) = broadcast::channel(1024);
@@ -269,56 +269,47 @@ impl SchemaEngine {
         let ovsdb_self = me.clone();
         tokio::spawn(async move {
             if let Ok(mut rx) = ovsdb_self.ovsdb.monitor_db("Open_vSwitch").await {
-                loop {
-                    match rx.recv().await {
-                        Ok(update) => {
-                            if let Some(params) = update.get("params").and_then(|p| p.as_array()) {
-                                if params.len() >= 3 {
-                                    if let Some(tables) = params[2].as_object() {
-                                        for (table_name, table_update) in tables.iter() {
-                                            let table_name_owned: String = table_name.to_string();
-                                            // monitor_db returns serde_json::Value; convert to
-                                            // simd_json::OwnedValue required by process_authoritative_change.
-                                            let simd_val: simd_json::OwnedValue = {
-                                                match serde_json::to_string(table_update)
-                                                    .ok()
-                                                    .and_then(|s| {
-                                                        let mut b = s.into_bytes();
-                                                        simd_json::to_owned_value(&mut b).ok()
-                                                    }) {
-                                                    Some(v) => v,
-                                                    None => continue,
-                                                }
-                                            };
-                                            let _ = ovsdb_self
-                                                .process_authoritative_change(
-                                                    "net".to_string(),
-                                                    format!(
-                                                        "/org/opdbus/v1/ovsdb/{}",
-                                                        table_name_owned
-                                                    ),
-                                                    ChangeType::PropertySet,
-                                                    Some(table_name_owned),
-                                                    None,
-                                                    simd_val,
-                                                    vec![
-                                                        "ovsdb".to_string(),
-                                                        "network".to_string(),
-                                                    ],
-                                                    "ovsdb-monitor".to_string(),
-                                                    ChangeSource::DBus,
-                                                )
-                                                .await;
+                while let Some(update) = rx.recv().await {
+                    if let Some(params) = update.get("params").and_then(|p| p.as_array()) {
+                        if params.len() >= 3 {
+                            if let Some(tables) = params[2].as_object() {
+                                for (table_name, table_update) in tables.iter() {
+                                    let table_name_owned: String = table_name.to_string();
+                                    // monitor_db returns serde_json::Value; convert to
+                                    // simd_json::OwnedValue required by process_authoritative_change.
+                                    let simd_val: simd_json::OwnedValue = {
+                                        match serde_json::to_string(table_update)
+                                            .ok()
+                                            .and_then(|s| {
+                                                let mut b = s.into_bytes();
+                                                simd_json::to_owned_value(&mut b).ok()
+                                            }) {
+                                            Some(v) => v,
+                                            None => continue,
                                         }
-                                    }
+                                    };
+                                    let _ = ovsdb_self
+                                        .process_authoritative_change(
+                                            "net".to_string(),
+                                            format!(
+                                                "/org/opdbus/v1/ovsdb/{}",
+                                                table_name_owned
+                                            ),
+                                            ChangeType::PropertySet,
+                                            Some(table_name_owned),
+                                            None,
+                                            simd_val,
+                                            vec![
+                                                "ovsdb".to_string(),
+                                                "network".to_string(),
+                                            ],
+                                            "ovsdb-monitor".to_string(),
+                                            ChangeSource::DBus,
+                                        )
+                                        .await;
                                 }
                             }
                         }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                            tracing::warn!("OVSDB subscription lagged by {} events", n);
-                            continue;
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                     }
                 }
             }

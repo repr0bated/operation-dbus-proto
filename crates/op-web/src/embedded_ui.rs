@@ -13,7 +13,7 @@ use rust_embed::RustEmbed;
 /// Embedded UI assets from ui/dist
 /// Built at compile time via build.rs
 #[derive(RustEmbed)]
-#[folder = "../../lovable/dist"]
+#[folder = "ui/dist"]
 #[prefix = ""]
 pub struct UiAssets;
 
@@ -77,8 +77,8 @@ pub async fn serve_embedded_ui(uri: Uri) -> impl IntoResponse {
 <body style="font-family: system-ui; padding: 2rem; background: #1a1a1a; color: #fff;">
     <h1>UI Not Built</h1>
     <p>The embedded UI has not been built yet.</p>
-    <p>To build the UI:</p>
-    <pre style="background: #333; padding: 1rem; border-radius: 4px;">
+        <p>To build the UI:</p>
+        <pre style="background: #333; padding: 1rem; border-radius: 4px;">
 cd crates/op-web/ui
 npm ci
 npm run build

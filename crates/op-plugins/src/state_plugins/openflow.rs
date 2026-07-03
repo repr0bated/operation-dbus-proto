@@ -144,14 +144,20 @@ pub enum SocketPortType {
 }
 
 pub struct OpenFlowPlugin {
-    /// OVSDB client routed through the op-openvswitch-daemon over D-Bus.
-    ovsdb_client: op_network::rovs_proxy::OvsdbDbusClient,
+    /// OVSDB client routed through direct rovs transport.
+    ovsdb_client: op_network::ovsdb::OvsdbClient,
+}
+
+impl Default for OpenFlowPlugin {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl OpenFlowPlugin {
     pub fn new() -> Self {
         Self {
-            ovsdb_client: op_network::rovs_proxy::OvsdbDbusClient::new(),
+            ovsdb_client: op_network::ovsdb::OvsdbClient::new(),
         }
     }
 
@@ -179,7 +185,7 @@ impl OpenFlowPlugin {
 
     /// Get OpenFlow port number for a port name
     async fn get_port_ofport(&self, port_name: &str) -> Result<u16> {
-        let jsonrpc = Self::get_jsonrpc_proxy().await?;
+        let client = op_network::ovsdb::OvsdbClient::new();
 
         let req = simd_json::json!(["Open_vSwitch", {
             "op": "select",
@@ -188,8 +194,7 @@ impl OpenFlowPlugin {
             "columns": ["ofport"]
         }]);
 
-        let resp = jsonrpc.transact("transact", &req.to_string()).await?;
-        let res: Value = simd_json::to_owned_value(&mut resp.into_bytes())?;
+        let res = client.transact_simd("Open_vSwitch", req).await?;
 
         if let Some(rows) = res
             .as_array()
@@ -207,22 +212,8 @@ impl OpenFlowPlugin {
         Err(anyhow!("Could not find ofport for {}", port_name))
     }
 
-    async fn get_jsonrpc_proxy<'a>() -> Result<op_network::rovs_proxy::RovsJsonRpcProxy<'a>> {
-        let conn = zbus::Connection::system()
-            .await
-            .context("Failed to connect to system bus")?;
-        op_network::rovs_proxy::RovsJsonRpcProxy::new(&conn)
-            .await
-            .context("Failed to create RovsJsonRpcProxy")
-    }
-
-    async fn get_openflow_proxy<'a>() -> Result<op_network::rovs_proxy::RovsOpenFlowProxy<'a>> {
-        let conn = zbus::Connection::system()
-            .await
-            .context("Failed to connect to system bus")?;
-        op_network::rovs_proxy::RovsOpenFlowProxy::new(&conn)
-            .await
-            .context("Failed to create RovsOpenFlowProxy")
+    async fn get_openflow_proxy() -> Result<op_network::rovs_proxy::RovsOpenFlowProxy> {
+        op_network::rovs_proxy::RovsOpenFlowProxy::new().await
     }
 
     fn is_managed_socket_port(port_name: &str) -> Option<SocketPortType> {
@@ -298,8 +289,10 @@ impl OpenFlowPlugin {
         log::info!("Installing flow on {}: {}", bridge, flow_json);
 
         let proxy = Self::get_openflow_proxy().await?;
+        let conn_id_str = proxy.connect("127.0.0.1:6633").await?;
+        let conn_id: u64 = conn_id_str.parse().map_err(|e| anyhow!("Invalid connection ID: {}", e))?;
         proxy
-            .send_flow(&flow_json)
+            .send_flow(conn_id, &flow_json)
             .await
             .context("DBus send_flow failed")?;
         Ok(())
@@ -308,7 +301,9 @@ impl OpenFlowPlugin {
     /// Query current flows via native DBus OpenFlow protocol
     async fn query_flows(&self, _bridge: &str) -> Result<Vec<FlowEntry>> {
         let proxy = Self::get_openflow_proxy().await?;
-        let flow_strings = proxy.dump_flows().await.context("DBus dump_flows failed")?;
+        let conn_id_str = proxy.connect("127.0.0.1:6633").await?;
+        let conn_id: u64 = conn_id_str.parse().map_err(|e| anyhow!("Invalid connection ID: {}", e))?;
+        let flow_strings = proxy.dump_flows(conn_id).await.context("DBus dump_flows failed")?;
 
         let mut flows = Vec::new();
         for s in flow_strings {
@@ -325,10 +320,12 @@ impl OpenFlowPlugin {
         log::info!("Deleting flow on {}: {}", bridge, flow_json);
 
         let proxy = Self::get_openflow_proxy().await?;
+        let conn_id_str = proxy.connect("127.0.0.1:6633").await?;
+        let conn_id: u64 = conn_id_str.parse().map_err(|e| anyhow!("Invalid connection ID: {}", e))?;
         // For now, OpenFlow deletions might need a specialized method or send_flow with a delete command.
         // Assuming send_flow handles the delete action via its JSON schema.
         proxy
-            .send_flow(&flow_json)
+            .send_flow(conn_id, &flow_json)
             .await
             .context("DBus send_flow failed for delete")?;
         Ok(())
@@ -575,7 +572,7 @@ impl OpenFlowPlugin {
             }
         ]);
 
-        self.ovsdb_client.transact_simd(operations).await?;
+self.ovsdb_client.transact_simd("Open_vSwitch", operations).await?;
         Ok(())
     }
 
@@ -588,7 +585,7 @@ impl OpenFlowPlugin {
             "columns": ["_uuid"]
         }]);
 
-        let result = self.ovsdb_client.transact_simd(operations).await?;
+        let result = self.ovsdb_client.transact_simd("Open_vSwitch", operations).await?;
 
         if let Some(rows) = result[0]["rows"].as_array() {
             if let Some(first_row) = rows.first() {
@@ -612,7 +609,7 @@ impl OpenFlowPlugin {
             "columns": ["_uuid"]
         }]);
 
-        let result = self.ovsdb_client.transact_simd(operations).await?;
+        let result = self.ovsdb_client.transact_simd("Open_vSwitch", operations).await?;
 
         if let Some(rows) = result[0]["rows"].as_array() {
             if let Some(first_row) = rows.first() {
@@ -637,6 +634,7 @@ impl OpenFlowPlugin {
     /// Generate default security flows to prevent dangerous edge packets
     /// These flows protect against: ARP spoofing, invalid TCP flags, malformed packets,
     /// packet storms, and other intrusion-like traffic
+    #[allow(clippy::vec_init_then_push)]
     fn generate_security_flows(bridge_name: &str) -> Vec<FlowEntry> {
         let mut security_flows = Vec::new();
 
@@ -920,6 +918,7 @@ impl OpenFlowPlugin {
 
     /// Generate Level 2 obfuscation flows: Pattern hiding
     /// Hides traffic patterns via timing randomization, packet padding, TTL normalization
+    #[allow(clippy::vec_init_then_push)]
     fn generate_pattern_hiding_flows(bridge_name: &str) -> Vec<FlowEntry> {
         let mut obfuscation_flows = Vec::new();
 
@@ -989,6 +988,7 @@ impl OpenFlowPlugin {
 
     /// Generate Level 3 obfuscation flows: Advanced traffic morphing
     /// Makes tunnel traffic look like normal HTTPS/HTTP traffic via protocol mimicry
+    #[allow(clippy::vec_init_then_push)]
     fn generate_advanced_obfuscation_flows(bridge_name: &str) -> Vec<FlowEntry> {
         let mut advanced_flows = Vec::new();
 
