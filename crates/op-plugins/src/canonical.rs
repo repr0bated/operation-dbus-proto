@@ -63,8 +63,8 @@ pub const PLUGIN_BASE_INTERFACE: &str = "org.opdbus.v1.Plugin";
 /// Interface for the plugins collection/manager
 pub const PLUGINS_INTERFACE: &str = "org.opdbus.v1.Plugin.Plugins";
 
-/// Base service name (bus name)
-pub const BASE_SERVICE_NAME: &str = "org.opdbus.v1";
+/// Canonical plugin-host service name (bus name)
+pub const BASE_SERVICE_NAME: &str = "org.opdbus.v1.plugins";
 
 /// Schema file directory for plugins
 pub const PLUGIN_SCHEMA_DIR: &str = "schemas/plugin";
@@ -290,10 +290,7 @@ mod tests {
     #[test]
     fn test_plugin_path() {
         assert_eq!(plugin_path("incus"), "/org/opdbus/v1/plugins/incus");
-        assert_eq!(
-            plugin_path("my-plugin"),
-            "/org/opdbus/v1/plugins/my_plugin"
-        );
+        assert_eq!(plugin_path("my-plugin"), "/org/opdbus/v1/plugins/my_plugin");
         assert_eq!(
             plugin_path("123invalid"),
             "/org/opdbus/v1/plugins/plugin_123invalid"
@@ -378,7 +375,9 @@ mod tests {
     fn test_is_canonical_plugin_path() {
         assert!(is_canonical_plugin_path("/org/opdbus/v1/plugins/net"));
         assert!(!is_canonical_plugin_path("/opdbus/v1/plugins/net"));
-        assert!(!is_canonical_plugin_path("/org/opdbus/v1/plugin/plugins/net"));
+        assert!(!is_canonical_plugin_path(
+            "/org/opdbus/v1/plugin/plugins/net"
+        ));
     }
 
     #[test]
@@ -386,6 +385,6 @@ mod tests {
         assert_eq!(DBUS_ROOT_PATH, "/org/opdbus/v1");
         assert_eq!(PLUGIN_BASE_PATH, "/org/opdbus/v1/plugins");
         assert_eq!(PLUGINS_INTERFACE, "org.opdbus.v1.Plugin.Plugins");
-        assert_eq!(BASE_SERVICE_NAME, "org.opdbus.v1");
+        assert_eq!(BASE_SERVICE_NAME, "org.opdbus.v1.plugins");
     }
 }

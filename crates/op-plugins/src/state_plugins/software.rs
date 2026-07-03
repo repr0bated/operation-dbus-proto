@@ -1,20 +1,73 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
+use op_state_store::{FieldSchema, FieldType, PluginSchema};
 use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
+use simd_json::json;
 use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+use super::plugin_scaffold_helpers::{method_decl_from_schemars_with_output, AckOutput};
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
 pub struct SoftwareState {
+    #[serde(default)]
     pub packages: Vec<PackageInfo>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PackageInfo {
     pub name: String,
     pub version: String,
     pub manager: String, // "dpkg", "rpm", "cargo", etc.
+}
+
+/// Input struct for Install method.
+/// See: https://www.freedesktop.org/software/systemd/man/org.freedesktop.systemd1.html
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct InstallInput {
+    /// Package name to install
+    pub name: String,
+    /// Package version (optional)
+    pub version: Option<String>,
+}
+
+/// Input struct for Uninstall method.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct UninstallInput {
+    /// Package name to uninstall
+    pub name: String,
+    /// Force removal even if dependent
+    #[serde(default)]
+    pub force: bool,
+}
+
+/// Input struct for Update method.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct UpdateInput {
+    /// Package name to update
+    pub name: String,
+    /// Target version (optional, defaults to latest)
+    pub version: Option<String>,
+}
+
+/// Input struct for GetInfo method.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct GetInfoInput {
+    /// Package name to query
+    pub name: String,
+}
+
+/// Published schema state for the `software` plugin.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "sch.software.plugin.software.schema@v1"))]
+pub struct SoftwareSchemaState {
+    #[schemars(
+        description = "Package list",
+        extend("x-oscal-subid" = "obs.software.plugin.software.packages@v1")
+    )]
+    pub packages: Vec<PackageInfo>,
 }
 
 pub struct SoftwarePlugin;
@@ -77,14 +130,7 @@ impl StatePlugin for SoftwarePlugin {
     }
 
     fn schema(&self) -> Option<op_state_store::PluginSchema> {
-        Some(super::plugin_schema_defs::software_plugin_schema())
-    }
-
-    async fn query_current_state(&self) -> Result<Value> {
-        let packages = Self::scan_dpkg().await;
-        Ok(simd_json::serde::to_owned_value(SoftwareState {
-            packages,
-        })?)
+        Some(software_schema())
     }
 
     async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {
@@ -134,4 +180,145 @@ impl StatePlugin for SoftwarePlugin {
             atomic_operations: false,
         }
     }
+}
+
+pub(crate) fn software_schema() -> PluginSchema {
+    let mut schema = super::schemars_adapter::plugin_schema_from_json(
+        "software",
+        "1.0.0",
+        "Software package inventory",
+        &serde_json::to_value(schemars::schema_for!(SoftwareSchemaState)).unwrap(),
+    );
+    schema.subids.insert(
+        "__schema__".to_string(),
+        "sch.software.plugin.software.schema@v1".to_string(),
+    );
+    super::schemars_adapter::apply_state_defaults(
+        &mut schema,
+        &simd_json::serde::to_owned_value(&SoftwareState::default()).unwrap(),
+    );
+
+    // Install method - https://www.freedesktop.org/software/systemd/man/org.freedesktop.systemd1.html
+    schema.methods.insert(
+        "install".to_string(),
+        method_decl_from_schemars_with_output::<InstallInput, AckOutput>(
+            "Install",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "software.write",
+            "mut.software.plugin.software.install@v1",
+        ),
+    );
+
+    // Uninstall method
+    schema.methods.insert(
+        "uninstall".to_string(),
+        method_decl_from_schemars_with_output::<UninstallInput, AckOutput>(
+            "Uninstall",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "software.write",
+            "mut.software.plugin.software.uninstall@v1",
+        ),
+    );
+
+    // Update method
+    schema.methods.insert(
+        "update".to_string(),
+        method_decl_from_schemars_with_output::<UpdateInput, AckOutput>(
+            "Update",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "software.write",
+            "mut.software.plugin.software.update@v1",
+        ),
+    );
+
+    // GetInfo method
+    schema.methods.insert(
+        "get_info".to_string(),
+        method_decl_from_schemars_with_output::<GetInfoInput, AckOutput>(
+            "GetInfo",
+            op_state_store::SideEffect::Read,
+            true,
+            "software.read",
+            "obs.software.plugin.software.get-info@v1",
+        ),
+    );
+
+    schema
+}
+
+/// Frozen golden reference: the original hand-rolled `software` schema, kept
+/// test-only so the schemars-derived contract can be verified against drift.
+#[cfg(test)]
+pub(crate) fn software_schema_golden() -> PluginSchema {
+    PluginSchema::builder("software")
+        .version("1.0.0")
+        .description("Software package inventory")
+        .subid("__schema__", "sch.software.plugin.software.schema@v1")
+        .field(
+            "packages",
+            FieldSchema {
+                field_type: FieldType::Any,
+                required: true,
+                description: "Package list".to_string(),
+                default: Some(json!([])),
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        )
+        .subid("packages", "obs.software.plugin.software.packages@v1")
+        .build()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn derived_schema_matches_hand_rolled() {
+        let diffs = crate::state_plugins::schemars_adapter::schema_diffs(
+            &software_schema_golden(),
+            &software_schema(),
+        );
+        assert!(diffs.is_empty(), "schema drift: {:#?}", diffs);
+    }
+
+    #[test]
+    fn all_subids_are_valid() {
+        let raw = serde_json::to_value(schemars::schema_for!(SoftwareSchemaState)).unwrap();
+        let mut subids = Vec::new();
+        collect_subids(&raw, &mut subids);
+        for subid in subids {
+            assert!(
+                crate::state_plugins::common::oscal::validate_subid(&subid).is_ok(),
+                "invalid subid: {subid}"
+            );
+        }
+    }
+
+    fn collect_subids(value: &serde_json::Value, out: &mut Vec<String>) {
+        if let Some(obj) = value.as_object() {
+            if let Some(subid) = obj.get("x-oscal-subid").and_then(|v| v.as_str()) {
+                out.push(subid.to_string());
+            }
+            for v in obj.values() {
+                collect_subids(v, out);
+            }
+        }
+        if let Some(arr) = value.as_array() {
+            for v in arr {
+                collect_subids(v, out);
+            }
+        }
+    }
+}
+
+// Self-registration: the plugin registry discovers this via inventory
+// (single source of the catalog; no central dispatch list).
+inventory::submit! {
+    crate::default_registry::PluginReg::new("software", |_ctx| std::sync::Arc::new(SoftwarePlugin::new()))
 }

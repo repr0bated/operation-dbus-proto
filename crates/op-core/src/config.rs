@@ -20,6 +20,36 @@ use std::fs;
 use std::path::Path;
 use tracing::{debug, info, warn};
 
+/// Canonical D-Bus well-known bus name for the op-dbus system.
+///
+/// All components (op-dbus-mirror, projection_server, rovs_proxy, etc.)
+/// must use this constant instead of hardcoding the string.
+pub const OPDBUS_BUS_NAME: &str = "org.opdbus.v1.plugins";
+
+/// Canonical base object path for the projected plugin tree.
+///
+/// This is the single stable root anchor; plugin leaves live at
+/// `{PLUGIN_BASE_PATH}/<plugin_id>` and must be derived from it (or discovered
+/// by introspection), never hardcoded with a different spelling. Consumers that
+/// only depend on `op-core` use this; `op-plugins` exposes the richer
+/// `canonical::plugin_path()` helper built on the same value.
+pub const PLUGIN_BASE_PATH: &str = "/org/opdbus/v1/plugins";
+
+/// D-Bus bus name for the op-dbus-mirror service.
+///
+/// The mirror publishes OVSDB, ObjectManager, and other non-plugin surfaces.
+/// It MUST NOT request `OPDBUS_BUS_NAME` — the projection server is the sole
+/// owner of that name. Consumers of the mirror's surfaces (OVSDB JSON-RPC,
+/// ObjectManager) dial this name instead.
+pub const MIRROR_BUS_NAME: &str = "org.opdbus.v1.mirror";
+
+/// Canonical session bus socket path.  No dash — consistent with `opdbus`
+/// used in D-Bus names, object paths, and shm directories.
+pub const SESSION_BUS_SOCKET_PATH: &str = "/run/opdbus/session-bus.sock";
+
+/// Canonical session bus address string (for `DBUS_SESSION_BUS_ADDRESS`).
+pub const SESSION_BUS_ADDRESS: &str = "unix:path=/run/opdbus/session-bus.sock";
+
 /// Default path for the environment file
 pub const DEFAULT_ENV_FILE: &str = "/etc/op-dbus/environment";
 

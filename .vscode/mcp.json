@@ -1,0 +1,9 @@
+{
+  "servers": {
+    "cognitive-mcp": {
+      "type": "stdio",
+      "command": "cognitive-mcp-server",
+      "args": ["--stdio"]
+    }
+  }
+}

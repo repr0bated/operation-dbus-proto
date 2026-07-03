@@ -1,14 +1,32 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
+use op_state_store::{FieldSchema, FieldType, PluginSchema};
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Google Cloud ADC plugin state schema.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "sch.software.plugin.gcloud-adc.schema@v1"))]
 pub struct GcloudAdcState {
+    /// Authenticated account.
+    #[schemars(
+        description = "Authenticated account",
+        extend("x-oscal-subid" = "exp.software.plugin.gcloud-adc.account.render@v1")
+    )]
     pub account: Option<String>,
+    /// Project id.
+    #[schemars(
+        description = "Project id",
+        extend("x-oscal-subid" = "exp.software.plugin.gcloud-adc.project-id.render@v1")
+    )]
     pub project_id: Option<String>,
+    /// Authentication status.
+    #[schemars(
+        description = "Authentication status",
+        extend("x-oscal-subid" = "exp.software.plugin.gcloud-adc.authenticated.render@v1")
+    )]
     pub authenticated: bool,
 }
 
@@ -96,12 +114,7 @@ impl StatePlugin for GcloudAdcPlugin {
     }
 
     fn schema(&self) -> Option<op_state_store::PluginSchema> {
-        Some(super::plugin_schema_defs::gcloud_adc_plugin_schema())
-    }
-
-    async fn query_current_state(&self) -> Result<Value> {
-        let state = Self::check_auth_status().await?;
-        Ok(simd_json::serde::to_owned_value(state)?)
+        Some(gcloud_adc_schema())
     }
 
     async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {
@@ -152,4 +165,124 @@ impl StatePlugin for GcloudAdcPlugin {
             atomic_operations: false,
         }
     }
+}
+
+/// Canonical `gcloud_adc` schema, derived from the structs via schemars.
+pub fn gcloud_adc_schema() -> PluginSchema {
+    let root = serde_json::to_value(schemars::schema_for!(GcloudAdcState))
+        .expect("schemars schema serializes to JSON");
+    super::schemars_adapter::plugin_schema_from_json(
+        "gcloud_adc",
+        "1.0.0",
+        "Google Cloud ADC state",
+        &root,
+    )
+}
+
+/// Frozen golden reference: the original hand-rolled schema, kept test-only so
+/// `derived_schema_matches_hand_rolled` can prove the derived schema still
+/// matches the contract this plugin shipped with.
+#[cfg(test)]
+pub(crate) fn gcloud_adc_schema_golden() -> PluginSchema {
+    PluginSchema::builder("gcloud_adc")
+        .version("1.0.0")
+        .description("Google Cloud ADC state")
+        .subid("__schema__", "sch.software.plugin.gcloud-adc.schema@v1")
+        .field(
+            "account",
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Authenticated account".to_string(),
+                default: None,
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        )
+        .subid(
+            "account",
+            "exp.software.plugin.gcloud-adc.account.render@v1",
+        )
+        .field(
+            "project_id",
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Project id".to_string(),
+                default: None,
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        )
+        .subid(
+            "project_id",
+            "exp.software.plugin.gcloud-adc.project-id.render@v1",
+        )
+        .field(
+            "authenticated",
+            FieldSchema {
+                field_type: FieldType::Boolean,
+                required: true,
+                description: "Authentication status".to_string(),
+                default: None,
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        )
+        .subid(
+            "authenticated",
+            "exp.software.plugin.gcloud-adc.authenticated.render@v1",
+        )
+        .build()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state_plugins::common::oscal::validate_subid;
+
+    #[test]
+    fn derived_schema_matches_hand_rolled() {
+        let golden = gcloud_adc_schema_golden();
+        let derived = gcloud_adc_schema();
+        let diffs = super::super::schemars_adapter::schema_diffs(&golden, &derived);
+        assert!(diffs.is_empty(), "schema_diffs: {:#?}", diffs);
+    }
+
+    #[test]
+    fn all_subids_are_valid() {
+        let raw = serde_json::to_value(schemars::schema_for!(GcloudAdcState)).unwrap();
+        let mut stack = vec![&raw];
+        while let Some(node) = stack.pop() {
+            if let Some(subid) = node.get("x-oscal-subid").and_then(|v| v.as_str()) {
+                validate_subid(subid).expect("invalid subid");
+            }
+            if let Some(props) = node.get("properties").and_then(|v| v.as_object()) {
+                for (_, v) in props {
+                    stack.push(v);
+                }
+            }
+            if let Some(defs) = node
+                .get("$defs")
+                .or_else(|| node.get("definitions"))
+                .and_then(|v| v.as_object())
+            {
+                for (_, v) in defs {
+                    stack.push(v);
+                }
+            }
+        }
+    }
+}
+
+// Self-registration: the plugin registry discovers this via inventory
+// (single source of the catalog; no central dispatch list).
+inventory::submit! {
+    crate::default_registry::PluginReg::new("gcloud_adc", |_ctx| std::sync::Arc::new(GcloudAdcPlugin::new()))
 }

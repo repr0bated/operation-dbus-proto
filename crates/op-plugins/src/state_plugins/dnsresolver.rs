@@ -1,3 +1,4 @@
+use schemars::JsonSchema;
 // dnsresolver_plugin.rs
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -8,28 +9,44 @@ use std::fs;
 use op_state::{
     ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
 };
+use op_state_store::{Constraint, FieldSchema, FieldType, PluginSchema};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct DnsState {
+    /// DNS plugin state schema.
+    #[schemars(extend("x-oscal-subid" = "sch.software.plugin.dnsresolver.schema@v1"))]
     pub version: u32,
+    #[schemars(extend("x-oscal-subid" = "obs.software.dnsresolver.state.items@v1"))]
     pub items: Vec<DnsItem>,
 }
 
-#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum Mode {
+    #[schemars(extend("x-oscal-subid" = "obs.software.dnsresolver.mode.enforce@v1"))]
     Enforce,
+    #[schemars(extend("x-oscal-subid" = "obs.software.dnsresolver.mode.observe-only@v1"))]
     ObserveOnly,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct DnsItem {
+    /// DNS item identifier.
+    #[schemars(extend("x-oscal-subid" = "exp.software.dnsresolver.item.id@v1"))]
     pub id: String,
+    /// DNS mode.
+    #[schemars(extend("x-oscal-subid" = "obs.software.dnsresolver.item.mode@v1"))]
     pub mode: Mode,
+    /// DNS server list.
+    #[schemars(extend("x-oscal-subid" = "mut.software.dnsresolver.item.servers@v1"))]
     pub servers: Vec<String>,
+    /// DNS search domains.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("x-oscal-subid" = "obs.software.dnsresolver.item.search@v1"))]
     pub search: Option<Vec<String>>,
+    /// DNS options.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("x-oscal-subid" = "obs.software.dnsresolver.item.options@v1"))]
     pub options: Option<Vec<String>>,
 }
 
@@ -153,9 +170,8 @@ impl StatePlugin for DnsResolverPlugin {
         "1.0.0"
     }
 
-    async fn query_current_state(&self) -> Result<Value> {
-        let items = Self::query_system();
-        Ok(simd_json::json!({ "version": 1, "items": items }))
+    fn schema(&self) -> Option<PluginSchema> {
+        Some(dnsresolver_schema())
     }
 
     async fn calculate_diff(&self, _current: &Value, desired: &Value) -> Result<StateDiff> {
@@ -288,4 +304,373 @@ impl StatePlugin for DnsResolverPlugin {
             atomic_operations: false,
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ResolveHostnameInput {
+    pub ifindex: i32,
+    pub name: String,
+    pub family: i32,
+    pub flags: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ResolveAddressInput {
+    pub ifindex: i32,
+    pub family: i32,
+    pub address: Vec<u8>,
+    pub flags: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ResolveRecordInput {
+    pub ifindex: i32,
+    pub name: String,
+    pub class: u16,
+    pub record_type: u16,
+    pub flags: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ResolveServiceInput {
+    pub ifindex: i32,
+    pub name: String,
+    pub family: i32,
+    pub flags: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct GetLinkInput {
+    pub ifindex: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SetLinkDNSInput {
+    pub ifindex: i32,
+    pub addresses: Vec<(i32, Vec<u8>)>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SetLinkDNSExInput {
+    pub ifindex: i32,
+    pub addresses: Vec<(i32, Vec<u8>, u16, String)>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SetLinkDomainsInput {
+    pub ifindex: i32,
+    pub domains: Vec<(String, bool)>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SetLinkDefaultRouteInput {
+    pub ifindex: i32,
+    pub enable: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SetLinkLLMNRInput {
+    pub ifindex: i32,
+    pub mode: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SetLinkMulticastDNSInput {
+    pub ifindex: i32,
+    pub mode: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SetLinkDNSOverTLSInput {
+    pub ifindex: i32,
+    pub mode: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SetLinkDNSSECInput {
+    pub ifindex: i32,
+    pub mode: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SetLinkDNSSECNegativeTrustAnchorsInput {
+    pub ifindex: i32,
+    pub names: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct RevertLinkInput {
+    pub ifindex: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct RegisterServiceInput {
+    pub id: String,
+    pub name_template: String,
+    pub type_: String,
+    pub port: u16,
+    pub priority: u16,
+    pub weight: u16,
+    pub txt: Vec<std::collections::BTreeMap<String, Vec<u8>>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct UnregisterServiceInput {
+    pub service_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ResetStatisticsInput {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct FlushCachesInput {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ResetServerFeaturesInput {}
+
+pub(crate) fn dnsresolver_schema() -> PluginSchema {
+    let mut schema = PluginSchema::builder("dnsresolver")
+        .version("1.0.0")
+        .description("DNS resolver declaration state")
+        .field(
+            "version",
+            FieldSchema {
+                field_type: FieldType::Integer,
+                required: false,
+                description: "Schema version".to_string(),
+                default: Some(simd_json::json!(1)),
+                example: None,
+                constraints: vec![Constraint::Min { value: 1.0 }],
+                read_only: false,
+                read_only_when: None,
+            },
+        )
+        .field(
+            "items",
+            FieldSchema {
+                field_type: FieldType::Array(Box::new(FieldType::Any)),
+                required: true,
+                description: "Resolver items".to_string(),
+                default: Some(simd_json::json!([])),
+                example: None,
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        )
+        .build();
+
+    // org.freedesktop.resolve1.Manager methods
+    // Spec: https://www.freedesktop.org/software/systemd/man/latest/org.freedesktop.resolve1.html
+    schema.methods.insert(
+        "resolve_hostname".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<ResolveHostnameInput, super::plugin_scaffold_helpers::AckOutput>(
+            "ResolveHostname",
+            op_state_store::SideEffect::Read,
+            true,
+            "dnsresolver.read",
+            "obs.software.dnsresolver.hostname.resolve@v1",
+        ),
+    );
+    schema.methods.insert(
+        "resolve_address".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<ResolveAddressInput, super::plugin_scaffold_helpers::AckOutput>(
+            "ResolveAddress",
+            op_state_store::SideEffect::Read,
+            true,
+            "dnsresolver.read",
+            "obs.software.dnsresolver.address.resolve@v1",
+        ),
+    );
+    schema.methods.insert(
+        "resolve_record".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<ResolveRecordInput, super::plugin_scaffold_helpers::AckOutput>(
+            "ResolveRecord",
+            op_state_store::SideEffect::Read,
+            true,
+            "dnsresolver.read",
+            "obs.software.dnsresolver.record.resolve@v1",
+        ),
+    );
+    schema.methods.insert(
+        "resolve_service".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<ResolveServiceInput, super::plugin_scaffold_helpers::AckOutput>(
+            "ResolveService",
+            op_state_store::SideEffect::Read,
+            true,
+            "dnsresolver.read",
+            "obs.software.dnsresolver.service.resolve@v1",
+        ),
+    );
+    schema.methods.insert(
+        "get_link".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<GetLinkInput, super::plugin_scaffold_helpers::AckOutput>(
+            "GetLink",
+            op_state_store::SideEffect::Read,
+            true,
+            "dnsresolver.read",
+            "obs.software.dnsresolver.link.get@v1",
+        ),
+    );
+    schema.methods.insert(
+        "set_link_dns".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<SetLinkDNSInput, super::plugin_scaffold_helpers::AckOutput>(
+            "SetLinkDNS",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "dnsresolver.write",
+            "mut.software.dnsresolver.link.set-dns@v1",
+        ),
+    );
+    schema.methods.insert(
+        "set_link_dns_ex".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<SetLinkDNSExInput, super::plugin_scaffold_helpers::AckOutput>(
+            "SetLinkDNSEx",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "dnsresolver.write",
+            "mut.software.dnsresolver.link.set-dns-ex@v1",
+        ),
+    );
+    schema.methods.insert(
+        "set_link_domains".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<SetLinkDomainsInput, super::plugin_scaffold_helpers::AckOutput>(
+            "SetLinkDomains",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "dnsresolver.write",
+            "mut.software.dnsresolver.link.set-domains@v1",
+        ),
+    );
+    schema.methods.insert(
+        "set_link_default_route".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<SetLinkDefaultRouteInput, super::plugin_scaffold_helpers::AckOutput>(
+            "SetLinkDefaultRoute",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "dnsresolver.write",
+            "mut.software.dnsresolver.link.set-default-route@v1",
+        ),
+    );
+    schema.methods.insert(
+        "set_link_llmnr".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<SetLinkLLMNRInput, super::plugin_scaffold_helpers::AckOutput>(
+            "SetLinkLLMNR",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "dnsresolver.write",
+            "mut.software.dnsresolver.link.set-llmnr@v1",
+        ),
+    );
+    schema.methods.insert(
+        "set_link_multicast_dns".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<SetLinkMulticastDNSInput, super::plugin_scaffold_helpers::AckOutput>(
+            "SetLinkMulticastDNS",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "dnsresolver.write",
+            "mut.software.dnsresolver.link.set-mdns@v1",
+        ),
+    );
+    schema.methods.insert(
+        "set_link_dns_over_tls".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<SetLinkDNSOverTLSInput, super::plugin_scaffold_helpers::AckOutput>(
+            "SetLinkDNSOverTLS",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "dnsresolver.write",
+            "mut.software.dnsresolver.link.set-dot@v1",
+        ),
+    );
+    schema.methods.insert(
+        "set_link_dnssec".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<SetLinkDNSSECInput, super::plugin_scaffold_helpers::AckOutput>(
+            "SetLinkDNSSEC",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "dnsresolver.write",
+            "mut.software.dnsresolver.link.set-dnssec@v1",
+        ),
+    );
+    schema.methods.insert(
+        "set_link_dnssec_nta".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+            SetLinkDNSSECNegativeTrustAnchorsInput,
+            super::plugin_scaffold_helpers::AckOutput,
+        >(
+            "SetLinkDNSSECNegativeTrustAnchors",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "dnsresolver.write",
+            "mut.software.dnsresolver.link.set-dnssec-nta@v1",
+        ),
+    );
+    schema.methods.insert(
+        "revert_link".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<RevertLinkInput, super::plugin_scaffold_helpers::AckOutput>(
+            "RevertLink",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "dnsresolver.write",
+            "mut.software.dnsresolver.link.revert@v1",
+        ),
+    );
+    schema.methods.insert(
+        "register_service".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<RegisterServiceInput, super::plugin_scaffold_helpers::AckOutput>(
+            "RegisterService",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "dnsresolver.write",
+            "mut.software.dnsresolver.service.register@v1",
+        ),
+    );
+    schema.methods.insert(
+        "unregister_service".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<UnregisterServiceInput, super::plugin_scaffold_helpers::AckOutput>(
+            "UnregisterService",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "dnsresolver.write",
+            "mut.software.dnsresolver.service.unregister@v1",
+        ),
+    );
+    schema.methods.insert(
+        "reset_statistics".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<ResetStatisticsInput, super::plugin_scaffold_helpers::AckOutput>(
+            "ResetStatistics",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "dnsresolver.write",
+            "mut.software.dnsresolver.statistics.reset@v1",
+        ),
+    );
+    schema.methods.insert(
+        "flush_caches".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<FlushCachesInput, super::plugin_scaffold_helpers::AckOutput>(
+            "FlushCaches",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "dnsresolver.write",
+            "mut.software.dnsresolver.caches.flush@v1",
+        ),
+    );
+    schema.methods.insert(
+        "reset_server_features".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<ResetServerFeaturesInput, super::plugin_scaffold_helpers::AckOutput>(
+            "ResetServerFeatures",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "dnsresolver.write",
+            "mut.software.dnsresolver.server-features.reset@v1",
+        ),
+    );
+
+    schema
+}
+
+// Self-registration: the plugin registry discovers this via inventory
+// (single source of the catalog; no central dispatch list).
+inventory::submit! {
+    crate::default_registry::PluginReg::new("dnsresolver", |_ctx| std::sync::Arc::new(DnsResolverPlugin::new()))
 }

@@ -21,6 +21,7 @@ const DEFAULT_USER_MEMORY_COLLECTION: &str = "user_memory";
 const DEFAULT_SCHEMA_SLED_PATH: &str = "/dev/shm/plugin_schema.dat";
 const DEFAULT_TRACE_LIMIT: u32 = 5;
 const DEFAULT_VOYAGE_API_URL: &str = "https://api.voyageai.com/v1/embeddings";
+const DEFAULT_VOYAGE_MONGODB_API_URL: &str = "https://ai.mongodb.com/v1/embeddings";
 const DEFAULT_VOYAGE_QUERY_MODEL: &str = "voyage-4";
 const DEFAULT_VOYAGE_OUTPUT_DIMENSION: u32 = 1024;
 
@@ -328,11 +329,14 @@ impl VoyageClient {
     fn from_env() -> Result<Self> {
         let api_key = std::env::var("COGNITIVE_MCP_VOYAGE_API_KEY")
             .or_else(|_| std::env::var("VOYAGE_API_KEY"))
+            .or_else(|_| std::env::var("VOYAGE_API_KEY_RUST"))
+            .or_else(|_| voyage_key_from_file().ok_or(std::env::VarError::NotPresent))
             .context(
-                "missing Voyage API key: set COGNITIVE_MCP_VOYAGE_API_KEY or VOYAGE_API_KEY",
+                "missing Voyage API key: set COGNITIVE_MCP_VOYAGE_API_KEY, VOYAGE_API_KEY, \
+                 VOYAGE_API_KEY_RUST, or COGNITIVE_MCP_VOYAGE_KEY_FILE",
             )?;
         let api_url = std::env::var("COGNITIVE_MCP_VOYAGE_API_URL")
-            .unwrap_or_else(|_| DEFAULT_VOYAGE_API_URL.into());
+            .unwrap_or_else(|_| voyage_url_for_key(&api_key).into());
         let model = std::env::var("COGNITIVE_MCP_VOYAGE_QUERY_MODEL")
             .unwrap_or_else(|_| DEFAULT_VOYAGE_QUERY_MODEL.into());
         let output_dimension = std::env::var("COGNITIVE_MCP_VOYAGE_OUTPUT_DIMENSION")
@@ -384,6 +388,39 @@ impl VoyageClient {
             .context("failed to decode Voyage embeddings response")?;
 
         extract_embedding(&response_json)
+    }
+}
+
+fn voyage_key_from_file() -> Option<String> {
+    let path = std::env::var("COGNITIVE_MCP_VOYAGE_KEY_FILE")
+        .ok()
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|home| Path::new(&home).join(".ssh/mongo-voyage"))
+        })?;
+
+    let contents = std::fs::read_to_string(&path).ok()?;
+    let key = contents
+        .lines()
+        .map(str::trim)
+        .find(|line| {
+            !line.is_empty()
+                && !line.starts_with('#')
+                && !line.starts_with("mdb_sa_id_")
+                && !line.starts_with("mdb_sa_sk_")
+                && (line.starts_with("al-") || line.starts_with("pa-"))
+        })?
+        .to_string();
+
+    tracing::info!(path = %path.display(), "Loaded Voyage API key from file");
+    Some(key)
+}
+
+fn voyage_url_for_key(key: &str) -> &'static str {
+    if key.trim().starts_with("al-") {
+        DEFAULT_VOYAGE_MONGODB_API_URL
+    } else {
+        DEFAULT_VOYAGE_API_URL
     }
 }
 
@@ -526,6 +563,14 @@ fn render_field_type(field_type: &FieldType) -> String {
             format!("object<{}>", names.join("|"))
         }
         FieldType::Enum(values) => format!("enum<{}>", values.join("|")),
+        FieldType::OneOf(branches) => format!(
+            "one_of<{}>",
+            branches
+                .iter()
+                .map(render_field_type)
+                .collect::<Vec<_>>()
+                .join("|")
+        ),
         FieldType::Any => "any".to_string(),
     }
 }
@@ -698,6 +743,7 @@ mod tests {
             category: "accountability".into(),
             version: "1.0.0".into(),
             description: "Human reviewable reasoning episodes".into(),
+            display_name: None,
             fields,
             dependencies: vec!["op-grpc-bridge".into(), "op-state-store".into()],
             example: None,
@@ -706,6 +752,9 @@ mod tests {
             dialect: op_state_store::DEFAULT_SCHEMA_DIALECT.into(),
             mutation_index: Some(7),
             subids: std::collections::HashMap::new(),
+            methods: std::collections::HashMap::new(),
+            signals: vec![],
+            guarantees: op_state_store::PluginCapabilities::default(),
         };
 
         let rendered = render_schema_embedding_text(&schema);

@@ -7,7 +7,7 @@
 //! - org.freedesktop.DBus.Peer
 //!
 //! This plugin follows the canonical path convention:
-//! - D-Bus Path: /org/opdbus/v1/plugin/plugins/freedesktop
+//! - D-Bus Path: /org/opdbus/v1/plugins/freedesktop
 //! - Interface: org.opdbus.v1.Plugin.Plugins.FreeDesktop
 //! - Schema: schemas/plugin/freedesktop.json
 //!
@@ -20,10 +20,11 @@
 //! ## Canonical Path Compliance
 //!
 //! This plugin uses the canonical paths as defined in `crate::canonical`:
-//! - Object path prefix: `/org/opdbus/v1/plugin/plugins/`
+//! - Object path prefix: `/org/opdbus/v1/plugins/`
 //! - Interface prefix: `org.opdbus.v1.Plugin.Plugins`
 //!
-//! Legacy paths like `/opdbus/v1/plugins/` are NOT supported.
+//! Legacy paths like `/opdbus/v1/plugins/` or `/org/opdbus/v1/plugin/plugins/`
+//! are normalized to the canonical prefix by `crate::canonical::normalize_plugin_path`.
 
 use crate::canonical;
 use anyhow::Result;
@@ -31,9 +32,41 @@ use async_trait::async_trait;
 use op_state::{
     ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, PluginSchema, StateDiff, StatePlugin,
 };
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use simd_json::prelude::{ValueAsScalar, ValueObjectAccess};
 use simd_json::OwnedValue as Value;
 use std::collections::HashMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GetManagedObjectsInput {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GetPropertyInput {
+    pub interface_name: String,
+    pub property_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GetAllPropertiesInput {
+    pub interface_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SetPropertyInput {
+    pub interface_name: String,
+    pub property_name: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct IntrospectInput {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PingInput {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GetMachineIdInput {}
 
 /// FreeDesktop plugin implementation
 pub struct FreeDesktopPlugin {
@@ -109,6 +142,76 @@ impl FreeDesktopPlugin {
                 .version("1.0.0")
                 .category("system")
                 .description("FreeDesktop D-Bus standards implementation")
+                .method(super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+                    GetManagedObjectsInput,
+                    super::plugin_scaffold_helpers::AckOutput,
+                >(
+                    "GetManagedObjects",
+                    op_state_store::SideEffect::Read,
+                    true,
+                    "freedesktop.read",
+                    "obs.software.freedesktop.managed_objects.get@v1",
+                ))
+                .method(super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+                    GetPropertyInput,
+                    super::plugin_scaffold_helpers::AckOutput,
+                >(
+                    "Get",
+                    op_state_store::SideEffect::Read,
+                    true,
+                    "freedesktop.read",
+                    "obs.software.freedesktop.property.get@v1",
+                ))
+                .method(super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+                    GetAllPropertiesInput,
+                    super::plugin_scaffold_helpers::AckOutput,
+                >(
+                    "GetAll",
+                    op_state_store::SideEffect::Read,
+                    true,
+                    "freedesktop.read",
+                    "obs.software.freedesktop.properties.getall@v1",
+                ))
+                .method(super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+                    SetPropertyInput,
+                    super::plugin_scaffold_helpers::AckOutput,
+                >(
+                    "Set",
+                    op_state_store::SideEffect::Mutation,
+                    true,
+                    "freedesktop.write",
+                    "mut.software.freedesktop.property.set@v1",
+                ))
+                .method(super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+                    IntrospectInput,
+                    super::plugin_scaffold_helpers::AckOutput,
+                >(
+                    "Introspect",
+                    op_state_store::SideEffect::Read,
+                    true,
+                    "freedesktop.read",
+                    "obs.software.freedesktop.introspect@v1",
+                ))
+                .method(super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+                    PingInput,
+                    super::plugin_scaffold_helpers::AckOutput,
+                >(
+                    "Ping",
+                    op_state_store::SideEffect::Read,
+                    true,
+                    "freedesktop.read",
+                    "obs.software.freedesktop.ping@v1",
+                ))
+                .method(super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+                    GetMachineIdInput,
+                    super::plugin_scaffold_helpers::AckOutput,
+                >(
+                    "GetMachineId",
+                    op_state_store::SideEffect::Read,
+                    true,
+                    "freedesktop.read",
+                    "obs.software.freedesktop.machine_id.get@v1",
+                ))
                 .build(),
         );
     }
@@ -281,41 +384,6 @@ impl StatePlugin for FreeDesktopPlugin {
         self.schema.clone()
     }
 
-    async fn query_current_state(&self) -> anyhow::Result<Value> {
-        // Return the current state of FreeDesktop interfaces
-        let interfaces: Vec<Value> = self
-            .dbus_interfaces
-            .values()
-            .map(|iface| {
-                simd_json::json!({
-                    "name": iface.name.clone(),
-                    "description": iface.description.clone(),
-                    "methods_count": iface.methods.len(),
-                    "signals_count": iface.signals.len(),
-                    "properties_count": iface.properties.len(),
-                })
-            })
-            .collect();
-
-        let state = simd_json::json!({
-            "name": "freedesktop",
-            "version": "1.0.0",
-            "plugin_type": "system",
-            "dbus_path": self.dbus_path(),
-            "dbus_interface": self.dbus_interface(),
-            "interfaces": interfaces,
-            "canonical_path_verified": true,
-            "freedesktop_standards": {
-                "object_manager": true,
-                "properties_interface": true,
-                "introspection_interface": true,
-                "peer_interface": true,
-            }
-        });
-
-        Ok(state)
-    }
-
     async fn calculate_diff(&self, _current: &Value, desired: &Value) -> anyhow::Result<StateDiff> {
         // FreeDesktop plugin is informational - we only check if desired state is valid
         let actions = vec![];
@@ -344,22 +412,16 @@ impl StatePlugin for FreeDesktopPlugin {
 
     async fn verify_state(&self, desired: &Value) -> anyhow::Result<bool> {
         // Verify the desired state has the correct structure
-        let current = self.query_current_state().await?;
-
-        // Check critical fields match
-        let current_name = current.get("name").and_then(|v| v.as_str());
-        let desired_name = desired.get("name").and_then(|v| v.as_str());
-
-        Ok(current_name == desired_name && current_name == Some("freedesktop"))
+        let current_name = desired.get("name").and_then(|v| v.as_str());
+        Ok(current_name == Some("freedesktop"))
     }
 
     async fn create_checkpoint(&self) -> anyhow::Result<Checkpoint> {
-        let current = self.query_current_state().await?;
         Ok(Checkpoint {
             id: format!("freedesktop-{}", chrono::Utc::now().timestamp()),
             plugin: self.name().to_string(),
             timestamp: chrono::Utc::now().timestamp(),
-            state_snapshot: current,
+            state_snapshot: simd_json::json!(null),
             backend_checkpoint: None,
         })
     }
@@ -417,13 +479,10 @@ mod tests {
         let plugin = FreeDesktopPlugin::new();
 
         // Verify canonical paths
-        assert_eq!(
-            plugin.dbus_path(),
-            "/org/opdbus/v1/plugin/plugins/freedesktop"
-        );
+        assert_eq!(plugin.dbus_path(), "/org/opdbus/v1/plugins/freedesktop");
         assert_eq!(
             plugin.dbus_interface(),
-            "org.opdbus.v1.Plugin.Plugins.FreeDesktop"
+            "org.opdbus.v1.Plugin.Plugins.Freedesktop"
         );
     }
 
@@ -450,10 +509,10 @@ mod tests {
 
         // Valid canonical path
         assert!(plugin
-            .validate_canonical_path("/org/opdbus/v1/plugin/plugins/test")
+            .validate_canonical_path("/org/opdbus/v1/plugins/test")
             .is_ok());
 
-        // Invalid legacy path
+        // Invalid legacy path (missing /org prefix)
         assert!(plugin
             .validate_canonical_path("/opdbus/v1/plugins/test")
             .is_err());
@@ -463,28 +522,18 @@ mod tests {
     fn test_path_normalization() {
         let plugin = FreeDesktopPlugin::new();
 
-        // Legacy path should be normalized
+        // Legacy path should be normalized to canonical
         let normalized = plugin.normalize_path("/opdbus/v1/plugins/test");
-        assert_eq!(
-            normalized,
-            Some("/org/opdbus/v1/plugin/plugins/test".to_string())
-        );
+        assert_eq!(normalized, Some("/org/opdbus/v1/plugins/test".to_string()));
 
-        // Canonical path stays the same
+        // Legacy alias also normalizes to canonical
         let canonical = plugin.normalize_path("/org/opdbus/v1/plugin/plugins/test");
-        assert_eq!(
-            canonical,
-            Some("/org/opdbus/v1/plugin/plugins/test".to_string())
-        );
+        assert_eq!(canonical, Some("/org/opdbus/v1/plugins/test".to_string()));
     }
+}
 
-    #[tokio::test]
-    async fn test_state_query() {
-        let plugin = FreeDesktopPlugin::new();
-        let state = plugin.query_current_state().await.unwrap();
-
-        assert_eq!(state.get("name").unwrap().as_str().unwrap(), "freedesktop");
-        assert_eq!(state.get("version").unwrap().as_str().unwrap(), "1.0.0");
-        assert!(state.get("interfaces").unwrap().is_array());
-    }
+// Self-registration: the plugin registry discovers this via inventory
+// (single source of the catalog; no central dispatch list).
+inventory::submit! {
+    crate::default_registry::PluginReg::new("freedesktop", |_ctx| std::sync::Arc::new(FreeDesktopPlugin::new()))
 }

@@ -7,11 +7,13 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use op_cognitive_mcp::rag_pipeline::{RagPipeline, DEFAULT_COLLECTION};
+use op_cognitive_mcp::rag_pipeline::default_collection_from_env;
+use op_cognitive_mcp::rag_pipeline::RagPipeline;
 use std::path::PathBuf;
 use tracing::{error, info};
 
-// voyage-code-3 pricing: $0.18 per million tokens (charged after free tier exhausted)
+// Voyage embedding pricing estimate: per million tokens, charged after free tier
+// exhausted. Rough figure for budgeting; adjust to the current voyage-4 tier.
 const VOYAGE_COST_PER_MILLION: f64 = 0.18;
 // Free tier per model per month (tokens) — overage is billed at VOYAGE_COST_PER_MILLION
 const VOYAGE_FREE_TIER_TOKENS: usize = 200_000_000;
@@ -41,8 +43,8 @@ struct Cli {
     list: bool,
 
     /// Qdrant collection name
-    #[arg(long, default_value = DEFAULT_COLLECTION)]
-    collection: String,
+    #[arg(long, env = "COGNITIVE_MCP_RAG_COLLECTION")]
+    collection: Option<String>,
 
     /// Skip repos whose names contain this substring
     #[arg(long)]
@@ -69,6 +71,10 @@ async fn main() -> Result<()> {
         .init();
 
     let mut cli = Cli::parse();
+    let collection = cli
+        .collection
+        .clone()
+        .unwrap_or_else(default_collection_from_env);
 
     // Expand ~ in zip path
     if let Some(home) = std::env::var_os("HOME") {
@@ -137,7 +143,9 @@ async fn main() -> Result<()> {
     println!("  Repos          : {}", targets.len());
     println!("  Est. chunks    : ~{estimated_chunks}");
     println!("  Est. tokens    : ~{}M", estimated_tokens / 1_000_000);
-    println!("  Est. cost      : ~${estimated_cost:.2}  (voyage-code-3 @ ${VOYAGE_COST_PER_MILLION}/M tokens)");
+    println!(
+        "  Est. cost      : ~${estimated_cost:.2}  (Voyage @ ${VOYAGE_COST_PER_MILLION}/M tokens)"
+    );
     println!(
         "  Token cap      : {}M  (--max-tokens)",
         cli.max_tokens / 1_000_000
@@ -170,7 +178,7 @@ async fn main() -> Result<()> {
     // ── Ingest ───────────────────────────────────────────────────────────────
     info!(
         count = targets.len(),
-        collection = %cli.collection,
+        collection = %collection,
         "Starting ingest"
     );
 
@@ -186,7 +194,7 @@ async fn main() -> Result<()> {
         info!(repo = %repo, "Processing");
 
         match pipeline
-            .ingest_repomix_entry(&zip_path, entry_name, &cli.collection)
+            .ingest_repomix_entry(&zip_path, entry_name, &collection)
             .await
         {
             Ok(stats) => {
@@ -225,7 +233,7 @@ async fn main() -> Result<()> {
     println!("  Errors          : {total_errors}");
     println!("  Est. tokens used: ~{}M", total_tokens / 1_000_000);
     println!("  Est. cost       : ~${actual_cost:.2}");
-    println!("  Collection      : {}", cli.collection);
+    println!("  Collection      : {collection}");
 
     Ok(())
 }

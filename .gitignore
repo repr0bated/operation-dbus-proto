@@ -24,6 +24,7 @@ archive/
 storage/
 *.pid
 nohup.out
+deploy/s6/**/supervise/
 
 # Nested git repos (whole directories)
 branch-bestie-sync/

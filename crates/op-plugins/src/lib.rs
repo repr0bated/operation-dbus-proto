@@ -1,4 +1,20 @@
 #![recursion_limit = "512"]
+#![allow(
+    dead_code,
+    unused_imports,
+    unused_variables,
+    deprecated,
+    clippy::derivable_impls,
+    clippy::collapsible_if,
+    clippy::large_enum_variant,
+    clippy::let_and_return,
+    clippy::new_without_default,
+    clippy::vec_init_then_push,
+    clippy::needless_update,
+    clippy::needless_borrows_for_generic_args,
+    clippy::op_ref,
+    clippy::empty_line_after_outer_attr
+)]
 
 //! op-plugins: Plugin system with state management and blockchain footprints
 //!
@@ -42,15 +58,24 @@ pub use state::{ChangeOperation, DesiredState, StateChange, ValidationResult};
 // (cognitive-mcp, projection, web, gRPC) imports schema types from `op_plugins`.
 // op-state-store is retired as a public schema surface — code that still (or
 // mistakenly) reaches for the old path can resolve through this alias instead.
+pub use op_state_store::plugin_schema::{
+    PluginSchemaBuilder, ValidationResult as SchemaValidationResult,
+};
 pub use op_state_store::{Constraint, FieldSchema, FieldType, PluginSchema, ReadOnlyCondition};
-pub use op_state_store::plugin_schema::{PluginSchemaBuilder, ValidationResult as SchemaValidationResult};
 
 /// Canonical input/contract schema for the cognitive-mcp gateway, including the
 /// `code_search` / `code_context` / `code_index` tool inputs (each carrying its
 /// OSCAL subid). This is the authoritative accessor; tools derive their
 /// `input_schema()` from this via `PluginSchema::field_input_schema(...)`.
 pub fn cognitive_mcp_plugin_schema() -> PluginSchema {
-    state_plugins::plugin_schema_defs::cognitive_mcp_plugin_schema()
+    state_plugins::cognitive_mcp::cognitive_mcp_schema()
+}
+
+/// Deterministically materialize the initial D-Bus projection state from a
+/// plugin schema. This is the bootstrap counterpart to the MutationEngine's
+/// normal projection writes: it is used only when no live projection exists.
+pub fn projection_seed_state_from_schema(schema: &PluginSchema) -> simd_json::OwnedValue {
+    state_plugins::plugin_scaffold_helpers::materialize_state_from_schema(schema)
 }
 
 // Re-export chat types
@@ -72,11 +97,11 @@ pub mod prelude {
         CognitiveMcpPlugin, CompactMcpPlugin, ConfigPlugin, CronPlugin, CtlPlaneChatbotPlugin,
         DnsResolverPlugin, EndpointPlugin, ExecutionResult, FactoryPlugin, Fail2banPlugin,
         FreeDesktopPlugin, FullSystemPlugin, GcloudAdcPlugin, HardwarePlugin, IncusPlugin,
-        KeypairPlugin, KeyringPlugin, KnowledgePlugin, Login1Plugin, LxcPlugin, MailServerPlugin,
+        KeypairPlugin, KeyringPlugin, Login1Plugin, MailServerPlugin,
         McpStatePlugin, MemoryPlugin, NetStatePlugin, NetmakerConfig, NetmakerPlugin,
-        OpenFlowObfuscationPlugin, OpenFlowPlugin, OvsBridgePlugin, OvsdbDaemonPlugin,
-        PackageKitPlugin, PciDeclPlugin, PrivacyRouterPlugin, PrivacyRoutesPlugin, ProcfsPlugin,
-        ProxmoxPlugin, ProxyServerPlugin, RovsCommandsPlugin, RtnetlinkPlugin, S6StatePlugin,
+        OpenFlowObfuscationPlugin, OpenFlowPlugin, OvsBridgePlugin, PackageKitPlugin,
+        PciDeclPlugin, PrivacyRouterPlugin, PrivacyRoutesPlugin, ProcfsPlugin,
+        ProxyServerPlugin, RovsCommandsPlugin, RtnetlinkPlugin, S6SystemctlPlugin,
         SchemaRendererPlugin, ServicePlugin, SessDeclPlugin, SoftwarePlugin, ToolDefinition,
         UnixSocketPlugin, UsersPlugin, WebUiPlugin, WireGuardPlugin, WorkflowsPlugin,
         ZeroclawPlugin,

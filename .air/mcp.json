@@ -1,0 +1,8 @@
+{
+    "mcpServers": {
+        "npx": {
+            "type": "stdio",
+            "command": "notebooklm-mcp"
+        }
+    }
+}

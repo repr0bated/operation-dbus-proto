@@ -18,7 +18,7 @@ use tracing::{debug, info, warn};
 use op_agents::agent_registry::AgentRegistry;
 use op_grpc_bridge::{GrpcClientPool, RemoteOperationClient};
 use op_llm::chat::ChatManager;
-use op_state_store::{SqliteStore, StateStore};
+use op_state_store::{MemoryStore, StateStore};
 use op_tools::registry::ToolDefinition;
 use op_tools::tool::{BoxedTool, Tool};
 use op_tools::ToolRegistry;
@@ -239,11 +239,7 @@ impl AppState {
             // No persistent database — SHM is the single source of truth.
             // All ephemeral state (chat sessions, execution jobs) lives in-memory only.
             info!("Using in-memory state store (no persistent DB — SHM is source of truth)");
-            Arc::new(
-                SqliteStore::new(":memory:")
-                    .await
-                    .expect("Failed to create in-memory state store"),
-            )
+            Arc::new(MemoryStore::new())
         };
 
         info!("✅ Application state initialized");

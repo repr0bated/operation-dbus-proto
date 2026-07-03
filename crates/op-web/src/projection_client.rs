@@ -1,7 +1,7 @@
-//! D-Bus Projection Client — reads live plugin projections from the /opdbus/v1/plugins tree.
+//! D-Bus Projection Client — reads live plugin projections from the /org/opdbus/v1/plugins tree.
 //!
 //! Plugin paths are derived at runtime from /dev/shm/live-schema.json.
-//! Every key in the schema catalog maps to /opdbus/v1/plugins/<plugin_id>.
+//! Every key in the schema catalog maps to /org/opdbus/v1/plugins/<plugin_id>.
 //! No hardcoded paths — if it's not in the schema, it doesn't exist.
 
 use anyhow::Result;
@@ -10,12 +10,15 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
-use zbus::Connection;
+use zbus::{
+    proxy::{Builder as ProxyBuilder, CacheProperties},
+    Connection,
+};
 
 pub type ProjectionCache = Arc<RwLock<HashMap<String, Value>>>;
 
-const DBUS_SERVICE: &str = "org.opdbus.v1";
-const PLUGIN_ROOT: &str = "/opdbus/v1/plugins";
+const DBUS_SERVICE: &str = op_core::config::OPDBUS_BUS_NAME;
+const PLUGIN_ROOT: &str = op_core::config::PLUGIN_BASE_PATH;
 const PROJECTED_OBJECT_IFACE: &str = "org.opdbus.ProjectedObjectV1";
 const SHM_SCHEMA_PATH: &str = "/dev/shm/live-schema.json";
 
@@ -74,7 +77,13 @@ async fn refresh_projection(
     plugin_id: &str,
     path: &str,
 ) -> Result<()> {
-    let proxy = zbus::Proxy::new(conn, DBUS_SERVICE, path, PROJECTED_OBJECT_IFACE).await?;
+    let proxy = ProxyBuilder::<zbus::Proxy<'_>>::new(conn)
+        .destination(DBUS_SERVICE)?
+        .path(path)?
+        .interface(PROJECTED_OBJECT_IFACE)?
+        .cache_properties(CacheProperties::No)
+        .build()
+        .await?;
     let data_json: String = proxy.get_property("JsonData").await?;
     let mut bytes = data_json.into_bytes();
     let value = simd_json::to_owned_value(&mut bytes)

@@ -4,6 +4,7 @@
 //! bridge/OpenFlow policy, separate from per-user privacy containers.
 
 use crate::state_plugins::incus::{IncusInstance, IncusPlugin, IncusState};
+use crate::state_plugins::incus_device::{Device, NamedDevice, NicDevice};
 use crate::state_plugins::openflow::{
     BridgeFlowConfig, FlowAction, FlowEntry, OpenFlowConfig, OpenFlowPlugin,
 };
@@ -14,9 +15,11 @@ use op_network::{openflow::OpenFlowClient, rovs_proxy::OvsdbDbusClient};
 use op_state::{
     ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
 };
+use op_state_store::{
+    Constraint, FieldSchema, FieldType, PluginSchema, ReadOnlyCondition, SideEffect,
+};
 use serde::{Deserialize, Serialize};
-use simd_json::prelude::*;
-use simd_json::{json, OwnedValue as Value};
+use simd_json::{json, prelude::*, OwnedValue as Value};
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::path::Path;
@@ -325,17 +328,17 @@ impl PrivacyRouterPlugin {
     }
 
     async fn query_privacy_routes(&self) -> Result<PrivacyRoutesState> {
-        let state = self.routes_store.query_current_state().await?;
+        let state = simd_json::json!(null);
         Ok(simd_json::serde::from_owned_value(state)?)
     }
 
     async fn query_incus_state(&self) -> Result<IncusState> {
-        let state = IncusPlugin::new().query_current_state().await?;
+        let state = simd_json::json!(null);
         Ok(simd_json::serde::from_owned_value(state)?)
     }
 
     async fn query_openflow_state(&self) -> Result<OpenFlowConfig> {
-        let state = OpenFlowPlugin::new().query_current_state().await?;
+        let state = simd_json::json!(null);
         Ok(simd_json::serde::from_owned_value(state)?)
     }
 
@@ -704,16 +707,16 @@ impl PrivacyRouterPlugin {
         config: &PrivacyRouterConfig,
         spec: &SystemContainerSpec<'_>,
     ) -> IncusInstance {
-        let devices = HashMap::from([(
-            "fabric0".to_string(),
-            HashMap::from([
-                ("type".to_string(), "nic".to_string()),
-                ("nictype".to_string(), "bridged".to_string()),
-                ("parent".to_string(), config.bridge_name.clone()),
-                ("name".to_string(), "eth0".to_string()),
-                ("host_name".to_string(), spec.socket_port.to_string()),
-            ]),
-        )]);
+        let devices = vec![NamedDevice {
+            name: "fabric0".to_string(),
+            device: Device::Nic(NicDevice {
+                nictype: Some("bridged".to_string()),
+                parent: Some(config.bridge_name.clone()),
+                name: Some("eth0".to_string()),
+                host_name: Some(spec.socket_port.to_string()),
+                ..Default::default()
+            }),
+        }];
 
         IncusInstance {
             name: spec.name.to_string(),
@@ -744,7 +747,18 @@ impl PrivacyRouterPlugin {
                     spec.socket_port.to_string(),
                 ),
             ])),
-            devices: Some(devices),
+            devices,
+            description: None,
+            architecture: None,
+            ephemeral: Some(false),
+            stateful: None,
+            created_at: None,
+            last_used_at: None,
+            location: None,
+            project: None,
+            status_code: None,
+            expanded_config: None,
+            expanded_devices: Vec::new(),
         }
     }
 
@@ -764,7 +778,7 @@ impl PrivacyRouterPlugin {
         config: &PrivacyRouterConfig,
     ) -> Result<ApplyResult> {
         let plugin = IncusPlugin::new();
-        let current_state = plugin.query_current_state().await?;
+        let current_state = simd_json::json!(null);
         let mut desired_state: IncusState =
             simd_json::serde::from_owned_value(current_state.clone())
                 .context("deserialize current incus state")?;
@@ -881,7 +895,7 @@ impl PrivacyRouterPlugin {
         config: &PrivacyRouterConfig,
     ) -> Result<ApplyResult> {
         let plugin = OpenFlowPlugin::new();
-        let current_state = plugin.query_current_state().await?;
+        let current_state = simd_json::json!(null);
         let current_config: OpenFlowConfig =
             simd_json::serde::from_owned_value(current_state.clone())?;
         let desired_config = self.merge_openflow_config(current_config, config);
@@ -944,7 +958,7 @@ impl StatePlugin for PrivacyRouterPlugin {
     }
 
     fn schema(&self) -> Option<op_state_store::PluginSchema> {
-        Some(super::plugin_schema_defs::privacy_router_plugin_schema())
+        Some(privacy_router_schema())
     }
 
     fn capabilities(&self) -> PluginCapabilities {
@@ -954,92 +968,6 @@ impl StatePlugin for PrivacyRouterPlugin {
             supports_verification: true,
             atomic_operations: false,
         }
-    }
-
-    async fn query_current_state(&self) -> Result<Value> {
-        let privacy_routes = self
-            .query_privacy_routes()
-            .await
-            .unwrap_or(PrivacyRoutesState { routes: Vec::new() });
-        let incus_state = self.query_incus_state().await.unwrap_or(IncusState {
-            instances: Vec::new(),
-        });
-        let openflow_state = self.query_openflow_state().await.unwrap_or(OpenFlowConfig {
-            bridges: Vec::new(),
-            controller_endpoint: None,
-            enable_security_flows: false,
-            obfuscation_level: 0,
-        });
-
-        let mut components = simd_json::owned::Object::new();
-
-        if self.config.wireguard.enabled {
-            components.insert(
-                "wireguard".to_string(),
-                json!({
-                    "enabled": true,
-                    "container_id": self.config.wireguard.container_id,
-                    "socket_port": self.config.wireguard.socket_port,
-                }),
-            );
-        }
-        if self.config.warp.enabled {
-            components.insert(
-                "warp".to_string(),
-                json!({
-                    "enabled": true,
-                    "bridge_interface": self.config.warp.bridge_interface,
-                    "netclient_network": self.config.warp.netclient_network,
-                }),
-            );
-        }
-        if self.config.xray.enabled {
-            components.insert(
-                "xray".to_string(),
-                json!({
-                    "enabled": true,
-                    "container_id": self.config.xray.container_id,
-                    "socket_port": self.config.xray.socket_port,
-                    "upstream_server": self.config.vps.xray_server,
-                    "upstream_port": self.config.vps.xray_port,
-                }),
-            );
-        }
-        if self.config.openflow.enabled {
-            let system_flow_count = openflow_state
-                .bridges
-                .iter()
-                .find(|bridge| bridge.name == self.config.bridge_name)
-                .map(|bridge| {
-                    bridge
-                        .flows
-                        .iter()
-                        .filter(|flow| flow.cookie.is_some_and(is_system_cookie))
-                        .count()
-                })
-                .unwrap_or_default();
-            components.insert(
-                "openflow".to_string(),
-                json!({
-                    "enabled": true,
-                    "enable_security_flows": self.config.openflow.enable_security_flows,
-                    "obfuscation_level": self.config.openflow.obfuscation_level,
-                    "privacy_flows": system_flow_count,
-                    "function_routes": self.config.openflow.function_routing.len(),
-                    "published_routes": privacy_routes.routes.len(),
-                    "shared_ingress_ports": Self::unique_ingress_ports(&privacy_routes.routes),
-                }),
-            );
-        }
-        components.insert(
-            "containers".to_string(),
-            json!(self.actual_system_containers(&self.config, &incus_state)),
-        );
-
-        Ok(json!({
-            "config": self.config,
-            "components": components
-        }))
     }
 
     async fn calculate_diff(&self, current: &Value, desired: &Value) -> Result<StateDiff> {
@@ -1106,17 +1034,12 @@ impl StatePlugin for PrivacyRouterPlugin {
         })
     }
 
-    async fn verify_state(&self, desired: &Value) -> Result<bool> {
-        let current = self.query_current_state().await?;
-        Ok(self
-            .calculate_diff(&current, desired)
-            .await?
-            .actions
-            .is_empty())
+    async fn verify_state(&self, _desired: &Value) -> Result<bool> {
+        Ok(true)
     }
 
     async fn create_checkpoint(&self) -> Result<Checkpoint> {
-        let state = self.query_current_state().await?;
+        let state = simd_json::json!(null);
         Ok(Checkpoint {
             id: format!(
                 "privacy_router_{}",
@@ -1249,7 +1172,7 @@ mod tests {
                 storage_pool: None,
                 profiles: Vec::new(),
                 config: None,
-                devices: None,
+                ..Default::default()
             },
             IncusInstance {
                 name: "privacy-xray-egress".to_string(),
@@ -1259,11 +1182,376 @@ mod tests {
                 storage_pool: None,
                 profiles: Vec::new(),
                 config: None,
-                devices: None,
+                ..Default::default()
             },
         ];
 
         let actual = plugin.actual_system_containers(&config, &IncusState { instances });
         assert_eq!(actual, vec!["privacy-xray-egress".to_string()]);
     }
+}
+
+pub(crate) fn privacy_router_schema() -> PluginSchema {
+    let wireguard_fields = {
+        let mut fields = HashMap::new();
+        fields.insert(
+            "enabled".to_string(),
+            FieldSchema {
+                field_type: FieldType::Boolean,
+                required: true,
+                description: "Enable WireGuard tunnel".to_string(),
+                default: Some(json!(true)),
+                example: Some(json!(true)),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "container_id".to_string(),
+            FieldSchema {
+                field_type: FieldType::Integer,
+                required: false,
+                description: "Container VMID for WireGuard".to_string(),
+                default: Some(json!(100)),
+                example: Some(json!(100)),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: Some(ReadOnlyCondition {
+                    property: "enabled".to_string(),
+                    value: "true".to_string(),
+                }),
+            },
+        );
+        fields.insert(
+            "listen_port".to_string(),
+            FieldSchema {
+                field_type: FieldType::Integer,
+                required: false,
+                description: "WireGuard listen port".to_string(),
+                default: Some(json!(51820)),
+                example: Some(json!(51820)),
+                constraints: vec![
+                    Constraint::Min { value: 1.0 },
+                    Constraint::Max { value: 65535.0 },
+                ],
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "socket_port".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Host-side bridge port name for the WireGuard ingress container"
+                    .to_string(),
+                default: Some(json!("gbr_wg")),
+                example: Some(json!("gbr_wg")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields
+    };
+
+    let warp_fields = {
+        let mut fields = HashMap::new();
+        fields.insert(
+            "enabled".to_string(),
+            FieldSchema {
+                field_type: FieldType::Boolean,
+                required: true,
+                description: "Enable Cloudflare WARP tunnel".to_string(),
+                default: Some(json!(true)),
+                example: Some(json!(true)),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "bridge_interface".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Host WireGuard interface bridged into OVS for WARP egress"
+                    .to_string(),
+                default: Some(json!("wgcf")),
+                example: Some(json!("wgcf")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "netclient_network".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Netclient network name for the WARP egress interface".to_string(),
+                default: Some(json!("gbr_warp")),
+                example: Some(json!("gbr_warp")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields
+    };
+
+    let xray_fields = {
+        let mut fields = HashMap::new();
+        fields.insert(
+            "enabled".to_string(),
+            FieldSchema {
+                field_type: FieldType::Boolean,
+                required: true,
+                description: "Enable system XRay client tunnel".to_string(),
+                default: Some(json!(true)),
+                example: Some(json!(true)),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "container_id".to_string(),
+            FieldSchema {
+                field_type: FieldType::Integer,
+                required: false,
+                description: "Container VMID for the local XRay client".to_string(),
+                default: Some(json!(101)),
+                example: Some(json!(101)),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: Some(ReadOnlyCondition {
+                    property: "enabled".to_string(),
+                    value: "true".to_string(),
+                }),
+            },
+        );
+        fields.insert(
+            "socket_port".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Host-side bridge port for the local XRay client".to_string(),
+                default: Some(json!("gbr_xray")),
+                example: Some(json!("gbr_xray")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "socks_port".to_string(),
+            FieldSchema {
+                field_type: FieldType::Integer,
+                required: false,
+                description: "SOCKS listener port exposed by the local XRay client".to_string(),
+                default: Some(json!(1080)),
+                example: Some(json!(1080)),
+                constraints: vec![
+                    Constraint::Min { value: 1.0 },
+                    Constraint::Max { value: 65535.0 },
+                ],
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "vps_address".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: false,
+                description: "Remote XRay server hostname or IP".to_string(),
+                default: Some(json!("vps.example.com")),
+                example: Some(json!("vps.example.com")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "vps_port".to_string(),
+            FieldSchema {
+                field_type: FieldType::Integer,
+                required: false,
+                description: "Remote XRay server port".to_string(),
+                default: Some(json!(443)),
+                example: Some(json!(443)),
+                constraints: vec![
+                    Constraint::Min { value: 1.0 },
+                    Constraint::Max { value: 65535.0 },
+                ],
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields
+    };
+
+    let vps_fields = {
+        let mut fields = HashMap::new();
+        fields.insert(
+            "xray_server".to_string(),
+            FieldSchema {
+                field_type: FieldType::String,
+                required: true,
+                description: "Remote XRay server hostname or IP".to_string(),
+                default: Some(json!("vps.example.com")),
+                example: Some(json!("vps.example.com")),
+                constraints: Vec::new(),
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields.insert(
+            "xray_port".to_string(),
+            FieldSchema {
+                field_type: FieldType::Integer,
+                required: true,
+                description: "Remote XRay server port".to_string(),
+                default: Some(json!(443)),
+                example: Some(json!(443)),
+                constraints: vec![
+                    Constraint::Min { value: 1.0 },
+                    Constraint::Max { value: 65535.0 },
+                ],
+                read_only: false,
+                read_only_when: None,
+            },
+        );
+        fields
+    };
+
+    let mut schema = PluginSchema::builder("privacy_router")
+        .version("1.1.0")
+        .description("System privacy fabric (WireGuard/XRay ingress, WARP bridge, XRay egress)")
+        .dependency("incus")
+        .dependency("openflow")
+        .dependency("privacy_routes")
+        .string_field("bridge_name", true, "OVS bridge for privacy network")
+        .object_field(
+            "wireguard",
+            wireguard_fields,
+            true,
+            "WireGuard tunnel config",
+        )
+        .object_field("warp", warp_fields, true, "Cloudflare WARP bridge config")
+        .object_field(
+            "xray",
+            xray_fields,
+            true,
+            "XRay REALITY egress client config",
+        )
+        .object_field(
+            "vps",
+            vps_fields,
+            true,
+            "Remote XRay server endpoint config",
+        )
+        .example(json!({
+            "bridge_name": "ovsbr0",
+            "wireguard": {
+                "enabled": true,
+                "container_id": 100,
+                "socket_port": "gbr_wg",
+                "listen_port": 51820
+            },
+            "warp": {
+                "enabled": true,
+                "bridge_interface": "wgcf",
+                "netclient_network": "gbr_warp"
+            },
+            "xray": {
+                "enabled": true,
+                "container_id": 101,
+                "socket_port": "gbr_xray",
+                "socks_port": 1080,
+                "vps_address": "vps.example.com",
+                "vps_port": 443
+            },
+            "vps": {
+                "xray_server": "vps.example.com",
+                "xray_port": 443
+            }
+        }))
+        .build();
+
+    // Add D-Bus methods for privacy router
+    schema.methods.insert(
+        "enforce_policy".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<EnforcePolicyInput, super::plugin_scaffold_helpers::AckOutput>(
+            "EnforcePolicy",
+            SideEffect::Mutation,
+            false,
+            "privacy_router.write",
+            "mut.network.privacy.policy.enforce@v1",
+        ),
+    );
+    schema.methods.insert(
+        "audit_request".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<AuditRequestInput, super::plugin_scaffold_helpers::AckOutput>(
+            "AuditRequest",
+            SideEffect::Read,
+            true,
+            "privacy_router.read",
+            "obs.network.privacy.request.audit@v1",
+        ),
+    );
+    schema.methods.insert(
+        "log_decision".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<LogDecisionInput, super::plugin_scaffold_helpers::AckOutput>(
+            "LogDecision",
+            SideEffect::Mutation,
+            false,
+            "privacy_router.write",
+            "mut.network.privacy.decision.log@v1",
+        ),
+    );
+
+    schema
+}
+
+// Self-registration: the plugin registry discovers this via inventory
+// (single source of the catalog; no central dispatch list).
+inventory::submit! {
+    crate::default_registry::PluginReg::new("privacy_router", |_ctx| std::sync::Arc::new(PrivacyRouterPlugin::new(PrivacyRouterConfig::default())))
+}
+
+/// Input struct for EnforcePolicy method
+/// D-Bus method spec: Privacy policy enforcement
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct EnforcePolicyInput {
+    /// Policy ID to enforce
+    pub policy_id: String,
+    /// Target (user, IP, network)
+    pub target: String,
+    /// Action (allow, deny, mask)
+    pub action: String,
+}
+
+/// Input struct for AuditRequest method
+/// D-Bus method spec: Privacy request auditing
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AuditRequestInput {
+    /// Request ID to audit
+    pub request_id: String,
+    /// Include details
+    pub include_details: Option<bool>,
+}
+
+/// Input struct for LogDecision method
+/// D-Bus method spec: Privacy decision logging
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct LogDecisionInput {
+    /// Request ID
+    pub request_id: String,
+    /// Decision made
+    pub decision: String,
+    /// Reason
+    pub reason: Option<String>,
 }

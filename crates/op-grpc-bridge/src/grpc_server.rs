@@ -3,26 +3,35 @@
 use std::collections::{BTreeMap, HashMap};
 use std::convert::TryFrom;
 use std::pin::Pin;
+use std::sync::OnceLock;
 use std::sync::Arc;
 
 use async_stream::stream;
 use chrono::{DateTime, Utc};
 use futures::StreamExt as _;
 use op_cognitive_mcp::QdrantSemanticShuttle;
-use op_plugins::prelude::ZeroclawPlugin;
-use op_state::StatePlugin;
-use prost_types::{Struct as ProstStruct, Timestamp as ProstTimestamp, Value as ProstValue};
+use prost::Message;
+use prost_types::{
+    Struct as ProstStruct, Timestamp as ProstTimestamp, Value as ProstValue,
+};
 use serde_json::Value as JsonValue;
 use simd_json::prelude::{ValueAsContainer, ValueAsScalar};
 use tokio::sync::{broadcast, RwLock};
 use tokio_stream::Stream;
+use tonic::transport::{Identity, ServerTlsConfig};
 use tonic::{Request, Response, Status};
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
+use prost_reflect::{DescriptorPool, DynamicMessage};
+use serde::de::DeserializeSeed;
 
-use crate::interceptor;
+use crate::interceptor::{self, GhostbridgeIdentity};
 
+use crate::dynamic_reflection::{ActiveReflectionCatalog, DynamicReflectionService};
+use crate::mutation_engine::{ChangeType, MutationEngine};
+use crate::plugin_object_blob::{blobify_plugin_schema, DbusObjectIdentity};
+use crate::plugin_grpc_gen::MethodServiceRegistry;
 use crate::proto::{
     event_chain_service_server::EventChainService, ovsdb_mirror_server::OvsdbMirror,
     plugin_service_server::PluginService, runtime_mirror_server::RuntimeMirror,
@@ -51,16 +60,14 @@ use crate::proto::{
     SubscribeEventsRequest, SubscribeRequest, SubscribeSignalsRequest, TagLock as ProtoTagLock,
     VerifyChainRequest, VerifyChainResponse,
 };
-use crate::schema_engine::{ChangeType, SchemaEngine};
-use op_state_store::{Decision, DenyReason, MerkleProof};
+use op_state_store::{Decision, DenyReason, MerkleProof, PluginSchema};
 use zbus::zvariant::{Array as ZArray, OwnedValue as ZOwnedValue, Str as ZStr, Value as ZValue};
 use zbus::{Connection, Proxy};
 
 /// Plugin schema provider.
 ///
-/// The provider is expected to read from the canonical plugin-document path
-/// and/or its in-memory catalog projection. It is not intended to invent
-/// schema independently of the plugin document.
+/// The provider reads only from the canonical SchemaEngine live-schema catalog.
+/// Per-plugin schema files are not a valid source of truth.
 #[tonic::async_trait]
 pub trait PluginSchemaProvider: Send + Sync {
     async fn list_plugins(&self) -> Vec<PluginInfo>;
@@ -69,32 +76,147 @@ pub trait PluginSchemaProvider: Send + Sync {
 
 const LIVE_SCHEMA_PATH: &str = "/dev/shm/live-schema.json";
 
-#[tonic::async_trait]
-impl PluginSchemaProvider for SchemaCatalogPluginProvider {
-    async fn list_plugins(&self) -> Vec<PluginInfo> {
-        let mut plugins = read_live_schema_plugins();
-        if !plugins.iter().any(|plugin| plugin.id == "zeroclaw") {
-            plugins.push(zeroclaw_plugin_info());
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SchemaMethodCapability {
+    required_capability: Option<String>,
+    grants_declared: bool,
+    granted_by_footprint: bool,
+}
+
+fn read_plugin_schema_json(plugin_id: &str) -> Option<JsonValue> {
+    let bytes = std::fs::read(LIVE_SCHEMA_PATH).ok()?;
+    let root = serde_json::from_slice::<JsonValue>(&bytes).ok()?;
+    root.as_object()?
+        .get(plugin_id)
+        .and_then(first_schema_entry)
+        .cloned()
+}
+
+fn first_schema_entry(value: &JsonValue) -> Option<&JsonValue> {
+    value
+        .as_array()
+        .and_then(|items| items.first())
+        .or(Some(value))
+}
+
+fn method_capability_from_schema(
+    schema: &JsonValue,
+    method_name: &str,
+    footprint: Option<&str>,
+) -> Option<SchemaMethodCapability> {
+    let method = schema.get("methods")?.as_object()?.get(method_name)?;
+    let required_capability = match method.get("required_capability") {
+        Some(JsonValue::String(capability)) if !capability.is_empty() => Some(capability.clone()),
+        _ => None,
+    };
+
+    let Some(capability) = required_capability.as_deref() else {
+        return Some(SchemaMethodCapability {
+            required_capability: None,
+            grants_declared: false,
+            granted_by_footprint: true,
+        });
+    };
+
+    let mut grants_declared = false;
+    let mut granted_by_footprint = false;
+    if let Some(grants) = schema
+        .get("capability_grants")
+        .and_then(JsonValue::as_object)
+    {
+        grants_declared = true;
+        if let Some(footprint) = footprint {
+            granted_by_footprint = grants
+                .get(footprint)
+                .or_else(|| grants.get("*"))
+                .and_then(JsonValue::as_array)
+                .is_some_and(|caps| caps.iter().any(|cap| cap.as_str() == Some(capability)));
         }
-        plugins
     }
 
-    async fn get_schema(&self, plugin_id: &str) -> Option<(String, String, String)> {
-        if plugin_id == "zeroclaw" {
-            return zeroclaw_schema_json();
-        }
+    Some(SchemaMethodCapability {
+        required_capability,
+        grants_declared,
+        granted_by_footprint,
+    })
+}
 
-        read_live_schema(plugin_id).or_else(|| {
-            if plugin_id == "zeroclaw" {
-                zeroclaw_schema_json()
-            } else {
-                None
-            }
+fn method_capability_for_plugin(
+    plugin_id: &str,
+    method_name: &str,
+    footprint: Option<&str>,
+) -> Option<SchemaMethodCapability> {
+    let schema = read_plugin_schema_json(plugin_id)?;
+    method_capability_from_schema(&schema, method_name, footprint)
+}
+
+fn enforce_bridge_capability(
+    plugin_id: &str,
+    method_name: &str,
+    capability_id: Option<&str>,
+    identity: Option<&GhostbridgeIdentity>,
+) -> Result<(), ProtoMutationError> {
+    let footprint = identity.map(|ctx| ctx.footprint.as_str());
+    let Some(method_capability) = method_capability_for_plugin(plugin_id, method_name, footprint)
+    else {
+        return Ok(());
+    };
+    let Some(required) = method_capability.required_capability else {
+        return Ok(());
+    };
+
+    let capability_matches = capability_id == Some(required.as_str());
+    let footprint_grants = if method_capability.grants_declared {
+        method_capability.granted_by_footprint
+    } else {
+        identity.is_some() && capability_matches
+    };
+
+    if capability_matches && footprint_grants {
+        Ok(())
+    } else {
+        Err(ProtoMutationError {
+            code: ProtoErrorCode::PermissionDenied as i32,
+            message: format!(
+                "AccessDenied: method {plugin_id}.{method_name} requires capability {required}"
+            ),
+            deny_reason: Some(ProtoDenyReason {
+                reason: Some(crate::proto::deny_reason::Reason::CapabilityMissing(
+                    ProtoCapabilityMissing {
+                        capability: required,
+                    },
+                )),
+            }),
         })
     }
 }
 
+fn plugin_id_from_dbus_path(path: &str) -> Option<String> {
+    let prefix = "/org/opdbus/v1/plugins/";
+    path.strip_prefix(prefix)
+        .and_then(|rest| rest.split('/').next())
+        .filter(|id| !id.is_empty())
+        .map(|id| id.replace('/', "."))
+}
+
+#[tonic::async_trait]
+impl PluginSchemaProvider for SchemaCatalogPluginProvider {
+    async fn list_plugins(&self) -> Vec<PluginInfo> {
+        read_schema_catalog_plugins()
+    }
+
+    async fn get_schema(&self, plugin_id: &str) -> Option<(String, String, String)> {
+        read_schema(plugin_id)
+    }
+}
+
 struct SchemaCatalogPluginProvider;
+
+fn read_schema_catalog_plugins() -> Vec<PluginInfo> {
+    let mut plugins = read_live_schema_plugins();
+    plugins.sort_by(|a, b| a.id.cmp(&b.id));
+    plugins
+}
 
 fn read_live_schema_plugins() -> Vec<PluginInfo> {
     let Ok(bytes) = std::fs::read(LIVE_SCHEMA_PATH) else {
@@ -110,10 +232,14 @@ fn read_live_schema_plugins() -> Vec<PluginInfo> {
     catalog
         .iter()
         .filter_map(|(id, entries)| {
-            let schema = entries.as_array().and_then(|items| items.first())?;
+            let schema = first_schema_entry(entries)?;
             Some(plugin_info_from_schema(id, schema))
         })
         .collect()
+}
+
+fn read_schema(plugin_id: &str) -> Option<(String, String, String)> {
+    read_live_schema(plugin_id)
 }
 
 fn read_live_schema(plugin_id: &str) -> Option<(String, String, String)> {
@@ -123,7 +249,12 @@ fn read_live_schema(plugin_id: &str) -> Option<(String, String, String)> {
         .as_object()?
         .get(plugin_id)?
         .as_array()
-        .and_then(|items| items.first())?;
+        .and_then(|items| items.first())
+        .or_else(|| root.as_object()?.get(plugin_id))?;
+    schema_response_from_value(schema)
+}
+
+fn schema_response_from_value(schema: &JsonValue) -> Option<(String, String, String)> {
     let version = schema
         .get("version")
         .and_then(JsonValue::as_str)
@@ -162,31 +293,10 @@ fn plugin_info_from_schema(id: &str, schema: &JsonValue) -> PluginInfo {
         name,
         version,
         description,
-        dbus_path: format!("/opdbus/v1/plugins/{}", id.replace('.', "/")),
+        dbus_path: format!("/org/opdbus/v1/plugins/{}", id.replace('.', "/")),
         interfaces: vec!["org.opdbus.v1.Plugin".to_string()],
         tags,
     }
-}
-
-fn zeroclaw_plugin_info() -> PluginInfo {
-    PluginInfo {
-        id: "zeroclaw".to_string(),
-        name: "zeroclaw".to_string(),
-        version: "1.0.0".to_string(),
-        description: "Zeroclaw schema/RPC-native model router for Antigravity UI".to_string(),
-        dbus_path: "/opdbus/v1/plugins/zeroclaw".to_string(),
-        interfaces: vec!["org.opdbus.v1.Plugin".to_string()],
-        tags: vec!["llm".to_string(), "antigravity".to_string()],
-    }
-}
-
-fn zeroclaw_schema_json() -> Option<(String, String, String)> {
-    let schema = ZeroclawPlugin::new().schema()?;
-    Some((
-        serde_json::to_string(&schema).ok()?,
-        "operation.pluginschema+json".to_string(),
-        schema.version,
-    ))
 }
 
 // =============================================================================
@@ -225,48 +335,100 @@ impl RegistryInner {
 // gRPC server implementation for operation services
 // =============================================================================
 
+use crate::per_plugin_reflection::PerMethodReflectionRegistry;
+use crate::plugin_grpc_gen::PerMethodGrpcServices;
+
 #[derive(Clone)]
 pub struct OperationGrpcServer {
-    schema_engine: Arc<SchemaEngine>,
+    mutation_engine: Arc<MutationEngine>,
     plugin_provider: Arc<dyn PluginSchemaProvider>,
     semantic_shuttle: Option<Arc<QdrantSemanticShuttle>>,
     /// Broadcast channel for chain events
     chain_events: broadcast::Sender<ProtoChainEvent>,
     /// Component registry state (shared across clones)
     registry: Arc<RwLock<RegistryInner>>,
+    /// Per-method gRPC services (frozen at D-Bus object creation)
+    per_method_services: Arc<PerMethodGrpcServices>,
+    /// Per-method reflection registry
+    per_method_reflection: Arc<PerMethodReflectionRegistry>,
+    /// Active D-Bus object blobs backing gRPC reflection discovery.
+    active_reflection: ActiveReflectionCatalog,
 }
 
 impl OperationGrpcServer {
-    pub fn new(schema_engine: Arc<SchemaEngine>) -> Self {
+    pub fn new(mutation_engine: Arc<MutationEngine>) -> Self {
         let (chain_tx, _) = broadcast::channel(1024);
         let (registry, _) = RegistryInner::new();
         Self {
-            schema_engine,
+            mutation_engine,
             plugin_provider: Arc::new(SchemaCatalogPluginProvider),
             semantic_shuttle: None,
             chain_events: chain_tx,
             registry: Arc::new(RwLock::new(registry)),
+            per_method_services: PerMethodGrpcServices::new(),
+            per_method_reflection: Arc::new(PerMethodReflectionRegistry::new()),
+            active_reflection: ActiveReflectionCatalog::new(),
         }
     }
 
     pub fn with_plugin_provider(
-        schema_engine: Arc<SchemaEngine>,
+        mutation_engine: Arc<MutationEngine>,
         plugin_provider: Arc<dyn PluginSchemaProvider>,
     ) -> Self {
         let (chain_tx, _) = broadcast::channel(1024);
         let (registry, _) = RegistryInner::new();
         Self {
-            schema_engine,
+            mutation_engine,
             plugin_provider,
             semantic_shuttle: None,
             chain_events: chain_tx,
             registry: Arc::new(RwLock::new(registry)),
+            per_method_services: PerMethodGrpcServices::new(),
+            per_method_reflection: Arc::new(PerMethodReflectionRegistry::new()),
+            active_reflection: ActiveReflectionCatalog::new(),
         }
     }
 
     pub fn with_semantic_shuttle(mut self, semantic_shuttle: Arc<QdrantSemanticShuttle>) -> Self {
         self.semantic_shuttle = Some(semantic_shuttle);
         self
+    }
+
+    /// Freeze all plugin method descriptors from the configured schema provider.
+    ///
+    /// tonic-reflection is immutable once mounted. This must run before
+    /// `build_operation_routes` creates the reflection service.
+    pub async fn freeze_plugin_method_reflection(&self) {
+        for plugin in self.plugin_provider.list_plugins().await {
+            let Some((schema_json, _, _)) = self.plugin_provider.get_schema(&plugin.id).await
+            else {
+                warn!(
+                    plugin_id = %plugin.id,
+                    "plugin schema missing while freezing gRPC reflection methods"
+                );
+                continue;
+            };
+            let Ok(schema) = serde_json::from_str::<PluginSchema>(&schema_json) else {
+                warn!(
+                    plugin_id = %plugin.id,
+                    "plugin schema could not be parsed while freezing gRPC reflection methods"
+                );
+                continue;
+            };
+            if schema.methods.is_empty() {
+                continue;
+            }
+            if let Err(error) = self
+                .register_plugin_methods(plugin.id.clone(), &schema)
+                .await
+            {
+                warn!(
+                    plugin_id = %plugin.id,
+                    %error,
+                    "failed to freeze plugin method descriptors for gRPC reflection"
+                );
+            }
+        }
     }
 
     /// Snapshot of all registered components plus a live-update receiver.
@@ -285,25 +447,206 @@ impl OperationGrpcServer {
         let rx = inner.watch_tx.subscribe();
         (snapshot, rx)
     }
+
+    /// Register a plugin's methods as per-method gRPC services.
+    ///
+    /// This is called at D-Bus object creation time. Each method gets its own
+    /// gRPC service generated and frozen. The reflection service is updated
+    /// to include these new method services.
+    pub async fn register_plugin_methods(
+        &self,
+        plugin_id: String,
+        schema: &PluginSchema,
+    ) -> Result<Vec<MethodServiceRegistry>, anyhow::Error> {
+        // Create frozen services for all methods
+        let registries = self
+            .per_method_services
+            .create_frozen_services(plugin_id.clone(), schema)
+            .await?;
+
+        // Register each method with the reflection registry
+        for registry in &registries {
+            self.per_method_reflection
+                .register(
+                    plugin_id.clone(),
+                    registry.method_name.clone(),
+                    registry.subid.clone(),
+                    registry.required_capability.clone(),
+                    registry.schema_version.clone(),
+                )
+                .await;
+        }
+
+        let blob = blobify_plugin_schema(
+            &plugin_id,
+            schema.clone(),
+            DbusObjectIdentity {
+                bus_name: "org.opdbus.v1.plugins".to_string(),
+                object_path: format!("/org/opdbus/v1/plugins/{}", plugin_id.replace('.', "/")),
+                interface_name: "org.opdbus.v1.Plugin".to_string(),
+            },
+            "operation.plugin.v1",
+            &format!(
+                "operation.plugin.v1.{}PluginMethods",
+                crate::plugin_object_blob::to_pascal_ident(&plugin_id)
+            ),
+        );
+        self.active_reflection.upsert_blob(blob).await;
+
+        Ok(registries)
+    }
+
+    /// Get the per-method services registry.
+    pub fn per_method_services(&self) -> Arc<PerMethodGrpcServices> {
+        self.per_method_services.clone()
+    }
+
+    /// Get the per-method reflection registry.
+    pub fn per_method_reflection(&self) -> Arc<PerMethodReflectionRegistry> {
+        self.per_method_reflection.clone()
+    }
+
+    pub fn active_reflection(&self) -> ActiveReflectionCatalog {
+        self.active_reflection.clone()
+    }
+
+    /// Generate the reflection file descriptor set for mounted services.
+    ///
+    /// The build script compiles the generated `operation.plugin.v1` plugin
+    /// method services into the static descriptor set. Do not append synthetic
+    /// `operation.method.*` descriptors here unless those services are mounted
+    /// too; reflection must not advertise routes clients cannot call.
+    pub fn generate_combined_reflection_descriptor(&self) -> Vec<u8> {
+        crate::callable_reflection::descriptor_bytes()
+    }
+
+    pub(crate) async fn call_generated_plugin_method_typed<Req, Res>(
+        &self,
+        plugin_id: &'static str,
+        method_name: &'static str,
+        request_message_name: &'static str,
+        response_message_name: &'static str,
+        request: Request<Req>,
+    ) -> Result<Response<Res>, Status>
+    where
+        Req: prost::Message + Default,
+        Res: prost::Message + Default,
+    {
+        let identity = request.extensions().get::<GhostbridgeIdentity>().cloned();
+        if let Err(error) = enforce_bridge_capability(plugin_id, method_name, None, identity.as_ref())
+        {
+            return Err(Status::permission_denied(error.message));
+        }
+
+        let request_bytes = request.into_inner().encode_to_vec();
+        let request_desc = plugin_descriptor_pool()
+            .get_message_by_name(request_message_name)
+            .ok_or_else(|| {
+                Status::internal(format!(
+                    "missing request descriptor for {plugin_id}.{method_name}"
+                ))
+            })?;
+        let request_dynamic = DynamicMessage::decode(request_desc, request_bytes.as_slice())
+            .map_err(|error| {
+                Status::internal(format!(
+                    "failed to decode typed request for {plugin_id}.{method_name}: {error}"
+                ))
+            })?;
+        let json_args = serde_json::to_string(&request_dynamic).map_err(|error| {
+            Status::internal(format!(
+                "failed to serialize typed request for {plugin_id}.{method_name}: {error}"
+            ))
+        })?;
+
+        let result = self
+            .mutation_engine
+            .dispatch_method_call(
+                plugin_id,
+                method_name,
+                &json_args,
+                None,
+                "grpc:operation.plugin.v1",
+            )
+            .await
+            .map_err(|error| {
+                Status::internal(format!(
+                    "plugin method {}.{} failed: {}",
+                    plugin_id, method_name, error
+                ))
+            })?;
+
+        let result_json = serde_json::to_string(&result).map_err(|error| {
+            Status::internal(format!(
+                "failed to serialize method result for {plugin_id}.{method_name}: {error}"
+            ))
+        })?;
+        let response_desc = plugin_descriptor_pool()
+            .get_message_by_name(response_message_name)
+            .ok_or_else(|| {
+                Status::internal(format!(
+                    "missing response descriptor for {plugin_id}.{method_name}"
+                ))
+            })?;
+        let mut deserializer = serde_json::de::Deserializer::from_str(&result_json);
+        let response_dynamic = response_desc
+            .deserialize(&mut deserializer)
+            .map_err(|error| {
+                Status::internal(format!(
+                    "failed to deserialize typed response for {plugin_id}.{method_name}: {error}"
+                ))
+            })?;
+        deserializer.end().map_err(|error| {
+            Status::internal(format!(
+                "failed to finish typed response decode for {plugin_id}.{method_name}: {error}"
+            ))
+        })?;
+
+        let mut bytes = Vec::new();
+        response_dynamic.encode(&mut bytes).map_err(|error| {
+            Status::internal(format!(
+                "failed to encode typed response for {plugin_id}.{method_name}: {error}"
+            ))
+        })?;
+        let response = Res::decode(bytes.as_slice()).map_err(|error| {
+            Status::internal(format!(
+                "failed to decode typed response for {plugin_id}.{method_name}: {error}"
+            ))
+        })?;
+        Ok(Response::new(response))
+    }
 }
 
-/// Run gRPC server for all Operation services.
+fn plugin_descriptor_pool() -> &'static DescriptorPool {
+    static POOL: OnceLock<DescriptorPool> = OnceLock::new();
+    POOL.get_or_init(|| {
+        DescriptorPool::decode(crate::proto::FILE_DESCRIPTOR_SET)
+            .expect("decode combined plugin descriptor pool")
+    })
+}
+
+include!(concat!(env!("OUT_DIR"), "/plugin_method_routes.rs"));
+
+/// Mount the COMPLETE Operation gRPC service surface onto a `tonic::service::Routes`.
 ///
-/// Includes:
-///   - StateSync, PluginService, EventChainService, OvsdbMirror, RuntimeMirror
-///   - ComponentRegistry, MailService, PrivacyNetworkService, RegistrationService
-///   - gRPC server reflection (all protos in combined descriptor)
-///   - gRPC health protocol (liveness for deploy verification and load balancers)
+/// This is the SINGLE source of the backplane's service set. Every endpoint that
+/// serves the backplane — the op-dbus bridge (`run_grpc_server`, TCP `:50051`) and
+/// the zeroclaw bridge (`run_zeroclaw_server`, `:8090` + `container.sock`) — builds
+/// its routes from here, so reflection can never advertise a service that isn't
+/// actually mounted (the bug the gRPC-Web probe surfaced).
 ///
-/// Adding a new domain service:
-///   1. Add the generated server import below
-///   2. Add `.add_service(...)` to the builder chain
-///   3. Mark it serving via health_reporter
-pub async fn run_grpc_server(
-    addr: std::net::SocketAddr,
-    schema_engine: Arc<SchemaEngine>,
-    plugin_provider: Option<Arc<dyn PluginSchemaProvider>>,
-) -> Result<(), tonic::transport::Error> {
+/// Services (all behind the Ghostbridge interceptor, all gRPC-Web enabled):
+///   StateSync, PluginService, EventChainService, OvsdbMirror, RuntimeMirror,
+///   ComponentRegistry, MailService, PrivacyNetworkService, RegistrationService,
+///   DbusPassthrough, ChatService, plus gRPC server reflection.
+///
+/// The caller supplies a fully-configured `OperationGrpcServer` (plugin provider /
+/// semantic shuttle already attached) and adds endpoint-specific extras
+/// afterward (e.g. the zeroclaw bridge adds `ZeroclawService`; `run_grpc_server`
+/// adds the gRPC health service).
+///
+/// Adding a new domain service: add one `.add_service(...)` here and it appears on
+/// BOTH endpoints at once.
+pub fn build_operation_routes(server: OperationGrpcServer) -> tonic::service::Routes {
     use crate::proto::dbus_passthrough_server::DbusPassthroughServer;
     use crate::proto::event_chain_service_server::EventChainServiceServer;
     use crate::proto::mail::mail_service_server::MailServiceServer;
@@ -314,25 +657,102 @@ pub async fn run_grpc_server(
     use crate::proto::registry::component_registry_server::ComponentRegistryServer;
     use crate::proto::runtime_mirror_server::RuntimeMirrorServer;
     use crate::proto::state_sync_server::StateSyncServer;
-    use op_cache::grpc::{AgentServiceImpl, McpServiceImpl, OrchestratorServiceImpl};
-    use op_cache::proto::mcp_service_server::McpServiceServer;
 
-    // Build MCP service backed by agent registry.
-    let agent_svc = std::sync::Arc::new(AgentServiceImpl::new());
-    let cache_svc = std::sync::Arc::new(op_cache::grpc::CacheServiceImpl::with_ttl(3600));
-    let orch_svc = std::sync::Arc::new(OrchestratorServiceImpl::with_config(
-        agent_svc.clone(),
-        cache_svc,
-        2,    // workstack_threshold
-        true, // enable_caching
-        3,    // promotion_threshold
+    // Reflection — exposes the static FileDescriptorSet snapshot covering all
+    // domain protos plus any per-method descriptors frozen before route build.
+    // tonic-reflection cannot be mutated after the service is mounted, so D-Bus
+    // object creation must call `register_plugin_methods` before this point when
+    // per-method services should be visible to grpcurl/MCP clients.
+    let descriptor = server.generate_combined_reflection_descriptor();
+    let descriptor: &'static [u8] = Box::leak(descriptor.into_boxed_slice());
+    let reflection_v1 = DynamicReflectionService::new(server.active_reflection()).into_v1_server();
+    let reflection_v1alpha = tonic_reflection::server::Builder::configure()
+        .register_encoded_file_descriptor_set(descriptor)
+        .build_v1alpha()
+        .expect("failed to build v1alpha reflection service");
+
+    let intercept = interceptor::ghostbridge_interceptor;
+
+    let routes = tonic::service::Routes::new(tonic_web::enable(StateSyncServer::with_interceptor(
+        server.clone(),
+        intercept,
+    )))
+    .add_service(tonic_web::enable(PluginServiceServer::with_interceptor(
+        server.clone(),
+        intercept,
+    )))
+    .add_service(tonic_web::enable(
+        EventChainServiceServer::with_interceptor(server.clone(), intercept),
+    ))
+    .add_service(tonic_web::enable(OvsdbMirrorServer::with_interceptor(
+        server.clone(),
+        intercept,
+    )))
+    .add_service(tonic_web::enable(RuntimeMirrorServer::with_interceptor(
+        server.clone(),
+        intercept,
+    )))
+    .add_service(tonic_web::enable(
+        ComponentRegistryServer::with_interceptor(server.clone(), intercept),
+    ))
+    .add_service(tonic_web::enable(MailServiceServer::with_interceptor(
+        server.clone(),
+        intercept,
+    )))
+    .add_service(tonic_web::enable(
+        PrivacyNetworkServiceServer::with_interceptor(server.clone(), intercept),
+    ))
+    .add_service(tonic_web::enable(
+        RegistrationServiceServer::with_interceptor(server.clone(), intercept),
+    ))
+    .add_service(tonic_web::enable(DbusPassthroughServer::with_interceptor(
+        server.clone(),
+        intercept,
+    )))
+    .add_service(tonic_web::enable(
+        crate::proto::chat::chat_service_server::ChatServiceServer::new(
+            crate::chat_service::ChatServiceImpl::new(),
+        ),
     ));
-    let mcp_svc = std::sync::Arc::new(McpServiceImpl::new(agent_svc, orch_svc));
+
+    let routes = add_routes(routes, server.clone());
+    routes
+        .add_service(tonic_web::enable(reflection_v1))
+        .add_service(tonic_web::enable(reflection_v1alpha))
+}
+
+/// Run gRPC server for all Operation services.
+///
+/// Mounts the shared [`build_operation_routes`] surface plus the gRPC health
+/// protocol (liveness for deploy verification and load balancers), with optional
+/// TLS. Adding a domain service is done in [`build_operation_routes`], not here.
+pub async fn run_grpc_server(
+    addr: std::net::SocketAddr,
+    mutation_engine: Arc<MutationEngine>,
+    plugin_provider: Option<Arc<dyn PluginSchemaProvider>>,
+    tls_identity: Option<Identity>,
+) -> Result<(), tonic::transport::Error> {
+    // Imports here back only the `health_reporter.set_serving::<T>()` type args;
+    // the service *instances* are mounted in `build_operation_routes`.
+    use crate::proto::event_chain_service_server::EventChainServiceServer;
+    use crate::proto::mail::mail_service_server::MailServiceServer;
+    use crate::proto::ovsdb_mirror_server::OvsdbMirrorServer;
+    use crate::proto::plugin_service_server::PluginServiceServer;
+    use crate::proto::privacy::privacy_network_service_server::PrivacyNetworkServiceServer;
+    use crate::proto::registration::registration_service_server::RegistrationServiceServer;
+    use crate::proto::registry::component_registry_server::ComponentRegistryServer;
+    use crate::proto::runtime_mirror_server::RuntimeMirrorServer;
+    use crate::proto::state_sync_server::StateSyncServer;
+
+    match mutation_engine.seed_missing_plugin_projections().await {
+        Ok(count) => info!(count, "Plugin projections seeded"),
+        Err(error) => warn!(%error, "Plugin projection seeding failed"),
+    }
 
     let server = if let Some(provider) = plugin_provider {
-        OperationGrpcServer::with_plugin_provider(schema_engine, provider)
+        OperationGrpcServer::with_plugin_provider(mutation_engine, provider)
     } else {
-        OperationGrpcServer::new(schema_engine)
+        OperationGrpcServer::new(mutation_engine)
     };
     let server = match QdrantSemanticShuttle::new().await {
         Ok(shuttle) => server.with_semantic_shuttle(Arc::new(shuttle)),
@@ -341,13 +761,7 @@ pub async fn run_grpc_server(
             server
         }
     };
-
-    // Reflection — exposes combined FileDescriptorSet covering all domain protos.
-    // Enables grpcurl discovery and drives MCP tool auto-registration in op-chat.
-    let reflection = tonic_reflection::server::Builder::configure()
-        .register_encoded_file_descriptor_set(crate::proto::FILE_DESCRIPTOR_SET)
-        .build_v1()
-        .expect("failed to build reflection service");
+    server.freeze_plugin_method_reflection().await;
 
     // Health — standard gRPC health protocol for deploy verification and LB probes.
     let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
@@ -378,6 +792,11 @@ pub async fn run_grpc_server(
     health_reporter
         .set_serving::<RegistrationServiceServer<OperationGrpcServer>>()
         .await;
+    health_reporter
+        .set_serving::<crate::proto::chat::chat_service_server::ChatServiceServer<
+            crate::chat_service::ChatServiceImpl,
+        >>()
+        .await;
 
     info!(addr = %addr, "gRPC bridge listening");
 
@@ -389,65 +808,22 @@ pub async fn run_grpc_server(
         .allow_methods(Any)
         .allow_headers(Any);
 
-    let server = tonic::transport::Server::builder()
+    let mut builder = tonic::transport::Server::builder()
         .accept_http1(true)
-        .layer(cors)
-        .add_service(tonic_web::enable(StateSyncServer::with_interceptor(
-            server.clone(),
-            interceptor::ghostbridge_interceptor,
-        )))
-        .add_service(tonic_web::enable(PluginServiceServer::with_interceptor(
-            server.clone(),
-            interceptor::ghostbridge_interceptor,
-        )))
-        .add_service(tonic_web::enable(
-            EventChainServiceServer::with_interceptor(
-                server.clone(),
-                interceptor::ghostbridge_interceptor,
-            ),
-        ))
-        .add_service(tonic_web::enable(OvsdbMirrorServer::with_interceptor(
-            server.clone(),
-            interceptor::ghostbridge_interceptor,
-        )))
-        .add_service(tonic_web::enable(RuntimeMirrorServer::with_interceptor(
-            server.clone(),
-            interceptor::ghostbridge_interceptor,
-        )))
-        .add_service(tonic_web::enable(
-            ComponentRegistryServer::with_interceptor(
-                server.clone(),
-                interceptor::ghostbridge_interceptor,
-            ),
-        ))
-        .add_service(tonic_web::enable(MailServiceServer::with_interceptor(
-            server.clone(),
-            interceptor::ghostbridge_interceptor,
-        )))
-        .add_service(tonic_web::enable(
-            PrivacyNetworkServiceServer::with_interceptor(
-                server.clone(),
-                interceptor::ghostbridge_interceptor,
-            ),
-        ))
-        .add_service(tonic_web::enable(
-            RegistrationServiceServer::with_interceptor(
-                server.clone(),
-                interceptor::ghostbridge_interceptor,
-            ),
-        ))
-        .add_service(tonic_web::enable(DbusPassthroughServer::with_interceptor(
-            server.clone(),
-            interceptor::ghostbridge_interceptor,
-        )))
-        .add_service(tonic_web::enable(tonic::codegen::InterceptedService::new(
-            McpServiceServer::from_arc(mcp_svc),
-            interceptor::ghostbridge_interceptor,
-        )))
-        .add_service(tonic_web::enable(reflection))
-        .add_service(tonic_web::enable(health_service));
+        .layer(cors);
 
-    server.serve(addr).await
+    if let Some(identity) = tls_identity {
+        builder = builder.tls_config(ServerTlsConfig::new().identity(identity))?;
+    }
+
+    // The complete service surface comes from the shared builder; the health
+    // service is the only extra mounted here (it is endpoint-local, not part of
+    // the reflected descriptor).
+    builder
+        .add_routes(build_operation_routes(server))
+        .add_service(tonic_web::enable(health_service))
+        .serve(addr)
+        .await
 }
 
 // =============================================================================
@@ -465,7 +841,7 @@ impl StateSync for OperationGrpcServer {
         let req = request.into_inner();
         info!("gRPC Subscribe: plugins={:?}", req.plugin_ids);
 
-        let mut rx = self.schema_engine.change_tx().subscribe();
+        let mut rx = self.mutation_engine.change_tx().subscribe();
         let plugin_filters = req.plugin_ids;
         let path_filters = req.path_patterns;
         let tag_filters = req.tags;
@@ -501,6 +877,7 @@ impl StateSync for OperationGrpcServer {
         &self,
         request: Request<MutateRequest>,
     ) -> Result<Response<MutateResponse>, Status> {
+        let identity = request.extensions().get::<GhostbridgeIdentity>().cloned();
         let req = request.into_inner();
         let value = prost_value_to_simd(&req.value.unwrap_or_else(|| ProstValue::from(0)));
         let change_type = match req.operation {
@@ -509,9 +886,40 @@ impl StateSync for OperationGrpcServer {
             x if x == ProtoOperationType::ApplyPatch as i32 => ChangeType::ObjectAdded,
             _ => ChangeType::PropertySet,
         };
+        let capability_id = if req.capability_id.is_empty() {
+            None
+        } else {
+            Some(req.capability_id.clone())
+        };
+
+        if change_type == ChangeType::MethodCall {
+            if let Some(method_name) = req.member_name.strip_prefix("method:").or_else(|| {
+                if req.member_name.is_empty() {
+                    None
+                } else {
+                    Some(req.member_name.as_str())
+                }
+            }) {
+                if let Err(error) = enforce_bridge_capability(
+                    &req.plugin_id,
+                    method_name,
+                    capability_id.as_deref(),
+                    identity.as_ref(),
+                ) {
+                    return Ok(Response::new(MutateResponse {
+                        success: false,
+                        event_id: 0,
+                        event_hash: String::new(),
+                        result: None,
+                        error: Some(error),
+                        effective_hash: String::new(),
+                    }));
+                }
+            }
+        }
 
         let result = self
-            .schema_engine
+            .mutation_engine
             .mutate(
                 req.plugin_id.clone(),
                 req.object_path.clone(),
@@ -523,11 +931,7 @@ impl StateSync for OperationGrpcServer {
                 },
                 value,
                 req.actor_id.clone(),
-                if req.capability_id.is_empty() {
-                    None
-                } else {
-                    Some(req.capability_id.clone())
-                },
+                capability_id,
             )
             .await;
 
@@ -560,7 +964,7 @@ impl StateSync for OperationGrpcServer {
         request: Request<GetStateRequest>,
     ) -> Result<Response<GetStateResponse>, Status> {
         let req = request.into_inner();
-        let state = self.schema_engine.get_state(&req.plugin_id).await;
+        let state = self.mutation_engine.get_state(&req.plugin_id).await;
 
         let state_struct = state
             .map(|v| simd_to_prost_struct(&v))
@@ -642,16 +1046,36 @@ impl PluginService for OperationGrpcServer {
         &self,
         request: Request<CallMethodRequest>,
     ) -> Result<Response<CallMethodResponse>, Status> {
+        let identity = request.extensions().get::<GhostbridgeIdentity>().cloned();
         let req = request.into_inner();
+        let capability_id = if req.capability_id.is_empty() {
+            None
+        } else {
+            Some(req.capability_id.clone())
+        };
+        if let Err(error) = enforce_bridge_capability(
+            &req.plugin_id,
+            &req.method_name,
+            capability_id.as_deref(),
+            identity.as_ref(),
+        ) {
+            return Ok(Response::new(CallMethodResponse {
+                success: false,
+                result: None,
+                event_id: 0,
+                event_hash: String::new(),
+                error: Some(error),
+            }));
+        }
         let args: Vec<simd_json::OwnedValue> = req
             .arguments
             .into_iter()
             .map(|v| prost_value_to_simd(&v))
             .collect();
 
-        // New pipeline: Route through SchemaEngine.mutate for authoritative recording.
+        // New pipeline: Route through MutationEngine.mutate for authoritative recording.
         let result = self
-            .schema_engine
+            .mutation_engine
             .mutate(
                 req.plugin_id.clone(),
                 req.object_path.clone(),
@@ -659,11 +1083,7 @@ impl PluginService for OperationGrpcServer {
                 Some(req.method_name.clone()),
                 simd_json::json!(args),
                 req.actor_id.clone(),
-                if req.capability_id.is_empty() {
-                    None
-                } else {
-                    Some(req.capability_id.clone())
-                },
+                capability_id,
             )
             .await;
 
@@ -727,35 +1147,42 @@ impl PluginService for OperationGrpcServer {
         request: Request<SetPropertyRequest>,
     ) -> Result<Response<SetPropertyResponse>, Status> {
         let req = request.into_inner();
-        let connection = Connection::system()
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?;
-        let proxy = zbus::fdo::PropertiesProxy::builder(&connection)
-            .destination(format!("org.opdbus.{}.v1", req.plugin_id))
-            .map_err(|e| Status::internal(e.to_string()))?
-            .path(req.object_path.as_str())
-            .map_err(|e| Status::internal(e.to_string()))?
-            .build()
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?;
-
-        let iface = zbus::names::InterfaceName::try_from(req.interface_name.as_str())
-            .map_err(|e| Status::invalid_argument(e.to_string()))?;
         let value = prost_value_to_simd(&req.value.unwrap_or_else(|| ProstValue::from(0)));
-        let zval =
-            simd_json_to_zvariant(&value).map_err(|e| Status::invalid_argument(e.to_string()))?;
 
-        proxy
-            .set(iface, req.property_name.as_str(), zval.into())
+        match self
+            .mutation_engine
+            .mutate(
+                req.plugin_id,
+                req.object_path,
+                ChangeType::PropertySet,
+                Some(req.property_name),
+                value,
+                req.actor_id,
+                if req.capability_id.is_empty() {
+                    None
+                } else {
+                    Some(req.capability_id)
+                },
+            )
             .await
-            .map_err(|e| Status::internal(e.to_string()))?;
-
-        Ok(Response::new(SetPropertyResponse {
-            success: true,
-            event_id: 0,
-            event_hash: String::new(),
-            error: None,
-        }))
+        {
+            Ok(ok) => Ok(Response::new(SetPropertyResponse {
+                success: ok.success,
+                event_id: ok.event_id,
+                event_hash: ok.event_hash,
+                error: None,
+            })),
+            Err(e) => Ok(Response::new(SetPropertyResponse {
+                success: false,
+                event_id: 0,
+                event_hash: String::new(),
+                error: Some(ProtoMutationError {
+                    code: ProtoErrorCode::Internal as i32,
+                    message: e.to_string(),
+                    deny_reason: None,
+                }),
+            })),
+        }
     }
 
     async fn subscribe_signals(
@@ -768,7 +1195,7 @@ impl PluginService for OperationGrpcServer {
         let path_filter = req.object_path;
 
         // Subscribe to the schema engine's change broadcast and filter for signals
-        let mut rx = self.schema_engine.change_tx().subscribe();
+        let mut rx = self.mutation_engine.change_tx().subscribe();
 
         let stream = stream! {
             loop {
@@ -830,7 +1257,7 @@ impl EventChainService for OperationGrpcServer {
         request: Request<GetEventsRequest>,
     ) -> Result<Response<GetEventsResponse>, Status> {
         let req = request.into_inner();
-        let chain = self.schema_engine.event_chain.clone();
+        let chain = self.mutation_engine.event_chain.clone();
         let chain = chain.read().await;
 
         let events: Vec<ProtoChainEvent> = chain
@@ -889,7 +1316,7 @@ impl EventChainService for OperationGrpcServer {
         &self,
         _request: Request<VerifyChainRequest>,
     ) -> Result<Response<VerifyChainResponse>, Status> {
-        let chain = self.schema_engine.event_chain.clone();
+        let chain = self.mutation_engine.event_chain.clone();
         let chain = chain.read().await;
         let result = chain.verify_chain();
         Ok(Response::new(VerifyChainResponse {
@@ -905,7 +1332,7 @@ impl EventChainService for OperationGrpcServer {
         request: Request<GetProofRequest>,
     ) -> Result<Response<GetProofResponse>, Status> {
         let req = request.into_inner();
-        let chain = self.schema_engine.event_chain.clone();
+        let chain = self.mutation_engine.event_chain.clone();
         let chain = chain.read().await;
         let proof: Option<MerkleProof> =
             op_state_store::EventBatch::generate_proof(chain.events(), req.event_id);
@@ -933,7 +1360,7 @@ impl EventChainService for OperationGrpcServer {
         request: Request<ProveTagImmutabilityRequest>,
     ) -> Result<Response<ProveTagImmutabilityResponse>, Status> {
         let req = request.into_inner();
-        let chain = self.schema_engine.event_chain.clone();
+        let chain = self.mutation_engine.event_chain.clone();
         let chain = chain.read().await;
         let proof = chain.prove_tag_immutability(&req.tag);
         Ok(Response::new(ProveTagImmutabilityResponse {
@@ -949,7 +1376,7 @@ impl EventChainService for OperationGrpcServer {
         request: Request<GetSnapshotRequest>,
     ) -> Result<Response<GetSnapshotResponse>, Status> {
         let req = request.into_inner();
-        let chain = self.schema_engine.event_chain.clone();
+        let chain = self.mutation_engine.event_chain.clone();
         let chain = chain.read().await;
         if let Some(snapshot) = chain.get_snapshot(&req.snapshot_id) {
             Ok(Response::new(GetSnapshotResponse {
@@ -966,11 +1393,11 @@ impl EventChainService for OperationGrpcServer {
     ) -> Result<Response<CreateSnapshotResponse>, Status> {
         let req = request.into_inner();
         let state = self
-            .schema_engine
+            .mutation_engine
             .get_state(&req.plugin_id)
             .await
             .unwrap_or_else(|| simd_json::json!({}));
-        let chain = self.schema_engine.event_chain.clone();
+        let chain = self.mutation_engine.event_chain.clone();
         let mut chain = chain.write().await;
         let snapshot = chain.create_snapshot(req.plugin_id, "1.0.0".to_string(), state);
         Ok(Response::new(CreateSnapshotResponse {
@@ -1010,7 +1437,7 @@ impl EventChainService for OperationGrpcServer {
 // Helpers
 // =============================================================================
 
-fn proto_state_change(change: &crate::schema_engine::StateChange) -> ProtoStateChange {
+fn proto_state_change(change: &crate::mutation_engine::StateChange) -> ProtoStateChange {
     ProtoStateChange {
         change_id: change.change_id.clone(),
         event_id: change.event_id,
@@ -1430,7 +1857,7 @@ impl OvsdbMirror for OperationGrpcServer {
         };
 
         // Subscribe to the schema engine's change broadcast and filter for OVSDB paths
-        let mut rx = self.schema_engine.change_tx().subscribe();
+        let mut rx = self.mutation_engine.change_tx().subscribe();
 
         let stream = stream! {
             loop {
@@ -1518,14 +1945,14 @@ impl OperationGrpcServer {
     /// Call an OVSDB method via the D-Bus mirror interface
     async fn ovsdb_call(&self, method: &str, args: &str) -> Result<String, Status> {
         let conn = self
-            .schema_engine
+            .mutation_engine
             .dbus_connection()
             .await
             .map_err(|e| Status::unavailable(format!("D-Bus not available: {}", e)))?;
 
         let proxy = Proxy::new(
             &conn,
-            "org.opdbus.v1",
+            op_core::config::MIRROR_BUS_NAME,
             "/org/opdbus/v1/ovsdb",
             "org.opdbus.OvsdbV1",
         )
@@ -2347,17 +2774,17 @@ use crate::proto::mail::{
 
 impl OperationGrpcServer {
     /// Call a MailService method via the D-Bus mail interface.
-    /// Falls back to SchemaEngine state if the D-Bus service is unavailable.
+    /// Falls back to MutationEngine state if the D-Bus service is unavailable.
     async fn mail_dbus_call(&self, method: &str, args: &str) -> Result<String, Status> {
         let conn = self
-            .schema_engine
+            .mutation_engine
             .dbus_connection()
             .await
             .map_err(|e| Status::unavailable(format!("D-Bus not available: {}", e)))?;
 
         let proxy = Proxy::new(
             &conn,
-            "org.opdbus.v1",
+            op_core::config::MIRROR_BUS_NAME,
             "/org/opdbus/v1/mail",
             "org.opdbus.MailV1",
         )
@@ -2425,7 +2852,7 @@ impl MailService for OperationGrpcServer {
                 }))
             }
             Err(_dbus_err) => {
-                // Record the send attempt in SchemaEngine state
+                // Record the send attempt in MutationEngine state
                 let mutation_value = simd_json::json!({
                     "from": req.from_email,
                     "to": req.to_email,
@@ -2434,7 +2861,7 @@ impl MailService for OperationGrpcServer {
                 });
                 let message_id = Uuid::new_v4().to_string();
                 let _ = self
-                    .schema_engine
+                    .mutation_engine
                     .process_grpc_mutation(
                         "mail".to_string(),
                         format!("/org/opdbus/v1/mail/outbox/{}", message_id),
@@ -2606,8 +3033,8 @@ impl MailService for OperationGrpcServer {
     ) -> Result<Response<GetMailStatusResponse>, Status> {
         let req = request.into_inner();
 
-        // Try reading status from SchemaEngine state first
-        let state = self.schema_engine.get_state("mail").await;
+        // Try reading status from MutationEngine state first
+        let state = self.mutation_engine.get_state("mail").await;
         if let Some(ref st) = state {
             if let Some(status_obj) = st.as_object().and_then(|o| o.get("status")) {
                 return Ok(Response::new(GetMailStatusResponse {
@@ -2819,7 +3246,7 @@ impl MailService for OperationGrpcServer {
                 });
                 let action_id = Uuid::new_v4().to_string();
                 let _ = self
-                    .schema_engine
+                    .mutation_engine
                     .process_grpc_mutation(
                         "mail".to_string(),
                         format!("/org/opdbus/v1/mail/admin_actions/{}", action_id),
@@ -2935,14 +3362,14 @@ impl OperationGrpcServer {
     /// Call a PrivacyNetwork method via the D-Bus privacy interface.
     async fn privacy_dbus_call(&self, method: &str, args: &str) -> Result<String, Status> {
         let conn = self
-            .schema_engine
+            .mutation_engine
             .dbus_connection()
             .await
             .map_err(|e| Status::unavailable(format!("D-Bus not available: {}", e)))?;
 
         let proxy = Proxy::new(
             &conn,
-            "org.opdbus.v1",
+            op_core::config::MIRROR_BUS_NAME,
             "/org/opdbus/v1/privacy",
             "org.opdbus.PrivacyV1",
         )
@@ -3037,7 +3464,7 @@ impl PrivacyNetworkService for OperationGrpcServer {
                     "force_reprovision": req.force_reprovision
                 });
                 let _ = self
-                    .schema_engine
+                    .mutation_engine
                     .process_grpc_mutation(
                         "privacy".to_string(),
                         "/org/opdbus/v1/privacy/network".to_string(),
@@ -3071,8 +3498,8 @@ impl PrivacyNetworkService for OperationGrpcServer {
     ) -> Result<Response<GetNetworkStatusResponse>, Status> {
         let req = request.into_inner();
 
-        // Check SchemaEngine state first
-        let state = self.schema_engine.get_state("privacy").await;
+        // Check MutationEngine state first
+        let state = self.mutation_engine.get_state("privacy").await;
         if let Some(ref st) = state {
             if let Some(net_status) = st.as_object().and_then(|o| o.get("network_status")) {
                 let components: Vec<_> = net_status
@@ -3264,7 +3691,7 @@ impl PrivacyNetworkService for OperationGrpcServer {
                     "status": "pending_no_backend"
                 });
                 let _ = self
-                    .schema_engine
+                    .mutation_engine
                     .process_grpc_mutation(
                         "privacy".to_string(),
                         format!("/org/opdbus/v1/privacy/users/{}", user_id),
@@ -3400,7 +3827,7 @@ impl PrivacyNetworkService for OperationGrpcServer {
                     "status": "pending_no_backend"
                 });
                 let _ = self
-                    .schema_engine
+                    .mutation_engine
                     .process_grpc_mutation(
                         "privacy".to_string(),
                         format!("/org/opdbus/v1/privacy/components/{}", req.component),
@@ -3713,7 +4140,7 @@ impl PrivacyNetworkService for OperationGrpcServer {
                     "status": "pending_no_backend"
                 });
                 let _ = self
-                    .schema_engine
+                    .mutation_engine
                     .process_grpc_mutation(
                         "privacy".to_string(),
                         format!("/org/opdbus/v1/privacy/routing/{}", req.container_name),
@@ -3814,14 +4241,14 @@ impl OperationGrpcServer {
     /// Call a RegistrationService method via the D-Bus registration interface.
     async fn registration_dbus_call(&self, method: &str, args: &str) -> Result<String, Status> {
         let conn = self
-            .schema_engine
+            .mutation_engine
             .dbus_connection()
             .await
             .map_err(|e| Status::unavailable(format!("D-Bus not available: {}", e)))?;
 
         let proxy = Proxy::new(
             &conn,
-            "org.opdbus.v1",
+            op_core::config::MIRROR_BUS_NAME,
             "/org/opdbus/v1/registration",
             "org.opdbus.RegistrationV1",
         )
@@ -3900,7 +4327,7 @@ impl RegistrationService for OperationGrpcServer {
                     "created_at": chrono::Utc::now().to_rfc3339()
                 });
                 let _ = self
-                    .schema_engine
+                    .mutation_engine
                     .process_grpc_mutation(
                         "registration".to_string(),
                         format!("/org/opdbus/v1/registration/magic_links/{}", token),
@@ -3987,7 +4414,7 @@ impl RegistrationService for OperationGrpcServer {
             }
             Err(_) => {
                 // Check state store for magic link token
-                let state = self.schema_engine.get_state("registration").await;
+                let state = self.mutation_engine.get_state("registration").await;
                 if let Some(ref st) = state {
                     if let Some(link_data) = st
                         .as_object()
@@ -4091,7 +4518,7 @@ impl RegistrationService for OperationGrpcServer {
                     "status": "pending_no_backend"
                 });
                 let _ = self
-                    .schema_engine
+                    .mutation_engine
                     .process_grpc_mutation(
                         "registration".to_string(),
                         format!("/org/opdbus/v1/registration/users/{}", user_id),
@@ -4123,7 +4550,7 @@ impl RegistrationService for OperationGrpcServer {
         let req = request.into_inner();
 
         // Check state store first
-        let state = self.schema_engine.get_state("registration").await;
+        let state = self.mutation_engine.get_state("registration").await;
         if let Some(ref st) = state {
             if let Some(users) = st.as_object().and_then(|o| o.get("users")) {
                 // Search by email or user_id
@@ -4428,7 +4855,7 @@ impl RegistrationService for OperationGrpcServer {
                     "status": "pending_no_backend"
                 });
                 let _ = self
-                    .schema_engine
+                    .mutation_engine
                     .process_grpc_mutation(
                         "registration".to_string(),
                         format!(
@@ -4469,9 +4896,17 @@ impl crate::proto::dbus_passthrough_server::DbusPassthrough for OperationGrpcSer
         &self,
         request: Request<crate::proto::DbusCallRequest>,
     ) -> Result<Response<crate::proto::DbusCallResponse>, Status> {
+        let identity = request.extensions().get::<GhostbridgeIdentity>().cloned();
         let req = request.into_inner();
+        if let Some(plugin_id) = plugin_id_from_dbus_path(&req.path) {
+            if let Err(error) =
+                enforce_bridge_capability(&plugin_id, &req.method, None, identity.as_ref())
+            {
+                return Err(Status::permission_denied(error.message));
+            }
+        }
         let conn = self
-            .schema_engine
+            .mutation_engine
             .dbus_connection()
             .await
             .map_err(|e| Status::unavailable(format!("D-Bus not available: {e}")))?;
@@ -4550,7 +4985,16 @@ impl crate::proto::dbus_passthrough_server::DbusPassthrough for OperationGrpcSer
         &self,
         request: Request<crate::proto::DbusSetPropertyRequest>,
     ) -> Result<Response<crate::proto::DbusSetPropertyResponse>, Status> {
+        let identity = request.extensions().get::<GhostbridgeIdentity>().cloned();
         let req = request.into_inner();
+        if let Some(plugin_id) = plugin_id_from_dbus_path(&req.path) {
+            let setter = format!("set_{}", req.property);
+            if let Err(error) =
+                enforce_bridge_capability(&plugin_id, &setter, None, identity.as_ref())
+            {
+                return Err(Status::permission_denied(error.message));
+            }
+        }
         let bus_conn = match req.bus.as_str() {
             "session" => Connection::session()
                 .await

@@ -22,7 +22,6 @@ members = [
     # "crates/op-ml",  # Disabled: ort API compatibility issues (see #ml-fixme)
     "crates/op-blockchain",
     "crates/op-deployment",
-    "crates/op-openvswitch-daemon",
     "crates/op-mcp",
     "crates/op-mcp-aggregator",
     "crates/op-identity",
@@ -32,12 +31,15 @@ members = [
     "crates/op-cozo-store",
     "crates/op-dbus-model",
     "crates/op-grpc-bridge",
+    "crates/op-grpc-adapters",
     "crates/op-dbus-mirror",
     "crates/op-compliance",
     "crates/op-projection",
     "crates/op-assistant-grpc",
     "crates/op-s6-systemctl",
     "crates/op-xray-daemon",
+    "crates/op-mcp-shim",
+    "crates/op-gemma",
 ]
 
 [workspace.package]
@@ -71,11 +73,11 @@ op-grpc-bridge = { path = "crates/op-grpc-bridge" }
 op-identity = { path = "crates/op-identity" }
 op-dbus-mirror = { path = "crates/op-dbus-mirror" }
 op-jsonrpc = { path = "crates/op-jsonrpc" }
-op-openvswitch-daemon = { path = "crates/op-openvswitch-daemon" }
 op-projection = { path = "crates/op-projection" }
 op-cozo-store = { path = "crates/op-cozo-store" }
 op-s6-systemctl = { path = "crates/op-s6-systemctl" }
 op-xray-daemon = { path = "crates/op-xray-daemon" }
+op-gemma = { path = "crates/op-gemma" }
 
 # Async
 tokio = { version = "1", features = ["full"] }
@@ -90,6 +92,7 @@ serde_json = "1"
 serde_yaml = "0.9"
 toml = "0.8"
 jsonschema = { version = "0.29", default-features = false }
+schemars = { version = "0.8", features = ["preserve_order"] }
 
 # DBus
 zbus = { version = "5", features = ["tokio"] }
@@ -119,7 +122,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
 # Utils
-uuid = { version = "1.6", features = ["v4", "serde"] }
+uuid = { version = "1.6", features = ["v4", "v7", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 quick-xml = { version = "0.36", features = ["serialize"] }
 regex = "1"
@@ -141,13 +144,12 @@ prost = "0.13"
 prost-types = "0.13"
 tonic-build = "0.12"
 tonic-reflection = "0.12"
+prost-reflect = { version = "0.14", features = ["serde"] }
 tonic-health = "0.12"
 tonic-web = "0.12"
 
 # Databases
-sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "json"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
-redis = { version = "0.25", features = ["tokio-comp"] }
 lru = "0.12"
 
 # Additional
@@ -200,7 +202,6 @@ tracing-subscriber.workspace = true
 thiserror.workspace = true
 async-trait.workspace = true
 zbus.workspace = true
-sqlx.workspace = true
 chrono.workspace = true
 base64.workspace = true
 futures.workspace = true

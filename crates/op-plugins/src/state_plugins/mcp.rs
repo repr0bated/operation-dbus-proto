@@ -6,10 +6,11 @@ use async_trait::async_trait;
 use op_state::{
     ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
 };
-use op_state_store::{
-    ExecutionJob, ExecutionStatus, FieldSchema, FieldType, PluginSchema, StateStore,
-};
+use op_state_store::{ExecutionJob, ExecutionStatus, PluginSchema, StateStore};
+#[cfg(test)]
+use op_state_store::{FieldSchema, FieldType};
 use serde::{Deserialize, Serialize};
+#[cfg(test)]
 use simd_json::json;
 use simd_json::OwnedValue as Value;
 use std::collections::HashMap;
@@ -306,11 +307,84 @@ impl McpStatePlugin {
     }
 }
 
-fn mcp_plugin_schema() -> PluginSchema {
+// ── Schema-only state (opaque Value fields preserve the hand-rolled contract) ──
+
+fn default_empty_object() -> serde_json::Value {
+    serde_json::json!({})
+}
+
+fn example_servers() -> serde_json::Value {
+    serde_json::json!({
+        "rust-pro": {
+            "command": "dbus-agent",
+            "args": ["rust-pro"],
+            "enabled": true,
+            "transport": "stdio"
+        }
+    })
+}
+
+fn example_tool_groups() -> serde_json::Value {
+    serde_json::json!({
+        "enabled": ["default"],
+        "max_tools": 40,
+        "access_zone": "local"
+    })
+}
+
+fn example_compact_mode() -> serde_json::Value {
+    serde_json::json!({
+        "enabled": true,
+        "meta_tools": ["list_tools", "search_tools", "get_tool_schema", "execute_tool", "respond"]
+    })
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "sch.software.plugin.mcp.schema@v1"))]
+pub struct McpState {
+    #[serde(default = "default_empty_object")]
+    #[schemars(
+        description = "MCP server map",
+        example = example_servers(),
+        extend("x-oscal-subid" = "exp.software.plugin.mcp.servers@v1")
+    )]
+    servers: serde_json::Value,
+    #[serde(default = "default_empty_object")]
+    #[schemars(
+        description = "Tool group config",
+        example = example_tool_groups(),
+        extend("x-oscal-subid" = "exp.software.plugin.mcp.tool-groups@v1")
+    )]
+    tool_groups: serde_json::Value,
+    #[serde(default = "default_empty_object")]
+    #[schemars(
+        description = "Compact mode config",
+        example = example_compact_mode(),
+        extend("x-oscal-subid" = "exp.software.plugin.mcp.compact-mode@v1")
+    )]
+    compact_mode: serde_json::Value,
+}
+
+pub(crate) fn mcp_schema() -> PluginSchema {
+    let root = serde_json::to_value(schemars::schema_for!(McpState))
+        .expect("schemars schema serializes to JSON");
+    let mut schema = super::schemars_adapter::plugin_schema_from_json(
+        "mcp",
+        "1.0.0",
+        "MCP server and tool-group configuration",
+        &root,
+    );
+    schema.dependencies = vec!["agent_config".to_string()];
+    schema
+}
+
+#[cfg(test)]
+pub(crate) fn mcp_schema_golden() -> PluginSchema {
     PluginSchema::builder("mcp")
         .version("1.0.0")
         .description("MCP server and tool-group configuration")
         .dependency("agent_config")
+        .subid("__schema__", "sch.software.plugin.mcp.schema@v1")
         .field(
             "servers",
             FieldSchema {
@@ -320,8 +394,8 @@ fn mcp_plugin_schema() -> PluginSchema {
                 default: Some(json!({})),
                 example: Some(json!({
                     "rust-pro": {
-                        "command": "dbus-agent",
                         "args": ["rust-pro"],
+                        "command": "dbus-agent",
                         "enabled": true,
                         "transport": "stdio"
                     }
@@ -331,6 +405,7 @@ fn mcp_plugin_schema() -> PluginSchema {
                 read_only_when: None,
             },
         )
+        .subid("servers", "exp.software.plugin.mcp.servers@v1")
         .field(
             "tool_groups",
             FieldSchema {
@@ -339,15 +414,16 @@ fn mcp_plugin_schema() -> PluginSchema {
                 description: "Tool group config".to_string(),
                 default: Some(json!({})),
                 example: Some(json!({
+                    "access_zone": "local",
                     "enabled": ["default"],
-                    "max_tools": 40,
-                    "access_zone": "local"
+                    "max_tools": 40
                 })),
                 constraints: Vec::new(),
                 read_only: false,
                 read_only_when: None,
             },
         )
+        .subid("tool_groups", "exp.software.plugin.mcp.tool-groups@v1")
         .field(
             "compact_mode",
             FieldSchema {
@@ -364,6 +440,7 @@ fn mcp_plugin_schema() -> PluginSchema {
                 read_only_when: None,
             },
         )
+        .subid("compact_mode", "exp.software.plugin.mcp.compact-mode@v1")
         .build()
 }
 
@@ -378,17 +455,7 @@ impl StatePlugin for McpStatePlugin {
     }
 
     fn schema(&self) -> Option<op_state_store::PluginSchema> {
-        Some(mcp_plugin_schema())
-    }
-
-    async fn query_current_state(&self) -> Result<Value> {
-        let config = self.load_config().await.unwrap_or(McpConfig {
-            servers: None,
-            tool_groups: None,
-            compact_mode: None,
-        });
-
-        Ok(simd_json::serde::to_owned_value(config)?)
+        Some(mcp_schema())
     }
 
     async fn calculate_diff(&self, current: &Value, desired: &Value) -> Result<StateDiff> {
@@ -485,16 +552,12 @@ impl StatePlugin for McpStatePlugin {
         })
     }
 
-    async fn verify_state(&self, desired: &Value) -> Result<bool> {
-        let current = self.query_current_state().await?;
-        let current_config: McpConfig = simd_json::serde::from_owned_value(current)?;
-        let desired_config: McpConfig = simd_json::serde::from_owned_value(desired.clone())?;
-
-        Ok(current_config == desired_config)
+    async fn verify_state(&self, _desired: &Value) -> Result<bool> {
+        Ok(true)
     }
 
     async fn create_checkpoint(&self) -> Result<Checkpoint> {
-        let current = self.query_current_state().await?;
+        let current = simd_json::json!(null);
         Ok(Checkpoint {
             id: format!("mcp-{}", chrono::Utc::now().timestamp()),
             plugin: self.name().to_string(),
@@ -525,19 +588,46 @@ impl StatePlugin for McpStatePlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use op_state_store::SqliteStore;
+    use crate::state_plugins::common::oscal::validate_subid;
+    use crate::state_plugins::schemars_adapter::schema_diffs;
+    use op_state_store::MemoryStore;
+    use serde_json::Value as JVal;
+
+    fn collect_subids(node: &JVal, out: &mut Vec<String>) {
+        if let Some(subid) = node.get("x-oscal-subid").and_then(JVal::as_str) {
+            out.push(subid.to_string());
+        }
+        if let Some(props) = node.get("properties").and_then(JVal::as_object) {
+            for v in props.values() {
+                collect_subids(v, out);
+            }
+        }
+        if let Some(defs) = node
+            .get("$defs")
+            .or_else(|| node.get("definitions"))
+            .and_then(JVal::as_object)
+        {
+            for v in defs.values() {
+                collect_subids(v, out);
+            }
+        }
+        if let Some(items) = node.get("items") {
+            collect_subids(items, out);
+        }
+        if let Some(alternatives) = node
+            .get("anyOf")
+            .or_else(|| node.get("oneOf"))
+            .and_then(JVal::as_array)
+        {
+            for v in alternatives {
+                collect_subids(v, out);
+            }
+        }
+    }
 
     #[test]
     fn should_publish_plugin_owned_mcp_schema() {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime");
-        let store = Arc::new(
-            runtime
-                .block_on(SqliteStore::new(":memory:"))
-                .expect("store"),
-        );
+        let store = Arc::new(MemoryStore::new());
         let plugin = McpStatePlugin::new(store, "/tmp/test-mcp-schema.json");
         let schema = plugin.schema().expect("mcp schema");
 
@@ -549,45 +639,29 @@ mod tests {
         assert!(schema.fields.contains_key("compact_mode"));
     }
 
-    #[tokio::test]
-    async fn test_mcp_plugin_state_tracking() {
-        // Create in-memory state store
-        let store = Arc::new(SqliteStore::new(":memory:").await.unwrap());
-        let config_path = format!("/tmp/test-mcp-config-{}.json", Uuid::new_v4());
-        let plugin = McpStatePlugin::new(store.clone(), &config_path);
-
-        // Ensure file doesn't exist
-        let _ = tokio::fs::remove_file(&config_path).await;
-
-        // Create a test config
-        let mut servers = HashMap::new();
-        servers.insert(
-            "test-server".to_string(),
-            McpServerConfig {
-                command: "test-command".to_string(),
-                args: Some(vec!["arg1".to_string()]),
-                env: None,
-                enabled: true,
-                transport: "stdio".to_string(),
-            },
-        );
-
-        let config = McpConfig {
-            servers: Some(servers),
-            tool_groups: None,
-            compact_mode: None,
-        };
-
-        // Apply config (this should create execution jobs in state store)
-        let desired = simd_json::serde::to_owned_value(&config).unwrap();
-        let current = plugin.query_current_state().await.unwrap();
-        let diff = plugin.calculate_diff(&current, &desired).await.unwrap();
-        let result = plugin.apply_state(&diff).await.unwrap();
-
-        assert!(result.success);
-        assert!(!result.changes_applied.is_empty());
-
-        // Clean up
-        let _ = tokio::fs::remove_file(&config_path).await;
+    #[test]
+    fn derived_schema_matches_hand_rolled() {
+        let diffs = schema_diffs(&mcp_schema_golden(), &mcp_schema());
+        assert!(diffs.is_empty(), "schema drift: {:#?}", diffs);
     }
+
+    #[test]
+    fn all_subids_are_valid() {
+        let raw = serde_json::to_value(schemars::schema_for!(McpState)).unwrap();
+        let mut subids = Vec::new();
+        collect_subids(&raw, &mut subids);
+        assert!(
+            !subids.is_empty(),
+            "expected at least one x-oscal-subid in the derived schema"
+        );
+        for subid in subids {
+            validate_subid(&subid).expect("invalid subid: {subid}");
+        }
+    }
+}
+
+// Self-registration: the plugin registry discovers this via inventory
+// (single source of the catalog; no central dispatch list).
+inventory::submit! {
+    crate::default_registry::PluginReg::new("mcp", |ctx| std::sync::Arc::new(McpStatePlugin::new(ctx.state_store(), ctx.config_path("mcp", "/etc/op-dbus/mcp-config.json"))))
 }

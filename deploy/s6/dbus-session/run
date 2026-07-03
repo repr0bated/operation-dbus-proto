@@ -1,7 +1,9 @@
 #!/bin/sh
 exec 2>&1
-mkdir -p /run/op-dbus
-exec dbus-daemon \
-    --session \
-    --address=unix:path=/run/op-dbus/session-bus.sock \
-    --nofork
+[ -r /etc/op-dbus/environment ] && . /etc/op-dbus/environment
+export DBUS_SESSION_BUS_ADDRESS
+: "${DBUS_SESSION_BUS_ADDRESS:?DBUS_SESSION_BUS_ADDRESS must be set in /etc/op-dbus/environment}"
+SOCKET_PATH="${DBUS_SESSION_BUS_ADDRESS#unix:path=}"
+mkdir -p "$(dirname "$SOCKET_PATH")"
+rm -f "$SOCKET_PATH"
+exec /usr/local/bin/busd -a "$DBUS_SESSION_BUS_ADDRESS"

@@ -20,6 +20,14 @@ use crate::proto::{
     CallMethodRequest, GetStateRequest, MutateRequest, OperationType as ProtoOperationType,
     SubscribeEventsRequest, SubscribeRequest,
 };
+use op_grpc_adapters::proto::{
+    execute_command_request::Command as ExecuteNetclientCommand,
+    netmaker_service_client::NetmakerServiceClient, ConnectRequest, DisconnectRequest,
+    ExecuteCommandRequest, ExecuteCommandResponse, InstallRequest, JoinNetworkRequest,
+    LeaveNetworkRequest, ListRequest, PeersRequest, PingRequest, PullRequest, PushRequest,
+    RegisterRequest, RestartServiceRequest, ServerRequest, UninstallRequest, UseRequest,
+    VersionRequest,
+};
 
 /// Configuration for a remote gRPC endpoint
 #[derive(Debug, Clone)]
@@ -148,6 +156,15 @@ impl GrpcClientPool {
     ) -> Result<EventChainServiceClient<Channel>, GrpcClientError> {
         let channel = self.get_channel(address).await?;
         Ok(EventChainServiceClient::new(channel))
+    }
+
+    /// Get a Netmaker adapter client.
+    pub async fn netmaker_client(
+        &self,
+        address: &str,
+    ) -> Result<NetmakerServiceClient<Channel>, GrpcClientError> {
+        let channel = self.get_channel(address).await?;
+        Ok(NetmakerServiceClient::new(channel))
     }
 
     /// Close all connections
@@ -551,5 +568,214 @@ fn serde_to_prost_value(value: &serde_json::Value) -> ProstValue {
                     .collect(),
             })),
         },
+    }
+}
+
+impl RemoteOperationClient {
+    /// Join a Netmaker network through the Netmaker adapter gRPC service.
+    pub async fn netmaker_join(
+        &self,
+        network: &str,
+        token: &str,
+    ) -> Result<bool, GrpcClientError> {
+        let mut client = self.pool.netmaker_client(&self.default_address).await?;
+        let response = client
+            .join_network(Request::new(JoinNetworkRequest {
+                network: network.to_string(),
+                token: token.to_string(),
+            }))
+            .await
+            .map_err(|e| GrpcClientError::RequestFailed(e.to_string()))?;
+        Ok(response.into_inner().success)
+    }
+
+    /// Leave a Netmaker network through the Netmaker adapter gRPC service.
+    pub async fn netmaker_leave(&self, network: &str) -> Result<bool, GrpcClientError> {
+        let mut client = self.pool.netmaker_client(&self.default_address).await?;
+        let response = client
+            .leave_network(Request::new(LeaveNetworkRequest {
+                network: network.to_string(),
+            }))
+            .await
+            .map_err(|e| GrpcClientError::RequestFailed(e.to_string()))?;
+        Ok(response.into_inner().success)
+    }
+
+    /// Restart a netclient-backed service through the adapter gRPC service.
+    pub async fn netmaker_restart(&self, service: &str) -> Result<bool, GrpcClientError> {
+        let mut client = self.pool.netmaker_client(&self.default_address).await?;
+        let response = client
+            .execute_command(Request::new(ExecuteCommandRequest {
+                command: Some(ExecuteNetclientCommand::Restart(RestartServiceRequest {
+                    service: service.to_string(),
+                })),
+            }))
+            .await
+            .map_err(|e| GrpcClientError::RequestFailed(e.to_string()))?;
+        Ok(response.into_inner().success)
+    }
+
+    pub async fn netclient_join(
+        &self,
+        network: &str,
+        token: &str,
+    ) -> Result<ExecuteCommandResponse, GrpcClientError> {
+        let mut client = self.pool.netmaker_client(&self.default_address).await?;
+        let response = client
+            .execute_command(Request::new(ExecuteCommandRequest {
+                command: Some(ExecuteNetclientCommand::Join(JoinNetworkRequest {
+                    network: network.to_string(),
+                    token: token.to_string(),
+                })),
+            }))
+            .await
+            .map_err(|e| GrpcClientError::RequestFailed(e.to_string()))?;
+        Ok(response.into_inner())
+    }
+
+    pub async fn netclient_leave(
+        &self,
+        network: &str,
+    ) -> Result<ExecuteCommandResponse, GrpcClientError> {
+        let mut client = self.pool.netmaker_client(&self.default_address).await?;
+        let response = client
+            .execute_command(Request::new(ExecuteCommandRequest {
+                command: Some(ExecuteNetclientCommand::Leave(LeaveNetworkRequest {
+                    network: network.to_string(),
+                })),
+            }))
+            .await
+            .map_err(|e| GrpcClientError::RequestFailed(e.to_string()))?;
+        Ok(response.into_inner())
+    }
+
+    pub async fn netclient_connect(
+        &self,
+        network: &str,
+    ) -> Result<ExecuteCommandResponse, GrpcClientError> {
+        let mut client = self.pool.netmaker_client(&self.default_address).await?;
+        let response = client
+            .execute_command(Request::new(ExecuteCommandRequest {
+                command: Some(ExecuteNetclientCommand::Connect(ConnectRequest {
+                    network: network.to_string(),
+                })),
+            }))
+            .await
+            .map_err(|e| GrpcClientError::RequestFailed(e.to_string()))?;
+        Ok(response.into_inner())
+    }
+
+    pub async fn netclient_disconnect(
+        &self,
+        network: &str,
+    ) -> Result<ExecuteCommandResponse, GrpcClientError> {
+        let mut client = self.pool.netmaker_client(&self.default_address).await?;
+        let response = client
+            .execute_command(Request::new(ExecuteCommandRequest {
+                command: Some(ExecuteNetclientCommand::Disconnect(DisconnectRequest {
+                    network: network.to_string(),
+                })),
+            }))
+            .await
+            .map_err(|e| GrpcClientError::RequestFailed(e.to_string()))?;
+        Ok(response.into_inner())
+    }
+
+    pub async fn netclient_list(&self) -> Result<ExecuteCommandResponse, GrpcClientError> {
+        self.netclient_noargs(ExecuteNetclientCommand::List(ListRequest {})).await
+    }
+
+    pub async fn netclient_peers(&self) -> Result<ExecuteCommandResponse, GrpcClientError> {
+        self.netclient_noargs(ExecuteNetclientCommand::Peers(PeersRequest {})).await
+    }
+
+    pub async fn netclient_ping(
+        &self,
+        peer: &str,
+    ) -> Result<ExecuteCommandResponse, GrpcClientError> {
+        self.netclient_noargs(ExecuteNetclientCommand::Ping(PingRequest {
+            peer: peer.to_string(),
+        }))
+        .await
+    }
+
+    pub async fn netclient_pull(&self) -> Result<ExecuteCommandResponse, GrpcClientError> {
+        self.netclient_noargs(ExecuteNetclientCommand::Pull(PullRequest {})).await
+    }
+
+    pub async fn netclient_push(&self) -> Result<ExecuteCommandResponse, GrpcClientError> {
+        self.netclient_noargs(ExecuteNetclientCommand::Push(PushRequest {})).await
+    }
+
+    pub async fn netclient_register(
+        &self,
+        instance: &str,
+    ) -> Result<ExecuteCommandResponse, GrpcClientError> {
+        self.netclient_noargs(ExecuteNetclientCommand::Register(RegisterRequest {
+            instance: instance.to_string(),
+        }))
+        .await
+    }
+
+    pub async fn netclient_server(
+        &self,
+        subcommand: &str,
+        args: Vec<String>,
+    ) -> Result<ExecuteCommandResponse, GrpcClientError> {
+        self.netclient_noargs(ExecuteNetclientCommand::Server(ServerRequest {
+            subcommand: subcommand.to_string(),
+            args,
+        }))
+        .await
+    }
+
+    pub async fn netclient_install(&self) -> Result<ExecuteCommandResponse, GrpcClientError> {
+        self.netclient_noargs(ExecuteNetclientCommand::Install(InstallRequest {})).await
+    }
+
+    pub async fn netclient_uninstall(&self) -> Result<ExecuteCommandResponse, GrpcClientError> {
+        self.netclient_noargs(ExecuteNetclientCommand::Uninstall(UninstallRequest {})).await
+    }
+
+    pub async fn netclient_use(
+        &self,
+        version: &str,
+    ) -> Result<ExecuteCommandResponse, GrpcClientError> {
+        self.netclient_noargs(ExecuteNetclientCommand::Use(UseRequest {
+            version: version.to_string(),
+        }))
+        .await
+    }
+
+    pub async fn netclient_version(&self) -> Result<ExecuteCommandResponse, GrpcClientError> {
+        self.netclient_noargs(ExecuteNetclientCommand::Version(VersionRequest {}))
+            .await
+    }
+
+    pub async fn netclient_daemon(
+        &self,
+        _args: Vec<String>,
+    ) -> Result<ExecuteCommandResponse, GrpcClientError> {
+        let ok = self.netmaker_restart("netclient").await?;
+        Ok(ExecuteCommandResponse {
+            success: ok,
+            exit_code: if ok { 0 } else { 1 },
+            stdout: String::new(),
+            stderr: String::new(),
+        })
+    }
+
+    async fn netclient_noargs(
+        &self,
+        command: ExecuteNetclientCommand,
+    ) -> Result<ExecuteCommandResponse, GrpcClientError> {
+        let mut client = self.pool.netmaker_client(&self.default_address).await?;
+        let response = client
+            .execute_command(Request::new(ExecuteCommandRequest {
+                command: Some(command),
+            }))
+            .await
+            .map_err(|e| GrpcClientError::RequestFailed(e.to_string()))?;
+        Ok(response.into_inner())
     }
 }

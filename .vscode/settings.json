@@ -7,6 +7,6 @@
     "workbench.editor.enablePreviewFromCodeNavigation": true,
     "terminal.integrated.suggest.enabled": true,
     "kiroAgent.modelSelection": "qwen3-coder-next",
-    "kiroAgent.configureMCP": "Disabled",
+    "kiroAgent.configureMCP": "Enabled",
     "terminal.integrated.copyOnSelection": true
 }

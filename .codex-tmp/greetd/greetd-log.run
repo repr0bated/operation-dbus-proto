@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+
+log_dir=/var/log/greetd
+mkdir -p "$log_dir"
+
+exec s6-log -b n20 s1000000 T "$log_dir"

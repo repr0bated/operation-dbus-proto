@@ -8,7 +8,6 @@ use axum::{
 use std::sync::Arc;
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::{Any, CorsLayer};
-use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 
 use crate::groups_admin;
@@ -147,11 +146,6 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             "/llm/models/:provider",
             get(handlers::llm::list_models_for_provider_handler),
         )
-        .route(
-            "/llm/provider",
-            post(handlers::llm::switch_provider_handler),
-        )
-        .route("/llm/model", post(handlers::llm::switch_model_handler))
         .route("/llm/chat", post(handlers::chat::send_message_handler))
         // OpenClaw endpoints (internal/base layer)
         .route(
@@ -252,7 +246,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
     let ws_route = Router::new().route("/ws", get(websocket::websocket_handler));
 
     // Main router - agents_mcp_route FIRST so it takes precedence
-    let mut router = Router::new()
+    let router = Router::new()
         .nest("/api", api_routes)
         // Human-facing privacy verification flow (magic-link target)
         .route("/privacy/verify", get(handlers::privacy::verify_redirect))
@@ -274,21 +268,8 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .nest("/groups-admin", groups_admin::create_groups_admin_router())
         .nest("/admin", admin::admin_routes());
 
-    // Use filesystem static files if available, otherwise fallback to embedded UI
-    let static_dir =
-        std::env::var("OP_WEB_STATIC_DIR").unwrap_or_else(|_| "lovable/dist".to_string());
-    let static_index = std::path::Path::new(&static_dir).join("index.html");
-    if static_index.exists() {
-        router = router
-            .fallback_service(ServeDir::new(static_dir).fallback(ServeFile::new(static_index)));
-    } else if std::path::Path::new(&static_dir).exists() {
-        router = router.fallback_service(
-            ServeDir::new(static_dir).fallback(get(crate::embedded_ui::serve_embedded_ui)),
-        );
-    } else {
-        router = router.fallback(crate::embedded_ui::serve_embedded_ui);
-    }
-
+    // No SPA fallback: op-web is API/gRPC only. The native zeroclaw-gui client
+    // consumes state over gRPC-Web + reflection; unmatched routes return 404.
     router
         .layer(Extension(state))
         .layer(axum::middleware::from_fn(security::ip_security_middleware))

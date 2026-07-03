@@ -1,12 +1,13 @@
-//! OVS Bridge Setup using Native OVSDB JSON-RPC
+//! OVS Bridge Setup using Native OVSDB JSON-RPC over the rovs D-Bus proxy.
 //!
-//! This example demonstrates creating and managing OVS bridges
-//! using pure Rust with native OVSDB JSON-RPC (no CLI commands).
+//! This example demonstrates creating and managing OVS bridges using pure Rust
+//! via `OvsdbDbusClient` (native OVSDB JSON-RPC routed through the rovs proxy —
+//! no `ovs-vsctl` CLI commands).
 //!
 //! Run with: cargo run --example ovs_native_rust
 
 use anyhow::Result;
-use op_network::OvsdbClient;
+use op_network::OvsdbDbusClient;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -17,8 +18,8 @@ async fn main() -> Result<()> {
 
     println!("=== OVS Native Bridge Setup Example ===\n");
 
-    // Create OVSDB client (connects to /var/run/openvswitch/db.sock)
-    let client = OvsdbClient::new();
+    // Create OVSDB client (routes JSON-RPC through the rovs D-Bus proxy).
+    let client = OvsdbDbusClient::new();
 
     // 1. Check connectivity
     println!("1. Checking OVSDB connectivity...");
@@ -68,7 +69,7 @@ async fn main() -> Result<()> {
     match client.get_bridge_info(bridge_name).await {
         Ok(info) => {
             println!("   Bridge info:");
-            println!("   {}\n", serde_json::to_string_pretty(&info)?);
+            println!("   {}\n", info);
         }
         Err(e) => {
             eprintln!("   Failed to get bridge info: {}", e);

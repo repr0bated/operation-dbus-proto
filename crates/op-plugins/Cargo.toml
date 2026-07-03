@@ -7,6 +7,12 @@ license.workspace = true
 description = "Plugin system with state management, domain plugins, and blockchain footprints"
 
 [dependencies]
+# Plugin schemas are derived from Rust state structs via schemars.
+schemars = "1"
+# Distributed plugin self-registration: each plugin module submits its
+# name+constructor via inventory::submit!; the registry iterates them. This is
+# the single source of the plugin catalog — no central dispatch list.
+inventory = "0.3"
 op-core = { path = "../op-core" }
 op-dbus-model = { workspace = true }
 op-state = { path = "../op-state" }
@@ -29,6 +35,7 @@ zbus = { workspace = true }
 chrono = { workspace = true }
 log = { workspace = true }
 reqwest = { workspace = true }
+regex = { workspace = true }
 sha2 = { workspace = true }
 md5 = { workspace = true }
 uuid = { workspace = true }

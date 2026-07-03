@@ -28,6 +28,11 @@ md5 = { workspace = true }
 blake3 = { workspace = true }
 libc = { workspace = true }
 x25519-dalek = { version = "2", features = ["static_secrets"] }
+bip39 = "2"
+
+# TUI dependencies
+crossterm = "0.28"
+ratatui = { version = "0.28", features = ["crossterm"] }
 
 [dev-dependencies]
 tempfile = "3"

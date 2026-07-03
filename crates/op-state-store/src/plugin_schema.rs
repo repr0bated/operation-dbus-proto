@@ -19,12 +19,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 /// Default JSON Schema dialect (can be overridden per-schema)
-pub const DEFAULT_SCHEMA_DIALECT: &str = "https://json-schema.org/v1/2026";
+pub const DEFAULT_SCHEMA_DIALECT: &str = "https://json-schema.org/draft/2020-12/schema";
 
 /// Known dialect identifiers
 pub mod dialects {
     pub const DRAFT_07: &str = "http://json-schema.org/draft-07/schema#";
-    pub const V2026: &str = "https://json-schema.org/v1/2026";
+    pub const DRAFT_2019_09: &str = "https://json-schema.org/draft/2019-09/schema";
+    pub const DRAFT_2020_12: &str = "https://json-schema.org/draft/2020-12/schema";
 }
 
 /// Path to the json-schema-spec repository relative to workspace root
@@ -41,6 +42,11 @@ pub enum FieldType {
     Array(Box<FieldType>),
     Object(HashMap<String, FieldSchema>),
     Enum(Vec<String>),
+    /// Discriminated union (tagged enum): the value must match exactly one of
+    /// the inner branch types. Serializes as `{"one_of": [<FieldType>, ...]}`
+    /// and renders to JSON Schema `{"oneOf": [...]}`. Distinct from
+    /// `Constraint::OneOf` (a value-membership constraint).
+    OneOf(Vec<FieldType>),
     Any,
 }
 
@@ -99,6 +105,76 @@ pub enum Constraint {
     Custom { validator: String },
 }
 
+/// Side-effect classification for a method declaration.
+///
+/// `Read` methods do not mutate plugin state; `Mutation` methods do.
+/// The serde representation is `snake_case` so serialized output is
+/// `"read"` or `"mutation"`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SideEffect {
+    Read,
+    Mutation,
+}
+
+/// Declares a single callable method on a plugin's capability surface.
+///
+/// Every `MethodDecl` is exposed as a D-Bus method (and gRPC route) by the
+/// bridge.  The `args` field is a JSON Schema object that the bridge uses to
+/// validate caller arguments before dispatch.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MethodDecl {
+    /// Method name as it appears on the D-Bus interface / gRPC route.
+    pub name: String,
+    /// JSON Schema describing the method's input arguments.
+    pub args: Value,
+    /// Optional JSON Schema describing the method's return value.
+    #[serde(default)]
+    pub returns: Option<Value>,
+    /// Whether the method reads or mutates state.
+    pub side_effect: SideEffect,
+    /// Whether repeated calls with the same args produce the same effect.
+    pub idempotent: bool,
+    /// If non-null, the caller's footprint must grant this capability.
+    #[serde(default)]
+    pub required_capability: Option<String>,
+    /// OSCAL subid for this method (e.g. `mut.network.wireguard.set-key@v1`).
+    pub subid: String,
+}
+
+/// Declares a signal emitted by a plugin.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignalDecl {
+    /// Signal name as it appears on the D-Bus interface.
+    pub name: String,
+    /// Optional JSON Schema describing the signal payload.
+    #[serde(default)]
+    pub payload: Option<Value>,
+    /// OSCAL subid for this signal (category must be `evt`).
+    pub subid: String,
+}
+
+/// Canonical plugin capability guarantees.
+///
+/// This is the **single** definition of `PluginCapabilities` in the workspace.
+/// The 4-field structure is the source of truth; all other definitions are
+/// removed.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct PluginCapabilities {
+    /// Whether the plugin supports rolling back state changes.
+    #[serde(default)]
+    pub supports_rollback: bool,
+    /// Whether the plugin supports checkpointing state.
+    #[serde(default)]
+    pub supports_checkpoints: bool,
+    /// Whether the plugin supports state verification.
+    #[serde(default)]
+    pub supports_verification: bool,
+    /// Whether the plugin's operations are atomic.
+    #[serde(default)]
+    pub atomic_operations: bool,
+}
+
 /// Plugin schema definition
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginSchema {
@@ -111,6 +187,10 @@ pub struct PluginSchema {
     pub version: String,
     /// Description
     pub description: String,
+    /// Display name for UI/contract surfaces (e.g. "GB.Keypair"). Display-only;
+    /// does not affect D-Bus path or interface name. None = use `name`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
     /// Fields in the plugin state
     pub fields: HashMap<String, FieldSchema>,
     /// Dependencies on other plugins
@@ -136,6 +216,15 @@ pub struct PluginSchema {
     /// operational taxonomy key is declared; surfaced via `field_input_schema`.
     #[serde(default)]
     pub subids: HashMap<String, String>,
+    /// Declared methods on the plugin's capability surface.
+    #[serde(default)]
+    pub methods: HashMap<String, MethodDecl>,
+    /// Declared signals emitted by the plugin.
+    #[serde(default)]
+    pub signals: Vec<SignalDecl>,
+    /// Plugin capability guarantees (4-field canonical block).
+    #[serde(default)]
+    pub guarantees: PluginCapabilities,
 }
 
 fn default_dialect() -> String {
@@ -293,6 +382,24 @@ impl PluginSchema {
         }
 
         schema
+    }
+
+    /// Set the methods map on this schema (builder-style).
+    pub fn with_methods(mut self, methods: HashMap<String, MethodDecl>) -> Self {
+        self.methods = methods;
+        self
+    }
+
+    /// Set the signals list on this schema (builder-style).
+    pub fn with_signals(mut self, signals: Vec<SignalDecl>) -> Self {
+        self.signals = signals;
+        self
+    }
+
+    /// Set the guarantees block on this schema (builder-style).
+    pub fn with_guarantees(mut self, guarantees: PluginCapabilities) -> Self {
+        self.guarantees = guarantees;
+        self
     }
 
     /// Render a single named field as a standalone JSON Schema suitable for an
@@ -605,6 +712,7 @@ pub struct PluginSchemaBuilder {
     category: String,
     version: String,
     description: String,
+    display_name: Option<String>,
     fields: HashMap<String, FieldSchema>,
     dependencies: Vec<String>,
     example: Option<Value>,
@@ -612,6 +720,9 @@ pub struct PluginSchemaBuilder {
     tags: Vec<String>,
     dialect: String,
     subids: HashMap<String, String>,
+    methods: HashMap<String, MethodDecl>,
+    signals: Vec<SignalDecl>,
+    guarantees: PluginCapabilities,
 }
 
 impl PluginSchemaBuilder {
@@ -621,6 +732,7 @@ impl PluginSchemaBuilder {
             category: default_category(),
             version: "1.0.0".to_string(),
             description: String::new(),
+            display_name: None,
             fields: HashMap::new(),
             dependencies: Vec::new(),
             example: None,
@@ -628,6 +740,9 @@ impl PluginSchemaBuilder {
             tags: Vec::new(),
             dialect: DEFAULT_SCHEMA_DIALECT.to_string(),
             subids: HashMap::new(),
+            methods: HashMap::new(),
+            signals: Vec::new(),
+            guarantees: PluginCapabilities::default(),
         }
     }
 
@@ -643,6 +758,12 @@ impl PluginSchemaBuilder {
 
     pub fn description(mut self, description: &str) -> Self {
         self.description = description.to_string();
+        self
+    }
+
+    /// Set the display name (e.g. "GB.Keypair"). Display-only.
+    pub fn display_name(mut self, display_name: &str) -> Self {
+        self.display_name = Some(display_name.to_string());
         self
     }
 
@@ -777,7 +898,7 @@ impl PluginSchemaBuilder {
         self.tag("immutable")
     }
 
-    /// Set the JSON Schema dialect (e.g., dialects::V2026)
+    /// Set the JSON Schema dialect (e.g., dialects::DRAFT_2020_12)
     pub fn dialect(mut self, dialect: &str) -> Self {
         self.dialect = dialect.to_string();
         self
@@ -791,12 +912,43 @@ impl PluginSchemaBuilder {
         self
     }
 
+    /// Set the methods map for the schema being built.
+    pub fn methods(mut self, methods: HashMap<String, MethodDecl>) -> Self {
+        self.methods = methods;
+        self
+    }
+
+    /// Set the signals list for the schema being built.
+    pub fn signals(mut self, signals: Vec<SignalDecl>) -> Self {
+        self.signals = signals;
+        self
+    }
+
+    /// Add a single method declaration to the schema being built.
+    pub fn method(mut self, method: MethodDecl) -> Self {
+        self.methods.insert(method.name.clone(), method);
+        self
+    }
+
+    /// Add a single signal declaration to the schema being built.
+    pub fn signal(mut self, signal: SignalDecl) -> Self {
+        self.signals.push(signal);
+        self
+    }
+
+    /// Set the guarantees block for the schema being built.
+    pub fn guarantees(mut self, guarantees: PluginCapabilities) -> Self {
+        self.guarantees = guarantees;
+        self
+    }
+
     pub fn build(self) -> PluginSchema {
         PluginSchema {
             name: self.name,
             category: self.category,
             version: self.version,
             description: self.description,
+            display_name: self.display_name,
             fields: self.fields,
             dependencies: self.dependencies,
             example: self.example,
@@ -805,6 +957,9 @@ impl PluginSchemaBuilder {
             dialect: self.dialect,
             mutation_index: None,
             subids: self.subids,
+            methods: self.methods,
+            signals: self.signals,
+            guarantees: self.guarantees,
         }
     }
 }
@@ -1086,7 +1241,6 @@ pub fn builtin_plugin_schemas() -> Vec<PluginSchema> {
         "full_system",
         "gcloud_adc",
         "hardware",
-        "keypair",
         "keyring",
         "login1",
         "mcp",
@@ -1119,7 +1273,6 @@ fn builtin_plugin_schema_from_canonical_name(name: &str) -> Option<PluginSchema>
         "full_system" => create_full_system_schema(),
         "gcloud_adc" => create_gcloud_adc_schema(),
         "hardware" => create_hardware_schema(),
-        "keypair" => create_keypair_schema(),
         "keyring" => create_keyring_schema(),
         "login1" => create_login1_schema(),
         "mcp" => create_mcp_schema(),
@@ -1454,18 +1607,6 @@ fn create_hardware_schema() -> PluginSchema {
             ("memory", any_field(true, "Memory info", Some(json!({})))),
             ("disks", any_field(true, "Disk list", Some(json!([])))),
         ],
-    )
-}
-
-fn create_keypair_schema() -> PluginSchema {
-    simple_schema(
-        "keypair",
-        "Keypair declaration state",
-        &[],
-        vec![(
-            "keypairs",
-            any_field(true, "Managed keypairs", Some(json!([]))),
-        )],
     )
 }
 
@@ -4251,8 +4392,7 @@ fn create_privacy_router_schema() -> PluginSchema {
             FieldSchema {
                 field_type: FieldType::String,
                 required: false,
-                description: "Netclient network name for the WARP egress interface"
-                    .to_string(),
+                description: "Netclient network name for the WARP egress interface".to_string(),
                 default: Some(json!("gbr_warp")),
                 example: Some(json!("gbr_warp")),
                 constraints: Vec::new(),
@@ -4792,6 +4932,17 @@ fn validate_value_against_type(
                 return Err(format!("Field '{}' must be a string enum value", name));
             }
         }
+        FieldType::OneOf(branches) => {
+            if !branches
+                .iter()
+                .any(|branch| validate_value_against_type(name, value, branch).is_ok())
+            {
+                return Err(format!(
+                    "Field '{}' must match one of the allowed variants",
+                    name
+                ));
+            }
+        }
         FieldType::Any => {}
     }
 
@@ -4835,6 +4986,10 @@ fn default_for_type(field_type: &FieldType) -> Value {
         FieldType::Array(_) => json!([]),
         FieldType::Object(_) => json!({}),
         FieldType::Enum(values) => values.first().map(|s| json!(s)).unwrap_or(json!("")),
+        FieldType::OneOf(branches) => branches
+            .first()
+            .map(default_for_type)
+            .unwrap_or(json!(null)),
         FieldType::Any => json!(null),
     }
 }
@@ -4862,6 +5017,12 @@ fn field_type_to_json_schema(field_type: &FieldType) -> Value {
         FieldType::Enum(values) => json!({
             "type": "string",
             "enum": values
+        }),
+        FieldType::OneOf(branches) => json!({
+            "oneOf": branches
+                .iter()
+                .map(field_type_to_json_schema)
+                .collect::<Vec<_>>()
         }),
         FieldType::Any => json!({}),
     }
@@ -4913,6 +5074,12 @@ fn field_type_to_json_schema_2026(field_type: &FieldType) -> Value {
             "type": "string",
             "enum": values
         }),
+        FieldType::OneOf(branches) => json!({
+            "oneOf": branches
+                .iter()
+                .map(field_type_to_json_schema_2026)
+                .collect::<Vec<_>>()
+        }),
         FieldType::Any => json!({}),
     }
 }
@@ -4920,6 +5087,230 @@ fn field_type_to_json_schema_2026(field_type: &FieldType) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ====================================================================
+    // WS1 — Capability Model tests (R1.1–R1.5, R2.1, R2.4, R11.1–R11.4)
+    // ====================================================================
+
+    #[test]
+    fn method_decl_fields_complete() {
+        // R1.2: MethodDecl MUST contain all seven fields
+        let decl = MethodDecl {
+            name: "SetKey".to_string(),
+            args: json!({"type": "object"}),
+            returns: Some(json!({"type": "string"})),
+            side_effect: SideEffect::Mutation,
+            idempotent: false,
+            required_capability: Some("wireguard.admin".to_string()),
+            subid: "mut.network.wireguard.set-key@v1".to_string(),
+        };
+        assert!(!decl.name.is_empty());
+        assert!(decl.args.is_object());
+        assert!(decl.returns.is_some());
+        assert!(matches!(decl.side_effect, SideEffect::Mutation));
+        assert!(!decl.idempotent);
+        assert!(decl.required_capability.is_some());
+        assert!(!decl.subid.is_empty());
+    }
+
+    #[test]
+    fn signal_decl_fields_complete() {
+        // R1.3: SignalDecl MUST contain name, payload, subid
+        let sig = SignalDecl {
+            name: "KeyRotated".to_string(),
+            payload: Some(json!({"type": "string"})),
+            subid: "evt.network.wireguard.key-rotated@v1".to_string(),
+        };
+        assert!(!sig.name.is_empty());
+        assert!(sig.payload.is_some());
+        assert!(!sig.subid.is_empty());
+    }
+
+    #[test]
+    fn side_effect_serializes_snake_case() {
+        // R1.2: side_effect serializes as "read" or "mutation"
+        let read_json = serde_json::to_string(&SideEffect::Read).unwrap();
+        assert_eq!(read_json, r#""read""#);
+        let mut_json = serde_json::to_string(&SideEffect::Mutation).unwrap();
+        assert_eq!(mut_json, r#""mutation""#);
+
+        // Round-trip
+        let read_back: SideEffect = serde_json::from_str(&read_json).unwrap();
+        assert!(matches!(read_back, SideEffect::Read));
+        let mut_back: SideEffect = serde_json::from_str(&mut_json).unwrap();
+        assert!(matches!(mut_back, SideEffect::Mutation));
+    }
+
+    #[test]
+    fn guarantees_has_four_bool_fields() {
+        // R1.4 / VAL-CAP-004: exactly four boolean fields
+        let caps = PluginCapabilities::default();
+        assert!(!caps.supports_rollback);
+        assert!(!caps.supports_checkpoints);
+        assert!(!caps.supports_verification);
+        assert!(!caps.atomic_operations);
+
+        // Verify the serialized form has exactly four keys, all bool
+        let json = serde_json::to_value(&caps).unwrap();
+        let obj = json.as_object().unwrap();
+        assert_eq!(obj.len(), 4);
+        assert!(obj.contains_key("supports_rollback"));
+        assert!(obj.contains_key("supports_checkpoints"));
+        assert!(obj.contains_key("supports_verification"));
+        assert!(obj.contains_key("atomic_operations"));
+        for (_, v) in obj {
+            assert_eq!(*v, serde_json::Value::Bool(false));
+        }
+    }
+
+    #[test]
+    fn schema_serializes_capability_keys() {
+        // R1.5 / R11.1–R11.2: serialized PluginSchema always includes
+        // methods, signals, guarantees keys with empty defaults
+        let schema = PluginSchema::builder("test")
+            .version("1.0.0")
+            .description("Test")
+            .string_field("name", true, "Name")
+            .build();
+
+        let json = serde_json::to_value(&schema).unwrap();
+        let obj = json.as_object().unwrap();
+
+        // methods → empty object
+        assert!(obj.contains_key("methods"));
+        assert!(obj["methods"].is_object());
+        assert!(obj["methods"].as_object().unwrap().is_empty());
+
+        // signals → empty array
+        assert!(obj.contains_key("signals"));
+        assert!(obj["signals"].is_array());
+        assert!(obj["signals"].as_array().unwrap().is_empty());
+
+        // guarantees → full four-key block, all false
+        assert!(obj.contains_key("guarantees"));
+        let guar = obj["guarantees"].as_object().unwrap();
+        assert_eq!(guar.len(), 4);
+        assert_eq!(guar["supports_rollback"], serde_json::json!(false));
+        assert_eq!(guar["supports_checkpoints"], serde_json::json!(false));
+        assert_eq!(guar["supports_verification"], serde_json::json!(false));
+        assert_eq!(guar["atomic_operations"], serde_json::json!(false));
+    }
+
+    #[test]
+    fn schema_round_trip_preserves_capability_surface() {
+        // R11.4: round-trip serialize/deserialize preserves full capability surface
+        let mut methods = std::collections::HashMap::new();
+        methods.insert(
+            "SetKey".to_string(),
+            MethodDecl {
+                name: "SetKey".to_string(),
+                args: json!({
+                    "type": "object",
+                    "properties": {
+                        "key": {"type": "string"}
+                    },
+                    "required": ["key"]
+                }),
+                returns: Some(json!({"type": "string"})),
+                side_effect: SideEffect::Mutation,
+                idempotent: false,
+                required_capability: Some("wireguard.admin".to_string()),
+                subid: "mut.network.wireguard.set-key@v1".to_string(),
+            },
+        );
+        methods.insert(
+            "GetStatus".to_string(),
+            MethodDecl {
+                name: "GetStatus".to_string(),
+                args: json!({"type": "object"}),
+                returns: Some(json!({"type": "string"})),
+                side_effect: SideEffect::Read,
+                idempotent: true,
+                required_capability: None,
+                subid: "obs.network.wireguard.get-status@v1".to_string(),
+            },
+        );
+
+        let signals = vec![SignalDecl {
+            name: "KeyRotated".to_string(),
+            payload: Some(json!({"type": "string"})),
+            subid: "evt.network.wireguard.key-rotated@v1".to_string(),
+        }];
+
+        let guarantees = PluginCapabilities {
+            supports_rollback: true,
+            supports_checkpoints: false,
+            supports_verification: true,
+            atomic_operations: false,
+        };
+
+        let original = PluginSchema::builder("wireguard")
+            .version("2.0.0")
+            .description("WireGuard interface state")
+            .string_field("interfaces", true, "Interfaces")
+            .build()
+            .with_methods(methods)
+            .with_signals(signals)
+            .with_guarantees(guarantees);
+
+        // Serialize
+        let json_str = serde_json::to_string(&original).unwrap();
+
+        // Deserialize
+        let restored: PluginSchema = serde_json::from_str(&json_str).unwrap();
+
+        // Verify capability surface preserved
+        assert_eq!(restored.methods.len(), 2);
+        let set_key = restored.methods.get("SetKey").unwrap();
+        assert_eq!(set_key.name, "SetKey");
+        assert!(matches!(set_key.side_effect, SideEffect::Mutation));
+        assert!(!set_key.idempotent);
+        assert_eq!(
+            set_key.required_capability.as_deref(),
+            Some("wireguard.admin")
+        );
+        assert_eq!(set_key.subid, "mut.network.wireguard.set-key@v1");
+
+        let get_status = restored.methods.get("GetStatus").unwrap();
+        assert!(matches!(get_status.side_effect, SideEffect::Read));
+        assert!(get_status.idempotent);
+        assert!(get_status.required_capability.is_none());
+
+        assert_eq!(restored.signals.len(), 1);
+        assert_eq!(restored.signals[0].name, "KeyRotated");
+        assert_eq!(
+            restored.signals[0].subid,
+            "evt.network.wireguard.key-rotated@v1"
+        );
+
+        assert!(restored.guarantees.supports_rollback);
+        assert!(!restored.guarantees.supports_checkpoints);
+        assert!(restored.guarantees.supports_verification);
+        assert!(!restored.guarantees.atomic_operations);
+    }
+
+    #[test]
+    fn schema_default_deserializes_without_capability_keys() {
+        // R11.2: backward-compatible deserialization — a JSON without
+        // methods/signals/guarantees keys should still deserialize,
+        // filling in empty defaults.
+        let legacy_json = r#"{
+            "name": "legacy",
+            "category": "uncategorized",
+            "version": "1.0.0",
+            "description": "Legacy schema without capability fields",
+            "fields": {}
+        }"#;
+
+        let schema: PluginSchema = serde_json::from_str(legacy_json).unwrap();
+        assert!(schema.methods.is_empty());
+        assert!(schema.signals.is_empty());
+        assert!(!schema.guarantees.supports_rollback);
+    }
+
+    // ====================================================================
+    // Existing tests
+    // ====================================================================
 
     #[test]
     fn test_schema_catalog() {

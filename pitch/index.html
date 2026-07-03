@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>GhostBridge × Netmaker</title>
+<style>
+:root{
+  --bg:#06070c; --ink:#eef1f8; --mut:#aab2c5; --dim:#6c7488; --line:#1c2030;
+  --a1:#8b5cff; --a2:#22d3ee; --a3:#34d399; --warn:#f59e0b;
+  --glass:rgba(20,24,36,.55);
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth;-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--ink);overflow-x:hidden;
+  font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;
+  -webkit-font-smoothing:antialiased}
+
+/* ===== animated mesh gradient background ===== */
+.bgfx{position:fixed;inset:-20%;z-index:-2;filter:blur(70px);opacity:.55;pointer-events:none}
+.blob{position:absolute;border-radius:50%;mix-blend-mode:screen;animation:float 22s ease-in-out infinite}
+.b1{width:46vw;height:46vw;background:#7c3cff;left:-6%;top:-8%}
+.b2{width:42vw;height:42vw;background:#0ea5e9;right:-8%;top:6%;animation-delay:-7s}
+.b3{width:40vw;height:40vw;background:#10b981;left:18%;bottom:-14%;animation-delay:-13s}
+.b4{width:30vw;height:30vw;background:#f59e0b;right:8%;bottom:-6%;animation-delay:-4s;opacity:.5}
+@keyframes float{0%,100%{transform:translate(0,0) scale(1)}33%{transform:translate(6%,8%) scale(1.12)}66%{transform:translate(-5%,4%) scale(.94)}}
+.grid-overlay{position:fixed;inset:0;z-index:-1;pointer-events:none;opacity:.05;
+  background-image:linear-gradient(#fff 1px,transparent 1px),linear-gradient(90deg,#fff 1px,transparent 1px);
+  background-size:54px 54px;mask-image:radial-gradient(ellipse at 50% 0,#000 30%,transparent 75%)}
+
+.wrap{max-width:1060px;margin:0 auto;padding:0 22px}
+section{padding:7vh 0;position:relative}
+h1,h2,h3{line-height:1.12;letter-spacing:-.025em;margin:0 0 .5em;font-weight:800}
+h1{font-size:clamp(38px,8.5vw,76px)}
+h2{font-size:clamp(26px,4.4vw,42px);font-weight:780}
+h3{font-size:17px;font-weight:700;letter-spacing:-.01em}
+p{color:var(--mut);margin:0 0 1em}
+.lead{font-size:clamp(18px,2.4vw,23px);color:#dfe4f0;max-width:780px}
+
+/* animated gradient text */
+.grad{background:linear-gradient(100deg,#a78bfa,#22d3ee,#34d399,#a78bfa);
+  background-size:300% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;
+  animation:slide 8s linear infinite}
+@keyframes slide{to{background-position:300% 0}}
+
+.eyebrow{font:700 12px/1 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.26em;
+  text-transform:uppercase;color:var(--a2);margin-bottom:18px;display:inline-block}
+.eyebrow::before{content:"";display:inline-block;width:26px;height:1px;background:var(--a2);
+  vertical-align:middle;margin-right:10px;opacity:.6}
+
+.chips{display:flex;flex-wrap:wrap;gap:9px;margin:24px 0}
+.chip{font:600 12px/1 ui-monospace,monospace;color:var(--mut);background:var(--glass);
+  border:1px solid var(--line);border-radius:999px;padding:9px 14px;backdrop-filter:blur(8px)}
+.pill{display:inline-flex;align-items:center;gap:9px;border:1px solid var(--line);
+  background:var(--glass);border-radius:999px;padding:8px 16px;font-size:13px;color:var(--mut);backdrop-filter:blur(8px)}
+.live{width:8px;height:8px;border-radius:50%;background:var(--a3);box-shadow:0 0 12px 2px #34d399;animation:beat 1.8s infinite}
+@keyframes beat{0%,100%{opacity:1}50%{opacity:.35}}
+
+.grid{display:grid;gap:16px}
+.g2{grid-template-columns:repeat(2,1fr)} .g3{grid-template-columns:repeat(3,1fr)}
+@media(max-width:780px){.g2,.g3{grid-template-columns:1fr}}
+
+.card{position:relative;background:var(--glass);border:1px solid var(--line);border-radius:18px;
+  padding:22px;backdrop-filter:blur(10px);transition:transform .35s cubic-bezier(.2,.7,.2,1),border-color .35s,box-shadow .35s;overflow:hidden}
+.card::after{content:"";position:absolute;inset:0;border-radius:18px;padding:1px;
+  background:linear-gradient(130deg,transparent,rgba(124,92,255,.5),rgba(34,211,238,.4),transparent);
+  -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
+  -webkit-mask-composite:xor;mask-composite:exclude;opacity:0;transition:opacity .35s}
+.card:hover{transform:translateY(-5px);box-shadow:0 24px 60px -28px rgba(124,92,255,.5)}
+.card:hover::after{opacity:1}
+.card h3{display:flex;align-items:center;gap:10px}
+.card p{margin:0;font-size:14.5px;color:var(--mut)}
+.dot{width:9px;height:9px;border-radius:3px;background:linear-gradient(120deg,var(--a1),var(--a2));flex:0 0 auto;box-shadow:0 0 10px rgba(124,92,255,.6)}
+
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.kv{color:var(--a2)}
+ul.clean{list-style:none;padding:0;margin:0}
+ul.clean li{position:relative;padding:6px 0 6px 24px;color:var(--mut);font-size:14px}
+ul.clean li::before{content:"";position:absolute;left:0;top:13px;width:9px;height:9px;border-radius:3px;background:linear-gradient(120deg,var(--a1),var(--a2))}
+.quote{font-size:clamp(22px,3.2vw,34px);font-weight:740;color:var(--ink);line-height:1.32;letter-spacing:-.02em}
+.muted{color:var(--dim);font-size:13px}
+.svgwrap{background:rgba(8,10,18,.6);border:1px solid var(--line);border-radius:18px;padding:18px;backdrop-filter:blur(6px)}
+text{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.footer{padding:40px 0 90px;color:var(--dim);font-size:13px;text-align:center}
+
+/* scroll reveal */
+.reveal{opacity:0;transform:translateY(26px);transition:opacity .8s cubic-bezier(.2,.7,.2,1),transform .8s cubic-bezier(.2,.7,.2,1)}
+.reveal.in{opacity:1;transform:none}
+.reveal.d1{transition-delay:.08s}.reveal.d2{transition-delay:.16s}.reveal.d3{transition-delay:.24s}
+
+/* flowing dash on svg connectors */
+.flow{stroke-dasharray:6 8;animation:dash 1.1s linear infinite}
+@keyframes dash{to{stroke-dashoffset:-28}}
+.pulseNode{animation:nodepulse 2.4s ease-in-out infinite}
+@keyframes nodepulse{0%,100%{opacity:.55}50%{opacity:1}}
+
+/* scroll progress bar */
+#prog{position:fixed;top:0;left:0;height:3px;width:0;z-index:10;
+  background:linear-gradient(90deg,#8b5cff,#22d3ee,#34d399);box-shadow:0 0 12px #22d3ee}
+
+.hero-sub{color:var(--dim);font-size:14px;max-width:700px;margin-top:20px}
+@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}.reveal{opacity:1;transform:none}}
+</style>
+</head>
+<body>
+<div id="prog"></div>
+<div class="bgfx"><div class="blob b1"></div><div class="blob b2"></div><div class="blob b3"></div><div class="blob b4"></div></div>
+<div class="grid-overlay"></div>
+
+<!-- HERO -->
+<section style="padding-top:14vh">
+  <div class="wrap">
+    <div class="eyebrow reveal">GhostBridge × Netmaker</div>
+    <h1 class="reveal d1">Netmaker isn't a dependency.<br><span class="grad">It's core code.</span></h1>
+    <p class="lead reveal d2">A zero-trust, compliance-grade AI control plane — built in Rust, running on a Netmaker mesh we treat as the spine: the transport <b style="color:var(--ink)">and</b> the root of identity.</p>
+    <div class="chips reveal d3">
+      <span class="chip">Rust</span><span class="chip">No-NIC hardened mesh</span><span class="chip">OSCAL-gated</span><span class="chip">Tamper-evident chain</span><span class="chip">Confrontable AI</span>
+    </div>
+    <p class="hero-sub reveal d3">Honest note: this is the first time anyone outside the project will have seen it. We booked the call because it was the door — but what we really want is a sharp engineer on your side to look closely and tell us, straight, what you think.</p>
+    <div style="margin-top:22px" class="reveal d3"><span class="pill"><span class="live"></span> cognitive-mcp verified live</span></div>
+  </div>
+</section>
+
+<!-- WHAT IT IS -->
+<section><div class="wrap">
+  <div class="eyebrow reveal">The one paragraph</div>
+  <h2 class="reveal d1">A mesh you can <span class="grad">trust</span>, not just connect</h2>
+  <p class="lead reveal d2" style="color:var(--mut)">Traffic flows through a hardened pipeline — decoy ingress, identity sled, Xray header injection, a per-hop interceptor — where every request is classified, routed, gated against machine-readable policy (OSCAL), and recorded into a tamper-evident hash-linked chain. An AI layer reasons over that verified history but <b style="color:var(--ink)">cannot execute anything itself</b>. Same codebase ships as a <b style="color:var(--ink)">privacy</b> edition or a <b style="color:var(--ink)">compliance</b> edition — one flag decides which world you're in.</p>
+</div></section>
+
+<!-- GOVERNANCE STACK -->
+<section><div class="wrap">
+  <div class="eyebrow reveal">How it works</div>
+  <h2 class="reveal d1">One governance pattern, <span class="grad">every layer</span></h2>
+  <p class="reveal d2">Make the wrong thing impossible first; gate what's left; record everything. <span class="kv">Rust</span> says code can't be wrong, <span class="kv">schema</span> says state can't be invalid, <span class="kv">A.N.N.A.</span> says action can't be unauthorized — the chain says it's all on the record.</p>
+  <div class="svgwrap reveal d2" style="margin-top:14px">
+    <svg viewBox="0 0 900 430" width="100%" aria-label="Governance stack">
+      <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#8b5cff"/><stop offset="1" stop-color="#22d3ee"/></linearGradient></defs>
+      <g>
+        <!-- generated rows -->
+        <g id="rows"></g>
+      </g>
+      <script type="application/json" id="rowdata">[
+        ["RUST","the compiler is the first enforcer — invalid code won't build"],
+        ["SCHEMA","invalid STATE is unrepresentable — the silent gate, before any rule runs"],
+        ["TRAFFIC COP · Gemma + Xray","Gemma classifies (what?) + Xray routes (where?) — directs, never authorizes"],
+        ["ZEROCLAW","routes to the right MODEL by cost / reasoning / specialty — schema-native"],
+        ["A.N.N.A.","OSCAL-gated approval at EVERY hop — the higher-up that says yes/no"],
+        ["CHAIN","hash-linked, tamper-evident evidence — every action becomes a block"],
+        ["THE LOOP","AI reassembles chain → Qdrant + Cozo graph → reasons → new blocks"]
+      ]</script>
+    </svg>
+  </div>
+</div></section>
+
+<!-- IDENTITY x MUTATION -->
+<section><div class="wrap">
+  <div class="eyebrow reveal">What's on every block</div>
+  <h2 class="reveal d1">Identity vector × Mutation vector</h2>
+  <p class="reveal d2">Two structured vectors ride every block — together they make <span class="kv mono">"who changed what, when, on whose authority"</span> a provable query, and they're exactly what A.N.N.A. gates on.</p>
+  <div class="grid g2" style="margin-top:14px">
+    <div class="card reveal"><h3><span class="dot" style="background:var(--a3)"></span>Identity vector — the WHO</h3><p><span class="mono kv">session_id = Argon2(PSK, salt=WG_pubkey)</span><br><br>Derived from the Netmaker WireGuard key. Stable, deterministic, unforgeable. Privacy mode: the key alone. Compliance mode: a verified user.</p></div>
+    <div class="card reveal d1"><h3><span class="dot" style="background:var(--a2)"></span>Mutation vector — the WHAT</h3><p>The <span class="mono kv">mut</span> class of the subid taxonomy: what kind of change, on what resource, under what OSCAL authority. Reads (<span class="mono">obs</span>) and changes (<span class="mono">mut</span>) are distinct — so you can prove nothing was altered.</p></div>
+  </div>
+  <p class="muted reveal" style="margin-top:14px"><span class="mono">block = (identity · mutation · payload# · timestamp · prev#)</span> — cross-examination becomes exact.</p>
+</div></section>
+
+<!-- VOYAGE VECTORS -->
+<section><div class="wrap">
+  <div class="eyebrow reveal">The semantic memory</div>
+  <h2 class="reveal d1">Voyage vectors → <span class="grad">searchable meaning</span></h2>
+  <p class="reveal d2">Identity & mutation are <i>provenance</i>. <b style="color:var(--ink)">Voyage vectors are meaning.</b> Every block, doc, and transcript is embedded by <span class="mono kv">voyage-code-3</span> into <span class="mono kv">Qdrant</span> — so the chain is searchable by similarity. This is the bottom pane when you cross-examine the agent.</p>
+  <div class="grid g3" style="margin-top:14px">
+    <div class="card reveal"><h3><span class="dot"></span>Embed</h3><p><span class="mono">voyage-code-3</span> turns each chunk into a vector. Code-aware — understands infra, not just prose.</p></div>
+    <div class="card reveal d1"><h3><span class="dot"></span>Search</h3><p>Vectors in <span class="mono">Qdrant</span>. <i>"Show me peers like the one that misbehaved"</i> — similarity, not keywords.</p></div>
+    <div class="card reveal d2"><h3><span class="dot"></span>Rebuildable</h3><p>A derived projection of the chain. Lose it → re-embed from the canonical blocks.</p></div>
+  </div>
+  <p class="muted reveal" style="margin-top:12px"><b style="color:var(--a2)">Voyage</b> = "find things like this." <b style="color:var(--a3)">Identity/mutation</b> = "who did exactly this, allowed?" Meaning to reason, provenance to prove.</p>
+</div></section>
+
+<!-- DIFFERENTIATORS -->
+<section><div class="wrap">
+  <div class="eyebrow reveal">Why it's different</div>
+  <h2 class="reveal d1">Four things nobody else can claim</h2>
+  <div class="grid g2" style="margin-top:14px">
+    <div class="card reveal"><h3><span class="dot"></span>A brain with no hands</h3><p>The AI is a delegator, recommender, fixer — that's the ceiling. <b style="color:var(--ink)">No internet, no execution rights.</b> It proposes; a separate OSCAL-gated, chained layer disposes. A compromised model can't do damage.</p></div>
+    <div class="card reveal d1"><h3><span class="dot"></span>You can cross-examine it</h3><p>Every action is a chained, searchable block. <span class="mono kv">"why did you do this?"</span> → answered with cryptographic receipts pulled live. <b style="color:var(--ink)">An AI you can put on the stand.</b></p></div>
+    <div class="card reveal"><h3><span class="dot"></span>The chain is the truth</h3><p>Qdrant + Cozo are AI-rebuilt projections of the canonical chain. Blockchain <i>by structure</i>, kept honest by <b style="color:var(--ink)">anchoring</b>, not consensus.</p></div>
+    <div class="card reveal d1"><h3><span class="dot"></span>Schema-native all the way down</h3><p>Components chosen because they're schema-based from the ground up. Rust: memory-safe, race-free, single static binaries. Nothing bolted on.</p></div>
+  </div>
+</div></section>
+
+<!-- DIAL -->
+<section><div class="wrap">
+  <div class="eyebrow reveal">One dial</div>
+  <h2 class="reveal d1">As <span style="color:var(--a3)">Snowden</span> as you want — or as <span style="color:var(--warn)">Big&nbsp;Brother</span> as you want</h2>
+  <p class="reveal d2">Same mesh, same chain, same confrontable AI. <b style="color:var(--ink)">Only the identity-linkage layer changes</b> — a deploy-time config, not a rewrite, not a hidden switch.</p>
+  <div class="svgwrap reveal d2" style="margin-top:14px">
+    <svg viewBox="0 0 900 200" width="100%" aria-label="dial">
+      <defs><linearGradient id="dial" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#34d399"/><stop offset="1" stop-color="#f59e0b"/></linearGradient></defs>
+      <rect x="60" y="90" width="780" height="12" rx="6" fill="url(#dial)"/>
+      <circle id="knob" cx="60" cy="96" r="13" fill="#06070c" stroke="#34d399" stroke-width="3"/>
+      <text x="60" y="56" fill="#34d399" font-size="15">PRIVACY</text>
+      <text x="60" y="135" fill="#8b93a7" font-size="11.5">key IS identity · no PII · de-anon impossible</text>
+      <text x="840" y="56" fill="#f59e0b" font-size="15" text-anchor="end">COMPLIANCE</text>
+      <text x="840" y="135" fill="#8b93a7" font-size="11.5" text-anchor="end">verified user · vault escrow · de-anon on OSCAL authority</text>
+    </svg>
+  </div>
+  <p class="muted reveal" style="margin-top:12px">Even in full oversight, de-anon isn't a backdoor — it needs a signed OSCAL <span class="mono">authorizing-official</span> action that itself becomes a chained, confrontable block. <b style="color:var(--ink)">You can cross-examine the watchers.</b></p>
+</div></section>
+
+<!-- NO-NIC -->
+<section><div class="wrap">
+  <div class="eyebrow reveal">For Netmaker specifically</div>
+  <h2 class="reveal d1">A control server with <span class="grad">no network interface</span></h2>
+  <p class="reveal d2"><span class="mono">netmaker</span>, <span class="mono">netmaker-mq</span>, <span class="mono">netmaker-ui</span> run loopback-only — exposed as unix sockets, fronted by Xray SNI routing. <b style="color:var(--ink)">A port scan returns nothing.</b></p>
+  <div class="svgwrap reveal d2" style="margin-top:14px">
+    <svg viewBox="0 0 900 230" width="100%" aria-label="no-nic">
+      <rect x="40" y="50" width="190" height="130" rx="14" fill="#0f1320" stroke="#2a3550"/>
+      <text x="135" y="42" fill="#9aa3b5" font-size="12" text-anchor="middle">wg-xray · TLS+SNI</text>
+      <text x="135" y="122" fill="#22d3ee" font-size="14" text-anchor="middle">Xray</text>
+      <g font-size="11" text-anchor="middle">
+      <rect x="350" y="42" width="180" height="40" rx="9" fill="#0c0e15" stroke="#2a3550"/><text x="440" y="66" fill="#8b93a7">/run/netmaker/api.sock</text>
+      <rect x="350" y="92" width="180" height="40" rx="9" fill="#0c0e15" stroke="#2a3550"/><text x="440" y="116" fill="#8b93a7">mq.sock · mqtts.sock</text>
+      <rect x="350" y="142" width="180" height="40" rx="9" fill="#0c0e15" stroke="#2a3550"/><text x="440" y="166" fill="#8b93a7">ui.sock</text>
+      <rect x="660" y="42" width="200" height="40" rx="9" fill="#0f1320" stroke="#34d39955"/><text x="760" y="66" fill="#e8ebf2">netmaker (no NIC)</text>
+      <rect x="660" y="92" width="200" height="40" rx="9" fill="#0f1320" stroke="#34d39955"/><text x="760" y="116" fill="#e8ebf2">netmaker-mq (no NIC)</text>
+      <rect x="660" y="142" width="200" height="40" rx="9" fill="#0f1320" stroke="#34d39955"/><text x="760" y="166" fill="#e8ebf2">netmaker-ui (no NIC)</text>
+      </g>
+      <g stroke="#22d3ee" stroke-width="1.6" fill="none" opacity=".8">
+        <line class="flow" x1="230" y1="115" x2="348" y2="62"/><line class="flow" x1="230" y1="115" x2="348" y2="112"/><line class="flow" x1="230" y1="115" x2="348" y2="162"/>
+        <line class="flow" x1="530" y1="62" x2="658" y2="62"/><line class="flow" x1="530" y1="112" x2="658" y2="112"/><line class="flow" x1="530" y1="162" x2="658" y2="162"/>
+      </g>
+      <text x="450" y="212" fill="#6b7385" font-size="11" text-anchor="middle">loopback-only services · unix sockets · zero open ports</text>
+    </svg>
+  </div>
+</div></section>
+
+<!-- USE CASES -->
+<section><div class="wrap">
+  <div class="eyebrow reveal">Use cases</div>
+  <h2 class="reveal d1">Three editions, <span class="grad">one engine</span></h2>
+  <div class="grid g3" style="margin-top:18px">
+    <div class="card reveal"><h3><span class="dot" style="background:var(--a3)"></span>Privacy</h3><p style="margin-bottom:12px">Key <i>is</i> identity; de-anon impossible by design.</p>
+      <ul class="clean"><li>Journalist / source networks</li><li>Activist & at-risk meshes</li><li>Privacy-first SaaS — can't hand over what you never linked</li><li>Confidential deal rooms</li><li>Sovereign personal infra</li></ul></div>
+    <div class="card reveal d1"><h3><span class="dot" style="background:var(--a1)"></span>EU Compliance</h3><p style="margin-bottom:12px">OSCAL-mapped, attributable, auditor-grade.</p>
+      <ul class="clean"><li>GDPR — minimization enforced at the schema</li><li>NIS2 — per-hop enforcement + incident evidence</li><li>DORA — ICT risk & audit trail</li><li>EU AI Act — cross-examinable, no-execution AI</li><li>Data residency — no silent egress</li></ul></div>
+    <div class="card reveal d2"><h3><span class="dot" style="background:var(--a2)"></span>Enterprise drop-in</h3><p style="margin-bottom:12px">Point it at what you run. It <b style="color:var(--ink)">introspects → schema-backed deployment</b>.</p>
+      <ul class="clean"><li><b style="color:var(--ink)">Active Directory</b> → groups become OSCAL roles</li><li><b style="color:var(--ink)">Databases</b> → schemas → governed state</li><li><b style="color:var(--ink)">Slack</b> → workspaces as principals & routes</li><li><b style="color:var(--ink)">CMS</b> → content wrapped under the chain</li><li>Zero-trust + audited, in days not quarters</li></ul></div>
+  </div>
+  <div class="svgwrap reveal d2" style="margin-top:18px">
+    <svg viewBox="0 0 900 190" width="100%" aria-label="introspection">
+      <g font-size="11.5" text-anchor="middle">
+      <rect x="30" y="22" width="150" height="32" rx="8" fill="#0f1320" stroke="#2a3550"/><text x="105" y="43" fill="#e8ebf2">Active Directory</text>
+      <rect x="30" y="62" width="150" height="32" rx="8" fill="#0f1320" stroke="#2a3550"/><text x="105" y="83" fill="#e8ebf2">Databases</text>
+      <rect x="30" y="102" width="150" height="32" rx="8" fill="#0f1320" stroke="#2a3550"/><text x="105" y="123" fill="#e8ebf2">Slack</text>
+      <rect x="30" y="142" width="150" height="32" rx="8" fill="#0f1320" stroke="#2a3550"/><text x="105" y="163" fill="#e8ebf2">CMS</text>
+      <rect x="370" y="74" width="170" height="48" rx="12" fill="#11151f" stroke="#3a3566"/><text x="455" y="96" fill="#22d3ee" font-size="13">INTROSPECT</text><text x="455" y="113" fill="#8b93a7">schema generation</text>
+      <rect x="710" y="74" width="160" height="48" rx="12" fill="#0f1320" stroke="#2a5a4a"/><text x="790" y="96" fill="#34d399" font-size="12.5">SCHEMA-BACKED</text><text x="790" y="113" fill="#8b93a7">deployment</text>
+      </g>
+      <g stroke="#22d3ee" stroke-width="1.5" fill="none" opacity=".8">
+        <line class="flow" x1="180" y1="38" x2="368" y2="92"/><line class="flow" x1="180" y1="78" x2="368" y2="98"/><line class="flow" x1="180" y1="118" x2="368" y2="104"/><line class="flow" x1="180" y1="158" x2="368" y2="110"/>
+        <line class="flow" x1="540" y1="98" x2="706" y2="98"/>
+      </g>
+    </svg>
+  </div>
+</div></section>
+
+<!-- WHY CORE -->
+<section><div class="wrap">
+  <div class="eyebrow reveal">Why Netmaker is core</div>
+  <h2 class="reveal d1">You're already <span class="grad">load-bearing</span></h2>
+  <div class="grid g3" style="margin-top:14px">
+    <div class="card reveal"><h3><span class="dot"></span>First-class state plugin</h3><p>Managed by the same engine that runs the whole platform — not wrapped at the edge.</p></div>
+    <div class="card reveal d1"><h3><span class="dot"></span>Peers <i>are</i> the identity</h3><p><span class="mono kv">session_id = Argon2(PSK, salt=WG_pubkey)</span> — rooted in the WireGuard key you manage. It's <b style="color:var(--ink)">link #0 of the chain</b>.</p></div>
+    <div class="card reveal d2"><h3><span class="dot"></span>We expand your surface</h3><p>Every GhostBridge deployment is a hardened Netmaker deployment — into rooms Netmaker alone doesn't reach yet.</p></div>
+  </div>
+</div></section>
+
+<!-- REVEAL (no ask) -->
+<section><div class="wrap">
+  <div class="eyebrow reveal">Why we're sending this</div>
+  <h2 class="reveal d1">Not an ask. A <span class="grad">heads-up</span>.</h2>
+  <p class="lead reveal d2" style="color:var(--mut)">We're not asking you for anything. We already run this in production on what's available today. We just figured the people who built the layer it all stands on should be the first to see what got built on top of it.</p>
+  <div class="grid g3" style="margin-top:18px">
+    <div class="card reveal"><h3>Already running</h3><p>This isn't a proposal or a feature request — it's a working system. Netmaker is load-bearing in it right now.</p></div>
+    <div class="card reveal d1"><h3>You built the foundation</h3><p>It felt wrong to put your mesh this deep in the core and never show you what it's become.</p></div>
+    <div class="card reveal d2"><h3>Just take a look</h3><p>If any of it is interesting, we'll happily go deeper in the meeting. If not — no harm, no homework.</p></div>
+  </div>
+</div></section>
+
+<!-- CLOSE -->
+<section style="padding-bottom:4vh"><div class="wrap">
+  <p class="quote reveal">Netmaker connects the machines. GhostBridge proves <span class="grad">who they are</span> and <span class="grad">that policy was enforced</span> — every hop, auditor-grade, in an AI loop you can cross-examine.</p>
+  <p class="lead reveal d1" style="margin-top:20px;color:var(--mut)">You're already in the core of what we built. We'd just like you to be the first to <i>see</i> it — and tell us, straight, what you think.</p>
+</div></section>
+
+<div class="footer">GhostBridge — Operation D-Bus · built in Rust on a Netmaker mesh · confidential pre-meeting brief</div>
+
+<script>
+// build governance rows
+(function(){
+  const data=JSON.parse(document.getElementById('rowdata').textContent);
+  const g=document.getElementById('rows');const ns="http://www.w3.org/2000/svg";
+  data.forEach((d,i)=>{const y=14+i*58;
+    const r=document.createElementNS(ns,'rect');r.setAttribute('x',40);r.setAttribute('y',y);r.setAttribute('width',820);r.setAttribute('height',46);r.setAttribute('rx',10);r.setAttribute('fill','#0f1320');r.setAttribute('stroke','#2a3550');g.appendChild(r);
+    const b=document.createElementNS(ns,'rect');b.setAttribute('x',40);b.setAttribute('y',y);b.setAttribute('width',6);b.setAttribute('height',46);b.setAttribute('rx',3);b.setAttribute('fill','url(#g)');b.setAttribute('class','pulseNode');b.style.animationDelay=(i*.18)+'s';g.appendChild(b);
+    const t1=document.createElementNS(ns,'text');t1.setAttribute('x',64);t1.setAttribute('y',y+20);t1.setAttribute('fill','#22d3ee');t1.setAttribute('font-size','13');t1.textContent=d[0];g.appendChild(t1);
+    const t2=document.createElementNS(ns,'text');t2.setAttribute('x',64);t2.setAttribute('y',y+37);t2.setAttribute('fill','#8b93a7');t2.setAttribute('font-size','11');t2.textContent=d[1];g.appendChild(t2);
+  });
+})();
+// scroll reveal
+const io=new IntersectionObserver((es)=>es.forEach(e=>{if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target)}}),{threshold:.12});
+document.querySelectorAll('.reveal').forEach(el=>io.observe(el));
+// progress bar
+const prog=document.getElementById('prog');
+addEventListener('scroll',()=>{const h=document.documentElement;const p=h.scrollTop/(h.scrollHeight-h.clientHeight)*100;prog.style.width=p+'%'},{passive:true});
+// animate dial knob on view
+const dialSec=document.querySelector('#knob');
+if(dialSec){const knob=document.getElementById('knob');const dio=new IntersectionObserver((es)=>es.forEach(e=>{if(e.isIntersecting){let x=60;const id=setInterval(()=>{x+=12;knob.setAttribute('cx',x);knob.setAttribute('stroke',x>450?'#f59e0b':'#34d399');if(x>=840){clearInterval(id);setTimeout(()=>{ // gentle drift back to center
+      let dir=-1,cx=840;const d2=setInterval(()=>{cx+=dir*6;if(cx<=450){dir=1}if(cx>=840){dir=-1}knob.setAttribute('cx',cx);knob.setAttribute('stroke',cx>450?'#f59e0b':'#34d399')},60);},400)}},22);dio.disconnect()}}),{threshold:.5});dio.observe(knob)}
+</script>
+</body>
+</html>

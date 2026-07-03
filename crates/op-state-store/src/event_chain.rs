@@ -150,6 +150,15 @@ pub struct ChainEvent {
     pub deny_reason: Option<DenyReason>,
     /// Hash of the input patch/payload
     pub input_patch_hash: String,
+    /// Blake3 footprint of the verbatim `json_args` string passed by the
+    /// caller for a method dispatch. `None` for events that do not carry
+    /// a raw JSON argument string (e.g. internal store subscriptions).
+    #[serde(default)]
+    pub json_args_footprint: Option<String>,
+    /// The method name invoked by the caller for a method-dispatch event.
+    /// `None` for non-method events (property sets, signals, etc.).
+    #[serde(default)]
+    pub method_name: Option<String>,
     /// Hash of the resulting effective state (if allowed)
     pub result_effective_hash: Option<String>,
     /// Optional delta hash for incremental verification
@@ -201,6 +210,8 @@ impl ChainEvent {
             decision,
             deny_reason: None,
             input_patch_hash,
+            json_args_footprint: None,
+            method_name: None,
             result_effective_hash: None,
             db_delta_hash: None,
             snapshot_ref: None,
@@ -214,8 +225,11 @@ impl ChainEvent {
         event
     }
 
-    /// Compute the hash of this event
-    fn compute_hash(&self) -> String {
+    /// Compute the hash of this event.
+    ///
+    /// Public so callers that enrich an already-appended event with additional
+    /// fields (e.g. `capability_id`) can recompute the hash after mutation.
+    pub fn compute_hash(&self) -> String {
         let payload = CanonicalEventPayload {
             event_id: self.event_id,
             prev_hash: &self.prev_hash,
@@ -230,6 +244,8 @@ impl ChainEvent {
             decision: &self.decision,
             deny_reason: self.deny_reason.as_ref(),
             input_patch_hash: &self.input_patch_hash,
+            json_args_footprint: self.json_args_footprint.as_deref(),
+            method_name: self.method_name.as_deref(),
             result_effective_hash: self.result_effective_hash.as_deref(),
         };
 
@@ -282,6 +298,8 @@ struct CanonicalEventPayload<'a> {
     decision: &'a Decision,
     deny_reason: Option<&'a DenyReason>,
     input_patch_hash: &'a str,
+    json_args_footprint: Option<&'a str>,
+    method_name: Option<&'a str>,
     result_effective_hash: Option<&'a str>,
 }
 
@@ -549,6 +567,49 @@ impl EventChain {
         self.append(event)
     }
 
+    /// Record a method-dispatch event with the full accountability surface.
+    ///
+    /// This is the record path for `SchemaEngine.mutate` method dispatches
+    /// (Requirement 5.5 / VAL-DISPATCH-005 / VAL-NFR-003). The event carries:
+    /// - `actor_id` — who initiated the call
+    /// - `plugin_id` — target plugin
+    /// - `method_name` — the invoked method name
+    /// - `capability_id` — the capability used (or `None`)
+    /// - `json_args_footprint` — Blake3 hash of the verbatim `json_args` string
+    ///
+    /// The append occurs before the dispatch returns success to the caller
+    /// (the caller holds the `EventChain` write lock during `record`).
+    pub fn record_method_call(
+        &mut self,
+        actor_id: String,
+        plugin_id: String,
+        method_name: String,
+        capability_id: Option<String>,
+        json_args: &str,
+    ) -> &ChainEvent {
+        let json_args_footprint = blake3::hash(json_args.as_bytes()).to_hex().to_string();
+        let target = format!("/org/opdbus/v1/plugins/{}", plugin_id);
+        let input_patch = simd_json::json!({ "method": method_name, "args": json_args });
+        let mut event = ChainEvent::new(
+            self.next_event_id(),
+            self.last_hash().to_string(),
+            actor_id,
+            plugin_id,
+            "1.0.0".to_string(),
+            OperationType::MethodCall,
+            target,
+            vec![],
+            Decision::Allow,
+            &input_patch,
+        );
+        event.capability_id = capability_id;
+        event.method_name = Some(method_name);
+        event.json_args_footprint = Some(json_args_footprint);
+        // Recompute hash now that capability_id / method_name / footprint are set.
+        event.event_hash = event.compute_hash();
+        self.append(event)
+    }
+
     /// Get number of unbatched events
     fn unbatched_count(&self) -> usize {
         let last_batched = self.batches.last().map(|b| b.last_event_id).unwrap_or(0);
@@ -688,6 +749,16 @@ impl EventChain {
     /// Get all events
     pub fn events(&self) -> &[ChainEvent] {
         &self.events
+    }
+
+    /// Get mutable access to all events.
+    ///
+    /// Used by callers that need to enrich the last-appended event with
+    /// additional fields (e.g. `capability_id`) after [`record`] has
+    /// appended it. The caller MUST recompute `event_hash` after mutating
+    /// any field that participates in the canonical hash payload.
+    pub fn events_mut(&mut self) -> &mut [ChainEvent] {
+        &mut self.events
     }
 
     /// Get all batches

@@ -11,6 +11,7 @@
 //! It reads from the zeroclaw plugin's `model_routes` projection at
 //! `/opdbus/v1/plugins/zeroclaw` and surfaces them as `byom_sources`.
 
+use super::plugin_scaffold_helpers::field_from_value;
 use anyhow::Result;
 use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
@@ -276,10 +277,7 @@ impl StatePlugin for FactoryPlugin {
         "1.0.0"
     }
     fn schema(&self) -> Option<PluginSchema> {
-        Some(super::plugin_schema_defs::factory_plugin_schema())
-    }
-    async fn query_current_state(&self) -> Result<Value> {
-        Ok(simd_json::serde::to_owned_value(Self::current_state())?)
+        Some(factory_schema())
     }
     async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {
         Ok(StateDiff {
@@ -323,4 +321,118 @@ impl StatePlugin for FactoryPlugin {
             atomic_operations: false,
         }
     }
+}
+
+pub(crate) fn factory_schema() -> PluginSchema {
+    use simd_json::prelude::*;
+    let state = simd_json::serde::to_owned_value(super::factory::FactoryPlugin::current_state())
+        .unwrap_or_else(|_| json!({}));
+
+    let mut builder = PluginSchema::builder("factory")
+        .version("1.0.0")
+        .category("llm")
+        .description("Factory Droid agent platform — computers, sessions, models, autonomy controls, BYOM discovery");
+
+    // Add BYOM dependency on zeroclaw for model discovery via D-Bus projection
+    builder = builder.dependency("zeroclaw");
+
+    // Add fields from live state
+    if let Some(obj) = state.as_object() {
+        for (key, value) in obj.iter() {
+            builder = builder.field(&key.to_string(), field_from_value(value));
+        }
+    }
+
+    let mut schema = builder.example(state.clone()).build();
+
+    // Output structs
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct ListComputersOutput {
+        pub computers: Vec<serde_json::Value>,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct GetSessionOutput {
+        pub session: Option<serde_json::Value>,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct ListSessionsOutput {
+        pub sessions: Vec<serde_json::Value>,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct ListModelsOutput {
+        pub models: Vec<serde_json::Value>,
+    }
+
+    use super::plugin_scaffold_helpers::method_decl_from_schemars_with_output;
+    use super::plugin_scaffold_helpers::AckOutput;
+    use op_state_store::SideEffect;
+
+    schema.methods.insert(
+        "list_computers".to_string(),
+        method_decl_from_schemars_with_output::<(), ListComputersOutput>(
+            "list_computers",
+            SideEffect::Read,
+            true,
+            "factory.read",
+            "obs.service.factory.computer.list@v1",
+        ),
+    );
+    schema.methods.insert(
+        "get_session".to_string(),
+        method_decl_from_schemars_with_output::<(), GetSessionOutput>(
+            "get_session",
+            SideEffect::Read,
+            true,
+            "factory.read",
+            "obs.service.factory.session.get@v1",
+        ),
+    );
+    schema.methods.insert(
+        "list_sessions".to_string(),
+        method_decl_from_schemars_with_output::<(), ListSessionsOutput>(
+            "list_sessions",
+            SideEffect::Read,
+            true,
+            "factory.read",
+            "obs.service.factory.session.list@v1",
+        ),
+    );
+    schema.methods.insert(
+        "list_models".to_string(),
+        method_decl_from_schemars_with_output::<(), ListModelsOutput>(
+            "list_models",
+            SideEffect::Read,
+            true,
+            "factory.read",
+            "obs.service.factory.model.list@v1",
+        ),
+    );
+    schema.methods.insert(
+        "discover_byom".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "discover_byom",
+            SideEffect::Mutation,
+            false,
+            "factory.invoke",
+            "mut.service.factory.byom.discover@v1",
+        ),
+    );
+    schema.methods.insert(
+        "set_autonomy".to_string(),
+        method_decl_from_schemars_with_output::<(), AckOutput>(
+            "set_autonomy",
+            SideEffect::Mutation,
+            false,
+            "factory.invoke",
+            "mut.service.factory.autonomy.set@v1",
+        ),
+    );
+
+    schema
+}
+
+// Self-registration: the plugin registry discovers this via inventory
+// (single source of the catalog; no central dispatch list).
+inventory::submit! {
+    crate::default_registry::PluginReg::new("factory", |_ctx| std::sync::Arc::new(FactoryPlugin::new()))
 }
