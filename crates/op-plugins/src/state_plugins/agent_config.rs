@@ -220,7 +220,10 @@ mod tests {
         let schema = agent_config_schema();
         assert_eq!(schema.name, "agent_config");
         assert_eq!(schema.version, "1.0.0");
-        assert_eq!(schema.description, "Agent configuration and tool assignments");
+        assert_eq!(
+            schema.description,
+            "Agent configuration and tool assignments"
+        );
         assert!(schema.fields.contains_key("agents"));
         assert!(schema.methods.contains_key("get_config"));
         assert!(schema.methods.contains_key("update_config"));

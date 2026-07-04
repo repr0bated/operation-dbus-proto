@@ -12,7 +12,6 @@ use tracing::info;
 
 /// The single active-schema catalog in shared memory. Every plugin reads its
 /// own slice by name from this one file (zero-copy, 1:1).
-const SHM_SCHEMA_PATH: &str = "/dev/shm/live-schema.json";
 
 /// THE one shared container socket. Every container connects to this single
 /// host-side UDS; xray/the bridge demuxes per connection by identity + the
@@ -97,22 +96,15 @@ impl SharedUnixSocketPlugin {
     /// Read this plugin's desired state straight from the single active schema
     /// catalog in shared memory (zero-copy 1:1).
     fn read_desired() -> SharedUnixSocketState {
-        let Ok(mut bytes) = std::fs::read(SHM_SCHEMA_PATH) else {
+        // The sealed blob IS this plugin: desired state is the `example`
+        // carried by its own blob in the SHM catalog.
+        let Some(schema) = op_blob::catalog::read_plugin_schema_shm("shared_unix_socket") else {
             return SharedUnixSocketState::default();
         };
-        let Ok(catalog) = simd_json::to_owned_value(&mut bytes) else {
+        let Some(state) = schema.example else {
             return SharedUnixSocketState::default();
         };
-        let Some(state) = catalog
-            .get("shared_unix_socket")
-            .and_then(|versions| versions.as_array())
-            .and_then(|versions| versions.last())
-            .and_then(|schema| schema.get("example"))
-        else {
-            return SharedUnixSocketState::default();
-        };
-        simd_json::serde::from_owned_value::<SharedUnixSocketState>(state.clone())
-            .unwrap_or_default()
+        simd_json::serde::from_owned_value::<SharedUnixSocketState>(state).unwrap_or_default()
     }
 
     /// Deterministically register a service on the shared socket.

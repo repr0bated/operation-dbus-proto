@@ -330,7 +330,10 @@ pub(crate) fn cozo_schema() -> PluginSchema {
 
     schema.methods.insert(
         "run_query".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<RunQueryInput, super::plugin_scaffold_helpers::AckOutput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+            RunQueryInput,
+            super::plugin_scaffold_helpers::AckOutput,
+        >(
             "run_query",
             op_state_store::SideEffect::Mutation, // Assuming it could mutate data
             false,
@@ -340,7 +343,10 @@ pub(crate) fn cozo_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "import_relations".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<ImportRelationsInput, super::plugin_scaffold_helpers::AckOutput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+            ImportRelationsInput,
+            super::plugin_scaffold_helpers::AckOutput,
+        >(
             "import_relations",
             op_state_store::SideEffect::Mutation,
             false,
@@ -350,7 +356,10 @@ pub(crate) fn cozo_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "export_relations".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<ExportRelationsInput, super::plugin_scaffold_helpers::AckOutput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+            ExportRelationsInput,
+            super::plugin_scaffold_helpers::AckOutput,
+        >(
             "export_relations",
             op_state_store::SideEffect::Read,
             true,
@@ -360,7 +369,10 @@ pub(crate) fn cozo_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "backup".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<BackupInput, super::plugin_scaffold_helpers::AckOutput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+            BackupInput,
+            super::plugin_scaffold_helpers::AckOutput,
+        >(
             "backup",
             op_state_store::SideEffect::Mutation,
             false,
@@ -370,7 +382,10 @@ pub(crate) fn cozo_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "restore".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<RestoreInput, super::plugin_scaffold_helpers::AckOutput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+            RestoreInput,
+            super::plugin_scaffold_helpers::AckOutput,
+        >(
             "restore",
             op_state_store::SideEffect::Mutation,
             false,
@@ -380,7 +395,10 @@ pub(crate) fn cozo_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "list_relations".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<ListRelationsInput, super::plugin_scaffold_helpers::AckOutput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+            ListRelationsInput,
+            super::plugin_scaffold_helpers::AckOutput,
+        >(
             "list_relations",
             op_state_store::SideEffect::Read,
             true,
@@ -390,7 +408,10 @@ pub(crate) fn cozo_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "describe_relation".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<DescribeRelationInput, super::plugin_scaffold_helpers::AckOutput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+            DescribeRelationInput,
+            super::plugin_scaffold_helpers::AckOutput,
+        >(
             "describe_relation",
             op_state_store::SideEffect::Read,
             true,

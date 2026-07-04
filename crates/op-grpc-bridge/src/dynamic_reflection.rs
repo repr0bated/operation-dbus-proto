@@ -47,7 +47,9 @@ impl Default for ActiveReflectionInner {
             blobs: BTreeMap::new(),
             index: ReflectionIndex::default(),
         };
-        inner.descriptor_sets.push(crate::proto::FILE_DESCRIPTOR_SET.to_vec());
+        inner
+            .descriptor_sets
+            .push(crate::proto::FILE_DESCRIPTOR_SET.to_vec());
         inner
             .descriptor_sets
             .push(tonic_reflection::pb::v1::FILE_DESCRIPTOR_SET.to_vec());
@@ -63,7 +65,7 @@ impl ActiveReflectionCatalog {
 
     pub async fn upsert_blob(&self, blob: PluginObjectBlob) {
         let mut inner = self.inner.write().await;
-        inner.blobs.insert(blob.plugin_id.clone(), blob);
+        inner.blobs.insert(blob.manifest.plugin_id.clone(), blob);
         inner.rebuild_index();
     }
 
@@ -91,14 +93,21 @@ impl ActiveReflectionInner {
         let active_services = self
             .blobs
             .values()
-            .map(|blob| blob.grpc.service_name.clone())
+            .flat_map(|blob| {
+                // Advertise legacy service names (mounted via build.rs) for
+                // ListServices; per-method typed services are indexed for
+                // file/symbol lookups but not listed unless routes are mounted.
+                // TODO(unify-routes): advertise operation.method.* services
+                // when PerMethodGrpcServices routes are mounted.
+                blob.manifest.grpc.services.clone()
+            })
             .collect::<BTreeSet<_>>();
         let mut index = ReflectionIndex::new(active_services);
 
         for encoded in self
             .descriptor_sets
             .iter()
-            .chain(self.blobs.values().map(|blob| &blob.grpc.descriptor_set))
+            .chain(self.blobs.values().map(|blob| &blob.descriptor_set))
         {
             let Ok(file_set) = FileDescriptorSet::decode(encoded.as_slice()) else {
                 continue;
@@ -231,19 +240,11 @@ impl ReflectionIndex {
     }
 
     fn symbol_by_name(&self, symbol: &str) -> Result<Vec<u8>, Status> {
-        self.encode_file(
-            symbol,
-            self.symbols.get(symbol),
-            "symbol",
-        )
+        self.encode_file(symbol, self.symbols.get(symbol), "symbol")
     }
 
     fn file_by_filename(&self, filename: &str) -> Result<Vec<u8>, Status> {
-        self.encode_file(
-            filename,
-            self.files.get(filename),
-            "file",
-        )
+        self.encode_file(filename, self.files.get(filename), "file")
     }
 
     fn encode_file(
@@ -381,9 +382,10 @@ mod tests {
             .any(|service| service == "operation.plugin.v1.ZeroclawPluginMethods"));
 
         catalog
-            .upsert_blob(crate::zeroclaw_object_blob::ZeroclawObjectBlob::from_plugin_schema())
+            .upsert_blob(crate::zeroclaw_object_blob::from_plugin_schema())
             .await;
         let after = catalog.list_services().await;
+        // Legacy service (mounted via build.rs) is advertised.
         assert!(after
             .iter()
             .any(|service| service == "operation.plugin.v1.ZeroclawPluginMethods"));

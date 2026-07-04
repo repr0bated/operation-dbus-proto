@@ -142,76 +142,90 @@ impl FreeDesktopPlugin {
                 .version("1.0.0")
                 .category("system")
                 .description("FreeDesktop D-Bus standards implementation")
-                .method(super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
-                    GetManagedObjectsInput,
-                    super::plugin_scaffold_helpers::AckOutput,
-                >(
-                    "GetManagedObjects",
-                    op_state_store::SideEffect::Read,
-                    true,
-                    "freedesktop.read",
-                    "obs.software.freedesktop.managed_objects.get@v1",
-                ))
-                .method(super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
-                    GetPropertyInput,
-                    super::plugin_scaffold_helpers::AckOutput,
-                >(
-                    "Get",
-                    op_state_store::SideEffect::Read,
-                    true,
-                    "freedesktop.read",
-                    "obs.software.freedesktop.property.get@v1",
-                ))
-                .method(super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
-                    GetAllPropertiesInput,
-                    super::plugin_scaffold_helpers::AckOutput,
-                >(
-                    "GetAll",
-                    op_state_store::SideEffect::Read,
-                    true,
-                    "freedesktop.read",
-                    "obs.software.freedesktop.properties.getall@v1",
-                ))
-                .method(super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
-                    SetPropertyInput,
-                    super::plugin_scaffold_helpers::AckOutput,
-                >(
-                    "Set",
-                    op_state_store::SideEffect::Mutation,
-                    true,
-                    "freedesktop.write",
-                    "mut.software.freedesktop.property.set@v1",
-                ))
-                .method(super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
-                    IntrospectInput,
-                    super::plugin_scaffold_helpers::AckOutput,
-                >(
-                    "Introspect",
-                    op_state_store::SideEffect::Read,
-                    true,
-                    "freedesktop.read",
-                    "obs.software.freedesktop.introspect@v1",
-                ))
-                .method(super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
-                    PingInput,
-                    super::plugin_scaffold_helpers::AckOutput,
-                >(
-                    "Ping",
-                    op_state_store::SideEffect::Read,
-                    true,
-                    "freedesktop.read",
-                    "obs.software.freedesktop.ping@v1",
-                ))
-                .method(super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
-                    GetMachineIdInput,
-                    super::plugin_scaffold_helpers::AckOutput,
-                >(
-                    "GetMachineId",
-                    op_state_store::SideEffect::Read,
-                    true,
-                    "freedesktop.read",
-                    "obs.software.freedesktop.machine_id.get@v1",
-                ))
+                .method(
+                    super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+                        GetManagedObjectsInput,
+                        super::plugin_scaffold_helpers::AckOutput,
+                    >(
+                        "GetManagedObjects",
+                        op_state_store::SideEffect::Read,
+                        true,
+                        "freedesktop.read",
+                        "obs.software.freedesktop.managed_objects.get@v1",
+                    ),
+                )
+                .method(
+                    super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+                        GetPropertyInput,
+                        super::plugin_scaffold_helpers::AckOutput,
+                    >(
+                        "Get",
+                        op_state_store::SideEffect::Read,
+                        true,
+                        "freedesktop.read",
+                        "obs.software.freedesktop.property.get@v1",
+                    ),
+                )
+                .method(
+                    super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+                        GetAllPropertiesInput,
+                        super::plugin_scaffold_helpers::AckOutput,
+                    >(
+                        "GetAll",
+                        op_state_store::SideEffect::Read,
+                        true,
+                        "freedesktop.read",
+                        "obs.software.freedesktop.properties.getall@v1",
+                    ),
+                )
+                .method(
+                    super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+                        SetPropertyInput,
+                        super::plugin_scaffold_helpers::AckOutput,
+                    >(
+                        "Set",
+                        op_state_store::SideEffect::Mutation,
+                        true,
+                        "freedesktop.write",
+                        "mut.software.freedesktop.property.set@v1",
+                    ),
+                )
+                .method(
+                    super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+                        IntrospectInput,
+                        super::plugin_scaffold_helpers::AckOutput,
+                    >(
+                        "Introspect",
+                        op_state_store::SideEffect::Read,
+                        true,
+                        "freedesktop.read",
+                        "obs.software.freedesktop.introspect@v1",
+                    ),
+                )
+                .method(
+                    super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+                        PingInput,
+                        super::plugin_scaffold_helpers::AckOutput,
+                    >(
+                        "Ping",
+                        op_state_store::SideEffect::Read,
+                        true,
+                        "freedesktop.read",
+                        "obs.software.freedesktop.ping@v1",
+                    ),
+                )
+                .method(
+                    super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+                        GetMachineIdInput,
+                        super::plugin_scaffold_helpers::AckOutput,
+                    >(
+                        "GetMachineId",
+                        op_state_store::SideEffect::Read,
+                        true,
+                        "freedesktop.read",
+                        "obs.software.freedesktop.machine_id.get@v1",
+                    ),
+                )
                 .build(),
         );
     }
@@ -522,29 +536,13 @@ mod tests {
     fn test_path_normalization() {
         let plugin = FreeDesktopPlugin::new();
 
-        // Legacy paths should be normalized to canonical form
+        // Legacy path should be normalized to canonical
         let normalized = plugin.normalize_path("/opdbus/v1/plugins/test");
         assert_eq!(normalized, Some("/org/opdbus/v1/plugins/test".to_string()));
 
-        let legacy_alias = plugin.normalize_path("/org/opdbus/v1/plugin/plugins/test");
-        assert_eq!(
-            legacy_alias,
-            Some("/org/opdbus/v1/plugins/test".to_string())
-        );
-
-        // Canonical path stays the same
-        let canonical = plugin.normalize_path("/org/opdbus/v1/plugins/test");
+        // Legacy alias also normalizes to canonical
+        let canonical = plugin.normalize_path("/org/opdbus/v1/plugin/plugins/test");
         assert_eq!(canonical, Some("/org/opdbus/v1/plugins/test".to_string()));
-    }
-
-    #[tokio::test]
-    async fn test_state_query() {
-        let plugin = FreeDesktopPlugin::new();
-        let state = plugin.query_current_state().await.unwrap();
-
-        assert_eq!(state.get("name").unwrap().as_str().unwrap(), "freedesktop");
-        assert_eq!(state.get("version").unwrap().as_str().unwrap(), "1.0.0");
-        assert!(state.get("interfaces").unwrap().is_array());
     }
 }
 

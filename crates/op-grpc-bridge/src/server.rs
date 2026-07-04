@@ -24,7 +24,6 @@ use crate::grpc_server::OperationGrpcServer;
 use crate::mutation_engine::MutationEngine;
 use crate::schema_loader::{SchemaLoader, SchemaReloadEvent};
 use crate::tracing::{GhostbridgeTraceLayer, TraceContext};
-use crate::zeroclaw_object_blob::ZeroclawObjectBlob;
 
 use crate::grpc_server::build_operation_routes;
 use crate::proto::zeroclaw::{
@@ -34,7 +33,11 @@ use crate::proto::zeroclaw::{
 
 const DEFAULT_UNIX_SOCKET: &str = "/run/opdbus/zeroclaw-grpc.sock";
 const DEFAULT_BIND_ADDR: &str = "0.0.0.0:8090";
-const DEFAULT_SCHEMA_PATH: &str = "/dev/shm/live-schema.json";
+/// Default schema source: the sealed blob catalog dir. When `schema_path`
+/// is a directory the loader reads the plugin's own blob from it (a blob in
+/// the catalog IS the plugin); a file path is still accepted for tests and
+/// plugin-owned schema files.
+const DEFAULT_SCHEMA_PATH: &str = op_blob::catalog::DEFAULT_SHM_DIR;
 
 /// Runtime configuration for the zeroclaw Axum host.
 #[derive(Clone, Debug)]
@@ -222,6 +225,9 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
     let mutation_engine = Arc::new(MutationEngine::new(event_chain, ovsdb, nonnet));
     mutation_engine.seed_missing_plugin_projections().await?;
     let operation_server = OperationGrpcServer::new(mutation_engine);
+    // The sealed SHM blob catalog IS the plugin set: hydrate reflection from
+    // it so a bridge restart advertises every sealed plugin immediately.
+    operation_server.hydrate_reflection_from_shm().await;
     // Attach the semantic shuttle for parity with run_grpc_server so
     // SearchSemanticTrace behaves identically on both endpoints (best-effort:
     // if Qdrant is unavailable the method returns failed_precondition).
@@ -234,13 +240,13 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
     };
     match serde_json::from_value::<op_state_store::PluginSchema>(loader.get().await) {
         Ok(schema) => {
-            let blob = ZeroclawObjectBlob::from_schema(schema.clone());
+            let blob = crate::zeroclaw_object_blob::from_schema(schema.clone());
             tracing::info!(
-                plugin_id = %blob.plugin_id,
-                schema_hash = %blob.schema_hash,
-                methods = blob.method_count(),
-                dbus_path = %blob.dbus.object_path,
-                grpc_service = %blob.grpc.service_name,
+                plugin_id = %blob.manifest.plugin_id,
+                schema_hash = %blob.manifest.schema_hash,
+                methods = blob.manifest.methods.len(),
+                dbus_path = %blob.manifest.dbus.object_path,
+                grpc_service = ?blob.manifest.grpc.services,
                 "zeroclaw D-Bus/gRPC object blob frozen"
             );
             if let Err(error) = operation_server

@@ -31,13 +31,16 @@ use crate::schema_engine::SchemaEngine;
 
 use op_plugins::canonical::{self, BASE_SERVICE_NAME};
 
-/// The combined monolith catalog in shared memory.
-const LIVE_SCHEMA_PATH: &str = "/dev/shm/live-schema.json";
+/// The sealed plugin-blob catalog in shared memory. The blob catalog IS the
+/// plugin set: routes are derived from the canonical schema JSON sealed in
+/// each blob — never from a monolith file or a plugin registry.
+const BLOB_CATALOG_DIR: &str = op_blob::catalog::DEFAULT_SHM_DIR;
 
-/// The producer's catalog manifest in shared memory. Carries the Blake3
-/// `catalog_hash` of the schema catalog (`{ "catalog_hash": "<hex>" }`).
-/// The bridge reads this hash, never re-computes it.
-const MANIFEST_PATH: &str = "/dev/shm/opdbus/.manifest.json";
+/// The blob catalog's manifest. Carries the Blake3 `catalog_hash`
+/// (`{ "catalog_hash": "<hex>", "generation": n, "plugins": {...} }`)
+/// written by the sealer as the atomic commit point. The bridge reads this
+/// hash, never re-computes it.
+const MANIFEST_PATH: &str = "/dev/shm/opdbus/plugin-blobs/.manifest.json";
 
 /// A schema-derived route entry for a plugin.
 #[derive(Debug, Clone)]
@@ -64,7 +67,7 @@ pub struct SchemaRouter {
     routes: Arc<RwLock<HashMap<String, PluginRoute>>>,
     /// D-Bus system connection (shared with SchemaEngine).
     dbus_connection: Arc<tokio::sync::OnceCell<Connection>>,
-    /// Combined monolith catalog path (default [`LIVE_SCHEMA_PATH`]).
+    /// Catalog path: blob-catalog dir in production (default [`BLOB_CATALOG_DIR`]), or a monolith file in tests.
     monolith_path: PathBuf,
     /// Present-state directory used to derive read-only child objects.
     state_dir: PathBuf,
@@ -97,7 +100,7 @@ impl SchemaRouter {
     pub fn new(dbus_connection: Arc<tokio::sync::OnceCell<Connection>>) -> Self {
         Self::with_paths(
             dbus_connection,
-            PathBuf::from(LIVE_SCHEMA_PATH),
+            PathBuf::from(BLOB_CATALOG_DIR),
             PathBuf::from(DEFAULT_SHM_STATE_DIR),
             PathBuf::from(MANIFEST_PATH),
         )
@@ -503,8 +506,31 @@ impl SchemaRouter {
 
     /// Loads plugin routes from the combined monolith. If the monolith is
     /// unavailable or invalid, no routes are exposed.
-    fn load_routes_from(monolith_path: &Path) -> HashMap<String, PluginRoute> {
-        Self::load_from_monolith(monolith_path).unwrap_or_default()
+    fn load_routes_from(catalog_path: &Path) -> HashMap<String, PluginRoute> {
+        if catalog_path.is_dir() {
+            Self::load_from_blob_catalog(catalog_path).unwrap_or_default()
+        } else {
+            Self::load_from_monolith(catalog_path).unwrap_or_default()
+        }
+    }
+
+    /// Loads plugin routes from the sealed blob catalog. Each blob's
+    /// SCHEMA_JSON section is the canonical full `PluginSchema`; a blob in
+    /// the catalog IS the plugin. Corrupt blobs are skipped by the catalog
+    /// loader (hash-verified) and therefore expose no route.
+    fn load_from_blob_catalog(dir: &Path) -> Option<HashMap<String, PluginRoute>> {
+        let catalog = op_blob::ActiveReflectionCatalog::open(dir).ok()?;
+        let mut routes = HashMap::new();
+        for blob in catalog.plugin_object_blobs() {
+            let plugin_id = blob.manifest.plugin_id.clone();
+            let schema: JsonValue = match serde_json::from_str(&blob.schema_json) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            let route = Self::build_route(&plugin_id, &schema);
+            routes.insert(plugin_id, route);
+        }
+        Some(routes)
     }
 
     fn load_from_monolith(path: &Path) -> Option<HashMap<String, PluginRoute>> {

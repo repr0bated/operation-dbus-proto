@@ -588,7 +588,10 @@ pub(crate) fn netmaker_schema() -> PluginSchema {
     }
     schema.methods.insert(
         "join_network".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<JoinNetworkInput, super::plugin_scaffold_helpers::AckOutput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+            JoinNetworkInput,
+            super::plugin_scaffold_helpers::AckOutput,
+        >(
             "join_network",
             op_state_store::SideEffect::Mutation,
             false,
@@ -598,7 +601,10 @@ pub(crate) fn netmaker_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "leave_network".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<LeaveNetworkInput, super::plugin_scaffold_helpers::AckOutput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+            LeaveNetworkInput,
+            super::plugin_scaffold_helpers::AckOutput,
+        >(
             "leave_network",
             op_state_store::SideEffect::Mutation,
             false,
@@ -608,7 +614,10 @@ pub(crate) fn netmaker_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "list_nodes".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<ListNodesInput, super::plugin_scaffold_helpers::AckOutput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+            ListNodesInput,
+            super::plugin_scaffold_helpers::AckOutput,
+        >(
             "list_nodes",
             op_state_store::SideEffect::Read,
             true,
@@ -618,7 +627,10 @@ pub(crate) fn netmaker_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "get_node".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<GetNodeInput, super::plugin_scaffold_helpers::AckOutput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+            GetNodeInput,
+            super::plugin_scaffold_helpers::AckOutput,
+        >(
             "get_node",
             op_state_store::SideEffect::Read,
             true,
@@ -628,7 +640,10 @@ pub(crate) fn netmaker_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "update_node".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<UpdateNodeInput, super::plugin_scaffold_helpers::AckOutput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+            UpdateNodeInput,
+            super::plugin_scaffold_helpers::AckOutput,
+        >(
             "update_node",
             op_state_store::SideEffect::Mutation,
             false,
@@ -638,7 +653,10 @@ pub(crate) fn netmaker_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "list_networks".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<ListNetworksInput, super::plugin_scaffold_helpers::AckOutput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+            ListNetworksInput,
+            super::plugin_scaffold_helpers::AckOutput,
+        >(
             "list_networks",
             op_state_store::SideEffect::Read,
             true,

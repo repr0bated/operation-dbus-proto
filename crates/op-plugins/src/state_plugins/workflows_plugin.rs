@@ -160,7 +160,10 @@ pub(crate) fn workflows_schema() -> PluginSchema {
     // StartWorkflow method
     schema.methods.insert(
         "start_workflow".to_string(),
-        method_decl_from_schemars_with_output::<StartWorkflowInput, super::plugin_scaffold_helpers::AckOutput>(
+        method_decl_from_schemars_with_output::<
+            StartWorkflowInput,
+            super::plugin_scaffold_helpers::AckOutput,
+        >(
             "StartWorkflow",
             op_state_store::SideEffect::Mutation,
             false,
@@ -172,7 +175,10 @@ pub(crate) fn workflows_schema() -> PluginSchema {
     // PauseWorkflow method
     schema.methods.insert(
         "pause_workflow".to_string(),
-        method_decl_from_schemars_with_output::<PauseWorkflowInput, super::plugin_scaffold_helpers::AckOutput>(
+        method_decl_from_schemars_with_output::<
+            PauseWorkflowInput,
+            super::plugin_scaffold_helpers::AckOutput,
+        >(
             "PauseWorkflow",
             op_state_store::SideEffect::Mutation,
             false,
@@ -184,7 +190,10 @@ pub(crate) fn workflows_schema() -> PluginSchema {
     // ResumeWorkflow method
     schema.methods.insert(
         "resume_workflow".to_string(),
-        method_decl_from_schemars_with_output::<ResumeWorkflowInput, super::plugin_scaffold_helpers::AckOutput>(
+        method_decl_from_schemars_with_output::<
+            ResumeWorkflowInput,
+            super::plugin_scaffold_helpers::AckOutput,
+        >(
             "ResumeWorkflow",
             op_state_store::SideEffect::Mutation,
             false,
@@ -196,7 +205,10 @@ pub(crate) fn workflows_schema() -> PluginSchema {
     // CancelWorkflow method
     schema.methods.insert(
         "cancel_workflow".to_string(),
-        method_decl_from_schemars_with_output::<CancelWorkflowInput, super::plugin_scaffold_helpers::AckOutput>(
+        method_decl_from_schemars_with_output::<
+            CancelWorkflowInput,
+            super::plugin_scaffold_helpers::AckOutput,
+        >(
             "CancelWorkflow",
             op_state_store::SideEffect::Mutation,
             false,

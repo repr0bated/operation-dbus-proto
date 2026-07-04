@@ -162,8 +162,18 @@ fn generate_plugin_methods_proto(sets: &[PluginMethodSet]) -> String {
     for set in sets {
         writeln!(proto, "// PluginSchema source: {}", set.plugin_id).unwrap();
         for method in &set.methods {
-            writeln!(proto, "{}", schema_message_proto(&method.input_name, &method.args)).unwrap();
-            writeln!(proto, "{}", schema_message_proto(&method.output_name, &method.returns)).unwrap();
+            writeln!(
+                proto,
+                "{}",
+                schema_message_proto(&method.input_name, &method.args)
+            )
+            .unwrap();
+            writeln!(
+                proto,
+                "{}",
+                schema_message_proto(&method.output_name, &method.returns)
+            )
+            .unwrap();
         }
         writeln!(proto, "service {} {{", set.service_name).unwrap();
         for method in &set.methods {
@@ -186,11 +196,7 @@ fn generate_plugin_method_routes(sets: &[PluginMethodSet]) -> String {
     writeln!(rust, "#[allow(clippy::all)]").unwrap();
     writeln!(rust, "#[allow(unused_qualifications)]").unwrap();
     writeln!(rust, "mod generated_plugin_method_routes {{").unwrap();
-    writeln!(
-        rust,
-        "    use crate::grpc_server::OperationGrpcServer;"
-    )
-    .unwrap();
+    writeln!(rust, "    use crate::grpc_server::OperationGrpcServer;").unwrap();
     writeln!(rust, "    use tonic::{{Request, Response, Status}};").unwrap();
     writeln!(rust).unwrap();
 
@@ -277,7 +283,10 @@ fn schema_fields(schema: &simd_json::OwnedValue) -> Vec<ProtoField> {
         return vec![fallback_field("payload", "google.protobuf.Value", false)];
     };
 
-    let Some(properties) = json_schema.get("properties").and_then(|value| value.as_object()) else {
+    let Some(properties) = json_schema
+        .get("properties")
+        .and_then(|value| value.as_object())
+    else {
         return Vec::new();
     };
 
@@ -406,11 +415,7 @@ fn to_pascal_ident(value: &str) -> String {
     }
     if ident.is_empty() {
         "Generated".to_string()
-    } else if ident
-        .chars()
-        .next()
-        .is_some_and(|ch| ch.is_ascii_digit())
-    {
+    } else if ident.chars().next().is_some_and(|ch| ch.is_ascii_digit()) {
         format!("P{}", ident)
     } else {
         ident
@@ -442,11 +447,7 @@ fn to_snake_ident(value: &str) -> String {
     }
     if ident.is_empty() {
         "generated".to_string()
-    } else if ident
-        .chars()
-        .next()
-        .is_some_and(|ch| ch.is_ascii_digit())
-    {
+    } else if ident.chars().next().is_some_and(|ch| ch.is_ascii_digit()) {
         format!("p_{}", ident)
     } else {
         ident
