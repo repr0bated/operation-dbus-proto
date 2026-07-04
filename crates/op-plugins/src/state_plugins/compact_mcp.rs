@@ -140,7 +140,7 @@ impl CompactMcpPlugin {
         let proxy = Proxy::new(
             &conn,
             "opdbus.v1",
-            "/opdbus/v1/s6/systemctl",
+            "/org/opdbus/v1/plugins/s6/systemctl",
             "opdbus.v1.S6.Systemctl",
         )
         .await

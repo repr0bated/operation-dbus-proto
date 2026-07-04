@@ -5,7 +5,7 @@ use zbus::{proxy, Connection};
 
 #[proxy(
     default_service = "org.opdbus.v1.S6.Systemctl",
-    default_path = "/org/opdbus/v1/s6/systemctl",
+    default_path = "/org/opdbus/v1/plugins/s6/systemctl",
     interface = "org.opdbus.v1.S6.Systemctl"
 )]
 trait S6Systemctl {
