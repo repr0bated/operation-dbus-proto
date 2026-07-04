@@ -48,8 +48,7 @@ cargo run --release -p op-web
 
 ## Documentation
 
-- `AGENTS.md` — agent coding guidelines
-- `CLAUDE.md` — project coding standards
+- `CLAUDE.md` — agent guidance + project coding standards
 - `docs/` — architecture docs
 - `deploy/` — s6 service definitions + deployment scripts
 

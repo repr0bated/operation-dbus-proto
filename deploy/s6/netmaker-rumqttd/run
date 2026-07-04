@@ -1,0 +1,8 @@
+#!/bin/sh
+# Unit name "netmaker-rumqttd" is historical (matches the installed live
+# service in /etc/s6/sv); the broker is now mosquitto — netmaker only
+# requires MQTT, the broker impl is swappable.
+set -eu
+exec 2>&1
+
+exec /usr/bin/mosquitto -c /home/jeremy/git/operation-dbus-proto/deploy/netmaker/host-mosquitto.conf
