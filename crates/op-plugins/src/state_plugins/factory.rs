@@ -51,17 +51,11 @@ mod projection {
     use simd_json::prelude::*;
     use simd_json::OwnedValue as Value;
 
-    const SHM_SCHEMA_PATH: &str = "/dev/shm/live-schema.json";
-
     /// Read zeroclaw's model_routes from D-Bus projection cache
     pub fn read_zeroclaw_model_routes() -> Option<Value> {
-        // Read the projection from shared memory JSON
-        let bytes = std::fs::read(SHM_SCHEMA_PATH).ok()?;
-        let mut bytes = bytes;
-        let schema: Value = simd_json::to_owned_value(&mut bytes).ok()?;
-
-        // Check if zeroclaw plugin exists in schema
-        schema.get("zeroclaw")?;
+        // The sealed blob IS the plugin: zeroclaw exists iff its blob is in
+        // the SHM catalog.
+        op_blob::catalog::read_plugin_schema_shm("zeroclaw")?;
 
         // Read zeroclaw projection from D-Bus via /dev/shm projection cache
         // The actual projection is written by op-dbus at /dev/shm/plugin-{name}.json

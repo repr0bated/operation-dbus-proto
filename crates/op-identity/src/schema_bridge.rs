@@ -425,13 +425,6 @@ pub fn read_schema_blob() -> std::io::Result<Vec<u8>> {
     Ok(bytes[schema_start..schema_end].to_vec())
 }
 
-fn current_schema_catalog_hash() -> blake3::Hash {
-    read_schema_blob()
-        .or_else(|_| std::fs::read("/dev/shm/live-schema.json"))
-        .map(|bytes| blake3::hash(&bytes))
-        .unwrap_or_else(|_| blake3::Hash::from([0u8; 32]))
-}
-
 // ── Reader side (the Shuttle) ────────────────────────────────────────────────
 
 /// Read the sled from shm — zero copy, no allocation.
@@ -926,28 +919,34 @@ fn decode_wg_pubkey(b64: &str) -> [u8; 32] {
 ///
 /// THE STRIKE/ETCH -- single source of truth for the identity footprint.
 ///
-/// Blake3( wg_pubkey || schema_catalog_hash(/dev/shm/live-schema.json) || mutation_index || source_port ).
+/// Blake3( wg_pubkey || schema_catalog_hash(blob-catalog manifest) || mutation_index || source_port ).
 /// source_port is the per-session WireGuard-observed source port (0 when none). It binds the
 /// footprint to the session network context for the accountability loop -- it is NOT an auth
 /// factor (WireGuard is the authenticator; see op-grpc-bridge GhostbridgeInterceptor).
-/// Manifest published by op-projection — the ONE place the canonical
-/// `catalog_hash` lives.
-const SHM_SCHEMA_MANIFEST_PATH: &str = "/dev/shm/opdbus/.manifest.json";
-/// Derived monolith catalog; fallback source for the hash before the manifest
-/// exists (deploy ordering). Same bytes → identical hash value.
+/// Manifest published by the blob sealer — the ONE place the canonical
+/// `catalog_hash` lives (blake3 leaf-fold over the sealed per-plugin blob
+/// hashes; the blob catalog IS the plugin set).
+const SHM_BLOB_MANIFEST_PATH: &str = "/dev/shm/opdbus/plugin-blobs/.manifest.json";
+/// Legacy manifest published by op-projection's SchemaEngine; transitional
+/// fallback until every host is re-sealed with the blob-catalog manifest.
+const SHM_LEGACY_MANIFEST_PATH: &str = "/dev/shm/opdbus/.manifest.json";
+/// Legacy derived monolith; last-resort fallback (deploy ordering).
 const SHM_LIVE_SCHEMA_PATH: &str = "/dev/shm/live-schema.json";
 
-/// The single canonical schema-catalog hash (32 bytes), computed ONCE by
-/// op-projection and read here — never re-hashed per call site. Reads the
-/// manifest's `catalog_hash`; falls back to hashing the monolith directly when
-/// the manifest isn't present yet. `None` if neither artifact exists.
+/// The single canonical schema-catalog hash (32 bytes), computed ONCE by the
+/// blob sealer and read here — never re-hashed per call site. Reads the blob
+/// catalog manifest's `catalog_hash`; falls back to the legacy SchemaEngine
+/// manifest, then the monolith, on hosts not yet re-sealed. `None` if no
+/// artifact exists.
 pub fn schema_catalog_hash() -> Option<[u8; 32]> {
-    if let Ok(bytes) = std::fs::read(SHM_SCHEMA_MANIFEST_PATH) {
-        if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes) {
-            if let Some(hex_str) = v.get("catalog_hash").and_then(|h| h.as_str()) {
-                if let Ok(raw) = hex::decode(hex_str) {
-                    if let Ok(arr) = <[u8; 32]>::try_from(raw.as_slice()) {
-                        return Some(arr);
+    for manifest in [SHM_BLOB_MANIFEST_PATH, SHM_LEGACY_MANIFEST_PATH] {
+        if let Ok(bytes) = std::fs::read(manifest) {
+            if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+                if let Some(hex_str) = v.get("catalog_hash").and_then(|h| h.as_str()) {
+                    if let Ok(raw) = hex::decode(hex_str) {
+                        if let Ok(arr) = <[u8; 32]>::try_from(raw.as_slice()) {
+                            return Some(arr);
+                        }
                     }
                 }
             }
@@ -1308,13 +1307,16 @@ mod xray_config_tests {
         // Each socket routes through XHTTP — xray does not dial unix sockets
         // directly in this branch.
         let outbounds = v["outbounds"].as_array().unwrap();
-    let qdrant = outbounds
+        let qdrant = outbounds
             .iter()
             .find(|o| o["tag"] == "to-qdrant")
             .expect("to-qdrant outbound");
         assert_eq!(qdrant["streamSettings"]["network"], "xhttp");
         assert_eq!(qdrant["settings"]["redirect"], "127.0.0.1:50051");
-        assert_eq!(qdrant["streamSettings"]["xhttpSettings"]["host"], "127.0.0.1");
+        assert_eq!(
+            qdrant["streamSettings"]["xhttpSettings"]["host"],
+            "127.0.0.1"
+        );
         assert_eq!(qdrant["streamSettings"]["xhttpSettings"]["mode"], "auto");
 
         // Each subdomain routes to its socket outbound off the shared ingress.

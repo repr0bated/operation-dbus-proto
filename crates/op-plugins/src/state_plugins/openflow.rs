@@ -1499,7 +1499,7 @@ pub(crate) fn openflow_schema() -> PluginSchema {
         "OpenFlow flow table management",
         &root,
     );
-    schema.dependencies = vec!["net".to_string(), "privacy_routes".to_string()];
+    schema.dependencies = vec!["net".to_string()];
     schema.example = Some(json!({
         "bridges": [
             {

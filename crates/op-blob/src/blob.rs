@@ -226,6 +226,19 @@ pub fn blobify_canonical(
 }
 
 impl PluginObjectBlob {
+    /// Rehydrate an owned blob from sealed bytes (inverse of `seal`).
+    /// `schema_json` is copied verbatim, so `from_sealed(b).seal() == b`
+    /// and the schema hash is preserved.
+    pub fn from_sealed(bytes: &[u8]) -> Result<Self, String> {
+        let r = BlobRef::new(bytes)?;
+        Ok(Self {
+            manifest: r.manifest()?,
+            schema_json: r.schema_json().to_string(),
+            descriptor_set: r.descriptor_set().to_vec(),
+            meta_json: r.meta_json().unwrap_or("{}").to_string(),
+        })
+    }
+
     /// Seal into the immutable byte image. Deterministic: same schema, same bytes.
     pub fn seal(&self) -> Vec<u8> {
         let manifest_json =

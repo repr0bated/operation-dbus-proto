@@ -210,7 +210,10 @@ pub(crate) fn btrfs_schema() -> PluginSchema {
 
     schema.methods.insert(
         "create_subvolume".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<CreateSubvolumeInput, super::plugin_scaffold_helpers::AckOutput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+            CreateSubvolumeInput,
+            super::plugin_scaffold_helpers::AckOutput,
+        >(
             "create_subvolume",
             op_state_store::SideEffect::Mutation,
             false,
@@ -220,7 +223,10 @@ pub(crate) fn btrfs_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "delete_subvolume".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<DeleteSubvolumeInput, super::plugin_scaffold_helpers::AckOutput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+            DeleteSubvolumeInput,
+            super::plugin_scaffold_helpers::AckOutput,
+        >(
             "delete_subvolume",
             op_state_store::SideEffect::Mutation,
             false,
@@ -230,7 +236,10 @@ pub(crate) fn btrfs_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "snapshot".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<SnapshotInput, super::plugin_scaffold_helpers::AckOutput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+            SnapshotInput,
+            super::plugin_scaffold_helpers::AckOutput,
+        >(
             "snapshot",
             op_state_store::SideEffect::Mutation,
             false,
@@ -240,7 +249,10 @@ pub(crate) fn btrfs_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "list_subvolumes".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<ListSubvolumesInput, super::plugin_scaffold_helpers::AckOutput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+            ListSubvolumesInput,
+            super::plugin_scaffold_helpers::AckOutput,
+        >(
             "list_subvolumes",
             op_state_store::SideEffect::Read,
             true,
@@ -250,7 +262,10 @@ pub(crate) fn btrfs_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "scrub_start".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<ScrubStartInput, super::plugin_scaffold_helpers::AckOutput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+            ScrubStartInput,
+            super::plugin_scaffold_helpers::AckOutput,
+        >(
             "scrub_start",
             op_state_store::SideEffect::Mutation,
             false,
@@ -260,7 +275,10 @@ pub(crate) fn btrfs_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "scrub_status".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<ScrubStatusInput, super::plugin_scaffold_helpers::AckOutput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+            ScrubStatusInput,
+            super::plugin_scaffold_helpers::AckOutput,
+        >(
             "scrub_status",
             op_state_store::SideEffect::Read,
             true,
@@ -270,7 +288,10 @@ pub(crate) fn btrfs_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "balance_start".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<BalanceStartInput, super::plugin_scaffold_helpers::AckOutput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+            BalanceStartInput,
+            super::plugin_scaffold_helpers::AckOutput,
+        >(
             "balance_start",
             op_state_store::SideEffect::Mutation,
             false,
@@ -280,7 +301,10 @@ pub(crate) fn btrfs_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "balance_status".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<BalanceStatusInput, super::plugin_scaffold_helpers::AckOutput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+            BalanceStatusInput,
+            super::plugin_scaffold_helpers::AckOutput,
+        >(
             "balance_status",
             op_state_store::SideEffect::Read,
             true,
@@ -290,7 +314,10 @@ pub(crate) fn btrfs_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "filesystem_df".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<FilesystemDfInput, super::plugin_scaffold_helpers::AckOutput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+            FilesystemDfInput,
+            super::plugin_scaffold_helpers::AckOutput,
+        >(
             "filesystem_df",
             op_state_store::SideEffect::Read,
             true,
@@ -300,7 +327,10 @@ pub(crate) fn btrfs_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "filesystem_usage".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<FilesystemUsageInput, super::plugin_scaffold_helpers::AckOutput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+            FilesystemUsageInput,
+            super::plugin_scaffold_helpers::AckOutput,
+        >(
             "filesystem_usage",
             op_state_store::SideEffect::Read,
             true,
@@ -310,7 +340,10 @@ pub(crate) fn btrfs_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "device_add".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<DeviceAddInput, super::plugin_scaffold_helpers::AckOutput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+            DeviceAddInput,
+            super::plugin_scaffold_helpers::AckOutput,
+        >(
             "device_add",
             op_state_store::SideEffect::Mutation,
             false,
@@ -320,7 +353,10 @@ pub(crate) fn btrfs_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "device_remove".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<DeviceRemoveInput, super::plugin_scaffold_helpers::AckOutput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+            DeviceRemoveInput,
+            super::plugin_scaffold_helpers::AckOutput,
+        >(
             "device_remove",
             op_state_store::SideEffect::Mutation,
             false,

@@ -21,7 +21,8 @@ use simd_json::OwnedValue as Value;
 const PLUGIN_NAME: &str = "persona";
 const PLUGIN_VERSION: &str = "1.0.0";
 const PLUGIN_CATEGORY: &str = "agents";
-const PLUGIN_DESCRIPTION: &str = "Agent persona catalog — built-in agent types, names, descriptions, operations";
+const PLUGIN_DESCRIPTION: &str =
+    "Agent persona catalog — built-in agent types, names, descriptions, operations";
 const PLUGIN_DISPLAY_NAME: &str = "GB.Persona";
 
 /// A single agent persona.
