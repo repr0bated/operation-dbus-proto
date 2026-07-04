@@ -1,23 +1,15 @@
 #!/bin/sh
 exec 2>&1
-# opdbus - WireGuard identity tunnel to Oracle VPS (10.0.0.2 <-> 10.0.0.1)
+# opdbus - hypervisor WireGuard identity tunnel to Oracle VPS (wg0, 10.0.0.2 <-> 10.0.0.1)
 # Gateway IP and iptables are managed by ovsbr0-init
-CONF="/etc/wireguard/opdbus.conf"
-IFACE="opdbus"
+IFACE="wg0"
 
-if [ ! -f "$CONF" ]; then
-    echo "[opdbus] Config not found: $CONF"
-    exit 0
+if ! wg show "${IFACE}" >/dev/null 2>&1; then
+    wg-quick up "${IFACE}"
 fi
 
-# Bring up the tunnel (Table=off, no auto-routes)
-wg-quick up "${IFACE}"
-
 # Add routes manually (Table=off means wg-quick won't add them)
-ip route replace 10.0.0.0/24 dev opdbus 2>/dev/null || true
-ip route replace 10.0.0.1/32 dev opdbus 2>/dev/null || true
+ip route replace 10.0.0.0/24 dev "${IFACE}" 2>/dev/null || true
+ip route replace 10.0.0.1/32 dev "${IFACE}" 2>/dev/null || true
 
-# Refresh identity sled from opdbus interface (tmpfs only — zero-disk rule, Req 7)
-/usr/local/bin/op-identity-sled --iface opdbus --refresh --path /dev/shm/plugin_schema.dat 2>/dev/null || true
-
-exec pause
+exec sleep infinity

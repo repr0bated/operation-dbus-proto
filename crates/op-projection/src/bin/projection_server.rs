@@ -54,6 +54,23 @@ async fn main() -> Result<()> {
         "Schema catalog published to shm"
     );
 
+    // 1b. Seed shm present-state from a boot-time observation of every loaded
+    //     plugin. Mutations (the single write door) overwrite these at runtime;
+    //     this only ensures the projected Data starts from observed reality
+    //     instead of empty defaults.
+    for (plugin_id, state) in plugin_reader.plugin_present_states().await {
+        match serde_json::to_vec(&state) {
+            Ok(bytes) => {
+                if let Err(error) = op_core::projection_shm::write_projection(&plugin_id, &bytes) {
+                    warn!(plugin_id = %plugin_id, error = %error, "Failed to seed present-state to shm");
+                }
+            }
+            Err(error) => {
+                warn!(plugin_id = %plugin_id, error = %error, "Failed to serialize present-state");
+            }
+        }
+    }
+
     // 2. Initialize D-Bus server (owns org.opdbus.v1.plugins, root interface
     //    at /org/opdbus/v1/plugins is always present for introspection).
     let dbus_server = ProjectionDbusServer::new_with_schemas(schema_map.clone())

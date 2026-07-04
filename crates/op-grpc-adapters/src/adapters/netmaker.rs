@@ -2,13 +2,12 @@
 //! Connects via unix socket: /run/netmaker/api.sock
 
 use crate::proto::{
-    netmaker_service_server::NetmakerService, GetNetworkRequest, GetNetworkResponse,
-    GetNodeRequest, GetNodeResponse, HealthRequest, HealthResponse, Host, JoinNetworkRequest,
-    JoinNetworkResponse, LeaveNetworkRequest, LeaveNetworkResponse, ListHostsRequest,
-    ListHostsResponse, ListNetworksRequest, ListNetworksResponse, ListNodesRequest,
-    ListNodesResponse, NetmakerEvent, Network, Node, RestartServiceRequest,
-    RestartServiceResponse, ExecuteCommandRequest, ExecuteCommandResponse,
-    StreamEventsRequest,
+    netmaker_service_server::NetmakerService, ExecuteCommandRequest, ExecuteCommandResponse,
+    GetNetworkRequest, GetNetworkResponse, GetNodeRequest, GetNodeResponse, HealthRequest,
+    HealthResponse, Host, JoinNetworkRequest, JoinNetworkResponse, LeaveNetworkRequest,
+    LeaveNetworkResponse, ListHostsRequest, ListHostsResponse, ListNetworksRequest,
+    ListNetworksResponse, ListNodesRequest, ListNodesResponse, NetmakerEvent, Network, Node,
+    RestartServiceRequest, RestartServiceResponse, StreamEventsRequest,
 };
 use async_trait::async_trait;
 use serde_json::Value as JsonValue;
@@ -80,9 +79,12 @@ impl NetmakerAdapter {
         tokio::fs::create_dir_all("/etc/netclient")
             .await
             .map_err(|e| Status::internal(format!("netclient config dir error: {}", e)))?;
-        tokio::fs::write(path, serde_json::to_string_pretty(&config).unwrap_or_else(|_| "{}".to_string()))
-            .await
-            .map_err(|e| Status::internal(format!("netclient config write error: {}", e)))?;
+        tokio::fs::write(
+            path,
+            serde_json::to_string_pretty(&config).unwrap_or_else(|_| "{}".to_string()),
+        )
+        .await
+        .map_err(|e| Status::internal(format!("netclient config write error: {}", e)))?;
         Ok(())
     }
 
@@ -97,7 +99,11 @@ impl NetmakerAdapter {
             }))
             .await?
             .into_inner();
-        if resp.success { Ok(()) } else { Err(Status::internal(resp.stderr)) }
+        if resp.success {
+            Ok(())
+        } else {
+            Err(Status::internal(resp.stderr))
+        }
     }
 }
 
@@ -285,11 +291,7 @@ impl NetmakerService for NetmakerAdapter {
     ) -> Result<Response<LeaveNetworkResponse>, Status> {
         let network = req.into_inner().network;
         self.patch_netclient_config(|config| {
-            if config
-                .get("default_network")
-                .and_then(|v| v.as_str())
-                == Some(network.as_str())
-            {
+            if config.get("default_network").and_then(|v| v.as_str()) == Some(network.as_str()) {
                 config["default_network"] = serde_json::json!("");
             }
             config["enabled"] = serde_json::json!(false);
@@ -350,9 +352,7 @@ impl NetmakerService for NetmakerAdapter {
             }
             crate::proto::execute_command_request::Command::Leave(leave) => {
                 self.patch_netclient_config(|config| {
-                    if config
-                        .get("default_network")
-                        .and_then(|v| v.as_str())
+                    if config.get("default_network").and_then(|v| v.as_str())
                         == Some(leave.network.as_str())
                     {
                         config["default_network"] = serde_json::json!("");
