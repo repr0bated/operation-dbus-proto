@@ -143,20 +143,30 @@ impl MutationEngine {
         }
     }
 
-    /// Seed missing plugin projection files from the canonical PluginSchema
-    /// catalog. This runs once during bridge startup; existing projection files
-    /// are left untouched so real mutation state always wins.
+    /// Seed missing plugin projection files AND missing sealed blobs from the
+    /// canonical PluginSchema catalog. This runs once during bridge startup;
+    /// existing projection files and blobs are left untouched so real mutation
+    /// state (and the sealer's artifacts) always win.
+    ///
+    /// A plugin missing from the SHM blob catalog is automatically blobified
+    /// and sealed here — the blob IS the plugin, so a loaded plugin without a
+    /// blob doesn't exist yet and is brought into existence on the spot.
     pub async fn seed_missing_plugin_projections(&self) -> anyhow::Result<usize> {
         let state_store: Arc<dyn StateStore> = Arc::new(MemoryStore::new());
         let registry = op_plugins::DefaultPluginRegistry::new(state_store);
         let plugins = registry.load_all_plugins().await?;
         let mut seeded = 0usize;
+        let mut sealed = 0usize;
+        let mut blob_store = match op_blob::BlobStore::open_default() {
+            Ok(store) => Some(store),
+            Err(error) => {
+                tracing::warn!(%error, "cannot open SHM blob catalog; missing plugins will not be auto-sealed");
+                None
+            }
+        };
 
         for plugin in plugins {
             let plugin_id = plugin.name().to_string();
-            if op_core::projection_shm::read_projection_bytes(&plugin_id).is_some() {
-                continue;
-            }
 
             let Some(schema) = plugin.schema() else {
                 tracing::debug!(
@@ -175,6 +185,32 @@ impl MutationEngine {
                 continue;
             }
 
+            // Auto-generate the sealed blob for any plugin missing from the
+            // SHM catalog (registration by existence).
+            if let Some(store) = blob_store.as_mut() {
+                let canonical_id = op_blob::canonical_plugin_id(&plugin_id);
+                if store.manifest(&canonical_id).is_none() {
+                    let blob = op_blob::blobify_plugin_schema(&plugin_id, schema.clone());
+                    match store.write(&blob) {
+                        Ok(_) => {
+                            tracing::info!(
+                                plugin_id = %canonical_id,
+                                schema_hash = %blob.manifest.schema_hash,
+                                "auto-sealed missing plugin blob into SHM catalog"
+                            );
+                            sealed += 1;
+                        }
+                        Err(error) => {
+                            tracing::warn!(plugin_id = %canonical_id, %error, "failed to auto-seal missing plugin blob");
+                        }
+                    }
+                }
+            }
+
+            if op_core::projection_shm::read_projection_bytes(&plugin_id).is_some() {
+                continue;
+            }
+
             let seed_state = op_plugins::projection_seed_state_from_schema(&schema);
             let json = simd_json::to_string(&seed_state)?;
             op_core::projection_shm::write_projection(&plugin_id, json.as_bytes())?;
@@ -183,8 +219,9 @@ impl MutationEngine {
         }
 
         tracing::info!(
-            count = seeded,
-            "Seeded missing plugin projections from PluginSchema"
+            projections = seeded,
+            blobs = sealed,
+            "Seeded missing plugin projections and sealed missing plugin blobs"
         );
         Ok(seeded)
     }
