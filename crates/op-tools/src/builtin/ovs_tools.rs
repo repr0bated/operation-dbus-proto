@@ -6,8 +6,8 @@
 use crate::Tool;
 use crate::ToolRegistry;
 use anyhow::Result;
-use op_network::ovsdb::OvsdbClient;
 use async_trait::async_trait;
+use op_network::ovsdb::OvsdbClient;
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
 use std::sync::Arc;
@@ -86,7 +86,6 @@ impl Tool for OvsListBridgesTool {
     }
 
     async fn execute(&self, _input: Value) -> Result<Value> {
-
         let bridges = OvsdbClient::new()
             .list_bridges()
             .await
@@ -353,7 +352,6 @@ impl Tool for OvsCreateBridgeTool {
     }
 
     async fn execute(&self, input: Value) -> Result<Value> {
-
         let bridge_name = input
             .get("name")
             .and_then(|v| v.as_str())
@@ -435,7 +433,6 @@ impl Tool for OvsDeleteBridgeTool {
     }
 
     async fn execute(&self, input: Value) -> Result<Value> {
-
         let bridge_name = input
             .get("name")
             .and_then(|v| v.as_str())
@@ -504,7 +501,6 @@ impl Tool for OvsAddPortTool {
     }
 
     async fn execute(&self, input: Value) -> Result<Value> {
-
         let bridge_name = input
             .get("bridge")
             .and_then(|v| v.as_str())
@@ -574,7 +570,6 @@ impl Tool for OvsListPortsTool {
     }
 
     async fn execute(&self, input: Value) -> Result<Value> {
-
         let bridge_name = input
             .get("bridge")
             .and_then(|v| v.as_str())
@@ -657,7 +652,6 @@ impl Tool for OvsGetBridgeInfoTool {
     }
 
     async fn execute(&self, input: Value) -> Result<Value> {
-
         let bridge_name = input
             .get("bridge")
             .and_then(|v| v.as_str())
@@ -707,7 +701,6 @@ impl Tool for OvsCheckAvailableTool {
     }
 
     async fn execute(&self, _input: Value) -> Result<Value> {
-
         let client = OvsdbClient::new();
 
         match client.list_dbs().await {
@@ -1013,7 +1006,6 @@ impl Tool for OvsSetBridgePropertyTool {
     }
 
     async fn execute(&self, input: Value) -> Result<Value> {
-
         let bridge_name = input
             .get("bridge")
             .and_then(|v| v.as_str())
@@ -1090,7 +1082,6 @@ impl Tool for OvsDeletePortTool {
     }
 
     async fn execute(&self, input: Value) -> Result<Value> {
-
         let bridge_name = input
             .get("bridge")
             .and_then(|v| v.as_str())

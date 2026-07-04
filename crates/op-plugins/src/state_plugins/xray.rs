@@ -5,7 +5,7 @@ use op_state_store::PluginSchema;
 use serde::{Deserialize, Serialize};
 use simd_json::OwnedValue as Value;
 
-use super::plugin_scaffold_helpers::method_decl_from_schemars;
+use super::plugin_scaffold_helpers::{method_decl_from_schemars, method_decl_from_schemars_with_output};
 
 /// Xray proxy configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]

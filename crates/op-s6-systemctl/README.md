@@ -9,7 +9,7 @@ This daemon provides a D-Bus interface (`org.opdbus.v1.S6.Systemctl`) that trans
 ## D-Bus Interface
 
 **Bus Name**: `org.opdbus.v1.S6.Systemctl`
-**Object Path**: `/org/opdbus/v1/s6/systemctl`
+**Object Path**: `/org/opdbus/v1/plugins/s6/systemctl`
 **Interface**: `org.opdbus.v1.S6.Systemctl`
 
 ## Method Mapping

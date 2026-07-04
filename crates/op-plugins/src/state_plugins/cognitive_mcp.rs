@@ -150,7 +150,7 @@ impl CognitiveMcpPlugin {
         let reply = conn
             .call_method(
                 Some("opdbus.v1"),
-                "/opdbus/v1/s6/systemctl",
+                "/org/opdbus/v1/plugins/s6/systemctl",
                 Some("opdbus.v1.S6.Systemctl"),
                 "reload",
                 &("op-cognitive-mcp",),
