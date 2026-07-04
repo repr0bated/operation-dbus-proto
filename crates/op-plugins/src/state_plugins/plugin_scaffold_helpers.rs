@@ -45,6 +45,7 @@ pub(crate) use super::unix_socket::unix_socket_schema_derived as unix_socket_plu
 pub(crate) use super::users::users_schema as users_plugin_schema;
 pub(crate) use super::web_ui::web_ui_schema as web_ui_plugin_schema;
 pub(crate) use super::wgcf::wgcf_schema as wgcf_plugin_schema;
+pub(crate) use super::wg_opdbus::wg_opdbus_schema;
 pub(crate) use super::wireguard::wireguard_schema as wireguard_plugin_schema;
 pub(crate) use super::workflows_plugin::workflows_schema as workflows_plugin_schema;
 pub(crate) use super::xray::xray_schema as xray_plugin_schema;
