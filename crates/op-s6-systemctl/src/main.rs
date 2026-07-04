@@ -3,7 +3,7 @@
 //! Provides a D-Bus interface that maps systemctl commands to s6/s6-rc
 //! operations for Artix Linux systems using s6 as the init system.
 //!
-//! D-Bus object path: /org/opdbus/v1/s6/systemctl
+//! D-Bus object path: /org/opdbus/v1/plugins/s6/systemctl
 //! Interface: org.opdbus.v1.S6.Systemctl
 //!
 //! ## Mapping Reference
@@ -54,7 +54,7 @@ async fn main() -> Result<()> {
 
     // Register the service on the connection
     conn.object_server()
-        .at("/org/opdbus/v1/s6/systemctl", service)
+        .at("/org/opdbus/v1/plugins/s6/systemctl", service)
         .await
         .context("Failed to register D-Bus object")?;
 
@@ -63,7 +63,7 @@ async fn main() -> Result<()> {
         .await
         .context("Failed to request bus name")?;
 
-    info!("D-Bus service registered at /org/opdbus/v1/s6/systemctl");
+    info!("D-Bus service registered at /org/opdbus/v1/plugins/s6/systemctl");
     info!("Interface: org.opdbus.v1.S6.Systemctl");
     info!("Daemon ready - press Ctrl+C to stop");
 

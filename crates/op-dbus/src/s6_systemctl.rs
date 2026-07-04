@@ -20,7 +20,7 @@
 //! primitive underneath.
 //!
 //! D-Bus interface: org.opdbus.v1.S6.Systemctl
-//! Object path:     /org/opdbus/v1/s6/systemctl
+//! Object path:     /org/opdbus/v1/plugins/s6/systemctl
 
 use anyhow::{Context, Result};
 use serde_json::json;
@@ -638,7 +638,7 @@ pub async fn run_s6_systemctl_service() -> Result<()> {
         .context("Failed to connect to system D-Bus")?;
 
     conn.object_server()
-        .at("/org/opdbus/v1/s6/systemctl", S6SystemctlService::new())
+        .at("/org/opdbus/v1/plugins/s6/systemctl", S6SystemctlService::new())
         .await
         .context("Failed to register s6-systemctl object")?;
 

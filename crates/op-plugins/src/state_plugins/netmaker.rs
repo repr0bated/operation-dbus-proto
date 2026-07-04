@@ -91,7 +91,7 @@ impl ServiceController {
         Proxy::new(
             &conn,
             "org.opdbus.v1.S6.Systemctl",
-            "/org/opdbus/v1/s6/systemctl",
+            "/org/opdbus/v1/plugins/s6/systemctl",
             "org.opdbus.v1.S6.Systemctl",
         )
         .await
@@ -107,7 +107,7 @@ impl ServiceController {
                 let proxy = Proxy::new(
                     connection,
                     "org.opdbus.v1.S6.Systemctl",
-                    "/org/opdbus/v1/s6/systemctl",
+                    "/org/opdbus/v1/plugins/s6/systemctl",
                     "org.opdbus.v1.S6.Systemctl",
                 )
                 .await?;
@@ -125,7 +125,7 @@ impl ServiceController {
                 let proxy = Proxy::new(
                     connection,
                     "org.opdbus.v1.S6.Systemctl",
-                    "/org/opdbus/v1/s6/systemctl",
+                    "/org/opdbus/v1/plugins/s6/systemctl",
                     "org.opdbus.v1.S6.Systemctl",
                 )
                 .await?;

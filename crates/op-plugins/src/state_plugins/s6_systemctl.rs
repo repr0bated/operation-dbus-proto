@@ -31,7 +31,7 @@ const PLUGIN_DISPLAY_NAME: &str = "GB.S6Systemctl";
 /// D-Bus proxy for the canonical `op-s6-systemctl` daemon.
 #[proxy(
     default_service = "org.opdbus.v1.S6.Systemctl",
-    default_path = "/org/opdbus/v1/s6/systemctl",
+    default_path = "/org/opdbus/v1/plugins/s6/systemctl",
     interface = "org.opdbus.v1.S6.Systemctl"
 )]
 trait S6Systemctl {
@@ -273,7 +273,7 @@ impl S6SystemctlPlugin {
         S6SystemctlState {
             daemon_running,
             bus_name: "org.opdbus.v1.S6.Systemctl".to_string(),
-            object_path: "/org/opdbus/v1/s6/systemctl".to_string(),
+            object_path: "/org/opdbus/v1/plugins/s6/systemctl".to_string(),
             interface: "org.opdbus.v1.S6.Systemctl".to_string(),
             units,
         }
