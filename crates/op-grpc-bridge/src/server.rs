@@ -4,8 +4,8 @@
 //!   - native gRPC over Unix socket `/run/opdbus/zeroclaw-grpc.sock`
 //!   - HTTP/1.1 + gRPC-Web on TCP `0.0.0.0:8090` (configurable via D-Bus)
 //!
-//! The schema itself is never generated here; it is read from the canonical
-//! SchemaEngine monolith at `/dev/shm/live-schema.json`.
+//! The schema itself is never generated here; it is read from the plugin's
+//! sealed blob in the SHM catalog (`/dev/shm/opdbus/plugin-blobs`).
 
 use std::net::SocketAddr;
 use std::path::PathBuf;

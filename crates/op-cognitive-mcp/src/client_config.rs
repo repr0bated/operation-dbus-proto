@@ -640,8 +640,9 @@ impl CognitiveMcpClient {
         tags: Vec<String>,
     ) -> Result<Value> {
         self.call_tool(
-            "memory/store",
+            "cognitive_memory",
             serde_json::json!({
+                "operation": "store",
                 "namespace": namespace,
                 "key": key,
                 "value": value,
@@ -655,8 +656,9 @@ impl CognitiveMcpClient {
     pub async fn retrieve_memory(&self, namespace: &str, key: &str) -> Result<Option<Value>> {
         let result = self
             .call_tool(
-                "memory/retrieve",
+                "cognitive_memory",
                 serde_json::json!({
+                    "operation": "retrieve",
                     "namespace": namespace,
                     "key": key,
                 }),

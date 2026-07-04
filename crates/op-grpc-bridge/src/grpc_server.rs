@@ -64,15 +64,13 @@ use zbus::{Connection, Proxy};
 
 /// Plugin schema provider.
 ///
-/// The provider reads only from the canonical SchemaEngine live-schema catalog.
-/// Per-plugin schema files are not a valid source of truth.
+/// The provider reads only from the sealed blob catalog. A blob in the
+/// catalog IS the plugin; nothing else is a valid source of truth.
 #[tonic::async_trait]
 pub trait PluginSchemaProvider: Send + Sync {
     async fn list_plugins(&self) -> Vec<PluginInfo>;
     async fn get_schema(&self, plugin_id: &str) -> Option<(String, String, String)>;
 }
-
-const LIVE_SCHEMA_PATH: &str = "/dev/shm/live-schema.json";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SchemaMethodCapability {
@@ -82,19 +80,8 @@ struct SchemaMethodCapability {
 }
 
 fn read_plugin_schema_json(plugin_id: &str) -> Option<JsonValue> {
-    let bytes = std::fs::read(LIVE_SCHEMA_PATH).ok()?;
-    let root = serde_json::from_slice::<JsonValue>(&bytes).ok()?;
-    root.as_object()?
-        .get(plugin_id)
-        .and_then(first_schema_entry)
-        .cloned()
-}
-
-fn first_schema_entry(value: &JsonValue) -> Option<&JsonValue> {
-    value
-        .as_array()
-        .and_then(|items| items.first())
-        .or(Some(value))
+    let schema = op_blob::catalog::read_plugin_schema_shm(plugin_id)?;
+    serde_json::to_value(&schema).ok()
 }
 
 fn method_capability_from_schema(
@@ -211,45 +198,23 @@ impl PluginSchemaProvider for SchemaCatalogPluginProvider {
 struct SchemaCatalogPluginProvider;
 
 fn read_schema_catalog_plugins() -> Vec<PluginInfo> {
-    let mut plugins = read_live_schema_plugins();
-    plugins.sort_by(|a, b| a.id.cmp(&b.id));
-    plugins
-}
-
-fn read_live_schema_plugins() -> Vec<PluginInfo> {
-    let Some(bytes) = read_schema_catalog_bytes() else {
+    // A blob in the catalog IS the plugin: enumerate the sealed catalog.
+    let Ok(store) = op_blob::BlobStore::open_default() else {
         return Vec::new();
     };
-    let Ok(root) = serde_json::from_slice::<JsonValue>(&bytes) else {
-        return Vec::new();
-    };
-    let Some(catalog) = root.as_object() else {
-        return Vec::new();
-    };
-
-    catalog
+    store
+        .plugin_object_blobs()
         .iter()
-        .filter_map(|(id, entries)| {
-            let schema = first_schema_entry(entries)?;
-            Some(plugin_info_from_schema(id, schema))
+        .filter_map(|blob| {
+            let schema: JsonValue = serde_json::from_str(&blob.schema_json).ok()?;
+            Some(plugin_info_from_schema(&blob.manifest.plugin_id, &schema))
         })
         .collect()
 }
 
 fn read_schema(plugin_id: &str) -> Option<(String, String, String)> {
-    read_live_schema(plugin_id)
-}
-
-fn read_live_schema(plugin_id: &str) -> Option<(String, String, String)> {
-    let bytes = read_schema_catalog_bytes()?;
-    let root = serde_json::from_slice::<JsonValue>(&bytes).ok()?;
-    let schema = root
-        .as_object()?
-        .get(plugin_id)?
-        .as_array()
-        .and_then(|items| items.first())
-        .or_else(|| root.as_object()?.get(plugin_id))?;
-    schema_response_from_value(schema)
+    let schema = read_plugin_schema_json(plugin_id)?;
+    schema_response_from_value(&schema)
 }
 
 fn schema_response_from_value(schema: &JsonValue) -> Option<(String, String, String)> {
@@ -263,12 +228,6 @@ fn schema_response_from_value(schema: &JsonValue) -> Option<(String, String, Str
         "operation.pluginschema+json".to_string(),
         version,
     ))
-}
-
-fn read_schema_catalog_bytes() -> Option<Vec<u8>> {
-    op_identity::read_schema_blob()
-        .or_else(|_| std::fs::read(LIVE_SCHEMA_PATH))
-        .ok()
 }
 
 fn plugin_info_from_schema(id: &str, schema: &JsonValue) -> PluginInfo {

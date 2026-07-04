@@ -239,9 +239,16 @@ impl SledView {
 }
 
 fn schema_blob_summary() -> (String, usize) {
-    match read_schema_blob().or_else(|_| std::fs::read("/dev/shm/live-schema.json")) {
-        Ok(bytes) => (hex::encode(blake3::hash(&bytes).as_bytes()), bytes.len()),
-        Err(_) => ("(missing)".to_string(), 0),
+    // The blob-catalog manifest is the published catalog identity — read the
+    // hash, never re-hash (one-schema rule).
+    match op_identity::schema_bridge::schema_catalog_hash() {
+        Some(hash) => {
+            let manifest_len = std::fs::read("/dev/shm/opdbus/plugin-blobs/.manifest.json")
+                .map(|b| b.len())
+                .unwrap_or(0);
+            (hex::encode(hash), manifest_len)
+        }
+        None => ("(missing)".to_string(), 0),
     }
 }
 

@@ -458,17 +458,20 @@ fn read_identity_sled(path: &Path) -> Result<IdentitySled> {
 }
 
 fn read_plugin_schema(_path: &Path) -> Result<PluginSchema> {
-    let schema_path = Path::new("/dev/shm/live-schema.json");
-    let schema_bytes = op_identity::read_schema_blob()
-        .or_else(|_| std::fs::read(schema_path))
-        .with_context(|| {
-            format!(
-                "failed to read schema blob or live schema from {}",
-                schema_path.display()
-            )
-        })?;
-
-    parse_plugin_schema(schema_bytes, schema_path)
+    // The sealed blob IS the plugin: the active session schema is read from
+    // the plugin's own blob in the SHM catalog. `OP_ACTIVE_SCHEMA_PLUGIN`
+    // selects which plugin anchors the session's retrieval text.
+    let plugin_id = std::env::var("OP_ACTIVE_SCHEMA_PLUGIN")
+        .unwrap_or_else(|_| "ctl_plane_chatbot".to_string());
+    if let Some(schema) = op_blob::catalog::read_plugin_schema_shm(&plugin_id) {
+        return Ok(schema);
+    }
+    // Transitional fallback: a sled-embedded single schema from hosts not yet
+    // re-sealed with a blob catalog.
+    let schema_bytes = op_identity::read_schema_blob().with_context(|| {
+        format!("no sealed blob for '{plugin_id}' and no sled-embedded schema available")
+    })?;
+    parse_plugin_schema(schema_bytes, Path::new("(sled-embedded schema blob)"))
 }
 
 fn read_identity_sled_and_schema(path: &Path) -> Result<(IdentitySled, PluginSchema)> {

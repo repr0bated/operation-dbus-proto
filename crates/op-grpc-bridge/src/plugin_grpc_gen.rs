@@ -13,7 +13,7 @@
 //!           │                    gRPC Reflection (one service per method)
 //!           │                               │
 //!           ▼                               ▼
-//!      /dev/shm/live-schema.json    Dynamic gRPC dispatch per method
+//!      /dev/shm/opdbus/plugin-blobs  Dynamic gRPC dispatch per method
 //! ```
 //!
 //! Each method gets its own gRPC service with a single RPC. The reflection
