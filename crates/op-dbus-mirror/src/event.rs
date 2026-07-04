@@ -12,12 +12,6 @@ pub enum MirrorEvent {
         delta: Value,
         sequence: u64,
     },
-    /// NonNetDb key change event
-    NonNet {
-        key: String,
-        delta: Value,
-        sequence: u64,
-    },
     /// Plugin state/projection change event
     Plugin {
         plugin_id: String,
@@ -51,9 +45,6 @@ impl MirrorEvent {
                 "/org/opdbus/v1/mirror/ovsdb/{}/{}",
                 table_name, uuid
             )),
-            MirrorEvent::NonNet { key, .. } => {
-                Some(format!("/org/opdbus/v1/mirror/nonnet/{}", key))
-            }
             MirrorEvent::Plugin { plugin_id, .. } => {
                 Some(format!("/org/opdbus/v1/plugins/{}", plugin_id))
             }
@@ -75,7 +66,6 @@ impl MirrorEvent {
     pub fn sequence(&self) -> u64 {
         match self {
             MirrorEvent::OvsdbRow { sequence, .. }
-            | MirrorEvent::NonNet { sequence, .. }
             | MirrorEvent::Plugin { sequence, .. }
             | MirrorEvent::Registry { sequence, .. }
             | MirrorEvent::ProcMem { sequence, .. }

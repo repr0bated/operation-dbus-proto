@@ -17,7 +17,7 @@ use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
 use op_grpc_bridge::run_grpc_server;
 use op_grpc_bridge::MutationEngine;
-use op_jsonrpc::nonnet::NonNetDb;
+
 use op_network::rovs_proxy::OvsdbDbusClient;
 use op_network::rtnetlink::list_interfaces;
 use op_state_store::{ChainConfig, EventChain};
@@ -81,8 +81,7 @@ async fn main() -> anyhow::Result<()> {
 
     let chain = Arc::new(RwLock::new(EventChain::new(ChainConfig::default())));
     let ovsdb = Arc::new(OvsdbDbusClient::new());
-    let nonnet = Arc::new(NonNetDb::new());
-    let engine = Arc::new(MutationEngine::new(chain, ovsdb, nonnet));
+    let engine = Arc::new(MutationEngine::new(chain, ovsdb));
 
     info!(addr = %addr, "op-dbus starting");
     run_grpc_server(addr, engine, None, None).await?;
