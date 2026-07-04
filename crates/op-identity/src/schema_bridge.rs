@@ -14,12 +14,16 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::env;
 use std::fs::{self, File};
-use std::io::Write;
+use std::io::{ErrorKind, Write};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 pub const SHM_SLED_PATH: &str = "/dev/shm/plugin_schema.dat";
 pub const SHM_XRAY_CONFIG: &str = "/dev/shm/xray-ghostbridge.json";
+pub const SCHEMA_BLOB_MAGIC: [u8; 8] = *b"OPBLOB01";
+pub const SCHEMA_BLOB_VERSION: u32 = 1;
+
+const SCHEMA_BLOB_HEADER_SIZE: usize = SCHEMA_BLOB_MAGIC.len() + 4 + 8;
 
 /// The tonic-web gRPC bridge (op-grpc-adapters) — the single endpoint xray
 /// routes to.  The bridge uses gRPC reflection to demux by service/method and
@@ -168,14 +172,17 @@ impl std::fmt::Display for SubidTaxonomy {
 /// Written by SchemaEngine (`write_sled`), read by the Shuttle via mmap.
 /// Never touches disk; lives entirely in tmpfs (`/dev/shm`).
 ///
-/// Matches `.kiro/specs/3tched-schema-shuttle-xray-pipeline` exactly.
+/// Extends `.kiro/specs/3tched-schema-shuttle-xray-pipeline` (spec's
+/// `reserved [u8; 60]` is split into `vector_id [u8; 16]` + `reserved [u8; 44]`;
+/// total size unchanged).
 /// Layout (152 bytes total):
 ///   wireguard_pubkey    [u8; 32]   offset 0
 ///   mutation_index      u64        offset 32
 ///   hashed_footprint    [u8; 32]   offset 40   (Blake3)
 ///   trace_id            [u8; 16]   offset 72   (UUID v4, network order)
 ///   schema_version      u32        offset 88
-///   reserved            [u8; 60]   offset 92
+///   vector_id           [u8; 16]   offset 92   (Qdrant episode UUID)
+///   reserved            [u8; 44]   offset 108
 #[repr(C)]
 #[derive(Debug, Clone, Serialize)]
 pub struct IdentitySled {
@@ -291,6 +298,14 @@ fn assert_tmpfs_or_abort(path: &str) -> std::io::Result<()> {
 /// Uses a tmp-file + rename so readers never see a partial write.
 /// Aborts if the target path is not on tmpfs (Zero-Btrfs Overhead rule).
 pub fn write_sled(sled: &IdentitySled) -> std::io::Result<()> {
+    let schema_blob = read_schema_blob().ok();
+    write_sled_with_schema_blob(sled, schema_blob.as_deref())
+}
+
+fn write_sled_with_schema_blob(
+    sled: &IdentitySled,
+    schema_blob: Option<&[u8]>,
+) -> std::io::Result<()> {
     assert_tmpfs_or_abort(SHM_SLED_PATH)?;
 
     let tmp = format!("{}.tmp", SHM_SLED_PATH);
@@ -299,9 +314,122 @@ pub fn write_sled(sled: &IdentitySled) -> std::io::Result<()> {
     };
     let mut f = File::create(&tmp)?;
     f.write_all(bytes)?;
+    if let Some(schema_blob) = schema_blob {
+        write_schema_blob_tail(&mut f, schema_blob)?;
+    }
     f.sync_data()?;
     fs::rename(&tmp, SHM_SLED_PATH)?;
     Ok(())
+}
+
+fn write_schema_blob_tail(file: &mut File, schema_blob: &[u8]) -> std::io::Result<()> {
+    file.write_all(&SCHEMA_BLOB_MAGIC)?;
+    file.write_all(&SCHEMA_BLOB_VERSION.to_le_bytes())?;
+    file.write_all(&(schema_blob.len() as u64).to_le_bytes())?;
+    file.write_all(schema_blob)?;
+    Ok(())
+}
+
+/// Embed the canonical schema catalog after the fixed `IdentitySled` prefix.
+///
+/// The first 152 bytes remain the stable sled ABI for zero-copy readers. The
+/// appended tail carries the schema blob so consumers can use one SHM artifact.
+pub fn write_schema_blob(schema_blob: &[u8]) -> std::io::Result<()> {
+    assert_tmpfs_or_abort(SHM_SLED_PATH)?;
+
+    let sled = match fs::read(SHM_SLED_PATH) {
+        Ok(bytes) if bytes.len() >= IdentitySled::SIZE => read_sled_prefix(&bytes)?,
+        Ok(_) | Err(_) => IdentitySled {
+            wireguard_pubkey: [0u8; 32],
+            mutation_index: 0,
+            hashed_footprint: [0u8; 32],
+            trace_id: [0u8; 16],
+            schema_version: SCHEMA_BLOB_VERSION,
+            vector_id: [0u8; 16],
+            reserved: [0u8; 44],
+        },
+    };
+
+    write_sled_with_schema_blob(&sled, Some(schema_blob))
+}
+
+fn read_sled_prefix(bytes: &[u8]) -> std::io::Result<IdentitySled> {
+    if bytes.len() < IdentitySled::SIZE {
+        return Err(std::io::Error::new(
+            ErrorKind::UnexpectedEof,
+            "sled prefix is shorter than IdentitySled",
+        ));
+    }
+
+    let mut sled = std::mem::MaybeUninit::<IdentitySled>::uninit();
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            bytes.as_ptr(),
+            sled.as_mut_ptr() as *mut u8,
+            IdentitySled::SIZE,
+        );
+        Ok(sled.assume_init())
+    }
+}
+
+/// Read the schema catalog embedded in `/dev/shm/plugin_schema.dat`.
+pub fn read_schema_blob() -> std::io::Result<Vec<u8>> {
+    let bytes = fs::read(SHM_SLED_PATH)?;
+    let tail_offset = IdentitySled::SIZE;
+    let header_end = tail_offset + SCHEMA_BLOB_HEADER_SIZE;
+    if bytes.len() < header_end {
+        return Err(std::io::Error::new(
+            ErrorKind::NotFound,
+            "schema blob tail missing",
+        ));
+    }
+
+    if bytes[tail_offset..tail_offset + SCHEMA_BLOB_MAGIC.len()] != SCHEMA_BLOB_MAGIC {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidData,
+            "schema blob magic mismatch",
+        ));
+    }
+
+    let version_offset = tail_offset + SCHEMA_BLOB_MAGIC.len();
+    let version = u32::from_le_bytes(
+        bytes[version_offset..version_offset + 4]
+            .try_into()
+            .expect("schema blob version range is fixed"),
+    );
+    if version != SCHEMA_BLOB_VERSION {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!("unsupported schema blob version: {version}"),
+        ));
+    }
+
+    let len_offset = version_offset + 4;
+    let schema_len = u64::from_le_bytes(
+        bytes[len_offset..len_offset + 8]
+            .try_into()
+            .expect("schema blob length range is fixed"),
+    ) as usize;
+    let schema_start = len_offset + 8;
+    let schema_end = schema_start.checked_add(schema_len).ok_or_else(|| {
+        std::io::Error::new(ErrorKind::InvalidData, "schema blob length overflow")
+    })?;
+
+    if schema_end > bytes.len() {
+        return Err(std::io::Error::new(
+            ErrorKind::UnexpectedEof,
+            "schema blob tail is truncated",
+        ));
+    }
+
+    Ok(bytes[schema_start..schema_end].to_vec())
+}
+
+fn current_schema_catalog_hash() -> blake3::Hash {
+    read_schema_blob()
+        .or_else(|_| std::fs::read("/dev/shm/live-schema.json"))
+        .map(|bytes| blake3::hash(&bytes))
+        .unwrap_or_else(|_| blake3::Hash::from([0u8; 32]))
 }
 
 // ── Reader side (the Shuttle) ────────────────────────────────────────────────

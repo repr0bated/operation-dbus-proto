@@ -171,6 +171,13 @@ mod tests {
 
     #[test]
     fn test_mutation_engine_unreachable_returns_internal() {
+        // Only meaningful on hosts without a live IdentitySled in shared
+        // memory; with a running daemon read_sled() succeeds and the
+        // interceptor proceeds past the branch under test.
+        if op_identity::read_sled().is_ok() {
+            eprintln!("skipping: live IdentitySled present in shared memory");
+            return;
+        }
         let mut req = Request::new(());
         req.metadata_mut().insert(
             "x-ghostbridge-footprint",

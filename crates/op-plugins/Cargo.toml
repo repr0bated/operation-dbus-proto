@@ -14,6 +14,8 @@ schemars = "1"
 # the single source of the plugin catalog — no central dispatch list.
 inventory = "0.3"
 op-core = { path = "../op-core" }
+# Sealed plugin-object blobs: the blob catalog IS the plugin surface.
+op-blob = { workspace = true }
 op-dbus-model = { workspace = true }
 op-state = { path = "../op-state" }
 op-state-store = { path = "../op-state-store" }
@@ -44,3 +46,7 @@ parking_lot = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+
+[[bin]]
+name = "opblob"
+path = "src/bin/opblob.rs"

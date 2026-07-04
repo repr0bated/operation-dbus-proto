@@ -4,7 +4,6 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
-use simd_json::ValueBuilder;
 use simd_json::{json, OwnedValue as Value};
 use std::collections::{HashMap, HashSet};
 
@@ -205,68 +204,6 @@ impl SchemaValidator {
     /// Load default curated use cases
     fn load_default_use_cases() -> Vec<UseCaseTemplate> {
         vec![
-            // Privacy Router Use Case
-            UseCaseTemplate {
-                name: "privacy_router".to_string(),
-                description: "Multi-hop privacy tunnel with WireGuard, WARP, and XRay".to_string(),
-                required_plugins: vec![
-                    "privacy_router".to_string(),
-                    "openflow".to_string(),
-                    "net".to_string(),
-                    "lxc".to_string(),
-                ],
-                required_fields: {
-                    let mut m = HashMap::new();
-                    m.insert(
-                        "privacy_router".to_string(),
-                        vec![
-                            "bridge_name".to_string(),
-                            "wireguard.enabled".to_string(),
-                            "warp.enabled".to_string(),
-                            "xray.enabled".to_string(),
-                        ],
-                    );
-                    m.insert("openflow".to_string(), vec!["bridges".to_string()]);
-                    m
-                },
-                valid_combinations: vec![FieldCombination {
-                    plugin: "privacy_router".to_string(),
-                    fields: {
-                        let mut m = HashMap::new();
-                        m.insert(
-                            "wireguard.container_id".to_string(),
-                            vec!["100".to_string()],
-                        );
-                        m.insert("xray.container_id".to_string(), vec!["101".to_string()]);
-                        m.insert(
-                            "bridge_name".to_string(),
-                            vec!["ovsbr0".to_string(), "vmbr0".to_string()],
-                        );
-                        m
-                    },
-                }],
-                dependencies: vec![
-                    Dependency {
-                        requires: "privacy_router".to_string(),
-                        required: "openflow".to_string(),
-                        condition: None,
-                    },
-                    Dependency {
-                        requires: "privacy_router".to_string(),
-                        required: "net".to_string(),
-                        condition: None,
-                    },
-                ],
-                constraints: vec![Constraint {
-                    plugin: "privacy_router".to_string(),
-                    field: "wireguard.container_id".to_string(),
-                    constraint_type: ConstraintType::Range {
-                        min: 100.0,
-                        max: 999.0,
-                    },
-                    required: Value::null(),
-                }],
-            },
             // Basic Network Use Case
             UseCaseTemplate {
                 name: "basic_network".to_string(),
@@ -284,9 +221,9 @@ impl SchemaValidator {
             // Container Mesh Use Case
             UseCaseTemplate {
                 name: "container_mesh".to_string(),
-                description: "LXC containers with Netmaker mesh networking".to_string(),
+                description: "Incus containers with Netmaker mesh networking".to_string(),
                 required_plugins: vec![
-                    "lxc".to_string(),
+                    "incus".to_string(),
                     "netmaker".to_string(),
                     "openflow".to_string(),
                 ],
@@ -305,21 +242,6 @@ impl SchemaValidator {
     /// Load plugin field definitions
     fn load_plugin_fields() -> HashMap<String, HashSet<String>> {
         let mut fields = HashMap::new();
-
-        // Privacy Router fields
-        fields.insert("privacy_router".to_string(), {
-            let mut s = HashSet::new();
-            s.insert("bridge_name".to_string());
-            s.insert("wireguard".to_string());
-            s.insert("warp".to_string());
-            s.insert("xray".to_string());
-            s.insert("vps".to_string());
-            s.insert("socket_networking".to_string());
-            s.insert("openflow".to_string());
-            s.insert("netmaker".to_string());
-            s.insert("containers".to_string());
-            s
-        });
 
         // Net plugin fields
         fields.insert("net".to_string(), {

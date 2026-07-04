@@ -29,14 +29,11 @@ fn default_plugins() -> Vec<String> {
         "packagekit".to_string(),
         "login1".to_string(),
         "keyring".to_string(),
-        "lxc".to_string(),
         "openflow".to_string(),
         "systemd_networkd".to_string(),
         "dnsresolver".to_string(),
         "netmaker".to_string(),
         "pcidecl".to_string(),
-        "privacy_router".to_string(),
-        "privacy".to_string(),
         "sessdecl".to_string(),
     ]
 }

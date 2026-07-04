@@ -11,7 +11,7 @@ use tokio::time::sleep;
 use tracing::{info, warn};
 
 use crate::openflow::OpenFlowClient;
-use crate::OvsdbDbusClient;
+use crate::ovsdb::OvsdbClient;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct NetworkPlugin {
@@ -185,7 +185,7 @@ impl NetworkPlugin {
 
     /// Get current network state
     pub async fn get_state(&self) -> Result<Value> {
-        let client = OvsdbDbusClient::new();
+        let client = OvsdbClient::new();
 
         // Get list of bridges
         let bridges = client.list_bridges().await.unwrap_or_default();
@@ -246,7 +246,7 @@ impl NetworkPlugin {
             self.ovsdb.timeout_seconds
         );
 
-        let client = OvsdbDbusClient::new();
+        let client = OvsdbClient::new();
         let timeout = Duration::from_secs(self.ovsdb.timeout_seconds);
         let start = std::time::Instant::now();
 
@@ -279,7 +279,7 @@ impl NetworkPlugin {
         info!("  Internal ports: {:?}", bridge.internal_ports);
         info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
-        let client = OvsdbDbusClient::new();
+        let client = OvsdbClient::new();
 
         // Check if bridge already exists
         let exists = client.bridge_exists(&bridge.name).await?;
