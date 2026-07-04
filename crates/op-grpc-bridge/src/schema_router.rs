@@ -1,6 +1,6 @@
 //! Schema-Driven Dynamic gRPC Router
 //!
-//! Reads the live schema catalog from `/dev/shm/live-schema.json`.
+//! Reads the sealed blob catalog from `/dev/shm/opdbus/plugin-blobs`.
 //! Dynamically routes incoming gRPC calls to their corresponding D-Bus objects
 //! at `/org/opdbus/v1/plugins/<plugin>`.
 //!
@@ -10,7 +10,7 @@
 //!
 //! ## Schema Access Path
 //!
-//! **Combined monolith:** `/dev/shm/live-schema.json` — authoritative catalog of all plugins.
+//! **Sealed blob catalog:** `/dev/shm/opdbus/plugin-blobs` — a blob in the catalog IS the plugin.
 //!
 //! The manifest hash is read, never re-computed. Consumers trust the manifest.
 

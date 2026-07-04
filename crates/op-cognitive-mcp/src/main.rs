@@ -87,7 +87,9 @@ fn resolve_bind(addr: &str, wg_ip: Option<&str>) -> String {
 /// as it did before this wiring existed.
 ///
 /// OSCAL subid: obs.service.cognitive-mcp.bind-config.resolve@v1
-fn cognitive_mcp_bind_config(cli: &Cli) -> op_plugins::state_plugins::cognitive_mcp::CognitiveMcpConfig {
+fn cognitive_mcp_bind_config(
+    cli: &Cli,
+) -> op_plugins::state_plugins::cognitive_mcp::CognitiveMcpConfig {
     use op_plugins::state_plugins::cognitive_mcp::CognitiveMcpConfig;
 
     op_core::projection_shm::read_projection_bytes("cognitive_mcp")
@@ -164,7 +166,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         http = %http_addr,
         grpc = %grpc_addr,
         db = %cli.db,
-        wg_interface = %cli.wg_interface,
+        wg_interface = %bind_config.wg_interface,
         "Starting Cognitive MCP Server"
     );
 
@@ -176,9 +178,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    match (cli.no_grpc, cli.no_http) {
+    match (!bind_config.grpc_enabled, !bind_config.http_enabled) {
         (true, true) => {
-            eprintln!("Error: both --no-grpc and --no-http specified. Nothing to run.");
+            eprintln!("Error: both gRPC and HTTP transports are disabled. Nothing to run.");
             std::process::exit(1);
         }
         (true, false) => {

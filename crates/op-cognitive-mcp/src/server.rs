@@ -58,7 +58,12 @@ impl CognitiveMcpServer {
         let quota_manager = Arc::new(QuotaManager::with_defaults());
         let gemini_fallback = Arc::new(GeminiFallback::new());
 
-        CognitiveToolRegistry::register_all(&tool_registry, memory_store.clone()).await?;
+        CognitiveToolRegistry::register_all(
+            &tool_registry,
+            memory_store.clone(),
+            qdrant_shuttle.clone(),
+        )
+        .await?;
 
         typed_tools::register_typed_tools(
             &tool_registry,

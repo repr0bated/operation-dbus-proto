@@ -54,7 +54,11 @@ impl VoyageClient {
             "Voyage API key not found: set COGNITIVE_MCP_VOYAGE_API_KEY, \
              VOYAGE_API_KEY, or VOYAGE_API_KEY_RUST",
         )?;
-        Ok(Self::from_params(params.endpoint, params.api_key, params.model_id))
+        Ok(Self::from_params(
+            params.endpoint,
+            params.api_key,
+            params.model_id,
+        ))
     }
 
     /// Embed text using Voyage API
