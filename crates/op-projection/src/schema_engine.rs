@@ -12,20 +12,7 @@ use regex::Regex;
 use simd_json::prelude::*;
 use simd_json::{OwnedValue as Value, StaticNode};
 use std::collections::HashMap;
-use std::io::Write;
 use tracing::{debug, error, info, warn};
-
-/// Authoritative all-together monolith of the PluginSchema catalog.
-const SHM_SCHEMA_PATH: &str = "/dev/shm/live-schema.json";
-
-/// Materialized per-plugin schema views. These are written by the same
-/// SchemaEngine commit as the monolith; they are not consumer-owned caches.
-const SHM_SCHEMA_DIR: &str = "/dev/shm/opdbus/schemas";
-
-/// Manifest carrying the single `catalog_hash`, per-plugin leaf hashes, and
-/// `generation`. Written LAST as the atomic commit point; the one place the
-/// catalog hash is published — consumers read it, never re-hash.
-const SHM_MANIFEST_PATH: &str = "/dev/shm/opdbus/.manifest.json";
 
 /// Schema version identifier
 pub type SchemaVersion = u64;
@@ -60,27 +47,6 @@ fn numeric_or_length(value: &Value) -> Option<f64> {
         Value::Array(a) => Some(a.len() as f64),
         _ => None,
     }
-}
-
-/// Atomically publish `bytes` to a `/dev/shm` path via a sibling temp file +
-/// rename, so readers see either the old or new content, never a torn write.
-fn atomic_write_shm(path: &str, bytes: &[u8]) -> Result<()> {
-    if let Some(parent) = std::path::Path::new(path).parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| anyhow::anyhow!("Cannot create {}: {}", parent.display(), e))?;
-    }
-    let tmp = format!("{}.tmp", path);
-    {
-        let mut file = std::fs::File::create(&tmp)
-            .map_err(|e| anyhow::anyhow!("Cannot create {}: {}", tmp, e))?;
-        file.write_all(bytes)
-            .map_err(|e| anyhow::anyhow!("Failed to write {}: {}", tmp, e))?;
-        file.sync_all()
-            .map_err(|e| anyhow::anyhow!("Failed to sync {}: {}", tmp, e))?;
-    }
-    std::fs::rename(&tmp, path)
-        .map_err(|e| anyhow::anyhow!("Failed to rename {} -> {}: {}", tmp, path, e))?;
-    Ok(())
 }
 
 /// The authoritative schema registry that validates and manages all PluginSchema definitions.
@@ -145,20 +111,16 @@ impl Default for SchemaEngine {
 }
 
 impl SchemaEngine {
-    /// Creates a new SchemaEngine instance.
-    /// If tmpfs is available, writes an empty schema catalog to enforce
-    /// the Absolute Base rule: without a valid schema, no entity exists.
+    /// Creates a new SchemaEngine instance. The SHM catalog is the sealed
+    /// blob catalog owned by the blob sealer — this engine never writes it
+    /// (Absolute Base rule: without a sealed blob, no entity exists).
     pub fn new() -> Self {
-        let engine = Self {
+        Self {
             schemas: HashMap::new(),
             quarantined: HashMap::new(),
             version_counter: HashMap::new(),
             audit_trail: Vec::new(),
-        };
-        // Write initial (empty) schema catalog to shared memory so consumers
-        // can immediately detect whether the projection system is alive.
-        let _ = engine.write_schemas_to_shm();
-        engine
+        }
     }
 
     /// Creates a new SchemaEngine with the given actor and trace ID
@@ -174,99 +136,22 @@ impl SchemaEngine {
         hash.to_hex().to_string()
     }
 
-    /// Write the entire schema catalog to shared memory as JSON.
-    /// This is the single source of truth: UI, blockchain, gRPC reflection,
-    /// and all downstream consumers read from this file.
+    /// The schema catalog in shared memory is the SEALED BLOB CATALOG
+    /// (`/dev/shm/opdbus/plugin-blobs`), written by the blob sealer — never by
+    /// this engine. The monolith (`live-schema.json`), the per-plugin schema
+    /// folder, and the legacy manifest are gone: a blob in the catalog IS the
+    /// plugin. This method now only reports the published catalog hash so
+    /// registration flows can log/audit against it.
     pub fn write_schemas_to_shm(&self) -> Result<String> {
-        let catalog: std::collections::HashMap<String, Vec<&PluginSchema>> = self
-            .schemas
-            .iter()
-            .map(|(k, v)| (k.clone(), v.iter().collect()))
-            .collect();
-
-        let json_bytes = serde_json::to_vec_pretty(&catalog)
-            .map_err(|e| anyhow::anyhow!("Failed to serialize schema catalog: {}", e))?;
-        atomic_write_shm(SHM_SCHEMA_PATH, &json_bytes)?;
-
-        std::fs::create_dir_all(SHM_SCHEMA_DIR)
-            .map_err(|e| anyhow::anyhow!("Cannot create schema dir {}: {}", SHM_SCHEMA_DIR, e))?;
-        let mut leaves: std::collections::BTreeMap<String, String> =
-            std::collections::BTreeMap::new();
-        for (id, schemas) in &catalog {
-            let Some(schema) = schemas.first() else {
-                continue;
-            };
-            let bytes = serde_json::to_vec_pretty(schema)
-                .map_err(|e| anyhow::anyhow!("Failed to serialize schema '{}': {}", id, e))?;
-            atomic_write_shm(&format!("{}/{}.json", SHM_SCHEMA_DIR, id), &bytes)?;
-            leaves.insert(id.clone(), blake3::hash(&bytes).to_hex().to_string());
-        }
-
-        // Keep the identity sled's embedded schema blob in sync (pr-17 live
-        // behavior): op-identity readers fall back to this embed when the
-        // manifest is unavailable.
-        if let Err(e) = op_identity::write_schema_blob(&json_bytes) {
-            warn!(
-                error = %e,
-                "Schema catalog JSON written, but embedded schema blob write failed"
-            );
-        }
-
-        // Canonical catalog hash = blake3 of the monolith bytes — the EXACT
-        //    value the identity derivation already uses, kept stable so the
-        //    WG/ghostbridge verifier needs no change.
-        let catalog_hash = blake3::hash(&json_bytes).to_hex().to_string();
-
-        // Manifest, written LAST as the atomic commit point — the one place
-        //    `catalog_hash` is published; consumers read it, never re-hash.
-        let generation = Self::read_manifest_generation().wrapping_add(1);
-        let mut manifest = serde_json::Map::new();
-        manifest.insert(
-            "catalog_hash".to_string(),
-            serde_json::Value::String(catalog_hash.clone()),
-        );
-        manifest.insert(
-            "generation".to_string(),
-            serde_json::Value::from(generation),
-        );
-        manifest.insert(
-            "plugins".to_string(),
-            serde_json::to_value(&leaves)
-                .map_err(|e| anyhow::anyhow!("Failed to serialize leaf hashes: {}", e))?,
-        );
-        let manifest_bytes = serde_json::to_vec_pretty(&serde_json::Value::Object(manifest))
-            .map_err(|e| anyhow::anyhow!("Failed to serialize schema manifest: {}", e))?;
-        atomic_write_shm(SHM_MANIFEST_PATH, &manifest_bytes)?;
-
-        info!(
-            schema_path = SHM_SCHEMA_PATH,
-            manifest_path = SHM_MANIFEST_PATH,
-            catalog_hash = %catalog_hash,
-            generation,
-            plugins = catalog.len(),
-            "Schema catalog and materialized plugin schemas written to shared memory"
-        );
-        Ok(catalog_hash)
+        self.read_schema_footprint()
     }
 
-    /// Read the current manifest `generation`, or 0 if no manifest exists yet.
-    /// The next write uses `generation + 1`, giving readers a monotonic marker
-    /// to detect a stale catalog snapshot.
-    fn read_manifest_generation() -> u64 {
-        std::fs::read(SHM_MANIFEST_PATH)
-            .ok()
-            .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
-            .and_then(|v| v.get("generation").and_then(serde_json::Value::as_u64))
-            .unwrap_or(0)
-    }
-
-    /// Read the Blake3 footprint of the current schema catalog on disk.
+    /// Read the published Blake3 catalog hash — read, never re-hashed; the
+    /// blob sealer is the sole authority (one-schema rule).
     pub fn read_schema_footprint(&self) -> Result<String> {
-        let bytes = op_identity::read_schema_blob()
-            .or_else(|_| std::fs::read(SHM_SCHEMA_PATH))
-            .map_err(|e| anyhow::anyhow!("Cannot read schema SHM: {}", e))?;
-        let hash = blake3::hash(&bytes);
-        Ok(hash.to_hex().to_string())
+        op_identity::schema_bridge::schema_catalog_hash()
+            .map(hex::encode)
+            .ok_or_else(|| anyhow::anyhow!("blob catalog manifest not available in SHM"))
     }
 
     /// Generates a trace ID for audit trail
