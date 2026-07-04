@@ -1,0 +1,52 @@
+# ZeroClaw GUI (crates/op-web/ui) — native eframe/egui shell
+# Bootstrapped from source analysis; Subtext Verify onboard would refine selectors
+# after a live browser trace against a tunneled dev build.
+
+components:
+  - name: topbar
+    description: Global header with brand, Console/Install tabs, connection status, theme toggle
+    selector: "region:topbar"
+
+  - name: sidebar
+    description: Collapsible navigation grouped by Chat, Control, Agent, Infrastructure, Settings
+    selector: "region:sidebar"
+
+  - name: nav_chat
+    description: Chat route — primary agent conversation surface
+    selector: "nav:Chat"
+
+  - name: nav_overview
+    description: Overview dashboard with Core/Agent/Web/Embed/Mesh stat cards
+    selector: "nav:Overview"
+
+  - name: nav_grpc_explorer
+    description: gRPC Explorer — pick reflected method, edit JSON request, invoke unary/streaming RPCs
+    selector: "nav:gRPC Explorer"
+
+  - name: nav_install
+    description: Install tab — pairing and onboarding flow for new deployments
+    selector: "nav:Install"
+
+  - name: overview_stat_core
+    description: Overview stat card showing op-core mirror status
+    selector: "overview:stat:Core"
+
+  - name: chat_input
+    description: Chat message input bound to ChatService gRPC transport
+    selector: "chat:input"
+
+memory:
+  - key: app_kind
+    value: Native desktop GUI (eframe/egui), not a browser SPA. Subtext Verify live-browser tools need a web build or Vite preview if one exists; session replay applies to deployed web surfaces with Fullstory capture.
+
+  - key: default_route
+    value: Overview on launch; sidebar defaults to Console top tab.
+
+  - key: grpc_endpoint
+    value: Connects via ZEROCLAW_GRPC env (default http://127.0.0.1:18789). Reflection bootstrap runs on startup; ChatService transport is optional.
+
+  - key: stub_views
+    value: Most nav routes still render a placeholder card ("View not yet ported."). Implemented views include Overview, Install, Chat, Inspector, State, gRPC Diagnostics, gRPC Explorer.
+
+  - key: auth
+    value: AuthState persisted locally; topbar shows connected/disconnected based on token presence; pairing code input on Install route.
