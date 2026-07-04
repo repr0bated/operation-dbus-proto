@@ -49,11 +49,9 @@ async fn start_test_server() -> (SocketAddr, Arc<SchemaLoader>, PathBuf) {
         op_state_store::ChainConfig::default(),
     )));
     let ovsdb = Arc::new(op_network::rovs_proxy::OvsdbDbusClient::new());
-    let nonnet = Arc::new(op_jsonrpc::nonnet::NonNetDb::new());
     let mutation_engine = Arc::new(op_grpc_bridge::MutationEngine::new(
         event_chain,
         ovsdb,
-        nonnet,
     ));
     let operation_server = op_grpc_bridge::grpc_server::OperationGrpcServer::new(mutation_engine);
     let app = build_axum_app(loader.clone(), operation_server);

@@ -16,7 +16,6 @@ use tokio::net::{TcpListener, TcpStream, UnixListener, UnixStream};
 use tokio::sync::RwLock;
 use tracing::{debug, error, info};
 
-use crate::nonnet::NonNetDb;
 use crate::protocol::{error_codes, JsonRpcRequest, JsonRpcResponse};
 use crate::OvsdbDbusClient;
 
@@ -32,8 +31,6 @@ pub struct JsonRpcServerConfig {
     pub tcp_addr: Option<String>,
     /// Enable OVSDB proxy
     pub ovsdb_enabled: bool,
-    /// Enable NonNet database
-    pub nonnet_enabled: bool,
 }
 
 impl Default for JsonRpcServerConfig {
@@ -42,7 +39,6 @@ impl Default for JsonRpcServerConfig {
             unix_socket: Some("/var/run/op-dbus/jsonrpc.sock".to_string()),
             tcp_addr: None,
             ovsdb_enabled: true,
-            nonnet_enabled: true,
         }
     }
 }
@@ -50,22 +46,14 @@ impl Default for JsonRpcServerConfig {
 /// JSON-RPC server
 pub struct JsonRpcServer {
     config: JsonRpcServerConfig,
-    nonnet: Option<Arc<NonNetDb>>,
     handlers: Arc<RwLock<HashMap<String, HandlerFn>>>,
 }
 
 impl JsonRpcServer {
     /// Create a new JSON-RPC server
     pub fn new(config: JsonRpcServerConfig) -> Self {
-        let nonnet = if config.nonnet_enabled {
-            Some(Arc::new(NonNetDb::new()))
-        } else {
-            None
-        };
-
         Self {
             config,
-            nonnet,
             handlers: Arc::new(RwLock::new(HashMap::new())),
         }
     }
@@ -73,11 +61,6 @@ impl JsonRpcServer {
     /// Create with default configuration
     pub fn with_defaults() -> Self {
         Self::new(JsonRpcServerConfig::default())
-    }
-
-    /// Get reference to NonNet database
-    pub fn nonnet(&self) -> Option<Arc<NonNetDb>> {
-        self.nonnet.clone()
     }
 
     /// Register a custom handler
@@ -172,7 +155,6 @@ impl JsonRpcServer {
     fn clone_for_connection(&self) -> JsonRpcServerConnection {
         JsonRpcServerConnection {
             config: self.config.clone(),
-            nonnet: self.nonnet.clone(),
             handlers: Arc::clone(&self.handlers),
         }
     }
@@ -181,7 +163,6 @@ impl JsonRpcServer {
 /// Server state for a single connection
 struct JsonRpcServerConnection {
     config: JsonRpcServerConfig,
-    nonnet: Option<Arc<NonNetDb>>,
     handlers: Arc<RwLock<HashMap<String, HandlerFn>>>,
 }
 
@@ -255,13 +236,6 @@ impl JsonRpcServerConnection {
 
         // Built-in methods
         match method.as_str() {
-            // NonNet database methods
-            "list_dbs" | "get_schema" | "transact" if self.config.nonnet_enabled => {
-                if let Some(ref nonnet) = self.nonnet {
-                    return nonnet.handle_request(request).await;
-                }
-            }
-
             // OVSDB proxy methods
             "ovsdb.list_dbs" | "ovsdb.get_schema" | "ovsdb.transact"
                 if self.config.ovsdb_enabled =>
@@ -277,7 +251,6 @@ impl JsonRpcServerConnection {
                         "name": "op-dbus-v2 JSON-RPC Server",
                         "version": env!("CARGO_PKG_VERSION"),
                         "ovsdb_enabled": self.config.ovsdb_enabled,
-                        "nonnet_enabled": self.config.nonnet_enabled,
                     }),
                 );
             }

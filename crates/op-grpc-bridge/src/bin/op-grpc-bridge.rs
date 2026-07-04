@@ -14,7 +14,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use op_grpc_bridge::{grpc_server::run_grpc_server, mutation_engine::MutationEngine};
-use op_jsonrpc::nonnet::NonNetDb;
+
 use op_network::rovs_proxy::OvsdbDbusClient;
 use op_state_store::{ChainConfig, EventChain};
 use tokio::sync::RwLock;
@@ -59,8 +59,7 @@ async fn main() -> anyhow::Result<()> {
     // ── Build MutationEngine (authoritative mutation pipeline) ─────────────────
     let event_chain = Arc::new(RwLock::new(EventChain::new(ChainConfig::default())));
     let ovsdb = Arc::new(OvsdbDbusClient::new());
-    let nonnet = Arc::new(NonNetDb::new());
-    let mutation_engine = Arc::new(MutationEngine::new(event_chain, ovsdb, nonnet));
+    let mutation_engine = Arc::new(MutationEngine::new(event_chain, ovsdb));
 
     // ── Bind address ─────────────────────────────────────────────────────────
     // Per spec: Xray redirects gRPC traffic to 127.0.0.1:18789.

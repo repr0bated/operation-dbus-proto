@@ -2061,14 +2061,12 @@ mod tests {
     /// Builds a test `SchemaEngine` with a real `EventChain` so dispatch
     /// tests can verify the event chain record.
     fn test_engine() -> Arc<SchemaEngine> {
-        use op_jsonrpc::nonnet::NonNetDb;
         use op_network::rovs_proxy::OvsdbDbusClient;
         use op_state_store::{ChainConfig, EventChain};
 
         let event_chain = Arc::new(RwLock::new(EventChain::new(ChainConfig::default())));
         let ovsdb = Arc::new(OvsdbDbusClient::new());
-        let nonnet = Arc::new(NonNetDb::new());
-        Arc::new(SchemaEngine::new(event_chain, ovsdb, nonnet))
+        Arc::new(SchemaEngine::new(event_chain, ovsdb))
     }
 
     /// Builds a `PluginRoute` with a method that has a `required_capability`.

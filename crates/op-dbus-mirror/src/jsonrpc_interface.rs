@@ -1,12 +1,10 @@
 //! JSON-RPC D-Bus Interfaces
 //!
-//! Exposes OVSDB and NonNet JSON-RPC methods as D-Bus interfaces
 //! for a true 1:1 mirror of the JSON-RPC API.
 //!
 //! Authoritative Path: D-Bus method → MutationEngine.mutate → RCP Database → EventChain
 
 use op_grpc_bridge::{ChangeType, MutationEngine};
-use op_jsonrpc::nonnet::NonNetDb;
 use op_jsonrpc::protocol::JsonRpcRequest;
 use op_network::rovs_proxy::OvsdbDbusClient;
 use serde_json::Value;
@@ -161,24 +159,15 @@ impl OvsdbInterface {
     }
 }
 
-/// NonNet D-Bus interface - mirrors JSON-RPC methods at /org/opdbus/v1/mirror/nonnet
-pub struct NonNetInterface {
-    pub nonnet: Arc<NonNetDb>,
     pub schema_engine: Option<Arc<MutationEngine>>,
 }
 
-impl NonNetInterface {
-    pub fn new(nonnet: Arc<NonNetDb>, schema_engine: Option<Arc<MutationEngine>>) -> Self {
         Self {
-            nonnet,
             schema_engine,
         }
     }
 }
 
-#[interface(name = "org.opdbus.mirror.NonNetV1")]
-impl NonNetInterface {
-    /// Execute JSON-RPC transact on NonNet
     async fn transact(&self, request: String) -> zbus::fdo::Result<String> {
         let req_simd = str_to_simd(&request)?;
         let req_serde: Value = serde_json::from_str(&request)
@@ -195,8 +184,6 @@ impl NonNetInterface {
             if let Some(engine) = &self.schema_engine {
                 match engine
                     .mutate(
-                        "nonnet".to_string(),
-                        "/org/opdbus/v1/mirror/nonnet".to_string(),
                         ChangeType::MethodCall,
                         Some(json_req.method.clone()),
                         req_simd,
@@ -209,27 +196,20 @@ impl NonNetInterface {
                     Err(e) => Err(zbus::fdo::Error::Failed(e.to_string())),
                 }
             } else {
-                let response = self.nonnet.handle_request(json_req).await;
                 Ok(serde_json::to_string(&response).unwrap_or_default())
             }
         } else {
-            let response = self.nonnet.handle_request(json_req).await;
             Ok(serde_json::to_string(&response).unwrap_or_default())
         }
     }
 
-    /// Get NonNet schema
     async fn get_schema(&self) -> zbus::fdo::Result<String> {
         let request =
-            op_jsonrpc::protocol::JsonRpcRequest::new("get_schema", simd_json::json!(["OpNonNet"]));
-        let response = self.nonnet.handle_request(request).await;
         Ok(serde_json::to_string(&response.result).unwrap_or_default())
     }
 
-    /// List NonNet databases
     async fn list_dbs(&self) -> zbus::fdo::Result<String> {
         let request = op_jsonrpc::protocol::JsonRpcRequest::new("list_dbs", simd_json::json!([]));
-        let response = self.nonnet.handle_request(request).await;
         Ok(serde_json::to_string(&response.result).unwrap_or_default())
     }
 }

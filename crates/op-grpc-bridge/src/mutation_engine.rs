@@ -17,7 +17,6 @@ use zbus::{Connection, Proxy};
 
 use base64::Engine;
 use op_identity::{read_sled, write_sled_full};
-use op_jsonrpc::nonnet::NonNetDb;
 use op_network::rovs_proxy::OvsdbDbusClient;
 use op_state_store::{ChainEvent, Decision, EventChain, MemoryStore, OperationType, StateStore};
 
@@ -74,7 +73,6 @@ pub struct MutationEngine {
 
     /// Authoritative RCP stores
     pub ovsdb: Arc<OvsdbDbusClient>,
-    pub nonnet: Arc<NonNetDb>,
     /// In-process plugin handles for MethodCall dispatch (e.g. createunixsocket).
     pub unix_socket: Arc<op_plugins::state_plugins::UnixSocketPlugin>,
 }
@@ -127,7 +125,6 @@ impl MutationEngine {
     pub fn new(
         event_chain: Arc<RwLock<EventChain>>,
         ovsdb: Arc<OvsdbDbusClient>,
-        nonnet: Arc<NonNetDb>,
     ) -> Self {
         let (change_tx, _) = broadcast::channel(1024);
         Self {
@@ -138,7 +135,6 @@ impl MutationEngine {
             session_bus: Arc::new(OnceCell::new()),
             dbus_call_limiter: Arc::new(Semaphore::new(32)),
             ovsdb,
-            nonnet,
             unix_socket: Arc::new(op_plugins::state_plugins::UnixSocketPlugin::new()),
         }
     }
@@ -405,9 +401,6 @@ impl MutationEngine {
         if plugin_id == "net" || object_path.contains("/ovsdb/") {
             tags.push("network".to_string());
             tags.push("ovsdb".to_string());
-        } else if object_path.contains("/nonnet/") {
-            tags.push("nonnet".to_string());
-            tags.push("plugin".to_string());
         } else {
             tags.push("state".to_string());
             tags.push(plugin_id.to_string());
@@ -546,40 +539,7 @@ impl MutationEngine {
     pub async fn start(self: Arc<Self>) -> anyhow::Result<()> {
         let me = self.clone();
 
-        // 1. Subscribe to NonNet updates
-        let mut nonnet_rx = self.nonnet.subscribe();
-        let nonnet_self = me.clone();
-        tokio::spawn(async move {
-            loop {
-                match nonnet_rx.recv().await {
-                    Ok(update) => {
-                        let _ = nonnet_self
-                            .process_authoritative_change(
-                                update.table.clone(),
-                                format!(
-                                    "/org/opdbus/v1/nonnet/{}/{}",
-                                    update.db_name, update.table
-                                ),
-                                ChangeType::PropertySet,
-                                None,
-                                None,
-                                simd_json::json!(update.rows),
-                                vec!["nonnet".to_string()],
-                                "nonnet-db".to_string(),
-                                None,
-                                ChangeSource::Internal,
-                            )
-                            .await;
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        tracing::warn!("NonNet subscription lagged by {} events", n);
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                }
-            }
-        });
-
-        // 2. Subscribe to OVSDB updates
+        // Subscribe to OVSDB updates
         let ovsdb_self = me.clone();
         tokio::spawn(async move {
             if let Ok(mut rx) = ovsdb_self.ovsdb.monitor_db("Open_vSwitch").await {
@@ -748,12 +708,6 @@ impl MutationEngine {
                         Some(v)
                     }
                 });
-
-                // For NonNet plugins, we update the NonNetDb which is authoritative for non-network state
-                if let Some(rows) = value.as_array() {
-                    let rows_vec: Vec<simd_json::OwnedValue> = rows.to_vec();
-                    self.nonnet.update_table(&plugin_id, rows_vec).await;
-                }
             }
         }
 
