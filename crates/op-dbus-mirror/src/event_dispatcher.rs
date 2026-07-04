@@ -1,7 +1,7 @@
 //! EventDispatcher module for unified event dispatch
 
 use anyhow::Result;
-use op_network::rovs_proxy::OvsdbDbusClient;
+use op_grpc_bridge::MutationEngine;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::broadcast;
@@ -17,7 +17,7 @@ use crate::DbusMirror;
 pub struct EventDispatcher {
     pub broadcast_tx: broadcast::Sender<MirrorEvent>,
     mirror: Arc<DbusMirror>,
-    ovsdb_client: Arc<OvsdbDbusClient>,
+    schema_engine: Option<Arc<MutationEngine>>,
     grpc_server: Option<Arc<op_grpc_bridge::OperationGrpcServer>>,
     /// Sequence numbers per object path
     sequence_numbers: Arc<std::sync::Mutex<HashMap<String, u64>>>,
@@ -27,14 +27,14 @@ impl EventDispatcher {
     /// Create a new EventDispatcher
     pub fn new(
         mirror: Arc<DbusMirror>,
-        ovsdb_client: Arc<OvsdbDbusClient>,
+        schema_engine: Option<Arc<MutationEngine>>,
         grpc_server: Option<Arc<op_grpc_bridge::OperationGrpcServer>>,
     ) -> Self {
         let (broadcast_tx, _) = broadcast::channel(1000);
         Self {
             broadcast_tx,
             mirror,
-            ovsdb_client,
+            schema_engine,
             grpc_server,
             sequence_numbers: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
@@ -44,8 +44,12 @@ impl EventDispatcher {
     pub async fn spawn_event_sources(&self) -> Result<()> {
         info!("Spawning all event sources");
 
-        // Spawn OVSDB monitor
-        ovsdb::spawn_ovsdb_monitor(self.ovsdb_client.clone(), self.broadcast_tx.clone()).await?;
+        // Spawn OVSDB monitor (reactive: subscribes to MutationEngine change_tx)
+        if let Some(engine) = &self.schema_engine {
+            ovsdb::spawn_ovsdb_monitor(engine.clone(), self.broadcast_tx.clone()).await?;
+        } else {
+            info!("No MutationEngine attached; OVSDB event feed disabled");
+        }
 
         // Spawn procfs watchers
         procfs::spawn_procfs_inotify_watchers(self.broadcast_tx.clone()).await?;

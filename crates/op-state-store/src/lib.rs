@@ -18,7 +18,6 @@ pub mod execution_job;
 pub mod memory_store;
 pub mod metrics;
 pub mod plugin_schema;
-pub mod schema_shuttle;
 pub mod schema_validator;
 pub mod state_store;
 
@@ -39,7 +38,6 @@ pub use plugin_schema::{
     SchemaLoadError, SchemaRegistry, SideEffect, SignalDecl,
     ValidationResult as SchemaValidationResult, DEFAULT_SCHEMA_DIALECT,
 };
-pub use schema_shuttle::{IdentitySled, SchemaShuttle};
 pub use schema_validator::{
     canonicalize_json, SchemaValidator, ValidationError, ValidationReport, ValidatorError,
 };

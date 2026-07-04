@@ -1,45 +1,53 @@
 //! StateManager watch integration
 
 use anyhow::Result;
-use op_state::manager::StateManager;
+use op_state::manager::{PluginOperation, StateManager};
 use std::sync::Arc;
 use tokio::sync::broadcast;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::event::MirrorEvent;
 
-/// PluginEvent for broadcast
-#[derive(Debug, Clone)]
-pub struct PluginEvent {
-    pub plugin_id: String,
-    pub operation: PluginOperation,
-}
-
-/// Plugin operation type
-#[derive(Debug, Clone)]
-pub enum PluginOperation {
-    Register,
-    Deregister,
-    Update,
-}
-
 /// Spawn StateManager watcher and send events to broadcast channel
 pub async fn spawn_state_manager_watcher(
-    _state_manager: Arc<StateManager>,
-    _broadcast_tx: broadcast::Sender<MirrorEvent>,
+    state_manager: Arc<StateManager>,
+    broadcast_tx: broadcast::Sender<MirrorEvent>,
 ) -> Result<()> {
     info!("Spawning StateManager watcher for event feed");
 
-    // TODO: Implement StateManager::watch() method
-    // For now, we'll use a polling approach as a placeholder
-    // The actual implementation should use a broadcast channel
+    let Some(mut rx) = state_manager.watch() else {
+        warn!("StateManager watch channel unavailable; plugin event feed disabled");
+        return Ok(());
+    };
 
     tokio::spawn(async move {
-        // Placeholder implementation
-        // In the real implementation, this would subscribe to StateManager's watch channel
         loop {
-            tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
-            // TODO: Read from watch channel and send events
+            match rx.recv().await {
+                Ok(plugin_event) => {
+                    let operation = match plugin_event.operation {
+                        PluginOperation::Register => "register",
+                        PluginOperation::Deregister => "deregister",
+                        PluginOperation::Update => "update",
+                    };
+                    let delta = serde_json::json!({
+                        "plugin_id": plugin_event.plugin_id,
+                        "operation": operation,
+                    });
+                    let event = MirrorEvent::Plugin {
+                        plugin_id: plugin_event.plugin_id,
+                        delta,
+                        sequence: 0,
+                    };
+                    let _ = broadcast_tx.send(event);
+                }
+                Err(broadcast::error::RecvError::Lagged(n)) => {
+                    warn!("StateManager watcher lagged by {} events", n);
+                }
+                Err(broadcast::error::RecvError::Closed) => {
+                    warn!("StateManager watch channel closed, stopping event feed");
+                    break;
+                }
+            }
         }
     });
 

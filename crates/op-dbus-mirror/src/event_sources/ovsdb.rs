@@ -1,79 +1,72 @@
 //! OVSDB event feed integration
 //!
-//! Uses `OvsdbDbusClient::monitor_db()` which delivers full IDL snapshots (no
-//! extra network connections) via `rovs_ovsdb::Client::wait()`.  The first
-//! message received is the initial snapshot taken right after the monitoring
-//! connection is established; subsequent messages arrive on every DB change.
+//! Subscribes to the SchemaEngine's `change_tx` broadcast channel for
+//! OVSDB-related state changes. The SchemaEngine is the authoritative
+//! source: all mutations flow through it and are recorded in the Event
+//! Chain. State changes arrive as `StateChange` structs carrying the
+//! new value from shared memory — no polling, no JSON-RPC monitor.
 
 use anyhow::Result;
-use op_network::rovs_proxy::OvsdbDbusClient;
+use op_grpc_bridge::{MutationEngine, StateChange};
 use std::sync::Arc;
 use tokio::sync::broadcast;
 use tracing::info;
 
 use crate::event::MirrorEvent;
 
-/// Spawn OVSDB monitor and send events to the broadcast channel.
+/// Spawn OVSDB monitor via SchemaEngine change_tx subscription.
 ///
-/// The monitor uses the IDL-based snapshot format from `monitor_db()`:
-/// `{ "TableName": [{ "_uuid": ["uuid", "..."], col: val, … }, …], … }`.
-/// Each snapshot is exploded into individual `MirrorEvent::OvsdbRow` events —
-/// one per row, per table.
+/// Filters `StateChange` events whose `plugin_id` is `"net"` or whose
+/// `object_path` starts with `/org/opdbus/v1/ovsdb` and converts them
+/// to `MirrorEvent::OvsdbRow` for the event dispatcher.
 pub async fn spawn_ovsdb_monitor(
-    ovsdb: Arc<OvsdbDbusClient>,
+    schema_engine: Arc<MutationEngine>,
     broadcast_tx: broadcast::Sender<MirrorEvent>,
 ) -> Result<()> {
-    info!("Spawning OVSDB monitor for event feed");
+    info!("Subscribing to SchemaEngine change_tx for OVSDB event feed");
 
-    // monitor_db() returns a channel that delivers IDL snapshots.  The first
-    // snapshot (sent immediately after connect) acts as the initial data load;
-    // no separate dump_db() call is needed.
-    let mut rx = ovsdb.monitor_db("Open_vSwitch").await?;
+    let mut rx = schema_engine.change_tx().subscribe();
 
     tokio::spawn(async move {
         let mut sequence: u64 = 0;
 
         loop {
             match rx.recv().await {
-                Ok(snapshot) => {
+                Ok(change) => {
+                    if !is_ovsdb_change(&change) {
+                        continue;
+                    }
+
                     sequence = sequence.wrapping_add(1);
 
-                    // snapshot = { "TableName": [ row, … ], … }
-                    // Each row has "_uuid": ["uuid", "…"] plus column values.
-                    let tables = match snapshot.as_object() {
-                        Some(t) => t,
-                        None => {
-                            tracing::warn!("monitor_db: received non-object snapshot, skipping");
-                            continue;
-                        }
+                    // Convert SchemaEngine value → serde_json::Value via Display
+                    let delta = change.new_value.to_string();
+                    let delta: serde_json::Value =
+                        serde_json::from_str(&delta).unwrap_or(serde_json::Value::Null);
+
+                    let table_name = change
+                        .object_path
+                        .rsplit('/')
+                        .next()
+                        .unwrap_or("unknown")
+                        .to_string();
+
+                    let uuid = change.change_id.clone();
+
+                    let event = MirrorEvent::OvsdbRow {
+                        table_name,
+                        uuid,
+                        delta,
+                        sequence,
                     };
 
-                    for (table_name, rows_val) in tables {
-                        let rows = match rows_val.as_array() {
-                            Some(r) => r,
-                            None => continue,
-                        };
-
-                        for row in rows {
-                            let uuid = extract_uuid(row);
-                            let event = MirrorEvent::OvsdbRow {
-                                table_name: table_name.clone(),
-                                uuid,
-                                delta: row.clone(),
-                                sequence,
-                            };
-                            // A send error means all receivers dropped; the task keeps
-                            // running so the monitoring connection stays alive.
-                            let _ = broadcast_tx.send(event);
-                        }
-                    }
+                    let _ = broadcast_tx.send(event);
                 }
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                    tracing::warn!("OVSDB monitor_db subscription lagged by {} events", n);
-                    continue;
+                Err(broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!("OVSDB change_tx subscription lagged by {} events", n);
                 }
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                    tracing::info!("OVSDB monitor_db channel closed, stopping event feed");
+                Err(broadcast::error::RecvError::Closed) => {
+                    tracing::info!("SchemaEngine change_tx closed, stopping OVSDB event feed");
                     break;
                 }
             }
@@ -83,26 +76,13 @@ pub async fn spawn_ovsdb_monitor(
     Ok(())
 }
 
-fn extract_uuid(row: &serde_json::Value) -> String {
-    // Canonical OVSDB wire form: ["uuid", "<uuid-str>"]
-    if let Some(uuid_val) = row.get("_uuid") {
-        if let Some(uuid_arr) = uuid_val.as_array() {
-            if uuid_arr.len() == 2 && uuid_arr[0].as_str() == Some("uuid") {
-                if let Some(uuid_str) = uuid_arr[1].as_str() {
-                    return uuid_str.to_string();
-                }
-            }
-        }
-    }
-    // Fallback keys used by some callers
-    if let Some(uuid) = row.get("uuid").and_then(|v| v.as_str()) {
-        return uuid.to_string();
-    }
-    if let Some(id) = row.get("id").and_then(|v| v.as_str()) {
-        return id.to_string();
-    }
-    if let Some(s) = row.get("name").and_then(|v| v.as_str()) {
-        return s.to_string();
-    }
-    "unknown".to_string()
+/// Check whether a StateChange is OVSDB-related.
+fn is_ovsdb_change(change: &StateChange) -> bool {
+    change.plugin_id == "net"
+        || change.object_path.starts_with("/org/opdbus/v1/ovsdb")
+        || change.object_path.starts_with("/org/opdbus/v1/ovs")
+        || change
+            .tags_touched
+            .iter()
+            .any(|t| t == "ovsdb" || t == "net")
 }

@@ -46,7 +46,6 @@ pub mod dbus_interface;
 pub mod event;
 pub mod event_dispatcher;
 pub mod event_sources;
-pub mod heartbeat;
 pub mod jsonrpc_interface;
 pub mod managed_objects;
 pub mod object;
@@ -149,7 +148,7 @@ impl DbusMirror {
         // Create event dispatcher
         let dispatcher = crate::event_dispatcher::EventDispatcher::new(
             self.clone(),
-            self.ovsdb.clone(),
+            self.schema_engine.clone(),
             self.grpc_server.clone(),
         );
 
@@ -158,13 +157,8 @@ impl DbusMirror {
             tracing::error!("Failed to spawn event sources: {}", e);
         }
 
-        // Spawn heartbeat task
-        if let Err(e) =
-            crate::heartbeat::spawn_heartbeat_task(self.clone(), dispatcher.broadcast_tx.clone())
-                .await
-        {
-            tracing::error!("Failed to spawn heartbeat task: {}", e);
-        }
+        // No heartbeat/poll resync: mirror state converges reactively via the
+        // MutationEngine change_tx stream (SHM-reactive rule — no poll loops).
 
         // Run event loop
         if let Err(e) = dispatcher.run_event_loop().await {

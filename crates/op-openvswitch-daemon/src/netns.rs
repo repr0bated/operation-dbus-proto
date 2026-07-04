@@ -281,6 +281,7 @@ fn add_addr_rtnetlink(ifname: &str, addr: &str) -> Result<()> {
 /// rename it, bring it up, and optionally add an IP address.
 ///
 /// This is the full "attach" operation for the openvswitch proxy.
+#[allow(dead_code)]
 pub fn attach_port_to_container(
     port_name: &str,
     bridge: &str,
@@ -451,6 +452,7 @@ pub fn container_netns_init(
 }
 
 /// Detach: placeholder for host-side cleanup after OVS port removal.
+#[allow(dead_code)]
 pub fn detach_port_from_bridge(port_name: &str, bridge: &str) -> Result<()> {
     info!("detach: removing {} from {}", port_name, bridge);
     Ok(())

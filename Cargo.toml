@@ -12,6 +12,7 @@ members = [
     "crates/op-cache",
     "crates/op-state",
     "crates/op-state-store",
+    "crates/op-blob",
     "crates/op-jsonrpc",
     "crates/op-llm",
     "crates/op-network",
@@ -63,6 +64,7 @@ op-introspection = { path = "crates/op-introspection" }
 op-dbus-model = { path = "crates/op-dbus-model" }
 op-execution-tracker = { path = "crates/op-execution-tracker" }
 op-state-store = { path = "crates/op-state-store" }
+op-blob = { path = "crates/op-blob" }
 op-plugins = { path = "crates/op-plugins" }
 op-workflows = { path = "crates/op-workflows" }
 op-blockchain = { path = "crates/op-blockchain" }

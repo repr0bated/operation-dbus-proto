@@ -139,14 +139,18 @@ impl OvsCapabilities {
 
     /// Check if OVSDB responds to list_dbs
     async fn check_ovsdb_responds() -> bool {
-        use crate::OvsdbDbusClient;
         use tokio::time::{timeout, Duration};
 
-        // Try to connect to OVSDB with a short timeout
         let result = timeout(Duration::from_secs(2), async {
-            OvsdbDbusClient::new().list_dbs().await
+            crate::ovsdb::OvsdbClient::new().list_dbs().await
         })
         .await;
+
+        match &result {
+            Ok(Err(e)) => tracing::debug!("OVSDB probe failed: {}", e),
+            Err(_) => tracing::debug!("OVSDB probe timed out"),
+            Ok(Ok(_)) => {}
+        }
 
         matches!(result, Ok(Ok(_)))
     }
@@ -215,7 +219,7 @@ pub fn counter_excuses() -> HashMap<&'static str, &'static str> {
 
     m.insert(
         "I cannot create network bridges",
-        "FALSE: OvsdbDbusClient::create_bridge() creates bridges via OVSDB transact. \
+        "FALSE: rovs_ovsdb::Client::create_bridge() creates bridges via OVSDB transact. \
          Use the ovs_create_bridge tool.",
     );
 

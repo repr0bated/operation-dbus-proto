@@ -1,13 +1,23 @@
 #!/bin/sh
 exec 2>&1
-[ -r /etc/op-dbus/environment ] && . /etc/op-dbus/environment
-export DBUS_SESSION_BUS_ADDRESS
-: "${DBUS_SESSION_BUS_ADDRESS:?DBUS_SESSION_BUS_ADDRESS must be set in /etc/op-dbus/environment}"
-export PRIVACY_DATAPATH_TYPE="${PRIVACY_DATAPATH_TYPE:-netdev}"
-export PRIVACY_FAIL_MODE="${PRIVACY_FAIL_MODE:-standalone}"
-export PRIVACY_UPLINK_PORT="${PRIVACY_UPLINK_PORT:-eth0}"
-export NEXTDNS_PROFILE_ID="${NEXTDNS_PROFILE_ID:-689ec7}"
-export SCHEMA_UUID="${SCHEMA_UUID:-761b8b60-cde0-51f5-a3d6-cc07308b85b7}"
-export SCHEMA_SUBID="${SCHEMA_SUBID:-sch.net.wireguard@v1}"
-export SCHEMA_CONTROL_SOURCE="${SCHEMA_CONTROL_SOURCE:-NIST_SP_800_53_R5}"
-exec /usr/local/bin/opdbus
+# opdbus - WireGuard identity tunnel to Oracle VPS (10.0.0.2 <-> 10.0.0.1)
+# Gateway IP and iptables are managed by ovsbr0-init
+CONF="/etc/wireguard/opdbus.conf"
+IFACE="opdbus"
+
+if [ ! -f "$CONF" ]; then
+    echo "[opdbus] Config not found: $CONF"
+    exit 0
+fi
+
+# Bring up the tunnel (Table=off, no auto-routes)
+wg-quick up "${IFACE}"
+
+# Add routes manually (Table=off means wg-quick won't add them)
+ip route replace 10.0.0.0/24 dev opdbus 2>/dev/null || true
+ip route replace 10.0.0.1/32 dev opdbus 2>/dev/null || true
+
+# Refresh identity sled from opdbus interface (tmpfs only — zero-disk rule, Req 7)
+/usr/local/bin/op-identity-sled --iface opdbus --refresh --path /dev/shm/plugin_schema.dat 2>/dev/null || true
+
+exec pause

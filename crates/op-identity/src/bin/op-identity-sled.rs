@@ -1,5 +1,7 @@
 use anyhow::{bail, Context, Result};
-use op_identity::schema_bridge::{write_sled_from_wg, IdentitySled, SHM_SLED_PATH};
+use op_identity::schema_bridge::{
+    read_schema_blob, write_sled_from_wg, IdentitySled, SHM_SLED_PATH,
+};
 use serde::Serialize;
 use std::env;
 use std::fs::File;
@@ -33,6 +35,7 @@ struct SledView {
     mutation_index: u64,
     hashed_footprint: String,
     schema_catalog_hash: String,
+    schema_blob_bytes: usize,
     trace_id: String,
     schema_version: u32,
 }
@@ -188,9 +191,7 @@ fn is_sled_valid(sled: &IdentitySled) -> bool {
 
 impl SledView {
     fn from_full(path: String, sled: &IdentitySled) -> Self {
-        let schema_catalog_hash = op_identity::schema_bridge::schema_catalog_hash()
-            .map(hex::encode)
-            .unwrap_or_else(|| "(missing)".to_string());
+        let (schema_catalog_hash, schema_blob_bytes) = schema_blob_summary();
 
         Self {
             path,
@@ -202,6 +203,7 @@ impl SledView {
             mutation_index: sled.mutation_index,
             hashed_footprint: hex::encode(sled.hashed_footprint),
             schema_catalog_hash,
+            schema_blob_bytes,
             trace_id: sled.trace_id_hex(),
             schema_version: sled.schema_version,
         }
@@ -217,9 +219,7 @@ impl SledView {
         );
         let is_valid = bytes[COMPACT_VALID_OFFSET] != 0;
         let footprint = &bytes[COMPACT_FOOTPRINT_OFFSET..COMPACT_FOOTPRINT_OFFSET + 32];
-        let schema_catalog_hash = op_identity::schema_bridge::schema_catalog_hash()
-            .map(hex::encode)
-            .unwrap_or_else(|| "(missing)".to_string());
+        let (schema_catalog_hash, schema_blob_bytes) = schema_blob_summary();
 
         Self {
             path,
@@ -231,9 +231,17 @@ impl SledView {
             mutation_index,
             hashed_footprint: hex::encode(footprint),
             schema_catalog_hash,
+            schema_blob_bytes,
             trace_id: trace_id(&wg, mutation_index),
             schema_version: 0,
         }
+    }
+}
+
+fn schema_blob_summary() -> (String, usize) {
+    match read_schema_blob().or_else(|_| std::fs::read("/dev/shm/live-schema.json")) {
+        Ok(bytes) => (hex::encode(blake3::hash(&bytes).as_bytes()), bytes.len()),
+        Err(_) => ("(missing)".to_string(), 0),
     }
 }
 
