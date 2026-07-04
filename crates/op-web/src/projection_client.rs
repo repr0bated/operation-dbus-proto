@@ -1,8 +1,9 @@
 //! D-Bus Projection Client — reads live plugin projections from the /org/opdbus/v1/plugins tree.
 //!
-//! Plugin paths are derived at runtime from /dev/shm/live-schema.json.
-//! Every key in the schema catalog maps to /org/opdbus/v1/plugins/<plugin_id>.
-//! No hardcoded paths — if it's not in the schema, it doesn't exist.
+//! Plugin paths are derived at runtime from the sealed blob catalog manifest
+//! (`/dev/shm/opdbus/plugin-blobs/.manifest.json`). Every active blob maps to
+//! /org/opdbus/v1/plugins/<plugin_id>. No hardcoded paths — a blob in the
+//! catalog IS the plugin; if it's not sealed, it doesn't exist.
 
 use anyhow::Result;
 use simd_json::OwnedValue as Value;
@@ -20,25 +21,14 @@ pub type ProjectionCache = Arc<RwLock<HashMap<String, Value>>>;
 const DBUS_SERVICE: &str = op_core::config::OPDBUS_BUS_NAME;
 const PLUGIN_ROOT: &str = op_core::config::PLUGIN_BASE_PATH;
 const PROJECTED_OBJECT_IFACE: &str = "org.opdbus.ProjectedObjectV1";
-const SHM_SCHEMA_PATH: &str = "/dev/shm/live-schema.json";
 
 fn plugin_ids_from_schema() -> Vec<String> {
-    let bytes = match std::fs::read(SHM_SCHEMA_PATH) {
-        Ok(b) => b,
-        Err(e) => {
-            warn!(error = %e, "Could not read live schema; no projections will be cached");
-            return vec![];
-        }
-    };
-    let mut bytes = bytes;
-    match simd_json::to_owned_value(&mut bytes) {
-        Ok(Value::Object(map)) => map
-            .keys()
-            .filter(|k| *k != "schema_renderer")
-            .map(|k| k.to_string())
-            .collect(),
-        _ => {
-            warn!("Live schema is not a JSON object; no projections will be cached");
+    // The blob catalog manifest is the "which plugins exist" read: a blob in
+    // the catalog IS the plugin.
+    match op_blob::catalog::read_manifest_plugin_ids_shm() {
+        Some(ids) => ids.into_iter().filter(|k| k != "schema_renderer").collect(),
+        None => {
+            warn!("Blob catalog manifest unavailable; no projections will be cached");
             vec![]
         }
     }

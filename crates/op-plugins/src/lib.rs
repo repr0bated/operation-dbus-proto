@@ -97,14 +97,12 @@ pub mod prelude {
         CognitiveMcpPlugin, CompactMcpPlugin, ConfigPlugin, CronPlugin, CtlPlaneChatbotPlugin,
         DnsResolverPlugin, EndpointPlugin, ExecutionResult, FactoryPlugin, Fail2banPlugin,
         FreeDesktopPlugin, FullSystemPlugin, GcloudAdcPlugin, HardwarePlugin, IncusPlugin,
-        KeypairPlugin, KeyringPlugin, Login1Plugin, MailServerPlugin,
-        McpStatePlugin, MemoryPlugin, NetStatePlugin, NetmakerConfig, NetmakerPlugin,
-        OpenFlowObfuscationPlugin, OpenFlowPlugin, OvsBridgePlugin, PackageKitPlugin,
-        PciDeclPlugin, PrivacyRouterPlugin, PrivacyRoutesPlugin, ProcfsPlugin,
-        ProxyServerPlugin, RovsCommandsPlugin, RtnetlinkPlugin, S6SystemctlPlugin,
-        SchemaRendererPlugin, ServicePlugin, SessDeclPlugin, SoftwarePlugin, ToolDefinition,
-        UnixSocketPlugin, UsersPlugin, WebUiPlugin, WireGuardPlugin, WorkflowsPlugin,
-        ZeroclawPlugin,
+        KeypairPlugin, KeyringPlugin, Login1Plugin, MailServerPlugin, McpStatePlugin, MemoryPlugin,
+        NetStatePlugin, NetmakerConfig, NetmakerPlugin, OpenFlowObfuscationPlugin, OpenFlowPlugin,
+        OvsBridgePlugin, PackageKitPlugin, PciDeclPlugin, ProcfsPlugin, ProxyServerPlugin,
+        RovsCommandsPlugin, RtnetlinkPlugin, S6SystemctlPlugin, SchemaRendererPlugin,
+        ServicePlugin, SessDeclPlugin, SoftwarePlugin, ToolDefinition, UnixSocketPlugin,
+        UsersPlugin, WebUiPlugin, WireGuardPlugin, WorkflowsPlugin, ZeroclawPlugin,
     };
 }
 pub mod state_publisher;

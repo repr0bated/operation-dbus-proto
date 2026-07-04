@@ -81,6 +81,234 @@ pub struct ModelAssignments {
     pub cozo_retrieval: String,
 }
 
+/// Configurable options RPC contract extracted from `operation.registration.v1`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "sch.service.zeroclaw-options.rpc.schema@v1"))]
+pub struct ConfigurableOptionRpc {
+    /// RPC name from RegistrationService.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "sch.service.zeroclaw-options.rpc.name@v1"))]
+    pub name: String,
+    /// Request message type.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "sch.service.zeroclaw-options.rpc.request@v1"))]
+    pub request_type: String,
+    /// Response message type.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "sch.service.zeroclaw-options.rpc.response@v1"))]
+    pub response_type: String,
+    /// Read or mutation side-effect classification.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "sch.service.zeroclaw-options.rpc.side-effect@v1"))]
+    pub side_effect: String,
+    /// Required capability for this RPC.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "sch.service.zeroclaw-options.rpc.capability@v1"))]
+    pub capability_id: String,
+    /// OSCAL operation taxonomy key.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "sch.service.zeroclaw-options.rpc.subid@v1"))]
+    pub subid: String,
+}
+
+/// Configurable options message contract extracted from registration.proto.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "sch.service.zeroclaw-options.message.schema@v1"))]
+pub struct ConfigurableOptionMessage {
+    /// Message type name.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "sch.service.zeroclaw-options.message.name@v1"))]
+    pub name: String,
+    /// Message fields keyed by proto field name.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "sch.service.zeroclaw-options.message.fields@v1"))]
+    pub fields: Vec<ConfigurableOptionField>,
+}
+
+/// Field contract extracted from configurable options proto messages.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "sch.service.zeroclaw-options.field.schema@v1"))]
+pub struct ConfigurableOptionField {
+    /// Field name.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "sch.service.zeroclaw-options.field.name@v1"))]
+    pub name: String,
+    /// Proto type, including optional/repeated marker when applicable.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "sch.service.zeroclaw-options.field.proto-type@v1"))]
+    pub proto_type: String,
+    /// JSON/schema rendering type.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "sch.service.zeroclaw-options.field.json-type@v1"))]
+    pub json_type: String,
+    /// True when the field contains sensitive material.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "sch.service.zeroclaw-options.field.sensitive@v1"))]
+    pub sensitive: bool,
+    /// True when this option is required by the source contract.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "sch.service.zeroclaw-options.field.required@v1"))]
+    pub required: bool,
+}
+
+/// Registration error code contract.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "sch.service.zeroclaw-options.error-code.schema@v1"))]
+pub struct ConfigurableOptionErrorCode {
+    /// Symbolic proto enum name.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "sch.service.zeroclaw-options.error-code.name@v1"))]
+    pub name: String,
+    /// Numeric proto value.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "sch.service.zeroclaw-options.error-code.value@v1"))]
+    pub value: i32,
+}
+
+/// Magic-link and WireGuard registration service schema.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "sch.service.zeroclaw-options.registration-service.schema@v1"))]
+pub struct RegistrationServiceSchema {
+    /// Proto package name.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "sch.service.zeroclaw-options.registration-service.package@v1"))]
+    pub package: String,
+    /// Owning proto source path.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "src.software.zeroclaw-options.registration-service.proto@v1"))]
+    pub source_proto: String,
+    /// Service name.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "sch.service.zeroclaw-options.registration-service.name@v1"))]
+    pub service: String,
+    /// RPC methods exposed by the registration service.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "sch.service.zeroclaw-options.registration-service.rpcs@v1"))]
+    pub rpcs: Vec<ConfigurableOptionRpc>,
+    /// Message schemas used by those RPCs.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "sch.service.zeroclaw-options.registration-service.messages@v1"))]
+    pub messages: Vec<ConfigurableOptionMessage>,
+    /// Error enum values.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "sch.service.zeroclaw-options.registration-service.errors@v1"))]
+    pub error_codes: Vec<ConfigurableOptionErrorCode>,
+}
+
+/// Identity chain declared for user container options.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "sch.software.zeroclaw-options.identity-chain.schema@v1"))]
+pub struct IdentityOptions {
+    /// Hardware-bound seed accepted by the user container flow.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "src.hardware.zeroclaw-options.identity.mac@v1"))]
+    pub mac_address_key: String,
+    /// Optional shared key accepted by the user container flow.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "src.policy.zeroclaw-options.identity.psk@v1"))]
+    pub pre_shared_key: String,
+    /// WireGuard public key identity.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "src.network.zeroclaw-options.identity.wireguard-pubkey@v1"))]
+    pub wireguard_pubkey: String,
+    /// MCP bearer token derivation rule.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "sch.software.zeroclaw-options.identity.mcp-token@v1"))]
+    pub mcp_token_derivation: String,
+}
+
+/// Namespace template declared for each user container.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "sch.software.zeroclaw-options.memory-namespace.schema@v1"))]
+pub struct MemoryNamespaceOption {
+    /// Namespace template.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "sch.software.zeroclaw-options.memory-namespace.template@v1"))]
+    pub namespace_template: String,
+    /// Keys owned by this namespace.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "sch.software.zeroclaw-options.memory-namespace.keys@v1"))]
+    pub keys: Vec<String>,
+    /// Human-readable purpose.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "sch.software.zeroclaw-options.memory-namespace.purpose@v1"))]
+    pub purpose: String,
+    /// Identity key used to bind this namespace to the container/user identity.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "sch.software.zeroclaw-options.memory-namespace.identity-link@v1"))]
+    pub identity_link_key: String,
+}
+
+/// User container option contract exposed through Zeroclaw.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "sch.process-procedure.zeroclaw-options.user-container.schema@v1"))]
+pub struct UserContainerOptions {
+    /// Source script that currently materializes the user container flow.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "src.process-procedure.zeroclaw-options.user-container.script@v1"))]
+    pub source_script: String,
+    /// User-visible container arguments.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "sch.process-procedure.zeroclaw-options.user-container.arguments@v1"))]
+    pub arguments: Vec<ConfigurableOptionField>,
+    /// Incus container name template.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "sch.service.zeroclaw-options.user-container.container-template@v1"))]
+    pub container_id_template: String,
+    /// Default Incus image.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "sch.service.zeroclaw-options.user-container.image@v1"))]
+    pub image: String,
+    /// Cognitive MCP endpoint used by the user container memory flow.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "exp.service.zeroclaw-options.user-container.mcp-endpoint@v1"))]
+    pub cognitive_mcp_endpoint: String,
+    /// Feature flags declared for the user container flow.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "sch.policy.zeroclaw-options.user-container.features@v1"))]
+    pub feature_flags: Vec<String>,
+}
+
+/// Privacy rules for configurable options.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "sch.policy.zeroclaw-options.privacy.schema@v1"))]
+pub struct PrivacyOptions {
+    /// Whether email may be written to CozoDB.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "sch.policy.zeroclaw-options.privacy.email-storage@v1"))]
+    pub email_storage_rule: String,
+    /// Sensitive fields that must not be rendered casually.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "sch.policy.zeroclaw-options.privacy.sensitive-fields@v1"))]
+    pub sensitive_fields: Vec<String>,
+}
+
+/// Complete configurable options schema surface owned by Zeroclaw.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "sch.service.zeroclaw-options.schema@v1"))]
+pub struct ConfigurableOptions {
+    /// Magic-link and WireGuard registration RPC schema.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "sch.service.zeroclaw-options.registration-service@v1"))]
+    pub registration_service: RegistrationServiceSchema,
+    /// User container configurable option schema.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "sch.process-procedure.zeroclaw-options.user-container@v1"))]
+    pub user_container: UserContainerOptions,
+    /// Identity chain schema.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "sch.software.zeroclaw-options.identity-chain@v1"))]
+    pub identity_chain: IdentityOptions,
+    /// Memory namespace templates.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "sch.software.zeroclaw-options.memory-namespaces@v1"))]
+    pub memory_namespaces: Vec<MemoryNamespaceOption>,
+    /// Privacy handling rules.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "sch.policy.zeroclaw-options.privacy@v1"))]
+    pub privacy_policy: PrivacyOptions,
+}
+
 /// Top-level Zeroclaw state.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "sch.software.plugin.zeroclaw.schema@v1"))]
@@ -105,6 +333,11 @@ pub struct ZeroclawState {
     #[serde(default)]
     #[schemars(extend("x-oscal-subid" = "mut.service.zeroclaw.transport@v1"))]
     pub transport: LlmTransport,
+    /// Configurable options schema: registration, user container options,
+    /// identity chain, memory namespaces, and privacy rules.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "sch.service.zeroclaw.options@v1"))]
+    pub configurable_options: ConfigurableOptions,
     /// Shared LLM projection fields (flattened to the top level).
     #[serde(flatten)]
     #[schemars(extend("x-oscal-subid" = "sch.software.zeroclaw.llm-projection@v1"))]
@@ -234,6 +467,20 @@ pub struct GetModelAssignmentsOutput {
     pub model_assignments: ModelAssignments,
 }
 
+/// Output for the visible Zeroclaw configurable options.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "obs.service.zeroclaw.options.result@v1"))]
+pub struct GetConfigurableOptionsOutput {
+    pub configurable_options: ConfigurableOptions,
+}
+
+/// Output for the workspace memory namespace option templates.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "obs.service.zeroclaw.options.memory-namespaces.result@v1"))]
+pub struct ListUserContainerMemoryNamespaceOptionsOutput {
+    pub memory_namespaces: Vec<MemoryNamespaceOption>,
+}
+
 /// Input for setting an ovs routing model.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SetOvsRoutingModelInput {
@@ -298,6 +545,11 @@ impl Default for ZeroclawPlugin {
 }
 
 impl ZeroclawPlugin {
+    const DBUS_OBJECT: &'static str = "/org/opdbus/v1/plugins/zeroclaw";
+    const OSCAL_SUBID_REGISTRY_OBJECT: &'static str =
+        "/org/opdbus/v1/plugins/oscal_subid_registry";
+    const DEFAULT_LOCAL_MODEL: &'static str = "gemma3:4b";
+
     pub fn new() -> Self {
         Self
     }
@@ -308,7 +560,8 @@ impl ZeroclawPlugin {
 
     pub fn current_state() -> ZeroclawState {
         let selected_provider = Self::env_or("LLM_PROVIDER", "ollama");
-        let selected_model = Self::env_or("LLM_MODEL", "gemma4");
+        let selected_model = Self::env_or("LLM_MODEL", Self::DEFAULT_LOCAL_MODEL);
+        let local_model = selected_model.clone();
         let router_endpoint = Self::env_or("ZEROCLAW_ROUTER_ENDPOINT", "http://localhost:11434");
         let grpc_target = Self::env_or("ZEROCLAW_GRPC_TARGET", "http://10.200.0.2:50051");
         let grpc_target_for_provider = grpc_target.clone();
@@ -318,14 +571,14 @@ impl ZeroclawPlugin {
             selected_provider,
             selected_model,
             model_assignments: ModelAssignments {
-                ovs_routing: "gemma4".to_string(),
-                obfuscation: "gemma4".to_string(),
+                ovs_routing: local_model.clone(),
+                obfuscation: local_model.clone(),
                 vectorization: "gemini-embedding-001".to_string(),
                 qdrant_retrieval: "gemini-embedding-001".to_string(),
-                cozo_retrieval: "gemma4".to_string(),
+                cozo_retrieval: local_model.clone(),
             },
             transport: LlmTransport {
-                dbus_object: "/opdbus/v1/plugins/zeroclaw".to_string(),
+                dbus_object: Self::DBUS_OBJECT.to_string(),
                 grpc_target: grpc_target_for_provider,
                 incus_container: "host".to_string(),
                 browser_surface: "gRPC-Web through op-web".to_string(),
@@ -333,8 +586,9 @@ impl ZeroclawPlugin {
                     "/api/zeroclaw/chat".to_string(),
                     "/api/llm/chat".to_string(),
                 ],
-                policy_source: "/opdbus/v1/plugins/oscal_subid_registry".to_string(),
+                policy_source: Self::OSCAL_SUBID_REGISTRY_OBJECT.to_string(),
             },
+            configurable_options: Self::configurable_options(),
             projection: LlmProjection {
                 providers: vec![
                     Provider {
@@ -355,7 +609,12 @@ impl ZeroclawPlugin {
                         id: "ollama".to_string(),
                         route: "ollama".to_string(),
                         kind: "local".to_string(),
-                        aliases: vec!["gemma".to_string(), "gemma4".to_string()],
+                        aliases: vec![
+                            "gemma".to_string(),
+                            "gemma3".to_string(),
+                            "gemma3:4b".to_string(),
+                            "gemma4".to_string(),
+                        ],
                         ..Default::default()
                     },
                     Provider {
@@ -423,13 +682,13 @@ impl ZeroclawPlugin {
                             "subid".to_string(),
                             "nist".to_string(),
                         ],
-                        source: "/opdbus/v1/plugins/oscal_subid_registry".to_string(),
+                        source: Self::OSCAL_SUBID_REGISTRY_OBJECT.to_string(),
                         ..Default::default()
                     },
                 ],
                 router: Router {
                     provider: "ollama".to_string(),
-                    model: "gemma4".to_string(),
+                    model: local_model.clone(),
                     endpoint: router_endpoint,
                     scope: "all".to_string(),
                     role: "context_aware_allocator".to_string(),
@@ -476,11 +735,13 @@ impl ZeroclawPlugin {
                         provider: "ollama".to_string(),
                         upstream_provider: "ollama".to_string(),
                         transport: "loopback".to_string(),
-                        model: "gemma4".to_string(),
+                        model: local_model.clone(),
                         kind: "router".to_string(),
                         status: "declared".to_string(),
                         available: false,
-                        status_reason: "gemma4 is the declared local classifier; unavailable until Ollama projects it.".to_string(),
+                        status_reason: format!(
+                            "{local_model} is the declared local classifier; unavailable until Ollama projects it."
+                        ),
                         api_key: Some(JsonValue::Null),
                         ..Default::default()
                     },
@@ -528,11 +789,13 @@ impl ZeroclawPlugin {
                         provider: "factory".to_string(),
                         upstream_provider: "ollama".to_string(),
                         transport: "loopback".to_string(),
-                        model: "gemma4".to_string(),
+                        model: local_model.clone(),
                         kind: "router".to_string(),
                         status: "declared".to_string(),
                         available: false,
-                        status_reason: "Factory local route -> ollama/gemma4; requires backend projection.".to_string(),
+                        status_reason: format!(
+                            "Factory local route -> ollama/{local_model}; requires backend projection."
+                        ),
                         api_key: Some(JsonValue::Null),
                         ..Default::default()
                     },
@@ -559,7 +822,7 @@ impl ZeroclawPlugin {
                         status: "declared".to_string(),
                         available: false,
                         status_reason: "OSCAL policy provider is declared; unavailable until oscal_subid_registry is projected.".to_string(),
-                        source: "/opdbus/v1/plugins/oscal_subid_registry".to_string(),
+                        source: Self::OSCAL_SUBID_REGISTRY_OBJECT.to_string(),
                         api_key: Some(JsonValue::Null),
                         ..Default::default()
                     },
@@ -635,6 +898,471 @@ impl ZeroclawPlugin {
                     required: true,
                     ..Default::default()
                 },
+            },
+        }
+    }
+
+    fn option_field(
+        name: &str,
+        proto_type: &str,
+        json_type: &str,
+        sensitive: bool,
+        required: bool,
+    ) -> ConfigurableOptionField {
+        ConfigurableOptionField {
+            name: name.to_string(),
+            proto_type: proto_type.to_string(),
+            json_type: json_type.to_string(),
+            sensitive,
+            required,
+        }
+    }
+
+    fn option_message(
+        name: &str,
+        fields: Vec<ConfigurableOptionField>,
+    ) -> ConfigurableOptionMessage {
+        ConfigurableOptionMessage {
+            name: name.to_string(),
+            fields,
+        }
+    }
+
+    fn option_rpc(
+        name: &str,
+        request_type: &str,
+        response_type: &str,
+        side_effect: &str,
+        capability_id: &str,
+        subid: &str,
+    ) -> ConfigurableOptionRpc {
+        ConfigurableOptionRpc {
+            name: name.to_string(),
+            request_type: request_type.to_string(),
+            response_type: response_type.to_string(),
+            side_effect: side_effect.to_string(),
+            capability_id: capability_id.to_string(),
+            subid: subid.to_string(),
+        }
+    }
+
+    fn memory_namespace(
+        namespace_template: &str,
+        keys: &[&str],
+        purpose: &str,
+    ) -> MemoryNamespaceOption {
+        MemoryNamespaceOption {
+            namespace_template: namespace_template.to_string(),
+            keys: keys.iter().map(|key| (*key).to_string()).collect(),
+            purpose: purpose.to_string(),
+            identity_link_key: "container:{container_id}:identity.wireguard_pubkey".to_string(),
+        }
+    }
+
+    fn configurable_options() -> ConfigurableOptions {
+        ConfigurableOptions {
+            registration_service: RegistrationServiceSchema {
+                package: "operation.registration.v1".to_string(),
+                source_proto: "crates/op-grpc-bridge/proto/registration.proto".to_string(),
+                service: "RegistrationService".to_string(),
+                rpcs: vec![
+                    Self::option_rpc(
+                        "SendMagicLink",
+                        "SendMagicLinkRequest",
+                        "SendMagicLinkResponse",
+                        "Mutation",
+                        "cap.software.zeroclaw.registration.magic-link.send@v1",
+                        "mut.service.zeroclaw.registration.magic-link.send@v1",
+                    ),
+                    Self::option_rpc(
+                        "VerifyMagicLink",
+                        "VerifyMagicLinkRequest",
+                        "VerifyMagicLinkResponse",
+                        "Mutation",
+                        "cap.software.zeroclaw.registration.magic-link.verify@v1",
+                        "mut.service.zeroclaw.registration.magic-link.verify@v1",
+                    ),
+                    Self::option_rpc(
+                        "RegisterUser",
+                        "RegisterUserRequest",
+                        "RegisterUserResponse",
+                        "Mutation",
+                        "cap.software.zeroclaw.registration.user.register@v1",
+                        "mut.service.zeroclaw.registration.user.register@v1",
+                    ),
+                    Self::option_rpc(
+                        "GetUserStatus",
+                        "GetUserStatusRequest",
+                        "GetUserStatusResponse",
+                        "Read",
+                        "cap.software.zeroclaw.registration.user-status.read@v1",
+                        "obs.service.zeroclaw.registration.user-status.get@v1",
+                    ),
+                    Self::option_rpc(
+                        "ListUsers",
+                        "ListUsersRequest",
+                        "ListUsersResponse",
+                        "Read",
+                        "cap.software.zeroclaw.registration.users.read@v1",
+                        "obs.service.zeroclaw.registration.users.list@v1",
+                    ),
+                    Self::option_rpc(
+                        "GetWireGuardConfig",
+                        "GetWireGuardConfigRequest",
+                        "GetWireGuardConfigResponse",
+                        "Read",
+                        "cap.software.zeroclaw.registration.wireguard-config.read@v1",
+                        "obs.service.zeroclaw.registration.wireguard-config.get@v1",
+                    ),
+                    Self::option_rpc(
+                        "AdminUserAction",
+                        "AdminUserActionRequest",
+                        "AdminUserActionResponse",
+                        "Mutation",
+                        "cap.software.zeroclaw.registration.admin-user-action.apply@v1",
+                        "mut.service.zeroclaw.registration.admin-user-action.apply@v1",
+                    ),
+                ],
+                messages: vec![
+                    Self::option_message(
+                        "SendMagicLinkRequest",
+                        vec![
+                            Self::option_field("email", "string", "string", false, true),
+                            Self::option_field("domain", "string", "string", false, true),
+                            Self::option_field("is_admin", "bool", "boolean", false, true),
+                            Self::option_field("custom_message", "optional string", "string", false, false),
+                        ],
+                    ),
+                    Self::option_message(
+                        "SendMagicLinkResponse",
+                        vec![
+                            Self::option_field("success", "bool", "boolean", false, false),
+                            Self::option_field("message", "string", "string", false, false),
+                            Self::option_field("token", "optional string", "string", true, false),
+                            Self::option_field(
+                                "expires_at",
+                                "google.protobuf.Timestamp",
+                                "string:date-time",
+                                false,
+                                false,
+                            ),
+                        ],
+                    ),
+                    Self::option_message(
+                        "VerifyMagicLinkRequest",
+                        vec![
+                            Self::option_field("token", "string", "string", true, true),
+                            Self::option_field("domain", "string", "string", false, true),
+                        ],
+                    ),
+                    Self::option_message(
+                        "VerifyMagicLinkResponse",
+                        vec![
+                            Self::option_field("success", "bool", "boolean", false, false),
+                            Self::option_field("user_id", "string", "string", false, false),
+                            Self::option_field("email", "string", "string", false, false),
+                            Self::option_field("wireguard_public_key", "string", "string", true, false),
+                            Self::option_field("assigned_ip", "string", "string", false, false),
+                            Self::option_field("wireguard_config", "string", "string", true, false),
+                            Self::option_field("message", "string", "string", false, false),
+                            Self::option_field("is_admin", "bool", "boolean", false, false),
+                            Self::option_field(
+                                "verified_at",
+                                "google.protobuf.Timestamp",
+                                "string:date-time",
+                                false,
+                                false,
+                            ),
+                        ],
+                    ),
+                    Self::option_message(
+                        "RegisterUserRequest",
+                        vec![
+                            Self::option_field("email", "string", "string", false, true),
+                            Self::option_field("wireguard_public_key", "string", "string", true, true),
+                            Self::option_field("domain", "string", "string", false, true),
+                            Self::option_field("is_admin", "bool", "boolean", false, true),
+                            Self::option_field(
+                                "metadata",
+                                "optional google.protobuf.Struct",
+                                "object",
+                                false,
+                                false,
+                            ),
+                        ],
+                    ),
+                    Self::option_message(
+                        "RegisterUserResponse",
+                        vec![
+                            Self::option_field("success", "bool", "boolean", false, false),
+                            Self::option_field("user_id", "string", "string", false, false),
+                            Self::option_field("message", "string", "string", false, false),
+                            Self::option_field("assigned_ip", "string", "string", false, false),
+                            Self::option_field("wireguard_config", "string", "string", true, false),
+                            Self::option_field(
+                                "registered_at",
+                                "google.protobuf.Timestamp",
+                                "string:date-time",
+                                false,
+                                false,
+                            ),
+                        ],
+                    ),
+                    Self::option_message(
+                        "GetUserStatusRequest",
+                        vec![
+                            Self::option_field("email", "string", "string", false, false),
+                            Self::option_field("user_id", "string", "string", false, false),
+                            Self::option_field("domain", "string", "string", false, false),
+                        ],
+                    ),
+                    Self::option_message(
+                        "GetUserStatusResponse",
+                        vec![
+                            Self::option_field("registered", "bool", "boolean", false, false),
+                            Self::option_field("user_id", "string", "string", false, false),
+                            Self::option_field("email", "string", "string", false, false),
+                            Self::option_field("email_verified", "bool", "boolean", false, false),
+                            Self::option_field("wireguard_public_key", "string", "string", true, false),
+                            Self::option_field("assigned_ip", "string", "string", false, false),
+                            Self::option_field("is_admin", "bool", "boolean", false, false),
+                            Self::option_field(
+                                "registered_at",
+                                "google.protobuf.Timestamp",
+                                "string:date-time",
+                                false,
+                                false,
+                            ),
+                            Self::option_field(
+                                "last_active",
+                                "google.protobuf.Timestamp",
+                                "string:date-time",
+                                false,
+                                false,
+                            ),
+                        ],
+                    ),
+                    Self::option_message(
+                        "ListUsersRequest",
+                        vec![
+                            Self::option_field("limit", "uint32", "integer:uint32", false, false),
+                            Self::option_field("offset", "uint32", "integer:uint32", false, false),
+                            Self::option_field("include_admins_only", "bool", "boolean", false, false),
+                            Self::option_field("domain_filter", "string", "string", false, false),
+                        ],
+                    ),
+                    Self::option_message(
+                        "ListUsersResponse",
+                        vec![
+                            Self::option_field("users", "repeated UserInfo", "array", false, false),
+                            Self::option_field("total_count", "uint32", "integer:uint32", false, false),
+                            Self::option_field("filtered_count", "uint32", "integer:uint32", false, false),
+                        ],
+                    ),
+                    Self::option_message(
+                        "UserInfo",
+                        vec![
+                            Self::option_field("user_id", "string", "string", false, false),
+                            Self::option_field("email", "string", "string", false, false),
+                            Self::option_field("email_verified", "bool", "boolean", false, false),
+                            Self::option_field("wireguard_public_key", "string", "string", true, false),
+                            Self::option_field("assigned_ip", "string", "string", false, false),
+                            Self::option_field("is_admin", "bool", "boolean", false, false),
+                            Self::option_field(
+                                "registered_at",
+                                "google.protobuf.Timestamp",
+                                "string:date-time",
+                                false,
+                                false,
+                            ),
+                            Self::option_field(
+                                "last_active",
+                                "google.protobuf.Timestamp",
+                                "string:date-time",
+                                false,
+                                false,
+                            ),
+                            Self::option_field(
+                                "metadata",
+                                "optional google.protobuf.Struct",
+                                "object",
+                                false,
+                                false,
+                            ),
+                        ],
+                    ),
+                    Self::option_message(
+                        "GetWireGuardConfigRequest",
+                        vec![
+                            Self::option_field("email", "string", "string", false, false),
+                            Self::option_field("user_id", "string", "string", false, false),
+                            Self::option_field("domain", "string", "string", false, false),
+                        ],
+                    ),
+                    Self::option_message(
+                        "GetWireGuardConfigResponse",
+                        vec![
+                            Self::option_field("success", "bool", "boolean", false, false),
+                            Self::option_field("wireguard_config", "string", "string", true, false),
+                            Self::option_field("public_key", "string", "string", true, false),
+                            Self::option_field("assigned_ip", "string", "string", false, false),
+                            Self::option_field("message", "string", "string", false, false),
+                            Self::option_field(
+                                "generated_at",
+                                "google.protobuf.Timestamp",
+                                "string:date-time",
+                                false,
+                                false,
+                            ),
+                        ],
+                    ),
+                    Self::option_message(
+                        "AdminUserActionRequest",
+                        vec![
+                            Self::option_field("action", "string", "string", false, true),
+                            Self::option_field("user_id", "string", "string", false, false),
+                            Self::option_field("email", "string", "string", false, false),
+                            Self::option_field(
+                                "parameters",
+                                "optional google.protobuf.Struct",
+                                "object",
+                                false,
+                                false,
+                            ),
+                        ],
+                    ),
+                    Self::option_message(
+                        "AdminUserActionResponse",
+                        vec![
+                            Self::option_field("success", "bool", "boolean", false, false),
+                            Self::option_field("message", "string", "string", false, false),
+                            Self::option_field("user_id", "string", "string", false, false),
+                            Self::option_field(
+                                "action_timestamp",
+                                "google.protobuf.Timestamp",
+                                "string:date-time",
+                                false,
+                                false,
+                            ),
+                        ],
+                    ),
+                    Self::option_message(
+                        "RegistrationError",
+                        vec![
+                            Self::option_field("code", "int32", "integer:int32", false, false),
+                            Self::option_field("message", "string", "string", false, false),
+                            Self::option_field(
+                                "details",
+                                "optional google.protobuf.Struct",
+                                "object",
+                                false,
+                                false,
+                            ),
+                        ],
+                    ),
+                ],
+                error_codes: vec![
+                    ConfigurableOptionErrorCode {
+                        name: "REGISTRATION_ERROR_UNSPECIFIED".to_string(),
+                        value: 0,
+                    },
+                    ConfigurableOptionErrorCode {
+                        name: "REGISTRATION_ERROR_INVALID_EMAIL".to_string(),
+                        value: 1,
+                    },
+                    ConfigurableOptionErrorCode {
+                        name: "REGISTRATION_ERROR_INVALID_TOKEN".to_string(),
+                        value: 2,
+                    },
+                    ConfigurableOptionErrorCode {
+                        name: "REGISTRATION_ERROR_USER_EXISTS".to_string(),
+                        value: 3,
+                    },
+                    ConfigurableOptionErrorCode {
+                        name: "REGISTRATION_ERROR_WIREGUARD_KEY_INVALID".to_string(),
+                        value: 4,
+                    },
+                    ConfigurableOptionErrorCode {
+                        name: "REGISTRATION_ERROR_NETWORK_UNAVAILABLE".to_string(),
+                        value: 5,
+                    },
+                    ConfigurableOptionErrorCode {
+                        name: "REGISTRATION_ERROR_ADMIN_REQUIRED".to_string(),
+                        value: 6,
+                    },
+                ],
+            },
+            user_container: UserContainerOptions {
+                source_script: "deploy/scripts/provision-workspace-subscriber.sh".to_string(),
+                arguments: vec![
+                    Self::option_field("username", "positional string", "string", false, true),
+                    Self::option_field("--mac", "option string", "string", true, false),
+                    Self::option_field("--psk", "option string", "string", true, false),
+                    Self::option_field("--email", "option string", "string", false, false),
+                    Self::option_field("--ghostbridge", "flag bool", "boolean", false, false),
+                    Self::option_field("--semantic", "flag bool", "boolean", false, false),
+                ],
+                container_id_template: "ws-{username}".to_string(),
+                image: "images:debian/12".to_string(),
+                cognitive_mcp_endpoint: "http://100.90.37.254:3003/mcp".to_string(),
+                feature_flags: vec!["ghostbridge".to_string(), "semantic_search".to_string()],
+            },
+            identity_chain: IdentityOptions {
+                mac_address_key: "--mac".to_string(),
+                pre_shared_key: "--psk".to_string(),
+                wireguard_pubkey: "container:{container_id}:identity/wireguard_pubkey".to_string(),
+                mcp_token_derivation: "uuid_v5(wireguard_pubkey)".to_string(),
+            },
+            memory_namespaces: vec![
+                Self::memory_namespace(
+                    "container:{container_id}:identity",
+                    &["wireguard_pubkey", "mcp_token", "mac_address", "psk", "email"],
+                    "Container identity namespace. Email is present only when GhostBridge is disabled.",
+                ),
+                Self::memory_namespace(
+                    "container:{container_id}:soul",
+                    &["profile"],
+                    "Container soul profile bound to the same container identity.",
+                ),
+                Self::memory_namespace(
+                    "container:{container_id}:domain:work",
+                    &["MEMORY_INDEX"],
+                    "Work-domain namespace bound to the container identity.",
+                ),
+                Self::memory_namespace(
+                    "container:{container_id}:domain:personal",
+                    &["MEMORY_INDEX"],
+                    "Personal-domain namespace bound to the container identity.",
+                ),
+                Self::memory_namespace(
+                    "container:{container_id}:domain:home",
+                    &["MEMORY_INDEX"],
+                    "Home-domain namespace bound to the container identity.",
+                ),
+                Self::memory_namespace(
+                    "container:{container_id}:index",
+                    &["MEMORY_INDEX"],
+                    "Namespace index for identity, soul, and domain namespaces.",
+                ),
+                Self::memory_namespace(
+                    "container:{container_id}:features",
+                    &["ghostbridge", "semantic_search"],
+                    "Feature flags projected for the container identity.",
+                ),
+            ],
+            privacy_policy: PrivacyOptions {
+                email_storage_rule:
+                    "Store email only when GhostBridge is disabled; GhostBridge users withhold email from CozoDB."
+                        .to_string(),
+                sensitive_fields: vec![
+                    "token".to_string(),
+                    "wireguard_public_key".to_string(),
+                    "wireguard_config".to_string(),
+                    "public_key".to_string(),
+                    "mcp_token".to_string(),
+                    "mac_address".to_string(),
+                    "psk".to_string(),
+                ],
             },
         }
     }
@@ -749,6 +1477,29 @@ pub(crate) fn zeroclaw_schema() -> PluginSchema {
             true,
             "cap.software.zeroclaw.model-assignments.read@v1",
             "obs.service.zeroclaw.model-assignments.get@v1",
+        ),
+    );
+    schema.methods.insert(
+        "GetConfigurableOptions".to_string(),
+        method_decl_from_schemars_with_output::<EmptyZeroclawInput, GetConfigurableOptionsOutput>(
+            "GetConfigurableOptions",
+            op_state_store::SideEffect::Read,
+            true,
+            "cap.software.zeroclaw.options.read@v1",
+            "obs.service.zeroclaw.options.get@v1",
+        ),
+    );
+    schema.methods.insert(
+        "ListUserContainerMemoryNamespaceOptions".to_string(),
+        method_decl_from_schemars_with_output::<
+            EmptyZeroclawInput,
+            ListUserContainerMemoryNamespaceOptionsOutput,
+        >(
+            "ListUserContainerMemoryNamespaceOptions",
+            op_state_store::SideEffect::Read,
+            true,
+            "cap.software.zeroclaw.options.memory-namespaces.read@v1",
+            "obs.service.zeroclaw.options.memory-namespaces.list@v1",
         ),
     );
     schema.methods.insert(
@@ -883,7 +1634,10 @@ pub(crate) fn zeroclaw_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "SetVectorizationModel".to_string(),
-        method_decl_from_schemars_with_output::<SetVectorizationModelInput, SetVectorizationModelOutput>(
+        method_decl_from_schemars_with_output::<
+            SetVectorizationModelInput,
+            SetVectorizationModelOutput,
+        >(
             "SetVectorizationModel",
             op_state_store::SideEffect::Mutation,
             false,
@@ -893,7 +1647,10 @@ pub(crate) fn zeroclaw_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "SetQdrantRetrievalModel".to_string(),
-        method_decl_from_schemars_with_output::<SetQdrantRetrievalModelInput, SetQdrantRetrievalModelOutput>(
+        method_decl_from_schemars_with_output::<
+            SetQdrantRetrievalModelInput,
+            SetQdrantRetrievalModelOutput,
+        >(
             "SetQdrantRetrievalModel",
             op_state_store::SideEffect::Mutation,
             false,
@@ -903,7 +1660,10 @@ pub(crate) fn zeroclaw_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "SetCozoRetrievalModel".to_string(),
-        method_decl_from_schemars_with_output::<SetCozoRetrievalModelInput, SetCozoRetrievalModelOutput>(
+        method_decl_from_schemars_with_output::<
+            SetCozoRetrievalModelInput,
+            SetCozoRetrievalModelOutput,
+        >(
             "SetCozoRetrievalModel",
             op_state_store::SideEffect::Mutation,
             false,
@@ -936,7 +1696,10 @@ pub struct DispatchOutcome {
 
 impl DispatchOutcome {
     fn plain(result: JsonValue) -> Self {
-        Self { result, signal: None }
+        Self {
+            result,
+            signal: None,
+        }
     }
 }
 
@@ -947,16 +1710,42 @@ pub fn dispatch_zeroclaw_method(
     state: &ZeroclawState,
 ) -> std::result::Result<DispatchOutcome, ZeroclawError> {
     match method {
-        "GetState" => Ok(DispatchOutcome::plain(serde_json::json!({ "state": to_json(state) }))),
-        "GetModelRoutes" => Ok(DispatchOutcome::plain(serde_json::json!({ "model_routes": to_json(&state.projection.model_routes) }))),
-        "GetProviderCatalog" => Ok(DispatchOutcome::plain(serde_json::json!({ "providers": to_json(&state.projection.providers) }))),
-        "GetTools" => Ok(DispatchOutcome::plain(serde_json::json!({ "tools": to_json(&state.projection.tools) }))),
-        "ListProviders" => Ok(DispatchOutcome::plain(serde_json::json!({ "providers": to_json(&state.projection.providers) }))),
-        "GetModelAssignments" => Ok(DispatchOutcome::plain(serde_json::json!({ "model_assignments": to_json(&state.model_assignments) }))),
-        "GetRouter" => Ok(DispatchOutcome::plain(serde_json::json!({ "router": to_json(&state.projection.router) }))),
-        "GetConfigSchema" => Ok(DispatchOutcome::plain(serde_json::json!({ "config_schema": to_json(&state.projection.config_schema) }))),
-        "ListUiSurfaces" => Ok(DispatchOutcome::plain(serde_json::json!({ "ui_surfaces": to_json(&state.projection.ui_surfaces) }))),
-        "GetStructuredOutput" => Ok(DispatchOutcome::plain(serde_json::json!({ "structured_output": to_json(&state.projection.structured_output) }))),
+        "GetState" => Ok(DispatchOutcome::plain(
+            serde_json::json!({ "state": to_json(state) }),
+        )),
+        "GetModelRoutes" => Ok(DispatchOutcome::plain(
+            serde_json::json!({ "model_routes": to_json(&state.projection.model_routes) }),
+        )),
+        "GetProviderCatalog" => Ok(DispatchOutcome::plain(
+            serde_json::json!({ "providers": to_json(&state.projection.providers) }),
+        )),
+        "GetTools" => Ok(DispatchOutcome::plain(
+            serde_json::json!({ "tools": to_json(&state.projection.tools) }),
+        )),
+        "ListProviders" => Ok(DispatchOutcome::plain(
+            serde_json::json!({ "providers": to_json(&state.projection.providers) }),
+        )),
+        "GetModelAssignments" => Ok(DispatchOutcome::plain(
+            serde_json::json!({ "model_assignments": to_json(&state.model_assignments) }),
+        )),
+        "GetConfigurableOptions" => Ok(DispatchOutcome::plain(
+            serde_json::json!({ "configurable_options": to_json(&state.configurable_options) }),
+        )),
+        "ListUserContainerMemoryNamespaceOptions" => Ok(DispatchOutcome::plain(
+            serde_json::json!({ "memory_namespaces": to_json(&state.configurable_options.memory_namespaces) }),
+        )),
+        "GetRouter" => Ok(DispatchOutcome::plain(
+            serde_json::json!({ "router": to_json(&state.projection.router) }),
+        )),
+        "GetConfigSchema" => Ok(DispatchOutcome::plain(
+            serde_json::json!({ "config_schema": to_json(&state.projection.config_schema) }),
+        )),
+        "ListUiSurfaces" => Ok(DispatchOutcome::plain(
+            serde_json::json!({ "ui_surfaces": to_json(&state.projection.ui_surfaces) }),
+        )),
+        "GetStructuredOutput" => Ok(DispatchOutcome::plain(
+            serde_json::json!({ "structured_output": to_json(&state.projection.structured_output) }),
+        )),
         "ResolveRoute" => resolve_route(json_args, state).map(DispatchOutcome::plain),
         "SetProvider" => set_provider_handler(json_args, state),
         "SetModel" => set_model_handler(json_args, state),
@@ -984,26 +1773,49 @@ fn parse_args(method: &str, json_args: &str) -> std::result::Result<JsonValue, Z
     })
 }
 
-fn require_str(args: &JsonValue, field: &str, method: &str) -> std::result::Result<String, ZeroclawError> {
-    args.get(field).and_then(JsonValue::as_str).map(str::to_string).ok_or_else(|| ZeroclawError::ExecutionDenied {
-        reason: format!("{method} requires string field '{field}'"),
-    })
+fn require_str(
+    args: &JsonValue,
+    field: &str,
+    method: &str,
+) -> std::result::Result<String, ZeroclawError> {
+    args.get(field)
+        .and_then(JsonValue::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| ZeroclawError::ExecutionDenied {
+            reason: format!("{method} requires string field '{field}'"),
+        })
 }
 
-fn resolve_route(json_args: &str, state: &ZeroclawState) -> std::result::Result<JsonValue, ZeroclawError> {
+fn resolve_route(
+    json_args: &str,
+    state: &ZeroclawState,
+) -> std::result::Result<JsonValue, ZeroclawError> {
     let args = parse_args("ResolveRoute", json_args)?;
     let hint = require_str(&args, "hint", "ResolveRoute")?;
-    state.projection.model_routes.iter()
+    state
+        .projection
+        .model_routes
+        .iter()
         .find(|route| route.hint == hint || route.model == hint)
         .map(|route| serde_json::json!({ "route": to_json(route) }))
         .ok_or(ZeroclawError::RouteNotDeclared { hint })
 }
 
-fn set_provider_handler(json_args: &str, state: &ZeroclawState) -> std::result::Result<DispatchOutcome, ZeroclawError> {
+fn set_provider_handler(
+    json_args: &str,
+    state: &ZeroclawState,
+) -> std::result::Result<DispatchOutcome, ZeroclawError> {
     let args = parse_args("SetProvider", json_args)?;
     let provider_id = require_str(&args, "provider_id", "SetProvider")?;
-    if !state.projection.providers.iter().any(|p| p.id == provider_id) {
-        return Err(ZeroclawError::ProviderNotDeclared { provider: provider_id });
+    if !state
+        .projection
+        .providers
+        .iter()
+        .any(|p| p.id == provider_id)
+    {
+        return Err(ZeroclawError::ProviderNotDeclared {
+            provider: provider_id,
+        });
     }
     let old = state.selected_provider.clone();
     Ok(DispatchOutcome {
@@ -1015,10 +1827,18 @@ fn set_provider_handler(json_args: &str, state: &ZeroclawState) -> std::result::
     })
 }
 
-fn set_model_handler(json_args: &str, state: &ZeroclawState) -> std::result::Result<DispatchOutcome, ZeroclawError> {
+fn set_model_handler(
+    json_args: &str,
+    state: &ZeroclawState,
+) -> std::result::Result<DispatchOutcome, ZeroclawError> {
     let args = parse_args("SetModel", json_args)?;
     let model_id = require_str(&args, "model_id", "SetModel")?;
-    if !state.projection.model_routes.iter().any(|r| r.model == model_id) {
+    if !state
+        .projection
+        .model_routes
+        .iter()
+        .any(|r| r.model == model_id)
+    {
         return Err(ZeroclawError::ModelNotDeclared { model: model_id });
     }
     let old = state.selected_model.clone();
@@ -1044,7 +1864,11 @@ fn set_role_model_handler(
         "vectorization" => serde_json::json!({ "vectorization": model_id }),
         "qdrant_retrieval" => serde_json::json!({ "qdrant_retrieval": model_id }),
         "cozo_retrieval" => serde_json::json!({ "cozo_retrieval": model_id }),
-        _ => return Err(ZeroclawError::ExecutionDenied { reason: format!("unknown model role: {role}") }),
+        _ => {
+            return Err(ZeroclawError::ExecutionDenied {
+                reason: format!("unknown model role: {role}"),
+            })
+        }
     };
     let signal = serde_json::json!({
         "role": role,
@@ -1071,14 +1895,30 @@ mod tests {
             out.push(subid.to_string());
         }
         if let Some(props) = node.get("properties").and_then(JVal::as_object) {
-            for v in props.values() { collect_subids(v, out); }
+            for v in props.values() {
+                collect_subids(v, out);
+            }
         }
-        if let Some(defs) = node.get("$defs").or_else(|| node.get("definitions")).and_then(JVal::as_object) {
-            for v in defs.values() { collect_subids(v, out); }
+        if let Some(defs) = node
+            .get("$defs")
+            .or_else(|| node.get("definitions"))
+            .and_then(JVal::as_object)
+        {
+            for v in defs.values() {
+                collect_subids(v, out);
+            }
         }
-        if let Some(items) = node.get("items") { collect_subids(items, out); }
-        if let Some(alts) = node.get("anyOf").or_else(|| node.get("oneOf")).and_then(JVal::as_array) {
-            for v in alts { collect_subids(v, out); }
+        if let Some(items) = node.get("items") {
+            collect_subids(items, out);
+        }
+        if let Some(alts) = node
+            .get("anyOf")
+            .or_else(|| node.get("oneOf"))
+            .and_then(JVal::as_array)
+        {
+            for v in alts {
+                collect_subids(v, out);
+            }
         }
     }
 

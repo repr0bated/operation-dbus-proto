@@ -19,14 +19,11 @@
 //!
 //! ## Usage
 //!
-//! ```rust,no_run
+//! ```rust
 //! use op_plugins::schema_loader::SchemaLoader;
 //!
-//! # async fn example() -> anyhow::Result<()> {
 //! let loader = SchemaLoader::new("schemas/plugin");
 //! let schema = loader.load_schema("incus").await?;
-//! # Ok(())
-//! # }
 //! ```
 
 use anyhow::{Context, Result};

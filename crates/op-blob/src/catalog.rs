@@ -104,6 +104,10 @@ impl BlobStore {
         self.active_reflection.blob_paths()
     }
 
+    pub fn plugin_object_blobs(&self) -> Vec<PluginObjectBlob> {
+        self.active_reflection.plugin_object_blobs()
+    }
+
     pub fn active_reflection(&self) -> &ActiveReflectionCatalog {
         &self.active_reflection
     }
@@ -319,6 +323,59 @@ impl ActiveReflectionCatalog {
         v.sort();
         v
     }
+
+    /// Rehydrate every active blob as an owned `PluginObjectBlob`, sorted by
+    /// plugin id — the startup-hydration input for in-memory reflection.
+    pub fn plugin_object_blobs(&self) -> Vec<PluginObjectBlob> {
+        let mut ids: Vec<&String> = self.entries.keys().collect();
+        ids.sort();
+        ids.iter()
+            .filter_map(|id| PluginObjectBlob::from_sealed(&self.entries[*id].bytes).ok())
+            .collect()
+    }
+}
+
+/// Read ONE plugin's canonical schema straight from its sealed blob in `dir`
+/// — the single-plugin read path (no catalog load, no monolith file). This is
+/// how a component (including a plugin reading its own contract) asks "what
+/// is plugin X": the blob answers, nothing else does.
+pub fn read_plugin_state_store_schema(
+    dir: &Path,
+    plugin_id: &str,
+) -> Option<op_state_store::PluginSchema> {
+    let prefix = format!("{plugin_id}.");
+    for e in std::fs::read_dir(dir).ok()? {
+        let p = e.ok()?.path();
+        let Some(name) = p.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if name.starts_with(&prefix) && name.ends_with(".blob") {
+            let bytes = std::fs::read(&p).ok()?;
+            let blob = BlobRef::new(&bytes).ok()?;
+            return blob.state_store_schema().ok();
+        }
+    }
+    None
+}
+
+/// [`read_plugin_state_store_schema`] against the default SHM catalog.
+pub fn read_plugin_schema_shm(plugin_id: &str) -> Option<op_state_store::PluginSchema> {
+    read_plugin_state_store_schema(Path::new(DEFAULT_SHM_DIR), plugin_id)
+}
+
+/// The active plugin ids from the catalog manifest (sorted) — the cheap
+/// "which plugins exist" read: one small JSON file, no blob loads.
+pub fn read_manifest_plugin_ids(dir: &Path) -> Option<Vec<String>> {
+    let bytes = std::fs::read(dir.join(MANIFEST_FILENAME)).ok()?;
+    let v: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    let mut ids: Vec<String> = v.get("plugins")?.as_object()?.keys().cloned().collect();
+    ids.sort();
+    Some(ids)
+}
+
+/// [`read_manifest_plugin_ids`] against the default SHM catalog.
+pub fn read_manifest_plugin_ids_shm() -> Option<Vec<String>> {
+    read_manifest_plugin_ids(Path::new(DEFAULT_SHM_DIR))
 }
 
 fn index_entry(path: PathBuf, bytes: Vec<u8>) -> Result<Entry, String> {

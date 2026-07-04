@@ -14,4 +14,3 @@
 pub fn descriptor_bytes() -> Vec<u8> {
     crate::proto::FILE_DESCRIPTOR_SET.to_vec()
 }
-

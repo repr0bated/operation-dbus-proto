@@ -19,7 +19,6 @@ use super::plugin_scaffold_helpers::{
 /// The single active-schema catalog in shared memory. Every plugin reads its
 /// own slice by name from this one file — there is no per-plugin shm file and
 /// no diff loop. The schema's declared state IS the desired state.
-const SHM_SCHEMA_PATH: &str = "/dev/shm/live-schema.json";
 
 fn default_protocol() -> String {
     "grpc".to_string()
@@ -181,7 +180,10 @@ pub fn unix_socket_schema_derived() -> PluginSchema {
     // Listen method
     schema.methods.insert(
         "listen".to_string(),
-        method_decl_from_schemars_with_output::<ListenInput, super::plugin_scaffold_helpers::AckOutput>(
+        method_decl_from_schemars_with_output::<
+            ListenInput,
+            super::plugin_scaffold_helpers::AckOutput,
+        >(
             "Listen",
             op_state_store::SideEffect::Mutation,
             false,
@@ -193,7 +195,10 @@ pub fn unix_socket_schema_derived() -> PluginSchema {
     // Accept method
     schema.methods.insert(
         "accept".to_string(),
-        method_decl_from_schemars_with_output::<AcceptInput, super::plugin_scaffold_helpers::AckOutput>(
+        method_decl_from_schemars_with_output::<
+            AcceptInput,
+            super::plugin_scaffold_helpers::AckOutput,
+        >(
             "Accept",
             op_state_store::SideEffect::Read,
             true,
@@ -205,7 +210,10 @@ pub fn unix_socket_schema_derived() -> PluginSchema {
     // Close method
     schema.methods.insert(
         "close".to_string(),
-        method_decl_from_schemars_with_output::<CloseInput, super::plugin_scaffold_helpers::AckOutput>(
+        method_decl_from_schemars_with_output::<
+            CloseInput,
+            super::plugin_scaffold_helpers::AckOutput,
+        >(
             "Close",
             op_state_store::SideEffect::Mutation,
             false,
@@ -234,21 +242,15 @@ impl UnixSocketPlugin {
     /// schema catalog in shared memory (zero-copy 1:1). The catalog is keyed by
     /// plugin name and each entry carries the schema-declared state.
     fn read_desired() -> UnixSocketState {
-        let Ok(mut bytes) = std::fs::read(SHM_SCHEMA_PATH) else {
+        // The sealed blob IS this plugin: desired state is the `example`
+        // carried by its own blob in the SHM catalog.
+        let Some(schema) = op_blob::catalog::read_plugin_schema_shm("unix_socket") else {
             return UnixSocketState::default();
         };
-        let Ok(catalog) = simd_json::to_owned_value(&mut bytes) else {
+        let Some(state) = schema.example else {
             return UnixSocketState::default();
         };
-        let Some(state) = catalog
-            .get("unix_socket")
-            .and_then(|versions| versions.as_array())
-            .and_then(|versions| versions.last())
-            .and_then(|schema| schema.get("example"))
-        else {
-            return UnixSocketState::default();
-        };
-        simd_json::serde::from_owned_value::<UnixSocketState>(state.clone()).unwrap_or_default()
+        simd_json::serde::from_owned_value::<UnixSocketState>(state).unwrap_or_default()
     }
 
     /// Bind a single endpoint when no shared transport exists. If the shared
@@ -668,8 +670,7 @@ pub(crate) fn unix_socket_schema() -> PluginSchema {
         FieldSchema {
             field_type: FieldType::String,
             required: false,
-            description: "Transport protocol carried over the socket (grpc)"
-                .to_string(),
+            description: "Transport protocol carried over the socket (grpc)".to_string(),
             default: Some(json!("grpc")),
             example: None,
             constraints: Vec::new(),

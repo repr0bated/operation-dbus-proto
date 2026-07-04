@@ -21,8 +21,8 @@
 //!     └─────────────────┘            └─────────────────┘
 //! ```
 
-pub mod chat_service;
 pub mod callable_reflection;
+pub mod chat_service;
 pub mod dbus_object;
 pub mod dynamic_reflection;
 pub mod grpc_client;
@@ -46,12 +46,12 @@ pub use interceptor::ghostbridge_interceptor;
 pub use mutation_engine::{ChangeSource, ChangeType, MutationEngine, StateChange};
 pub use per_plugin_reflection::{
     generate_all_method_protos_for_plugin, generate_reflection_file_descriptor_set,
-    MethodReflectionMeta, PerMethodReflectionConfig, PerMethodReflectionRegistry,
-    to_method_service_name,
+    to_method_service_name, MethodReflectionMeta, PerMethodReflectionConfig,
+    PerMethodReflectionRegistry,
 };
 pub use plugin_grpc_gen::{
     generate_method_file_descriptor, generate_method_proto, generate_plugin_method_protos,
-    MethodServiceRegistry, MethodServiceLifecycleEvent, PerMethodGrpcServices,
+    MethodServiceLifecycleEvent, MethodServiceRegistry, PerMethodGrpcServices,
 };
 pub use proto_gen::{ProtoGenConfig, ProtoGenerator};
 pub use server::{run_zeroclaw_server, ServerConfig};

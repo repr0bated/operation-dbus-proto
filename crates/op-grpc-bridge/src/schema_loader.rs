@@ -61,6 +61,9 @@ impl SchemaLoader {
     pub fn load(&self) -> anyhow::Result<()> {
         let start = Instant::now();
         let path = self.path.read().unwrap().clone();
+        if path.is_dir() {
+            return self.load_from_blob_catalog(&path, start);
+        }
         let bytes = std::fs::read(&path).map_err(|e| {
             let plugin_id = self.plugin_id();
             anyhow::anyhow!(
@@ -74,10 +77,36 @@ impl SchemaLoader {
         Self::parse_and_store(self, &bytes, start, &path)
     }
 
+    /// Read the plugin's canonical schema from its sealed blob in a catalog
+    /// dir. The blob in the catalog IS the plugin — no monolith, no registry.
+    fn load_from_blob_catalog(&self, dir: &Path, start: Instant) -> anyhow::Result<()> {
+        let plugin_id = self.plugin_id();
+        let schema = op_blob::catalog::read_plugin_state_store_schema(dir, &plugin_id)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "no sealed blob for '{}' in catalog {}. \
+                     Ensure the catalog has been sealed (opblob seal-shm) first.",
+                    plugin_id,
+                    dir.display()
+                )
+            })?;
+        let value = serde_json::to_value(&schema)?;
+        let bytes = serde_json::to_vec(&value)?;
+        Self::parse_and_store(self, &bytes, start, dir)
+    }
+
     /// Asynchronous reload used by `SIGHUP` and the D-Bus object.
     pub async fn reload(&self) -> anyhow::Result<()> {
         let start = Instant::now();
         let path = self.path.read().unwrap().clone();
+        if path.is_dir() {
+            let loader = self.clone();
+            return tokio::task::spawn_blocking(move || {
+                loader.load_from_blob_catalog(&path, start)
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("reload task panicked: {}", e))?;
+        }
         let bytes = tokio::fs::read(&path).await.map_err(|e| {
             let plugin_id = self.plugin_id();
             anyhow::anyhow!(

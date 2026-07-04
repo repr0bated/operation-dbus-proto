@@ -248,7 +248,7 @@ impl NetStatePlugin {
 
     /// Check if OVS is available via D-Bus daemon
     pub async fn check_ovs_available(&self) -> Result<bool> {
-        let client = op_network::ovsdb::OvsdbClient::new();
+        let client = op_network::rovs_proxy::OvsdbDbusClient::new();
         match client.list_dbs().await {
             Ok(_) => Ok(true),
             Err(_) => {
@@ -327,7 +327,7 @@ impl NetStatePlugin {
 
     /// Query OVS bridges via D-Bus daemon
     pub async fn query_ovs_bridges(&self) -> Result<Vec<InterfaceConfig>> {
-        let client = op_network::ovsdb::OvsdbClient::new();
+        let client = op_network::rovs_proxy::OvsdbDbusClient::new();
 
         if client.list_dbs().await.is_err() {
             log::info!("OVSDB not reachable via D-Bus daemon - skipping OVS operations");
@@ -345,8 +345,8 @@ impl NetStatePlugin {
         };
 
         for bridge_name in bridge_names {
-            // Get bridge information via D-Bus
-            let bridge_info: serde_json::Value = match client.get_bridge_info(&bridge_name).await {
+            // Get bridge information via JSON-RPC
+            let bridge_info_json = match client.get_bridge_info(&bridge_name).await {
                 Ok(info) => info,
                 Err(_) => {
                     log::debug!("Failed to get info for bridge: {}", bridge_name);
@@ -354,7 +354,28 @@ impl NetStatePlugin {
                 }
             };
 
-            // Get ports for this bridge via D-Bus
+            // Parse JSON string to HashMap
+            let mut bridge_info: HashMap<String, Value> =
+                match serde_json::from_str::<HashMap<String, Value>>(&bridge_info_json) {
+                    Ok(info) => info,
+                    Err(_) => {
+                        log::debug!("Failed to parse bridge info JSON for: {}", bridge_name);
+                        continue;
+                    }
+                };
+
+            // Enrich with routing info (via rtnetlink) for this bridge
+            if let Ok(routes) = op_network::rtnetlink::list_routes_for_interface(&bridge_name).await
+            {
+                bridge_info.insert(
+                    "routing".to_string(),
+                    simd_json::json!({
+                        "ipv4_routes": routes
+                    }),
+                );
+            }
+
+            // Get ports for this bridge via JSON-RPC
             let ports = match client.list_bridge_ports(&bridge_name).await {
                 Ok(ports) => Some(ports),
                 Err(_) => {
@@ -364,16 +385,6 @@ impl NetStatePlugin {
             };
 
             // Derive simple role tags for ports (best-effort heuristics)
-            let mut properties_map: HashMap<String, Value> = match bridge_info.as_object() {
-                Some(obj) => obj
-                    .iter()
-                    .filter_map(|(k, v)| {
-                        simd_json::serde::to_owned_value(v.clone()).ok().map(|owned| (k.clone(), owned))
-                    })
-                    .collect(),
-                None => HashMap::new(),
-            };
-            
             if let Some(ref port_list) = ports {
                 let mut tags: HashMap<String, String> = HashMap::new();
                 for p in port_list {
@@ -395,7 +406,7 @@ impl NetStatePlugin {
                     };
                     tags.insert(p.clone(), role.to_string());
                 }
-                properties_map.insert(
+                bridge_info.insert(
                     "port_tags".to_string(),
                     simd_json::serde::to_owned_value(tags).unwrap_or(Value::null()),
                 );
@@ -411,7 +422,7 @@ impl NetStatePlugin {
                     ipv4: None,      // OVS bridges don't have IP config directly
                     ipv6: None,
                     controller: None,
-                    properties: Some(properties_map),
+                    properties: Some(bridge_info),
                     property_schema: Some(vec!["ovsdb".to_string()]),
                 },
             });
@@ -422,7 +433,7 @@ impl NetStatePlugin {
 
     /// Apply OVS bridge configuration via D-Bus daemon and rtnetlink
     pub async fn apply_ovs_config(&self, config: &InterfaceConfig) -> Result<()> {
-        let client = op_network::ovsdb::OvsdbClient::new();
+        let client = op_network::rovs_proxy::OvsdbDbusClient::new();
         log::info!("Starting apply_ovs_config for {}", config.name);
 
         // Ensure bridge exists via D-Bus daemon
@@ -608,7 +619,7 @@ impl NetStatePlugin {
 
     /// Delete OVS bridge via D-Bus daemon
     pub async fn delete_ovs_bridge(&self, name: &str) -> Result<()> {
-        let client = op_network::ovsdb::OvsdbClient::new();
+        let client = op_network::rovs_proxy::OvsdbDbusClient::new();
 
         client
             .delete_bridge(name)
@@ -972,7 +983,10 @@ pub(crate) fn net_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "apply_interface".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<ApplyInterfaceInput, super::plugin_scaffold_helpers::AckOutput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+            ApplyInterfaceInput,
+            super::plugin_scaffold_helpers::AckOutput,
+        >(
             "apply_interface",
             op_state_store::SideEffect::Mutation,
             false,
@@ -982,7 +996,10 @@ pub(crate) fn net_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "delete_ovs_bridge".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<DeleteOvsBridgeInput, super::plugin_scaffold_helpers::AckOutput>(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+            DeleteOvsBridgeInput,
+            super::plugin_scaffold_helpers::AckOutput,
+        >(
             "delete_ovs_bridge",
             op_state_store::SideEffect::Mutation,
             false,

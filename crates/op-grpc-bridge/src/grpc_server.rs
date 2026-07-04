@@ -3,17 +3,17 @@
 use std::collections::{BTreeMap, HashMap};
 use std::convert::TryFrom;
 use std::pin::Pin;
-use std::sync::OnceLock;
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 use async_stream::stream;
 use chrono::{DateTime, Utc};
 use futures::StreamExt as _;
 use op_cognitive_mcp::QdrantSemanticShuttle;
 use prost::Message;
-use prost_types::{
-    Struct as ProstStruct, Timestamp as ProstTimestamp, Value as ProstValue,
-};
+use prost_reflect::{DescriptorPool, DynamicMessage};
+use prost_types::{Struct as ProstStruct, Timestamp as ProstTimestamp, Value as ProstValue};
+use serde::de::DeserializeSeed;
 use serde_json::Value as JsonValue;
 use simd_json::prelude::{ValueAsContainer, ValueAsScalar};
 use tokio::sync::{broadcast, RwLock};
@@ -23,15 +23,13 @@ use tonic::{Request, Response, Status};
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
-use prost_reflect::{DescriptorPool, DynamicMessage};
-use serde::de::DeserializeSeed;
 
 use crate::interceptor::{self, GhostbridgeIdentity};
 
 use crate::dynamic_reflection::{ActiveReflectionCatalog, DynamicReflectionService};
 use crate::mutation_engine::{ChangeType, MutationEngine};
-use crate::plugin_object_blob::{blobify_plugin_schema, DbusObjectIdentity};
 use crate::plugin_grpc_gen::MethodServiceRegistry;
+use crate::plugin_object_blob::blobify_plugin_schema;
 use crate::proto::{
     event_chain_service_server::EventChainService, ovsdb_mirror_server::OvsdbMirror,
     plugin_service_server::PluginService, runtime_mirror_server::RuntimeMirror,
@@ -400,6 +398,28 @@ impl OperationGrpcServer {
         self
     }
 
+    /// Hydrate in-memory reflection from the sealed SHM blob catalog.
+    ///
+    /// The blob catalog IS the plugin registry: a restart must advertise the
+    /// same plugin set that was sealed, without waiting for every plugin to
+    /// re-register at runtime. Call once at server startup.
+    pub async fn hydrate_reflection_from_shm(&self) -> usize {
+        let store = match op_blob::BlobStore::open_default() {
+            Ok(store) => store,
+            Err(error) => {
+                tracing::warn!(%error, "cannot open SHM blob catalog; reflection starts empty");
+                return 0;
+            }
+        };
+        let blobs = store.plugin_object_blobs();
+        let count = blobs.len();
+        for blob in blobs {
+            self.active_reflection.upsert_blob(blob).await;
+        }
+        tracing::info!(count, "hydrated reflection from SHM blob catalog");
+        count
+    }
+
     /// Freeze all plugin method descriptors from the configured schema provider.
     ///
     /// tonic-reflection is immutable once mounted. This must run before
@@ -483,20 +503,19 @@ impl OperationGrpcServer {
                 .await;
         }
 
-        let blob = blobify_plugin_schema(
-            &plugin_id,
-            schema.clone(),
-            DbusObjectIdentity {
-                bus_name: "org.opdbus.v1.plugins".to_string(),
-                object_path: format!("/org/opdbus/v1/plugins/{}", plugin_id.replace('.', "/")),
-                interface_name: "org.opdbus.v1.Plugin".to_string(),
-            },
-            "operation.plugin.v1",
-            &format!(
-                "operation.plugin.v1.{}PluginMethods",
-                crate::plugin_object_blob::to_pascal_ident(&plugin_id)
-            ),
-        );
+        let blob = blobify_plugin_schema(&plugin_id, schema.clone());
+        // Persist the sealed per-object blob to shm (zero-copy read-path for
+        // other processes) before handing it to the reflection catalog.
+        match op_blob::BlobStore::open_default() {
+            Ok(mut store) => {
+                if let Err(error) = store.write(&blob) {
+                    tracing::warn!(%plugin_id, %error, "failed to persist plugin object blob");
+                }
+            }
+            Err(error) => {
+                tracing::warn!(%error, "failed to open plugin object blob store");
+            }
+        }
         self.active_reflection.upsert_blob(blob).await;
 
         Ok(registries)
@@ -539,7 +558,8 @@ impl OperationGrpcServer {
         Res: prost::Message + Default,
     {
         let identity = request.extensions().get::<GhostbridgeIdentity>().cloned();
-        if let Err(error) = enforce_bridge_capability(plugin_id, method_name, None, identity.as_ref())
+        if let Err(error) =
+            enforce_bridge_capability(plugin_id, method_name, None, identity.as_ref())
         {
             return Err(Status::permission_denied(error.message));
         }
@@ -760,6 +780,9 @@ pub async fn run_grpc_server(
     } else {
         OperationGrpcServer::new(mutation_engine)
     };
+    // The sealed SHM blob catalog IS the plugin set: hydrate reflection from
+    // it so a restart advertises every sealed plugin immediately.
+    server.hydrate_reflection_from_shm().await;
     let server = match QdrantSemanticShuttle::new().await {
         Ok(shuttle) => server.with_semantic_shuttle(Arc::new(shuttle)),
         Err(error) => {

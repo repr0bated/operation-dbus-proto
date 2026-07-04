@@ -111,13 +111,7 @@ pub fn plugin_id_from_path(path: &str) -> Option<String> {
 }
 
 pub fn read_plugin_schema(plugin_id: &str) -> Option<PluginSchema> {
-    let bytes = std::fs::read("/dev/shm/live-schema.json").ok()?;
-    let root = serde_json::from_slice::<serde_json::Value>(&bytes).ok()?;
-    let schema = root
-        .as_object()?
-        .get(plugin_id)?
-        .as_array()
-        .and_then(|items| items.first())
-        .or_else(|| root.as_object()?.get(plugin_id))?;
-    serde_json::from_value::<PluginSchema>(schema.clone()).ok()
+    // The sealed blob IS the plugin: read the canonical schema from its blob
+    // in the SHM catalog, never from a monolith file.
+    op_blob::catalog::read_plugin_schema_shm(plugin_id)
 }

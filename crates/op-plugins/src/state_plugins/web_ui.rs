@@ -567,7 +567,10 @@ pub(crate) fn web_ui_schema() -> PluginSchema {
     // RenderPage method
     schema.methods.insert(
         "render_page".to_string(),
-        method_decl_from_schemars_with_output::<RenderPageInput, super::plugin_scaffold_helpers::AckOutput>(
+        method_decl_from_schemars_with_output::<
+            RenderPageInput,
+            super::plugin_scaffold_helpers::AckOutput,
+        >(
             "RenderPage",
             op_state_store::SideEffect::Read,
             true,
@@ -579,7 +582,10 @@ pub(crate) fn web_ui_schema() -> PluginSchema {
     // HandleEvent method
     schema.methods.insert(
         "handle_event".to_string(),
-        method_decl_from_schemars_with_output::<HandleEventInput, super::plugin_scaffold_helpers::AckOutput>(
+        method_decl_from_schemars_with_output::<
+            HandleEventInput,
+            super::plugin_scaffold_helpers::AckOutput,
+        >(
             "HandleEvent",
             op_state_store::SideEffect::Mutation,
             false,
@@ -591,7 +597,10 @@ pub(crate) fn web_ui_schema() -> PluginSchema {
     // UpdateComponent method
     schema.methods.insert(
         "update_component".to_string(),
-        method_decl_from_schemars_with_output::<UpdateComponentInput, super::plugin_scaffold_helpers::AckOutput>(
+        method_decl_from_schemars_with_output::<
+            UpdateComponentInput,
+            super::plugin_scaffold_helpers::AckOutput,
+        >(
             "UpdateComponent",
             op_state_store::SideEffect::Mutation,
             false,

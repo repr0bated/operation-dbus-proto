@@ -23,7 +23,8 @@ use simd_json::OwnedValue as Value;
 const PLUGIN_NAME: &str = "qdrant";
 const PLUGIN_VERSION: &str = "1.0.0";
 const PLUGIN_CATEGORY: &str = "data";
-const PLUGIN_DESCRIPTION: &str = "Qdrant vector search engine — collections, vector config, HNSW, optimizers";
+const PLUGIN_DESCRIPTION: &str =
+    "Qdrant vector search engine — collections, vector config, HNSW, optimizers";
 const PLUGIN_DISPLAY_NAME: &str = "GB.Qdrant";
 
 const DEFAULT_QDRANT_HTTP_ENDPOINT: &str = "http://127.0.0.1:6333";

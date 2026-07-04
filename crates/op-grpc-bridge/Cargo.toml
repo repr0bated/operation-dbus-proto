@@ -37,6 +37,7 @@ jsonschema = { workspace = true }
 
 # Internal crates
 op-state-store = { path = "../op-state-store" }
+op-blob = { path = "../op-blob" }
 op-state = { path = "../op-state" }
 op-plugins = { path = "../op-plugins" }
 op-identity = { path = "../op-identity" }

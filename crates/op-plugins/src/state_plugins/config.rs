@@ -3,9 +3,9 @@ use async_trait::async_trait;
 use op_state::{
     ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
 };
-use op_state_store::{PluginSchema, SideEffect};
 #[cfg(test)]
 use op_state_store::{FieldSchema, FieldType};
+use op_state_store::{PluginSchema, SideEffect};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use simd_json::json;

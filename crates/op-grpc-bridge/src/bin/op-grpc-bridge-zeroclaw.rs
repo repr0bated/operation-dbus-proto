@@ -1,6 +1,6 @@
 //! 🟢 🦅 ZeroClaw Axum Host — HTTP/gRPC-Web schema server.
 //!
-//! Reads the zeroclaw PluginSchema from `/dev/shm/live-schema.json`
+//! Reads the zeroclaw PluginSchema from its sealed blob in the SHM catalog
 //! and serves it over native gRPC (Unix socket) and gRPC-Web/HTTP (TCP).
 //! This is the HTTP-facing side of The Shuttle for the zeroclaw plugin.
 

@@ -573,11 +573,7 @@ fn serde_to_prost_value(value: &serde_json::Value) -> ProstValue {
 
 impl RemoteOperationClient {
     /// Join a Netmaker network through the Netmaker adapter gRPC service.
-    pub async fn netmaker_join(
-        &self,
-        network: &str,
-        token: &str,
-    ) -> Result<bool, GrpcClientError> {
+    pub async fn netmaker_join(&self, network: &str, token: &str) -> Result<bool, GrpcClientError> {
         let mut client = self.pool.netmaker_client(&self.default_address).await?;
         let response = client
             .join_network(Request::new(JoinNetworkRequest {
@@ -682,11 +678,13 @@ impl RemoteOperationClient {
     }
 
     pub async fn netclient_list(&self) -> Result<ExecuteCommandResponse, GrpcClientError> {
-        self.netclient_noargs(ExecuteNetclientCommand::List(ListRequest {})).await
+        self.netclient_noargs(ExecuteNetclientCommand::List(ListRequest {}))
+            .await
     }
 
     pub async fn netclient_peers(&self) -> Result<ExecuteCommandResponse, GrpcClientError> {
-        self.netclient_noargs(ExecuteNetclientCommand::Peers(PeersRequest {})).await
+        self.netclient_noargs(ExecuteNetclientCommand::Peers(PeersRequest {}))
+            .await
     }
 
     pub async fn netclient_ping(
@@ -700,11 +698,13 @@ impl RemoteOperationClient {
     }
 
     pub async fn netclient_pull(&self) -> Result<ExecuteCommandResponse, GrpcClientError> {
-        self.netclient_noargs(ExecuteNetclientCommand::Pull(PullRequest {})).await
+        self.netclient_noargs(ExecuteNetclientCommand::Pull(PullRequest {}))
+            .await
     }
 
     pub async fn netclient_push(&self) -> Result<ExecuteCommandResponse, GrpcClientError> {
-        self.netclient_noargs(ExecuteNetclientCommand::Push(PushRequest {})).await
+        self.netclient_noargs(ExecuteNetclientCommand::Push(PushRequest {}))
+            .await
     }
 
     pub async fn netclient_register(
@@ -730,11 +730,13 @@ impl RemoteOperationClient {
     }
 
     pub async fn netclient_install(&self) -> Result<ExecuteCommandResponse, GrpcClientError> {
-        self.netclient_noargs(ExecuteNetclientCommand::Install(InstallRequest {})).await
+        self.netclient_noargs(ExecuteNetclientCommand::Install(InstallRequest {}))
+            .await
     }
 
     pub async fn netclient_uninstall(&self) -> Result<ExecuteCommandResponse, GrpcClientError> {
-        self.netclient_noargs(ExecuteNetclientCommand::Uninstall(UninstallRequest {})).await
+        self.netclient_noargs(ExecuteNetclientCommand::Uninstall(UninstallRequest {}))
+            .await
     }
 
     pub async fn netclient_use(
