@@ -1,20 +1,19 @@
 #!/bin/sh
 # gbr-xray - Xray REALITY egress for GhostBridge privacy chain
-# AGENTS.md: D-Bus-first architecture with accountability headers
 
 XRAY_CONFIG="${XRAY_CONFIG:-/etc/xray/config.json}"
 
-# Check if config exists
 if [ ! -f "$XRAY_CONFIG" ]; then
     echo "Xray config not found: $XRAY_CONFIG"
     exit 0
 fi
 
-# Load secrets if available (XRAY_PUBLIC_KEY, etc.)
 if [ -f /etc/ghostbridge/xray.env ]; then
     . /etc/ghostbridge/xray.env
 fi
 
-# Run Xray
+# Alias 10.0.0.2 on ovsbr0 for Netmaker gRPC bridge
+ip addr replace 10.0.0.2/32 dev ovsbr0 2>/dev/null || true
+
 exec 2>&1
 exec /usr/local/bin/xray run -c "$XRAY_CONFIG"

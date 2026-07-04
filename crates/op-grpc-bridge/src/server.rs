@@ -15,6 +15,7 @@ use std::sync::Arc;
 use async_stream::stream;
 use axum::Router;
 use tokio::sync::mpsc;
+use tonic::transport::{Identity, ServerTlsConfig};
 use tonic::{Request as TonicRequest, Response as TonicResponse, Status};
 use tower_http::cors::{Any, CorsLayer};
 use tracing::info;
@@ -46,6 +47,8 @@ pub struct ServerConfig {
     pub schema_path: PathBuf,
     pub unix_socket: PathBuf,
     pub bind_addr: String,
+    pub tls_bind_addr: Option<String>,
+    pub tls_identity: Option<Identity>,
 }
 
 impl Default for ServerConfig {
@@ -55,6 +58,8 @@ impl Default for ServerConfig {
             schema_path: PathBuf::from(DEFAULT_SCHEMA_PATH),
             unix_socket: PathBuf::from(DEFAULT_UNIX_SOCKET),
             bind_addr: DEFAULT_BIND_ADDR.to_string(),
+            tls_bind_addr: None,
+            tls_identity: None,
         }
     }
 }
@@ -76,6 +81,35 @@ impl ServerConfig {
             ),
             bind_addr: std::env::var("ZEROCLAW_BIND_ADDR")
                 .unwrap_or_else(|_| DEFAULT_BIND_ADDR.to_string()),
+            tls_bind_addr: std::env::var("ZEROCLAW_TLS_BIND_ADDR").ok(),
+            tls_identity: Self::load_tls_identity(),
+        }
+    }
+
+    /// Load TLS identity from env vars or auto-generate self-signed.
+    /// Env: `ZEROCLAW_TLS_CERT`, `ZEROCLAW_TLS_KEY` (PEM).
+    /// If both absent, generates one via rcgen (localhost, ghostbridge.tech, 3tched.com).
+    fn load_tls_identity() -> Option<Identity> {
+        let cert_pem = std::env::var("ZEROCLAW_TLS_CERT").ok();
+        let key_pem = std::env::var("ZEROCLAW_TLS_KEY").ok();
+
+        match (cert_pem, key_pem) {
+            (Some(cert), Some(key)) => {
+                tracing::info!("TLS identity loaded from ZEROCLAW_TLS_CERT/ZEROCLAW_TLS_KEY env vars");
+                Some(Identity::from_pem(cert, key))
+            }
+            _ => {
+                let ck = rcgen::generate_simple_self_signed(vec![
+                    "localhost".to_string(),
+                    "ghostbridge.tech".to_string(),
+                    "3tched.com".to_string(),
+                ])
+                .expect("failed to generate self-signed TLS cert");
+                let cert_pem = ck.cert.pem();
+                let key_pem = ck.key_pair.serialize_pem();
+                tracing::info!("TLS identity auto-generated (self-signed for localhost, ghostbridge.tech, 3tched.com)");
+                Some(Identity::from_pem(cert_pem, key_pem))
+            }
         }
     }
 }
@@ -221,8 +255,7 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
         op_state_store::ChainConfig::default(),
     )));
     let ovsdb = Arc::new(op_network::rovs_proxy::OvsdbDbusClient::new());
-    let nonnet = Arc::new(op_jsonrpc::nonnet::NonNetDb::new());
-    let mutation_engine = Arc::new(MutationEngine::new(event_chain, ovsdb, nonnet));
+    let mutation_engine = Arc::new(MutationEngine::new(event_chain, ovsdb));
     mutation_engine.seed_missing_plugin_projections().await?;
     let operation_server = OperationGrpcServer::new(mutation_engine);
     // The sealed SHM blob catalog IS the plugin set: hydrate reflection from
@@ -288,25 +321,62 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
         .add_routes(build_tonic_routes(loader.clone(), operation_server.clone()))
         .serve_with_incoming(unix_incoming);
 
-    // TCP listener for HTTP + gRPC-Web.
+    // TCP listener for HTTP + gRPC-Web (local-only, no TLS).
     let bind_addr: SocketAddr = config.bind_addr.parse()?;
     let tcp_listener = tokio::net::TcpListener::bind(bind_addr).await?;
     info!(addr = %bind_addr, "zeroclaw HTTP/gRPC-Web listening on TCP");
 
-    let axum_app = build_axum_app(loader.clone(), operation_server);
+    let axum_app = build_axum_app(loader.clone(), operation_server.clone());
     let tcp_server = axum::serve(tcp_listener, axum_app);
+
+    // Optional TLS listener for gRPC-Web over TLS (GUI/public-facing).
+    let tls_server_fut = match (config.tls_bind_addr, config.tls_identity) {
+        (Some(ref tls_addr), Some(identity)) => {
+            let tls_bind: SocketAddr = tls_addr.parse()?;
+            info!(addr = %tls_bind, "zeroclaw TLS gRPC-Web listening on TCP");
+            let cors = CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods(Any)
+                .allow_headers(Any);
+            let tls_config = ServerTlsConfig::new().identity(identity);
+            let server: std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), tonic::transport::Error>> + Send>> = Box::pin(
+                tonic::transport::Server::builder()
+                    .accept_http1(true)
+                    .tls_config(tls_config)
+                    .expect("invalid TLS config")
+                    .layer(cors)
+                    .add_routes(build_tonic_routes(loader.clone(), operation_server))
+                    .serve(tls_bind),
+            );
+            Some(server)
+        }
+        _ => None,
+    };
 
     // Rebind task: when a new bind address is requested, restart the TCP server.
     // The current implementation starts the initial TCP server; subsequent
-    // rebinds require a restart to keep the listener lifecycle simple and safe.
+    // rebinds require a restart to keep the listener lifecycle simple andsafe.
     let rebind_task = tokio::spawn(async move {
         while let Some(new_bind) = rebind_rx.recv().await {
             info!(new_bind = %new_bind, "D-Bus rebind request received; will be honored on next restart");
         }
     });
 
-    let (unix_result, tcp_result) = tokio::join!(tonic_server, tcp_server);
+    let (unix_result, tcp_result, tls_result) = match tls_server_fut {
+        Some(tls) => {
+            let (u, t, tls) = tokio::join!(tonic_server, tcp_server, tls);
+            (u, t, Some(tls))
+        }
+        None => {
+            let (u, t) = tokio::join!(tonic_server, tcp_server);
+            (u, t, None)
+        }
+    };
     let _ = rebind_task.await;
     unix_result.map_err(|e| anyhow::anyhow!("Unix server error: {}", e))?;
-    tcp_result.map_err(|e| anyhow::anyhow!("TCP server error: {}", e))
+    tcp_result.map_err(|e| anyhow::anyhow!("TCP server error: {}", e))?;
+    if let Some(Err(e)) = tls_result {
+        return Err(anyhow::anyhow!("TLS server error: {}", e));
+    }
+    Ok(())
 }

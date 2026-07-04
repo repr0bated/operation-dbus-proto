@@ -17,8 +17,6 @@ next_connection_delay_ms = 1
 connection_timeout_ms = 60000
 max_payload_size = 20480
 max_inflight_count = 500
-[v4.1.connections.auth]
-netmaker = "3f48f4cbbf54ae2fbfdf5c4fce64caf2"
 
 # second loopback listener mirroring mosquitto's 8883 (plaintext; xray does TLS)
 [v4.2]
@@ -29,8 +27,6 @@ next_connection_delay_ms = 1
 connection_timeout_ms = 60000
 max_payload_size = 20480
 max_inflight_count = 500
-[v4.2.connections.auth]
-netmaker = "3f48f4cbbf54ae2fbfdf5c4fce64caf2"
 
 [console]
 listen = "127.0.0.1:3030"

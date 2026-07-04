@@ -9,27 +9,29 @@
 //! - Native Proxmox API client for LXC container management
 
 pub mod controller;
-pub mod ovsdb;
 pub mod openflow;
 pub mod ovs_capabilities;
 pub mod ovs_error;
 pub mod ovs_netlink;
+pub mod ovsdb;
 pub mod plugin;
 pub mod proxmox;
 pub mod rovs_proxy;
 pub mod rtnetlink;
 
 pub use controller::OpenFlowController;
-pub use ovsdb::OvsdbClient;
 pub use openflow::{FlowAction, FlowEntry, FlowMatch, OpenFlowClient, OpenFlowVersion};
 pub use ovs_capabilities::{counter_excuses, excuses_to_llm_context, OvsCapabilities};
 pub use ovs_error::OvsError;
 pub use ovs_netlink::{Datapath, KernelFlow, OvsNetlinkClient, Vport, VportConfig, VportType};
+pub use ovsdb::OvsdbClient;
 pub use plugin::{NetworkInterface, NetworkPlugin, OpenFlowConfig, OvsBridge, OvsdbConfig};
 pub use proxmox::{
     ContainerStatus, CreateContainerRequest, LxcContainer, ProxmoxClient, ProxmoxToken,
 };
-pub use rovs_proxy::{openflow_proxy, jsonrpc_proxy, ensure_proxies, RovsJsonRpcProxy, RovsOpenFlowProxy};
+pub use rovs_proxy::{
+    ensure_proxies, jsonrpc_proxy, openflow_proxy, RovsJsonRpcProxy, RovsOpenFlowProxy,
+};
 
 /// Prelude for convenient imports
 pub mod prelude {

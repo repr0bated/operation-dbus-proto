@@ -1,24 +1,6 @@
 #!/bin/sh
 exec 2>&1
-# opdbus - WireGuard identity tunnel to Oracle VPS (10.0.0.2 <-> 10.0.0.1)
-# Gateway IP and iptables are managed by ovsbr0-init
-CONF="/etc/wireguard/opdbus.conf"
-IFACE="opdbus"
-
-if [ ! -f "$CONF" ]; then
-    echo "[opdbus] Config not found: $CONF"
-    exit 0
-fi
-
-# Bring up the tunnel (Table=off, no auto-routes)
-wg-quick up "${IFACE}"
-
-# Add routes manually (Table=off means wg-quick won't add them)
-ip route replace 10.0.0.0/24 dev opdbus 2>/dev/null || true
-ip route replace 10.0.0.1/32 dev opdbus 2>/dev/null || true
-
-# Refresh identity sled from opdbus interface
-/usr/local/bin/op-identity-sled --iface opdbus --refresh --path /dev/shm/plugin_schema.dat 2>/dev/null || true
-cp /dev/shm/plugin_schema.dat /var/lib/op-dbus/plugin_schema.dat 2>/dev/null || true
+# wg-opdbus is PluginSchema/blob managed. WireGuard configuration is supplied
+# as arguments to the wg_opdbus plugin and delegated to the wireguard plugin.
 
 exec pause
