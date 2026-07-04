@@ -1,0 +1,770 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SERVICE="operation.v1.PluginService/CallMethod"
+DEFAULT_ENDPOINT="${ZCALL_ENDPOINT:-127.0.0.1:18789}"
+DEFAULT_BLOB_DIR="${ZCALL_BLOB_DIR:-/dev/shm/opdbus/plugin-blobs}"
+SLED_PATH="${ZCALL_SLED_PATH:-/dev/shm/plugin_schema.dat}"
+DBUS_SERVICE="${ZCALL_DBUS_SERVICE:-org.opdbus.v1.plugins}"
+DBUS_BASE_PATH="${ZCALL_DBUS_BASE_PATH:-/org/opdbus/v1/plugins}"
+DBUS_IFACE="${ZCALL_DBUS_IFACE:-org.opdbus.v1.plugins.ProjectedObject}"
+
+endpoint="$DEFAULT_ENDPOINT"
+blob_dir="$DEFAULT_BLOB_DIR"
+source_mode="${ZCALL_SOURCE:-blob}"
+arguments_json="[]"
+arguments_was_set=0
+method_arg_pairs=()
+capability_id=""
+actor_id=""
+object_path=""
+interface_name=""
+print_only=0
+
+usage() {
+    cat <<'EOF'
+zcall - short wrapper for blob-created opdbus plugin calls
+
+Usage:
+  zcall list
+  zcall methods <plugin>
+  zcall help [plugin] [method]
+  zcall expand <plugin> <method> [--arguments JSON]
+  zcall <plugin> <method> --arguments JSON
+
+Options:
+  -a, --arguments JSON      JSON argument list. Arrays are passed as repeated
+                            arguments; objects/scalars are wrapped as one arg.
+  -c, --capability ID       Capability id for PluginService.CallMethod.
+      --actor ID            Actor id for PluginService.CallMethod.
+      --object PATH         Override object path.
+      --interface NAME      Override interface name.
+      --endpoint HOST:PORT  gRPC endpoint. Default: 127.0.0.1:18789.
+      --blob-dir DIR        Blob catalog. Default: /dev/shm/opdbus/plugin-blobs.
+      --source MODE         blob, auto, schema, dbus. Default: blob.
+      --print               Print the expanded grpcurl command and request.
+  -h, --help                Show help.
+
+Examples:
+  zcall methods unix_socket
+  zcall help unix_socket bind
+  zcall unix_socket bind --arguments '{"name":"qdrant","path":"/run/qdrant.sock","ports":[6333,6334]}'
+  zcall expand qdrant create_collection --arguments '{"collection_name":"docs"}'
+
+By default zcall parses sealed blobs in /dev/shm/opdbus/plugin-blobs. It does
+not need D-Bus introspection for list/help/completion.
+EOF
+}
+
+die() {
+    printf 'zcall: %s\n' "$*" >&2
+    exit 1
+}
+
+have() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+normalize_plugin() {
+    printf '%s' "${1//-/_}"
+}
+
+normalize_method() {
+    printf '%s' "${1//-/_}"
+}
+
+contract_py() {
+    python3 - "$@" <<'PY'
+import ast
+import json
+import os
+import re
+import struct
+import subprocess
+import sys
+
+MAGIC = b"OPBLOB01"
+HEADER_LEN = 64
+ENTRY_LEN = 24
+SECTION_SCHEMA = 1
+SECTION_MANIFEST = 2
+DBUS_SERVICE = os.environ.get("ZCALL_DBUS_SERVICE", "org.opdbus.v1.plugins")
+DBUS_BASE_PATH = os.environ.get("ZCALL_DBUS_BASE_PATH", "/org/opdbus/v1/plugins")
+DBUS_IFACE = os.environ.get("ZCALL_DBUS_IFACE", "org.opdbus.v1.plugins.ProjectedObject")
+
+
+def canonical_method_name(name):
+    name = re.sub(r"(.)([A-Z][a-z]+)", r"\1_\2", str(name))
+    name = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", name)
+    return name.replace("-", "_").lower()
+
+
+def read_blob(path):
+    data = open(path, "rb").read()
+    if len(data) < HEADER_LEN or data[:8] != MAGIC:
+        return None
+    section_count = struct.unpack_from("<H", data, 10)[0]
+    sections = {}
+    for i in range(section_count):
+        pos = HEADER_LEN + i * ENTRY_LEN
+        if pos + ENTRY_LEN > len(data):
+            break
+        tag, _reserved, off, size = struct.unpack_from("<IIQQ", data, pos)
+        if off + size <= len(data):
+            sections[tag] = data[off:off + size]
+    manifest = json.loads(sections.get(SECTION_MANIFEST, b"{}") or b"{}")
+    schema = json.loads(sections.get(SECTION_SCHEMA, b"{}") or b"{}")
+    return {"manifest": manifest, "schema": schema}
+
+
+def blob_records(blob_dir):
+    records = {}
+    if not os.path.isdir(blob_dir):
+        return records
+    for name in sorted(os.listdir(blob_dir)):
+        if not name.endswith(".blob"):
+            continue
+        path = os.path.join(blob_dir, name)
+        try:
+            rec = read_blob(path)
+        except Exception:
+            continue
+        if not rec:
+            continue
+        plugin = rec["manifest"].get("plugin_id") or rec["schema"].get("name")
+        if plugin:
+            records[str(plugin)] = rec
+    return records
+
+
+def live_schema_records():
+    path = "/dev/shm/live-schema.json"
+    if not os.path.exists(path):
+        return {}
+    try:
+        root = json.load(open(path))
+    except Exception:
+        return {}
+    if not isinstance(root, dict):
+        return {}
+    records = {}
+    for plugin, value in root.items():
+        schema = value[0] if isinstance(value, list) and value else value
+        if isinstance(schema, dict):
+            records[str(plugin)] = {"manifest": {}, "schema": schema}
+    return records
+
+
+def parse_busctl_string(raw):
+    raw = raw.strip()
+    if raw.startswith("s "):
+        raw = raw[2:].strip()
+    if raw.startswith('"'):
+        return ast.literal_eval(raw)
+    return raw
+
+
+def dbus_methods(plugin):
+    path = f"{DBUS_BASE_PATH}/{plugin}"
+    try:
+        raw = subprocess.check_output(
+            [
+                "busctl",
+                "--system",
+                "get-property",
+                DBUS_SERVICE,
+                path,
+                DBUS_IFACE,
+                "Methods",
+            ],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+        text = parse_busctl_string(raw)
+        value = json.loads(text)
+        return value if isinstance(value, dict) else {}
+    except Exception:
+        return {}
+
+
+def dbus_plugins():
+    try:
+        raw = subprocess.check_output(
+            ["busctl", "--system", "tree", DBUS_SERVICE],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+    except Exception:
+        return []
+    plugins = []
+    prefix = f"{DBUS_BASE_PATH}/"
+    for line in raw.splitlines():
+        line = line.strip()
+        idx = line.find(prefix)
+        if idx < 0:
+            continue
+        rest = line[idx + len(prefix):].strip()
+        if rest and "/" not in rest:
+            plugins.append(rest)
+    return sorted(set(plugins))
+
+
+def schema_methods(schema):
+    methods = schema.get("methods") if isinstance(schema, dict) else {}
+    return methods if isinstance(methods, dict) else {}
+
+
+def manifest_methods(manifest):
+    methods = {}
+    for item in manifest.get("methods", []) if isinstance(manifest, dict) else []:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("schema_name") or item.get("name")
+        if name:
+            methods[canonical_method_name(name)] = item
+    return methods
+
+
+def callable_records(records):
+    out = {}
+    for plugin, rec in records.items():
+        methods = manifest_methods(rec.get("manifest", {}))
+        methods.update(schema_methods(rec.get("schema", {})))
+        if methods:
+            out[plugin] = rec
+    return out
+
+
+def records_for(source, blob_dir):
+    if source in ("auto", "blob"):
+        recs = blob_records(blob_dir)
+        if recs or source == "blob":
+            return recs
+    if source in ("auto", "schema"):
+        recs = live_schema_records()
+        if recs or source == "schema":
+            return recs
+    return {}
+
+
+def methods_for(plugin, source, blob_dir):
+    recs = records_for(source, blob_dir)
+    rec = recs.get(plugin)
+    if rec:
+        methods = schema_methods(rec.get("schema", {}))
+        for name, item in manifest_methods(rec.get("manifest", {})).items():
+            if isinstance(methods.get(name), dict) and isinstance(item, dict):
+                merged = dict(item)
+                merged.update(methods[name])
+                methods[name] = merged
+            else:
+                methods[name] = item
+        return methods
+    if source in ("auto", "dbus"):
+        return dbus_methods(plugin)
+    return {}
+
+
+def plugins_for(source, blob_dir):
+    recs = records_for(source, blob_dir)
+    if recs:
+        return sorted(recs)
+    if source in ("auto", "dbus"):
+        return dbus_plugins()
+    return []
+
+
+def completion_plugins_for(source, blob_dir):
+    recs = records_for(source, blob_dir)
+    if recs:
+        return sorted(p.replace("_", "-") for p in callable_records(recs))
+    if source in ("auto", "dbus"):
+        return sorted(p.replace("_", "-") for p in dbus_plugins() if dbus_methods(p))
+    return []
+
+
+def plugin_identity(plugin, source, blob_dir):
+    recs = records_for(source, blob_dir)
+    rec = recs.get(plugin, {})
+    manifest = rec.get("manifest", {})
+    dbus = manifest.get("dbus", {}) if isinstance(manifest, dict) else {}
+    return {
+        "object_path": dbus.get("object_path") or f"{DBUS_BASE_PATH}/{plugin}",
+        "interface_name": dbus.get("interface_name") or "org.opdbus.v1.Plugin",
+    }
+
+
+def method_detail(methods, name):
+    if name in methods:
+        return methods[name]
+    lowered = name.lower()
+    for key, val in methods.items():
+        if key.lower() == lowered:
+            return val
+        if isinstance(val, dict) and str(val.get("name", "")).lower() == lowered:
+            return val
+    return None
+
+
+def arg_flags_for(plugin, method, source, blob_dir):
+    detail = method_detail(methods_for(plugin, source, blob_dir), method)
+    if not isinstance(detail, dict):
+        return []
+    args = detail.get("args")
+    if not isinstance(args, dict):
+        return []
+    props = args.get("properties")
+    if not isinstance(props, dict):
+        return []
+    return [f"--{name.replace('_', '-')}" for name in sorted(props)]
+
+
+cmd = sys.argv[1]
+source = sys.argv[2]
+blob_dir = sys.argv[3]
+
+if cmd == "plugins":
+    print("\n".join(plugins_for(source, blob_dir)))
+elif cmd == "completion-plugins":
+    print("\n".join(completion_plugins_for(source, blob_dir)))
+elif cmd == "methods":
+    plugin = sys.argv[4]
+    print("\n".join(m.replace("_", "-") for m in sorted(methods_for(plugin, source, blob_dir))))
+elif cmd == "method-json":
+    plugin, method = sys.argv[4], sys.argv[5]
+    detail = method_detail(methods_for(plugin, source, blob_dir), method)
+    print(json.dumps(detail or {}, indent=2, sort_keys=True))
+elif cmd == "args":
+    plugin, method = sys.argv[4], sys.argv[5]
+    print("\n".join(arg_flags_for(plugin, method, source, blob_dir)))
+elif cmd == "method-summary":
+    plugin = sys.argv[4]
+    methods = methods_for(plugin, source, blob_dir)
+    for key in sorted(methods):
+        val = methods[key]
+        if isinstance(val, dict):
+            display = val.get("name") or key
+            cap = val.get("required_capability") or "-"
+            side = val.get("side_effect") or "-"
+            subid = val.get("subid") or "-"
+            print(f"{display}\t{side}\t{cap}\t{subid}")
+        else:
+            print(f"{key}\t-\t-\t-")
+elif cmd == "identity":
+    plugin = sys.argv[4]
+    print(json.dumps(plugin_identity(plugin, source, blob_dir), sort_keys=True))
+else:
+    raise SystemExit(f"unknown contract command: {cmd}")
+PY
+}
+
+read_headers() {
+    python3 - "$SLED_PATH" <<'PY'
+import os
+import sys
+
+path = sys.argv[1]
+try:
+    data = open(path, "rb").read()
+except Exception:
+    raise SystemExit(0)
+if len(data) < 88:
+    raise SystemExit(0)
+footprint = data[40:72]
+trace_id = data[72:88]
+if not footprint or not trace_id or all(b == 0 for b in footprint) or all(b == 0 for b in trace_id):
+    raise SystemExit(0)
+print("-H")
+print("x-ghostbridge-footprint: " + footprint.hex())
+print("-H")
+print("x-ghostbridge-trace-id: " + trace_id.hex())
+PY
+}
+
+request_json() {
+    local plugin="$1"
+    local method="$2"
+    local object="$3"
+    local iface="$4"
+    python3 - "$plugin" "$method" "$object" "$iface" "$arguments_json" "$actor_id" "$capability_id" <<'PY'
+import json
+import sys
+
+plugin, method, obj, iface, raw_args, actor, capability = sys.argv[1:]
+try:
+    parsed = json.loads(raw_args)
+except Exception as exc:
+    raise SystemExit(f"invalid --arguments JSON: {exc}")
+arguments = parsed if isinstance(parsed, list) else [parsed]
+print(json.dumps({
+    "plugin_id": plugin,
+    "object_path": obj,
+    "interface_name": iface,
+    "method_name": method,
+    "arguments": arguments,
+    "actor_id": actor,
+    "capability_id": capability,
+}, separators=(",", ":")))
+PY
+}
+
+args_json_from_flags() {
+    local plugin="$1"
+    local method="$2"
+    shift 2
+    python3 - "$source_mode" "$blob_dir" "$plugin" "$method" "$@" <<'PY'
+import ast
+import json
+import os
+import re
+import struct
+import subprocess
+import sys
+
+MAGIC = b"OPBLOB01"
+HEADER_LEN = 64
+ENTRY_LEN = 24
+SECTION_SCHEMA = 1
+SECTION_MANIFEST = 2
+DBUS_SERVICE = os.environ.get("ZCALL_DBUS_SERVICE", "org.opdbus.v1.plugins")
+DBUS_BASE_PATH = os.environ.get("ZCALL_DBUS_BASE_PATH", "/org/opdbus/v1/plugins")
+DBUS_IFACE = os.environ.get("ZCALL_DBUS_IFACE", "org.opdbus.v1.plugins.ProjectedObject")
+
+
+def canonical_method_name(name):
+    name = re.sub(r"(.)([A-Z][a-z]+)", r"\1_\2", str(name))
+    name = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", name)
+    return name.replace("-", "_").lower()
+
+
+def read_blob(path):
+    data = open(path, "rb").read()
+    if len(data) < HEADER_LEN or data[:8] != MAGIC:
+        return None
+    section_count = struct.unpack_from("<H", data, 10)[0]
+    sections = {}
+    for i in range(section_count):
+        pos = HEADER_LEN + i * ENTRY_LEN
+        if pos + ENTRY_LEN > len(data):
+            break
+        tag, _reserved, off, size = struct.unpack_from("<IIQQ", data, pos)
+        if off + size <= len(data):
+            sections[tag] = data[off:off + size]
+    return {
+        "manifest": json.loads(sections.get(SECTION_MANIFEST, b"{}") or b"{}"),
+        "schema": json.loads(sections.get(SECTION_SCHEMA, b"{}") or b"{}"),
+    }
+
+
+def blob_records(blob_dir):
+    records = {}
+    if not os.path.isdir(blob_dir):
+        return records
+    for name in sorted(os.listdir(blob_dir)):
+        if not name.endswith(".blob"):
+            continue
+        try:
+            rec = read_blob(os.path.join(blob_dir, name))
+        except Exception:
+            continue
+        if not rec:
+            continue
+        plugin = rec["manifest"].get("plugin_id") or rec["schema"].get("name")
+        if plugin:
+            records[str(plugin)] = rec
+    return records
+
+
+def live_schema_records():
+    path = "/dev/shm/live-schema.json"
+    if not os.path.exists(path):
+        return {}
+    try:
+        root = json.load(open(path))
+    except Exception:
+        return {}
+    records = {}
+    for plugin, value in root.items():
+        schema = value[0] if isinstance(value, list) and value else value
+        if isinstance(schema, dict):
+            records[str(plugin)] = {"manifest": {}, "schema": schema}
+    return records
+
+
+def parse_busctl_string(raw):
+    raw = raw.strip()
+    if raw.startswith("s "):
+        raw = raw[2:].strip()
+    if raw.startswith('"'):
+        return ast.literal_eval(raw)
+    return raw
+
+
+def dbus_methods(plugin):
+    try:
+        raw = subprocess.check_output(
+            ["busctl", "--system", "get-property", DBUS_SERVICE, f"{DBUS_BASE_PATH}/{plugin}", DBUS_IFACE, "Methods"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+        value = json.loads(parse_busctl_string(raw))
+        return value if isinstance(value, dict) else {}
+    except Exception:
+        return {}
+
+
+def schema_methods(schema):
+    methods = schema.get("methods") if isinstance(schema, dict) else {}
+    return methods if isinstance(methods, dict) else {}
+
+
+def manifest_methods(manifest):
+    methods = {}
+    for item in manifest.get("methods", []) if isinstance(manifest, dict) else []:
+        if isinstance(item, dict):
+            name = item.get("schema_name") or item.get("name")
+            if name:
+                methods[canonical_method_name(name)] = item
+    return methods
+
+
+def records_for(source, blob_dir):
+    if source in ("auto", "blob"):
+        recs = blob_records(blob_dir)
+        if recs or source == "blob":
+            return recs
+    if source in ("auto", "schema"):
+        recs = live_schema_records()
+        if recs or source == "schema":
+            return recs
+    return {}
+
+
+def methods_for(plugin, source, blob_dir):
+    rec = records_for(source, blob_dir).get(plugin)
+    if rec:
+        methods = schema_methods(rec.get("schema", {}))
+        for name, item in manifest_methods(rec.get("manifest", {})).items():
+            if isinstance(methods.get(name), dict) and isinstance(item, dict):
+                merged = dict(item)
+                merged.update(methods[name])
+                methods[name] = merged
+            else:
+                methods[name] = item
+        return methods
+    if source in ("auto", "dbus"):
+        return dbus_methods(plugin)
+    return {}
+
+
+def method_detail(methods, name):
+    if name in methods:
+        return methods[name]
+    lowered = name.lower()
+    for key, val in methods.items():
+        if key.lower() == lowered:
+            return val
+        if isinstance(val, dict) and str(val.get("name", "")).lower() == lowered:
+            return val
+    return {}
+
+
+def parse_scalar(raw):
+    if raw == "":
+        return ""
+    if raw[0] in "[{\"" or raw in ("true", "false", "null") or raw[0].isdigit() or raw[0] == "-":
+        try:
+            return json.loads(raw)
+        except Exception:
+            pass
+    return raw
+
+
+def parse_value(raw, schema):
+    typ = schema.get("type") if isinstance(schema, dict) else None
+    if isinstance(typ, list):
+        typ = next((t for t in typ if t != "null"), typ[0] if typ else None)
+    if typ == "array":
+        if raw.startswith("["):
+            return json.loads(raw)
+        item_schema = schema.get("items", {}) if isinstance(schema, dict) else {}
+        return [parse_value(part.strip(), item_schema) for part in raw.split(",") if part.strip() != ""]
+    if typ == "object":
+        return json.loads(raw)
+    if typ == "integer":
+        return int(raw)
+    if typ == "number":
+        return float(raw)
+    if typ == "boolean":
+        if raw.lower() in ("1", "true", "yes", "on"):
+            return True
+        if raw.lower() in ("0", "false", "no", "off"):
+            return False
+        raise SystemExit(f"invalid boolean value: {raw}")
+    return parse_scalar(raw)
+
+
+source, blob_dir, plugin, method = sys.argv[1:5]
+pairs = sys.argv[5:]
+detail = method_detail(methods_for(plugin, source, blob_dir), method)
+arg_schema = detail.get("args", {}) if isinstance(detail, dict) else {}
+props = arg_schema.get("properties", {}) if isinstance(arg_schema, dict) else {}
+obj = {}
+for pair in pairs:
+    key, raw = pair.split("=", 1)
+    key = key.replace("-", "_")
+    obj[key] = parse_value(raw, props.get(key, {}))
+print(json.dumps(obj, separators=(",", ":")))
+PY
+}
+
+print_expanded() {
+    local request="$1"
+    local -a headers=("${@:2}")
+    printf 'grpcurl -plaintext'
+    local i
+    for ((i = 0; i < ${#headers[@]}; i += 2)); do
+        printf ' -H %q' "${headers[i + 1]}"
+    done
+    printf ' -d %q %q %q\n' "$request" "$endpoint" "$SERVICE"
+}
+
+complete_mode=0
+if [[ "${1:-}" == "--complete" ]]; then
+    complete_mode=1
+    shift
+fi
+
+while (($#)); do
+    case "$1" in
+        --endpoint)
+            endpoint="${2:-}"; shift 2 ;;
+        --blob-dir)
+            blob_dir="${2:-}"; shift 2 ;;
+        --source)
+            source_mode="${2:-}"; shift 2 ;;
+        -a|--arguments)
+            arguments_json="${2:-}"; arguments_was_set=1; shift 2 ;;
+        -c|--capability)
+            capability_id="${2:-}"; shift 2 ;;
+        --actor)
+            actor_id="${2:-}"; shift 2 ;;
+        --object)
+            object_path="${2:-}"; shift 2 ;;
+        --interface)
+            interface_name="${2:-}"; shift 2 ;;
+        --print|--dry-run)
+            print_only=1; shift ;;
+        -h|--help)
+            usage; exit 0 ;;
+        --)
+            shift; break ;;
+        -*)
+            die "unknown option: $1" ;;
+        *)
+            break ;;
+    esac
+done
+
+if ((complete_mode)); then
+    case "${1:-}" in
+        plugins) contract_py completion-plugins "$source_mode" "$blob_dir" ;;
+        methods) contract_py methods "$source_mode" "$blob_dir" "$(normalize_plugin "${2:-}")" ;;
+        args) contract_py args "$source_mode" "$blob_dir" "$(normalize_plugin "${2:-}")" "$(normalize_method "${3:-}")" ;;
+        *) exit 0 ;;
+    esac
+    exit 0
+fi
+
+cmd="${1:-help}"
+case "$cmd" in
+    list)
+        contract_py plugins "$source_mode" "$blob_dir"
+        exit 0
+        ;;
+    methods)
+        plugin="$(normalize_plugin "${2:-}")"
+        [[ -n "$plugin" ]] || die "usage: zcall methods <plugin>"
+        contract_py method-summary "$source_mode" "$blob_dir" "$plugin" | column -t -s $'\t'
+        exit 0
+        ;;
+    help)
+        plugin="$(normalize_plugin "${2:-}")"
+        method="${3:-}"
+        if [[ -z "$plugin" ]]; then
+            usage
+            exit 0
+        fi
+        if [[ -z "$method" ]]; then
+            printf 'Methods for %s:\n' "$plugin"
+            contract_py method-summary "$source_mode" "$blob_dir" "$plugin" | column -t -s $'\t'
+        else
+            contract_py method-json "$source_mode" "$blob_dir" "$plugin" "$(normalize_method "$method")"
+        fi
+        exit 0
+        ;;
+    expand)
+        shift
+        print_only=1
+        ;;
+esac
+
+[[ $# -ge 2 ]] || die "usage: zcall <plugin> <method> --arguments JSON"
+plugin="$(normalize_plugin "$1")"
+method="$(normalize_method "$2")"
+shift 2
+
+while (($#)); do
+    case "$1" in
+        -a|--arguments)
+            arguments_json="${2:-}"; arguments_was_set=1; shift 2 ;;
+        -c|--capability)
+            capability_id="${2:-}"; shift 2 ;;
+        --actor)
+            actor_id="${2:-}"; shift 2 ;;
+        --object)
+            object_path="${2:-}"; shift 2 ;;
+        --interface)
+            interface_name="${2:-}"; shift 2 ;;
+        --endpoint)
+            endpoint="${2:-}"; shift 2 ;;
+        --blob-dir)
+            blob_dir="${2:-}"; shift 2 ;;
+        --source)
+            source_mode="${2:-}"; shift 2 ;;
+        --print|--dry-run)
+            print_only=1; shift ;;
+        --*)
+            key="${1#--}"
+            [[ -n "${2:-}" ]] || die "missing value for --$key"
+            method_arg_pairs+=("$key=$2")
+            shift 2 ;;
+        *)
+            die "unknown call option: $1" ;;
+    esac
+done
+
+if (( ${#method_arg_pairs[@]} > 0 )); then
+    if (( arguments_was_set )); then
+        die "use either --arguments JSON or method arg flags, not both"
+    fi
+    arguments_json="$(args_json_from_flags "$plugin" "$method" "${method_arg_pairs[@]}")"
+fi
+
+identity="$(contract_py identity "$source_mode" "$blob_dir" "$plugin")"
+default_object="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["object_path"])' <<<"$identity")"
+default_iface="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["interface_name"])' <<<"$identity")"
+object_path="${object_path:-$default_object}"
+interface_name="${interface_name:-$default_iface}"
+
+request="$(request_json "$plugin" "$method" "$object_path" "$interface_name")"
+mapfile -t headers < <(read_headers)
+
+if ((print_only)); then
+    print_expanded "$request" "${headers[@]}"
+    printf '%s\n' "$request" | jq . 2>/dev/null || printf '%s\n' "$request"
+    exit 0
+fi
+
+have grpcurl || die "grpcurl is required for PluginService.CallMethod"
+grpcurl -plaintext "${headers[@]}" -d "$request" "$endpoint" "$SERVICE"
