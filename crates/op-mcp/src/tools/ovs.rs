@@ -17,10 +17,8 @@ pub async fn register_all(registry: &ToolRegistry) -> Result<usize> {
     registry.register(Arc::new(OvsAddBridgeTool)).await?;
     registry.register(Arc::new(OvsDelBridgeTool)).await?;
     registry.register(Arc::new(OvsAddPortTool)).await?;
-    registry.register(Arc::new(OvsDelPortTool)).await?;
-    registry.register(Arc::new(OvsAddFlowTool)).await?;
     registry.register(Arc::new(OvsDelFlowsTool)).await?;
-    Ok(10)
+    Ok(9)
 }
 
 macro_rules! ovs_tool {
@@ -39,10 +37,9 @@ macro_rules! ovs_tool {
     };
 }
 
-/// Get OVSDB D-Bus client (from op-network rovs_proxy).
-/// AGENTS.md: D-Bus first - never use ovs-vsctl/ovs-ofctl CLI.
-async fn ovsdb_client() -> Result<op_network::rovs_proxy::OvsdbDbusClient> {
-    Ok(op_network::rovs_proxy::OvsdbDbusClient::new())
+/// Get OVSDB client (direct rovs transport).
+async fn ovsdb_client() -> Result<op_network::ovsdb::OvsdbClient> {
+    Ok(op_network::ovsdb::OvsdbClient::new())
 }
 
 ovs_tool!(OvsListBridgesTool, "ovs_list_bridges", "List all OVS bridges via D-Bus daemon.",
@@ -119,43 +116,15 @@ ovs_tool!(OvsDelBridgeTool, "ovs_del_bridge", "Delete an OVS bridge via D-Bus da
     }
 );
 
-ovs_tool!(OvsAddPortTool, "ovs_add_port", "Add a port to an OVS bridge via D-Bus daemon.",
+ovs_tool!(OvsAddPortTool, "ovs_add_port", "Add a port to an OVS bridge via OVSDB.",
     json!({"type": "object", "properties": {"bridge": {"type": "string"}, "port": {"type": "string"}}, "required": ["bridge", "port"]}),
     |input: Value| async move {
         let bridge = input.get("bridge").and_then(|v| v.as_str()).ok_or_else(|| anyhow::anyhow!("Missing bridge"))?;
         let port = input.get("port").and_then(|v| v.as_str()).ok_or_else(|| anyhow::anyhow!("Missing port"))?;
         let client = ovsdb_client().await?;
         client.add_port(bridge, port).await
-            .map_err(|e| anyhow::anyhow!("D-Bus add_port failed: {}", e))?;
-        Ok(json!({"success": true, "bridge": bridge, "port": port, "action": "added", "method": "dbus_native"}))
-    }
-);
-
-ovs_tool!(OvsDelPortTool, "ovs_del_port", "Remove a port from an OVS bridge via D-Bus daemon.",
-    json!({"type": "object", "properties": {"bridge": {"type": "string"}, "port": {"type": "string"}}, "required": ["bridge", "port"]}),
-    |input: Value| async move {
-        let bridge = input.get("bridge").and_then(|v| v.as_str()).ok_or_else(|| anyhow::anyhow!("Missing bridge"))?;
-        let port = input.get("port").and_then(|v| v.as_str()).ok_or_else(|| anyhow::anyhow!("Missing port"))?;
-        let client = ovsdb_client().await?;
-        client.delete_port(bridge, port).await
-            .map_err(|e| anyhow::anyhow!("D-Bus delete_port failed: {}", e))?;
-        Ok(json!({"success": true, "bridge": bridge, "port": port, "action": "deleted", "method": "dbus_native"}))
-    }
-);
-
-ovs_tool!(OvsAddFlowTool, "ovs_add_flow", "Add a flow to an OVS bridge via OpenFlow native protocol.",
-    json!({"type": "object", "properties": {"bridge": {"type": "string"}, "flow": {"type": "string"}}, "required": ["bridge", "flow"]}),
-    |input: Value| async move {
-        let bridge = input.get("bridge").and_then(|v| v.as_str()).ok_or_else(|| anyhow::anyhow!("Missing bridge"))?;
-        let flow = input.get("flow").and_then(|v| v.as_str()).ok_or_else(|| anyhow::anyhow!("Missing flow"))?;
-        // Use OpenFlow native client
-        let addr: std::net::SocketAddr = "127.0.0.1:6653".parse()
-            .map_err(|e| anyhow::anyhow!("Invalid OpenFlow controller address: {}", e))?;
-        let mut openflow_client = op_network::OpenFlowClient::connect(addr).await
-            .map_err(|e| anyhow::anyhow!("OpenFlow connect failed: {}", e))?;
-        // String-based flow rules - currently logs warning, full parsing pending
-        openflow_client.add_flow_rule(flow).await;
-        Ok(json!({"success": true, "bridge": bridge, "action": "flow_added", "method": "openflow_native", "note": "String-based flow rules use rovs-openflow native protocol; full ovs-ofctl format parsing is pending"}))
+            .map_err(|e| anyhow::anyhow!("OVSDB add_port failed: {}", e))?;
+        Ok(json!({"success": true, "bridge": bridge, "port": port, "action": "added", "method": "ovsdb"}))
     }
 );
 

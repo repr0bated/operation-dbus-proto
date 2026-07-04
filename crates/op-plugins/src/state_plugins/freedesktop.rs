@@ -522,13 +522,29 @@ mod tests {
     fn test_path_normalization() {
         let plugin = FreeDesktopPlugin::new();
 
-        // Legacy path should be normalized to canonical
+        // Legacy paths should be normalized to canonical form
         let normalized = plugin.normalize_path("/opdbus/v1/plugins/test");
         assert_eq!(normalized, Some("/org/opdbus/v1/plugins/test".to_string()));
 
-        // Legacy alias also normalizes to canonical
-        let canonical = plugin.normalize_path("/org/opdbus/v1/plugin/plugins/test");
+        let legacy_alias = plugin.normalize_path("/org/opdbus/v1/plugin/plugins/test");
+        assert_eq!(
+            legacy_alias,
+            Some("/org/opdbus/v1/plugins/test".to_string())
+        );
+
+        // Canonical path stays the same
+        let canonical = plugin.normalize_path("/org/opdbus/v1/plugins/test");
         assert_eq!(canonical, Some("/org/opdbus/v1/plugins/test".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_state_query() {
+        let plugin = FreeDesktopPlugin::new();
+        let state = plugin.query_current_state().await.unwrap();
+
+        assert_eq!(state.get("name").unwrap().as_str().unwrap(), "freedesktop");
+        assert_eq!(state.get("version").unwrap().as_str().unwrap(), "1.0.0");
+        assert!(state.get("interfaces").unwrap().is_array());
     }
 }
 

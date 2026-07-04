@@ -202,6 +202,16 @@ impl SchemaEngine {
             leaves.insert(id.clone(), blake3::hash(&bytes).to_hex().to_string());
         }
 
+        // Keep the identity sled's embedded schema blob in sync (pr-17 live
+        // behavior): op-identity readers fall back to this embed when the
+        // manifest is unavailable.
+        if let Err(e) = op_identity::write_schema_blob(&json_bytes) {
+            warn!(
+                error = %e,
+                "Schema catalog JSON written, but embedded schema blob write failed"
+            );
+        }
+
         // Canonical catalog hash = blake3 of the monolith bytes — the EXACT
         //    value the identity derivation already uses, kept stable so the
         //    WG/ghostbridge verifier needs no change.
@@ -252,7 +262,8 @@ impl SchemaEngine {
 
     /// Read the Blake3 footprint of the current schema catalog on disk.
     pub fn read_schema_footprint(&self) -> Result<String> {
-        let bytes = std::fs::read(SHM_SCHEMA_PATH)
+        let bytes = op_identity::read_schema_blob()
+            .or_else(|_| std::fs::read(SHM_SCHEMA_PATH))
             .map_err(|e| anyhow::anyhow!("Cannot read schema SHM: {}", e))?;
         let hash = blake3::hash(&bytes);
         Ok(hash.to_hex().to_string())

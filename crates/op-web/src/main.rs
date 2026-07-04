@@ -28,11 +28,14 @@ async fn main() -> anyhow::Result<()> {
 
     // Absolute Base: without a valid schema catalog in shared memory, the entity does not exist.
     const SHM_SCHEMA_PATH: &str = "/dev/shm/live-schema.json";
-    match std::fs::metadata(SHM_SCHEMA_PATH) {
-        Ok(meta) if meta.len() > 2 => {
+    match op_identity::read_schema_blob()
+        .or_else(|_| std::fs::read(SHM_SCHEMA_PATH))
+        .map(|bytes| bytes.len())
+    {
+        Ok(bytes) if bytes > 2 => {
             info!(
                 path = SHM_SCHEMA_PATH,
-                bytes = meta.len(),
+                bytes = bytes,
                 "Schema catalog present in shared memory"
             );
         }

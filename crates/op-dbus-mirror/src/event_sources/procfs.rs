@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 use inotify::{Inotify, WatchMask};
-use procfs::{Current, LoadAverage};
+use procfs::{Current, CurrentSI, LoadAverage};
 use std::time::Duration;
 use tokio::sync::broadcast;
 use tokio::time;
@@ -35,8 +35,8 @@ pub async fn spawn_procfs_inotify_watchers(
                         None
                     };
 
-                    if let Some(path) = path {
-                        if path == "/proc/meminfo" {
+                    match path {
+                        Some("/proc/meminfo") => {
                             if let Ok(meminfo) = procfs::Meminfo::current() {
                                 let event = MirrorEvent::ProcMem {
                                     delta: serde_json::to_value(meminfo).unwrap_or_default(),
@@ -45,6 +45,17 @@ pub async fn spawn_procfs_inotify_watchers(
                                 let _ = broadcast_tx.send(event);
                             }
                         }
+                        Some("/proc/stat") => {
+                            if let Ok(stat) = procfs::KernelStats::current() {
+                                let event = MirrorEvent::ProcStatic {
+                                    section: "stat".to_string(),
+                                    data: serde_json::to_value(stat).unwrap_or_default(),
+                                    sequence: 0,
+                                };
+                                let _ = broadcast_tx.send(event);
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }

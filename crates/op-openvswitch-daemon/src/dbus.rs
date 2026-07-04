@@ -128,6 +128,42 @@ impl JsonRpcService {
         debug!("jsonrpc.notify (passthrough stub)");
     }
 
+    /// List databases on the OVSDB server (JSON-RPC `list_dbs`).
+    /// Returns a JSON array of database names.
+    async fn list_dbs(&self) -> String {
+        let mut guard = match self.state.get_ovsdb().await {
+            Ok(g) => g,
+            Err(e) => return json_error(&format!("OVSDB connect failed: {}", e)),
+        };
+        let client = match guard.as_mut() {
+            Some(c) => c,
+            None => return json_error("OVSDB client unavailable"),
+        };
+        match client.list_dbs().await {
+            Ok(dbs) => serde_json::to_string(&dbs)
+                .unwrap_or_else(|e| json_error(&format!("serialize result failed: {}", e))),
+            Err(e) => json_error(&format!("list_dbs failed: {}", e)),
+        }
+    }
+
+    /// Return the connected database's schema (cached from the OVSDB
+    /// `get_schema` fetch at connect time). JSON-encoded `DbSchema`.
+    async fn get_schema(&self) -> String {
+        let guard = match self.state.get_ovsdb().await {
+            Ok(g) => g,
+            Err(e) => return json_error(&format!("OVSDB connect failed: {}", e)),
+        };
+        let client = match guard.as_ref() {
+            Some(c) => c,
+            None => return json_error("OVSDB client unavailable"),
+        };
+        match client.schema() {
+            Some(schema) => serde_json::to_string(schema)
+                .unwrap_or_else(|e| json_error(&format!("serialize schema failed: {}", e))),
+            None => json_error("schema not yet fetched"),
+        }
+    }
+
     /// Return next JSON-RPC request id (monotonic counter).
     async fn next_id(&self) -> u64 {
         // Simplistic id counter.  In full rovs-jsonrpc this is per-connection.

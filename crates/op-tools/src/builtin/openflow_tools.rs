@@ -13,6 +13,7 @@ use crate::tool::Tool;
 use crate::ToolRegistry;
 use anyhow::Result;
 use async_trait::async_trait;
+use op_network::ovsdb::OvsdbClient;
 use simd_json::{json, OwnedValue as Value};
 use std::sync::Arc;
 
@@ -83,7 +84,7 @@ impl Tool for OpenFlowAddFlowTool {
         }
 
         // Use OVSDB to add flow via Flow table
-        let ovsdb_client = op_network::rovs_proxy::OvsdbDbusClient::new();
+        let ovsdb_client = OvsdbClient::new();
         
         // Build flow rule string (ovs-ofctl format for reference)
         let flow_rule = format!(
@@ -102,7 +103,7 @@ impl Tool for OpenFlowAddFlowTool {
             }
         }]);
 
-        match ovsdb_client.transact(operations).await {
+        match ovsdb_client.transact("Open_vSwitch", operations).await {
             Ok(_) => Ok(json!({
                 "success": true,
                 "bridge": bridge,
@@ -290,7 +291,7 @@ impl Tool for OpenFlowCreatePrivacySocketTool {
         };
 
         // Create OVS internal port via OVSDB
-        let ovsdb_client = op_network::rovs_proxy::OvsdbDbusClient::new();
+        let ovsdb_client = OvsdbClient::new();
         
         // Add port to bridge
         if let Err(e) = ovsdb_client.add_port(bridge, socket_type).await {

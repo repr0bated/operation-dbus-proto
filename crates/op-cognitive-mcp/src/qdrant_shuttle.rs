@@ -459,8 +459,14 @@ fn read_identity_sled(path: &Path) -> Result<IdentitySled> {
 
 fn read_plugin_schema(_path: &Path) -> Result<PluginSchema> {
     let schema_path = Path::new("/dev/shm/live-schema.json");
-    let schema_bytes = std::fs::read(schema_path)
-        .with_context(|| format!("failed to read live schema from {}", schema_path.display()))?;
+    let schema_bytes = op_identity::read_schema_blob()
+        .or_else(|_| std::fs::read(schema_path))
+        .with_context(|| {
+            format!(
+                "failed to read schema blob or live schema from {}",
+                schema_path.display()
+            )
+        })?;
 
     parse_plugin_schema(schema_bytes, schema_path)
 }
