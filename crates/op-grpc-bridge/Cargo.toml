@@ -74,6 +74,10 @@ path = "src/bin/op-grpc-bridge.rs"
 name = "op-grpc-bridge-zeroclaw"
 path = "src/bin/op-grpc-bridge-zeroclaw.rs"
 
+[[bin]]
+name = "dump-protos"
+path = "src/bin/dump-protos.rs"
+
 [build-dependencies]
 tonic-build = { workspace = true }
 op-plugins = { path = "../op-plugins" }

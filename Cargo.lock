@@ -4156,6 +4156,7 @@ dependencies = [
  "hex",
  "memmap2",
  "op-agents",
+ "op-blob",
  "op-cache",
  "op-core",
  "op-cozo-store",

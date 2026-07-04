@@ -2,7 +2,7 @@
 exec 2>&1
 [ -r /etc/op-dbus/environment ] && . /etc/op-dbus/environment
 export DBUS_SESSION_BUS_ADDRESS
-: "${DBUS_SESSION_BUS_ADDRESS:?DBUS_SESSION_BUS_ADDRESS must be set in /etc/op-dbus/environment}"
-export OP_DBUS_PROJECTION_BUS="${OP_DBUS_PROJECTION_BUS:-session}"
+export OP_DBUS_PROJECTION_BUS
+: "${OP_DBUS_PROJECTION_BUS:?OP_DBUS_PROJECTION_BUS must be set in /etc/op-dbus/environment}"
 export RUST_LOG="${RUST_LOG:-op_projection=info,info}"
 exec /usr/local/bin/projection_server

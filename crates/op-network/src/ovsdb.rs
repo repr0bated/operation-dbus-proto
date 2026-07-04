@@ -220,10 +220,15 @@ impl OvsdbClient {
     }
 
     /// Add a port to a bridge with optional type
-    pub async fn add_port_with_type(&self, bridge: &str, port: &str, port_type: Option<&str>) -> Result<()> {
+    pub async fn add_port_with_type(
+        &self,
+        bridge: &str,
+        port: &str,
+        port_type: Option<&str>,
+    ) -> Result<()> {
         let bridge_uuid = self.find_bridge_uuid(bridge).await?;
         let existing_ports = self.list_ports(bridge).await.unwrap_or_default();
-        
+
         if existing_ports.iter().any(|p| p == port) {
             info!("Port {} already attached to bridge {}", port, bridge);
             return Ok(());
@@ -343,7 +348,11 @@ impl OvsdbClient {
         let result = self.transact("Open_vSwitch", operations).await?;
 
         let mut bridges = Vec::new();
-        if let Some(rows) = result.get(0).and_then(|r| r.get("rows")).and_then(|r| r.as_array()) {
+        if let Some(rows) = result
+            .get(0)
+            .and_then(|r| r.get("rows"))
+            .and_then(|r| r.as_array())
+        {
             for row in rows {
                 if let Some(name) = row.get("name").and_then(|n| n.as_str()) {
                     bridges.push(name.to_string());
@@ -368,7 +377,11 @@ impl OvsdbClient {
         let result = self.transact("Open_vSwitch", operations).await?;
 
         let mut port_uuids = Vec::new();
-        if let Some(rows) = result.get(0).and_then(|r| r.get("rows")).and_then(|r| r.as_array()) {
+        if let Some(rows) = result
+            .get(0)
+            .and_then(|r| r.get("rows"))
+            .and_then(|r| r.as_array())
+        {
             if let Some(first_row) = rows.first() {
                 port_uuids = Self::extract_uuid_set(first_row.get("ports").unwrap_or(&Value::Null));
             }
@@ -384,7 +397,11 @@ impl OvsdbClient {
             }]);
 
             let result = self.transact("Open_vSwitch", ops).await?;
-            if let Some(rows) = result.get(0).and_then(|r| r.get("rows")).and_then(|r| r.as_array()) {
+            if let Some(rows) = result
+                .get(0)
+                .and_then(|r| r.get("rows"))
+                .and_then(|r| r.as_array())
+            {
                 if let Some(first_row) = rows.first() {
                     if let Some(name) = first_row.get("name").and_then(|n| n.as_str()) {
                         port_names.push(name.to_string());
@@ -421,8 +438,12 @@ impl OvsdbClient {
         }]);
 
         let result = self.transact("Open_vSwitch", operations).await?;
-        result.get(0)
-            .and_then(|r| r.get("rows").and_then(|rows| rows.as_array().and_then(|r| r.first())))
+        result
+            .get(0)
+            .and_then(|r| {
+                r.get("rows")
+                    .and_then(|rows| rows.as_array().and_then(|r| r.first()))
+            })
             .cloned()
             .ok_or_else(|| anyhow!("Bridge '{}' not found", name))
     }
@@ -440,11 +461,14 @@ impl OvsdbClient {
 
         for name in table_names {
             let result = self
-                .transact(db, json!([{
-                    "op": "select",
-                    "table": name,
-                    "where": []
-                }]))
+                .transact(
+                    db,
+                    json!([{
+                        "op": "select",
+                        "table": name,
+                        "where": []
+                    }]),
+                )
                 .await;
             let rows = match result {
                 Ok(r) => r
@@ -476,12 +500,20 @@ impl OvsdbClient {
         let _ = self.get_schema(db).await?;
 
         let (_tx, rx) = tokio::sync::mpsc::channel(100);
-        info!("monitor_db: channel open for {}, awaiting shm-driven feed", db);
+        info!(
+            "monitor_db: channel open for {}, awaiting shm-driven feed",
+            db
+        );
         Ok(rx)
     }
 
     /// Set a property on a bridge
-    pub async fn set_bridge_property(&self, bridge_name: &str, property: &str, value: &str) -> Result<()> {
+    pub async fn set_bridge_property(
+        &self,
+        bridge_name: &str,
+        property: &str,
+        value: &str,
+    ) -> Result<()> {
         let operations = json!([{
             "op": "update",
             "table": "Bridge",
@@ -489,7 +521,10 @@ impl OvsdbClient {
             "row": { property: value }
         }]);
         self.transact("Open_vSwitch", operations).await?;
-        info!("Bridge {} property {} set to {}", bridge_name, property, value);
+        info!(
+            "Bridge {} property {} set to {}",
+            bridge_name, property, value
+        );
         Ok(())
     }
 
@@ -516,7 +551,11 @@ impl OvsdbClient {
         }]);
 
         let result = self.transact("Open_vSwitch", operations).await?;
-        if let Some(rows) = result.get(0).and_then(|r| r.get("rows")).and_then(|r| r.as_array()) {
+        if let Some(rows) = result
+            .get(0)
+            .and_then(|r| r.get("rows"))
+            .and_then(|r| r.as_array())
+        {
             if let Some(first_row) = rows.first() {
                 if let Some(uuid_array) = first_row.get("_uuid").and_then(|u| u.as_array()) {
                     if uuid_array.len() == 2 && uuid_array[0] == "uuid" {
@@ -540,9 +579,15 @@ impl OvsdbClient {
         }]);
 
         let result = self.transact("Open_vSwitch", operations).await?;
-        if let Some(rows) = result.get(0).and_then(|r| r.get("rows")).and_then(|r| r.as_array()) {
+        if let Some(rows) = result
+            .get(0)
+            .and_then(|r| r.get("rows"))
+            .and_then(|r| r.as_array())
+        {
             if let Some(first_row) = rows.first() {
-                if let Some(uuid) = Self::extract_uuid_atom(first_row.get("_uuid").unwrap_or(&Value::Null)) {
+                if let Some(uuid) =
+                    Self::extract_uuid_atom(first_row.get("_uuid").unwrap_or(&Value::Null))
+                {
                     return Ok(uuid);
                 }
             }
@@ -561,10 +606,7 @@ impl OvsdbClient {
         if let Some(as_set) = value.as_array() {
             if as_set.len() == 2 && as_set[0] == "set" {
                 if let Some(items) = as_set[1].as_array() {
-                    return items
-                        .iter()
-                        .filter_map(Self::extract_uuid_atom)
-                        .collect();
+                    return items.iter().filter_map(Self::extract_uuid_atom).collect();
                 }
             }
         }
@@ -600,13 +642,19 @@ mod tests {
     #[test]
     fn extract_uuid_atom_works() {
         let value = json!(["uuid", "abc123"]);
-        assert_eq!(OvsdbClient::extract_uuid_atom(&value), Some("abc123".to_string()));
+        assert_eq!(
+            OvsdbClient::extract_uuid_atom(&value),
+            Some("abc123".to_string())
+        );
     }
 
     #[test]
     fn extract_uuid_atom_named_uuid_works() {
         let value = json!(["named-uuid", "my_bridge"]);
-        assert_eq!(OvsdbClient::extract_uuid_atom(&value), Some("my_bridge".to_string()));
+        assert_eq!(
+            OvsdbClient::extract_uuid_atom(&value),
+            Some("my_bridge".to_string())
+        );
     }
 
     #[test]
