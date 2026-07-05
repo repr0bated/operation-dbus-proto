@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use tokio::task::AbortHandle;
 use tokio::time::{sleep, Duration};
 
@@ -81,11 +81,11 @@ impl PageDataHub {
             loop {
                 set_status(&inner, &slug_owned, &format!("polling {}.{}…", source.plugin, source.method));
                 match fetch_plugin(&registry, &source).await {
-                    Ok(Some(val)) if !val.is_null() && val != json!({}) => {
+                    Ok(Some(val)) if is_meaningful_result(&val) => {
                         set_value(
                             &inner,
                             &slug_owned,
-                            Some(val),
+                            Some(unwrap_protobuf_value(val)),
                             &format!("LIVE — {}.{}", source.plugin, source.method),
                         );
                     }
@@ -152,6 +152,70 @@ async fn fetch_plugin(reg: &ReflectionRegistry, source: &PageSource) -> anyhow::
         anyhow::bail!("{msg}");
     }
     Ok(resp.get("result").cloned())
+}
+
+/// True when a CallMethod `result` carries bindable data (not null/empty).
+fn is_meaningful_result(v: &Value) -> bool {
+    match unwrap_protobuf_value(v.clone()) {
+        Value::Null => false,
+        Value::Object(m) if m.is_empty() => false,
+        Value::Array(a) if a.is_empty() => false,
+        _ => true,
+    }
+}
+
+/// Reflection decodes `google.protobuf.Value` with kind wrappers; flatten to plain JSON.
+fn unwrap_protobuf_value(v: Value) -> Value {
+    let Value::Object(map) = v else {
+        return v;
+    };
+    if map.len() != 1 {
+        return Value::Object(map);
+    }
+
+    if map.contains_key("nullValue") || map.contains_key("null_value") {
+        return Value::Null;
+    }
+    if let Some(Value::Bool(b)) = map.get("boolValue").or_else(|| map.get("bool_value")) {
+        return Value::Bool(*b);
+    }
+    if let Some(Value::String(s)) = map.get("stringValue").or_else(|| map.get("string_value")) {
+        return Value::String(s.clone());
+    }
+    if let Some(Value::Number(n)) = map.get("numberValue").or_else(|| map.get("number_value")) {
+        return Value::Number(n.clone());
+    }
+    if let Some(sv) = map.get("structValue").or_else(|| map.get("struct_value")) {
+        return unwrap_protobuf_struct(sv);
+    }
+    if let Some(lv) = map.get("listValue").or_else(|| map.get("list_value")) {
+        return unwrap_protobuf_list(lv);
+    }
+    Value::Object(map)
+}
+
+fn unwrap_protobuf_struct(v: &Value) -> Value {
+    let fm = v
+        .get("fields")
+        .and_then(Value::as_object)
+        .or_else(|| v.as_object());
+    if let Some(fm) = fm {
+        let out: Map<String, Value> = fm
+            .iter()
+            .map(|(k, v)| (k.clone(), unwrap_protobuf_value(v.clone())))
+            .collect();
+        return Value::Object(out);
+    }
+    v.clone()
+}
+
+fn unwrap_protobuf_list(v: &Value) -> Value {
+    let values = v
+        .get("values")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    Value::Array(values.into_iter().map(unwrap_protobuf_value).collect())
 }
 
 fn set_status(inner: &Arc<Mutex<HashMap<String, Entry>>>, slug: &str, status: &str) {

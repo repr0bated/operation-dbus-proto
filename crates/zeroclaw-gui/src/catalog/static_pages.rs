@@ -126,8 +126,11 @@ impl StaticPages {
     fn load_from_disk(&mut self) {
         let dir = pages_dir();
         let Ok(read_dir) = std::fs::read_dir(&dir) else {
+            self.pages.clear();
+            self.mtimes.clear();
             return;
         };
+        let mut seen = std::collections::HashSet::new();
         for entry in read_dir.flatten() {
             let path = entry.path();
             if path.extension().and_then(|s| s.to_str()) != Some("json") {
@@ -137,6 +140,7 @@ impl StaticPages {
             if slug.is_empty() {
                 continue;
             }
+            seen.insert(slug.clone());
             let mtime = entry.metadata().and_then(|m| m.modified()).unwrap_or(SystemTime::UNIX_EPOCH);
             if self.mtimes.get(&slug) == Some(&mtime) {
                 continue;
@@ -159,6 +163,8 @@ impl StaticPages {
                 }
             }
         }
+        self.pages.retain(|slug, _| seen.contains(slug));
+        self.mtimes.retain(|slug, _| seen.contains(slug));
     }
 }
 
