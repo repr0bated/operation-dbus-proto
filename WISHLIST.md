@@ -35,6 +35,7 @@ Replaces scattered TODO fragments across `.zenflow/tasks/`, `.kiro/specs/`, and 
 | OD-10 | Repoint `op-mcp-shim` endpoint for laptop (xray door, not 10.200) + TLS channel | `general-purpose` | TODO | laptop is a WG peer, can't reach 10.200 |
 | OD-09 | Restore A.N.N.A./OSCAL role cast in narrative + interceptor docs (authorizing-official = real-time approve) | `claude` | TODO | notebook `Identity-State Arbitrator` |
 | OD-24 | **Nail down registration + accountability loop** — reconcile provision script (CozoDB+Bearer+HTTP) with runtime (sled+header+gRPC); wire Netmaker peer reg | `general-purpose` | TODO | template: `deploy/scripts/provision-workspace-subscriber.sh`; see SIGNALS concerns |
+| OD-32 | **Blob-first projection** — blobs sealed in SHM but unread at runtime; single writer to `/dev/shm/opdbus/plugin-blobs`; delete op-blob narrow `PluginSchema`, seal canonical `op_state_store::PluginSchema`; op-projection + reflection read ONLY from blob catalog (not `live-schema.json`); atomic manifest + tmp+rename + stale sweep | `general-purpose` | TODO | Fable 5 audit in SIGNALS.md (2026-07-03); synthesis: `docs/fable-handoff-synthesis.md`; factory: `FACTORY-PROMPT-op-blob-unification.md` |
 
 ## ⏭ Next
 *Queued; start when Current clears.*
