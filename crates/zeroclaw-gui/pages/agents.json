@@ -1,0 +1,35 @@
+{
+  "title": "Agents",
+  "source": {
+    "plugin": "agent_config",
+    "method": "get_config",
+    "args": [],
+    "poll_secs": 15
+  },
+  "data": {
+    "agents": [
+      { "id": "factory", "status": "ok", "role": "orchestrator" },
+      { "id": "memory", "status": "ok", "role": "hygiene" }
+    ]
+  },
+  "spec": {
+    "kind": "stack",
+    "children": [
+      { "kind": "heading", "text": "Agents", "size": 18 },
+      { "kind": "muted", "text": "Agent config from agent_config.get_config." },
+      { "kind": "space", "px": 12 },
+      { "kind": "card", "children": [
+        { "kind": "heading", "text": "Registered agents", "size": 13 },
+        { "kind": "repeat", "bind": "/agents", "child": {
+          "kind": "stack", "dir": "h", "children": [
+            { "kind": "label", "bind": "/id" },
+            { "kind": "space", "px": 12 },
+            { "kind": "label", "bind": "/role" },
+            { "kind": "space", "px": 12 },
+            { "kind": "status_pill", "bind": "/status" }
+          ]
+        }}
+      ]}
+    ]
+  }
+}
