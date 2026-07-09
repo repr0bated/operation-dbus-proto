@@ -614,6 +614,9 @@ impl MutationEngine {
     ) -> anyhow::Result<MutationResult> {
         let mut old_value = None;
         let mut authoritative_value = value.clone();
+        // When a per-plugin dispatch produces a domain result, it is returned
+        // to the caller instead of the (projection-bound) authoritative value.
+        let mut caller_result: Option<simd_json::OwnedValue> = None;
 
         // Resolve the acting identity from the Sled (/dev/shm/plugin_schema.dat)
         // when the caller omitted it. The Sled carries the WireGuard footprint +
@@ -694,6 +697,30 @@ impl MutationEngine {
                     authoritative_value = unix_socket_state_after_registration(&name, &ports);
                 }
             }
+        } else if plugin_id == "identity_sled" && change_type == ChangeType::MethodCall {
+            // identity_sled dispatch: PluginService.CallMethod (zcall) lands
+            // here, not in dispatch_method_call, so the arm must exist in
+            // both. zcall wraps object arguments as a one-element array.
+            if let Some(method) = &member_name {
+                let mut args_json: serde_json::Value = serde_json::to_value(&value)?;
+                if let serde_json::Value::Array(items) = &args_json {
+                    args_json = items
+                        .first()
+                        .cloned()
+                        .unwrap_or_else(|| serde_json::Value::Object(Default::default()));
+                }
+                let domain = crate::identity_sled_dispatch::dispatch_identity_sled_method(
+                    self, method, &args_json,
+                )
+                .await?;
+                // The projection carries the full sled state (the dispatch
+                // already wrote it to the cache); the caller gets the
+                // method's domain result.
+                if let Some(state) = self.get_state("identity_sled").await {
+                    authoritative_value = state;
+                }
+                caller_result = Some(simd_json::serde::to_owned_value(&domain)?);
+            }
         } else {
             // NonNet / Generic Plugin Path
             if change_type == ChangeType::PropertySet {
@@ -749,7 +776,7 @@ impl MutationEngine {
             success: true,
             event_id: change.event_id,
             event_hash: change.event_hash,
-            result: Some(authoritative_value),
+            result: Some(caller_result.unwrap_or(authoritative_value)),
             error: None,
         })
     }
