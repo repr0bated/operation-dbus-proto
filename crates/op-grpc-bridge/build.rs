@@ -228,13 +228,13 @@ fn generate_plugin_method_routes(sets: &[PluginMethodSet]) -> String {
 
     writeln!(
         rust,
-        "    pub(crate) fn add_routes(mut routes: tonic::service::Routes, server: OperationGrpcServer) -> tonic::service::Routes {{"
+        "    pub(crate) fn add_routes(\n        mut routes: tonic::service::Routes,\n        server: OperationGrpcServer,\n        intercept: fn(tonic::Request<()>) -> Result<tonic::Request<()>, tonic::Status>,\n    ) -> tonic::service::Routes {{"
     )
     .unwrap();
     for set in sets {
         writeln!(
             rust,
-            "        routes = routes.add_service(tonic_web::enable(crate::proto::plugin_methods::{}::{}::new(server.clone())));",
+            "        routes = routes.add_service(tonic_web::enable(crate::proto::plugin_methods::{}::{}::with_interceptor(server.clone(), intercept)));",
             set.server_module, set.server_type
         )
         .unwrap();

@@ -158,15 +158,9 @@ fn read_projected_data(plugin_id: &str, path_segments: &[String]) -> String {
 }
 
 fn read_plugin_schema(plugin_id: &str) -> Option<PluginSchema> {
-    let bytes = std::fs::read("/dev/shm/live-schema.json").ok()?;
-    let root = serde_json::from_slice::<serde_json::Value>(&bytes).ok()?;
-    let schema = root
-        .as_object()?
-        .get(plugin_id)?
-        .as_array()
-        .and_then(|items| items.first())
-        .or_else(|| root.as_object()?.get(plugin_id))?;
-    serde_json::from_value::<PluginSchema>(schema.clone()).ok()
+    // Absolute Base: a plugin exists ⟺ its sealed blob is in the catalog.
+    // Never fall back to the removed /dev/shm/live-schema.json monolith.
+    op_blob::catalog::read_plugin_schema_shm(plugin_id)
 }
 
 /// Navigate a JSON value by path segments (object keys or array indices).

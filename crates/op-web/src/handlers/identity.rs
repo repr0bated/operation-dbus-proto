@@ -1,7 +1,7 @@
 //! Identity Sled Handler — Read the live identity sled from shared memory.
 //!
 //! GET /api/identity/sled — returns the current sled contents as JSON.
-//! Readable by any WireGuard-connected device without root access.
+//! Restricted to localhost and trusted WireGuard mesh (AccessZone).
 
 use axum::{
     body::Body,
@@ -9,6 +9,7 @@ use axum::{
     http::{header, StatusCode},
     response::Response,
 };
+use op_core::security::AccessZone;
 use op_identity::schema_bridge::{read_sled, IdentitySled};
 use serde_json::json;
 use std::sync::Arc;
@@ -17,7 +18,25 @@ use tracing::{info, warn};
 use crate::state::AppState;
 
 /// GET /api/identity/sled
-pub async fn identity_sled_handler(Extension(_state): Extension<Arc<AppState>>) -> Response {
+pub async fn identity_sled_handler(
+    Extension(_state): Extension<Arc<AppState>>,
+    Extension(zone): Extension<AccessZone>,
+) -> Response {
+    // Footprint/trace/pubkey are session secrets — not for Public or LAN-only peers.
+    match zone {
+        AccessZone::Localhost | AccessZone::TrustedMesh => {}
+        AccessZone::PrivateNetwork | AccessZone::Public => {
+            warn!(?zone, "Denied identity sled read outside trusted mesh");
+            return Response::builder()
+                .status(StatusCode::FORBIDDEN)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{"error":"identity sled requires localhost or trusted WireGuard mesh"}"#,
+                ))
+                .expect("response with valid body should not fail");
+        }
+    }
+
     match read_sled() {
         Ok((ptr, _mmap)) => {
             // SAFETY: `ptr` is derived from a live `memmap2::Mmap` (`_mmap`). The mapping

@@ -239,29 +239,15 @@ fn json_error_response(status: StatusCode, message: &str) -> Response {
         })
 }
 
-/// Read zeroclaw schema directly from shared memory (Absolute Base)
-/// Per AGENTS.md: "The Absolute Base: PluginSchema is the single source of truth"
+/// Read zeroclaw schema directly from the sealed blob catalog (Absolute Base).
 fn read_zeroclaw_from_shm() -> Option<Value> {
-    const SHM_SCHEMA_PATH: &str = "/dev/shm/live-schema.json";
+    let schema = op_blob::catalog::read_plugin_schema_shm("zeroclaw")?;
+    let schema_value = simd_json::serde::to_owned_value(&schema).ok()?;
+    let fields = schema_value.get("fields")?.as_object()?;
 
-    let mut bytes = op_identity::read_schema_blob()
-        .or_else(|_| std::fs::read(SHM_SCHEMA_PATH))
-        .ok()?;
-    let schema: Value = simd_json::to_owned_value(&mut bytes).ok()?;
-
-    // Extract zeroclaw from the schema examples (the canonical source)
-    let zeroclaw_schema = schema.get("zeroclaw")?.as_array()?.first()?;
-    let fields = zeroclaw_schema.get("fields")?.as_array()?;
-
-    // Helper: find field example by name
-    fn find_example(fields: &[Value], name: &str) -> Option<Value> {
-        for f in fields {
-            let field_name = f.get("name")?.as_str()?;
-            if field_name == name {
-                return f.get("example").cloned();
-            }
-        }
-        None
+    fn find_example(fields: &simd_json::owned::Object, name: &str) -> Option<Value> {
+        let field = fields.get(name)?;
+        field.get("example").cloned()
     }
 
     Some(json!({

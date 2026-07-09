@@ -26,23 +26,21 @@ async fn main() -> anyhow::Result<()> {
     info!("Starting op-web server...");
     info!("Version: {}", env!("CARGO_PKG_VERSION"));
 
-    // Absolute Base: without a valid schema catalog in shared memory, the entity does not exist.
-    const SHM_SCHEMA_PATH: &str = "/dev/shm/live-schema.json";
-    match op_identity::read_schema_blob()
-        .or_else(|_| std::fs::read(SHM_SCHEMA_PATH))
-        .map(|bytes| bytes.len())
-    {
-        Ok(bytes) if bytes > 2 => {
+    // Absolute Base: a plugin exists ⟺ its sealed blob is in the catalog.
+    // Require the blob-catalog manifest (not the removed live-schema.json monolith).
+    const BLOB_MANIFEST: &str = "/dev/shm/opdbus/plugin-blobs/.manifest.json";
+    match op_blob::catalog::read_manifest_plugin_ids_shm() {
+        Some(ids) if !ids.is_empty() => {
             info!(
-                path = SHM_SCHEMA_PATH,
-                bytes = bytes,
-                "Schema catalog present in shared memory"
+                path = BLOB_MANIFEST,
+                plugins = ids.len(),
+                "Sealed blob catalog present in shared memory"
             );
         }
         _ => {
             tracing::error!(
-                path = SHM_SCHEMA_PATH,
-                "FATAL: Schema catalog missing from shared memory. Start projection_server first."
+                path = BLOB_MANIFEST,
+                "FATAL: Blob catalog missing. Run `opblob seal-shm` or start op-grpc-bridge first."
             );
             std::process::exit(1);
         }

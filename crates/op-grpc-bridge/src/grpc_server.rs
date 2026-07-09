@@ -695,12 +695,13 @@ pub fn build_operation_routes(server: OperationGrpcServer) -> tonic::service::Ro
         intercept,
     )))
     .add_service(tonic_web::enable(
-        crate::proto::chat::chat_service_server::ChatServiceServer::new(
+        crate::proto::chat::chat_service_server::ChatServiceServer::with_interceptor(
             crate::chat_service::ChatServiceImpl::new(),
+            intercept,
         ),
     ));
 
-    let routes = add_routes(routes, server.clone());
+    let routes = add_routes(routes, server.clone(), intercept);
     routes
         .add_service(tonic_web::enable(reflection_v1))
         .add_service(tonic_web::enable(reflection_v1alpha))
