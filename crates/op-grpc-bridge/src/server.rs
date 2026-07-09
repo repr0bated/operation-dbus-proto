@@ -95,7 +95,9 @@ impl ServerConfig {
 
         match (cert_pem, key_pem) {
             (Some(cert), Some(key)) => {
-                tracing::info!("TLS identity loaded from ZEROCLAW_TLS_CERT/ZEROCLAW_TLS_KEY env vars");
+                tracing::info!(
+                    "TLS identity loaded from ZEROCLAW_TLS_CERT/ZEROCLAW_TLS_KEY env vars"
+                );
                 Some(Identity::from_pem(cert, key))
             }
             _ => {
@@ -339,7 +341,9 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
                 .allow_methods(Any)
                 .allow_headers(Any);
             let tls_config = ServerTlsConfig::new().identity(identity);
-            let server: std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), tonic::transport::Error>> + Send>> = Box::pin(
+            let server: std::pin::Pin<
+                Box<dyn std::future::Future<Output = Result<(), tonic::transport::Error>> + Send>,
+            > = Box::pin(
                 tonic::transport::Server::builder()
                     .accept_http1(true)
                     .tls_config(tls_config)

@@ -82,7 +82,9 @@ impl HookProviderService {
 }
 
 fn client_id(info: &Option<exhook::ClientInfo>) -> &str {
-    info.as_ref().map(|c| c.clientid.as_str()).unwrap_or("unknown")
+    info.as_ref()
+        .map(|c| c.clientid.as_str())
+        .unwrap_or("unknown")
 }
 
 fn empty() -> Response<EmptySuccess> {
@@ -141,7 +143,9 @@ impl HookProvider for HookProviderService {
             .map(|c| c.clientid.as_str())
             .unwrap_or("unknown");
         debug!(client_id = %client, "EMQX OnClientConnect");
-        let _ = self.record_event("on_client_connect", client, None, None).await;
+        let _ = self
+            .record_event("on_client_connect", client, None, None)
+            .await;
         Ok(empty())
     }
 
@@ -159,7 +163,9 @@ impl HookProvider for HookProviderService {
         let req = request.into_inner();
         let client = client_id(&req.clientinfo);
         info!(client_id = %client, "EMQX OnClientConnected");
-        let _ = self.record_event("on_client_connected", client, None, None).await;
+        let _ = self
+            .record_event("on_client_connected", client, None, None)
+            .await;
         Ok(empty())
     }
 
@@ -252,7 +258,9 @@ impl HookProvider for HookProviderService {
         let req = request.into_inner();
         let client = client_id(&req.clientinfo);
         debug!(client_id = %client, "EMQX OnSessionCreated");
-        let _ = self.record_event("on_session_created", client, None, None).await;
+        let _ = self
+            .record_event("on_session_created", client, None, None)
+            .await;
         Ok(empty())
     }
 

@@ -543,8 +543,10 @@ impl IncusPlugin {
         Ok(instances)
     }
 
-    /// Apply a single Create action for an instance.
-    async fn apply_create(instance: &IncusInstance) -> Result<Vec<String>> {
+    /// Apply a single Create action for an instance. Public so the
+    /// identity_sled provision path (creating a container IS writing a sled)
+    /// can drive the same creation logic.
+    pub async fn apply_create(instance: &IncusInstance) -> Result<Vec<String>> {
         let mut changes = Vec::new();
         let name = &instance.name;
 

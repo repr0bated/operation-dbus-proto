@@ -8,6 +8,7 @@
 //! - Container networking with OpenFlow routing
 //! - Native Proxmox API client for LXC container management
 
+pub mod btrfs;
 pub mod controller;
 pub mod openflow;
 pub mod ovs_capabilities;

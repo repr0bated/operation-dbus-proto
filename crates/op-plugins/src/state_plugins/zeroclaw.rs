@@ -546,8 +546,7 @@ impl Default for ZeroclawPlugin {
 
 impl ZeroclawPlugin {
     const DBUS_OBJECT: &'static str = "/org/opdbus/v1/plugins/zeroclaw";
-    const OSCAL_SUBID_REGISTRY_OBJECT: &'static str =
-        "/org/opdbus/v1/plugins/oscal_subid_registry";
+    const OSCAL_SUBID_REGISTRY_OBJECT: &'static str = "/org/opdbus/v1/plugins/oscal_subid_registry";
     const DEFAULT_LOCAL_MODEL: &'static str = "gemma3:4b";
 
     pub fn new() -> Self {

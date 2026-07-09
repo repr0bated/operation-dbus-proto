@@ -23,7 +23,7 @@ use simd_json::OwnedValue as Value;
 
 /// One container's identity sled. The container is the sled is the identity:
 /// `session_id` == container name == derived session identity.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "sch.service.identity-sled.record.schema@v1"))]
 pub struct ContainerIdentitySled {
     /// Container identity: session_id = container name, derived from the
@@ -65,6 +65,12 @@ pub struct ContainerIdentitySled {
     #[serde(default)]
     #[schemars(extend("x-oscal-subid" = "src.service.identity-sled.btrfs-device@v1"))]
     pub btrfs_device: Option<SledBtrfsDevice>,
+    /// The container's full Incus definition (official `shared/api` shape) —
+    /// the sled inherits the Incus schema; provisioning the container IS
+    /// writing this sled. The instance `name` is always the session_id.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "src.service.identity-sled.instance@v1"))]
+    pub instance: Option<super::incus::IncusInstance>,
     /// Unix seconds when the session began.
     #[serde(default)]
     pub session_started_at: i64,
@@ -83,6 +89,10 @@ pub struct ContainerIdentitySled {
 pub struct SledBtrfsDevice {
     /// Path of the sealed image / block device (e.g. loop-backed image file).
     pub device_path: String,
+    /// Mounted btrfs filesystem the device is added TO (`btrfs device add
+    /// <device_path> <mount_point>`).
+    #[serde(default)]
+    pub mount_point: String,
     /// btrfs filesystem UUID of the sealed image.
     #[serde(default)]
     pub btrfs_uuid: String,
@@ -257,6 +267,31 @@ pub(crate) fn identity_sled_schema() -> PluginSchema {
         pub btrfs_device: Option<SledBtrfsDevice>,
     }
     #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct ProvisionContainerInput {
+        /// WireGuard public key (base64). session_id — and therefore the
+        /// container name — is DERIVED from this, never supplied.
+        pub wireguard_pubkey: String,
+        /// Provision-time PSK (base64); when present the session_id derivation
+        /// is Argon2(PSK, salt=pubkey).
+        #[serde(default)]
+        pub psk: Option<String>,
+        /// Sealed identity blob reference seeding this container.
+        #[serde(default)]
+        pub blob_ref: Option<String>,
+        /// btrfs persistence device to register for this sled.
+        #[serde(default)]
+        pub btrfs_device: Option<SledBtrfsDevice>,
+        /// Incus instance definition overrides (image, profiles, config,
+        /// devices…). `name` is ignored and forced to the derived session_id;
+        /// `nic`-type devices are rejected (containers get no NIC or IP).
+        #[serde(default)]
+        pub instance: Option<super::incus::IncusInstance>,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct AttachBtrfsDeviceInput {
+        pub session_id: String,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
     pub struct TouchSessionInput {
         pub session_id: String,
     }
@@ -308,6 +343,26 @@ pub(crate) fn identity_sled_schema() -> PluginSchema {
         ),
     );
     schema.methods.insert(
+        "provision_container".to_string(),
+        method_decl_from_schemars_with_output::<ProvisionContainerInput, GetIdentityOutput>(
+            "provision_container",
+            SideEffect::Mutation,
+            false,
+            "identity_sled.write",
+            "mut.service.identity-sled.container.provision@v1",
+        ),
+    );
+    schema.methods.insert(
+        "attach_btrfs_device".to_string(),
+        method_decl_from_schemars_with_output::<AttachBtrfsDeviceInput, GetIdentityOutput>(
+            "attach_btrfs_device",
+            SideEffect::Mutation,
+            false,
+            "identity_sled.write",
+            "mut.service.identity-sled.btrfs-device.attach@v1",
+        ),
+    );
+    schema.methods.insert(
         "touch_session".to_string(),
         method_decl_from_schemars_with_output::<TouchSessionInput, AckOutput>(
             "touch_session",
@@ -351,6 +406,8 @@ mod tests {
         for method in [
             "get_identity",
             "write_identity",
+            "provision_container",
+            "attach_btrfs_device",
             "touch_session",
             "record_session_event",
             "get_session_history",

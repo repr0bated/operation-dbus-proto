@@ -4468,6 +4468,7 @@ dependencies = [
  "op-blob",
  "op-cognitive-mcp",
  "op-core",
+ "op-cozo-store",
  "op-grpc-adapters",
  "op-identity",
  "op-jsonrpc",
