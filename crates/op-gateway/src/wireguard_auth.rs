@@ -99,7 +99,23 @@ impl WireGuardDatabase {
         })
         .await
         .map_err(|e| anyhow::anyhow!("blocking task panicked: {e}"))??;
-        recs.iter().map(record_to_session).collect()
+        // A single corrupt row (e.g. malformed flags_json) must not fail this
+        // whole load — sessions are account-lifetime identity, and collect::<Result<Vec<_>>>
+        // would otherwise evict every *other* valid session from memory too.
+        // Skip and log the bad row instead.
+        Ok(recs
+            .iter()
+            .filter_map(|rec| match record_to_session(rec) {
+                Ok(session) => Some(session),
+                Err(e) => {
+                    warn!(
+                        "Dropping corrupt WireGuard session row {}: {}",
+                        rec.session_id, e
+                    );
+                    None
+                }
+            })
+            .collect())
     }
 
     pub async fn remove_wireguard_session(&self, session_id: &str) -> Result<()> {

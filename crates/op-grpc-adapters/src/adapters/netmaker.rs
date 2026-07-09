@@ -37,13 +37,15 @@ impl NetmakerAdapter {
     /// return a 200/204 with no JSON payload at all).
     async fn raw_get(&self, path: &str) -> Result<Vec<u8>, Status> {
         // `path` is built from caller-supplied gRPC fields (e.g. a network/node
-        // name) and interpolated directly into the raw request line below. A
-        // value containing CR/LF would inject extra headers or a second request
-        // into this socket, which carries the adapter's bearer token — reject it
-        // outright rather than trying to encode it.
-        if path.contains('\r') || path.contains('\n') {
+        // name) and interpolated directly into the raw request line below. CR/LF
+        // would inject extra headers or a second request into this socket, which
+        // carries the adapter's bearer token; a space or other control character
+        // would still land verbatim in "GET {path} HTTP/1.1" and break the
+        // request line. These are internal endpoints that should never contain
+        // such characters, so reject the whole class rather than just CR/LF.
+        if path.chars().any(|c| c.is_ascii_control() || c == ' ') {
             return Err(Status::invalid_argument(
-                "path must not contain CR or LF characters",
+                "path must not contain whitespace or control characters",
             ));
         }
 
