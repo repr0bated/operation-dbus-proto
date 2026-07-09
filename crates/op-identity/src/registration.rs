@@ -6,7 +6,7 @@
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use rand::distributions::Alphanumeric;
 use rand::rngs::OsRng;
-use rand::Rng;
+use rand::{Rng, RngCore};
 use x25519_dalek::{PublicKey, StaticSecret};
 
 /// WireGuard keypair used for user identity and VPN config.
@@ -25,6 +25,13 @@ pub fn generate_wireguard_keypair() -> WireGuardKeyPair {
         private_key: BASE64.encode(secret.as_bytes()),
         public_key: BASE64.encode(public.as_bytes()),
     }
+}
+
+/// Generate a WireGuard preshared key (32 random bytes, base64).
+pub fn generate_wireguard_psk() -> String {
+    let mut psk = [0u8; 32];
+    rand::RngCore::fill_bytes(&mut OsRng, &mut psk);
+    BASE64.encode(psk)
 }
 
 /// Generate a random token suitable for magic-link flows.

@@ -22,6 +22,8 @@ pub struct PrivacyContainerConfig {
     pub device_name: String,
     pub storage_pool: Option<String>,
     pub attach_bridged_nic: bool,
+    /// When set (from zeroclaw container_id_template), used verbatim as Incus name.
+    pub explicit_container_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -68,7 +70,22 @@ impl PrivacyContainerConfig {
                     value == "1" || value == "true" || value == "yes"
                 })
                 .unwrap_or(true),
+            explicit_container_name: None,
         }
+    }
+
+    /// Build from zeroclaw `user_container` schema (image + resolved container name).
+    pub fn from_zeroclaw_options(
+        options: &crate::zeroclaw_configurable::ZeroclawConfigurableOptions,
+        container_name: &str,
+    ) -> Self {
+        let mut cfg = Self::from_env();
+        if !options.user_container.image.is_empty() {
+            cfg.image = options.user_container.image.clone();
+        }
+        cfg.explicit_container_name = Some(container_name.to_string());
+        cfg.name_prefix = String::new();
+        cfg
     }
 }
 
@@ -77,6 +94,20 @@ impl PrivacyContainerConfig {
 /// Idempotent: existing instances are updated in place.
 pub async fn ensure_user_container(user: &PrivacyUser) -> Result<String> {
     let cfg = PrivacyContainerConfig::from_env();
+    ensure_user_container_with_config(user, &cfg).await
+}
+
+/// Ensure container using zeroclaw `user_container` options from the sealed blob.
+pub async fn ensure_user_container_from_options(
+    user: &PrivacyUser,
+    options: &crate::zeroclaw_configurable::ZeroclawConfigurableOptions,
+) -> Result<String> {
+    let container_name =
+        crate::zeroclaw_configurable::resolve_container_name(
+            &options.user_container.container_id_template,
+            &user.id,
+        );
+    let cfg = PrivacyContainerConfig::from_zeroclaw_options(options, &container_name);
     ensure_user_container_with_config(user, &cfg).await
 }
 
@@ -90,7 +121,10 @@ async fn ensure_user_container_with_config(
         );
     }
 
-    let container_name = container_name_for_user(&user.id, &cfg.name_prefix);
+    let container_name = cfg
+        .explicit_container_name
+        .clone()
+        .unwrap_or_else(|| container_name_for_session(&user.id, &cfg.name_prefix));
     let route_id = derive_route_id(&user.wg_public_key)?;
     debug!(
         "Publishing privacy container '{}' for user {} via StateManager",
@@ -144,8 +178,7 @@ fn desired_instance(
         storage_pool: cfg.storage_pool.clone(),
         profiles: Vec::new(),
         config: Some(HashMap::from([
-            ("user.opdbus.user_id".to_string(), user.id.clone()),
-            ("user.opdbus.email".to_string(), user.email.clone()),
+            ("user.opdbus.session_id".to_string(), user.id.clone()),
             (
                 "user.opdbus.assigned_ip".to_string(),
                 user.assigned_ip.clone(),
@@ -170,6 +203,33 @@ fn upsert_instance(state: &mut IncusState, instance: IncusInstance) {
         None => state.instances.push(instance),
     }
     state.instances.sort_by(|a, b| a.name.cmp(&b.name));
+}
+
+fn container_name_for_session(session_id: &str, name_prefix: &str) -> String {
+    // session_id is the Incus container name (the sled IS the identity).
+    let sanitized: String = session_id
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
+        .map(|c| c.to_ascii_lowercase())
+        .collect();
+    if sanitized.is_empty() {
+        return container_name_for_user(session_id, name_prefix);
+    }
+    if sanitized.len() <= 63 && !name_prefix.is_empty() {
+        let mut prefix = normalize_prefix(name_prefix);
+        if !prefix.ends_with('-') {
+            prefix.push('-');
+        }
+        let full = format!("{}{}", prefix, sanitized);
+        if full.len() <= 63 {
+            return full;
+        }
+    }
+    if sanitized.len() > 63 {
+        sanitized[..63].trim_end_matches('-').to_string()
+    } else {
+        sanitized
+    }
 }
 
 fn container_name_for_user(user_id: &str, name_prefix: &str) -> String {

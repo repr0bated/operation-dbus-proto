@@ -6,7 +6,10 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, Utc};
 use op_cozo_store::{CozoGraphShuttle, DataValue, Num};
-use op_identity::generate_magic_link_token;
+use op_identity::{
+    derive_session_id_from_psk, generate_magic_link_token, session_proof,
+    generate_wireguard_psk,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -58,6 +61,26 @@ pub struct UserApiCredentials {
     pub preferred_provider: Option<String>,
 }
 
+/// Ephemeral signup state — email and PSK never touch Cozo until verify completes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingSignup {
+    pub pending_id: String,
+    pub email: String,
+    pub wg_public_key: String,
+    pub wg_private_key: String,
+    pub psk: String,
+    pub assigned_ip: String,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Result of a successful magic-link verification.
+#[derive(Debug, Clone)]
+pub struct VerifiedSignup {
+    pub user: PrivacyUser,
+    /// Delivered once to the client at verify time; never persisted server-side.
+    pub psk: String,
+}
+
 /// A magic link for email verification
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MagicLink {
@@ -70,6 +93,8 @@ pub struct MagicLink {
 pub struct UserStore {
     cozo: CozoGraphShuttle,
     magic_links: RwLock<HashMap<String, MagicLink>>,
+    pending_signups: RwLock<HashMap<String, PendingSignup>>,
+    signup_email_index: RwLock<HashMap<String, String>>,
     next_ip: RwLock<u8>, // Last octet for IP assignment (10.100.0.x)
 }
 
@@ -170,6 +195,103 @@ fn parse_user_row(id: &str, row: &[DataValue]) -> Option<PrivacyUser> {
     })
 }
 
+/// Parse a consumer account row (no email / Google fields).
+fn parse_consumer_row(session_id: &str, row: &[DataValue]) -> Option<PrivacyUser> {
+    if row.len() < 12 {
+        return None;
+    }
+    let api_json = dv_str(&row[10]).unwrap_or("null");
+    let api_credentials = if api_json == "null" || api_json.is_empty() {
+        None
+    } else {
+        serde_json::from_str(api_json).ok()
+    };
+
+    Some(PrivacyUser {
+        id: session_id.to_string(),
+        email: String::new(),
+        email_verified: dv_bool(&row[3]),
+        wg_public_key: dv_str(&row[0])?.to_string(),
+        wg_private_key_encrypted: dv_str(&row[1])?.to_string(),
+        assigned_ip: dv_str(&row[2])?.to_string(),
+        privacy_quota_bytes: dv_int(&row[4]).unwrap_or(1_073_741_824) as u64,
+        privacy_quota_used_bytes: dv_int(&row[5]).unwrap_or(0) as u64,
+        privacy_container_name: {
+            let s = dv_str(&row[6])?;
+            if s.is_empty() {
+                None
+            } else {
+                Some(s.to_string())
+            }
+        },
+        privacy_route_id: {
+            let s = dv_str(&row[7])?;
+            if s.is_empty() {
+                None
+            } else {
+                Some(s.to_string())
+            }
+        },
+        privacy_network_connected: dv_bool(&row[8]),
+        privacy_network_connected_at: {
+            let s = dv_str(&row[9])?;
+            if s.is_empty() {
+                None
+            } else {
+                DateTime::parse_from_rfc3339(s)
+                    .ok()
+                    .map(|d| d.with_timezone(&Utc))
+            }
+        },
+        google_id: None,
+        google_email: None,
+        api_credentials,
+        created_at: DateTime::parse_from_rfc3339(dv_str(&row[11])?)
+            .ok()?
+            .with_timezone(&Utc),
+    })
+}
+
+#[allow(clippy::type_complexity)]
+fn consumer_to_cozo_fields(
+    user: &PrivacyUser,
+) -> (
+    String,
+    String,
+    String,
+    String,
+    i64,
+    i64,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+) {
+    let api_json = user
+        .api_credentials
+        .as_ref()
+        .map(|c| serde_json::to_string(c).unwrap_or_else(|_| "null".to_string()))
+        .unwrap_or_else(|| "null".to_string());
+    (
+        user.wg_public_key.clone(),
+        user.wg_private_key_encrypted.clone(),
+        user.assigned_ip.clone(),
+        user.email_verified.to_string(),
+        user.privacy_quota_bytes as i64,
+        user.privacy_quota_used_bytes as i64,
+        user.privacy_container_name.clone().unwrap_or_default(),
+        user.privacy_route_id.clone().unwrap_or_default(),
+        user.privacy_network_connected.to_string(),
+        user.privacy_network_connected_at
+            .map(|d| d.to_rfc3339())
+            .unwrap_or_default(),
+        api_json,
+        user.created_at.to_rfc3339(),
+    )
+}
+
 #[allow(clippy::type_complexity)]
 fn user_to_cozo_fields(
     user: &PrivacyUser,
@@ -228,6 +350,8 @@ impl UserStore {
         let store = Self {
             cozo,
             magic_links: RwLock::new(HashMap::new()),
+            pending_signups: RwLock::new(HashMap::new()),
+            signup_email_index: RwLock::new(HashMap::new()),
             next_ip: RwLock::new(2),
         };
         // Load highest IP from existing users
@@ -283,6 +407,45 @@ impl UserStore {
         self.cozo.clone()
     }
 
+    async fn upsert_consumer_in_cozo(&self, user: &PrivacyUser) -> Result<()> {
+        let c = self.cozo_clone();
+        let (
+            wg,
+            wg_priv,
+            ip,
+            ev,
+            quota,
+            used,
+            container,
+            route,
+            pnc,
+            pnc_at,
+            api_json,
+            ts,
+        ) = consumer_to_cozo_fields(user);
+        let session_id = user.id.clone();
+        tokio::task::spawn_blocking(move || {
+            c.upsert_consumer_account(
+                &session_id,
+                &wg,
+                &wg_priv,
+                &ip,
+                ev == "true",
+                quota,
+                used,
+                &container,
+                &route,
+                pnc == "true",
+                &pnc_at,
+                &api_json,
+                &ts,
+            )
+        })
+        .await
+        .context("spawn_blocking")??;
+        Ok(())
+    }
+
     async fn upsert_in_cozo(&self, user: &PrivacyUser) -> Result<()> {
         let c = self.cozo_clone();
         let (
@@ -325,6 +488,77 @@ impl UserStore {
         })
         .await
         .context("spawn_blocking")??;
+        Ok(())
+    }
+
+    /// Create an ephemeral pending signup (consumer path — no Cozo write yet).
+    pub async fn create_pending_signup(
+        &self,
+        email: &str,
+        wg_public_key: String,
+        wg_private_key: String,
+    ) -> Result<PendingSignup> {
+        let email = email.trim().to_lowercase();
+        if self.signup_email_index.read().await.contains_key(&email) {
+            anyhow::bail!("Signup already pending for this email");
+        }
+        if self.get_user_by_email(&email).await.is_some() {
+            anyhow::bail!("Email already registered");
+        }
+
+        let pending = PendingSignup {
+            pending_id: uuid::Uuid::new_v4().to_string(),
+            email,
+            wg_public_key,
+            wg_private_key,
+            psk: generate_wireguard_psk(),
+            assigned_ip: self.allocate_ip().await,
+            created_at: Utc::now(),
+        };
+
+        let email_key = pending.email.clone();
+        let pending_id = pending.pending_id.clone();
+        self.pending_signups
+            .write()
+            .await
+            .insert(pending_id.clone(), pending.clone());
+        self.signup_email_index
+            .write()
+            .await
+            .insert(email_key, pending_id);
+        info!(
+            "Created pending signup {} (IP {})",
+            pending.pending_id, pending.assigned_ip
+        );
+        Ok(pending)
+    }
+
+    /// Lookup a pending signup by email (ephemeral resend path).
+    pub async fn get_pending_by_email(&self, email: &str) -> Option<PendingSignup> {
+        let email = email.trim().to_lowercase();
+        let pending_id = self.signup_email_index.read().await.get(&email)?.clone();
+        self.pending_signups.read().await.get(&pending_id).cloned()
+    }
+
+    /// Persist a verified consumer account — no email in Cozo.
+    pub async fn persist_verified_account(&self, user: &PrivacyUser, psk_b64: &str) -> Result<()> {
+        use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+        let psk_bytes = BASE64.decode(psk_b64.trim()).context("decode psk")?;
+        let session_id = derive_session_id_from_psk(&user.wg_public_key, &psk_bytes)?;
+        let proof = session_proof(&session_id);
+        let wg = user.wg_public_key.clone();
+
+        let c = self.cozo_clone();
+        tokio::task::spawn_blocking(move || {
+            c.upsert_user(&wg)?;
+            c.upsert_account_session(&wg, &session_id, &proof)?;
+            c.create_session(&session_id, &wg, None)?;
+            Ok::<(), op_cozo_store::CozoError>(())
+        })
+        .await
+        .context("spawn_blocking")??;
+
+        self.upsert_consumer_in_cozo(user).await?;
         Ok(())
     }
 
@@ -377,8 +611,8 @@ impl UserStore {
         Ok(link)
     }
 
-    /// Verify a magic link and mark user as verified
-    pub async fn verify_magic_link(&self, token: &str) -> Result<PrivacyUser> {
+    /// Verify a magic link and materialize the verified account (consumer path).
+    pub async fn verify_magic_link(&self, token: &str) -> Result<VerifiedSignup> {
         let link = {
             let mut links = self.magic_links.write().await;
             links.remove(token).context("Invalid or expired link")?
@@ -386,18 +620,84 @@ impl UserStore {
         if link.expires_at < Utc::now() {
             anyhow::bail!("Link has expired");
         }
+
+        let pending = self
+            .pending_signups
+            .write()
+            .await
+            .remove(&link.user_id)
+            .or_else(|| {
+                // Legacy path: user_id may already be a persisted privacy_users id.
+                None
+            });
+
+        if let Some(pending) = pending {
+            self.signup_email_index
+                .write()
+                .await
+                .remove(&pending.email);
+
+            use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+            let psk_bytes = BASE64
+                .decode(pending.psk.trim())
+                .context("decode pending psk")?;
+            let session_id =
+                derive_session_id_from_psk(&pending.wg_public_key, &psk_bytes)?;
+
+            let user = PrivacyUser {
+                id: session_id.clone(),
+                email: String::new(),
+                email_verified: true,
+                created_at: pending.created_at,
+                wg_public_key: pending.wg_public_key.clone(),
+                wg_private_key_encrypted: pending.wg_private_key.clone(),
+                assigned_ip: pending.assigned_ip.clone(),
+                privacy_quota_bytes: default_privacy_quota_bytes(),
+                privacy_quota_used_bytes: 0,
+                privacy_container_name: None,
+                privacy_route_id: None,
+                privacy_network_connected: false,
+                privacy_network_connected_at: None,
+                google_id: None,
+                google_email: None,
+                api_credentials: None,
+            };
+
+            self.persist_verified_account(&user, &pending.psk).await?;
+            info!("User {} verified via magic link (session_id)", session_id);
+            return Ok(VerifiedSignup {
+                user,
+                psk: pending.psk,
+            });
+        }
+
+        // Legacy privacy_users flow (Google / pre-migration accounts).
         let mut user = self
             .get_user(&link.user_id)
             .await
             .context("User not found")?;
         user.email_verified = true;
         self.upsert_in_cozo(&user).await?;
-        info!("User {} verified via magic link", user.id);
-        Ok(user)
+        info!("User {} verified via magic link (legacy)", user.id);
+        Ok(VerifiedSignup {
+            user,
+            psk: String::new(),
+        })
     }
 
-    /// Get user by ID
+    /// Get user by ID (consumer session or legacy privacy_users).
     pub async fn get_user(&self, user_id: &str) -> Option<PrivacyUser> {
+        let c_consumer = self.cozo_clone();
+        let id = user_id.to_string();
+        let consumer_row = tokio::task::spawn_blocking(move || c_consumer.get_consumer_account(&id))
+            .await
+            .ok()
+            .and_then(|r| r.ok())
+            .flatten();
+        if let Some(row) = consumer_row {
+            return parse_consumer_row(user_id, &row);
+        }
+
         let c = self.cozo_clone();
         let id = user_id.to_string();
         let row = tokio::task::spawn_blocking(move || c.get_privacy_user(&id))
@@ -507,7 +807,11 @@ impl UserStore {
     ) -> Result<()> {
         let mut user = self.get_user(user_id).await.context("User not found")?;
         user.api_credentials = Some(credentials);
-        self.upsert_in_cozo(&user).await?;
+        if user.email.is_empty() && user.google_id.is_none() {
+            self.upsert_consumer_in_cozo(&user).await?;
+        } else {
+            self.upsert_in_cozo(&user).await?;
+        }
         info!("Updated API credentials for user {}", user_id);
         Ok(())
     }
@@ -524,7 +828,11 @@ impl UserStore {
         user.privacy_route_id = Some(route_id.clone());
         user.privacy_network_connected = true;
         user.privacy_network_connected_at = Some(Utc::now());
-        self.upsert_in_cozo(&user).await?;
+        if user.email.is_empty() && user.google_id.is_none() {
+            self.upsert_consumer_in_cozo(&user).await?;
+        } else {
+            self.upsert_in_cozo(&user).await?;
+        }
         info!(
             "User {} connected to privacy network via container {} route {}",
             user_id, container_name, route_id
@@ -538,17 +846,40 @@ impl UserStore {
         user.api_credentials
     }
 
-    /// List all users
+    /// List all users (consumer + legacy privacy accounts).
     pub async fn list_users(&self) -> Vec<PrivacyUser> {
         let c = self.cozo_clone();
+        let consumer_rows = match tokio::task::spawn_blocking({
+            let c = c.clone();
+            move || c.list_consumer_accounts()
+        })
+        .await
+        .ok()
+        {
+            Some(Ok(r)) => r,
+            _ => Vec::new(),
+        };
+        let mut users = Vec::new();
+        for mut row in consumer_rows {
+            if row.is_empty() {
+                continue;
+            }
+            let id = match dv_str(&row.remove(0)) {
+                Some(s) => s.to_string(),
+                None => continue,
+            };
+            if let Some(user) = parse_consumer_row(&id, &row) {
+                users.push(user);
+            }
+        }
+
         let rows = match tokio::task::spawn_blocking(move || c.list_privacy_users())
             .await
             .ok()
         {
             Some(Ok(r)) => r,
-            _ => return Vec::new(),
+            _ => return users,
         };
-        let mut users = Vec::new();
         for mut row in rows {
             if row.is_empty() {
                 continue;

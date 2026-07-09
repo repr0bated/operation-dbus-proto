@@ -864,6 +864,11 @@ impl MutationEngine {
             "rovs_commands" => {
                 dispatch_rovs_commands_method(&self.ovsdb, method, &parsed_value).await?
             }
+            "identity_sled" => {
+                let args = serde_json::to_value(&parsed_value)?;
+                crate::identity_sled_dispatch::dispatch_identity_sled_method(self, method, &args)
+                    .await?
+            }
             "zeroclaw" => {
                 let state = op_plugins::state_plugins::zeroclaw::ZeroclawPlugin::current_state();
                 match op_plugins::state_plugins::zeroclaw::dispatch_zeroclaw_method(
@@ -941,6 +946,47 @@ impl MutationEngine {
     pub async fn update_state_cache(&self, plugin_id: String, state: simd_json::OwnedValue) {
         let mut cache = self.state_cache.write().await;
         cache.insert(plugin_id, state);
+    }
+
+    /// Write the in-memory plugin state to `/dev/shm/opdbus/projections/` and broadcast.
+    pub async fn publish_plugin_projection_from_cache(
+        &self,
+        plugin_id: &str,
+        change_type: ChangeType,
+    ) -> anyhow::Result<()> {
+        let state = self.get_state(plugin_id).await;
+        let Some(state) = state else {
+            return Ok(());
+        };
+        let new_value = serde_json::to_value(&state)?;
+        let crawl_result = self.crawl_plugin_dbus_tree(plugin_id).await;
+        let projection_value = if let Some(crawl) = crawl_result {
+            simd_json::json!({
+                "data": new_value,
+                "_introspection": crawl,
+            })
+        } else {
+            simd_json::serde::to_owned_value(&new_value)?
+        };
+        let json = simd_json::to_string(&projection_value)?;
+        op_core::projection_shm::write_projection(plugin_id, json.as_bytes())?;
+        let change = StateChange {
+            change_id: uuid::Uuid::new_v4().to_string(),
+            event_id: 0,
+            plugin_id: plugin_id.to_string(),
+            object_path: format!("/org/opdbus/v1/plugins/{plugin_id}"),
+            change_type,
+            member_name: None,
+            old_value: None,
+            new_value: projection_value,
+            tags_touched: vec![],
+            event_hash: String::new(),
+            timestamp: chrono::Utc::now(),
+            actor_id: "identity_sled_dispatch".to_string(),
+            source: ChangeSource::Internal,
+        };
+        let _ = self.change_tx.send(change);
+        Ok(())
     }
 
     async fn update_cached_plugin_state(

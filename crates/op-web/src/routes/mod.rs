@@ -5,9 +5,11 @@ use axum::{
     routing::{delete, get, post},
     Router,
 };
+use std::path::PathBuf;
 use std::sync::Arc;
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::{Any, CorsLayer};
+use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 
 use crate::groups_admin;
@@ -268,12 +270,38 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .nest("/groups-admin", groups_admin::create_groups_admin_router())
         .nest("/admin", admin::admin_routes());
 
-    // No SPA fallback: op-web is API/gRPC only. The native zeroclaw-gui client
-    // consumes state over gRPC-Web + reflection; unmatched routes return 404.
+    // Dev: serve the Vite build from OP_WEB_STATIC_DIR (SPA fallback to index.html).
+    // Production embed is a later step — until then, rebuild with `npx vite build`
+    // in crates/op-web/ui and restart op-web-srv.
+    let router = attach_static_ui(router);
+
     router
         .layer(Extension(state))
         .layer(axum::middleware::from_fn(security::ip_security_middleware))
         .layer(cors)
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())
+}
+
+fn attach_static_ui(router: Router) -> Router {
+    let static_dir = match std::env::var("OP_WEB_STATIC_DIR") {
+        Ok(dir) if !dir.is_empty() => PathBuf::from(dir),
+        _ => {
+            tracing::info!("OP_WEB_STATIC_DIR unset — API/WebSocket only");
+            return router;
+        }
+    };
+
+    let index = static_dir.join("index.html");
+    if !index.is_file() {
+        tracing::warn!(
+            dir = %static_dir.display(),
+            "OP_WEB_STATIC_DIR has no index.html — static UI disabled"
+        );
+        return router;
+    }
+
+    tracing::info!(dir = %static_dir.display(), "Serving UI from static directory");
+    let serve_dir = ServeDir::new(static_dir).not_found_service(ServeFile::new(index));
+    router.fallback_service(serve_dir)
 }

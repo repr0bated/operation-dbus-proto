@@ -12,11 +12,11 @@
 # route through the privacy layer and must not have email in CozoDB.
 #
 # Usage:
-#   sudo ./provision-workspace-subscriber.sh <username> --mac <aa:bb:cc:dd:ee:ff> --psk <key> [--email <addr>] [--ghostbridge] [--semantic]
+#   sudo ./provision-workspace-subscriber.sh <session_id> --mac <aa:bb:cc:dd:ee:ff> --psk <key> [--ghostbridge] [--semantic]
 #
 set -eu
 
-USERNAME="${1:?username required}"
+USERNAME="${1:?session_id required}"
 shift
 
 MAC_ADDR=""
@@ -36,11 +36,12 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-CONTAINER_ID="ws-${USERNAME}"
+# session_id doubles as the Incus container name (the sled IS the identity).
+CONTAINER_ID="${USERNAME}"
 IMAGE="images:debian/12"
 MCP="http://100.90.37.254:3003/mcp"
 
-echo "=== Provisioning workspace subscriber: $USERNAME ==="
+echo "=== Provisioning workspace subscriber: $CONTAINER_ID ==="
 echo "    Container  : $CONTAINER_ID"
 echo "    MAC address: ${MAC_ADDR:-<not provided>}"
 echo "    PSK        : ${PSK:+<provided>}${PSK:-<not provided>}"
@@ -132,11 +133,10 @@ if [ -n "$PSK" ]; then
         "\"$PSK\""
 fi
 
-# Email: store ONLY when GhostBridge is disabled.
-# GhostBridge users route through the privacy layer — email must not leak into CozoDB.
+# Email is a delivery channel only — never stored in Cozo for consumer/GhostBridge paths.
+# Enterprise onboarding with email in Cozo is a separate, explicit flow.
 if [ -n "$EMAIL" ] && [ "$GHOSTBRIDGE" = "false" ]; then
-    remember "container:${CONTAINER_ID}:identity" "email" \
-        "\"$EMAIL\""
+    echo "    NOTE: email provided but not stored (consumer path — delivery channel only)"
 fi
 
 # Soul

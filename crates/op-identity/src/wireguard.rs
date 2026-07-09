@@ -22,15 +22,36 @@ impl WireGuardIdentity {
         }
     }
 
-    /// Get the local WireGuard public key (this machine's identity)
+    /// Get the local WireGuard public key (this machine's identity).
+    ///
+    /// `WG_PUBKEY` env is an explicit override; otherwise the key is read from
+    /// the live interface via `wg show <iface> public-key`.
     pub fn get_local_pubkey(&self) -> anyhow::Result<String> {
-        // Try environment variable first
         if let Ok(pubkey) = std::env::var("WG_PUBKEY") {
             debug!("Using WG_PUBKEY from environment");
             return Ok(pubkey);
         }
 
-        anyhow::bail!("WG_PUBKEY not set in environment. Identity decoupling requires explicit pre-assignment.");
+        let output = Command::new("wg")
+            .args(["show", &self.interface, "public-key"])
+            .output()?;
+
+        if !output.status.success() {
+            anyhow::bail!(
+                "wg show {} public-key failed: {}",
+                self.interface,
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+
+        let pubkey = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if pubkey.is_empty() || pubkey == "(none)" {
+            anyhow::bail!(
+                "interface {} has no public key (interface down or no private key set)",
+                self.interface
+            );
+        }
+        Ok(pubkey)
     }
 
     /// Get peer's pubkey from their IP address

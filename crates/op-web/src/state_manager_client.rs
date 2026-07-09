@@ -15,12 +15,13 @@ use std::sync::{Arc, OnceLock};
 static GRPC_CLIENT: OnceLock<RemoteOperationClient> = OnceLock::new();
 
 /// Lazily initialize a singleton RemoteOperationClient backed by the
-/// MutationEngine's gRPC endpoint (env `OP_DBUS_GRPC_ADDR`, default
-/// `127.0.0.1:50051`).
+/// MutationEngine's gRPC endpoint (env `OP_DBUS_GRPC_ADDR` / `OP_DBUS_ADDR`,
+/// default `http://10.200.0.2:8090` tonic-web on the hub).
 fn client() -> &'static RemoteOperationClient {
     GRPC_CLIENT.get_or_init(|| {
-        let grpc_addr =
-            std::env::var("OP_DBUS_GRPC_ADDR").unwrap_or_else(|_| "127.0.0.1:50051".to_string());
+        let grpc_addr = std::env::var("OP_DBUS_GRPC_ADDR")
+            .or_else(|_| std::env::var("OP_DBUS_ADDR"))
+            .unwrap_or_else(|_| "http://10.200.0.2:8090".to_string());
         let pool = Arc::new(GrpcClientPool::new());
         RemoteOperationClient::new(pool, &grpc_addr, "op-web")
     })

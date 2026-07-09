@@ -23,7 +23,7 @@ fn read_blob_catalog_map() -> Option<Value> {
             }
         }
     }
-    Some(Value::Object(map))
+    Some(Value::Object(Box::new(map)))
 }
 
 pub async fn schema_catalog_handler(Extension(_state): Extension<Arc<AppState>>) -> Json<Value> {

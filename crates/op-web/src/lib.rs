@@ -40,6 +40,7 @@ pub mod privacy_network;
 pub mod privacy_openflow;
 pub mod privacy_routes;
 pub mod projection_client;
+pub mod registration_provision;
 pub mod routes;
 pub mod sse;
 pub mod state;
@@ -47,6 +48,7 @@ pub mod state_manager_client;
 pub mod users;
 pub mod websocket;
 pub mod wireguard;
+pub mod zeroclaw_configurable;
 pub mod zeroclaw_routes;
 
 pub use orchestrator::UnifiedOrchestrator;

@@ -58,6 +58,7 @@ pub(crate) use super::cozo::cozo_schema as cozo_plugin_schema;
 pub(crate) use super::datastore::datastore_schema as datastore_plugin_schema;
 pub(crate) use super::dnsresolver::dnsresolver_schema as dnsresolver_plugin_schema;
 pub(crate) use super::gemma_brain::gemma_brain_schema as gemma_brain_plugin_schema;
+pub(crate) use super::identity_sled::identity_sled_schema as identity_sled_plugin_schema;
 pub(crate) use super::large_language_model::large_language_model_schema as large_language_model_plugin_schema;
 pub(crate) use super::login1::login1_schema as login1_plugin_schema;
 pub(crate) use super::mcp::mcp_schema as mcp_plugin_schema;

@@ -193,6 +193,31 @@ impl CozoGraphShuttle {
                 created_at: String default "",
                 expires_at: String default ""
             }"#,
+            // consumer account proof — wg_pubkey keyed, no email/PII
+            r#":create account_sessions {
+                wg_pubkey: String
+                =>
+                session_id: String default "",
+                session_proof: String default "",
+                created_at: String default ""
+            }"#,
+            // GhostBridge consumer operational state — session_id keyed, no email/PII
+            r#":create consumer_accounts {
+                session_id: String
+                =>
+                wg_public_key: String default "",
+                wg_private_key_encrypted: String default "",
+                assigned_ip: String default "",
+                email_verified: String default "true",
+                privacy_quota_bytes: Int default 1073741824,
+                privacy_quota_used_bytes: Int default 0,
+                privacy_container_name: String default "",
+                privacy_route_id: String default "",
+                privacy_network_connected: String default "false",
+                privacy_network_connected_at: String default "",
+                api_credentials_json: String default "null",
+                created_at: String default ""
+            }"#,
             // full WireGuard gateway session record (op-gateway::WireGuardSession),
             // persisted so restarts don't drop live sessions
             r#":create wg_sessions {
@@ -815,6 +840,166 @@ impl CozoGraphShuttle {
         )
         .map_err(|e| CozoError::Other(format!("delete session: {e}")))?;
         Ok(())
+    }
+
+    // ── Account sessions (consumer path — no PII) ─────────────────────────────
+
+    /// Persist a verified account: session_id + blake3(session_id) proof keyed by wg_pubkey.
+    pub fn upsert_account_session(
+        &self,
+        wg_pubkey: &str,
+        session_id: &str,
+        session_proof: &str,
+    ) -> std::result::Result<(), CozoError> {
+        let query = r#"
+            ?[wg_pubkey, session_id, session_proof, created_at]
+                <- [[$wg, $sid, $proof, $ts]]
+            :put account_sessions {
+                wg_pubkey => session_id, session_proof, created_at
+            }
+        "#;
+        let mut p: Params = BTreeMap::new();
+        p.insert("wg".into(), DataValue::Str(wg_pubkey.into()));
+        p.insert("sid".into(), DataValue::Str(session_id.into()));
+        p.insert("proof".into(), DataValue::Str(session_proof.into()));
+        p.insert("ts".into(), DataValue::Str(now_rfc3339().into()));
+        cozo_run(&self.db, query, p)
+            .map_err(|e| CozoError::Other(format!("upsert account session: {e}")))?;
+        Ok(())
+    }
+
+    // ── Consumer accounts (GhostBridge path — no email) ───────────────────────
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn upsert_consumer_account(
+        &self,
+        session_id: &str,
+        wg_public_key: &str,
+        wg_private_key_encrypted: &str,
+        assigned_ip: &str,
+        email_verified: bool,
+        privacy_quota_bytes: i64,
+        privacy_quota_used_bytes: i64,
+        privacy_container_name: &str,
+        privacy_route_id: &str,
+        privacy_network_connected: bool,
+        privacy_network_connected_at: &str,
+        api_credentials_json: &str,
+        created_at: &str,
+    ) -> std::result::Result<(), CozoError> {
+        let query = r#"
+            ?[session_id, wg_public_key, wg_private_key_encrypted, assigned_ip, email_verified,
+              privacy_quota_bytes, privacy_quota_used_bytes, privacy_container_name,
+              privacy_route_id, privacy_network_connected, privacy_network_connected_at,
+              api_credentials_json, created_at]
+                <- [[$sid, $wg, $wg_priv, $ip, $ev, $quota, $used, $container, $route,
+                     $pnc, $pnc_at, $api_json, $ts]]
+            :put consumer_accounts {
+                session_id => wg_public_key, wg_private_key_encrypted, assigned_ip,
+                    email_verified, privacy_quota_bytes, privacy_quota_used_bytes,
+                    privacy_container_name, privacy_route_id, privacy_network_connected,
+                    privacy_network_connected_at, api_credentials_json, created_at
+            }
+        "#;
+        let mut p: Params = BTreeMap::new();
+        p.insert("sid".into(), DataValue::Str(session_id.into()));
+        p.insert("wg".into(), DataValue::Str(wg_public_key.into()));
+        p.insert(
+            "wg_priv".into(),
+            DataValue::Str(wg_private_key_encrypted.into()),
+        );
+        p.insert("ip".into(), DataValue::Str(assigned_ip.into()));
+        p.insert(
+            "ev".into(),
+            DataValue::Str(email_verified.to_string().into()),
+        );
+        p.insert("quota".into(), dv_int(privacy_quota_bytes));
+        p.insert("used".into(), dv_int(privacy_quota_used_bytes));
+        p.insert(
+            "container".into(),
+            DataValue::Str(privacy_container_name.into()),
+        );
+        p.insert("route".into(), DataValue::Str(privacy_route_id.into()));
+        p.insert(
+            "pnc".into(),
+            DataValue::Str(privacy_network_connected.to_string().into()),
+        );
+        p.insert(
+            "pnc_at".into(),
+            DataValue::Str(privacy_network_connected_at.into()),
+        );
+        p.insert(
+            "api_json".into(),
+            DataValue::Str(api_credentials_json.into()),
+        );
+        p.insert("ts".into(), DataValue::Str(created_at.into()));
+        cozo_run(&self.db, query, p)
+            .map_err(|e| CozoError::Other(format!("upsert consumer account: {e}")))?;
+        Ok(())
+    }
+
+    pub fn get_consumer_account(
+        &self,
+        session_id: &str,
+    ) -> std::result::Result<Option<Vec<DataValue>>, CozoError> {
+        let mut p: Params = BTreeMap::new();
+        p.insert("sid".into(), DataValue::Str(session_id.into()));
+        let r = cozo_run(
+            &self.db,
+            "?[wg_public_key, wg_private_key_encrypted, assigned_ip, email_verified,
+             privacy_quota_bytes, privacy_quota_used_bytes, privacy_container_name,
+             privacy_route_id, privacy_network_connected, privacy_network_connected_at,
+             api_credentials_json, created_at] := \
+             *consumer_accounts[session_id, wg_public_key, wg_private_key_encrypted, assigned_ip,
+             email_verified, privacy_quota_bytes, privacy_quota_used_bytes,
+             privacy_container_name, privacy_route_id, privacy_network_connected,
+             privacy_network_connected_at, api_credentials_json, created_at], session_id = $sid",
+            p,
+        )
+        .map_err(|e| CozoError::Other(format!("get consumer account: {e}")))?;
+        Ok(r.rows.into_iter().next())
+    }
+
+    pub fn list_consumer_accounts(&self) -> std::result::Result<Vec<Vec<DataValue>>, CozoError> {
+        let r = cozo_run(
+            &self.db,
+            "?[session_id, wg_public_key, wg_private_key_encrypted, assigned_ip, email_verified,
+             privacy_quota_bytes, privacy_quota_used_bytes, privacy_container_name,
+             privacy_route_id, privacy_network_connected, privacy_network_connected_at,
+             api_credentials_json, created_at] := \
+             *consumer_accounts[session_id, wg_public_key, wg_private_key_encrypted, assigned_ip,
+             email_verified, privacy_quota_bytes, privacy_quota_used_bytes,
+             privacy_container_name, privacy_route_id, privacy_network_connected,
+             privacy_network_connected_at, api_credentials_json, created_at]",
+            BTreeMap::new(),
+        )
+        .map_err(|e| CozoError::Other(format!("list consumer accounts: {e}")))?;
+        Ok(r.rows)
+    }
+
+    /// Lookup account session proof by wg_pubkey.
+    pub fn lookup_account_session(
+        &self,
+        wg_pubkey: &str,
+    ) -> std::result::Result<Option<(String, String, String)>, CozoError> {
+        let mut p: Params = BTreeMap::new();
+        p.insert("wg".into(), DataValue::Str(wg_pubkey.into()));
+        let r = cozo_run(
+            &self.db,
+            "?[session_id, session_proof, created_at] := \
+             *account_sessions[wg_pubkey, session_id, session_proof, created_at], \
+             wg_pubkey = $wg",
+            p,
+        )
+        .map_err(|e| CozoError::Other(format!("lookup account session: {e}")))?;
+        if let Some(row) = r.rows.first() {
+            let sid = dv_as_str(&row[0]).unwrap_or("").to_string();
+            let proof = dv_as_str(&row[1]).unwrap_or("").to_string();
+            let created = dv_as_str(&row[2]).unwrap_or("").to_string();
+            Ok(Some((sid, proof, created)))
+        } else {
+            Ok(None)
+        }
     }
 
     // ── WireGuard gateway sessions ───────────────────────────────────────────────

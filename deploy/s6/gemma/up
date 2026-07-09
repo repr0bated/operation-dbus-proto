@@ -1,2 +1,2 @@
 #!/bin/execlineb -P
-foreground { sh /etc/s6/sv/gemma/shell_up }
+sh /etc/s6/sv/gemma/shell_up

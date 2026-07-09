@@ -45,9 +45,26 @@ pub struct AccessQuery {
 pub struct VerifyResponse {
     pub success: bool,
     pub user_id: Option<String>,
+    pub session_id: Option<String>,
+    /// WireGuard PSK — delivered once at verify; never stored server-side.
+    pub psk: Option<String>,
     pub config: Option<String>,
     pub qr_code: Option<String>,
     pub message: String,
+}
+
+impl Default for VerifyResponse {
+    fn default() -> Self {
+        Self {
+            success: false,
+            user_id: None,
+            session_id: None,
+            psk: None,
+            config: None,
+            qr_code: None,
+            message: String::new(),
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -142,7 +159,38 @@ pub async fn signup(
         );
     }
 
-    // Check if user already exists
+    // Pending or legacy verified account — resend magic link
+    if let Some(pending) = state.user_store.get_pending_by_email(&email).await {
+        match state.user_store.create_magic_link(&pending.pending_id).await {
+            Ok(link) => {
+                if let Err(e) = state
+                    .email_sender
+                    .send_magic_link(&email, &link.token)
+                    .await
+                {
+                    error!("Failed to send magic link email: {}", e);
+                }
+                return (
+                    StatusCode::OK,
+                    Json(SignupResponse {
+                        success: true,
+                        message: "Check your email for the login link".to_string(),
+                    }),
+                );
+            }
+            Err(e) => {
+                error!("Failed to create magic link: {}", e);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(SignupResponse {
+                        success: false,
+                        message: "Failed to create login link".to_string(),
+                    }),
+                );
+            }
+        }
+    }
+
     if let Some(existing) = state.user_store.get_user_by_email(&email).await {
         // User exists - create new magic link
         match state.user_store.create_magic_link(&existing.id).await {
@@ -188,18 +236,20 @@ pub async fn signup(
         );
     }
 
-    // New user - generate WireGuard keys
+    // New user — ephemeral pending signup (no Cozo until verify)
     let keypair = generate_keypair();
 
-    // Create user (we'll encrypt the private key later, for now just store it)
     match state
         .user_store
-        .create_user(&email, keypair.public_key, keypair.private_key)
+        .create_pending_signup(&email, keypair.public_key, keypair.private_key)
         .await
     {
-        Ok(user) => {
-            // Create magic link
-            match state.user_store.create_magic_link(&user.id).await {
+        Ok(pending) => {
+            match state
+                .user_store
+                .create_magic_link(&pending.pending_id)
+                .await
+            {
                 Ok(link) => {
                     // Send email
                     if let Err(e) = state
@@ -249,24 +299,31 @@ pub async fn verify(
     Query(query): Query<VerifyQuery>,
 ) -> (StatusCode, Json<VerifyResponse>) {
     match state.user_store.verify_magic_link(&query.token).await {
-        Ok(user) => {
-            let provisioned_user = match provision_verified_user(&state, user).await {
-                Ok(user) => user,
-                Err(e) => {
-                    error!("Privacy provisioning failed after verification: {}", e);
-                    return (
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        Json(VerifyResponse {
-                            success: false,
-                            user_id: None,
-                            config: None,
-                            qr_code: None,
-                            message: "Privacy network provisioning failed. Please retry shortly."
-                                .to_string(),
-                        }),
-                    );
-                }
-            };
+        Ok(verified) => {
+            let psk_once = (!verified.psk.is_empty()).then(|| verified.psk.clone());
+            let session_id = verified.user.id.clone();
+            let provisioned_user =
+                match crate::registration_provision::provision_verified_signup(&state, verified)
+                    .await
+                {
+                    Ok(user) => user,
+                    Err(e) => {
+                        error!("Privacy provisioning failed after verification: {}", e);
+                        return (
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            Json(VerifyResponse {
+                                success: false,
+                                user_id: None,
+                                session_id: None,
+                                psk: None,
+                                config: None,
+                                qr_code: None,
+                                message: "Privacy network provisioning failed. Please retry shortly."
+                                    .to_string(),
+                            }),
+                        );
+                    }
+                };
 
             if !state.server_config.is_configured() {
                 return (
@@ -274,6 +331,8 @@ pub async fn verify(
                     Json(VerifyResponse {
                         success: false,
                         user_id: None,
+                        session_id: None,
+                        psk: None,
                         config: None,
                         qr_code: None,
                         message: "WireGuard server key is not configured on the host.".to_string(),
@@ -300,7 +359,9 @@ pub async fn verify(
                 StatusCode::OK,
                 Json(VerifyResponse {
                     success: true,
-                    user_id: Some(provisioned_user.id),
+                    user_id: Some(provisioned_user.id.clone()),
+                    session_id: Some(session_id),
+                    psk: psk_once,
                     config: Some(config),
                     qr_code,
                     message: "Connected to privacy network. Your WireGuard configuration is ready."
@@ -315,6 +376,8 @@ pub async fn verify(
                 Json(VerifyResponse {
                     success: false,
                     user_id: None,
+                    session_id: None,
+                    psk: None,
                     config: None,
                     qr_code: None,
                     message: format!("Verification failed: {}", e),
@@ -330,19 +393,21 @@ pub async fn verify_redirect(
     Query(query): Query<VerifyQuery>,
 ) -> Redirect {
     match state.user_store.verify_magic_link(&query.token).await {
-        Ok(user) => match provision_verified_user(&state, user).await {
-            Ok(provisioned_user) => {
-                info!(
-                    "User {} verified and provisioned via redirect flow",
-                    provisioned_user.id
-                );
-                Redirect::to(&format!("/privacy/access?user_id={}", provisioned_user.id))
+        Ok(verified) => {
+            match crate::registration_provision::provision_verified_signup(&state, verified).await {
+                Ok(provisioned_user) => {
+                    info!(
+                        "User {} verified and provisioned via redirect flow",
+                        provisioned_user.id
+                    );
+                    Redirect::to(&format!("/privacy/access?user_id={}", provisioned_user.id))
+                }
+                Err(e) => {
+                    error!("Provisioning failed in redirect flow: {}", e);
+                    Redirect::to("/privacy/access?status=provisioning_failed")
+                }
             }
-            Err(e) => {
-                error!("Provisioning failed in redirect flow: {}", e);
-                Redirect::to("/privacy/access?status=provisioning_failed")
-            }
-        },
+        }
         Err(e) => {
             error!("Magic link verification failed in redirect flow: {}", e);
             Redirect::to("/privacy/access?status=verification_failed")
@@ -503,10 +568,8 @@ pub async fn get_config(
             axum::http::StatusCode::UNAUTHORIZED,
             axum::Json(VerifyResponse {
                 success: false,
-                user_id: None,
-                config: None,
-                qr_code: None,
                 message: "Unauthorized".to_string(),
+                ..Default::default()
             }),
         );
     }
@@ -519,6 +582,8 @@ pub async fn get_config(
                     Json(VerifyResponse {
                         success: false,
                         user_id: None,
+                        session_id: None,
+                        psk: None,
                         config: None,
                         qr_code: None,
                         message: "WireGuard server key is not configured on the host.".to_string(),
@@ -541,6 +606,7 @@ pub async fn get_config(
                     config: Some(config),
                     qr_code,
                     message: "Configuration retrieved".to_string(),
+                ..Default::default()
                 }),
             )
         }
@@ -552,6 +618,7 @@ pub async fn get_config(
                 config: None,
                 qr_code: None,
                 message: "Email not verified".to_string(),
+                ..Default::default()
             }),
         ),
         None => (
@@ -562,7 +629,9 @@ pub async fn get_config(
                 config: None,
                 qr_code: None,
                 message: "User not found".to_string(),
+                ..Default::default()
             }),
+
         ),
     }
 }
@@ -652,7 +721,9 @@ pub async fn google_auth(
                     config: None,
                     qr_code: None,
                     message: "Google OAuth not configured".to_string(),
+                ..Default::default()
                 }),
+
             ));
         }
     };
@@ -716,7 +787,9 @@ pub async fn google_callback(
                     config: None,
                     qr_code: None,
                     message: "Invalid CSRF state".to_string(),
+                ..Default::default()
                 }),
+
             ));
         }
     }
@@ -732,7 +805,9 @@ pub async fn google_callback(
                     config: None,
                     qr_code: None,
                     message: "Google OAuth not configured".to_string(),
+                ..Default::default()
                 }),
+
             ));
         }
     };
@@ -770,7 +845,9 @@ pub async fn google_callback(
                     config: None,
                     qr_code: None,
                     message: "Failed to authenticate with Google".to_string(),
+                ..Default::default()
                 }),
+
             ));
         }
     };
@@ -794,6 +871,8 @@ pub async fn google_callback(
                     Json(VerifyResponse {
                         success: false,
                         user_id: None,
+                        session_id: None,
+                        psk: None,
                         config: None,
                         qr_code: None,
                         message: "Failed to get user information".to_string(),
@@ -811,7 +890,9 @@ pub async fn google_callback(
                     config: None,
                     qr_code: None,
                     message: "Failed to get user information".to_string(),
+                ..Default::default()
                 }),
+
             ));
         }
     };
@@ -826,7 +907,9 @@ pub async fn google_callback(
                 config: None,
                 qr_code: None,
                 message: "Google account email not verified".to_string(),
+                ..Default::default()
             }),
+
         ));
     }
 
@@ -841,7 +924,9 @@ pub async fn google_callback(
                 config: None,
                 qr_code: None,
                 message: "Privacy network host setup failed. Please retry shortly.".to_string(),
+                ..Default::default()
             }),
+
         ));
     }
 
@@ -870,12 +955,22 @@ pub async fn google_callback(
                     config: None,
                     qr_code: None,
                     message: "Failed to create user account".to_string(),
+                ..Default::default()
                 }),
+
             ));
         }
     };
 
-    let provisioned_user = match provision_verified_user(&state, user).await {
+    let provisioned_user = match crate::registration_provision::provision_verified_signup(
+        &state,
+        crate::users::VerifiedSignup {
+            user,
+            psk: String::new(),
+        },
+    )
+    .await
+    {
         Ok(user) => user,
         Err(e) => {
             error!("Privacy provisioning failed for Google OAuth user: {}", e);
@@ -888,7 +983,9 @@ pub async fn google_callback(
                     qr_code: None,
                     message: "Privacy network provisioning failed. Please retry shortly."
                         .to_string(),
+                ..Default::default()
                 }),
+
             ));
         }
     };
@@ -902,7 +999,9 @@ pub async fn google_callback(
                 config: None,
                 qr_code: None,
                 message: "WireGuard server key is not configured on the host.".to_string(),
+                ..Default::default()
             }),
+
         ));
     }
 
@@ -927,7 +1026,9 @@ pub async fn google_callback(
         StatusCode::OK,
         Json(VerifyResponse {
             success: true,
-            user_id: Some(provisioned_user.id),
+            user_id: Some(provisioned_user.id.clone()),
+            session_id: Some(provisioned_user.id.clone()),
+            psk: None,
             config: Some(config),
             qr_code,
             message: "Connected to privacy network. Your WireGuard configuration is ready."
@@ -938,26 +1039,16 @@ pub async fn google_callback(
 
 async fn provision_verified_user(
     state: &Arc<AppState>,
-    user: PrivacyUser,
-) -> anyhow::Result<PrivacyUser> {
-    crate::privacy_network::ensure_host_privacy_network().await?;
-    let container_name = crate::privacy_container::ensure_user_container(&user).await?;
-    let route_id =
-        crate::privacy_routes::publish_user_privacy_route(&user, Some(container_name.as_str()))
-            .await?;
-    crate::privacy_openflow::publish_openflow_for_privacy_routes().await?;
-
-    let already_connected = user.privacy_network_connected
-        && user.privacy_container_name.as_deref() == Some(container_name.as_str())
-        && user.privacy_route_id.as_deref() == Some(route_id.as_str());
-    if already_connected {
-        return Ok(user);
-    }
-
-    state
-        .user_store
-        .mark_privacy_network_connected(&user.id, container_name, route_id)
-        .await
+    user: crate::users::PrivacyUser,
+) -> anyhow::Result<crate::users::PrivacyUser> {
+    crate::registration_provision::provision_verified_signup(
+        state,
+        crate::users::VerifiedSignup {
+            user,
+            psk: String::new(),
+        },
+    )
+    .await
 }
 
 fn escape_html(input: &str) -> String {

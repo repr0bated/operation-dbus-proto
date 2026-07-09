@@ -699,7 +699,15 @@ pub fn build_operation_routes(server: OperationGrpcServer) -> tonic::service::Ro
             crate::chat_service::ChatServiceImpl::new(),
             intercept,
         ),
-    ));
+    ))
+    // EMQX ExHook v2 — the broker is the gRPC client and carries no Ghostbridge
+    // identity headers, so this service is mounted without the interceptor.
+    // It is an audit tap into MutationEngine, not a plugin/mutation surface.
+    .add_service(
+        crate::proto::emqx_exhook::hook_provider_server::HookProviderServer::new(
+            crate::emqx_hook_provider::HookProviderService::new(server.mutation_engine.clone()),
+        ),
+    );
 
     let routes = add_routes(routes, server.clone(), intercept);
     routes

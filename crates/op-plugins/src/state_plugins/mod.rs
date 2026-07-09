@@ -37,6 +37,7 @@ pub mod gcloud_adc;
 pub mod gemma_brain;
 pub mod ghostbridge;
 pub mod hardware;
+pub mod identity_sled;
 pub mod incus;
 pub mod incus_device;
 pub mod json_render;

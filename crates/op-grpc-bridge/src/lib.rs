@@ -25,7 +25,9 @@ pub mod callable_reflection;
 pub mod chat_service;
 pub mod dbus_object;
 pub mod dynamic_reflection;
+pub mod emqx_hook_provider;
 pub mod grpc_client;
+pub mod identity_sled_dispatch;
 pub mod grpc_server;
 pub mod interceptor;
 pub mod mutation_engine;
@@ -87,6 +89,12 @@ pub mod proto {
     /// ChatService — operator-to-system chat interface (delegator, forced tool calling).
     pub mod chat {
         tonic::include_proto!("op_chat.chat");
+    }
+
+    /// EMQX ExHook v2 — the broker calls our HookProvider for MQTT events
+    /// (EMQX 5.x fixed the exhook proto package at v2).
+    pub mod emqx_exhook {
+        tonic::include_proto!("emqx.exhook.v2");
     }
 
     /// Build-time generated PluginSchema method services.

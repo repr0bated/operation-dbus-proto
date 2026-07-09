@@ -1,8 +1,8 @@
 #!/bin/sh
-# 🟢 🛷 Zeroclaw Axum Host — gRPC / gRPC-Web schema bridge
+# 🟢 🛷 Zeroclaw Axum Host — gRPC / gRPC-Web (tonic-web) schema bridge
 #
-# Serves the zeroclaw schema from its sealed blob in /dev/shm/opdbus/plugin-blobs.
-# Depends on opblob having sealed the plugin catalog first.
+# Mesh entry: http://10.200.0.2:8090 (alias bound by bind-hub-aliases.sh)
+# Unix socket: /run/ghostbridge/container.sock
 
 set -eu
 exec 2>&1
@@ -19,5 +19,7 @@ export ZEROCLAW_BIND_ADDR="${ZEROCLAW_BIND_ADDR:-0.0.0.0:8090}"
 export ZEROCLAW_SCHEMA_PATH="${ZEROCLAW_SCHEMA_PATH:-/dev/shm/opdbus/plugin-blobs}"
 export ZEROCLAW_UNIX_SOCKET="${ZEROCLAW_UNIX_SOCKET:-/run/ghostbridge/container.sock}"
 export RUST_LOG="${RUST_LOG:-op_grpc_bridge=info,info}"
+
+. /usr/local/lib/ghostbridge/bind-hub-aliases.sh
 
 exec /usr/local/bin/op-grpc-bridge-zeroclaw

@@ -1,0 +1,62 @@
+{
+  "_comment": "Oracle decoy VPS — identity injection at ingress, forward to 3tched tonic-web",
+  "log": { "loglevel": "warning" },
+  "inbounds": [
+    {
+      "tag": "decoy-wg-grpc",
+      "listen": "10.189.0.1",
+      "port": 443,
+      "protocol": "vless",
+      "settings": {
+        "clients": [{ "id": "REPLACE_WITH_CLIENT_UUID", "flow": "" }],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "show": false,
+          "dest": "www.microsoft.com:443",
+          "xver": 0,
+          "serverNames": ["grpc.ghostbridge.tech"],
+          "privateKey": "REPLACE_REALITY_PRIVATE_KEY",
+          "shortIds": [""]
+        }
+      },
+      "sniffing": { "enabled": true, "destOverride": ["http", "tls"] }
+    }
+  ],
+  "outbounds": [
+    {
+      "tag": "inject-and-forward",
+      "protocol": "freedom",
+      "settings": {},
+      "sendThrough": "10.189.0.2"
+    },
+    {
+      "tag": "to-threetched-grpc-web",
+      "protocol": "freedom",
+      "settings": {
+        "domainStrategy": "UseIP"
+      },
+      "proxySettings": {
+        "tag": "inject-and-forward"
+      }
+    }
+  ],
+  "routing": {
+    "domainStrategy": "IPIfNonMatch",
+    "rules": [
+      {
+        "type": "field",
+        "inboundTag": ["decoy-wg-grpc"],
+        "outboundTag": "to-threetched-grpc-web"
+      }
+    ]
+  },
+  "_routing_notes": {
+    "identity_injection": "Use xray route metadata / ext plugin or PostUp watcher (deploy/oracle-decoy-ingress/setup-wg-decoy.sh) to stamp X-Ghostbridge-Footprint + X-Ghostbridge-Trace-ID from /dev/shm/decoy_identity BEFORE forward",
+    "forward_target": "WireGuard peer 3tched hypervisor grpc-uplink — tonic-web op-grpc-bridge-zeroclaw :8090 at 10.200.0.2 (mesh) or WG tunnel endpoint",
+    "ui_target": "op-web static UI at http://10.0.0.2:8080 on hypervisor (decoy forwards HTTP subdomain separately)"
+  }
+}

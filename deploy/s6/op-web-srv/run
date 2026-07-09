@@ -1,12 +1,16 @@
 #!/bin/sh
-# op-web-server — unified HTTP API + embedded UI for op-dbus
+# op-web-server — unified HTTP API + static UI (dev) for op-dbus
 export PORT="${PORT:-8080}"
 [ -r /etc/op-dbus/environment ] && . /etc/op-dbus/environment
 export DBUS_SESSION_BUS_ADDRESS
 : "${DBUS_SESSION_BUS_ADDRESS:?DBUS_SESSION_BUS_ADDRESS must be set in /etc/op-dbus/environment}"
-export OP_DBUS_GRPC_ADDR="${OP_DBUS_GRPC_ADDR:-http://10.200.0.1:50051}"
+export OP_DBUS_GRPC_ADDR="${OP_DBUS_GRPC_ADDR:-http://10.200.0.2:8090}"
 export OP_DBUS_ADDR="${OP_DBUS_ADDR:-$OP_DBUS_GRPC_ADDR}"
 export OP_MEMORY_DB="${OP_MEMORY_DB:-/var/lib/op-dbus/cognitive.db}"
-export OP_WEB_STATIC_DIR="${OP_WEB_STATIC_DIR:-/home/jeremy/git/operation-dbus-proto/lovable/dist}"
+export OP_WEB_STATIC_DIR="${OP_WEB_STATIC_DIR:-/home/jeremy/git/operation-dbus-proto/crates/op-web/ui/dist}"
 export RUST_LOG="${RUST_LOG:-op_web=info,info}"
+
+# Decoy ingress alias (10.0.0.2) + mesh grpc-uplink alias (10.200.0.2)
+. /usr/local/lib/ghostbridge/bind-hub-aliases.sh
+
 exec s6-setuidgid jeremy /usr/local/bin/op-web-server

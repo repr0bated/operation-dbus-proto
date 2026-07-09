@@ -1,0 +1,12 @@
+#!/bin/sh
+exec 2>&1
+export HOME="${HOME:-/home/jeremy}"
+export PATH="/home/jeremy/.local/bin:/usr/local/bin:/usr/bin:/bin"
+export OP_ZCALL_ENDPOINT="${OP_ZCALL_ENDPOINT:-127.0.0.1:8090}"
+INTERVAL="${OP_NLM_SYNC_INTERVAL:-900}"
+exec s6-setuidgid jeremy /bin/sh -c "
+while :; do
+  /usr/local/sbin/op-nlm-sync-drive-cron.sh || true
+  sleep $INTERVAL
+done
+"

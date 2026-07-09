@@ -26,8 +26,10 @@ op-identity = { workspace = true }
 op-introspection = { workspace = true }
 op-grpc-bridge = { path = "../op-grpc-bridge" }
 op-jsonrpc = { path = "../op-jsonrpc" }
+op-blob = { workspace = true }
 op-cozo-store = { path = "../op-cozo-store" }
 op-cognitive-mcp = { path = "../op-cognitive-mcp" }
+qdrant-client = "1.17"
 
 # Rate limiting
 tower_governor = "0.4"
@@ -42,7 +44,6 @@ hyper = { workspace = true }
 # Serialization
 serde = { workspace = true }
 serde_json = { workspace = true }
-op-blob = { workspace = true }
 simd-json = { workspace = true }
 toml = { workspace = true }
 
@@ -53,7 +54,7 @@ tokio-stream = { workspace = true, features = ["sync"] }
 async-stream = "0.3"
 
 # Utilities
-uuid = { workspace = true, features = ["v4", "serde"] }
+uuid = { workspace = true, features = ["v4", "v5", "serde"] }
 chrono = { workspace = true, features = ["serde"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
