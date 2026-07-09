@@ -820,8 +820,12 @@ impl CozoGraphShuttle {
     // ── WireGuard gateway sessions ───────────────────────────────────────────────
 
     /// Upsert a full WireGuard gateway session record and its peer_pubkey → session_id
-    /// mapping.
+    /// mapping, atomically. Uses Cozo's `multi_transaction` so a failure partway
+    /// through (e.g. the peer-mapping write) rolls back the session write too —
+    /// otherwise a restart could resurrect a session row with no peer mapping.
     pub fn put_wg_session(&self, rec: &WgSessionRecord) -> std::result::Result<(), CozoError> {
+        let txn = self.db.multi_transaction(true);
+
         let query = r#"
             ?[session_id, peer_pubkey, psk, created_at, expires_at, is_active, last_used,
               client_ip, client_version, auth_method, key_rotation_count, flags_json]
@@ -860,8 +864,10 @@ impl CozoGraphShuttle {
             dv_int(rec.key_rotation_count as i64),
         );
         p.insert("flags".into(), DataValue::Str(rec.flags_json.as_str().into()));
-        cozo_run(&self.db, query, p)
-            .map_err(|e| CozoError::Other(format!("put wg session: {e}")))?;
+        if let Err(e) = txn.run_script(query, p) {
+            let _ = txn.abort();
+            return Err(CozoError::Other(format!("put wg session: {e}")));
+        }
 
         let mut pp: Params = BTreeMap::new();
         pp.insert(
@@ -869,12 +875,16 @@ impl CozoGraphShuttle {
             DataValue::Str(rec.peer_pubkey.as_str().into()),
         );
         pp.insert("sid".into(), DataValue::Str(rec.session_id.as_str().into()));
-        cozo_run(
-            &self.db,
+        if let Err(e) = txn.run_script(
             "?[peer_pubkey, session_id] <- [[$peer, $sid]] :put wg_peer_sessions { peer_pubkey => session_id }",
             pp,
-        )
-        .map_err(|e| CozoError::Other(format!("put wg peer session: {e}")))?;
+        ) {
+            let _ = txn.abort();
+            return Err(CozoError::Other(format!("put wg peer session: {e}")));
+        }
+
+        txn.commit()
+            .map_err(|e| CozoError::Other(format!("commit wg session write: {e}")))?;
         Ok(())
     }
 

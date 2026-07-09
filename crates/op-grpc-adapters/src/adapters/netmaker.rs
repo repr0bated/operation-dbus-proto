@@ -33,7 +33,18 @@ impl NetmakerAdapter {
 
     /// Minimal HTTP/1.1 GET over the Netmaker container's unix domain socket
     /// (containers on this project have no NIC/IP — everything routes over UDS).
-    async fn get<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T, Status> {
+    async fn get<T: serde::de::DeserializeOwned + Default>(&self, path: &str) -> Result<T, Status> {
+        // `path` is built from caller-supplied gRPC fields (e.g. a network/node
+        // name) and interpolated directly into the raw request line below. A
+        // value containing CR/LF would inject extra headers or a second request
+        // into this socket, which carries the adapter's bearer token — reject it
+        // outright rather than trying to encode it.
+        if path.contains('\r') || path.contains('\n') {
+            return Err(Status::invalid_argument(
+                "path must not contain CR or LF characters",
+            ));
+        }
+
         let master_key =
             std::env::var("NETMAKER_MASTER_KEY").unwrap_or_else(|_| "masterkey".to_string());
 
@@ -90,6 +101,12 @@ impl NetmakerAdapter {
         } else {
             body_raw.to_vec()
         };
+
+        // Some Netmaker endpoints return a 200/204 with no JSON payload at all;
+        // treat that as "no data" rather than a parse failure.
+        if body.is_empty() {
+            return Ok(T::default());
+        }
 
         serde_json::from_slice(&body)
             .map_err(|e| Status::internal(format!("Netmaker API parse error: {}", e)))
@@ -183,7 +200,7 @@ impl NetmakerService for NetmakerAdapter {
         &self,
         _req: Request<HealthRequest>,
     ) -> Result<Response<HealthResponse>, Status> {
-        #[derive(serde::Deserialize)]
+        #[derive(serde::Deserialize, Default)]
         struct HealthResp {
             status: String,
             version: Option<String>,
@@ -223,7 +240,7 @@ impl NetmakerService for NetmakerAdapter {
         &self,
         req: Request<GetNetworkRequest>,
     ) -> Result<Response<GetNetworkResponse>, Status> {
-        #[derive(serde::Deserialize)]
+        #[derive(serde::Deserialize, Default)]
         struct Net {
             netid: String,
             addressrange: Option<String>,
@@ -281,7 +298,7 @@ impl NetmakerService for NetmakerAdapter {
         &self,
         req: Request<GetNodeRequest>,
     ) -> Result<Response<GetNodeResponse>, Status> {
-        #[derive(serde::Deserialize)]
+        #[derive(serde::Deserialize, Default)]
         struct N {
             id: String,
             name: Option<String>,

@@ -150,7 +150,11 @@ fn record_to_session(rec: &WgSessionRecord) -> Result<WireGuardSession> {
         client_version: rec.client_version.clone(),
         auth_method: rec.auth_method.clone(),
         key_rotation_count: rec.key_rotation_count,
-        flags: serde_json::from_str(&rec.flags_json).unwrap_or_default(),
+        // Propagate parse failures instead of silently degrading to an empty
+        // map — a corrupt row would otherwise load as a seemingly-valid
+        // session with its wireguard_claim_ticket/current_session_key flags
+        // silently missing, masking the underlying data problem.
+        flags: serde_json::from_str(&rec.flags_json)?,
     })
 }
 
@@ -358,7 +362,17 @@ impl WireGuardAuthManager {
     /// is still updated on every call — only the Cozo flush is throttled.
     const LAST_USED_FLUSH_COOLDOWN_SECS: u64 = 60;
 
-    /// Validate a WireGuard session
+    /// Validate a WireGuard session.
+    ///
+    /// This takes a write lock on `sessions` on every call to keep the in-memory
+    /// `last_used` fresh, not just a read lock — the real cost this was fixed for
+    /// (a CozoDB disk write via `spawn_blocking` on every call) is already gone
+    /// via the cooldown above. Going further to a lock-free `last_used` (e.g. an
+    /// `AtomicU64` per session) would mean restructuring `WireGuardSession` itself,
+    /// since it's cloned wholesale and returned publicly from `get_session`/
+    /// `list_sessions`/`create_session` today — a larger change than this pass
+    /// warrants; the in-memory write lock is uncontended I/O-free work, unlike the
+    /// disk write it replaced.
     #[tracing::instrument(skip(self))]
     pub async fn validate_session(&self, session_id: &str) -> Result<bool> {
         debug!("Validating WireGuard session: {}", session_id);
