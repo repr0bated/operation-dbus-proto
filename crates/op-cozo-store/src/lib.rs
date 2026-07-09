@@ -823,8 +823,32 @@ impl CozoGraphShuttle {
     /// mapping, atomically. Uses Cozo's `multi_transaction` so a failure partway
     /// through (e.g. the peer-mapping write) rolls back the session write too —
     /// otherwise a restart could resurrect a session row with no peer mapping.
+    /// Also deactivates any *other* still-active `wg_sessions` row for this same
+    /// peer_pubkey — otherwise `load_wireguard_sessions()` would reload both the
+    /// old and new session as valid bearers after a restart.
     pub fn put_wg_session(&self, rec: &WgSessionRecord) -> std::result::Result<(), CozoError> {
         let txn = self.db.multi_transaction(true);
+
+        let mut dp: Params = BTreeMap::new();
+        dp.insert(
+            "peer".into(),
+            DataValue::Str(rec.peer_pubkey.as_str().into()),
+        );
+        dp.insert("new_sid".into(), DataValue::Str(rec.session_id.as_str().into()));
+        if let Err(e) = txn.run_script(
+            r#"
+                superseded[session_id] := *wg_peer_sessions[peer_pubkey, session_id],
+                                           peer_pubkey = $peer, session_id != $new_sid
+                ?[session_id, is_active] := superseded[session_id], is_active = false
+                :update wg_sessions { session_id => is_active }
+            "#,
+            dp,
+        ) {
+            let _ = txn.abort();
+            return Err(CozoError::Other(format!(
+                "deactivate superseded wg session: {e}"
+            )));
+        }
 
         let query = r#"
             ?[session_id, peer_pubkey, psk, created_at, expires_at, is_active, last_used,

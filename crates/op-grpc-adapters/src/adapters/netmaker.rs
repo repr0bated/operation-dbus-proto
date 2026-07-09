@@ -33,7 +33,9 @@ impl NetmakerAdapter {
 
     /// Minimal HTTP/1.1 GET over the Netmaker container's unix domain socket
     /// (containers on this project have no NIC/IP — everything routes over UDS).
-    async fn get<T: serde::de::DeserializeOwned + Default>(&self, path: &str) -> Result<T, Status> {
+    /// Returns the raw response body bytes; may be empty (some Netmaker endpoints
+    /// return a 200/204 with no JSON payload at all).
+    async fn raw_get(&self, path: &str) -> Result<Vec<u8>, Status> {
         // `path` is built from caller-supplied gRPC fields (e.g. a network/node
         // name) and interpolated directly into the raw request line below. A
         // value containing CR/LF would inject extra headers or a second request
@@ -96,18 +98,35 @@ impl NetmakerAdapter {
         let is_chunked = head
             .lines()
             .any(|l| l.to_ascii_lowercase().starts_with("transfer-encoding:") && l.to_ascii_lowercase().contains("chunked"));
-        let body = if is_chunked {
+        Ok(if is_chunked {
             dechunk(body_raw)
         } else {
             body_raw.to_vec()
-        };
+        })
+    }
 
-        // Some Netmaker endpoints return a 200/204 with no JSON payload at all;
-        // treat that as "no data" rather than a parse failure.
+    /// GET a single object. An empty response body is a not-found error — for a
+    /// singleton RPC (get_network, get_node, ...), silently returning a
+    /// default-valued object would hide a missing object from the caller.
+    async fn get<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T, Status> {
+        let body = self.raw_get(path).await?;
         if body.is_empty() {
-            return Ok(T::default());
+            return Err(Status::not_found(format!(
+                "Netmaker API returned no data for {}",
+                path
+            )));
         }
+        serde_json::from_slice(&body)
+            .map_err(|e| Status::internal(format!("Netmaker API parse error: {}", e)))
+    }
 
+    /// GET a list. Unlike `get`, an empty response body is a valid empty list —
+    /// Netmaker returns no body at all for some "nothing to list" cases.
+    async fn get_list<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<Vec<T>, Status> {
+        let body = self.raw_get(path).await?;
+        if body.is_empty() {
+            return Ok(Vec::new());
+        }
         serde_json::from_slice(&body)
             .map_err(|e| Status::internal(format!("Netmaker API parse error: {}", e)))
     }
@@ -200,7 +219,7 @@ impl NetmakerService for NetmakerAdapter {
         &self,
         _req: Request<HealthRequest>,
     ) -> Result<Response<HealthResponse>, Status> {
-        #[derive(serde::Deserialize, Default)]
+        #[derive(serde::Deserialize)]
         struct HealthResp {
             status: String,
             version: Option<String>,
@@ -223,7 +242,7 @@ impl NetmakerService for NetmakerAdapter {
             addressrange6: Option<String>,
             localrange: Option<String>,
         }
-        let nets: Vec<Net> = self.get("/api/networks").await?;
+        let nets: Vec<Net> = self.get_list("/api/networks").await?;
         let networks = nets
             .into_iter()
             .map(|n| Network {
@@ -240,7 +259,7 @@ impl NetmakerService for NetmakerAdapter {
         &self,
         req: Request<GetNetworkRequest>,
     ) -> Result<Response<GetNetworkResponse>, Status> {
-        #[derive(serde::Deserialize, Default)]
+        #[derive(serde::Deserialize)]
         struct Net {
             netid: String,
             addressrange: Option<String>,
@@ -279,7 +298,7 @@ impl NetmakerService for NetmakerAdapter {
         } else {
             format!("/api/nodes/{}", network)
         };
-        let raw: Vec<N> = self.get(&path).await?;
+        let raw: Vec<N> = self.get_list(&path).await?;
         let nodes = raw
             .into_iter()
             .map(|n| Node {
@@ -298,7 +317,7 @@ impl NetmakerService for NetmakerAdapter {
         &self,
         req: Request<GetNodeRequest>,
     ) -> Result<Response<GetNodeResponse>, Status> {
-        #[derive(serde::Deserialize, Default)]
+        #[derive(serde::Deserialize)]
         struct N {
             id: String,
             name: Option<String>,
@@ -333,7 +352,7 @@ impl NetmakerService for NetmakerAdapter {
             publickey: Option<String>,
             version: Option<String>,
         }
-        let raw: Vec<H> = self.get("/api/hosts").await?;
+        let raw: Vec<H> = self.get_list("/api/hosts").await?;
         let hosts = raw
             .into_iter()
             .map(|h| Host {
