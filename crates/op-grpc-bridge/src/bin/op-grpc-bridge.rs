@@ -48,6 +48,13 @@ fn load_tls_identity() -> Option<Identity> {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // rustls 0.23 is built with both aws-lc-rs and ring in this workspace, so
+    // no default CryptoProvider can be inferred — TLS setup panics at the first
+    // handshake unless one is installed process-wide before any TLS use.
+    rustls::crypto::aws_lc_rs::default_provider()
+        .install_default()
+        .map_err(|_| anyhow::anyhow!("failed to install rustls aws-lc-rs CryptoProvider"))?;
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()

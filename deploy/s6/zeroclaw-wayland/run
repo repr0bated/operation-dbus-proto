@@ -43,7 +43,7 @@ exec s6-setuidgid "$OP_ZEROCLAW_USER" env \
   WAYLAND_DISPLAY="$ZEROCLAW_WAYLAND_DISPLAY" \
   LIBGL_ALWAYS_SOFTWARE="${LIBGL_ALWAYS_SOFTWARE:-}" \
   weston \
-    --backend=headless-backend.so \
+    --backend="${ZEROCLAW_WESTON_BACKEND:-headless-backend.so}" ${ZEROCLAW_WESTON_EXTRA_ARGS:-} \
     --socket="$ZEROCLAW_WAYLAND_DISPLAY" \
     --idle-time=0 \
     --log="${state_dir}/weston.log"

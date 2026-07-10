@@ -66,6 +66,7 @@ async-stream = "0.3"
 base64 = "0.21"
 qdrant-client = "1.17"
 rcgen = "0.13"
+rustls = { workspace = true }
 
 [[bin]]
 name = "op-grpc-bridge"
