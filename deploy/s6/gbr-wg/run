@@ -12,10 +12,10 @@ IFACE="${IFACE:-wg0}"
 # Check if config exists
 if [ ! -f "$WG_CONF" ]; then
     echo "WireGuard config not found: $WG_CONF"
-    # Exit but tell s6 to not restart immediately
-    exit 0
+    exec pause
 fi
 
 # Bring up WireGuard
 exec 2>&1
-exec wg-quick up "${IFACE}" && exec pause
+wg-quick up "${IFACE}"
+exec pause
