@@ -1,0 +1,70 @@
+#!/bin/sh
+# Grok-backed routing/UI proposal agent. Live routing still belongs to the
+# D-Bus routing plugin; this service only asks Zeroclaw for JSON proposals.
+exec 2>&1
+set -eu
+
+if [ -f /etc/ghostbridge/zeroclaw.env ]; then
+    set -a
+    . /etc/ghostbridge/zeroclaw.env
+    set +a
+fi
+
+export HOME="${ZEROCLAW_HOME:-/root}"
+export PATH="/home/jeremy/.cargo/bin:/home/jeremy/.local/bin:/usr/local/bin:/usr/bin:/bin"
+export ZCALL_ENDPOINT="${ZCALL_ENDPOINT:-127.0.0.1:8090}"
+
+ZEROCLAW_BIN="${ZEROCLAW_BIN:-/home/jeremy/.cargo/bin/zeroclaw}"
+MINDSTUDIO_BIN="${MINDSTUDIO_BIN:-/usr/local/bin/mindstudio}"
+if [ -n "${MINDSTUDIO_BASE_URL:-}" ]; then
+    DEFAULT_PROVIDER="custom:${MINDSTUDIO_BASE_URL}"
+else
+    DEFAULT_PROVIDER="${LLM_PROVIDER:-xai}"
+fi
+
+PROVIDER="${ZEROCLAW_ROUTING_UIGEN_PROVIDER:-$DEFAULT_PROVIDER}"
+MODEL="${ZEROCLAW_ROUTING_UIGEN_MODEL:-${MINDSTUDIO_MODEL:-${LLM_MODEL:-grok-4-1-fast-reasoning}}}"
+INTERVAL="${ZEROCLAW_ROUTING_UIGEN_INTERVAL_SECONDS:-3600}"
+STATE_FILE="${ZEROCLAW_ROUTING_UIGEN_STATE_FILE:-/run/zeroclaw-routing-uigen/session.json}"
+OUT_FILE="${ZEROCLAW_ROUTING_UIGEN_OUT_FILE:-/dev/shm/zeroclaw-routing-uigen-last.json}"
+
+mkdir -p "$(dirname "$STATE_FILE")"
+
+prompt='Read the Routing.UIgen.Agent instructions from the Zeroclaw workspace. Return only a compact JSON health/proposal object for current routing/UI generation state. Do not publish routes.'
+
+while :; do
+    tmp="${OUT_FILE}.$$"
+    set +e
+    if [ -n "${MINDSTUDIO_AGENT_ID:-}" ]; then
+        if [ -n "${MINDSTUDIO_VERSION:-}" ]; then
+            "$MINDSTUDIO_BIN" run-agent "$MINDSTUDIO_AGENT_ID" \
+                --workflow "${MINDSTUDIO_WORKFLOW:-Main}" \
+                --version "$MINDSTUDIO_VERSION" \
+                --no-meta \
+                --query "$prompt" >"$tmp"
+            rc=$?
+        else
+            "$MINDSTUDIO_BIN" run-agent "$MINDSTUDIO_AGENT_ID" \
+                --workflow "${MINDSTUDIO_WORKFLOW:-Main}" \
+                --no-meta \
+                --query "$prompt" >"$tmp"
+            rc=$?
+        fi
+    else
+        "$ZEROCLAW_BIN" agent \
+            --provider "$PROVIDER" \
+            --model "$MODEL" \
+            --session-state-file "$STATE_FILE" \
+            --message "$prompt" >"$tmp"
+        rc=$?
+    fi
+    set -e
+    if [ "$rc" -eq 0 ]; then
+        mv "$tmp" "$OUT_FILE"
+        echo "zeroclaw-routing-uigen: wrote $OUT_FILE"
+    else
+        rm -f "$tmp"
+        echo "zeroclaw-routing-uigen: agent failed rc=$rc"
+    fi
+    sleep "$INTERVAL"
+done

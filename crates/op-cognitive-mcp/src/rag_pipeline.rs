@@ -1,6 +1,6 @@
-//! RAG ingestion pipeline for repomix content.
+//! RAG ingestion pipeline for the Voyage 4 Qdrant code corpus.
 //!
-//! Pipeline: zip → repomix parse → enrich → chunk → Voyage embed → Qdrant upsert
+//! Pipeline: source text/import formats → enrich → chunk → Voyage embed → Qdrant upsert
 //!
 //! Each Qdrant point payload carries rich metadata for hover display:
 //!   repo, file_path, language, symbols, doc_comments, imports, tags,
@@ -30,12 +30,12 @@ use tracing::{info, warn};
 
 // ─── constants ───────────────────────────────────────────────────────────────
 
-pub const DEFAULT_COLLECTION: &str = "repomix_rag";
 /// The fused voyage-4 retrieval set — one shared embedding space, so `_large`
 /// and `_lite` collections compare directly. Best available tier per language:
 /// go/python/rust were re-vectorized to voyage-4-large (see ../logs
 /// vectorize_lsp_4large_*), the rest remain voyage-4-lite. Rust replaced its old
 /// voyage-code-3 solo collection here.
+pub const DEFAULT_COLLECTION: &str = "repos_lsp_rust_voyage_4_large";
 pub const DEFAULT_VOYAGE4_COLLECTIONS: &[&str] = &[
     "repos_lsp_c_cpp_voyage_4_lite",
     "repos_lsp_go_voyage_4_large",
@@ -722,9 +722,7 @@ impl RagPipeline {
 }
 
 pub fn default_collection_from_env() -> String {
-    std::env::var("COGNITIVE_MCP_RAG_COLLECTION")
-        .or_else(|_| std::env::var("COGNITIVE_MCP_REPOMIX_COLLECTION"))
-        .unwrap_or_else(|_| DEFAULT_COLLECTION.to_string())
+    std::env::var("COGNITIVE_MCP_RAG_COLLECTION").unwrap_or_else(|_| DEFAULT_COLLECTION.to_string())
 }
 
 pub fn default_collections_for_mode(mode: RetrievalMode) -> Vec<String> {

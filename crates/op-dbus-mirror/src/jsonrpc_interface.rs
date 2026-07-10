@@ -5,9 +5,7 @@
 //! Authoritative Path: D-Bus method → MutationEngine.mutate → RCP Database → EventChain
 
 use op_grpc_bridge::{ChangeType, MutationEngine};
-use op_jsonrpc::protocol::JsonRpcRequest;
 use op_network::rovs_proxy::OvsdbDbusClient;
-use serde_json::Value;
 use std::sync::Arc;
 use zbus::interface;
 
@@ -156,60 +154,5 @@ impl OvsdbInterface {
             Ok(ports) => Ok(serde_json::to_string(&ports).unwrap_or_default()),
             Err(e) => Err(zbus::fdo::Error::Failed(e.to_string())),
         }
-    }
-}
-
-    pub schema_engine: Option<Arc<MutationEngine>>,
-}
-
-        Self {
-            schema_engine,
-        }
-    }
-}
-
-    async fn transact(&self, request: String) -> zbus::fdo::Result<String> {
-        let req_simd = str_to_simd(&request)?;
-        let req_serde: Value = serde_json::from_str(&request)
-            .map_err(|e| zbus::fdo::Error::InvalidArgs(e.to_string()))?;
-
-        let json_req: JsonRpcRequest = serde_json::from_value(req_serde.clone())
-            .map_err(|e| zbus::fdo::Error::InvalidArgs(e.to_string()))?;
-
-        if json_req.method == "mutate"
-            || json_req.method == "update"
-            || json_req.method == "insert"
-            || json_req.method == "delete"
-        {
-            if let Some(engine) = &self.schema_engine {
-                match engine
-                    .mutate(
-                        ChangeType::MethodCall,
-                        Some(json_req.method.clone()),
-                        req_simd,
-                        "dbus-client".to_string(),
-                        None,
-                    )
-                    .await
-                {
-                    Ok(result) => Ok(serde_json::to_string(&result.result).unwrap_or_default()),
-                    Err(e) => Err(zbus::fdo::Error::Failed(e.to_string())),
-                }
-            } else {
-                Ok(serde_json::to_string(&response).unwrap_or_default())
-            }
-        } else {
-            Ok(serde_json::to_string(&response).unwrap_or_default())
-        }
-    }
-
-    async fn get_schema(&self) -> zbus::fdo::Result<String> {
-        let request =
-        Ok(serde_json::to_string(&response.result).unwrap_or_default())
-    }
-
-    async fn list_dbs(&self) -> zbus::fdo::Result<String> {
-        let request = op_jsonrpc::protocol::JsonRpcRequest::new("list_dbs", simd_json::json!([]));
-        Ok(serde_json::to_string(&response.result).unwrap_or_default())
     }
 }

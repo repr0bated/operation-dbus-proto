@@ -583,7 +583,7 @@ fn example_code_search_language() -> Option<String> {
 }
 
 fn example_collection() -> Option<String> {
-    Some("repomix_rag".to_string())
+    Some("repos_lsp_rust_voyage_4_large".to_string())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
@@ -1525,7 +1525,7 @@ pub(crate) fn cognitive_mcp_schema_golden() -> PluginSchema {
                     "Override the Qdrant collection (see qdrant plugin collections) for this search"
                         .to_string(),
                 default: None,
-                example: Some(json!("repomix_rag")),
+                example: Some(json!("repos_lsp_rust_voyage_4_large")),
                 constraints: Vec::new(),
                 read_only: false,
                 read_only_when: None,
@@ -1652,7 +1652,7 @@ pub(crate) fn cognitive_mcp_schema_golden() -> PluginSchema {
                 description: "Override the Qdrant collection (see qdrant plugin collections) for this context request"
                     .to_string(),
                 default: None,
-                example: Some(json!("repomix_rag")),
+                example: Some(json!("repos_lsp_rust_voyage_4_large")),
                 constraints: Vec::new(),
                 read_only: false,
                 read_only_when: None,

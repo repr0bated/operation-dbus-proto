@@ -8,7 +8,7 @@
 use anyhow::Result;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 
-use crate::{derive_session_id_from_psk, session_proof, verify_session_proof};
+use crate::{derive_session_id_from_psk, session_proof};
 
 /// 3tched hub peer on the decoy VPS mesh (`10.0.0.2`).
 pub const HOST_PEER_PUBKEY: &str = "iNqgBk7pBC/iXUmF+v4PNvvdAxjP5qWjxzMYYRE8+hw=";

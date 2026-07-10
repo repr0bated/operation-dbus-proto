@@ -149,7 +149,6 @@ impl MirrorEventDelta for MirrorEvent {
     fn delta(&self) -> serde_json::Value {
         match self {
             MirrorEvent::OvsdbRow { delta, .. }
-            | MirrorEvent::NonNet { delta, .. }
             | MirrorEvent::Plugin { delta, .. }
             | MirrorEvent::ProcMem { delta, .. }
             | MirrorEvent::ProcLoad { delta, .. }

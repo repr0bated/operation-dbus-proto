@@ -1,21 +1,40 @@
 #!/bin/sh
+# Default routing loop — registry → D-Bus routing plugin → SHM → shuttle.
+# No LLM / xAI. Deterministic fallback when Grok is down or unused.
 exec 2>&1
 set -eu
 
-PATH="${PATH:-/usr/local/sbin:/usr/local/bin:/usr/bin:/bin}"
+PATH="${PATH:-/usr/local/sbin:/usr/local/bin:/usr/bin:/bin:/home/jeremy/.local/bin}"
 
-GEMMA_BIN="${GEMMA_BIN:-/usr/local/bin/op-gemma}"
 SHUTTLE_BIN="${SHUTTLE_BIN:-/usr/local/bin/op-identity-shuttle}"
 GEMMA_INTERVAL_SECONDS="${GEMMA_INTERVAL_SECONDS:-300}"
+ZCALL_ENDPOINT="${ZCALL_ENDPOINT:-127.0.0.1:8090}"
+export ZCALL_ENDPOINT
+
+# Legacy binary fallback if zcall routing is unavailable.
+GEMMA_BIN="${GEMMA_BIN:-/usr/local/bin/op-gemma}"
 
 if [ -f /etc/ghostbridge/xray.env ]; then
     . /etc/ghostbridge/xray.env
 fi
 
-while :; do
+derive_and_publish() {
+    if command -v zcall >/dev/null 2>&1 \
+        && zcall methods routing 2>/dev/null | grep -q '^derive'; then
+        echo "routing: zcall derive (registry → D-Bus object)"
+        zcall routing derive -c routing.invoke --arguments '{}' || return 1
+        echo "routing: zcall publish (D-Bus → SHM secondary)"
+        zcall routing publish -c routing.invoke --arguments '{}' || return 1
+        return 0
+    fi
+    echo "routing: zcall unavailable — falling back to op-gemma binary"
     "$GEMMA_BIN"
+}
 
-    "$SHUTTLE_BIN"
+while :; do
+    derive_and_publish || echo "routing: derive/publish failed (will retry)"
+
+    "$SHUTTLE_BIN" || echo "routing: shuttle failed (will retry)"
 
     sleep "$GEMMA_INTERVAL_SECONDS"
 done

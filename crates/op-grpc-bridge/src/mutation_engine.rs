@@ -721,6 +721,23 @@ impl MutationEngine {
                 }
                 caller_result = Some(simd_json::serde::to_owned_value(&domain)?);
             }
+        } else if plugin_id == "routing" && change_type == ChangeType::MethodCall {
+            if let Some(method) = &member_name {
+                let mut args_json: serde_json::Value = serde_json::to_value(&value)?;
+                if let serde_json::Value::Array(items) = &args_json {
+                    args_json = items
+                        .first()
+                        .cloned()
+                        .unwrap_or_else(|| serde_json::Value::Object(Default::default()));
+                }
+                let domain =
+                    crate::routing_dispatch::dispatch_routing_method(self, method, &args_json)
+                        .await?;
+                if let Some(state) = self.get_state("routing").await {
+                    authoritative_value = state;
+                }
+                caller_result = Some(simd_json::serde::to_owned_value(&domain)?);
+            }
         } else {
             // NonNet / Generic Plugin Path
             if change_type == ChangeType::PropertySet {
@@ -892,6 +909,10 @@ impl MutationEngine {
                 let args = serde_json::to_value(&parsed_value)?;
                 crate::identity_sled_dispatch::dispatch_identity_sled_method(self, method, &args)
                     .await?
+            }
+            "routing" => {
+                let args = serde_json::to_value(&parsed_value)?;
+                crate::routing_dispatch::dispatch_routing_method(self, method, &args).await?
             }
             "zeroclaw" => {
                 let state = op_plugins::state_plugins::zeroclaw::ZeroclawPlugin::current_state();

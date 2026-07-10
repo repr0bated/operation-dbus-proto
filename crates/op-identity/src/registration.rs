@@ -6,7 +6,7 @@
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use rand::distributions::Alphanumeric;
 use rand::rngs::OsRng;
-use rand::{Rng, RngCore};
+use rand::Rng;
 use x25519_dalek::{PublicKey, StaticSecret};
 
 /// WireGuard keypair used for user identity and VPN config.

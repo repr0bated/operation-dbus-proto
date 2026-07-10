@@ -84,6 +84,23 @@ pub fn generate_client_config(
     client_address: &str,
     server: &WgServerConfig,
 ) -> String {
+    generate_client_config_with_psk(client_private_key, client_address, server, None)
+}
+
+/// Generate a WireGuard client configuration, optionally including the one-time
+/// preshared key delivered by the magic-link verification flow.
+pub fn generate_client_config_with_psk(
+    client_private_key: &str,
+    client_address: &str,
+    server: &WgServerConfig,
+    preshared_key: Option<&str>,
+) -> String {
+    let preshared_key = preshared_key
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+        .map(|key| format!("PresharedKey = {}\n", key))
+        .unwrap_or_default();
+
     format!(
         r#"[Interface]
 PrivateKey = {}
@@ -92,7 +109,7 @@ DNS = {}
 
 [Peer]
 PublicKey = {}
-AllowedIPs = {}
+{}AllowedIPs = {}
 Endpoint = {}
 PersistentKeepalive = 25
 "#,
@@ -100,6 +117,7 @@ PersistentKeepalive = 25
         client_address,
         server.dns,
         server.public_key,
+        preshared_key,
         server.allowed_ips,
         server.endpoint
     )

@@ -57,7 +57,6 @@ pub(crate) use super::config::config_plugin_schema;
 pub(crate) use super::cozo::cozo_schema as cozo_plugin_schema;
 pub(crate) use super::datastore::datastore_schema as datastore_plugin_schema;
 pub(crate) use super::dnsresolver::dnsresolver_schema as dnsresolver_plugin_schema;
-pub(crate) use super::gemma_brain::gemma_brain_schema as gemma_brain_plugin_schema;
 pub(crate) use super::identity_sled::identity_sled_schema as identity_sled_plugin_schema;
 pub(crate) use super::large_language_model::large_language_model_schema as large_language_model_plugin_schema;
 pub(crate) use super::login1::login1_schema as login1_plugin_schema;
@@ -67,6 +66,7 @@ pub(crate) use super::notebooklm::notebooklm_schema as notebooklm_plugin_schema;
 pub(crate) use super::persona::persona_schema as persona_plugin_schema;
 pub(crate) use super::procfs::procfs_schema as procfs_plugin_schema;
 pub(crate) use super::qdrant::qdrant_schema as qdrant_plugin_schema;
+pub(crate) use super::routing::routing_schema as routing_plugin_schema;
 pub(crate) use super::shared_unix_socket::shared_unix_socket_schema as shared_unix_socket_plugin_schema;
 
 // ── Shared utility functions (not schemas) ─────────────────────────────────────

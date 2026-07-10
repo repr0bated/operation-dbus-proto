@@ -2,6 +2,7 @@ use std::fs::File;
 use std::mem::size_of;
 use std::path::{Path, PathBuf};
 
+use crate::identity_source::active_container_trace_context;
 use anyhow::{ensure, Context, Result};
 use memmap2::MmapOptions;
 use op_identity::IdentitySled;
@@ -99,8 +100,18 @@ impl QdrantSemanticShuttle {
         })
     }
 
-    /// Reads the active identity sled directly from shared memory.
+    /// Reads the active identity sled from the schema'd container projection,
+    /// falling back to the legacy raw mmap sled when the projection is absent.
     pub fn current_trace_context(&self) -> Result<SessionTraceContext> {
+        if let Some(trace) = active_container_trace_context() {
+            return Ok(SessionTraceContext {
+                wireguard_pubkey: trace.wireguard_pubkey,
+                mutation_index: trace.mutation_index,
+                hashed_footprint: trace.hashed_footprint,
+                trace_id: trace.trace_id,
+            });
+        }
+
         let sled = read_identity_sled(&self.sled_path)?;
         ensure!(
             sled.is_sled_valid(),

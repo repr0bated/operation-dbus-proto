@@ -4,7 +4,7 @@
 //!
 //! Architecture:
 //! - zeroclaw owns provider/model routing (OD-28) — SendRequest carries them.
-//! - gemma_brain routes to the selected model and applies compliance tags.
+//! - Model selection is zeroclaw / large_language_model (not a brand brain).
 //! - The chatbot is a DELEGATOR — forced tool calling is mandatory; even user
 //!   responses are emitted as tool calls (respond_to_user).
 //! - Chat persistence flows through the memory loop → cognitive-mcp.
@@ -100,11 +100,11 @@ impl ChatService for ChatServiceImpl {
                 }))
                 .await;
 
-            // TODO: Wire to gemma_brain routing + ForcedToolPipeline.
+            // TODO: Wire to large_language_model / ForcedToolPipeline.
             //
             // The pipeline will:
             // 1. Build ChatRequest with tool_choice: Required
-            // 2. Route through gemma_brain to the selected provider/model
+            // 2. Route through large_language_model / zeroclaw to the selected provider/model
             // 3. For each ModelPart yielded:
             //    - Text → ChatFrame::Part(text)
             //    - ToolCall → ChatFrame::Part(tool-call) + ApprovalRequired if needed

@@ -1,13 +1,13 @@
 //! json-render.dev declarative element spec.
 //!
-//! An `Element` is an immutable, versioned UI atom authored by `gemma_brain`.
+//! An `Element` is an immutable, versioned UI atom authored by UI-gen / json-render.
 //! The Rust interpreter in [`super::interpret`] is the only thing allowed to
 //! materialise these into pixels — no per-element Rust, no WASM, no fallback.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// Stable identifier minted by gemma_brain. Never reused.
+/// Stable identifier minted by UI-gen. Never reused.
 pub type ElementId = String;
 
 /// Monotonic per-element version. A new version means a behavioural change;

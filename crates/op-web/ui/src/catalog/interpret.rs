@@ -5,7 +5,7 @@
 //! the live [`CatalogSnapshot`]. Unknown ids, missing versions, or unknown
 //! DSL nodes surface as [`RenderError`] — no silent fallbacks, no raw JSON.
 //!
-//! The seed primitive set below is the minimum needed for gemma_brain to
+//! The seed primitive set below is the minimum needed for UI-gen to
 //! generate against. Adding a new primitive is a deliberate act: append a
 //! match arm here and document the DSL key in the json-render.dev catalog
 //! contract. Never extend by accepting unknown node shapes.

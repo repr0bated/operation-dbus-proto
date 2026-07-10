@@ -3,7 +3,7 @@
 //! The single inference surface — provider, model id, endpoint, and generation
 //! params. The model is a FIELD, not the plugin's identity: swap `gemma3` →
 //! `llama3`/`mistral` by changing `model_id`. This is the ONLY plugin that knows
-//! about Ollama; consumers (e.g. `gemma_brain`) talk to this surface and embed
+//! about Ollama; consumers (e.g. UI-gen / agents) talk to this surface and embed
 //! no model of their own.
 //!
 //! The plugin reports the *live* observed state: it queries the

@@ -1,19 +1,31 @@
 #!/bin/sh
+# One-shot default routing: registry → D-Bus routing plugin → SHM → shuttle.
+# No LLM / xAI required.
 set -eu
 
-PATH="${PATH:-/usr/local/sbin:/usr/local/bin:/usr/bin:/bin}"
+PATH="${PATH:-/usr/local/sbin:/usr/local/bin:/usr/bin:/bin:/home/jeremy/.local/bin}"
 
-GEMMA_BIN="${GEMMA_BIN:-/usr/local/bin/op-gemma}"
 SHUTTLE_BIN="${SHUTTLE_BIN:-/usr/local/bin/op-identity-shuttle}"
+GEMMA_BIN="${GEMMA_BIN:-/usr/local/bin/op-gemma}"
+ZCALL_ENDPOINT="${ZCALL_ENDPOINT:-127.0.0.1:8090}"
+export ZCALL_ENDPOINT
 
 if [ -f /etc/ghostbridge/xray.env ]; then
     . /etc/ghostbridge/xray.env
 fi
 
-echo "gemma: generating subid → tag → xray + OpenFlow rules"
-"$GEMMA_BIN"
+if command -v zcall >/dev/null 2>&1 \
+    && zcall methods routing 2>/dev/null | grep -q '^derive'; then
+    echo "routing: zcall derive (registry → D-Bus object)"
+    zcall routing derive -c routing.invoke --arguments '{}'
+    echo "routing: zcall publish (D-Bus → SHM secondary)"
+    zcall routing publish -c routing.invoke --arguments '{}'
+else
+    echo "routing: zcall unavailable — falling back to op-gemma binary"
+    "$GEMMA_BIN"
+fi
 
-echo "gemma: running identity shuttle to regenerate xray config"
+echo "routing: identity shuttle → xray config"
 "$SHUTTLE_BIN"
 
-echo "gemma: ready"
+echo "routing: ready"

@@ -23,6 +23,7 @@ pub mod dbus_interface;
 pub mod doctor;
 pub mod gemini_fallback;
 pub mod grpc_service;
+pub mod identity_source;
 pub mod memory_store;
 pub mod notebooklm;
 pub mod qdrant_shuttle;

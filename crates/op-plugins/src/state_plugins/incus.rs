@@ -186,8 +186,7 @@ impl IncusPlugin {
         const MAX_ATTEMPTS: u32 = 3;
         let mut last_empty_err = None;
         for attempt in 1..=MAX_ATTEMPTS {
-            let response =
-                Self::incus_api_request_once(method, path, body, idle_timeout).await?;
+            let response = Self::incus_api_request_once(method, path, body, idle_timeout).await?;
             if !response.is_empty() {
                 return Ok(response);
             }
@@ -367,7 +366,10 @@ impl IncusPlugin {
             .and_then(|v| v.as_str())
             .unwrap_or("");
         if op_status == "Success" {
-            let result = metadata.get("metadata").cloned().unwrap_or(simd_json::json!({}));
+            let result = metadata
+                .get("metadata")
+                .cloned()
+                .unwrap_or(simd_json::json!({}));
             Ok(simd_json::to_string(&result)?.into_bytes())
         } else {
             let err = metadata

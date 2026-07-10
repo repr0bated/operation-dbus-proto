@@ -1,6 +1,6 @@
 //! `CatalogService` stream consumer.
 //!
-//! The schema lives in `op-plugins` (gemma_brain side) and is discovered
+//! The schema lives in `op-plugins` (json_render / UI-gen) and is discovered
 //! through gRPC reflection — same pattern as every other service in this
 //! crate. This module is read-only: gemma is the sole writer.
 //!
@@ -39,7 +39,7 @@ pub async fn run(
 ) -> Result<()> {
     // TODO: resolve `gemma.catalog.v1.CatalogService/Subscribe` via reflection,
     //       open the server stream, and dispatch each frame below. Wired as a
-    //       no-op stub so the rest of the system compiles while gemma_brain's
+    //       no-op stub so the rest of the system compiles while UI-gen's
     //       proto lands.
     let _ = (store,);
     Ok(())

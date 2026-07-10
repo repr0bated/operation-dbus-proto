@@ -328,17 +328,17 @@ mod tests {
         let path = dir.path().join("live-schema.json");
         let value = serde_json::json!({
             "zeroclaw": [{"name": "zeroclaw", "version": "1.0.0"}],
-            "gemma_brain": [{"name": "gemma_brain", "version": "2.0.0"}]
+            "routing": [{"name": "routing", "version": "1.0.0"}]
         });
         write_json(&path, &value);
 
-        let loader = SchemaLoader::new_for_plugin(&path, "gemma_brain").unwrap();
+        let loader = SchemaLoader::new_for_plugin(&path, "routing").unwrap();
         let loaded = loader.get().await;
         assert_eq!(
             loaded,
-            serde_json::json!({"name": "gemma_brain", "version": "2.0.0"})
+            serde_json::json!({"name": "routing", "version": "1.0.0"})
         );
-        assert_eq!(loader.plugin_id(), "gemma_brain");
+        assert_eq!(loader.plugin_id(), "routing");
     }
 
     #[tokio::test]
