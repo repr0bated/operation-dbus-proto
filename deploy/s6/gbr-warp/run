@@ -9,10 +9,9 @@ WG_CONF="${WG_CONF:-/etc/wireguard/wgcf.conf}"
 # Check if config exists
 if [ ! -f "$WG_CONF" ]; then
     echo "WireGuard config not found: $WG_CONF"
-    exec pause
+    exit 0
 fi
 
 # Bring up WireGuard interface
 exec 2>&1
-wg-quick up "${IFACE}"
-exec pause
+exec wg-quick up "${IFACE}" && exec pause
