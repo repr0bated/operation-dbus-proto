@@ -160,6 +160,53 @@ impl IncusPlugin {
 
     /// Minimal HTTP-over-UnixSocket client for Incus REST API (AGENTS.md §4: no subprocess bypasses)
     async fn incus_api_request(method: &str, path: &str, body: Option<&str>) -> Result<Vec<u8>> {
+        Self::incus_api_request_with_idle_timeout(method, path, body, Duration::from_millis(500))
+            .await
+    }
+
+    /// Same as [`Self::incus_api_request`] but with a caller-chosen idle-read
+    /// timeout. Regular calls answer within milliseconds so 500ms of silence
+    /// safely means "done"; the long-poll operation-`/wait` endpoint can go
+    /// silent for up to its own timeout while Incus is still working, so it
+    /// needs a much longer idle allowance or the read loop returns an empty
+    /// response before Incus ever answers.
+    ///
+    /// Retries on a genuinely empty (0-byte) response — never valid HTTP —
+    /// since rapid connection churn against Incus's Unix-socket HTTP server
+    /// can transiently reset a freshly opened connection before it responds;
+    /// a fresh connection on retry reliably succeeds (verified live: the
+    /// daemon itself never fails the same request when retried moments
+    /// later, including a re-poll of an in-flight operation's `/wait`).
+    async fn incus_api_request_with_idle_timeout(
+        method: &str,
+        path: &str,
+        body: Option<&str>,
+        idle_timeout: Duration,
+    ) -> Result<Vec<u8>> {
+        const MAX_ATTEMPTS: u32 = 3;
+        let mut last_empty_err = None;
+        for attempt in 1..=MAX_ATTEMPTS {
+            let response =
+                Self::incus_api_request_once(method, path, body, idle_timeout).await?;
+            if !response.is_empty() {
+                return Ok(response);
+            }
+            last_empty_err = Some(anyhow::anyhow!(
+                "Incus returned an empty response to {method} {path} (attempt {attempt}/{MAX_ATTEMPTS})"
+            ));
+            if attempt < MAX_ATTEMPTS {
+                tokio::time::sleep(Duration::from_millis(100 * attempt as u64)).await;
+            }
+        }
+        Err(last_empty_err.unwrap())
+    }
+
+    async fn incus_api_request_once(
+        method: &str,
+        path: &str,
+        body: Option<&str>,
+        idle_timeout: Duration,
+    ) -> Result<Vec<u8>> {
         let socket_path = "/var/lib/incus/unix.socket";
         if !std::path::Path::new(socket_path).exists() {
             return Err(anyhow::anyhow!(
@@ -191,7 +238,7 @@ impl IncusPlugin {
         let mut response = Vec::new();
         let mut buf = [0u8; 4096];
         loop {
-            match tokio::time::timeout(Duration::from_millis(500), stream.read(&mut buf)).await {
+            match tokio::time::timeout(idle_timeout, stream.read(&mut buf)).await {
                 Ok(Ok(0)) => break,
                 Ok(Ok(n)) => response.extend_from_slice(&buf[..n]),
                 Ok(Err(e)) => return Err(e.into()),
@@ -253,12 +300,28 @@ impl IncusPlugin {
         Ok(body)
     }
 
-    /// Call Incus REST API and extract metadata from sync response
+    /// Call Incus REST API and extract metadata, transparently waiting out
+    /// async operations (Incus answers most mutating calls with `202
+    /// Accepted`/`"type":"async"` plus an `/1.0/operations/<id>` to poll —
+    /// the actual success/failure only appears once that operation resolves;
+    /// treating the 202 body itself as the result silently drops real
+    /// errors, since the envelope's own top-level `error` field is empty for
+    /// operations that haven't completed yet).
     async fn incus_api_call(method: &str, path: &str, body: Option<&str>) -> Result<Vec<u8>> {
         let response = Self::incus_api_request(method, path, body).await?;
         let mut raw = response;
         let val: simd_json::OwnedValue =
             simd_json::from_slice(&mut raw).context("Failed to parse Incus API response")?;
+
+        let response_type = val.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        if response_type == "async" {
+            let op_path = val
+                .get("operation")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("async Incus response missing operation path"))?
+                .to_string();
+            return Self::wait_incus_operation(&op_path).await;
+        }
 
         let status = val
             .get("status")
@@ -272,9 +335,47 @@ impl IncusPlugin {
             let err = val
                 .get("error")
                 .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
                 .or_else(|| val.get("status").and_then(|v| v.as_str()))
                 .unwrap_or("Unknown Incus API error");
             Err(anyhow::anyhow!("Incus API error: {}", err))
+        }
+    }
+
+    /// Block on an Incus async operation until it reaches a terminal state,
+    /// via the long-poll `/1.0/operations/<id>/wait` endpoint (Incus holds
+    /// the connection open until the operation finishes or the timeout
+    /// elapses), and surface `metadata.err` on failure — that field, not the
+    /// outer envelope, carries the actual reason (e.g. "Image not provided
+    /// for instance creation").
+    async fn wait_incus_operation(op_path: &str) -> Result<Vec<u8>> {
+        let wait_path = format!("{op_path}/wait?timeout=120");
+        let response = Self::incus_api_request_with_idle_timeout(
+            "GET",
+            &wait_path,
+            None,
+            Duration::from_secs(125),
+        )
+        .await?;
+        let mut raw = response;
+        let val: simd_json::OwnedValue = simd_json::from_slice(&mut raw)
+            .context("Failed to parse Incus operation-wait response")?;
+
+        let metadata = val.get("metadata").cloned().unwrap_or(simd_json::json!({}));
+        let op_status = metadata
+            .get("status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if op_status == "Success" {
+            let result = metadata.get("metadata").cloned().unwrap_or(simd_json::json!({}));
+            Ok(simd_json::to_string(&result)?.into_bytes())
+        } else {
+            let err = metadata
+                .get("err")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .unwrap_or("Incus operation failed with no error detail");
+            Err(anyhow::anyhow!("Incus operation failed: {}", err))
         }
     }
 
@@ -333,24 +434,63 @@ impl IncusPlugin {
                     i += 1;
                 }
 
+                // `images:ubuntu/24.04` is CLI shorthand for remote `images`
+                // + alias `ubuntu/24.04`. The REST API's source.alias only
+                // ever resolves against LOCAL aliases/fingerprints — for a
+                // remote it also needs source.server + source.protocol, or
+                // Incus can't find the image at all ("Image not provided
+                // for instance creation") even though it's a valid, cached
+                // remote image. `local:`/no-prefix means a bare local alias
+                // or fingerprint, needing no server/protocol.
+                let (remote, bare_alias) = match image.split_once(':') {
+                    Some((r, a)) if r != "local" => (Some(r), a),
+                    Some((_, a)) => (None, a),
+                    None => (None, image),
+                };
+                let mut source = simd_json::json!({ "type": "image", "alias": bare_alias });
+                if let Some(remote) = remote {
+                    let (server, protocol) = match remote {
+                        "images" => ("https://images.linuxcontainers.org", "simplestreams"),
+                        other => {
+                            return Err(anyhow::anyhow!(
+                                "unknown Incus image remote '{}': only 'images' and 'local' \
+                                 are wired for instance creation",
+                                other
+                            ))
+                        }
+                    };
+                    if let Some(obj) = source.as_object_mut() {
+                        obj.insert("server".into(), simd_json::json!(server));
+                        obj.insert("protocol".into(), simd_json::json!(protocol));
+                    }
+                }
                 let mut body = simd_json::json!({
                     "name": name,
-                    "source": { "type": "image", "alias": image },
+                    "source": source,
                     "type": "container",
                 });
+                // simd_json's IndexMut panics on a key that isn't already
+                // present (unlike serde_json::Value, which auto-inserts) —
+                // insert explicitly rather than index-assign.
+                let body_obj = body
+                    .as_object_mut()
+                    .expect("body literal is always an object");
                 if no_profiles {
-                    body["profiles"] = simd_json::json!([]);
+                    body_obj.insert("profiles".into(), simd_json::json!([]));
                 } else if !profiles.is_empty() {
-                    body["profiles"] = simd_json::json!(profiles);
+                    body_obj.insert("profiles".into(), simd_json::json!(profiles));
                 }
                 if let Some(pool) = storage_pool {
-                    body["devices"] = simd_json::json!({
-                        "root": {
-                            "type": "disk",
-                            "pool": pool,
-                            "path": "/"
-                        }
-                    });
+                    body_obj.insert(
+                        "devices".into(),
+                        simd_json::json!({
+                            "root": {
+                                "type": "disk",
+                                "pool": pool,
+                                "path": "/"
+                            }
+                        }),
+                    );
                 }
                 let body_str = simd_json::to_string(&body)?;
                 Self::incus_api_call("POST", "/1.0/instances", Some(&body_str)).await
