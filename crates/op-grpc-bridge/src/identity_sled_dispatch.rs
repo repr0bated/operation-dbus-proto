@@ -373,14 +373,40 @@ pub async fn dispatch_identity_sled_method(
             let session_id = derive_session_id(args, &pubkey)?;
 
             let mut instance: IncusInstance = match args.get("instance") {
-                Some(v) => serde_json::from_value(v.clone())
-                    .map_err(|e| anyhow::anyhow!("invalid instance definition: {e}"))?,
+                Some(v) => {
+                    // `name`/`status`/`type` are mandatory on IncusInstance
+                    // (it also models read-back instances, where they always
+                    // exist) but irrelevant to a provision-time override:
+                    // `name` is always forced to the derived session_id below
+                    // and `status`/`type` default to their obvious values —
+                    // inject placeholders so a partial override (e.g.
+                    // image-only) still parses.
+                    let mut v = v.clone();
+                    if let Some(obj) = v.as_object_mut() {
+                        obj.entry("name").or_insert_with(|| serde_json::json!(""));
+                        obj.entry("status").or_insert_with(|| serde_json::json!(""));
+                        obj.entry("type").or_insert_with(|| serde_json::json!(""));
+                    }
+                    serde_json::from_value(v)
+                        .map_err(|e| anyhow::anyhow!("invalid instance definition: {e}"))?
+                }
                 None => IncusInstance::default(),
             };
             // The container name IS the identity — always the derived id.
             instance.name = session_id.clone();
             if instance.instance_type.is_empty() {
                 instance.instance_type = "container".to_string();
+            }
+            if instance.status.is_empty() {
+                instance.status = "Running".to_string();
+            }
+            // No profile override = the Incus "default" profile, which on
+            // this host supplies only the root disk device (no nic) — an
+            // empty profile list would make apply_create pass --no-profiles,
+            // and Incus then fails instance creation outright with no root
+            // device to mount.
+            if instance.profiles.is_empty() {
+                instance.profiles = vec!["default".to_string()];
             }
             // Hard rule: no container NIC or IP; all I/O over the UDS surface.
             if instance
@@ -421,7 +447,7 @@ pub async fn dispatch_identity_sled_method(
             // exists, so an incus failure means no sled row.
             IncusPlugin::apply_create(&instance)
                 .await
-                .map_err(|e| anyhow::anyhow!("incus create for '{session_id}' failed: {e}"))?;
+                .map_err(|e| anyhow::anyhow!("incus create for '{session_id}' failed: {e:#}"))?;
 
             let ts = now();
             let sled = ContainerIdentitySled {
