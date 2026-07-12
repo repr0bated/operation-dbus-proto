@@ -31,7 +31,7 @@ pub use proxmox::{
     ContainerStatus, CreateContainerRequest, LxcContainer, ProxmoxClient, ProxmoxToken,
 };
 pub use rovs_proxy::{
-    ensure_proxies, jsonrpc_proxy, openflow_proxy, RovsJsonRpcProxy, RovsOpenFlowProxy,
+    ensure_proxies, jsonrpc_proxy, openflow_proxy, OvsdbDbusClient, RovsJsonRpcProxy, RovsOpenFlowProxy,
 };
 
 /// Prelude for convenient imports

@@ -10,7 +10,7 @@ use op_mcp::tool_registry::{BoxedTool, Tool, ToolRegistry};
 use simd_json::OwnedValue as Value;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, OnceCell};
 
 const DEFAULT_NOTEBOOKLM_COMMAND: &str = "npx";
 const DEFAULT_NOTEBOOKLM_ARGS: &[&str] = &["-y", "notebooklm-mcp@latest"];
@@ -258,6 +258,47 @@ impl Tool for NotebookLmTool {
             )
         }))
     }
+}
+
+static NOTEBOOKLM_REGISTRY: OnceCell<Arc<ToolRegistry>> = OnceCell::const_new();
+
+/// Lazily start the NotebookLM MCP sidecar and cache its populated registry.
+///
+/// The sidecar (`npx notebooklm-mcp`) is spawned on first use and reused for
+/// the process lifetime. Returns an error if no tools register (missing
+/// `NOTEBOOKLM_COOKIE`, `npx` unavailable, or the bridge disabled).
+pub async fn notebooklm_registry() -> Result<Arc<ToolRegistry>> {
+    NOTEBOOKLM_REGISTRY
+        .get_or_try_init(|| async {
+            let registry = Arc::new(ToolRegistry::new());
+            let count = register_notebooklm_tools(registry.as_ref()).await?;
+            if count == 0 {
+                anyhow::bail!(
+                    "NotebookLM sidecar registered 0 tools; check NOTEBOOKLM_COOKIE, npx \
+                     availability, and COGNITIVE_MCP_NOTEBOOKLM_ENABLED"
+                );
+            }
+            Ok(registry)
+        })
+        .await
+        .map(Arc::clone)
+}
+
+/// Published tool names currently exposed by the NotebookLM sidecar.
+pub async fn list_notebooklm_tools() -> Result<Vec<String>> {
+    let registry = notebooklm_registry().await?;
+    let defs = registry.list(0, usize::MAX, None).await;
+    Ok(defs.into_iter().map(|d| d.name).collect())
+}
+
+/// Execute a NotebookLM sidecar tool by its published name with JSON args.
+pub async fn call_notebooklm_tool(tool: &str, args: serde_json::Value) -> Result<serde_json::Value> {
+    let registry = notebooklm_registry().await?;
+    let mut bytes = serde_json::to_vec(&args)?;
+    let input: Value = simd_json::to_owned_value(&mut bytes)
+        .map_err(|e| anyhow::anyhow!("invalid NotebookLM args JSON: {e}"))?;
+    let output = registry.execute(tool, input).await?;
+    Ok(serde_json::to_value(&output)?)
 }
 
 fn env_flag(name: &str, default: bool) -> bool {

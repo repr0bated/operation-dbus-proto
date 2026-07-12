@@ -1,0 +1,19 @@
+#!/bin/sh
+# Loopback OpenAI-compatible chat/completions shim -> MindStudio apps/run
+# (Model Router agent RoutingAgent-UIGenerator, grok-4.1-fast). Consumers:
+# zeroclaw custom provider at http://127.0.0.1:8093/v1. Advisory/UI-gen
+# only — live routing stays with the deterministic D-Bus routing plugin.
+exec 2>&1
+set -eu
+export PATH="/usr/local/bin:/usr/bin:/bin"
+
+# MIND_STUDIO_API_KEY lives in the operator secrets file.
+if [ -f /home/jeremy/.bash_secrets ]; then
+    set -a
+    . /home/jeremy/.bash_secrets
+    set +a
+fi
+
+export MINDSTUDIO_SHIM_LISTEN="${MINDSTUDIO_SHIM_LISTEN:-127.0.0.1:8093}"
+
+exec s6-setuidgid jeremy /usr/local/bin/op-mindstudio-shim

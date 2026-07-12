@@ -21,9 +21,10 @@ const DBUS_OBJECT_PATH: &str = "/org/opdbus/rovs/jsonrpc";
 const DBUS_INTERFACE: &str = "org.opdbus.rovs.jsonrpc";
 
 /// OVSDB JSON-RPC client via D-Bus
+#[derive(Clone)]
 pub struct OvsdbClient {
     timeout: Duration,
-    proxy: OnceCell<zbus::Proxy<'static>>,
+    proxy: std::sync::Arc<OnceCell<zbus::Proxy<'static>>>,
 }
 
 impl OvsdbClient {
@@ -31,7 +32,7 @@ impl OvsdbClient {
     pub fn new() -> Self {
         Self {
             timeout: Duration::from_secs(30),
-            proxy: OnceCell::new(),
+            proxy: std::sync::Arc::new(OnceCell::new()),
         }
     }
 
@@ -538,6 +539,25 @@ impl OvsdbClient {
         }]);
         self.transact("Open_vSwitch", operations).await?;
         info!("Interface {} type set to {}", iface_name, iface_type);
+        Ok(())
+    }
+
+    /// Set an option on an interface
+    pub async fn set_interface_option(
+        &self,
+        _bridge_name: &str,
+        iface_name: &str,
+        option_name: &str,
+        option_value: &str,
+    ) -> Result<()> {
+        let operations = json!([{
+            "op": "mutate",
+            "table": "Interface",
+            "where": [["name", "==", iface_name]],
+            "mutations": [["options", "insert", ["map", [[option_name, option_value]]]]]
+        }]);
+        self.transact("Open_vSwitch", operations).await?;
+        info!("Interface {} option {} set to {}", iface_name, option_name, option_value);
         Ok(())
     }
 

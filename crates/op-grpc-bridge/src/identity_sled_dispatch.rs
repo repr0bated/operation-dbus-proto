@@ -220,6 +220,32 @@ fn now() -> i64 {
     chrono::Utc::now().timestamp()
 }
 
+fn host_identity_from_raw_sled() -> anyhow::Result<ContainerIdentitySled> {
+    let (ptr, _mmap) = op_identity::schema_bridge::read_sled()?;
+    let sled = unsafe { &*ptr };
+    let wireguard_pubkey = base64::engine::general_purpose::STANDARD.encode(sled.wireguard_pubkey);
+    let ts = now();
+
+    Ok(ContainerIdentitySled {
+        session_id: op_identity::session::derive_session_id(&wireguard_pubkey),
+        wireguard_pubkey,
+        interface: std::env::var("IDENTITY_SLED_HOST_INTERFACE")
+            .unwrap_or_else(|_| "opdbus".to_string()),
+        peer_ip: std::env::var("IDENTITY_SLED_HOST_PEER_IP").ok(),
+        mutation_index: sled.mutation_index,
+        hashed_footprint: hex::encode(sled.hashed_footprint),
+        trace_id: sled.trace_id_hex(),
+        schema_version: sled.schema_version,
+        vector_id: sled.vector_id_hex(),
+        blob_ref: Some(op_identity::schema_bridge::SHM_SLED_PATH.to_string()),
+        btrfs_device: None,
+        instance: None,
+        session_started_at: ts,
+        last_seen_at: ts,
+        active: sled.is_sled_valid(),
+    })
+}
+
 fn arg_str(args: &JsonValue, key: &str) -> String {
     args.get(key)
         .and_then(|v| v.as_str())
@@ -249,30 +275,21 @@ pub async fn dispatch_identity_sled_method(
     method: &str,
     args: &JsonValue,
 ) -> anyhow::Result<JsonValue> {
-    ensure_hydrated(engine).await;
-
     match method {
         "get_identity" => {
             let session_id = arg_str(args, "session_id");
+            if session_id.is_empty() {
+                let identity = host_identity_from_raw_sled()?;
+                return Ok(serde_json::json!({ "identity": identity }));
+            }
+
+            ensure_hydrated(engine).await;
             let cache = read_cache(engine).await;
-            let sled = if session_id.is_empty() {
-                // Container zero: the host's own identity.
-                let host_pubkey = op_identity::wireguard::WireGuardIdentity::new()
-                    .get_local_pubkey()
-                    .unwrap_or_default();
-                let host_id = op_identity::session::derive_session_id(&host_pubkey);
-                cache
-                    .sleds
-                    .iter()
-                    .find(|s| s.session_id == host_id)
-                    .cloned()
-            } else {
-                cache
-                    .sleds
-                    .iter()
-                    .find(|s| s.session_id == session_id)
-                    .cloned()
-            };
+            let sled = cache
+                .sleds
+                .iter()
+                .find(|s| s.session_id == session_id)
+                .cloned();
             match sled {
                 Some(identity) => Ok(serde_json::json!({ "identity": identity })),
                 None => Err(anyhow::anyhow!(
@@ -283,6 +300,7 @@ pub async fn dispatch_identity_sled_method(
         }
 
         "write_identity" => {
+            ensure_hydrated(engine).await;
             let pubkey = arg_str(args, "wireguard_pubkey");
             if pubkey.is_empty() {
                 anyhow::bail!("write_identity requires wireguard_pubkey");

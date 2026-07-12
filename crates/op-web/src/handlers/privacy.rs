@@ -16,7 +16,7 @@ use std::sync::Arc;
 use tracing::{error, info, warn};
 
 use crate::state::AppState;
-use crate::users::PrivacyUser;
+
 use crate::wireguard::{generate_client_config, generate_keypair, generate_qr_code};
 
 #[derive(Debug, Deserialize)]
@@ -73,6 +73,11 @@ pub struct StatusResponse {
     pub server_public_key: Option<String>,
     pub endpoint: Option<String>,
     pub registered_users: usize,
+}
+
+/// GET /privacy/signup - Human-facing registration page.
+pub async fn signup_page() -> Html<&'static str> {
+    Html(include_str!("../../../../deploy/registration/index.html"))
 }
 
 #[derive(Debug, Deserialize)]
@@ -1035,20 +1040,6 @@ pub async fn google_callback(
                 .to_string(),
         }),
     ))
-}
-
-async fn provision_verified_user(
-    state: &Arc<AppState>,
-    user: crate::users::PrivacyUser,
-) -> anyhow::Result<crate::users::PrivacyUser> {
-    crate::registration_provision::provision_verified_signup(
-        state,
-        crate::users::VerifiedSignup {
-            user,
-            psk: String::new(),
-        },
-    )
-    .await
 }
 
 fn escape_html(input: &str) -> String {

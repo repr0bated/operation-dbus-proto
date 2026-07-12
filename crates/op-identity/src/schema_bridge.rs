@@ -312,7 +312,11 @@ fn write_sled_with_schema_blob(
     let bytes: &[u8] = unsafe {
         std::slice::from_raw_parts(sled as *const IdentitySled as *const u8, IdentitySled::SIZE)
     };
+    use std::os::unix::fs::PermissionsExt;
     let mut f = File::create(&tmp)?;
+    let mut perms = f.metadata()?.permissions();
+    perms.set_mode(0o644);
+    f.set_permissions(perms)?;
     f.write_all(bytes)?;
     if let Some(schema_blob) = schema_blob {
         write_schema_blob_tail(&mut f, schema_blob)?;

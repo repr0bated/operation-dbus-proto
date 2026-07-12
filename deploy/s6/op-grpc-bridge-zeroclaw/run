@@ -18,8 +18,9 @@ export DBUS_SESSION_BUS_ADDRESS
 export ZEROCLAW_BIND_ADDR="${ZEROCLAW_BIND_ADDR:-0.0.0.0:8090}"
 export ZEROCLAW_SCHEMA_PATH="${ZEROCLAW_SCHEMA_PATH:-/dev/shm/opdbus/plugin-blobs}"
 export ZEROCLAW_UNIX_SOCKET="${ZEROCLAW_UNIX_SOCKET:-/run/ghostbridge/container.sock}"
+export OP_GRPC_BRIDGE_MODE="${OP_GRPC_BRIDGE_MODE:-zeroclaw}"
 export RUST_LOG="${RUST_LOG:-op_grpc_bridge=info,info}"
 
 . /usr/local/lib/ghostbridge/bind-hub-aliases.sh
 
-exec /usr/local/bin/op-grpc-bridge-zeroclaw
+exec /usr/local/bin/op-grpc-bridge

@@ -22,7 +22,7 @@ use simd_json::{json, OwnedValue as Value};
 use std::path::Path;
 
 use super::plugin_scaffold_helpers::method_decl_from_schemars_with_output;
-use super::plugin_scaffold_helpers::AckOutput;
+use super::plugin_scaffold_helpers::EmptyInput;
 
 /// Manifest of the designated knowledge corpus.
 const MANIFEST_PATH: &str = "knowledge/notebooks.manifest.json";
@@ -263,6 +263,308 @@ impl StatePlugin for NotebookLmPlugin {
     }
 }
 
+// ── Typed method inputs/outputs for the NotebookLM sidecar bridge ──────────────
+//
+// These give `zcall notebooklm <method>` real, schema-validated arguments
+// instead of the empty `()` input that produced echo-only responses. Field
+// names mirror the NotebookLM MCP tool arguments; the dispatch in
+// `op-grpc-bridge::notebooklm_dispatch` forwards them to the live sidecar.
+// Outputs are the permissive [`NotebookLmResult`] envelope because NotebookLM
+// tools return dynamic JSON.
+
+/// Result envelope returned by every NotebookLM method (the sidecar's raw JSON
+/// under `result`, or an `error` string on failure).
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct NotebookLmResult {
+    /// Whether the underlying NotebookLM tool call succeeded.
+    pub success: bool,
+    /// The plugin method that was invoked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub method: Option<String>,
+    /// The resolved NotebookLM sidecar tool that serviced the call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
+    /// Raw JSON result returned by the NotebookLM MCP tool.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<serde_json::Value>,
+    /// Error message when the call failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Reference to a single notebook.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct NbNotebookRef {
+    /// NotebookLM notebook identifier.
+    pub notebook_id: String,
+}
+
+/// Free-text search across notebooks.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct NbSearch {
+    /// Search query.
+    pub query: String,
+    /// Maximum number of results.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
+/// Ask a question against one notebook.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct NbQuery {
+    /// Notebook to query.
+    pub notebook_id: String,
+    /// Natural-language question.
+    pub question: String,
+}
+
+/// Ask a question spanning multiple notebooks.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct NbCrossQuery {
+    /// Natural-language question.
+    pub question: String,
+    /// Notebooks to include (defaults to the designated corpus).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notebook_ids: Option<Vec<String>>,
+}
+
+/// Reference to a source within a notebook.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct NbSourceRef {
+    /// Owning notebook.
+    pub notebook_id: String,
+    /// Source identifier.
+    pub source_id: String,
+}
+
+/// Add a URL source.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct NbAddUrl {
+    /// Target notebook.
+    pub notebook_id: String,
+    /// Source URL.
+    pub url: String,
+}
+
+/// Add a text source.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct NbAddText {
+    /// Target notebook.
+    pub notebook_id: String,
+    /// Source title.
+    pub title: String,
+    /// Source body text.
+    pub content: String,
+}
+
+/// Add a Google Drive source.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct NbAddDrive {
+    /// Target notebook.
+    pub notebook_id: String,
+    /// Google Drive file/document URL.
+    pub drive_url: String,
+}
+
+/// Add a local file source.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct NbAddFile {
+    /// Target notebook.
+    pub notebook_id: String,
+    /// Path to the file to upload.
+    pub file_path: String,
+}
+
+/// Sync a notebook's sources from a Google Drive folder.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct NbSyncDrive {
+    /// Target notebook.
+    pub notebook_id: String,
+    /// Google Drive folder identifier to sync from.
+    pub folder_id: String,
+}
+
+/// Create a source label.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct NbCreateLabel {
+    /// Target notebook.
+    pub notebook_id: String,
+    /// Label name.
+    pub name: String,
+    /// Optional emoji.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub emoji: Option<String>,
+}
+
+/// Rename a source label.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct NbRenameLabel {
+    /// Target notebook.
+    pub notebook_id: String,
+    /// Label identifier.
+    pub label_id: String,
+    /// New label name.
+    pub name: String,
+}
+
+/// Set a label's emoji.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct NbLabelEmoji {
+    /// Target notebook.
+    pub notebook_id: String,
+    /// Label identifier.
+    pub label_id: String,
+    /// Emoji to set.
+    pub emoji: String,
+}
+
+/// Move a source to a label.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct NbMoveLabel {
+    /// Target notebook.
+    pub notebook_id: String,
+    /// Source to move.
+    pub source_id: String,
+    /// Destination label.
+    pub label_id: String,
+}
+
+/// Reference to a label within a notebook.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct NbLabelRef {
+    /// Owning notebook.
+    pub notebook_id: String,
+    /// Label identifier.
+    pub label_id: String,
+}
+
+/// Generate a studio artifact (audio, video, report, quiz, etc.).
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct NbStudioCreate {
+    /// Target notebook.
+    pub notebook_id: String,
+    /// Optional generation instructions / focus prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<String>,
+}
+
+/// Revise an existing slides artifact.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct NbReviseSlides {
+    /// Target notebook.
+    pub notebook_id: String,
+    /// Slides artifact to revise.
+    pub artifact_id: String,
+    /// Revision instructions.
+    pub instructions: String,
+}
+
+/// Reference to a studio artifact.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct NbArtifactRef {
+    /// Owning notebook.
+    pub notebook_id: String,
+    /// Artifact identifier.
+    pub artifact_id: String,
+}
+
+/// Query audio-generation status.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct NbAudioStatus {
+    /// Owning notebook.
+    pub notebook_id: String,
+    /// Specific artifact (defaults to the latest audio job).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact_id: Option<String>,
+}
+
+/// Start a research task.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct NbResearchStart {
+    /// Target notebook.
+    pub notebook_id: String,
+    /// Research topic / prompt.
+    pub topic: String,
+}
+
+/// Import research results.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct NbResearchImport {
+    /// Target notebook.
+    pub notebook_id: String,
+    /// Research job identifier to import.
+    pub research_id: String,
+}
+
+/// Invite a collaborator.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct NbShareInvite {
+    /// Notebook to share.
+    pub notebook_id: String,
+    /// Invitee email address.
+    pub email: String,
+}
+
+/// Run a batch of operations.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct NbBatch {
+    /// Ordered list of operation descriptors.
+    pub operations: Vec<serde_json::Value>,
+}
+
+/// Run a named pipeline.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct NbRunPipeline {
+    /// Pipeline identifier.
+    pub pipeline_id: String,
+    /// Optional pipeline parameters.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub params: Option<serde_json::Value>,
+}
+
+/// Tag a source.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct NbTagAdd {
+    /// Owning notebook.
+    pub notebook_id: String,
+    /// Source to tag.
+    pub source_id: String,
+    /// Tag value.
+    pub tag: String,
+}
+
+/// Smart-select sources by query.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct NbTagSmartSelect {
+    /// Owning notebook.
+    pub notebook_id: String,
+    /// Selection query.
+    pub query: String,
+}
+
+/// Reference to a session.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct NbSessionRef {
+    /// Session identifier.
+    pub session_id: String,
+}
+
+/// Reset a session (or all sessions when omitted).
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct NbResetSession {
+    /// Specific session to reset (defaults to the active session).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+}
+
+/// Configure authentication.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct NbSetupAuth {
+    /// NotebookLM auth cookie (falls back to the `NOTEBOOKLM_COOKIE` env).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cookie: Option<String>,
+}
+
 /// NotebookLM schema derived from the typed [`NotebookLmState`] struct via schemars.
 pub(crate) fn notebooklm_schema() -> PluginSchema {
     let root = serde_json::to_value(schemars::schema_for!(NotebookLmState))
@@ -277,7 +579,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     // Add methods to schema with typed returns
     schema.methods.insert(
         "list_notebooks".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<EmptyInput, NotebookLmResult>(
             "list_notebooks",
             SideEffect::Read,
             true,
@@ -287,7 +589,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "get_notebook".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbNotebookRef, NotebookLmResult>(
             "get_notebook",
             SideEffect::Read,
             true,
@@ -297,7 +599,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "select_notebook".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbNotebookRef, NotebookLmResult>(
             "select_notebook",
             SideEffect::Mutation,
             false,
@@ -307,7 +609,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "search_notebooks".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbSearch, NotebookLmResult>(
             "search_notebooks",
             SideEffect::Read,
             true,
@@ -317,7 +619,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "query_notebook".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbQuery, NotebookLmResult>(
             "query_notebook",
             SideEffect::Read,
             true,
@@ -327,7 +629,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "get_library_stats".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<EmptyInput, NotebookLmResult>(
             "get_library_stats",
             SideEffect::Read,
             true,
@@ -337,7 +639,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "cross_notebook_query".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbCrossQuery, NotebookLmResult>(
             "cross_notebook_query",
             SideEffect::Read,
             true,
@@ -349,7 +651,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     // === Source methods (R/M) ===
     schema.methods.insert(
         "list_sources".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbNotebookRef, NotebookLmResult>(
             "list_sources",
             SideEffect::Read,
             true,
@@ -359,7 +661,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "get_source_content".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbSourceRef, NotebookLmResult>(
             "get_source_content",
             SideEffect::Read,
             true,
@@ -369,7 +671,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "add_source_url".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbAddUrl, NotebookLmResult>(
             "add_source_url",
             SideEffect::Mutation,
             false,
@@ -379,7 +681,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "add_source_text".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbAddText, NotebookLmResult>(
             "add_source_text",
             SideEffect::Mutation,
             false,
@@ -389,7 +691,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "add_source_drive".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbAddDrive, NotebookLmResult>(
             "add_source_drive",
             SideEffect::Mutation,
             false,
@@ -399,7 +701,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "add_source_file".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbAddFile, NotebookLmResult>(
             "add_source_file",
             SideEffect::Mutation,
             false,
@@ -409,7 +711,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "delete_source".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbSourceRef, NotebookLmResult>(
             "delete_source",
             SideEffect::Mutation,
             false,
@@ -419,7 +721,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "sync_drive_sources".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbSyncDrive, NotebookLmResult>(
             "sync_drive_sources",
             SideEffect::Mutation,
             false,
@@ -431,7 +733,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     // === Label methods (M) ===
     schema.methods.insert(
         "auto_label_sources".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbNotebookRef, NotebookLmResult>(
             "auto_label_sources",
             SideEffect::Mutation,
             false,
@@ -441,7 +743,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "create_label".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbCreateLabel, NotebookLmResult>(
             "create_label",
             SideEffect::Mutation,
             false,
@@ -451,7 +753,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "rename_label".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbRenameLabel, NotebookLmResult>(
             "rename_label",
             SideEffect::Mutation,
             false,
@@ -461,7 +763,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "set_label_emoji".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbLabelEmoji, NotebookLmResult>(
             "set_label_emoji",
             SideEffect::Mutation,
             false,
@@ -471,7 +773,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "move_source_label".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbMoveLabel, NotebookLmResult>(
             "move_source_label",
             SideEffect::Mutation,
             false,
@@ -481,7 +783,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "delete_label".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbLabelRef, NotebookLmResult>(
             "delete_label",
             SideEffect::Mutation,
             false,
@@ -493,7 +795,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     // === Studio content methods (M) ===
     schema.methods.insert(
         "create_audio".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbStudioCreate, NotebookLmResult>(
             "create_audio",
             SideEffect::Mutation,
             false,
@@ -503,7 +805,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "create_video".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbStudioCreate, NotebookLmResult>(
             "create_video",
             SideEffect::Mutation,
             false,
@@ -513,7 +815,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "create_report".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbStudioCreate, NotebookLmResult>(
             "create_report",
             SideEffect::Mutation,
             false,
@@ -523,7 +825,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "create_quiz".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbStudioCreate, NotebookLmResult>(
             "create_quiz",
             SideEffect::Mutation,
             false,
@@ -533,7 +835,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "create_flashcards".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbStudioCreate, NotebookLmResult>(
             "create_flashcards",
             SideEffect::Mutation,
             false,
@@ -543,7 +845,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "create_infographic".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbStudioCreate, NotebookLmResult>(
             "create_infographic",
             SideEffect::Mutation,
             false,
@@ -553,7 +855,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "create_mindmap".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbNotebookRef, NotebookLmResult>(
             "create_mindmap",
             SideEffect::Mutation,
             false,
@@ -563,7 +865,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "create_slides".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbStudioCreate, NotebookLmResult>(
             "create_slides",
             SideEffect::Mutation,
             false,
@@ -573,7 +875,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "revise_slides".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbReviseSlides, NotebookLmResult>(
             "revise_slides",
             SideEffect::Mutation,
             false,
@@ -583,7 +885,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "describe_studio".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbNotebookRef, NotebookLmResult>(
             "describe_studio",
             SideEffect::Read,
             true,
@@ -593,7 +895,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "get_audio_status".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbAudioStatus, NotebookLmResult>(
             "get_audio_status",
             SideEffect::Read,
             true,
@@ -603,7 +905,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "list_artifacts".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbNotebookRef, NotebookLmResult>(
             "list_artifacts",
             SideEffect::Read,
             true,
@@ -613,7 +915,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "download_artifact".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbArtifactRef, NotebookLmResult>(
             "download_artifact",
             SideEffect::Read,
             true,
@@ -625,7 +927,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     // === Research / share / batch (M) ===
     schema.methods.insert(
         "start_research".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbResearchStart, NotebookLmResult>(
             "start_research",
             SideEffect::Mutation,
             false,
@@ -635,7 +937,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "import_research".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbResearchImport, NotebookLmResult>(
             "import_research",
             SideEffect::Mutation,
             false,
@@ -645,7 +947,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "share_public".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbNotebookRef, NotebookLmResult>(
             "share_public",
             SideEffect::Mutation,
             false,
@@ -655,7 +957,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "share_invite".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbShareInvite, NotebookLmResult>(
             "share_invite",
             SideEffect::Mutation,
             false,
@@ -665,7 +967,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "get_share_settings".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbNotebookRef, NotebookLmResult>(
             "get_share_settings",
             SideEffect::Read,
             true,
@@ -675,7 +977,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "disable_share".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbNotebookRef, NotebookLmResult>(
             "disable_share",
             SideEffect::Mutation,
             false,
@@ -685,7 +987,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "batch_operation".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbBatch, NotebookLmResult>(
             "batch_operation",
             SideEffect::Mutation,
             false,
@@ -695,7 +997,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "run_pipeline".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbRunPipeline, NotebookLmResult>(
             "run_pipeline",
             SideEffect::Mutation,
             false,
@@ -705,7 +1007,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "list_pipelines".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<EmptyInput, NotebookLmResult>(
             "list_pipelines",
             SideEffect::Read,
             true,
@@ -715,7 +1017,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "tag_add".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbTagAdd, NotebookLmResult>(
             "tag_add",
             SideEffect::Mutation,
             false,
@@ -725,7 +1027,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "tag_list".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbNotebookRef, NotebookLmResult>(
             "tag_list",
             SideEffect::Read,
             true,
@@ -735,7 +1037,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "tag_smart_select".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbTagSmartSelect, NotebookLmResult>(
             "tag_smart_select",
             SideEffect::Read,
             true,
@@ -747,7 +1049,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     // === Sessions / auth / health (R/M) ===
     schema.methods.insert(
         "list_sessions".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<EmptyInput, NotebookLmResult>(
             "list_sessions",
             SideEffect::Read,
             true,
@@ -757,7 +1059,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "close_session".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbSessionRef, NotebookLmResult>(
             "close_session",
             SideEffect::Mutation,
             false,
@@ -767,7 +1069,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "reset_session".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbResetSession, NotebookLmResult>(
             "reset_session",
             SideEffect::Mutation,
             false,
@@ -777,7 +1079,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "get_health".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<EmptyInput, NotebookLmResult>(
             "get_health",
             SideEffect::Read,
             true,
@@ -787,7 +1089,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "setup_auth".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbSetupAuth, NotebookLmResult>(
             "setup_auth",
             SideEffect::Mutation,
             false,
@@ -797,7 +1099,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "refresh_auth".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<EmptyInput, NotebookLmResult>(
             "refresh_auth",
             SideEffect::Mutation,
             false,
@@ -807,7 +1109,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "reauth".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<EmptyInput, NotebookLmResult>(
             "reauth",
             SideEffect::Mutation,
             false,
@@ -1092,7 +1394,7 @@ pub(crate) fn notebooklm_schema_golden() -> PluginSchema {
     // === Notebook methods (R) ===
     schema.methods.insert(
         "list_notebooks".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<EmptyInput, NotebookLmResult>(
             "list_notebooks",
             SideEffect::Read,
             true,
@@ -1102,7 +1404,7 @@ pub(crate) fn notebooklm_schema_golden() -> PluginSchema {
     );
     schema.methods.insert(
         "get_notebook".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbNotebookRef, NotebookLmResult>(
             "get_notebook",
             SideEffect::Read,
             true,
@@ -1112,7 +1414,7 @@ pub(crate) fn notebooklm_schema_golden() -> PluginSchema {
     );
     schema.methods.insert(
         "select_notebook".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbNotebookRef, NotebookLmResult>(
             "select_notebook",
             SideEffect::Mutation,
             false,
@@ -1122,7 +1424,7 @@ pub(crate) fn notebooklm_schema_golden() -> PluginSchema {
     );
     schema.methods.insert(
         "search_notebooks".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbSearch, NotebookLmResult>(
             "search_notebooks",
             SideEffect::Read,
             true,
@@ -1132,7 +1434,7 @@ pub(crate) fn notebooklm_schema_golden() -> PluginSchema {
     );
     schema.methods.insert(
         "query_notebook".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbQuery, NotebookLmResult>(
             "query_notebook",
             SideEffect::Read,
             true,
@@ -1142,7 +1444,7 @@ pub(crate) fn notebooklm_schema_golden() -> PluginSchema {
     );
     schema.methods.insert(
         "get_library_stats".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<EmptyInput, NotebookLmResult>(
             "get_library_stats",
             SideEffect::Read,
             true,
@@ -1152,7 +1454,7 @@ pub(crate) fn notebooklm_schema_golden() -> PluginSchema {
     );
     schema.methods.insert(
         "cross_notebook_query".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbCrossQuery, NotebookLmResult>(
             "cross_notebook_query",
             SideEffect::Read,
             true,
@@ -1164,7 +1466,7 @@ pub(crate) fn notebooklm_schema_golden() -> PluginSchema {
     // === Source methods (R/M) ===
     schema.methods.insert(
         "list_sources".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbNotebookRef, NotebookLmResult>(
             "list_sources",
             SideEffect::Read,
             true,
@@ -1174,7 +1476,7 @@ pub(crate) fn notebooklm_schema_golden() -> PluginSchema {
     );
     schema.methods.insert(
         "get_source_content".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbSourceRef, NotebookLmResult>(
             "get_source_content",
             SideEffect::Read,
             true,
@@ -1184,7 +1486,7 @@ pub(crate) fn notebooklm_schema_golden() -> PluginSchema {
     );
     schema.methods.insert(
         "add_source_url".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbAddUrl, NotebookLmResult>(
             "add_source_url",
             SideEffect::Mutation,
             false,
@@ -1194,7 +1496,7 @@ pub(crate) fn notebooklm_schema_golden() -> PluginSchema {
     );
     schema.methods.insert(
         "add_source_text".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbAddText, NotebookLmResult>(
             "add_source_text",
             SideEffect::Mutation,
             false,
@@ -1204,7 +1506,7 @@ pub(crate) fn notebooklm_schema_golden() -> PluginSchema {
     );
     schema.methods.insert(
         "add_source_drive".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbAddDrive, NotebookLmResult>(
             "add_source_drive",
             SideEffect::Mutation,
             false,
@@ -1214,7 +1516,7 @@ pub(crate) fn notebooklm_schema_golden() -> PluginSchema {
     );
     schema.methods.insert(
         "add_source_file".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbAddFile, NotebookLmResult>(
             "add_source_file",
             SideEffect::Mutation,
             false,
@@ -1224,7 +1526,7 @@ pub(crate) fn notebooklm_schema_golden() -> PluginSchema {
     );
     schema.methods.insert(
         "delete_source".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbSourceRef, NotebookLmResult>(
             "delete_source",
             SideEffect::Mutation,
             false,
@@ -1234,7 +1536,7 @@ pub(crate) fn notebooklm_schema_golden() -> PluginSchema {
     );
     schema.methods.insert(
         "sync_drive_sources".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbSyncDrive, NotebookLmResult>(
             "sync_drive_sources",
             SideEffect::Mutation,
             false,
@@ -1246,7 +1548,7 @@ pub(crate) fn notebooklm_schema_golden() -> PluginSchema {
     // === Label methods (M) ===
     schema.methods.insert(
         "auto_label_sources".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbNotebookRef, NotebookLmResult>(
             "auto_label_sources",
             SideEffect::Mutation,
             false,
@@ -1256,7 +1558,7 @@ pub(crate) fn notebooklm_schema_golden() -> PluginSchema {
     );
     schema.methods.insert(
         "create_label".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbCreateLabel, NotebookLmResult>(
             "create_label",
             SideEffect::Mutation,
             false,
@@ -1266,7 +1568,7 @@ pub(crate) fn notebooklm_schema_golden() -> PluginSchema {
     );
     schema.methods.insert(
         "rename_label".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbRenameLabel, NotebookLmResult>(
             "rename_label",
             SideEffect::Mutation,
             false,
@@ -1276,7 +1578,7 @@ pub(crate) fn notebooklm_schema_golden() -> PluginSchema {
     );
     schema.methods.insert(
         "set_label_emoji".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbLabelEmoji, NotebookLmResult>(
             "set_label_emoji",
             SideEffect::Mutation,
             false,
@@ -1286,7 +1588,7 @@ pub(crate) fn notebooklm_schema_golden() -> PluginSchema {
     );
     schema.methods.insert(
         "move_source_label".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbMoveLabel, NotebookLmResult>(
             "move_source_label",
             SideEffect::Mutation,
             false,
@@ -1296,7 +1598,7 @@ pub(crate) fn notebooklm_schema_golden() -> PluginSchema {
     );
     schema.methods.insert(
         "delete_label".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbLabelRef, NotebookLmResult>(
             "delete_label",
             SideEffect::Mutation,
             false,
@@ -1308,7 +1610,7 @@ pub(crate) fn notebooklm_schema_golden() -> PluginSchema {
     // === Studio content methods (M) ===
     schema.methods.insert(
         "create_audio".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbStudioCreate, NotebookLmResult>(
             "create_audio",
             SideEffect::Mutation,
             false,
@@ -1318,7 +1620,7 @@ pub(crate) fn notebooklm_schema_golden() -> PluginSchema {
     );
     schema.methods.insert(
         "create_video".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbStudioCreate, NotebookLmResult>(
             "create_video",
             SideEffect::Mutation,
             false,
@@ -1328,7 +1630,7 @@ pub(crate) fn notebooklm_schema_golden() -> PluginSchema {
     );
     schema.methods.insert(
         "create_report".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbStudioCreate, NotebookLmResult>(
             "create_report",
             SideEffect::Mutation,
             false,
@@ -1338,7 +1640,7 @@ pub(crate) fn notebooklm_schema_golden() -> PluginSchema {
     );
     schema.methods.insert(
         "create_quiz".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbStudioCreate, NotebookLmResult>(
             "create_quiz",
             SideEffect::Mutation,
             false,
@@ -1348,7 +1650,7 @@ pub(crate) fn notebooklm_schema_golden() -> PluginSchema {
     );
     schema.methods.insert(
         "create_flashcards".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbStudioCreate, NotebookLmResult>(
             "create_flashcards",
             SideEffect::Mutation,
             false,
@@ -1358,7 +1660,7 @@ pub(crate) fn notebooklm_schema_golden() -> PluginSchema {
     );
     schema.methods.insert(
         "create_infographic".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbStudioCreate, NotebookLmResult>(
             "create_infographic",
             SideEffect::Mutation,
             false,
@@ -1368,7 +1670,7 @@ pub(crate) fn notebooklm_schema_golden() -> PluginSchema {
     );
     schema.methods.insert(
         "create_mindmap".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbNotebookRef, NotebookLmResult>(
             "create_mindmap",
             SideEffect::Mutation,
             false,
@@ -1378,7 +1680,7 @@ pub(crate) fn notebooklm_schema_golden() -> PluginSchema {
     );
     schema.methods.insert(
         "create_slides".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbStudioCreate, NotebookLmResult>(
             "create_slides",
             SideEffect::Mutation,
             false,
@@ -1388,7 +1690,7 @@ pub(crate) fn notebooklm_schema_golden() -> PluginSchema {
     );
     schema.methods.insert(
         "revise_slides".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbReviseSlides, NotebookLmResult>(
             "revise_slides",
             SideEffect::Mutation,
             false,
@@ -1398,7 +1700,7 @@ pub(crate) fn notebooklm_schema_golden() -> PluginSchema {
     );
     schema.methods.insert(
         "describe_studio".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbNotebookRef, NotebookLmResult>(
             "describe_studio",
             SideEffect::Read,
             true,
@@ -1408,7 +1710,7 @@ pub(crate) fn notebooklm_schema_golden() -> PluginSchema {
     );
     schema.methods.insert(
         "get_audio_status".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbAudioStatus, NotebookLmResult>(
             "get_audio_status",
             SideEffect::Read,
             true,
@@ -1418,7 +1720,7 @@ pub(crate) fn notebooklm_schema_golden() -> PluginSchema {
     );
     schema.methods.insert(
         "list_artifacts".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbNotebookRef, NotebookLmResult>(
             "list_artifacts",
             SideEffect::Read,
             true,
@@ -1428,7 +1730,7 @@ pub(crate) fn notebooklm_schema_golden() -> PluginSchema {
     );
     schema.methods.insert(
         "download_artifact".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbArtifactRef, NotebookLmResult>(
             "download_artifact",
             SideEffect::Read,
             true,
@@ -1440,7 +1742,7 @@ pub(crate) fn notebooklm_schema_golden() -> PluginSchema {
     // === Research / share / batch (M) ===
     schema.methods.insert(
         "start_research".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbResearchStart, NotebookLmResult>(
             "start_research",
             SideEffect::Mutation,
             false,
@@ -1450,7 +1752,7 @@ pub(crate) fn notebooklm_schema_golden() -> PluginSchema {
     );
     schema.methods.insert(
         "import_research".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbResearchImport, NotebookLmResult>(
             "import_research",
             SideEffect::Mutation,
             false,
@@ -1460,7 +1762,7 @@ pub(crate) fn notebooklm_schema_golden() -> PluginSchema {
     );
     schema.methods.insert(
         "share_public".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbNotebookRef, NotebookLmResult>(
             "share_public",
             SideEffect::Mutation,
             false,
@@ -1470,7 +1772,7 @@ pub(crate) fn notebooklm_schema_golden() -> PluginSchema {
     );
     schema.methods.insert(
         "share_invite".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbShareInvite, NotebookLmResult>(
             "share_invite",
             SideEffect::Mutation,
             false,
@@ -1480,7 +1782,7 @@ pub(crate) fn notebooklm_schema_golden() -> PluginSchema {
     );
     schema.methods.insert(
         "get_share_settings".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbNotebookRef, NotebookLmResult>(
             "get_share_settings",
             SideEffect::Read,
             true,
@@ -1490,7 +1792,7 @@ pub(crate) fn notebooklm_schema_golden() -> PluginSchema {
     );
     schema.methods.insert(
         "disable_share".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbNotebookRef, NotebookLmResult>(
             "disable_share",
             SideEffect::Mutation,
             false,
@@ -1500,7 +1802,7 @@ pub(crate) fn notebooklm_schema_golden() -> PluginSchema {
     );
     schema.methods.insert(
         "batch_operation".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbBatch, NotebookLmResult>(
             "batch_operation",
             SideEffect::Mutation,
             false,
@@ -1510,7 +1812,7 @@ pub(crate) fn notebooklm_schema_golden() -> PluginSchema {
     );
     schema.methods.insert(
         "run_pipeline".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbRunPipeline, NotebookLmResult>(
             "run_pipeline",
             SideEffect::Mutation,
             false,
@@ -1520,7 +1822,7 @@ pub(crate) fn notebooklm_schema_golden() -> PluginSchema {
     );
     schema.methods.insert(
         "list_pipelines".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<EmptyInput, NotebookLmResult>(
             "list_pipelines",
             SideEffect::Read,
             true,
@@ -1530,7 +1832,7 @@ pub(crate) fn notebooklm_schema_golden() -> PluginSchema {
     );
     schema.methods.insert(
         "tag_add".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbTagAdd, NotebookLmResult>(
             "tag_add",
             SideEffect::Mutation,
             false,
@@ -1540,7 +1842,7 @@ pub(crate) fn notebooklm_schema_golden() -> PluginSchema {
     );
     schema.methods.insert(
         "tag_list".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbNotebookRef, NotebookLmResult>(
             "tag_list",
             SideEffect::Read,
             true,
@@ -1550,7 +1852,7 @@ pub(crate) fn notebooklm_schema_golden() -> PluginSchema {
     );
     schema.methods.insert(
         "tag_smart_select".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbTagSmartSelect, NotebookLmResult>(
             "tag_smart_select",
             SideEffect::Read,
             true,
@@ -1562,7 +1864,7 @@ pub(crate) fn notebooklm_schema_golden() -> PluginSchema {
     // === Sessions / auth / health (R/M) ===
     schema.methods.insert(
         "list_sessions".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<EmptyInput, NotebookLmResult>(
             "list_sessions",
             SideEffect::Read,
             true,
@@ -1572,7 +1874,7 @@ pub(crate) fn notebooklm_schema_golden() -> PluginSchema {
     );
     schema.methods.insert(
         "close_session".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbSessionRef, NotebookLmResult>(
             "close_session",
             SideEffect::Mutation,
             false,
@@ -1582,7 +1884,7 @@ pub(crate) fn notebooklm_schema_golden() -> PluginSchema {
     );
     schema.methods.insert(
         "reset_session".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbResetSession, NotebookLmResult>(
             "reset_session",
             SideEffect::Mutation,
             false,
@@ -1592,7 +1894,7 @@ pub(crate) fn notebooklm_schema_golden() -> PluginSchema {
     );
     schema.methods.insert(
         "get_health".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<EmptyInput, NotebookLmResult>(
             "get_health",
             SideEffect::Read,
             true,
@@ -1602,7 +1904,7 @@ pub(crate) fn notebooklm_schema_golden() -> PluginSchema {
     );
     schema.methods.insert(
         "setup_auth".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NbSetupAuth, NotebookLmResult>(
             "setup_auth",
             SideEffect::Mutation,
             false,
@@ -1612,7 +1914,7 @@ pub(crate) fn notebooklm_schema_golden() -> PluginSchema {
     );
     schema.methods.insert(
         "refresh_auth".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<EmptyInput, NotebookLmResult>(
             "refresh_auth",
             SideEffect::Mutation,
             false,
@@ -1622,7 +1924,7 @@ pub(crate) fn notebooklm_schema_golden() -> PluginSchema {
     );
     schema.methods.insert(
         "reauth".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<EmptyInput, NotebookLmResult>(
             "reauth",
             SideEffect::Mutation,
             false,

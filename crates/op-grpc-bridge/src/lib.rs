@@ -31,6 +31,7 @@ pub mod grpc_server;
 pub mod identity_sled_dispatch;
 pub mod interceptor;
 pub mod mutation_engine;
+pub mod notebooklm_dispatch;
 pub mod routing_dispatch;
 pub mod per_plugin_reflection;
 pub mod plugin_grpc_gen;

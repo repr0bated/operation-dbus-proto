@@ -49,7 +49,13 @@ assert_contains_only_prefix() {
 assert_contains_only_prefix \
     "top-level plugins" \
     "$(get_completions 'zcall ')" \
-    "$(zcall --complete plugins | LC_ALL=C sort)"
+    "$( (echo "list"; echo "methods"; echo "help"; echo "check-catalog"; echo "doctor"; echo "expand"; zcall --complete plugins) | LC_ALL=C sort )"
+
+assert_lines \
+    "top-level options" \
+    "$(get_completions 'zcall -')" \
+    $'--actor\n--arguments\n--blob-dir\n--capability\n--dry-run\n--endpoint\n--help\n--interface\n--object\n--print\n--show-headers\n--source\n--timeout\n-a\n-c\n-h'
+
 
 assert_contains_only_prefix \
     "plugin prefix a" \

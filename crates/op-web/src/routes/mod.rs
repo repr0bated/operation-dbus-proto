@@ -250,6 +250,9 @@ pub fn create_router(state: Arc<AppState>) -> Router {
     // Main router - agents_mcp_route FIRST so it takes precedence
     let router = Router::new()
         .nest("/api", api_routes)
+        .route("/privacy/signup", get(handlers::privacy::signup_page))
+        .route("/registration", get(handlers::privacy::signup_page))
+        .route("/registration/", get(handlers::privacy::signup_page))
         // Human-facing privacy verification flow (magic-link target)
         .route("/privacy/verify", get(handlers::privacy::verify_redirect))
         .route(

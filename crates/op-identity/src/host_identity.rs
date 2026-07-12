@@ -52,6 +52,7 @@ pub fn host_identity() -> Result<HostIdentity> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::verify_session_proof;
 
     #[test]
     fn host_session_id_is_stable() {

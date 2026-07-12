@@ -74,7 +74,7 @@ path = "src/bin/op-grpc-bridge.rs"
 
 [[bin]]
 name = "op-grpc-bridge-zeroclaw"
-path = "src/bin/op-grpc-bridge-zeroclaw.rs"
+path = "src/bin/op-grpc-bridge.rs"
 
 [[bin]]
 name = "dump-protos"

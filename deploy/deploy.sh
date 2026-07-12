@@ -22,7 +22,7 @@ SERVICES=(
     "op-chat:op-chat:chatmanager"
     "op-dbus-mirror:ovs-dbus-init:op-dbus-mirror"
     "op-projection:projection_server:op-projection"
-    "op-grpc-bridge:op-grpc-bridge-zeroclaw:op-grpc-bridge-zeroclaw"
+    "op-grpc-bridge:op-grpc-bridge:op-grpc-bridge-zeroclaw"
     "op-mcp:op-mcp-server:op-mcp-compact"
     "op-cognitive-mcp:op-cognitive-mcp:op-cognitive-mcp"
     # Blob gemma4+zeroclaw complete deployments are handled by btrfs subvols + helpers (see docs/BLOB_ARCHITECTURE_SYNTHESIS.md + crate op-projection/src/blob.rs)

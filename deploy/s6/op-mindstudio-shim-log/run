@@ -1,7 +1,8 @@
 #!/bin/sh
 set -eu
 
-service="${OP_S6_LOG_SERVICE:-zeroclaw-routing-uigen}"
+service="${OP_S6_LOG_SERVICE:-$(basename "$(pwd)")}"
+service="${service%-log}"
 directives="${OP_S6_LOG_DIRECTIVES:-n10 s2000000 T}"
 
 if install -d -m 0750 -o s6log -g s6log "/var/log/op-dbus/${service}" 2>/dev/null; then

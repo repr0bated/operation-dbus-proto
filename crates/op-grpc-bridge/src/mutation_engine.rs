@@ -482,7 +482,21 @@ impl MutationEngine {
         // prefixed) is skipped by path derivation so it doesn't create child
         // objects (no recursive echo).
         if change_type != ChangeType::ObjectRemoved {
-            let crawl_result = self.crawl_plugin_dbus_tree(&plugin_id).await;
+            let crawl_result = match tokio::time::timeout(
+                std::time::Duration::from_millis(750),
+                self.crawl_plugin_dbus_tree(&plugin_id),
+            )
+            .await
+            {
+                Ok(crawl) => crawl,
+                Err(_) => {
+                    tracing::warn!(
+                        plugin_id = %plugin_id,
+                        "Timed out crawling plugin D-Bus tree for projection"
+                    );
+                    None
+                }
+            };
 
             let projection_value = if let Some(crawl) = crawl_result {
                 simd_json::json!({
@@ -639,14 +653,53 @@ impl MutationEngine {
                             }
                         }
                         "add_port" => {
-                            if let Some(args) = value.as_array() {
+                            if let Some(obj) = value.as_object() {
+                                let br = obj.get("bridge_name").and_then(|v| v.as_str())
+                                    .ok_or_else(|| anyhow::anyhow!("bridge_name required"))?;
+                                let port = obj.get("port_name").and_then(|v| v.as_str())
+                                    .ok_or_else(|| anyhow::anyhow!("port_name required"))?;
+                                let iftype = obj.get("interface_type").and_then(|v| v.as_str()).unwrap_or("internal");
+                                self.ovsdb.add_port_with_type(br, port, Some(iftype)).await?;
+                            } else if let Some(args) = value.as_array() {
                                 if args.len() >= 2 {
-                                    if let (Some(br), Some(port)) =
-                                        (args[0].as_str(), args[1].as_str())
-                                    {
-                                        self.ovsdb.add_port(br, port).await?;
-                                    }
+                                    let br = args[0].as_str().ok_or_else(|| anyhow::anyhow!("bridge_name must be string"))?;
+                                    let port = args[1].as_str().ok_or_else(|| anyhow::anyhow!("port_name must be string"))?;
+                                    let iftype = args.get(2).and_then(|v| v.as_str()).unwrap_or("internal");
+                                    self.ovsdb.add_port_with_type(br, port, Some(iftype)).await?;
                                 }
+                            }
+                        }
+                        "set_controller" => {
+                            if let Some(obj) = value.as_object() {
+                                let br = obj.get("bridge_name").and_then(|v| v.as_str())
+                                    .ok_or_else(|| anyhow::anyhow!("bridge_name required"))?;
+                                let ctrl = obj.get("controller").and_then(|v| v.as_str())
+                                    .ok_or_else(|| anyhow::anyhow!("controller required"))?;
+                                self.ovsdb.set_bridge_property(br, "controller", ctrl).await?;
+                            }
+                        }
+                        "set_bridge_property" => {
+                            if let Some(obj) = value.as_object() {
+                                let br = obj.get("bridge_name").and_then(|v| v.as_str())
+                                    .ok_or_else(|| anyhow::anyhow!("bridge_name required"))?;
+                                let prop = obj.get("property").and_then(|v| v.as_str())
+                                    .ok_or_else(|| anyhow::anyhow!("property required"))?;
+                                let val = obj.get("value").and_then(|v| v.as_str())
+                                    .ok_or_else(|| anyhow::anyhow!("value required"))?;
+                                self.ovsdb.set_bridge_property(br, prop, val).await?;
+                            }
+                        }
+                        "set_interface" => {
+                            if let Some(obj) = value.as_object() {
+                                let br = obj.get("bridge_name").and_then(|v| v.as_str())
+                                    .ok_or_else(|| anyhow::anyhow!("bridge_name required"))?;
+                                let port = obj.get("port_name").and_then(|v| v.as_str())
+                                    .ok_or_else(|| anyhow::anyhow!("port_name required"))?;
+                                let prop = obj.get("property").and_then(|v| v.as_str())
+                                    .ok_or_else(|| anyhow::anyhow!("property required"))?;
+                                let val = obj.get("value").and_then(|v| v.as_str())
+                                    .ok_or_else(|| anyhow::anyhow!("value required"))?;
+                                self.ovsdb.set_interface_option(br, port, prop, val).await?;
                             }
                         }
                         _ => {
@@ -736,6 +789,34 @@ impl MutationEngine {
                 if let Some(state) = self.get_state("routing").await {
                     authoritative_value = state;
                 }
+                caller_result = Some(simd_json::serde::to_owned_value(&domain)?);
+            }
+        } else if plugin_id == "ghostbridge" && change_type == ChangeType::MethodCall {
+            if let Some(method) = &member_name {
+                let state =
+                    op_plugins::state_plugins::ghostbridge::GhostbridgePlugin::current_state();
+                let domain = op_plugins::state_plugins::ghostbridge::dispatch_ghostbridge_method(
+                    method, &state,
+                )?;
+                authoritative_value = simd_json::serde::to_owned_value(&state)?;
+                caller_result = Some(simd_json::serde::to_owned_value(&domain)?);
+            }
+        } else if plugin_id == "notebooklm" && change_type == ChangeType::MethodCall {
+            // notebooklm is a live passthrough to the NotebookLM MCP sidecar
+            // (Backend A). There is no local state to mutate; the caller gets
+            // the sidecar's result. zcall wraps object arguments as a
+            // one-element array, matching the routing/identity_sled arms.
+            if let Some(method) = &member_name {
+                let mut args_json: serde_json::Value = serde_json::to_value(&value)?;
+                if let serde_json::Value::Array(items) = &args_json {
+                    args_json = items
+                        .first()
+                        .cloned()
+                        .unwrap_or_else(|| serde_json::Value::Object(Default::default()));
+                }
+                let domain =
+                    crate::notebooklm_dispatch::dispatch_notebooklm_method(method, &args_json)
+                        .await?;
                 caller_result = Some(simd_json::serde::to_owned_value(&domain)?);
             }
         } else {
@@ -914,6 +995,15 @@ impl MutationEngine {
                 let args = serde_json::to_value(&parsed_value)?;
                 crate::routing_dispatch::dispatch_routing_method(self, method, &args).await?
             }
+            "ghostbridge" => {
+                let state =
+                    op_plugins::state_plugins::ghostbridge::GhostbridgePlugin::current_state();
+                op_plugins::state_plugins::ghostbridge::dispatch_ghostbridge_method(method, &state)?
+            }
+            "notebooklm" => {
+                let args = serde_json::to_value(&parsed_value)?;
+                crate::notebooklm_dispatch::dispatch_notebooklm_method(method, &args).await?
+            }
             "zeroclaw" => {
                 let state = op_plugins::state_plugins::zeroclaw::ZeroclawPlugin::current_state();
                 match op_plugins::state_plugins::zeroclaw::dispatch_zeroclaw_method(
@@ -1004,7 +1094,22 @@ impl MutationEngine {
             return Ok(());
         };
         let new_value = serde_json::to_value(&state)?;
-        let crawl_result = self.crawl_plugin_dbus_tree(plugin_id).await;
+        // The crawl introspects the plugins bus name this same process owns;
+        // while a CallMethod handler is running the dispatcher can't answer,
+        // so an unbounded wait self-deadlocks every write. Bound it and fall
+        // back to a crawl-less projection.
+        let crawl_result = match tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            self.crawl_plugin_dbus_tree(plugin_id),
+        )
+        .await
+        {
+            Ok(crawl) => crawl,
+            Err(_) => {
+                tracing::warn!(plugin_id, "plugin D-Bus crawl timed out; projecting without introspection");
+                None
+            }
+        };
         let projection_value = if let Some(crawl) = crawl_result {
             simd_json::json!({
                 "data": new_value,
@@ -1239,7 +1344,8 @@ async fn dispatch_rovs_commands_method(
                 .get("port_name")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| anyhow::anyhow!("port_name required"))?;
-            ovsdb.add_port(bridge_name, port_name).await?;
+            let iftype = args.get("interface_type").and_then(|v| v.as_str()).unwrap_or("internal");
+            ovsdb.add_port_with_type(bridge_name, port_name, Some(iftype)).await?;
             Ok(serde_json::json!({"added": port_name, "to": bridge_name}))
         }
         "remove_port" => {
@@ -1269,6 +1375,54 @@ async fn dispatch_rovs_commands_method(
         "list_dbs" => {
             let dbs = ovsdb.list_dbs().await?;
             Ok(serde_json::json!(dbs))
+        }
+        "set_controller" => {
+            let bridge_name = args
+                .get("bridge_name")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("bridge_name required"))?;
+            let controller = args
+                .get("controller")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("controller required"))?;
+            ovsdb.set_bridge_property(bridge_name, "controller", controller).await?;
+            Ok(serde_json::json!({"set": "controller", "on": bridge_name}))
+        }
+        "set_bridge_property" => {
+            let bridge_name = args
+                .get("bridge_name")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("bridge_name required"))?;
+            let property = args
+                .get("property")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("property required"))?;
+            let value = args
+                .get("value")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("value required"))?;
+            ovsdb.set_bridge_property(bridge_name, property, value).await?;
+            Ok(serde_json::json!({"set": property, "on": bridge_name}))
+        }
+        "set_interface" => {
+            let bridge_name = args
+                .get("bridge_name")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("bridge_name required"))?;
+            let port_name = args
+                .get("port_name")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("port_name required"))?;
+            let property = args
+                .get("property")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("property required"))?;
+            let value = args
+                .get("value")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("value required"))?;
+            ovsdb.set_interface_option(bridge_name, port_name, property, value).await?;
+            Ok(serde_json::json!({"set": property, "on": format!("{}/{}", bridge_name, port_name)}))
         }
         _ => Err(anyhow::anyhow!("unknown rovs_commands method: {}", method)),
     }

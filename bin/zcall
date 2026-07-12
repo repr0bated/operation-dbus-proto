@@ -2,8 +2,9 @@
 set -euo pipefail
 
 SERVICE="operation.v1.PluginService/CallMethod"
-DEFAULT_ENDPOINT="${ZCALL_ENDPOINT:-127.0.0.1:18789}"
+DEFAULT_ENDPOINT="${ZCALL_ENDPOINT:-10.200.0.1:50051}"
 DEFAULT_BLOB_DIR="${ZCALL_BLOB_DIR:-/dev/shm/opdbus/plugin-blobs}"
+DEFAULT_TIMEOUT="${ZCALL_TIMEOUT:-15}"
 SLED_PATH="${ZCALL_SLED_PATH:-/dev/shm/plugin_schema.dat}"
 DBUS_SERVICE="${ZCALL_DBUS_SERVICE:-org.opdbus.v1.plugins}"
 DBUS_BASE_PATH="${ZCALL_DBUS_BASE_PATH:-/org/opdbus/v1/plugins}"
@@ -11,6 +12,7 @@ DBUS_IFACE="${ZCALL_DBUS_IFACE:-org.opdbus.v1.plugins.ProjectedObject}"
 
 endpoint="$DEFAULT_ENDPOINT"
 blob_dir="$DEFAULT_BLOB_DIR"
+call_timeout="$DEFAULT_TIMEOUT"
 source_mode="${ZCALL_SOURCE:-blob}"
 arguments_json="[]"
 arguments_was_set=0
@@ -20,6 +22,7 @@ actor_id=""
 object_path=""
 interface_name=""
 print_only=0
+show_headers=0
 
 usage() {
     cat <<'EOF'
@@ -29,6 +32,7 @@ Usage:
   zcall list
   zcall methods <plugin>
   zcall help [plugin] [method]
+  zcall check-catalog
   zcall expand <plugin> <method> [--arguments JSON]
   zcall <plugin> <method> --arguments JSON
 
@@ -39,10 +43,12 @@ Options:
       --actor ID            Actor id for PluginService.CallMethod.
       --object PATH         Override object path.
       --interface NAME      Override interface name.
-      --endpoint HOST:PORT  gRPC endpoint. Default: 127.0.0.1:18789.
+      --endpoint HOST:PORT  gRPC endpoint. Default: 10.200.0.1:50051.
+      --timeout SECONDS     gRPC call timeout. Default: 15.
       --blob-dir DIR        Blob catalog. Default: /dev/shm/opdbus/plugin-blobs.
       --source MODE         blob, auto, schema, dbus. Default: blob.
       --print               Print the expanded grpcurl command and request.
+      --show-headers        Include live Ghostbridge headers in --print output.
   -h, --help                Show help.
 
 Examples:
@@ -247,6 +253,10 @@ def records_for(source, blob_dir):
     return {}
 
 
+def method_names_for(plugin, source, blob_dir):
+    return methods_for(plugin, source, blob_dir)
+
+
 def methods_for(plugin, source, blob_dir):
     recs = records_for(source, blob_dir)
     rec = recs.get(plugin)
@@ -306,6 +316,72 @@ def method_detail(methods, name):
     return None
 
 
+def require_plugin(plugin, source, blob_dir):
+    recs = records_for(source, blob_dir)
+    if plugin in recs:
+        return
+    if source in ("auto", "dbus") and plugin in dbus_plugins():
+        return
+    raise SystemExit(f"unknown plugin: {plugin}")
+
+
+def require_method(plugin, method, source, blob_dir):
+    require_plugin(plugin, source, blob_dir)
+    methods = methods_for(plugin, source, blob_dir)
+    detail = method_detail(methods, method)
+    if not isinstance(detail, dict):
+        raise SystemExit(f"unknown method for {plugin}: {method}")
+    return detail
+
+
+def declared_method_name(plugin, method, source, blob_dir):
+    detail = require_method(plugin, method, source, blob_dir)
+    return str(detail.get("name") or detail.get("schema_name") or method)
+
+
+def validate_arguments(plugin, method, raw_args, source, blob_dir):
+    detail = require_method(plugin, method, source, blob_dir)
+    args_schema = detail.get("args") if isinstance(detail, dict) else {}
+    if not isinstance(args_schema, dict):
+        return
+    required = args_schema.get("required") or []
+    props = args_schema.get("properties") or {}
+    if not isinstance(required, list):
+        required = []
+    try:
+        parsed = json.loads(raw_args)
+    except Exception as exc:
+        raise SystemExit(f"invalid --arguments JSON: {exc}")
+    arguments = parsed if isinstance(parsed, list) else [parsed]
+    if required and not arguments:
+        raise SystemExit(
+            f"{plugin}.{declared_method_name(plugin, method, source, blob_dir)} "
+            f"requires fields: {', '.join(required)}"
+        )
+    for index, arg in enumerate(arguments):
+        if not isinstance(arg, dict):
+            if required:
+                raise SystemExit(
+                    f"argument {index} for {plugin}."
+                    f"{declared_method_name(plugin, method, source, blob_dir)} "
+                    "must be an object"
+                )
+            continue
+        missing = [name for name in required if name not in arg]
+        if missing:
+            raise SystemExit(
+                f"argument {index} for {plugin}."
+                f"{declared_method_name(plugin, method, source, blob_dir)} "
+                f"missing required field(s): {', '.join(missing)}"
+            )
+        unknown_required = [name for name in required if name not in props]
+        if unknown_required:
+            raise SystemExit(
+                f"schema for {plugin}.{method} is inconsistent; required "
+                f"field(s) lack properties: {', '.join(unknown_required)}"
+            )
+
+
 def arg_flags_for(plugin, method, source, blob_dir):
     detail = method_detail(methods_for(plugin, source, blob_dir), method)
     if not isinstance(detail, dict):
@@ -319,12 +395,61 @@ def arg_flags_for(plugin, method, source, blob_dir):
     return [f"--{name.replace('_', '-')}" for name in sorted(props)]
 
 
+def check_catalog(source, blob_dir):
+    records = records_for(source, blob_dir)
+    if not records:
+        raise SystemExit(f"no plugins found from source={source} blob_dir={blob_dir}")
+    plugin_count = 0
+    callable_plugin_count = 0
+    method_count = 0
+    failures = []
+    for plugin in sorted(records):
+        plugin_count += 1
+        methods = methods_for(plugin, source, blob_dir)
+        if not methods:
+            continue
+        callable_plugin_count += 1
+        for key in sorted(methods):
+            detail = methods[key]
+            method_count += 1
+            if not isinstance(detail, dict):
+                failures.append(f"{plugin}.{key}: method detail is not an object")
+                continue
+            call_name = detail.get("name") or detail.get("schema_name") or key
+            args = detail.get("args")
+            if args is not None and not isinstance(args, dict):
+                failures.append(f"{plugin}.{call_name}: args is not an object")
+                continue
+            required = args.get("required", []) if isinstance(args, dict) else []
+            props = args.get("properties", {}) if isinstance(args, dict) else {}
+            if not isinstance(required, list) or not isinstance(props, dict):
+                failures.append(f"{plugin}.{call_name}: malformed required/properties")
+                continue
+            missing = [name for name in required if name not in props]
+            if missing:
+                failures.append(
+                    f"{plugin}.{call_name}: required field(s) missing from "
+                    f"properties: {', '.join(missing)}"
+                )
+    print(
+        f"plugins={plugin_count} callable_plugins={callable_plugin_count} "
+        f"methods={method_count} failures={len(failures)}"
+    )
+    for failure in failures:
+        print(failure)
+    if failures:
+        raise SystemExit(1)
+
+
 cmd = sys.argv[1]
 source = sys.argv[2]
 blob_dir = sys.argv[3]
 
 if cmd == "plugins":
-    print("\n".join(plugins_for(source, blob_dir)))
+    plugins = plugins_for(source, blob_dir)
+    if not plugins:
+        raise SystemExit(f"no plugins found from source={source} blob_dir={blob_dir}")
+    print("\n".join(plugins))
 elif cmd == "completion-plugins":
     print("\n".join(completion_plugins_for(source, blob_dir)))
 elif cmd == "methods":
@@ -332,14 +457,17 @@ elif cmd == "methods":
     print("\n".join(m.replace("_", "-") for m in sorted(methods_for(plugin, source, blob_dir))))
 elif cmd == "method-json":
     plugin, method = sys.argv[4], sys.argv[5]
-    detail = method_detail(methods_for(plugin, source, blob_dir), method)
-    print(json.dumps(detail or {}, indent=2, sort_keys=True))
+    detail = require_method(plugin, method, source, blob_dir)
+    print(json.dumps(detail, indent=2, sort_keys=True))
 elif cmd == "args":
     plugin, method = sys.argv[4], sys.argv[5]
     print("\n".join(arg_flags_for(plugin, method, source, blob_dir)))
 elif cmd == "method-summary":
     plugin = sys.argv[4]
+    require_plugin(plugin, source, blob_dir)
     methods = methods_for(plugin, source, blob_dir)
+    if not methods:
+        raise SystemExit(f"plugin has no methods: {plugin}")
     for key in sorted(methods):
         val = methods[key]
         if isinstance(val, dict):
@@ -352,7 +480,20 @@ elif cmd == "method-summary":
             print(f"{key}\t-\t-\t-")
 elif cmd == "identity":
     plugin = sys.argv[4]
+    require_plugin(plugin, source, blob_dir)
     print(json.dumps(plugin_identity(plugin, source, blob_dir), sort_keys=True))
+elif cmd == "capability":
+    plugin, method = sys.argv[4], sys.argv[5]
+    detail = require_method(plugin, method, source, blob_dir)
+    print(detail.get("required_capability") or "")
+elif cmd == "check-catalog":
+    check_catalog(source, blob_dir)
+elif cmd == "declared-method":
+    plugin, method = sys.argv[4], sys.argv[5]
+    print(declared_method_name(plugin, method, source, blob_dir))
+elif cmd == "validate-arguments":
+    plugin, method, raw_args = sys.argv[4], sys.argv[5], sys.argv[6]
+    validate_arguments(plugin, method, raw_args, source, blob_dir)
 else:
     raise SystemExit(f"unknown contract command: {cmd}")
 PY
@@ -624,9 +765,67 @@ print_expanded() {
     printf 'grpcurl -plaintext'
     local i
     for ((i = 0; i < ${#headers[@]}; i += 2)); do
-        printf ' -H %q' "${headers[i + 1]}"
+        if ((show_headers)); then
+            printf ' -H %q' "${headers[i + 1]}"
+        else
+            case "${headers[i + 1]}" in
+                x-ghostbridge-footprint:*) printf ' -H %q' 'x-ghostbridge-footprint: (redacted)' ;;
+                x-ghostbridge-trace-id:*) printf ' -H %q' 'x-ghostbridge-trace-id: (redacted)' ;;
+                *) printf ' -H %q' "${headers[i + 1]}" ;;
+            esac
+        fi
     done
     printf ' -d %q %q %q\n' "$request" "$endpoint" "$SERVICE"
+}
+
+check_response() {
+    python3 - "$1" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+try:
+    with open(path, "r", encoding="utf-8") as handle:
+        data = json.load(handle)
+except Exception as exc:
+    raise SystemExit(f"zcall: failed to parse grpc response JSON: {exc}")
+
+error = data.get("error") if isinstance(data, dict) else None
+if error:
+    message = error.get("message") if isinstance(error, dict) else str(error)
+    code = error.get("code") if isinstance(error, dict) else "ERROR"
+    print(f"zcall: {code}: {message}", file=sys.stderr)
+    raise SystemExit(10)
+if isinstance(data, dict) and data.get("success") is False:
+    print("zcall: CallMethod returned success=false", file=sys.stderr)
+    raise SystemExit(10)
+PY
+}
+
+run_grpcurl() {
+    local request="$1"
+    shift
+    local -a headers=("$@")
+    local out err rc
+    out="$(mktemp)"
+    err="$(mktemp)"
+    set +e
+    timeout "$call_timeout" grpcurl -plaintext "${headers[@]}" -d "$request" "$endpoint" "$SERVICE" >"$out" 2>"$err"
+    rc=$?
+    set -e
+    if [[ "$rc" == "0" ]]; then
+        cat "$out"
+        check_response "$out"
+        rm -f "$out" "$err"
+        return 0
+    fi
+    cat "$out"
+    cat "$err" >&2
+    rm -f "$out" "$err"
+    if [[ "$rc" == "124" ]]; then
+        die "CallMethod timed out after ${call_timeout}s: $plugin.$method at $endpoint"
+    fi
+    return "$rc"
 }
 
 complete_mode=0
@@ -639,6 +838,8 @@ while (($#)); do
     case "$1" in
         --endpoint)
             endpoint="${2:-}"; shift 2 ;;
+        --timeout)
+            call_timeout="${2:-}"; shift 2 ;;
         --blob-dir)
             blob_dir="${2:-}"; shift 2 ;;
         --source)
@@ -655,6 +856,8 @@ while (($#)); do
             interface_name="${2:-}"; shift 2 ;;
         --print|--dry-run)
             print_only=1; shift ;;
+        --show-headers)
+            show_headers=1; shift ;;
         -h|--help)
             usage; exit 0 ;;
         --)
@@ -688,6 +891,10 @@ case "$cmd" in
         contract_py method-summary "$source_mode" "$blob_dir" "$plugin" | column -t -s $'\t'
         exit 0
         ;;
+    check-catalog|doctor)
+        contract_py check-catalog "$source_mode" "$blob_dir"
+        exit 0
+        ;;
     help)
         plugin="$(normalize_plugin "${2:-}")"
         method="${3:-}"
@@ -709,31 +916,13 @@ case "$cmd" in
         ;;
 esac
 
-[[ $# -ge 2 ]] || die "usage: zcall <plugin> <method> --arguments JSON"
+[[ $# -ge 2 ]] || die "usage: zcall [global options] <plugin> <method> [method arguments]"
 plugin="$(normalize_plugin "$1")"
 method="$(normalize_method "$2")"
 shift 2
 
 while (($#)); do
     case "$1" in
-        -a|--arguments)
-            arguments_json="${2:-}"; arguments_was_set=1; shift 2 ;;
-        -c|--capability)
-            capability_id="${2:-}"; shift 2 ;;
-        --actor)
-            actor_id="${2:-}"; shift 2 ;;
-        --object)
-            object_path="${2:-}"; shift 2 ;;
-        --interface)
-            interface_name="${2:-}"; shift 2 ;;
-        --endpoint)
-            endpoint="${2:-}"; shift 2 ;;
-        --blob-dir)
-            blob_dir="${2:-}"; shift 2 ;;
-        --source)
-            source_mode="${2:-}"; shift 2 ;;
-        --print|--dry-run)
-            print_only=1; shift ;;
         --*)
             key="${1#--}"
             [[ -n "${2:-}" ]] || die "missing value for --$key"
@@ -751,12 +940,18 @@ if (( ${#method_arg_pairs[@]} > 0 )); then
     arguments_json="$(args_json_from_flags "$plugin" "$method" "${method_arg_pairs[@]}")"
 fi
 
+contract_py validate-arguments "$source_mode" "$blob_dir" "$plugin" "$method" "$arguments_json"
+if [[ -z "$capability_id" ]]; then
+    capability_id="$(contract_py capability "$source_mode" "$blob_dir" "$plugin" "$method")"
+fi
+declared_method="$(contract_py declared-method "$source_mode" "$blob_dir" "$plugin" "$method")"
 identity="$(contract_py identity "$source_mode" "$blob_dir" "$plugin")"
 default_object="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["object_path"])' <<<"$identity")"
 default_iface="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["interface_name"])' <<<"$identity")"
 object_path="${object_path:-$default_object}"
 interface_name="${interface_name:-$default_iface}"
 
+method="$declared_method"
 request="$(request_json "$plugin" "$method" "$object_path" "$interface_name")"
 mapfile -t headers < <(read_headers)
 
@@ -767,4 +962,5 @@ if ((print_only)); then
 fi
 
 have grpcurl || die "grpcurl is required for PluginService.CallMethod"
-grpcurl -plaintext "${headers[@]}" -d "$request" "$endpoint" "$SERVICE"
+have timeout || die "timeout is required for bounded PluginService.CallMethod calls"
+run_grpcurl "$request" "${headers[@]}"

@@ -1,0 +1,48 @@
+%% 3tched host network — reconciled 2026-07-10 from NotebookLM + live inspection.
+%% EDIT wherever wrong, then hand back.
+%% Rule: OVS driven ONLY via rovs plugins over D-Bus (OVSDB JSON-RPC). No OVS CLI.
+%% Status: OK = works now | BROKEN = must fix | STALE = rogue leftover, remove | OPT = optional
+flowchart TB
+    clients["Internet clients / netclients<br/>DNS *.ghostbridge.tech + *.3tched.com<br/>all resolve to 129.153.134.63"]:::ok
+
+    subgraph oracle["Oracle decoy VPS 129.153.134.63"]
+        wg0["wg0 hub :51821/udp  10.0.0.1/24"]:::ok
+        dnat["iptables DNAT tcp 443,8443,3003,18789,<br/>50051,50052,mail -> 10.0.0.2"]:::ok
+    end
+
+    subgraph host["3tched host (Artix s6)  eth0 148.113.204.83"]
+        opdbus["opdbus WG tunnel 10.0.0.2/24 -> oracle:51821<br/>DOWN — nothing brings it up (wg-opdbus s6 = stub)<br/>FIX #1: bring up via wg_opdbus plugin"]:::broken
+        resolv["/etc/resolv.conf = nameserver 127.0.0.1<br/>resolvconf signature mismatch -> breaks wg-quick<br/>FIX #2"]:::broken
+        ovsbr0["ovsbr0 bridge 10.200.0.1/30<br/>+ aliases 10.200.0.2/32, 10.0.0.2/32"]:::ok
+        xray["xray NATIVE on host :443/:8443<br/>SNI routing (gbr-xray s6) — listening"]:::ok
+        uds["/run/ghostbridge/container.sock (UDS)<br/>unix_socket plugin create_unix_socket<br/>no proxy devices, no netdevs"]:::ok
+        nmif["netmaker WG mesh iface<br/>UP but NO IP (want 100.90.37.254)<br/>FIX #3"]:::broken
+        wgcf["wgcf/WARP 172.16.0.2 fwmark 51820"]:::opt
+        chatbot["wg-chatbot 100.90.37.253"]:::opt
+        rovs["rovs OVSDB plugin path HUNG (list/remove_port time out)<br/>blocks sanctioned OVS cleanup — FIX #5"]:::broken
+    end
+
+    subgraph containers["Incus containers — NO NIC, NO IP, UDS only"]
+        nmappl["netmaker appliance (9431b9db...)<br/>netmaker:8081, EMQX 1883/8083, caddy 80/443<br/>RUNNING but: no socket wiring +<br/>SERVER_HOST=148.113.204.83 leaks real IP<br/>FIX #4"]:::broken
+    end
+
+    subgraph stale["STALE OVSDB ports — remove via rovs remove_port (from dead gbr-* services)"]
+        p1["gbr_wg"]:::stale
+        p2["gbr_warp"]:::stale
+        p3["gbr_xray"]:::stale
+        p4["ovsbr0-sock"]:::stale
+        p5["ovsbr0-mgmt"]:::stale
+    end
+
+    clients -->|udp 51821 WG| wg0
+    clients -->|tcp 443 TLS SNI| dnat
+    dnat -->|via WG tunnel| opdbus
+    opdbus --> xray
+    xray -->|SNI api./broker./dashboard.| uds
+    uds --> nmappl
+    nmif -.->|mesh 100.90.37.0/24| nmappl
+
+    classDef ok fill:#1b3a2b,stroke:#3fb37f,color:#d7f5e6;
+    classDef broken fill:#4a1e1e,stroke:#e06666,color:#ffd9d9;
+    classDef stale fill:#3a331b,stroke:#c9a94a,color:#f5ecc9;
+    classDef opt fill:#26303a,stroke:#5a86a8,color:#d6e6f2;

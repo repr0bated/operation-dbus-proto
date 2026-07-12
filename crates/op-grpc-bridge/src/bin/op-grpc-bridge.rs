@@ -13,7 +13,11 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use op_grpc_bridge::{grpc_server::run_grpc_server, mutation_engine::MutationEngine};
+use op_grpc_bridge::{
+    grpc_server::run_grpc_server,
+    mutation_engine::MutationEngine,
+    server::{run_zeroclaw_server, ServerConfig},
+};
 
 use op_network::rovs_proxy::OvsdbDbusClient;
 use op_state_store::{ChainConfig, EventChain};
@@ -62,6 +66,21 @@ async fn main() -> anyhow::Result<()> {
                 .add_directive("info".parse()?),
         )
         .init();
+
+    let argv0 = std::env::args().next().unwrap_or_default();
+    let mode = std::env::var("OP_GRPC_BRIDGE_MODE").unwrap_or_else(|_| {
+        if argv0.contains("zeroclaw") {
+            "zeroclaw".to_string()
+        } else {
+            "bridge".to_string()
+        }
+    });
+
+    if mode == "zeroclaw" {
+        let config = ServerConfig::from_env();
+        tracing::info!(?config, "ZeroClaw Axum host starting");
+        return run_zeroclaw_server(config).await;
+    }
 
     // ── Build MutationEngine (authoritative mutation pipeline) ─────────────────
     let event_chain = Arc::new(RwLock::new(EventChain::new(ChainConfig::default())));

@@ -76,6 +76,39 @@ pub struct ListPortsInput {
     pub bridge_name: String,
 }
 
+/// set_controller method input — set the OpenFlow controller(s) on a bridge
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SetControllerInput {
+    /// Bridge name
+    pub bridge_name: String,
+    /// Controller target(s), e.g. "tcp:10.0.0.1:6633"
+    pub controller: String,
+}
+
+/// set_bridge_property method input — set an arbitrary property on a bridge
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SetBridgePropertyInput {
+    /// Bridge name
+    pub bridge_name: String,
+    /// Property key (e.g. "protocols", "other_config:datapath-id", "fail_mode")
+    pub property: String,
+    /// Value to set (string-encoded; OVSDB transact handles conversion)
+    pub value: String,
+}
+
+/// set_interface method input — set an arbitrary option/type on an interface
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SetInterfaceInput {
+    /// Bridge name (used to locate the interface)
+    pub bridge_name: String,
+    /// Interface / port name
+    pub port_name: String,
+    /// Property key (e.g. "type", "options:peer", "options:remote_ip")
+    pub property: String,
+    /// Value to set
+    pub value: String,
+}
+
 // =============================================================================
 // Plugin implementation
 // =============================================================================
@@ -267,6 +300,45 @@ pub(crate) fn rovs_commands_schema() -> PluginSchema {
             true,
             "cap.network.ovsdb.db.list@v1",
             "obs.network.ovsdb.db.list@v1",
+        ),
+    );
+    methods.insert(
+        "set_controller".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+            SetControllerInput,
+            super::plugin_scaffold_helpers::AckOutput,
+        >(
+            "set_controller",
+            SideEffect::Mutation,
+            false,
+            "cap.network.ovsdb.bridge.set-controller@v1",
+            "mut.network.ovsdb.bridge.set-controller@v1",
+        ),
+    );
+    methods.insert(
+        "set_bridge_property".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+            SetBridgePropertyInput,
+            super::plugin_scaffold_helpers::AckOutput,
+        >(
+            "set_bridge_property",
+            SideEffect::Mutation,
+            false,
+            "cap.network.ovsdb.bridge.set-property@v1",
+            "mut.network.ovsdb.bridge.set-property@v1",
+        ),
+    );
+    methods.insert(
+        "set_interface".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+            SetInterfaceInput,
+            super::plugin_scaffold_helpers::AckOutput,
+        >(
+            "set_interface",
+            SideEffect::Mutation,
+            false,
+            "cap.network.ovsdb.interface.set-property@v1",
+            "mut.network.ovsdb.interface.set-property@v1",
         ),
     );
 

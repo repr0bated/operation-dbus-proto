@@ -165,6 +165,26 @@ pub struct GetGhostrunnerOutput {
     pub ghostrunner: GhostrunnerSurface,
 }
 
+/// Plugin-owned method dispatch for the Ghostbridge D-Bus/gRPC surface.
+pub fn dispatch_ghostbridge_method(
+    method: &str,
+    state: &GhostbridgeState,
+) -> Result<serde_json::Value> {
+    match method {
+        "GetState" | "get_state" => Ok(serde_json::json!({ "state": state })),
+        "GetIdentity" | "get_identity" => {
+            Ok(serde_json::json!({ "identity": &state.bridge_identity }))
+        }
+        "ListEndpoints" | "list_endpoints" => {
+            Ok(serde_json::json!({ "endpoints": &state.endpoints }))
+        }
+        "GetGhostrunner" | "get_ghostrunner" => {
+            Ok(serde_json::json!({ "ghostrunner": &state.ghostrunner }))
+        }
+        other => Err(anyhow::anyhow!("unknown ghostbridge method: {other}")),
+    }
+}
+
 // =============================================================================
 // PLUGIN BODY
 // =============================================================================
@@ -418,6 +438,16 @@ mod tests {
         assert_eq!(schema.version, PLUGIN_VERSION);
         assert_eq!(schema.display_name, Some(PLUGIN_DISPLAY_NAME.to_string()));
         assert_eq!(schema.methods.len(), 4);
+    }
+
+    #[test]
+    fn dispatch_returns_declared_method_outputs() {
+        let state = GhostbridgePlugin::current_state();
+        let identity = dispatch_ghostbridge_method("GetIdentity", &state).unwrap();
+        assert!(identity.get("identity").is_some());
+
+        let endpoints = dispatch_ghostbridge_method("ListEndpoints", &state).unwrap();
+        assert!(endpoints.get("endpoints").is_some());
     }
 
     #[test]
