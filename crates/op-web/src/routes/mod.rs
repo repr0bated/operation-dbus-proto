@@ -280,6 +280,12 @@ pub fn create_router(state: Arc<AppState>) -> Router {
 
     router
         .layer(Extension(state))
+        // Runs after ip_security (which sets the AccessZone extension), before
+        // the SPA fallback: intercepts gRPC-web traffic and injects the live
+        // Ghostbridge identity headers on the way to the local bridge.
+        .layer(axum::middleware::from_fn(
+            crate::middleware::grpc_proxy::grpc_web_proxy_middleware,
+        ))
         .layer(axum::middleware::from_fn(security::ip_security_middleware))
         .layer(cors)
         .layer(CompressionLayer::new())

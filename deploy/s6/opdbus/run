@@ -1,15 +1,10 @@
 #!/bin/sh
 exec 2>&1
-# opdbus - hypervisor WireGuard identity tunnel to Oracle VPS (wg0, 10.0.0.2 <-> 10.0.0.1)
-# Gateway IP and iptables are managed by ovsbr0-init
-IFACE="wg0"
+# opdbus previously brought up a direct wg0 tunnel to the oracle. Retired
+# 2026-07-11: host WireGuard is netmaker ONLY (control-plane-network owns
+# it); this wg0/10.0.0.0/24 tunnel raced netmaker's own route for the same
+# subnet. Kept as an inert stub (not removed) because op-dbus/op-projection/
+# op-grpc-bridge-zeroclaw/op-dbus-mirror still depend on this service via
+# ovsbr0-init/ovsbr0-static in the s6-rc graph.
 
-if ! wg show "${IFACE}" >/dev/null 2>&1; then
-    wg-quick up "${IFACE}"
-fi
-
-# Add routes manually (Table=off means wg-quick won't add them)
-ip route replace 10.0.0.0/24 dev "${IFACE}" 2>/dev/null || true
-ip route replace 10.0.0.1/32 dev "${IFACE}" 2>/dev/null || true
-
-exec sleep infinity
+exec pause

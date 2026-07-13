@@ -117,7 +117,9 @@ fn default_memory_namespaces() -> Vec<MemoryNamespaceOption> {
                 "psk".to_string(),
                 "email".to_string(),
             ],
-            purpose: "Container identity namespace. Email is present only when GhostBridge is disabled.".to_string(),
+            purpose:
+                "Container identity namespace. Email is present only when GhostBridge is disabled."
+                    .to_string(),
             identity_link_key: "container:{container_id}:identity.wireguard_pubkey".to_string(),
         },
         MemoryNamespaceOption {
@@ -185,22 +187,23 @@ fn load_configurable_options_from_shm() -> Option<ZeroclawConfigurableOptions> {
 }
 
 fn parse_configurable_options_value(root: &SimdValue) -> Result<ZeroclawConfigurableOptions> {
-    let node = root
-        .get("configurable_options")
-        .unwrap_or(root);
+    let node = root.get("configurable_options").unwrap_or(root);
     let json = simd_json::serde::to_string(node).context("serialize configurable_options")?;
     serde_json::from_str(&json).context("parse zeroclaw configurable_options")
 }
 
 /// Resolve feature flags for a provision run (schema declares options; env selects defaults).
 pub fn resolve_provision_features(options: &ZeroclawConfigurableOptions) -> ProvisionFeatures {
-    let declared: std::collections::HashSet<_> =
-        options.user_container.feature_flags.iter().map(String::as_str).collect();
+    let declared: std::collections::HashSet<_> = options
+        .user_container
+        .feature_flags
+        .iter()
+        .map(String::as_str)
+        .collect();
 
-    let ghostbridge = env_flag("PROVISION_GHOSTBRIDGE", true)
-        && declared.contains("ghostbridge");
-    let semantic_search = env_flag("PROVISION_SEMANTIC_SEARCH", false)
-        && declared.contains("semantic_search");
+    let ghostbridge = env_flag("PROVISION_GHOSTBRIDGE", true) && declared.contains("ghostbridge");
+    let semantic_search =
+        env_flag("PROVISION_SEMANTIC_SEARCH", false) && declared.contains("semantic_search");
 
     ProvisionFeatures {
         ghostbridge,

@@ -15,7 +15,9 @@ fi
 
 export DBUS_SESSION_BUS_ADDRESS
 : "${DBUS_SESSION_BUS_ADDRESS:?DBUS_SESSION_BUS_ADDRESS must be set in /etc/op-dbus/environment}"
-export ZEROCLAW_BIND_ADDR="${ZEROCLAW_BIND_ADDR:-0.0.0.0:8090}"
+# Keep the control-plane bridge on its mesh identity.  The decoy ingress IP
+# (10.0.0.2) owns :8090 separately and forwards it to the assistant UI socket.
+export ZEROCLAW_BIND_ADDR="${ZEROCLAW_BIND_ADDR:-10.200.0.2:8090}"
 export ZEROCLAW_SCHEMA_PATH="${ZEROCLAW_SCHEMA_PATH:-/dev/shm/opdbus/plugin-blobs}"
 export ZEROCLAW_UNIX_SOCKET="${ZEROCLAW_UNIX_SOCKET:-/run/ghostbridge/container.sock}"
 export OP_GRPC_BRIDGE_MODE="${OP_GRPC_BRIDGE_MODE:-zeroclaw}"

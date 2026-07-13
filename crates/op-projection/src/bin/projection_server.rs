@@ -13,6 +13,7 @@
 use anyhow::{Context, Result};
 use op_projection::*;
 use std::collections::HashMap;
+use std::sync::Arc;
 use tracing::{info, warn};
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
@@ -45,6 +46,9 @@ async fn main() -> Result<()> {
         .map(|schema| (schema.name.clone(), schema.clone()))
         .collect();
 
+    let plugin_map: HashMap<String, Arc<dyn op_state::StatePlugin>> =
+        plugin_reader.plugin_instances();
+
     for schema in projection_schemas {
         register_schema_if_missing(&mut schema_engine, schema)?;
     }
@@ -73,7 +77,7 @@ async fn main() -> Result<()> {
 
     // 2. Initialize D-Bus server (owns org.opdbus.v1.plugins, root interface
     //    at /org/opdbus/v1/plugins is always present for introspection).
-    let dbus_server = ProjectionDbusServer::new_with_schemas(schema_map.clone())
+    let dbus_server = ProjectionDbusServer::new_with_schemas(schema_map.clone(), plugin_map)
         .await
         .context("failed to start projection D-Bus server")?;
 

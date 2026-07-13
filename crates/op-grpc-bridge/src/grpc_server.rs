@@ -11,9 +11,8 @@ use chrono::{DateTime, Utc};
 use futures::StreamExt as _;
 use op_cognitive_mcp::QdrantSemanticShuttle;
 use prost::Message;
-use prost_reflect::{DescriptorPool, DynamicMessage};
+use prost_reflect::{DescriptorPool, DeserializeOptions, DynamicMessage, SerializeOptions};
 use prost_types::{Struct as ProstStruct, Timestamp as ProstTimestamp, Value as ProstValue};
-use serde::de::DeserializeSeed;
 use serde_json::Value as JsonValue;
 use simd_json::prelude::{ValueAsContainer, ValueAsScalar};
 use tokio::sync::{broadcast, RwLock};
@@ -133,6 +132,53 @@ fn method_capability_for_plugin(
 ) -> Option<SchemaMethodCapability> {
     let schema = read_plugin_schema_json(plugin_id)?;
     method_capability_from_schema(&schema, method_name, footprint)
+}
+
+#[cfg(test)]
+mod capability_tests {
+    use super::*;
+
+    #[test]
+    fn method_capability_is_derived_from_schema_and_footprint_grant() {
+        let schema = serde_json::json!({
+            "methods": {
+                "list_bridges": {
+                    "required_capability": "cap.network.ovsdb.bridge.list@v1"
+                }
+            },
+            "capability_grants": {
+                "caller-footprint": ["cap.network.ovsdb.bridge.list@v1"]
+            }
+        });
+
+        let capability =
+            method_capability_from_schema(&schema, "list_bridges", Some("caller-footprint"))
+                .expect("method capability");
+
+        assert_eq!(
+            capability.required_capability.as_deref(),
+            Some("cap.network.ovsdb.bridge.list@v1")
+        );
+        assert!(capability.grants_declared);
+        assert!(capability.granted_by_footprint);
+    }
+
+    #[test]
+    fn method_without_required_capability_needs_no_grant() {
+        let schema = serde_json::json!({
+            "methods": {
+                "list_bridges": {
+                    "required_capability": null
+                }
+            }
+        });
+
+        let capability = method_capability_from_schema(&schema, "list_bridges", None)
+            .expect("method capability");
+
+        assert_eq!(capability.required_capability, None);
+        assert!(capability.granted_by_footprint);
+    }
 }
 
 fn enforce_bridge_capability(
@@ -517,15 +563,24 @@ impl OperationGrpcServer {
         Res: prost::Message + Default,
     {
         let identity = request.extensions().get::<GhostbridgeIdentity>().cloned();
-        if let Err(error) =
-            enforce_bridge_capability(plugin_id, method_name, None, identity.as_ref())
-        {
+        let capability_id = method_capability_for_plugin(
+            plugin_id,
+            method_name,
+            identity.as_ref().map(|context| context.footprint.as_str()),
+        )
+        .and_then(|method| method.required_capability);
+        if let Err(error) = enforce_bridge_capability(
+            plugin_id,
+            method_name,
+            capability_id.as_deref(),
+            identity.as_ref(),
+        ) {
             return Err(Status::permission_denied(error.message));
         }
 
         let request_bytes = request.into_inner().encode_to_vec();
         let request_desc = plugin_descriptor_pool()
-            .get_message_by_name(request_message_name)
+            .get_message_by_name(&plugin_method_message_full_name(request_message_name))
             .ok_or_else(|| {
                 Status::internal(format!(
                     "missing request descriptor for {plugin_id}.{method_name}"
@@ -537,7 +592,23 @@ impl OperationGrpcServer {
                     "failed to decode typed request for {plugin_id}.{method_name}: {error}"
                 ))
             })?;
-        let json_args = serde_json::to_string(&request_dynamic).map_err(|error| {
+        // Dispatch validates args against PluginSchema, which declares proto
+        // (snake_case) field names and true JSON integers — proto3 JSON
+        // defaults (camelCase, stringified 64-bit ints) would never match.
+        let mut json_args_bytes = Vec::new();
+        request_dynamic
+            .serialize_with_options(
+                &mut serde_json::Serializer::new(&mut json_args_bytes),
+                &SerializeOptions::new()
+                    .use_proto_field_name(true)
+                    .stringify_64_bit_integers(false),
+            )
+            .map_err(|error| {
+                Status::internal(format!(
+                    "failed to serialize typed request for {plugin_id}.{method_name}: {error}"
+                ))
+            })?;
+        let json_args = String::from_utf8(json_args_bytes).map_err(|error| {
             Status::internal(format!(
                 "failed to serialize typed request for {plugin_id}.{method_name}: {error}"
             ))
@@ -549,7 +620,7 @@ impl OperationGrpcServer {
                 plugin_id,
                 method_name,
                 &json_args,
-                None,
+                capability_id.as_deref(),
                 "grpc:operation.plugin.v1",
             )
             .await
@@ -560,26 +631,34 @@ impl OperationGrpcServer {
                 ))
             })?;
 
-        let result_json = serde_json::to_string(&result).map_err(|error| {
+        // `dispatch_method_call` returns an accountability envelope. Typed
+        // plugin RPCs return only the method's declared domain response.
+        let domain_result = result.get("result").unwrap_or(&result);
+        let result_json = serde_json::to_string(domain_result).map_err(|error| {
             Status::internal(format!(
                 "failed to serialize method result for {plugin_id}.{method_name}: {error}"
             ))
         })?;
         let response_desc = plugin_descriptor_pool()
-            .get_message_by_name(response_message_name)
+            .get_message_by_name(&plugin_method_message_full_name(response_message_name))
             .ok_or_else(|| {
                 Status::internal(format!(
                     "missing response descriptor for {plugin_id}.{method_name}"
                 ))
             })?;
         let mut deserializer = serde_json::de::Deserializer::from_str(&result_json);
-        let response_dynamic = response_desc
-            .deserialize(&mut deserializer)
-            .map_err(|error| {
-                Status::internal(format!(
-                    "failed to deserialize typed response for {plugin_id}.{method_name}: {error}"
-                ))
-            })?;
+        // PluginSchema `returns` is the contract: fields a plugin emits beyond
+        // its declared returns are dropped rather than failing the call.
+        let response_dynamic = DynamicMessage::deserialize_with_options(
+            response_desc,
+            &mut deserializer,
+            &DeserializeOptions::new().deny_unknown_fields(false),
+        )
+        .map_err(|error| {
+            Status::internal(format!(
+                "failed to deserialize typed response for {plugin_id}.{method_name}: {error}"
+            ))
+        })?;
         deserializer.end().map_err(|error| {
             Status::internal(format!(
                 "failed to finish typed response decode for {plugin_id}.{method_name}: {error}"
@@ -607,6 +686,13 @@ fn plugin_descriptor_pool() -> &'static DescriptorPool {
         DescriptorPool::decode(crate::proto::FILE_DESCRIPTOR_SET)
             .expect("decode combined plugin descriptor pool")
     })
+}
+
+/// Fully qualify a generated plugin method message name for descriptor pool
+/// lookup. Generated routes pass bare message names; the pool indexes them
+/// under the `operation.plugin.v1` package.
+fn plugin_method_message_full_name(message_name: &str) -> String {
+    format!("operation.plugin.v1.{message_name}")
 }
 
 include!(concat!(env!("OUT_DIR"), "/plugin_method_routes.rs"));

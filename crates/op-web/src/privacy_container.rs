@@ -102,11 +102,10 @@ pub async fn ensure_user_container_from_options(
     user: &PrivacyUser,
     options: &crate::zeroclaw_configurable::ZeroclawConfigurableOptions,
 ) -> Result<String> {
-    let container_name =
-        crate::zeroclaw_configurable::resolve_container_name(
-            &options.user_container.container_id_template,
-            &user.id,
-        );
+    let container_name = crate::zeroclaw_configurable::resolve_container_name(
+        &options.user_container.container_id_template,
+        &user.id,
+    );
     let cfg = PrivacyContainerConfig::from_zeroclaw_options(options, &container_name);
     ensure_user_container_with_config(user, &cfg).await
 }

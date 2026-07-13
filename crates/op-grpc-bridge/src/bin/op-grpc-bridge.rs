@@ -19,7 +19,6 @@ use op_grpc_bridge::{
     server::{run_zeroclaw_server, ServerConfig},
 };
 
-use op_network::rovs_proxy::OvsdbDbusClient;
 use op_state_store::{ChainConfig, EventChain};
 use tokio::sync::RwLock;
 use tonic::transport::Identity;
@@ -84,8 +83,7 @@ async fn main() -> anyhow::Result<()> {
 
     // ── Build MutationEngine (authoritative mutation pipeline) ─────────────────
     let event_chain = Arc::new(RwLock::new(EventChain::new(ChainConfig::default())));
-    let ovsdb = Arc::new(OvsdbDbusClient::new());
-    let mutation_engine = Arc::new(MutationEngine::new(event_chain, ovsdb));
+    let mutation_engine = Arc::new(MutationEngine::new(event_chain));
 
     // ── Bind address ─────────────────────────────────────────────────────────
     // Per spec: Xray redirects gRPC traffic to 127.0.0.1:18789.

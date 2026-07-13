@@ -24,6 +24,7 @@ Replaces scattered TODO fragments across `.zenflow/tasks/`, `.kiro/specs/`, and 
 | OD-DEMO | **Get a demo out** — minimal end-to-end path that shows the system working | `general-purpose` | TODO | top priority; scope/deadline TBD — see subtasks once defined |
 | OD-05 | Dynamic xray cutover: wire `run_schema_shuttle` → live (sled → /dev/shm config → D-Bus start) | `general-purpose` | BLOCKED | needs `/etc/ghostbridge/xray.env` secrets + op-xray-daemon running as service |
 | OD-08 | netmaker server down: resolve broker token timeout (stay on decoy `129.153.134.63` vs relocate) | `devops` | BLOCKED | egress works; server relocation decision open |
+| OD-32 | Identity injection origin: oracle's gRPC ports (50051/50052) are pure L3/L4 iptables DNAT to 3tched, no L7 layer in the path — zero trust requires the WG peer pubkey injected as gRPC metadata (= HTTP/2 headers) per-call, which means routing that traffic through an HTTP/2-aware proxy (xray, already on the box) instead of raw DNAT. An "egress ACL is enough" shortcut was floated and explicitly rejected as IP-ACL theater per `[[project_zero_trust_principle]]` — real fix is per-packet header injection, not inferred trust from restricted IPs | `general-purpose` | TODO | touching oracle is deferred pending explicit go-ahead (live production VPS: mail/grpc/web). 3tched-side partial fix already shipped: `op-cognitive-mcp` no longer skips the sled write when there's no local WG iface (falls back to last-known pubkey) — see `[[project_oracle_decoy_relay_asbuilt]]` memory |
 
 ## ▶ Current
 *Actively in flight.*
@@ -41,7 +42,7 @@ Replaces scattered TODO fragments across `.zenflow/tasks/`, `.kiro/specs/`, and 
 
 | ID | Task | Agent | Status | Notes |
 |----|------|-------|--------|-------|
-| OD-06 | Gemma as single routing brain: subid classification + OpenFlow tags + subdomain resolution | `general-purpose` | TODO | design recorded, not built |
+| OD-06 | Gemma as single routing brain: subid classification + OpenFlow tags + subdomain resolution | `general-purpose` | TODO | design recorded, not built; 2026-07-13: Jeremy wants this to own dynamic decoy→backend xray routing (currently static domain-match rules in `/etc/xray/config.json`, works but hand-authored) — natural extension once built, not a prerequisite for OD-32 (identity injection), which is done independently |
 | OD-07 | Owned-domain DNS split-horizon: `*.ghostbridge.tech` carve-out → internal targets | `devops` | BLOCKED | needs Gemma map (OD-06) |
 | OD-01 | OVSDB event-driven: `monitor` (RFC 7047) in `OvsdbClient` + listener in `DbusMirror` | `devops` | TODO | replaces periodic reconciliation |
 | OD-02 | Enterprise event-driven: `inotify`/`SQLITE_UPDATE_HOOK` on `state.db` → re-projection | `devops` | TODO | |

@@ -2,7 +2,7 @@
 // Manages OpenFlow flows for the GhostBridge privacy tunnel (gbr_wg → gbr_warp → gbr_xray)
 // and the shared gRPC bridge ingress port. No per-container sock_* ports.
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use async_trait::async_trait;
 use log;
 use op_state::{
@@ -1486,6 +1486,67 @@ impl StatePlugin for OpenFlowPlugin {
             supports_checkpoints: true,
             supports_verification: true,
             atomic_operations: false, // Flows installed one by one
+        }
+    }
+
+    async fn call_method(&self, method: &str, args: &serde_json::Value) -> Result<serde_json::Value> {
+        match method {
+            "add_flow" => {
+                let input: AddFlowInput = serde_json::from_value(args.clone())
+                    .context("parse add_flow arguments")?;
+                let flow = FlowEntry {
+                    table: input.table,
+                    priority: input.priority,
+                    match_fields: input.match_fields,
+                    actions: input.actions,
+                    cookie: input.cookie,
+                    idle_timeout: input.idle_timeout.unwrap_or(0) as u16,
+                    hard_timeout: input.hard_timeout.unwrap_or(0) as u16,
+                };
+                self.install_flow(&input.bridge, &flow).await
+                    .context("install flow via OpenFlow")?;
+                Ok(serde_json::json!({"success": true}))
+            }
+            "delete_flow" => {
+                let input: DeleteFlowInput = serde_json::from_value(args.clone())
+                    .context("parse delete_flow arguments")?;
+                let flows = self.query_flows(&input.bridge).await
+                    .context("query current flows")?;
+                for flow in flows {
+                    let matches = input.match_fields.iter().all(|(k, v)| {
+                        flow.match_fields.get(k).map(|s| s.as_str()) == Some(v.as_str())
+                    });
+                    if matches {
+                        self.delete_flow(&input.bridge, &flow).await
+                            .context("delete matching flow")?;
+                    }
+                }
+                Ok(serde_json::json!({"success": true}))
+            }
+            "modify_flow" => {
+                let input: ModifyFlowInput = serde_json::from_value(args.clone())
+                    .context("parse modify_flow arguments")?;
+                let flows = self.query_flows(&input.bridge).await
+                    .context("query current flows")?;
+                for mut flow in flows {
+                    let matches = input.match_fields.iter().all(|(k, v)| {
+                        flow.match_fields.get(k).map(|s| s.as_str()) == Some(v.as_str())
+                    });
+                    if matches {
+                        if let Some(p) = input.priority {
+                            flow.priority = p;
+                        }
+                        flow.actions = input.actions.clone();
+                        if let Err(e) = self.delete_flow(&input.bridge, &flow).await {
+                            log::warn!("failed to delete old flow before modify: {e}");
+                        }
+                        self.install_flow(&input.bridge, &flow).await
+                            .context("install modified flow")?;
+                    }
+                }
+                Ok(serde_json::json!({"success": true}))
+            }
+            _ => bail!("openflow plugin does not implement method '{method}'"),
         }
     }
 }

@@ -1,5 +1,5 @@
 // 🟢 🛡️ The Tonic gRPC Gatekeeper (Middleware Interceptor)
-// Sits on the primary gRPC ingress at port 18789. Intercepts Xray-injected headers,
+// Sits on the primary gRPC ingress at port 8090. Intercepts Xray-injected headers,
 // performs a zero-copy check against the IdentitySled in shared memory, and either
 // allows the gRPC payload through or drops the connection instantly.
 //
@@ -22,7 +22,7 @@ fn is_sled_valid(sled: &IdentitySled) -> bool {
     sled.hashed_footprint != [0u8; 32] && sled.trace_id != [0u8; 16]
 }
 
-/// THE GATEKEEPER: Tonic gRPC Interceptor on port 18789.
+/// THE GATEKEEPER: Tonic gRPC Interceptor on port 8090.
 ///
 /// Enforces the Absolute Base rule: if the `x-ghostbridge-footprint` provided by Xray
 /// does not perfectly match the hashed footprint sitting in shared memory, the payload
@@ -43,14 +43,35 @@ pub fn ghostbridge_interceptor(mut req: Request<()>) -> Result<Request<()>, Stat
     // 1. Extract the Xray-injected Identity Headers (The Accountability Loop)
     //    Clone header values upfront to release the immutable borrow on `req`,
     //    allowing the mutable `extensions_mut()` call downstream.
+    let pubkey_value = req.metadata().get("x-wireguard-pubkey").cloned();
+
+    // The sled's footprint is rotated by MutationEngine on every successful
+    // mutation system-wide (see mutation_engine.rs's post-mutation sled
+    // rewrite) — it is not a stable value a caller can cache and resend, so
+    // xray cannot inject it as a static header without it going stale the
+    // instant anything else in the system mutates. The pubkey IS stable
+    // (it's the peer's actual WireGuard identity), so xray injects that, and
+    // this interceptor re-projects the sled from it before comparing —
+    // the sled inherits identity from the connection, not the other way
+    // around. A caller-supplied `x-ghostbridge-footprint` is still honored
+    // when present (older/direct callers that already know the live value),
+    // but is no longer required.
     let footprint_value = req.metadata().get("x-ghostbridge-footprint").cloned();
     let trace_value = req
         .metadata()
         .get("x-ghostbridge-trace-id")
-        .or_else(|| req.metadata().get("x-wireguard-pubkey"))
+        .or_else(|| pubkey_value.as_ref())
         .cloned();
 
-    if footprint_value.is_none() || trace_value.is_none() {
+    if let Some(pubkey_header) = &pubkey_value {
+        if let Ok(pubkey) = pubkey_header.to_str() {
+            if let Err(e) = op_identity::schema_bridge::write_sled_from_wg(pubkey) {
+                tracing::warn!("failed to project sled from x-wireguard-pubkey: {e}");
+            }
+        }
+    }
+
+    if trace_value.is_none() {
         return Err(Status::unauthenticated(
             "A.N.N.A. Scribe: Missing Ghostbridge Identity Sled. Connection Dropped.",
         ));
@@ -69,23 +90,27 @@ pub fn ghostbridge_interceptor(mut req: Request<()>) -> Result<Request<()>, Stat
     }
 
     let current_footprint = sled.hashed_footprint;
-
-    // 3. The Strike/Etch Validation: Check if the payload is in sync with Btrfs.
-    //    If a Btrfs mutation has occurred and the client's footprint is stale,
-    //    the connection is dropped without consuming any NVMe I/O.
-    let request_footprint = footprint_value
-        .as_ref()
-        .unwrap()
-        .to_str()
-        .map_err(|_| Status::invalid_argument("Invalid footprint header encoding"))?;
     let expected_footprint = hex::encode(current_footprint);
 
-    if request_footprint != expected_footprint {
-        return Err(Status::permission_denied(
-            "A.N.N.A. Scribe: Temporal Hash Mismatch. \
-             Session footprint is out of sync with current Btrfs mutation.",
-        ));
-    }
+    // 3. The Strike/Etch Validation: only enforced when the CALLER supplies a
+    //    footprint (a caller claiming to already know the live value). A
+    //    pubkey-only caller just re-projected the sled above, so its footprint
+    //    is current by construction — nothing stale to compare against.
+    let request_footprint = match footprint_value.as_ref() {
+        Some(v) => {
+            let s = v
+                .to_str()
+                .map_err(|_| Status::invalid_argument("Invalid footprint header encoding"))?;
+            if s != expected_footprint {
+                return Err(Status::permission_denied(
+                    "A.N.N.A. Scribe: Temporal Hash Mismatch. \
+                     Session footprint is out of sync with the current mutation index.",
+                ));
+            }
+            s.to_string()
+        }
+        None => expected_footprint,
+    };
 
     // 4. Pass the Trace ID downstream into the gRPC context for the React GUI.
     let session_id = trace_value
@@ -95,7 +120,7 @@ pub fn ghostbridge_interceptor(mut req: Request<()>) -> Result<Request<()>, Stat
         .map_err(|_| Status::invalid_argument("Invalid trace header encoding"))?
         .to_string();
     req.extensions_mut().insert(GhostbridgeIdentity {
-        footprint: request_footprint.to_string(),
+        footprint: request_footprint,
         session_id,
     });
 

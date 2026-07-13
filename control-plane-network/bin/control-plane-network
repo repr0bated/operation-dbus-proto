@@ -1,0 +1,362 @@
+#!/bin/sh
+# control-plane-network
+# Staged s6 network initialization for main or decoy nodes.
+#
+# This is the sanctioned bootstrap exception: it brings the network into
+# existence natively (OVSDB CLI, ip, wg). Once up, the rovs/wireguard
+# plugins own all further mutation via D-Bus. The OpenFlow controller
+# assignment lives in the separate ovsbr0-controller oneshot, not here —
+# see that script for why.
+#
+# Configuration: /etc/control-plane-network/network.conf
+# Layout source: docs/topology-designed-2026-07-10.mmd (reconciled with Codex)
+
+set -eu
+
+# s6-rc oneshots run with a minimal PATH; ovs-vsctl/zcall live in /usr/local.
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+CONF="${CONTROL_PLANE_NETWORK_CONF:-/etc/control-plane-network/network.conf}"
+[ -r "$CONF" ] && . "$CONF"
+
+ROLE="${NODE_ROLE:-${1:-main}}"
+case "$ROLE" in main|decoy) ;; *) echo "role must be main or decoy" >&2; exit 2;; esac
+
+STATE_DIR="${STATE_DIR:-/var/lib/control-plane-network}"
+REPORT_DIR="${REPORT_DIR:-/var/log/control-plane-network}"
+BIRTHDAY="${BIRTHDAY:-2026-07-11}"
+SHORT_PAUSE="${SHORT_PAUSE:-2}"
+LONG_PAUSE="${LONG_PAUSE:-7}"
+
+# Network layout — override per node in network.conf.
+# ovsbr0 keeps only its own Incus-managed identity (10.200.0.1/30). The two
+# enslaved ports carry their own addresses directly: eth0 (public IP +
+# service anchors) and netmaker (mesh identity). Both work as addressed,
+# enslaved OVS ports under fail_mode=standalone with no controller — an
+# in-band controller pointed at the bridge's own address is what actually
+# breaks forwarding (confirmed live, 2026-07-12), enslavement itself does
+# not.
+BRIDGE="${BRIDGE:-ovsbr0}"
+BRIDGE_ADDRESSES="${BRIDGE_ADDRESSES:-10.200.0.1/30}"
+BRIDGE_DATAPATH="${BRIDGE_DATAPATH:-system}"
+BRIDGE_FAIL_MODE="${BRIDGE_FAIL_MODE:-standalone}"
+
+# eth0 is enslaved into the bridge and keeps its public IP plus the two
+# internal service anchors (grpc-uplink, oracle DNAT target) directly on
+# itself.
+UPLINK_NIC="${UPLINK_NIC:-eth0}"
+PUBLIC_IP="${PUBLIC_IP:-148.113.204.83/32}"
+PUBLIC_GW="${PUBLIC_GW:-148.113.204.1}"
+UPLINK_ALIASES="${UPLINK_ALIASES:-10.200.0.2/32 10.0.0.2/32}"
+
+# Stale OVSDB ports that resurrect from conf.db; removed every boot.
+ROGUE_PORTS="${ROGUE_PORTS:-ovsbr0-sock ovsbr0-mgmt gbr_wg gbr_warp gbr_xray}"
+OVSDB_SOCK="${OVSDB_SOCK:-/usr/local/var/run/openvswitch/db.sock}"
+
+# The ONLY WireGuard interface on the host is the netmaker mesh. It is
+# hub-and-spoke through the oracle (one stable peer), so a static config
+# replaces netclient (which runs only inside the netmaker container). It
+# joins ovsbr0 as an enslaved port and carries its own mesh identity
+# addresses directly (netmaker.conf uses /32,/128 point-to-point style with
+# Table=off, so the broader subnets still need explicit routes below).
+NETMAKER_IFACE="${NETMAKER_IFACE:-netmaker}"
+NETMAKER_ALIASES="${NETMAKER_ALIASES:-10.0.0.3/32 100.90.37.254/32 fd3c:8a39:2d9e:9577:ffff:ffff:ffff:fffe/128}"
+# net=src pairs — AllowedIPs routed out the WG port, sourced from the
+# aliases above (now genuinely local to the interface).
+NETMAKER_ROUTES="${NETMAKER_ROUTES:-10.0.0.0/24=10.0.0.3 100.90.37.0/24=100.90.37.254 fd3c:8a39:2d9e:9577::/64=fd3c:8a39:2d9e:9577:ffff:ffff:ffff:fffe}"
+
+ZCALL="${ZCALL:-zcall}"
+
+HEARTBEAT=0
+FAILED_STAGES=""
+
+mkdir -p "$STATE_DIR" "$REPORT_DIR"
+
+ts() { date -Iseconds; }
+log() { printf '%s [%s] %s\n' "$(ts)" "$ROLE" "$*"; }
+pause_short() { log "short pause: ${SHORT_PAUSE}s"; sleep "$SHORT_PAUSE"; }
+pause_long()  { log "long pause: ${LONG_PAUSE}s"; sleep "$LONG_PAUSE"; }
+
+# Run a stage; record failure but keep bringing up whatever else can come up.
+stage() {
+    _name="$1"; shift
+    log "stage: $_name"
+    if "$@"; then
+        log "stage ok: $_name"
+    else
+        log "stage FAILED: $_name"
+        FAILED_STAGES="$FAILED_STAGES $_name"
+    fi
+}
+
+wait_dbus() {
+    i=0
+    while [ ! -S /run/dbus/system_bus_socket ]; do
+        i=$((i + 1))
+        [ "$i" -gt 120 ] && { log "D-Bus socket missing after 120s"; return 1; }
+        log "waiting for D-Bus"
+        sleep 1
+    done
+    return 0
+}
+
+wait_ovsdb() {
+    i=0
+    while [ ! -S "$OVSDB_SOCK" ]; do
+        i=$((i + 1))
+        [ "$i" -gt 60 ] && { log "OVSDB socket missing after 60s: $OVSDB_SOCK"; return 1; }
+        sleep 1
+    done
+    return 0
+}
+
+# Incus owns ovsbr0 (creates it with dnsmasq, 10.200.0.1/30). We wait for
+# Incus to create the bridge, then configure datapath/fail-mode and strip
+# rogue ports. We do NOT create the bridge ourselves.
+ensure_bridge() {
+    i=0
+    while ! ovs-vsctl --db="unix:$OVSDB_SOCK" br-exists "$BRIDGE" 2>/dev/null; do
+        i=$((i + 1))
+        [ "$i" -gt 60 ] && { log "bridge $BRIDGE not created after 60s (Incus must create it)"; return 1; }
+        sleep 1
+    done
+    log "ensure_bridge: $BRIDGE exists (Incus-managed)"
+
+    ovs-vsctl --db="unix:$OVSDB_SOCK" set bridge "$BRIDGE" \
+        datapath_type="$BRIDGE_DATAPATH" fail_mode="$BRIDGE_FAIL_MODE" || return 1
+    for _port in $ROGUE_PORTS; do
+        ovs-vsctl --db="unix:$OVSDB_SOCK" --if-exists del-port "$BRIDGE" "$_port" || true
+    done
+    return 0
+}
+
+# Incus assigns 10.200.0.1/30 via its network config. `ip addr replace` is
+# idempotent so this is safe to re-run regardless of what's already present.
+assign_addresses() {
+    ip link set "$BRIDGE" up || return 1
+    for _addr in $BRIDGE_ADDRESSES; do
+        ip addr replace "$_addr" dev "$BRIDGE" || return 1
+    done
+    return 0
+}
+
+# Stop dhcpcd from managing eth0 so it doesn't fight the bridge enslavement.
+# dhcpcd re-acquires the DHCP lease on eth0 and overrides the bridge route.
+tame_dhcpcd() {
+    # Add eth0 to denyinterfaces if not already there.
+    _conf=/etc/dhcpcd.conf
+    if [ -f "$_conf" ] && ! grep -q 'denyinterfaces.*eth0' "$_conf" 2>/dev/null; then
+        # Append eth0 to the existing denyinterfaces line, or add one.
+        if grep -q '^denyinterfaces' "$_conf" 2>/dev/null; then
+            sed -i 's/^denyinterfaces.*/& eth0/' "$_conf"
+        else
+            echo 'denyinterfaces eth0' >> "$_conf"
+        fi
+        log "tame_dhcpcd: added eth0 to denyinterfaces in $_conf"
+    else
+        log "tame_dhcpcd: eth0 already denied"
+    fi
+    # Release the eth0 lease and stop dhcpcd on it.
+    dhcpcd -x "$UPLINK_NIC" 2>/dev/null || true
+    log "tame_dhcpcd: released dhcpcd on $UPLINK_NIC"
+    return 0
+}
+
+# Enslave the physical NIC into the OVS bridge and keep its own addresses on
+# it directly (confirmed live 2026-07-12: an enslaved "system" port under
+# fail_mode=standalone with no controller still passes real external
+# traffic — OVS's built-in learning-switch fallback handles this fine).
+# This is the single riskiest stage in the whole script — a bad move here
+# is what cost remote reachability on 2026-07-12 and required local console
+# recovery — so every step is idempotent, and the move is verified with a
+# rollback instead of just hoped to work.
+enslave_eth0() {
+    if ovs-vsctl --db="unix:$OVSDB_SOCK" list-ports "$BRIDGE" 2>/dev/null \
+            | grep -qx "$UPLINK_NIC"; then
+        log "enslave_eth0: $UPLINK_NIC already on $BRIDGE"
+    else
+        ovs-vsctl --db="unix:$OVSDB_SOCK" --may-exist add-port "$BRIDGE" "$UPLINK_NIC" \
+            || { log "enslave_eth0: cannot add $UPLINK_NIC to $BRIDGE"; return 1; }
+        log "enslave_eth0: added $UPLINK_NIC to $BRIDGE"
+    fi
+    ip link set "$UPLINK_NIC" up || return 1
+
+    ip addr replace "$PUBLIC_IP" dev "$UPLINK_NIC" || return 1
+    for _addr in $UPLINK_ALIASES; do
+        ip addr replace "$_addr" dev "$UPLINK_NIC" || return 1
+    done
+    ip route replace default via "$PUBLIC_GW" dev "$UPLINK_NIC" src "${PUBLIC_IP%/*}" \
+        || return 1
+    log "enslave_eth0: $PUBLIC_IP + aliases + default route on $UPLINK_NIC"
+
+    # Verify the enslavement actually preserved reachability before
+    # committing to it. If the gateway is unreachable, de-enslave eth0
+    # entirely so a future boot doesn't need a local console to recover —
+    # self-heal instead of silently staying broken.
+    #
+    # Deliberately NOT `ping -I $UPLINK_NIC`: device-bound ping doesn't
+    # reliably follow the same route the kernel's normal FIB lookup would
+    # use (confirmed live 2026-07-12 — `-I eth0` gave 100% loss while a
+    # plain ping over the identical route/src succeeded cleanly moments
+    # later). A plain ping matches what real traffic through the default
+    # route actually experiences.
+    if ! ping -c 2 -W 2 "$PUBLIC_GW" >/dev/null 2>&1; then
+        log "enslave_eth0: gateway $PUBLIC_GW unreachable via $UPLINK_NIC — rolling back"
+        ovs-vsctl --db="unix:$OVSDB_SOCK" --if-exists del-port "$BRIDGE" "$UPLINK_NIC" \
+            2>/dev/null || true
+        ip addr replace "$PUBLIC_IP" dev "$UPLINK_NIC" || true
+        ip route replace default via "$PUBLIC_GW" dev "$UPLINK_NIC" \
+            src "${PUBLIC_IP%/*}" || true
+        log "enslave_eth0: rolled back — $UPLINK_NIC restored as a plain interface"
+        return 1
+    fi
+    log "enslave_eth0: verified reachable ($PUBLIC_GW via $UPLINK_NIC)"
+    return 0
+}
+
+# Static WG mesh: wg-quick only parses (strip); mesh identity addresses and
+# the Table=off equivalent (AllowedIPs as device routes) are applied here.
+netmaker_up() {
+    _conf="/etc/wireguard/${NETMAKER_IFACE}.conf"
+    [ -r "$_conf" ] || { log "no static config: $_conf"; return 1; }
+    ip link show "$NETMAKER_IFACE" >/dev/null 2>&1 \
+        || ip link add "$NETMAKER_IFACE" type wireguard || return 1
+    _tmp="$STATE_DIR/.wg-${NETMAKER_IFACE}.stripped"
+    wg-quick strip "$NETMAKER_IFACE" > "$_tmp" || { rm -f "$_tmp"; return 1; }
+    wg setconf "$NETMAKER_IFACE" "$_tmp" || { rm -f "$_tmp"; return 1; }
+    rm -f "$_tmp"
+    for _addr in $NETMAKER_ALIASES; do
+        ip addr replace "$_addr" dev "$NETMAKER_IFACE" || return 1
+    done
+    _mtu="$(sed -n 's/^MTU[[:space:]]*=[[:space:]]*//p' "$_conf" | head -n 1)"
+    if [ -n "$_mtu" ]; then
+        ip link set "$NETMAKER_IFACE" mtu "$_mtu" || return 1
+    fi
+    ip link set "$NETMAKER_IFACE" up || return 1
+    for _pair in $NETMAKER_ROUTES; do
+        _net="${_pair%%=*}"
+        _src="${_pair#*=}"
+        ip route replace "$_net" dev "$NETMAKER_IFACE" src "$_src" || return 1
+    done
+    ovs-vsctl --db="unix:$OVSDB_SOCK" --may-exist add-port "$BRIDGE" "$NETMAKER_IFACE" \
+        || return 1
+    # Packet-type-aware flows need OpenFlow15 enabled on the bridge.
+    ovs-vsctl --db="unix:$OVSDB_SOCK" set bridge "$BRIDGE" \
+        protocols=OpenFlow10,OpenFlow11,OpenFlow12,OpenFlow13,OpenFlow14,OpenFlow15 \
+        || return 1
+    _mac="$(ip -o link show "$BRIDGE" | sed -n 's/.*link\/ether \([0-9a-f:]*\).*/\1/p')"
+    [ -n "$_mac" ] || { log "cannot read $BRIDGE MAC"; return 1; }
+    # The WG port delivers pure L3 packets (no Ethernet header); without
+    # these flows the datapath compiles them to drop. Encap a header and
+    # hand them to the host stack. xray/OpenFlow tag routing layers richer
+    # flows on top of this bootstrap set.
+    # TODO: convert to `zcall openflow add_flow` + rovs_commands once the
+    # rovs->OVSDB hang (FIX #5) is resolved; OVS CLI here is the sanctioned
+    # bootstrap exception until then.
+    for _pt in 0x800 0x86dd; do
+        ovs-ofctl -O OpenFlow15 add-flow "$BRIDGE" \
+            "priority=100,packet_type=(1,$_pt),in_port=$NETMAKER_IFACE,actions=encap(ethernet),set_field:$_mac->eth_dst,LOCAL" \
+            || return 1
+    done
+    return 0
+}
+
+write_dns() {
+    cat > "$STATE_DIR/resolv.conf" <<'EOF'
+nameserver 2a07:a8c0::68:9ec7
+nameserver 2a07:a8c1::68:9ec7
+EOF
+    log "wrote IPv6-only NextDNS resolver fragment"
+}
+
+increment_heartbeat() {
+    _file="$STATE_DIR/heartbeat"
+    _n=0
+    [ -r "$_file" ] && _n="$(cat "$_file" 2>/dev/null || echo 0)"
+    HEARTBEAT=$((_n + 1))
+    printf '%s\n' "$HEARTBEAT" > "$_file"
+}
+
+age_days() {
+    _born="$(date -d "$BIRTHDAY" +%s 2>/dev/null || echo 0)"
+    _now="$(date +%s)"
+    if [ "$_born" -gt 0 ]; then
+        echo $(((_now - _born) / 86400))
+    else
+        echo 0
+    fi
+}
+
+capture() {
+    _title="$1"; shift
+    printf '\n## %s\n\n```\n' "$_title"
+    "$@" 2>&1 || true
+    printf '```\n'
+}
+
+startup_report() {
+    _stamp="$(date +%Y%m%d-%H%M%S)"
+    _report="$REPORT_DIR/${ROLE}-${_stamp}.md"
+
+    {
+        echo "# Control Plane Startup Report"
+        echo
+        echo "- Node: $(uname -n)"
+        echo "- Role: $ROLE"
+        echo "- Birthday: $BIRTHDAY"
+        echo "- Age: $(age_days) days"
+        echo "- Soul: present"
+        echo "- Heartbeat: $HEARTBEAT"
+        echo "- State: awake"
+        echo "- Generated: $(ts)"
+        if [ -n "$FAILED_STAGES" ]; then
+            echo "- Failed stages:$FAILED_STAGES"
+        else
+            echo "- Failed stages: none"
+        fi
+
+        capture "Interfaces" ip -brief address
+        capture "IPv4 routes" ip route
+        capture "IPv6 routes" ip -6 route
+        capture "OVS bridge $BRIDGE" ovs-vsctl --db="unix:$OVSDB_SOCK" list-ports "$BRIDGE"
+        capture "OpenFlow flows" ovs-ofctl -O OpenFlow15 dump-flows "$BRIDGE"
+        capture "WireGuard $NETMAKER_IFACE" wg show "$NETMAKER_IFACE"
+        capture "Listening sockets" ss -lntup
+        capture "Current logins" who
+        capture "Recent logins" last -n 20
+    } > "$_report"
+
+    ln -sfn "$_report" "$REPORT_DIR/latest-${ROLE}.md"
+    log "startup report: $_report"
+}
+
+main() {
+    increment_heartbeat
+    log "starting staged network initialization (heartbeat $HEARTBEAT, age $(age_days) days)"
+
+    stage "dbus-wait" wait_dbus
+    pause_short
+
+    stage "ovsdb-wait" wait_ovsdb
+    stage "bridge" ensure_bridge
+    stage "addresses" assign_addresses
+    stage "tame-dhcpcd" tame_dhcpcd
+    stage "enslave-eth0" enslave_eth0
+    pause_long
+
+    stage "netmaker-mesh" netmaker_up
+    stage "dns-fragment" write_dns
+    pause_short
+
+    startup_report
+    touch "$STATE_DIR/${ROLE}.ready"
+
+    if [ -n "$FAILED_STAGES" ]; then
+        log "network initialization completed with failures:$FAILED_STAGES"
+        exit 1
+    fi
+    log "network initialization complete"
+}
+
+main "$@"

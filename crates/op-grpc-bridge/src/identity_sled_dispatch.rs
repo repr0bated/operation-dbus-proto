@@ -230,7 +230,7 @@ fn host_identity_from_raw_sled() -> anyhow::Result<ContainerIdentitySled> {
         session_id: op_identity::session::derive_session_id(&wireguard_pubkey),
         wireguard_pubkey,
         interface: std::env::var("IDENTITY_SLED_HOST_INTERFACE")
-            .unwrap_or_else(|_| "opdbus".to_string()),
+            .unwrap_or_else(|_| "netmaker".to_string()),
         peer_ip: std::env::var("IDENTITY_SLED_HOST_PEER_IP").ok(),
         mutation_index: sled.mutation_index,
         hashed_footprint: hex::encode(sled.hashed_footprint),

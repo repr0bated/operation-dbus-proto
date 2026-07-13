@@ -7,8 +7,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, Utc};
 use op_cozo_store::{CozoGraphShuttle, DataValue, Num};
 use op_identity::{
-    derive_session_id_from_psk, generate_magic_link_token, session_proof,
-    generate_wireguard_psk,
+    derive_session_id_from_psk, generate_magic_link_token, generate_wireguard_psk, session_proof,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -409,20 +408,8 @@ impl UserStore {
 
     async fn upsert_consumer_in_cozo(&self, user: &PrivacyUser) -> Result<()> {
         let c = self.cozo_clone();
-        let (
-            wg,
-            wg_priv,
-            ip,
-            ev,
-            quota,
-            used,
-            container,
-            route,
-            pnc,
-            pnc_at,
-            api_json,
-            ts,
-        ) = consumer_to_cozo_fields(user);
+        let (wg, wg_priv, ip, ev, quota, used, container, route, pnc, pnc_at, api_json, ts) =
+            consumer_to_cozo_fields(user);
         let session_id = user.id.clone();
         tokio::task::spawn_blocking(move || {
             c.upsert_consumer_account(
@@ -632,17 +619,13 @@ impl UserStore {
             });
 
         if let Some(pending) = pending {
-            self.signup_email_index
-                .write()
-                .await
-                .remove(&pending.email);
+            self.signup_email_index.write().await.remove(&pending.email);
 
             use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
             let psk_bytes = BASE64
                 .decode(pending.psk.trim())
                 .context("decode pending psk")?;
-            let session_id =
-                derive_session_id_from_psk(&pending.wg_public_key, &psk_bytes)?;
+            let session_id = derive_session_id_from_psk(&pending.wg_public_key, &psk_bytes)?;
 
             let user = PrivacyUser {
                 id: session_id.clone(),
@@ -689,11 +672,12 @@ impl UserStore {
     pub async fn get_user(&self, user_id: &str) -> Option<PrivacyUser> {
         let c_consumer = self.cozo_clone();
         let id = user_id.to_string();
-        let consumer_row = tokio::task::spawn_blocking(move || c_consumer.get_consumer_account(&id))
-            .await
-            .ok()
-            .and_then(|r| r.ok())
-            .flatten();
+        let consumer_row =
+            tokio::task::spawn_blocking(move || c_consumer.get_consumer_account(&id))
+                .await
+                .ok()
+                .and_then(|r| r.ok())
+                .flatten();
         if let Some(row) = consumer_row {
             return parse_consumer_row(user_id, &row);
         }

@@ -232,7 +232,9 @@ impl OvsdbDbusClient {
         property: &str,
         value: &str,
     ) -> Result<()> {
-        self.inner.set_bridge_property(bridge_name, property, value).await
+        self.inner
+            .set_bridge_property(bridge_name, property, value)
+            .await
     }
 
     /// Set an option on an interface.
@@ -243,7 +245,9 @@ impl OvsdbDbusClient {
         option_name: &str,
         option_value: &str,
     ) -> Result<()> {
-        self.inner.set_interface_option(bridge_name, iface_name, option_name, option_value).await
+        self.inner
+            .set_interface_option(bridge_name, iface_name, option_name, option_value)
+            .await
     }
 
     /// Delete a port from a bridge.
@@ -258,7 +262,9 @@ impl OvsdbDbusClient {
         port_name: &str,
         port_type: Option<&str>,
     ) -> Result<()> {
-        self.inner.add_port_with_type(bridge_name, port_name, port_type).await
+        self.inner
+            .add_port_with_type(bridge_name, port_name, port_type)
+            .await
     }
 
     /// Dump database contents as JSON Value.
@@ -290,6 +296,8 @@ impl OvsdbDbusClient {
 
     /// Execute transaction.
     pub async fn transact(&self, operations: Vec<Value>) -> Result<Value> {
-        self.inner.transact("Open_vSwitch", Value::Array(operations)).await
+        self.inner
+            .transact("Open_vSwitch", Value::Array(operations))
+            .await
     }
 }

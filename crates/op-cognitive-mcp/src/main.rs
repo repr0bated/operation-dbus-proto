@@ -17,9 +17,10 @@
 //!   3. WireGuard interface IP detected at startup (if interface is up)
 //!   4. 0.0.0.0 fallback
 
+use base64::Engine;
 use clap::Parser;
 use op_cognitive_mcp::CognitiveMcpServer;
-use op_identity::{write_sled_from_wg, WireGuardIdentity};
+use op_identity::{read_sled, write_sled_from_wg, WireGuardIdentity};
 use tracing::{info, warn, Level};
 use tracing_subscriber::FmtSubscriber;
 
@@ -133,8 +134,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let wg_id = WireGuardIdentity::with_interface(&bind_config.wg_interface);
     let wg_ip = wg_id.get_local_ip();
 
-    match wg_id.get_local_pubkey() {
-        Ok(pubkey) => {
+    // No wg show fallback: a host with no live WireGuard interface (e.g.
+    // 3tched, where WG terminates on the oracle decoy, not locally) must
+    // still leave a fresh sled behind rather than an unwritten/stale one —
+    // fall back to the pubkey already on file, so mutation_index/trace_id
+    // still advance and the sled never silently goes stale across restarts.
+    let pubkey = wg_id.get_local_pubkey().ok().or_else(|| {
+        let (sled_ptr, _mmap) = read_sled().ok()?;
+        let existing = unsafe { &*sled_ptr };
+        Some(base64::engine::general_purpose::STANDARD.encode(existing.wireguard_pubkey))
+    });
+
+    match pubkey {
+        Some(pubkey) => {
             info!(
                 interface = %bind_config.wg_interface,
                 pubkey = %pubkey,
@@ -148,12 +160,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
             }
         }
-        Err(e) => {
+        None => {
             warn!(
                 interface = %bind_config.wg_interface,
-                error = %e,
-                "Could not read WireGuard public key — identity sled not written; \
-                 set WG_PUBKEY env var to override"
+                "No WireGuard interface and no existing sled to fall back to — \
+                 identity sled not written; set WG_PUBKEY env var to override"
             );
         }
     }

@@ -7,7 +7,10 @@ export DBUS_SESSION_BUS_ADDRESS
 export OP_DBUS_GRPC_ADDR="${OP_DBUS_GRPC_ADDR:-http://10.200.0.2:8090}"
 export OP_DBUS_ADDR="${OP_DBUS_ADDR:-$OP_DBUS_GRPC_ADDR}"
 export OP_MEMORY_DB="${OP_MEMORY_DB:-/var/lib/op-dbus/cognitive.db}"
-export OP_WEB_STATIC_DIR="${OP_WEB_STATIC_DIR:-/home/jeremy/git/operation-dbus-proto/crates/op-web/ui/dist}"
+# The control-plane UI is served by the assistant container.  Keep op-web as
+# the authenticated REST/gRPC-Web gateway only; an explicit override can still
+# attach a static tree for local development.
+export OP_WEB_STATIC_DIR="${OP_WEB_STATIC_DIR-}"
 export RUST_LOG="${RUST_LOG:-op_web=info,info}"
 
 # Decoy ingress alias (10.0.0.2) + mesh grpc-uplink alias (10.200.0.2)

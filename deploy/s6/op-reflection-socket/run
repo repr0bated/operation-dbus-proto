@@ -1,0 +1,5 @@
+#!/bin/sh
+exec 2>&1
+export REFLECTION_SOCKET_PATH="${REFLECTION_SOCKET_PATH:-/run/ghostbridge/reflection.sock}"
+export REFLECTION_UPSTREAM="${REFLECTION_UPSTREAM:-http://10.200.0.1:50051}"
+exec /usr/local/bin/op-reflection-socket

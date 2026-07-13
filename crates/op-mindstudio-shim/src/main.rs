@@ -90,10 +90,7 @@ fn strip_think(result: &str) -> &str {
     result
 }
 
-async fn chat_completions(
-    State(shim): State<Arc<Shim>>,
-    Json(req): Json<ChatRequest>,
-) -> Response {
+async fn chat_completions(State(shim): State<Arc<Shim>>, Json(req): Json<ChatRequest>) -> Response {
     let prompt = flatten_prompt(&req.messages);
     if prompt.is_empty() {
         return error_response(StatusCode::BAD_REQUEST, "no message content");
@@ -129,15 +126,28 @@ async fn chat_completions(
             )
         }
     };
-    let result = payload.get("result").and_then(Value::as_str);
-    let Some(result) = result else {
+    let Some(result) = payload.get("result") else {
         tracing::warn!(%status, %payload, "mindstudio run without result");
         return error_response(
             StatusCode::BAD_GATEWAY,
             &format!("mindstudio run returned no result (status {status})"),
         );
     };
-    let text = strip_think(result);
+    // JSON-render apps return a structured `{root,elements,state}` object,
+    // while older MindStudio workflows return a text string. Preserve the
+    // OpenAI-compatible string content envelope for both forms.
+    let text = match result {
+        Value::String(text) => strip_think(text).to_string(),
+        structured => match serde_json::to_string(structured) {
+            Ok(text) => text,
+            Err(e) => {
+                return error_response(
+                    StatusCode::BAD_GATEWAY,
+                    &format!("mindstudio result was not serializable: {e}"),
+                )
+            }
+        },
+    };
 
     Json(json!({
         "id": payload
@@ -183,8 +193,8 @@ async fn main() -> Result<()> {
         .map_err(|_| anyhow::anyhow!("MIND_STUDIO_API_KEY is not set"))?;
     let app_id = std::env::var("MINDSTUDIO_APP_ID")
         .unwrap_or_else(|_| "83dc1fff-d16e-4a7f-80b9-fd68f6117346".to_string());
-    let listen = std::env::var("MINDSTUDIO_SHIM_LISTEN")
-        .unwrap_or_else(|_| "127.0.0.1:8093".to_string());
+    let listen =
+        std::env::var("MINDSTUDIO_SHIM_LISTEN").unwrap_or_else(|_| "127.0.0.1:8093".to_string());
 
     let shim = Arc::new(Shim {
         http: reqwest::Client::builder()

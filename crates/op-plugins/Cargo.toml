@@ -21,6 +21,9 @@ op-state = { path = "../op-state" }
 op-state-store = { path = "../op-state-store" }
 op-blockchain = { path = "../op-blockchain" }
 op-network = { path = "../op-network" }
+rovs-ovsdb = "0.2"
+rovs-jsonrpc = "0.2"
+rovs-transport = "0.2"
 op-dynamic-loader = { path = "../op-dynamic-loader" }
 op-execution-tracker = { path = "../op-execution-tracker" }
 op-agents = { path = "../op-agents" }

@@ -1,6 +1,15 @@
 {
     "mcp": {
         "servers": {
+            "op-cognitive-mcp": {
+                "command": "/usr/local/bin/op-cognitive-mcp",
+                "args": ["--stdio"],
+                "description": "Code-aware cognitive MCP — memory, RAG, identity graph, compliance, context persistence",
+                "env": {
+                    "VOYAGE_API_KEY": "",
+                    "QDRANT_URL": "http://127.0.0.1:6334"
+                }
+            },
             "op-dbus-compact": {
                 "type": "sse",
                 "url": "https://op-dbus.ghostbridge.tech/mcp/compact",

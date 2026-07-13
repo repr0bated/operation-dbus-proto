@@ -47,6 +47,7 @@ pub mod login1;
 pub mod mail_server;
 pub mod mcp;
 pub mod memory_plugin;
+pub mod mindstudio;
 pub mod net;
 pub mod netmaker;
 pub mod notebooklm;

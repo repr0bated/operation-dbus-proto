@@ -1,5 +1,15 @@
 #!/bin/sh
 exec 2>&1
+
+[ -r /etc/op-dbus/environment ] && . /etc/op-dbus/environment
+export DBUS_SESSION_BUS_ADDRESS
 export COGNITIVE_MCP_DB_PATH="${COGNITIVE_MCP_DB_PATH:-/var/lib/op-dbus/cognitive.db}"
+export COGNITIVE_MCP_BIND="${COGNITIVE_MCP_BIND:-127.0.0.1:3003}"
+export COGNITIVE_MCP_GRPC_BIND="${COGNITIVE_MCP_GRPC_BIND:-127.0.0.1:50052}"
 export WG_INTERFACE="${WG_INTERFACE:-netmaker}"
-exec s6-envdir ./env /usr/local/bin/op-cognitive-mcp --db "$COGNITIVE_MCP_DB_PATH"
+export RUST_LOG="${RUST_LOG:-op_cognitive_mcp=info,info}"
+
+exec s6-envdir ./env /usr/local/bin/op-cognitive-mcp \
+    --db "$COGNITIVE_MCP_DB_PATH" \
+    --http "$COGNITIVE_MCP_BIND" \
+    --grpc "$COGNITIVE_MCP_GRPC_BIND"

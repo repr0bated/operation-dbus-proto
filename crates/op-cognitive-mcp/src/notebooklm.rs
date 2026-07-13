@@ -292,7 +292,10 @@ pub async fn list_notebooklm_tools() -> Result<Vec<String>> {
 }
 
 /// Execute a NotebookLM sidecar tool by its published name with JSON args.
-pub async fn call_notebooklm_tool(tool: &str, args: serde_json::Value) -> Result<serde_json::Value> {
+pub async fn call_notebooklm_tool(
+    tool: &str,
+    args: serde_json::Value,
+) -> Result<serde_json::Value> {
     let registry = notebooklm_registry().await?;
     let mut bytes = serde_json::to_vec(&args)?;
     let input: Value = simd_json::to_owned_value(&mut bytes)

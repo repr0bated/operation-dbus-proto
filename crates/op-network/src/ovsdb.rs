@@ -557,7 +557,10 @@ impl OvsdbClient {
             "mutations": [["options", "insert", ["map", [[option_name, option_value]]]]]
         }]);
         self.transact("Open_vSwitch", operations).await?;
-        info!("Interface {} option {} set to {}", iface_name, option_name, option_value);
+        info!(
+            "Interface {} option {} set to {}",
+            iface_name, option_name, option_value
+        );
         Ok(())
     }
 

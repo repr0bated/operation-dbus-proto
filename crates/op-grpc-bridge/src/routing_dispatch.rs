@@ -13,8 +13,9 @@ use crate::mutation_engine::MutationEngine;
 
 async fn cache_state(engine: &MutationEngine) -> RoutingState {
     match engine.get_state("routing").await {
-        Some(v) => serde_json::from_value(serde_json::to_value(&v).unwrap_or_default())
-            .unwrap_or_default(),
+        Some(v) => {
+            serde_json::from_value(serde_json::to_value(&v).unwrap_or_default()).unwrap_or_default()
+        }
         None => RoutingState::default(),
     }
 }

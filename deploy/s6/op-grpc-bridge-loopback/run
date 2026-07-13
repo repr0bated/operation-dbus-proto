@@ -1,0 +1,8 @@
+#!/bin/sh
+set -eu
+
+# Preserve legacy host clients while the canonical bridge listener remains on
+# the 10.200.0.2 mesh address.
+exec socat \
+    TCP-LISTEN:8090,bind=127.0.0.1,reuseaddr,fork \
+    TCP:10.200.0.2:8090

@@ -54,7 +54,7 @@ assert_contains_only_prefix \
 assert_lines \
     "top-level options" \
     "$(get_completions 'zcall -')" \
-    $'--actor\n--arguments\n--blob-dir\n--capability\n--dry-run\n--endpoint\n--help\n--interface\n--object\n--print\n--show-headers\n--source\n--timeout\n-a\n-c\n-h'
+    $'--actor\n--arguments\n--blob-dir\n--capability\n--dry-run\n--endpoint\n--help\n--print\n--show-headers\n--source\n--timeout\n-a\n-c\n-h'
 
 
 assert_contains_only_prefix \

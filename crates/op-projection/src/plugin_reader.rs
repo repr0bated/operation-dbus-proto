@@ -13,6 +13,7 @@ use op_state::StatePlugin;
 use op_state_store::{MemoryStore, StateStore};
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
+use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
@@ -150,6 +151,33 @@ impl SystemPluginReader {
             .iter()
             .map(|plugin| (plugin.name.clone(), plugin.schema.clone()))
             .collect()
+    }
+
+    /// Returns a map of plugin id to the loaded `StatePlugin` instance.
+    ///
+    /// The projection D-Bus server uses this to dispatch `CallMethod` on the
+    /// `ProjectedObject` interface, making D-Bus the execution surface and
+    /// gRPC a transport.
+    pub fn plugin_instances(&self) -> HashMap<String, Arc<dyn StatePlugin>> {
+        self.plugins
+            .iter()
+            .map(|plugin| (plugin.name.clone(), plugin.plugin.clone()))
+            .collect()
+    }
+
+    /// Call a named method on a loaded plugin by id.
+    pub async fn call_plugin_method(
+        &self,
+        plugin_id: &str,
+        method: &str,
+        args: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        let plugin = self
+            .plugins
+            .iter()
+            .find(|p| p.name == plugin_id)
+            .with_context(|| format!("plugin '{}' not loaded", plugin_id))?;
+        plugin.plugin.call_method(method, args).await
     }
 
     /// Snapshots the present-state of every loaded plugin and returns it as

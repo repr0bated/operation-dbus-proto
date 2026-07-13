@@ -42,6 +42,7 @@ members = [
     "crates/op-mcp-shim",
     "crates/op-mindstudio-shim",
     "crates/op-gemma",
+    "crates/op-reflection-socket",
 ]
 
 [workspace.package]

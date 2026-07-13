@@ -1,6 +1,15 @@
 {
-  "_comment": "Agents MCP configuration - run-on-connection cognitive agents",
+  "_comment": "Agents MCP configuration - run-on-connection cognitive agents + local cognitive MCP",
   "mcpServers": {
+    "op-cognitive-mcp": {
+      "command": "/usr/local/bin/op-cognitive-mcp",
+      "args": ["--stdio"],
+      "description": "Code-aware cognitive MCP — memory, RAG, identity graph, compliance, context persistence. Local stdio server.",
+      "env": {
+        "VOYAGE_API_KEY": "",
+        "QDRANT_URL": "http://127.0.0.1:6334"
+      }
+    },
     "op-agents": {
       "serverUrl": "https://op-dbus.ghostbridge.tech/mcp/agents",
       "transport": "sse",
@@ -70,10 +79,11 @@
   "_workflow": {
     "recommended_startup": [
       "1. Connect to agents MCP (run-on-connection agents start automatically)",
-      "2. Use memory_recall to check for previous context",
-      "3. Use context_manager_load to restore session state",
-      "4. Use rust_pro_check to verify project compiles",
-      "5. Use sequential_thinking_plan for complex tasks"
+      "2. Use cognitive_mcp_memory_remember for local context persistence",
+      "3. Use memory_recall to check for previous context",
+      "4. Use context_manager_load to restore session state",
+      "5. Use rust_pro_check to verify project compiles",
+      "6. Use sequential_thinking_plan for complex tasks"
     ],
     "rust_development": [
       "rust_pro_check - Quick compilation check",

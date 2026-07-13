@@ -1,0 +1,60 @@
+#!/bin/sh
+set -eu
+
+# Qdrant runs sealed inside the "qdrant" Incus container (no NIC — it only
+# has the loopback interface; systemd inside the container binds it to
+# 127.0.0.1:6333/6334). The host reaches it via two Incus TCP proxy devices
+# (listen=host 127.0.0.1 -> connect=container 127.0.0.1), which do not
+# require or grant the container a network interface. This is the only
+# supported path in from the host; cognitive-mcp's default
+# COGNITIVE_MCP_QDRANT_URL (http://127.0.0.1:6334) assumes it.
+
+CONTAINER="${QDRANT_CONTAINER:-qdrant}"
+GRPC_PORT="${QDRANT_GRPC_PORT:-6334}"
+HTTP_PORT="${QDRANT_HTTP_PORT:-6333}"
+
+ensure_running() {
+    state="$(incus list "$CONTAINER" --format csv -c s 2>/dev/null || echo missing)"
+    if [ "$state" = "missing" ]; then
+        echo "qdrant: container '$CONTAINER' does not exist" >&2
+        exit 1
+    fi
+    if [ "$state" != "RUNNING" ]; then
+        echo "qdrant: starting container '$CONTAINER' (was $state)"
+        incus start "$CONTAINER"
+    fi
+    for i in $(seq 1 30); do
+        [ "$(incus list "$CONTAINER" --format csv -c s 2>/dev/null)" = "RUNNING" ] && return 0
+        sleep 1
+    done
+    echo "qdrant: container '$CONTAINER' did not reach RUNNING after 30s" >&2
+    exit 1
+}
+
+ensure_proxy_device() {
+    name="$1"
+    port="$2"
+    if incus config device get "$CONTAINER" "$name" listen >/dev/null 2>&1; then
+        return 0
+    fi
+    echo "qdrant: adding proxy device $name (127.0.0.1:$port host -> container)"
+    incus config device add "$CONTAINER" "$name" proxy \
+        listen=tcp:127.0.0.1:"$port" connect=tcp:127.0.0.1:"$port" bind=host
+}
+
+wait_healthy() {
+    for i in $(seq 1 30); do
+        if curl -fsS "http://127.0.0.1:${HTTP_PORT}/healthz" 2>/dev/null | grep -q "healthz check passed"; then
+            echo "qdrant: healthy on 127.0.0.1:${HTTP_PORT} (grpc ${GRPC_PORT})"
+            return 0
+        fi
+        sleep 1
+    done
+    echo "qdrant: not healthy after 30s" >&2
+    exit 1
+}
+
+ensure_running
+ensure_proxy_device qdrant-grpc "$GRPC_PORT"
+ensure_proxy_device qdrant-http "$HTTP_PORT"
+wait_healthy

@@ -105,10 +105,15 @@
   },
   {
     "name": "op-cognitive-mcp",
-    "description": "Cognitive memory and context tools",
+    "description": "Cognitive memory, RAG, and context tools for code-aware retrieval",
     "command": "/usr/local/bin/op-cognitive-mcp",
-    "args": [],
+    "args": ["--stdio"],
     "transport": "stdio",
-    "enabled": true
+    "enabled": true,
+    "env": {
+      "VOYAGE_API_KEY": "",
+      "QDRANT_URL": "http://127.0.0.1:6334"
+    },
+    "enable_instructions": "Set VOYAGE_API_KEY for full code-RAG; Qdrant must be running for vector search"
   }
 ]

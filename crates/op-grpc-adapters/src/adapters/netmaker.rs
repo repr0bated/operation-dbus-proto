@@ -97,9 +97,10 @@ impl NetmakerAdapter {
             )));
         }
 
-        let is_chunked = head
-            .lines()
-            .any(|l| l.to_ascii_lowercase().starts_with("transfer-encoding:") && l.to_ascii_lowercase().contains("chunked"));
+        let is_chunked = head.lines().any(|l| {
+            l.to_ascii_lowercase().starts_with("transfer-encoding:")
+                && l.to_ascii_lowercase().contains("chunked")
+        });
         Ok(if is_chunked {
             dechunk(body_raw)
         } else {

@@ -1,6 +1,15 @@
 {
   "_comment": "Unified MCP configuration for all modes",
   "mcpServers": {
+    "op-cognitive-mcp": {
+      "command": "/usr/local/bin/op-cognitive-mcp",
+      "args": ["--stdio"],
+      "description": "Code-aware cognitive MCP — memory, RAG, identity graph, compliance, context persistence. Requires Qdrant + Voyage for full RAG.",
+      "env": {
+        "VOYAGE_API_KEY": "",
+        "QDRANT_URL": "http://127.0.0.1:6334"
+      }
+    },
     "op-compact": {
       "serverUrl": "https://op-dbus.ghostbridge.tech/mcp/compact",
       "transport": "sse",
@@ -19,13 +28,14 @@
   },
   "_usage": {
     "recommended": [
+      "Use 'op-cognitive-mcp' for local code-aware RAG, memory, and compliance",
       "Use 'op-agents' for always-available cognitive tools",
       "Use 'op-compact' for discovering and using other tools",
-      "Both can be active simultaneously on different ports"
+      "op-cognitive-mcp + op-agents can be active simultaneously"
     ],
     "workflow": [
-      "1. Use sequential_thinking_think for complex reasoning",
-      "2. Use memory_remember to store important context",
+      "1. Use cognitive_mcp_memory_remember for local context persistence",
+      "2. Use sequential_thinking_think for complex reasoning",
       "3. Use list_tools to discover available capabilities",
       "4. Use get_tool_schema then execute_tool for specific tasks"
     ]

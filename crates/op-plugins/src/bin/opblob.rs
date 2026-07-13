@@ -5,6 +5,7 @@
 //! opblob seal-shm                     blobify real plugins into /dev/shm/opdbus/plugin-blobs
 //! opblob seal-plugins <dir>           blobify real plugins into a catalog dir
 //! opblob inspect <file.blob>          print identity, services, methods
+//! opblob schema <file.blob>           print the canonical embedded PluginSchema JSON
 //! opblob catalog <dir>                list active services in a catalog dir
 //! opblob btrfs-seal <image> <dir>     seal a catalog dir into a btrfs image
 //! opblob keygen <keyfile>             generate the account WG identity keypair
@@ -30,12 +31,13 @@ fn main() -> ExitCode {
         [cmd] if cmd == "seal-shm" => seal_plugins(Path::new(DEFAULT_SHM_DIR)),
         [cmd, dir] if cmd == "seal-plugins" => seal_plugins(Path::new(dir)),
         [cmd, file] if cmd == "inspect" => inspect(Path::new(file)),
+        [cmd, file] if cmd == "schema" => schema(Path::new(file)),
         [cmd, dir] if cmd == "catalog" => catalog(Path::new(dir)),
         [cmd, image, dir] if cmd == "btrfs-seal" => btrfs_seal(Path::new(image), Path::new(dir)),
         [cmd, keyfile] if cmd == "keygen" => keygen(Path::new(keyfile)),
         _ => {
             eprintln!(
-                "usage: opblob demo-seal <dir> | seal-shm | seal-plugins <dir> | inspect <file.blob> | catalog <dir> | btrfs-seal <image> <dir> | keygen <keyfile>"
+                "usage: opblob demo-seal <dir> | seal-shm | seal-plugins <dir> | inspect <file.blob> | schema <file.blob> | catalog <dir> | btrfs-seal <image> <dir> | keygen <keyfile>"
             );
             return ExitCode::from(2);
         }
@@ -183,6 +185,18 @@ fn inspect(file: &Path) -> Result<(), String> {
             f.name, f.package, f.messages, f.services
         );
     }
+    Ok(())
+}
+
+/// Emit the exact canonical PluginSchema JSON sealed into the blob. This is
+/// the machine-readable contract for RAG, prompt grounding, and validators;
+/// `inspect` is deliberately only a human-oriented manifest summary.
+fn schema(file: &Path) -> Result<(), String> {
+    let bytes = std::fs::read(file).map_err(|e| e.to_string())?;
+    let blob = BlobRef::new(&bytes)?;
+    // Parse once before emitting so a corrupt schema section fails closed.
+    blob.state_store_schema()?;
+    println!("{}", blob.schema_json());
     Ok(())
 }
 

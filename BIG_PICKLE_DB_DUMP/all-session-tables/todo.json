@@ -1,0 +1,8 @@
+[{"session_id":"ses_0b516ef36ffeY2Uc26WsdLIdZW","content":"Remove gemma from gbr-xray/dependencies.d/","status":"completed","priority":"high","position":0,"time_created":1783671168653,"time_updated":1783671168653},
+{"session_id":"ses_0b516ef36ffeY2Uc26WsdLIdZW","content":"Remove op-openvswitch-daemon from workspace Cargo.toml members","status":"completed","priority":"high","position":1,"time_created":1783671168653,"time_updated":1783671168653},
+{"session_id":"ses_0b516ef36ffeY2Uc26WsdLIdZW","content":"Commit all uncommitted changes","status":"pending","priority":"high","position":2,"time_created":1783671168653,"time_updated":1783671168653},
+{"session_id":"ses_0b516ef36ffeY2Uc26WsdLIdZW","content":"Fix netmaker.rs async/sync mismatch","status":"in_progress","priority":"medium","position":3,"time_created":1783671168653,"time_updated":1783671168653},
+{"session_id":"ses_0b516ef36ffeY2Uc26WsdLIdZW","content":"Investigate netclient uix socket in netmaker-pro","status":"pending","priority":"medium","position":4,"time_created":1783671168653,"time_updated":1783671168653},
+{"session_id":"ses_0b516ef36ffeY2Uc26WsdLIdZW","content":"Determine WG_PUBKEY for identity sled","status":"pending","priority":"low","position":5,"time_created":1783671168653,"time_updated":1783671168653},
+{"session_id":"ses_0b516ef36ffeY2Uc26WsdLIdZW","content":"Post-reboot: recreate qdrant container on btrfs-pool","status":"pending","priority":"high","position":6,"time_created":1783671168653,"time_updated":1783671168653},
+{"session_id":"ses_0b516ef36ffeY2Uc26WsdLIdZW","content":"Post-reboot: verify qdrant gRPC 6334 accessible","status":"pending","priority":"high","position":7,"time_created":1783671168653,"time_updated":1783671168653}]

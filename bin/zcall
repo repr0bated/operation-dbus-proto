@@ -1,26 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SERVICE="operation.v1.PluginService/CallMethod"
 DEFAULT_ENDPOINT="${ZCALL_ENDPOINT:-10.200.0.1:50051}"
 DEFAULT_BLOB_DIR="${ZCALL_BLOB_DIR:-/dev/shm/opdbus/plugin-blobs}"
 DEFAULT_TIMEOUT="${ZCALL_TIMEOUT:-15}"
 SLED_PATH="${ZCALL_SLED_PATH:-/dev/shm/plugin_schema.dat}"
-DBUS_SERVICE="${ZCALL_DBUS_SERVICE:-org.opdbus.v1.plugins}"
-DBUS_BASE_PATH="${ZCALL_DBUS_BASE_PATH:-/org/opdbus/v1/plugins}"
-DBUS_IFACE="${ZCALL_DBUS_IFACE:-org.opdbus.v1.plugins.ProjectedObject}"
 
 endpoint="$DEFAULT_ENDPOINT"
 blob_dir="$DEFAULT_BLOB_DIR"
 call_timeout="$DEFAULT_TIMEOUT"
 source_mode="${ZCALL_SOURCE:-blob}"
-arguments_json="[]"
+arguments_json="{}"
 arguments_was_set=0
 method_arg_pairs=()
 capability_id=""
 actor_id=""
-object_path=""
-interface_name=""
+service=""
 print_only=0
 show_headers=0
 
@@ -37,16 +32,15 @@ Usage:
   zcall <plugin> <method> --arguments JSON
 
 Options:
-  -a, --arguments JSON      JSON argument list. Arrays are passed as repeated
-                            arguments; objects/scalars are wrapped as one arg.
-  -c, --capability ID       Capability id for PluginService.CallMethod.
-      --actor ID            Actor id for PluginService.CallMethod.
-      --object PATH         Override object path.
-      --interface NAME      Override interface name.
+  -a, --arguments JSON      Typed gRPC request object.
+  -c, --capability ID       Retained for command compatibility; authorization
+                            is derived from the Ghostbridge identity headers.
+      --actor ID            Retained for command compatibility; actor identity
+                            is derived from the Ghostbridge identity sled.
       --endpoint HOST:PORT  gRPC endpoint. Default: 10.200.0.1:50051.
       --timeout SECONDS     gRPC call timeout. Default: 15.
       --blob-dir DIR        Blob catalog. Default: /dev/shm/opdbus/plugin-blobs.
-      --source MODE         blob, auto, schema, dbus. Default: blob.
+      --source MODE         blob, auto, schema. Default: blob.
       --print               Print the expanded grpcurl command and request.
       --show-headers        Include live Ghostbridge headers in --print output.
   -h, --help                Show help.
@@ -81,12 +75,10 @@ normalize_method() {
 
 contract_py() {
     python3 - "$@" <<'PY'
-import ast
 import json
 import os
 import re
 import struct
-import subprocess
 import sys
 
 MAGIC = b"OPBLOB01"
@@ -94,9 +86,6 @@ HEADER_LEN = 64
 ENTRY_LEN = 24
 SECTION_SCHEMA = 1
 SECTION_MANIFEST = 2
-DBUS_SERVICE = os.environ.get("ZCALL_DBUS_SERVICE", "org.opdbus.v1.plugins")
-DBUS_BASE_PATH = os.environ.get("ZCALL_DBUS_BASE_PATH", "/org/opdbus/v1/plugins")
-DBUS_IFACE = os.environ.get("ZCALL_DBUS_IFACE", "org.opdbus.v1.plugins.ProjectedObject")
 
 
 def canonical_method_name(name):
@@ -161,60 +150,6 @@ def live_schema_records():
     return records
 
 
-def parse_busctl_string(raw):
-    raw = raw.strip()
-    if raw.startswith("s "):
-        raw = raw[2:].strip()
-    if raw.startswith('"'):
-        return ast.literal_eval(raw)
-    return raw
-
-
-def dbus_methods(plugin):
-    path = f"{DBUS_BASE_PATH}/{plugin}"
-    try:
-        raw = subprocess.check_output(
-            [
-                "busctl",
-                "--system",
-                "get-property",
-                DBUS_SERVICE,
-                path,
-                DBUS_IFACE,
-                "Methods",
-            ],
-            stderr=subprocess.DEVNULL,
-            text=True,
-        )
-        text = parse_busctl_string(raw)
-        value = json.loads(text)
-        return value if isinstance(value, dict) else {}
-    except Exception:
-        return {}
-
-
-def dbus_plugins():
-    try:
-        raw = subprocess.check_output(
-            ["busctl", "--system", "tree", DBUS_SERVICE],
-            stderr=subprocess.DEVNULL,
-            text=True,
-        )
-    except Exception:
-        return []
-    plugins = []
-    prefix = f"{DBUS_BASE_PATH}/"
-    for line in raw.splitlines():
-        line = line.strip()
-        idx = line.find(prefix)
-        if idx < 0:
-            continue
-        rest = line[idx + len(prefix):].strip()
-        if rest and "/" not in rest:
-            plugins.append(rest)
-    return sorted(set(plugins))
-
-
 def schema_methods(schema):
     methods = schema.get("methods") if isinstance(schema, dict) else {}
     return methods if isinstance(methods, dict) else {}
@@ -270,8 +205,6 @@ def methods_for(plugin, source, blob_dir):
             else:
                 methods[name] = item
         return methods
-    if source in ("auto", "dbus"):
-        return dbus_methods(plugin)
     return {}
 
 
@@ -279,8 +212,6 @@ def plugins_for(source, blob_dir):
     recs = records_for(source, blob_dir)
     if recs:
         return sorted(recs)
-    if source in ("auto", "dbus"):
-        return dbus_plugins()
     return []
 
 
@@ -288,20 +219,7 @@ def completion_plugins_for(source, blob_dir):
     recs = records_for(source, blob_dir)
     if recs:
         return sorted(p.replace("_", "-") for p in callable_records(recs))
-    if source in ("auto", "dbus"):
-        return sorted(p.replace("_", "-") for p in dbus_plugins() if dbus_methods(p))
     return []
-
-
-def plugin_identity(plugin, source, blob_dir):
-    recs = records_for(source, blob_dir)
-    rec = recs.get(plugin, {})
-    manifest = rec.get("manifest", {})
-    dbus = manifest.get("dbus", {}) if isinstance(manifest, dict) else {}
-    return {
-        "object_path": dbus.get("object_path") or f"{DBUS_BASE_PATH}/{plugin}",
-        "interface_name": dbus.get("interface_name") or "org.opdbus.v1.Plugin",
-    }
 
 
 def method_detail(methods, name):
@@ -319,8 +237,6 @@ def method_detail(methods, name):
 def require_plugin(plugin, source, blob_dir):
     recs = records_for(source, blob_dir)
     if plugin in recs:
-        return
-    if source in ("auto", "dbus") and plugin in dbus_plugins():
         return
     raise SystemExit(f"unknown plugin: {plugin}")
 
@@ -478,14 +394,17 @@ elif cmd == "method-summary":
             print(f"{display}\t{side}\t{cap}\t{subid}")
         else:
             print(f"{key}\t-\t-\t-")
-elif cmd == "identity":
-    plugin = sys.argv[4]
-    require_plugin(plugin, source, blob_dir)
-    print(json.dumps(plugin_identity(plugin, source, blob_dir), sort_keys=True))
 elif cmd == "capability":
     plugin, method = sys.argv[4], sys.argv[5]
     detail = require_method(plugin, method, source, blob_dir)
     print(detail.get("required_capability") or "")
+elif cmd == "return-fields":
+    plugin, method = sys.argv[4], sys.argv[5]
+    detail = require_method(plugin, method, source, blob_dir)
+    returns = detail.get("returns") if isinstance(detail, dict) else None
+    properties = returns.get("properties", {}) if isinstance(returns, dict) else {}
+    if isinstance(properties, dict):
+        print("\n".join(sorted(properties)))
 elif cmd == "check-catalog":
     check_catalog(source, blob_dir)
 elif cmd == "declared-method":
@@ -523,29 +442,36 @@ PY
 }
 
 request_json() {
-    local plugin="$1"
-    local method="$2"
-    local object="$3"
-    local iface="$4"
-    python3 - "$plugin" "$method" "$object" "$iface" "$arguments_json" "$actor_id" "$capability_id" <<'PY'
+    python3 - "$arguments_json" <<'PY'
 import json
 import sys
 
-plugin, method, obj, iface, raw_args, actor, capability = sys.argv[1:]
+raw_args = sys.argv[1]
 try:
     parsed = json.loads(raw_args)
 except Exception as exc:
     raise SystemExit(f"invalid --arguments JSON: {exc}")
-arguments = parsed if isinstance(parsed, list) else [parsed]
-print(json.dumps({
-    "plugin_id": plugin,
-    "object_path": obj,
-    "interface_name": iface,
-    "method_name": method,
-    "arguments": arguments,
-    "actor_id": actor,
-    "capability_id": capability,
-}, separators=(",", ":")))
+if isinstance(parsed, list):
+    if not parsed:
+        parsed = {}
+    elif len(parsed) == 1 and isinstance(parsed[0], dict):
+        parsed = parsed[0]
+if not isinstance(parsed, dict):
+    raise SystemExit("direct typed gRPC calls require a JSON object")
+print(json.dumps(parsed, separators=(",", ":")))
+PY
+}
+
+typed_service() {
+    python3 - "$1" "$2" <<'PY'
+import re
+import sys
+
+def pascal(value):
+    return "".join(part[:1].upper() + part[1:] for part in re.split(r"[^A-Za-z0-9]+", value) if part)
+
+plugin, method = sys.argv[1:]
+print(f"operation.plugin.v1.{pascal(plugin)}PluginMethods/{pascal(method)}")
 PY
 }
 
@@ -554,12 +480,10 @@ args_json_from_flags() {
     local method="$2"
     shift 2
     python3 - "$source_mode" "$blob_dir" "$plugin" "$method" "$@" <<'PY'
-import ast
 import json
 import os
 import re
 import struct
-import subprocess
 import sys
 
 MAGIC = b"OPBLOB01"
@@ -567,9 +491,6 @@ HEADER_LEN = 64
 ENTRY_LEN = 24
 SECTION_SCHEMA = 1
 SECTION_MANIFEST = 2
-DBUS_SERVICE = os.environ.get("ZCALL_DBUS_SERVICE", "org.opdbus.v1.plugins")
-DBUS_BASE_PATH = os.environ.get("ZCALL_DBUS_BASE_PATH", "/org/opdbus/v1/plugins")
-DBUS_IFACE = os.environ.get("ZCALL_DBUS_IFACE", "org.opdbus.v1.plugins.ProjectedObject")
 
 
 def canonical_method_name(name):
@@ -632,28 +553,6 @@ def live_schema_records():
     return records
 
 
-def parse_busctl_string(raw):
-    raw = raw.strip()
-    if raw.startswith("s "):
-        raw = raw[2:].strip()
-    if raw.startswith('"'):
-        return ast.literal_eval(raw)
-    return raw
-
-
-def dbus_methods(plugin):
-    try:
-        raw = subprocess.check_output(
-            ["busctl", "--system", "get-property", DBUS_SERVICE, f"{DBUS_BASE_PATH}/{plugin}", DBUS_IFACE, "Methods"],
-            stderr=subprocess.DEVNULL,
-            text=True,
-        )
-        value = json.loads(parse_busctl_string(raw))
-        return value if isinstance(value, dict) else {}
-    except Exception:
-        return {}
-
-
 def schema_methods(schema):
     methods = schema.get("methods") if isinstance(schema, dict) else {}
     return methods if isinstance(methods, dict) else {}
@@ -693,8 +592,6 @@ def methods_for(plugin, source, blob_dir):
             else:
                 methods[name] = item
         return methods
-    if source in ("auto", "dbus"):
-        return dbus_methods(plugin)
     return {}
 
 
@@ -762,7 +659,7 @@ PY
 print_expanded() {
     local request="$1"
     local -a headers=("${@:2}")
-    printf 'grpcurl -plaintext'
+    printf 'grpcurl -plaintext -emit-defaults'
     local i
     for ((i = 0; i < ${#headers[@]}; i += 2)); do
         if ((show_headers)); then
@@ -775,30 +672,30 @@ print_expanded() {
             esac
         fi
     done
-    printf ' -d %q %q %q\n' "$request" "$endpoint" "$SERVICE"
+    printf ' -d %q %q %q\n' "$request" "$endpoint" "$service"
 }
 
 check_response() {
-    python3 - "$1" <<'PY'
+    python3 - "$1" "$2" <<'PY'
 import json
+import re
 import sys
 
-path = sys.argv[1]
+path, raw_expected = sys.argv[1:]
 try:
     with open(path, "r", encoding="utf-8") as handle:
         data = json.load(handle)
 except Exception as exc:
     raise SystemExit(f"zcall: failed to parse grpc response JSON: {exc}")
 
-error = data.get("error") if isinstance(data, dict) else None
-if error:
-    message = error.get("message") if isinstance(error, dict) else str(error)
-    code = error.get("code") if isinstance(error, dict) else "ERROR"
-    print(f"zcall: {code}: {message}", file=sys.stderr)
+if not isinstance(data, dict):
+    print("zcall: typed gRPC response is not an object", file=sys.stderr)
     raise SystemExit(10)
-if isinstance(data, dict) and data.get("success") is False:
-    print("zcall: CallMethod returned success=false", file=sys.stderr)
-    raise SystemExit(10)
+for field in (field for field in raw_expected.splitlines() if field):
+    camel = re.sub(r"_([a-z])", lambda match: match.group(1).upper(), field)
+    if field not in data and camel not in data:
+        print(f"zcall: typed gRPC response is missing declared field: {field}", file=sys.stderr)
+        raise SystemExit(10)
 PY
 }
 
@@ -810,12 +707,12 @@ run_grpcurl() {
     out="$(mktemp)"
     err="$(mktemp)"
     set +e
-    timeout "$call_timeout" grpcurl -plaintext "${headers[@]}" -d "$request" "$endpoint" "$SERVICE" >"$out" 2>"$err"
+    timeout "$call_timeout" grpcurl -plaintext -emit-defaults "${headers[@]}" -d "$request" "$endpoint" "$service" >"$out" 2>"$err"
     rc=$?
     set -e
     if [[ "$rc" == "0" ]]; then
         cat "$out"
-        check_response "$out"
+        check_response "$out" "$expected_return_fields"
         rm -f "$out" "$err"
         return 0
     fi
@@ -823,7 +720,7 @@ run_grpcurl() {
     cat "$err" >&2
     rm -f "$out" "$err"
     if [[ "$rc" == "124" ]]; then
-        die "CallMethod timed out after ${call_timeout}s: $plugin.$method at $endpoint"
+        die "typed gRPC call timed out after ${call_timeout}s: $plugin.$method at $endpoint"
     fi
     return "$rc"
 }
@@ -850,10 +747,6 @@ while (($#)); do
             capability_id="${2:-}"; shift 2 ;;
         --actor)
             actor_id="${2:-}"; shift 2 ;;
-        --object)
-            object_path="${2:-}"; shift 2 ;;
-        --interface)
-            interface_name="${2:-}"; shift 2 ;;
         --print|--dry-run)
             print_only=1; shift ;;
         --show-headers)
@@ -923,6 +816,26 @@ shift 2
 
 while (($#)); do
     case "$1" in
+        -a|--arguments)
+            arguments_json="${2:-}"; arguments_was_set=1; shift 2 ;;
+        -c|--capability)
+            capability_id="${2:-}"; shift 2 ;;
+        --actor)
+            actor_id="${2:-}"; shift 2 ;;
+        --endpoint)
+            endpoint="${2:-}"; shift 2 ;;
+        --timeout)
+            call_timeout="${2:-}"; shift 2 ;;
+        --blob-dir)
+            blob_dir="${2:-}"; shift 2 ;;
+        --source)
+            source_mode="${2:-}"; shift 2 ;;
+        --print|--dry-run)
+            print_only=1; shift ;;
+        --show-headers)
+            show_headers=1; shift ;;
+        -h|--help)
+            usage; exit 0 ;;
         --*)
             key="${1#--}"
             [[ -n "${2:-}" ]] || die "missing value for --$key"
@@ -945,14 +858,10 @@ if [[ -z "$capability_id" ]]; then
     capability_id="$(contract_py capability "$source_mode" "$blob_dir" "$plugin" "$method")"
 fi
 declared_method="$(contract_py declared-method "$source_mode" "$blob_dir" "$plugin" "$method")"
-identity="$(contract_py identity "$source_mode" "$blob_dir" "$plugin")"
-default_object="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["object_path"])' <<<"$identity")"
-default_iface="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["interface_name"])' <<<"$identity")"
-object_path="${object_path:-$default_object}"
-interface_name="${interface_name:-$default_iface}"
-
 method="$declared_method"
-request="$(request_json "$plugin" "$method" "$object_path" "$interface_name")"
+service="$(typed_service "$plugin" "$method")"
+request="$(request_json)"
+expected_return_fields="$(contract_py return-fields "$source_mode" "$blob_dir" "$plugin" "$method")"
 mapfile -t headers < <(read_headers)
 
 if ((print_only)); then
@@ -961,6 +870,6 @@ if ((print_only)); then
     exit 0
 fi
 
-have grpcurl || die "grpcurl is required for PluginService.CallMethod"
-have timeout || die "timeout is required for bounded PluginService.CallMethod calls"
+have grpcurl || die "grpcurl is required for direct typed gRPC calls"
+have timeout || die "timeout is required for bounded typed gRPC calls"
 run_grpcurl "$request" "${headers[@]}"

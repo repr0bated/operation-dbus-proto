@@ -2,6 +2,24 @@
     "version": "1.0.0",
     "description": "op-dbus MCP Server Configuration",
     "servers": {
+        "op-cognitive-mcp": {
+            "name": "op-cognitive-mcp",
+            "description": "Code-aware cognitive MCP — memory, RAG, identity graph, compliance, context persistence. Local stdio server.",
+            "transport": {
+                "type": "stdio",
+                "command": "/usr/local/bin/op-cognitive-mcp",
+                "args": ["--stdio"]
+            },
+            "env": {
+                "VOYAGE_API_KEY": "",
+                "QDRANT_URL": "http://127.0.0.1:6334"
+            },
+            "capabilities": {
+                "tools": true,
+                "resources": false,
+                "prompts": false
+            }
+        },
         "op-dbus-compact": {
             "name": "op-dbus-compact",
             "description": "Compact mode with 5 lazy meta-tools: list_tools, search_tools, get_tool_schema, execute_tool, respond. Recommended for AI clients with limited context windows.",
@@ -71,6 +89,7 @@
     "_usage": {
         "cursor": "Copy mcpServers to ~/.cursor/mcp.json or project .cursor/mcp.json",
         "vscode": "Add mcp.servers to VS Code settings.json",
-        "claude_desktop": "Use stdio transport with op-mcp-server binary, or SSE with mcp-proxy bridge"
+        "claude_desktop": "Use stdio transport with op-cognitive-mcp or op-mcp-server binary",
+        "cognitive_mcp": "Set VOYAGE_API_KEY for full code-RAG; start Qdrant for vector search"
     }
 }

@@ -166,7 +166,11 @@ pub async fn signup(
 
     // Pending or legacy verified account — resend magic link
     if let Some(pending) = state.user_store.get_pending_by_email(&email).await {
-        match state.user_store.create_magic_link(&pending.pending_id).await {
+        match state
+            .user_store
+            .create_magic_link(&pending.pending_id)
+            .await
+        {
             Ok(link) => {
                 if let Err(e) = state
                     .email_sender
@@ -323,8 +327,9 @@ pub async fn verify(
                                 psk: None,
                                 config: None,
                                 qr_code: None,
-                                message: "Privacy network provisioning failed. Please retry shortly."
-                                    .to_string(),
+                                message:
+                                    "Privacy network provisioning failed. Please retry shortly."
+                                        .to_string(),
                             }),
                         );
                     }
@@ -611,7 +616,7 @@ pub async fn get_config(
                     config: Some(config),
                     qr_code,
                     message: "Configuration retrieved".to_string(),
-                ..Default::default()
+                    ..Default::default()
                 }),
             )
         }
@@ -636,7 +641,6 @@ pub async fn get_config(
                 message: "User not found".to_string(),
                 ..Default::default()
             }),
-
         ),
     }
 }
@@ -726,9 +730,8 @@ pub async fn google_auth(
                     config: None,
                     qr_code: None,
                     message: "Google OAuth not configured".to_string(),
-                ..Default::default()
+                    ..Default::default()
                 }),
-
             ));
         }
     };
@@ -792,9 +795,8 @@ pub async fn google_callback(
                     config: None,
                     qr_code: None,
                     message: "Invalid CSRF state".to_string(),
-                ..Default::default()
+                    ..Default::default()
                 }),
-
             ));
         }
     }
@@ -810,9 +812,8 @@ pub async fn google_callback(
                     config: None,
                     qr_code: None,
                     message: "Google OAuth not configured".to_string(),
-                ..Default::default()
+                    ..Default::default()
                 }),
-
             ));
         }
     };
@@ -850,9 +851,8 @@ pub async fn google_callback(
                     config: None,
                     qr_code: None,
                     message: "Failed to authenticate with Google".to_string(),
-                ..Default::default()
+                    ..Default::default()
                 }),
-
             ));
         }
     };
@@ -895,9 +895,8 @@ pub async fn google_callback(
                     config: None,
                     qr_code: None,
                     message: "Failed to get user information".to_string(),
-                ..Default::default()
+                    ..Default::default()
                 }),
-
             ));
         }
     };
@@ -914,7 +913,6 @@ pub async fn google_callback(
                 message: "Google account email not verified".to_string(),
                 ..Default::default()
             }),
-
         ));
     }
 
@@ -931,7 +929,6 @@ pub async fn google_callback(
                 message: "Privacy network host setup failed. Please retry shortly.".to_string(),
                 ..Default::default()
             }),
-
         ));
     }
 
@@ -960,9 +957,8 @@ pub async fn google_callback(
                     config: None,
                     qr_code: None,
                     message: "Failed to create user account".to_string(),
-                ..Default::default()
+                    ..Default::default()
                 }),
-
             ));
         }
     };
@@ -988,9 +984,8 @@ pub async fn google_callback(
                     qr_code: None,
                     message: "Privacy network provisioning failed. Please retry shortly."
                         .to_string(),
-                ..Default::default()
+                    ..Default::default()
                 }),
-
             ));
         }
     };
@@ -1006,7 +1001,6 @@ pub async fn google_callback(
                 message: "WireGuard server key is not configured on the host.".to_string(),
                 ..Default::default()
             }),
-
         ));
     }
 

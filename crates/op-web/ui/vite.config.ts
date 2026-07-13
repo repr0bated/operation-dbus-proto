@@ -1,13 +1,18 @@
-import { defineConfig } from "vite";
+import { defineConfig, type PluginOption } from "vite";
 import react from "@vitejs/plugin-react";
 import path from "path";
-import { componentTagger } from "lovable-tagger";
 
 // Backend gRPC-Web and API target (adjust for your environment)
 const API_TARGET = process.env.VITE_API_TARGET || "http://localhost:50051";
 
 // https://vitejs.dev/config/
-export default defineConfig(({ mode }) => ({
+export default defineConfig(async ({ mode }) => {
+  const plugins: PluginOption[] = [react()];
+  if (mode === "development") {
+    const { componentTagger } = await import("lovable-tagger");
+    plugins.push(componentTagger());
+  }
+  return {
   server: {
     host: "::",
     port: 8080,
@@ -36,10 +41,11 @@ export default defineConfig(({ mode }) => ({
       },
     },
   },
-  plugins: [react(), mode === "development" && componentTagger()].filter(Boolean),
-  resolve: {
-    alias: {
-      "@": path.resolve(__dirname, "./src"),
+    plugins,
+    resolve: {
+      alias: {
+        "@": path.resolve(__dirname, "./src"),
+      },
     },
-  },
-}));
+  };
+});

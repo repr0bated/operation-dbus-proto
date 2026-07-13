@@ -2,7 +2,7 @@
   "mcpServers": {
     "cognitive-grpc": {
       "type": "stdio",
-      "command": "cognitive-mcp-server",
+      "command": "/home/jeremy/git/operation-dbus-proto/target/release/op-cognitive-mcp",
       "args": ["--stdio"]
     }
   }

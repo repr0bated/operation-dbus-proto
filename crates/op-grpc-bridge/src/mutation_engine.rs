@@ -17,7 +17,6 @@ use zbus::{Connection, Proxy};
 
 use base64::Engine;
 use op_identity::{read_sled, write_sled_full};
-use op_network::rovs_proxy::OvsdbDbusClient;
 use op_state_store::{ChainEvent, Decision, EventChain, MemoryStore, OperationType, StateStore};
 
 /// A state change projected from the authoritative system bus
@@ -71,8 +70,6 @@ pub struct MutationEngine {
     #[allow(dead_code)]
     dbus_call_limiter: Arc<Semaphore>,
 
-    /// Authoritative RCP stores
-    pub ovsdb: Arc<OvsdbDbusClient>,
     /// In-process plugin handles for MethodCall dispatch (e.g. createunixsocket).
     pub unix_socket: Arc<op_plugins::state_plugins::UnixSocketPlugin>,
 }
@@ -122,7 +119,7 @@ impl op_core::state_publisher::StatePublisher for MutationEngine {
 
 impl MutationEngine {
     /// Create a new authoritative Mutation Engine
-    pub fn new(event_chain: Arc<RwLock<EventChain>>, ovsdb: Arc<OvsdbDbusClient>) -> Self {
+    pub fn new(event_chain: Arc<RwLock<EventChain>>) -> Self {
         let (change_tx, _) = broadcast::channel(1024);
         Self {
             event_chain,
@@ -131,7 +128,6 @@ impl MutationEngine {
             dbus_connection: Arc::new(OnceCell::new()),
             session_bus: Arc::new(OnceCell::new()),
             dbus_call_limiter: Arc::new(Semaphore::new(32)),
-            ovsdb,
             unix_socket: Arc::new(op_plugins::state_plugins::UnixSocketPlugin::new()),
         }
     }
@@ -546,70 +542,9 @@ impl MutationEngine {
     }
 
     /// Start the Mutation Engine background tasks.
-    /// Subscribes to authoritative RCP stores and broadcasts changes.
+    /// Direct plugin calls publish their changes through this engine, so no
+    /// compatibility-proxy subscription is required.
     pub async fn start(self: Arc<Self>) -> anyhow::Result<()> {
-        let me = self.clone();
-
-        // Subscribe to OVSDB updates
-        let ovsdb_self = me.clone();
-        tokio::spawn(async move {
-            if let Ok(mut rx) = ovsdb_self.ovsdb.monitor_db("Open_vSwitch").await {
-                loop {
-                    match rx.recv().await {
-                        Ok(update) => {
-                            if let Some(params) = update.get("params").and_then(|p| p.as_array()) {
-                                if params.len() >= 3 {
-                                    if let Some(tables) = params[2].as_object() {
-                                        for (table_name, table_update) in tables.iter() {
-                                            let table_name_owned: String = table_name.to_string();
-                                            // monitor_db returns serde_json::Value; convert to
-                                            // simd_json::OwnedValue required by process_authoritative_change.
-                                            let simd_val: simd_json::OwnedValue = {
-                                                match serde_json::to_string(table_update)
-                                                    .ok()
-                                                    .and_then(|s| {
-                                                        let mut b = s.into_bytes();
-                                                        simd_json::to_owned_value(&mut b).ok()
-                                                    }) {
-                                                    Some(v) => v,
-                                                    None => continue,
-                                                }
-                                            };
-                                            let _ = ovsdb_self
-                                                .process_authoritative_change(
-                                                    "net".to_string(),
-                                                    format!(
-                                                        "/org/opdbus/v1/ovsdb/{}",
-                                                        table_name_owned
-                                                    ),
-                                                    ChangeType::PropertySet,
-                                                    Some(table_name_owned),
-                                                    None,
-                                                    simd_val,
-                                                    vec![
-                                                        "ovsdb".to_string(),
-                                                        "network".to_string(),
-                                                    ],
-                                                    "ovsdb-monitor".to_string(),
-                                                    None,
-                                                    ChangeSource::DBus,
-                                                )
-                                                .await;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                            tracing::warn!("OVSDB subscription lagged by {} events", n);
-                            continue;
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                    }
-                }
-            }
-        });
-
         Ok(())
     }
 
@@ -649,73 +584,137 @@ impl MutationEngine {
                     match method.as_str() {
                         "create_bridge" => {
                             if let Some(name) = value.as_str() {
-                                self.ovsdb.create_bridge(name).await?;
+                                dispatch_rovs_commands_method(
+                                    "create_bridge",
+                                    &simd_json::json!({
+                                        "bridge_name": name,
+                                        "datapath_type": "system",
+                                    }),
+                                )
+                                .await?;
                             }
                         }
                         "add_port" => {
                             if let Some(obj) = value.as_object() {
-                                let br = obj.get("bridge_name").and_then(|v| v.as_str())
+                                let br = obj
+                                    .get("bridge_name")
+                                    .and_then(|v| v.as_str())
                                     .ok_or_else(|| anyhow::anyhow!("bridge_name required"))?;
-                                let port = obj.get("port_name").and_then(|v| v.as_str())
+                                let port = obj
+                                    .get("port_name")
+                                    .and_then(|v| v.as_str())
                                     .ok_or_else(|| anyhow::anyhow!("port_name required"))?;
-                                let iftype = obj.get("interface_type").and_then(|v| v.as_str()).unwrap_or("internal");
-                                self.ovsdb.add_port_with_type(br, port, Some(iftype)).await?;
+                                let iftype = obj
+                                    .get("interface_type")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("internal");
+                                dispatch_rovs_commands_method(
+                                    "add_port",
+                                    &simd_json::json!({
+                                        "bridge_name": br,
+                                        "port_name": port,
+                                        "interface_type": iftype,
+                                    }),
+                                )
+                                .await?;
                             } else if let Some(args) = value.as_array() {
                                 if args.len() >= 2 {
-                                    let br = args[0].as_str().ok_or_else(|| anyhow::anyhow!("bridge_name must be string"))?;
-                                    let port = args[1].as_str().ok_or_else(|| anyhow::anyhow!("port_name must be string"))?;
-                                    let iftype = args.get(2).and_then(|v| v.as_str()).unwrap_or("internal");
-                                    self.ovsdb.add_port_with_type(br, port, Some(iftype)).await?;
+                                    let br = args[0].as_str().ok_or_else(|| {
+                                        anyhow::anyhow!("bridge_name must be string")
+                                    })?;
+                                    let port = args[1].as_str().ok_or_else(|| {
+                                        anyhow::anyhow!("port_name must be string")
+                                    })?;
+                                    let iftype =
+                                        args.get(2).and_then(|v| v.as_str()).unwrap_or("internal");
+                                    dispatch_rovs_commands_method(
+                                        "add_port",
+                                        &simd_json::json!({
+                                            "bridge_name": br,
+                                            "port_name": port,
+                                            "interface_type": iftype,
+                                        }),
+                                    )
+                                    .await?;
                                 }
                             }
                         }
                         "set_controller" => {
                             if let Some(obj) = value.as_object() {
-                                let br = obj.get("bridge_name").and_then(|v| v.as_str())
+                                let br = obj
+                                    .get("bridge_name")
+                                    .and_then(|v| v.as_str())
                                     .ok_or_else(|| anyhow::anyhow!("bridge_name required"))?;
-                                let ctrl = obj.get("controller").and_then(|v| v.as_str())
+                                let ctrl = obj
+                                    .get("controller")
+                                    .and_then(|v| v.as_str())
                                     .ok_or_else(|| anyhow::anyhow!("controller required"))?;
-                                self.ovsdb.set_bridge_property(br, "controller", ctrl).await?;
+                                dispatch_rovs_commands_method(
+                                    "set_controller",
+                                    &simd_json::json!({
+                                        "bridge_name": br,
+                                        "controller": ctrl,
+                                    }),
+                                )
+                                .await?;
                             }
                         }
                         "set_bridge_property" => {
                             if let Some(obj) = value.as_object() {
-                                let br = obj.get("bridge_name").and_then(|v| v.as_str())
+                                let br = obj
+                                    .get("bridge_name")
+                                    .and_then(|v| v.as_str())
                                     .ok_or_else(|| anyhow::anyhow!("bridge_name required"))?;
-                                let prop = obj.get("property").and_then(|v| v.as_str())
+                                let prop = obj
+                                    .get("property")
+                                    .and_then(|v| v.as_str())
                                     .ok_or_else(|| anyhow::anyhow!("property required"))?;
-                                let val = obj.get("value").and_then(|v| v.as_str())
+                                let val = obj
+                                    .get("value")
+                                    .and_then(|v| v.as_str())
                                     .ok_or_else(|| anyhow::anyhow!("value required"))?;
-                                self.ovsdb.set_bridge_property(br, prop, val).await?;
+                                dispatch_rovs_commands_method(
+                                    "set_bridge_property",
+                                    &simd_json::json!({
+                                        "bridge_name": br,
+                                        "property": prop,
+                                        "value": val,
+                                    }),
+                                )
+                                .await?;
                             }
                         }
                         "set_interface" => {
                             if let Some(obj) = value.as_object() {
-                                let br = obj.get("bridge_name").and_then(|v| v.as_str())
+                                let br = obj
+                                    .get("bridge_name")
+                                    .and_then(|v| v.as_str())
                                     .ok_or_else(|| anyhow::anyhow!("bridge_name required"))?;
-                                let port = obj.get("port_name").and_then(|v| v.as_str())
+                                let port = obj
+                                    .get("port_name")
+                                    .and_then(|v| v.as_str())
                                     .ok_or_else(|| anyhow::anyhow!("port_name required"))?;
-                                let prop = obj.get("property").and_then(|v| v.as_str())
+                                let prop = obj
+                                    .get("property")
+                                    .and_then(|v| v.as_str())
                                     .ok_or_else(|| anyhow::anyhow!("property required"))?;
-                                let val = obj.get("value").and_then(|v| v.as_str())
+                                let val = obj
+                                    .get("value")
+                                    .and_then(|v| v.as_str())
                                     .ok_or_else(|| anyhow::anyhow!("value required"))?;
-                                self.ovsdb.set_interface_option(br, port, prop, val).await?;
-                            }
-                        }
-                        _ => {
-                            // Fallback to generic D-Bus call if it's a known service
-                            let _ = self
-                                .call_dbus_method(
-                                    &format!("org.opdbus.{}.v1", plugin_id),
-                                    &object_path,
-                                    "org.opdbus.OvsdbV1",
-                                    method,
-                                    vec![value.clone()],
-                                    &actor_id,
-                                    &capability_id,
+                                dispatch_rovs_commands_method(
+                                    "set_interface",
+                                    &simd_json::json!({
+                                        "bridge_name": br,
+                                        "port_name": port,
+                                        "property": prop,
+                                        "value": val,
+                                    }),
                                 )
                                 .await?;
+                            }
                         }
+                        _ => anyhow::bail!("unknown direct OVS method: {method}"),
                     }
                 }
             } else if change_type == ChangeType::PropertySet {
@@ -726,9 +725,15 @@ impl MutationEngine {
                     if parts.len() >= 6 && parts[4] == "Bridge" {
                         let br_name = parts[5].replace('_', "-");
                         if let Some(val_str) = value.as_str() {
-                            self.ovsdb
-                                .set_bridge_property(&br_name, prop, val_str)
-                                .await?;
+                            dispatch_rovs_commands_method(
+                                "set_bridge_property",
+                                &simd_json::json!({
+                                    "bridge_name": br_name,
+                                    "property": prop,
+                                    "value": val_str,
+                                }),
+                            )
+                            .await?;
                         }
                     }
                 }
@@ -739,7 +744,15 @@ impl MutationEngine {
             // shared container.sock transport; the transport owner is not
             // replaced during registration.
             if let Some(method) = &member_name {
-                if method == "createunixsocket" {
+                // "createunixsocket" is the original method name; "Bind" is the
+                // same operation under the schema's later per-method naming
+                // (Bind/Listen/Accept/Close) — the dispatch here was never
+                // updated to match when the schema was reorganized, so `Bind`
+                // silently fell through to the generic echo path. Both names
+                // reuse the same real logic: registration against the single
+                // shared container.sock (create_unix_socket ignores any
+                // caller-supplied path by design — see its doc comment).
+                if method == "createunixsocket" || method == "Bind" || method == "bind" {
                     let (name, ports) = parse_socket_args(&value);
                     let result = self
                         .unix_socket
@@ -787,6 +800,22 @@ impl MutationEngine {
                     crate::routing_dispatch::dispatch_routing_method(self, method, &args_json)
                         .await?;
                 if let Some(state) = self.get_state("routing").await {
+                    authoritative_value = state;
+                }
+                caller_result = Some(simd_json::serde::to_owned_value(&domain)?);
+            }
+        } else if plugin_id == "rovs_commands" && change_type == ChangeType::MethodCall {
+            // rovs_commands dispatch: PluginService.CallMethod (zcall) lands
+            // here. Typed reflection routes proxy to the same gRPC method, so
+            // this is the common execution path for both call surfaces.
+            if let Some(method) = &member_name {
+                let unwrapped = value
+                    .as_array()
+                    .and_then(|items| items.first())
+                    .cloned()
+                    .unwrap_or_else(|| value.clone());
+                let domain = dispatch_rovs_commands_method(method, &unwrapped).await?;
+                if let Some(state) = self.get_state("rovs_commands").await {
                     authoritative_value = state;
                 }
                 caller_result = Some(simd_json::serde::to_owned_value(&domain)?);
@@ -983,9 +1012,7 @@ impl MutationEngine {
 
         // Dispatch to appropriate backend based on plugin_id
         let method_result: serde_json::Value = match plugin_id {
-            "rovs_commands" => {
-                dispatch_rovs_commands_method(&self.ovsdb, method, &parsed_value).await?
-            }
+            "rovs_commands" => dispatch_rovs_commands_method(method, &parsed_value).await?,
             "identity_sled" => {
                 let args = serde_json::to_value(&parsed_value)?;
                 crate::identity_sled_dispatch::dispatch_identity_sled_method(self, method, &args)
@@ -1003,6 +1030,10 @@ impl MutationEngine {
             "notebooklm" => {
                 let args = serde_json::to_value(&parsed_value)?;
                 crate::notebooklm_dispatch::dispatch_notebooklm_method(method, &args).await?
+            }
+            "mindstudio" => {
+                let args = serde_json::to_value(&parsed_value)?;
+                crate::mindstudio_dispatch::dispatch_mindstudio_method(method, &args).await?
             }
             "zeroclaw" => {
                 let state = op_plugins::state_plugins::zeroclaw::ZeroclawPlugin::current_state();
@@ -1106,7 +1137,10 @@ impl MutationEngine {
         {
             Ok(crawl) => crawl,
             Err(_) => {
-                tracing::warn!(plugin_id, "plugin D-Bus crawl timed out; projecting without introspection");
+                tracing::warn!(
+                    plugin_id,
+                    "plugin D-Bus crawl timed out; projecting without introspection"
+                );
                 None
             }
         };
@@ -1312,120 +1346,13 @@ fn existing_unix_socket_sockets() -> Vec<simd_json::OwnedValue> {
         .collect()
 }
 
-/// Execute rovs_commands methods via OVSDB proxy
+/// Execute the implementation owned by the rovs_commands plugin directly.
 async fn dispatch_rovs_commands_method(
-    ovsdb: &op_network::rovs_proxy::OvsdbDbusClient,
     method: &str,
     args: &simd_json::OwnedValue,
 ) -> anyhow::Result<serde_json::Value> {
-    match method {
-        "create_bridge" => {
-            let bridge_name = args
-                .get("bridge_name")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("bridge_name required"))?;
-            ovsdb.create_bridge(bridge_name).await?;
-            Ok(serde_json::json!({"created": bridge_name}))
-        }
-        "delete_bridge" => {
-            let bridge_name = args
-                .get("bridge_name")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("bridge_name required"))?;
-            ovsdb.delete_bridge(bridge_name).await?;
-            Ok(serde_json::json!({"deleted": bridge_name}))
-        }
-        "add_port" => {
-            let bridge_name = args
-                .get("bridge_name")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("bridge_name required"))?;
-            let port_name = args
-                .get("port_name")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("port_name required"))?;
-            let iftype = args.get("interface_type").and_then(|v| v.as_str()).unwrap_or("internal");
-            ovsdb.add_port_with_type(bridge_name, port_name, Some(iftype)).await?;
-            Ok(serde_json::json!({"added": port_name, "to": bridge_name}))
-        }
-        "remove_port" => {
-            let bridge_name = args
-                .get("bridge_name")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("bridge_name required"))?;
-            let port_name = args
-                .get("port_name")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("port_name required"))?;
-            ovsdb.delete_port(bridge_name, port_name).await?;
-            Ok(serde_json::json!({"removed": port_name, "from": bridge_name}))
-        }
-        "list_bridges" => {
-            let bridges = ovsdb.list_bridges().await?;
-            Ok(serde_json::json!(bridges))
-        }
-        "list_ports" => {
-            let bridge_name = args
-                .get("bridge_name")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("bridge_name required"))?;
-            let ports = ovsdb.list_bridge_ports(bridge_name).await?;
-            Ok(serde_json::json!(ports))
-        }
-        "list_dbs" => {
-            let dbs = ovsdb.list_dbs().await?;
-            Ok(serde_json::json!(dbs))
-        }
-        "set_controller" => {
-            let bridge_name = args
-                .get("bridge_name")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("bridge_name required"))?;
-            let controller = args
-                .get("controller")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("controller required"))?;
-            ovsdb.set_bridge_property(bridge_name, "controller", controller).await?;
-            Ok(serde_json::json!({"set": "controller", "on": bridge_name}))
-        }
-        "set_bridge_property" => {
-            let bridge_name = args
-                .get("bridge_name")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("bridge_name required"))?;
-            let property = args
-                .get("property")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("property required"))?;
-            let value = args
-                .get("value")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("value required"))?;
-            ovsdb.set_bridge_property(bridge_name, property, value).await?;
-            Ok(serde_json::json!({"set": property, "on": bridge_name}))
-        }
-        "set_interface" => {
-            let bridge_name = args
-                .get("bridge_name")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("bridge_name required"))?;
-            let port_name = args
-                .get("port_name")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("port_name required"))?;
-            let property = args
-                .get("property")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("property required"))?;
-            let value = args
-                .get("value")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("value required"))?;
-            ovsdb.set_interface_option(bridge_name, port_name, property, value).await?;
-            Ok(serde_json::json!({"set": property, "on": format!("{}/{}", bridge_name, port_name)}))
-        }
-        _ => Err(anyhow::anyhow!("unknown rovs_commands method: {}", method)),
-    }
+    let args = serde_json::to_value(args)?;
+    op_plugins::state_plugins::RovsCommandsPlugin::call_direct(method, &args).await
 }
 
 /// Parse createunixsocket arguments. Accepts either a JSON array

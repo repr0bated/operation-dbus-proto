@@ -1,5 +1,14 @@
 {
     "mcpServers": {
+        "op-cognitive-mcp": {
+            "command": "/usr/local/bin/op-cognitive-mcp",
+            "args": ["--stdio"],
+            "description": "Code-aware cognitive MCP — memory, RAG, identity graph, compliance, context persistence. Requires Qdrant + Voyage API key for full RAG.",
+            "env": {
+                "VOYAGE_API_KEY": "",
+                "QDRANT_URL": "http://127.0.0.1:6334"
+            }
+        },
         "op-dbus-compact": {
             "command": "curl",
             "args": [
@@ -16,5 +25,5 @@
             "description": "op-dbus MCP via stdio (recommended for Claude Desktop)"
         }
     },
-    "_note": "Claude Desktop natively supports stdio-based MCP servers. For SSE-based servers, you may need mcp-proxy or similar bridge. The op-mcp-server binary provides native stdio support."
+    "_note": "Claude Desktop natively supports stdio-based MCP servers. For SSE-based servers, you may need mcp-proxy or similar bridge. Set VOYAGE_API_KEY for full code-RAG. Qdrant must be running for vector search."
 }

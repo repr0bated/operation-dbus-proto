@@ -1,10 +1,19 @@
 #!/bin/sh
 set -eu
 
+# ovsbr0's own addressing/datapath setup. control-plane-network (which runs
+# later, depends on this service) owns everything else: enslaving eth0 and
+# netmaker into the bridge, their addresses, and the default route. There is
+# no separate "opdbus" WireGuard interface any more (host WG = netmaker
+# only, 2026-07-11) and no separate L3 interface needing iptables FORWARD
+# permission — eth0/netmaker are enslaved switch ports of ovsbr0, not routed
+# peers of it, so that forwarding rule from the old topology no longer
+# applies.
+
 BR="${BR:-ovsbr0}"
 EXPECTED_DATAPATH="${OVS_DATAPATH_TYPE:-system}"
 EXPECTED_FAIL_MODE="${OVS_FAIL_MODE:-standalone}"
-GW_ADDR="${OVSBR0_GATEWAY:-10.200.0.2/30}"
+GW_ADDR="${OVSBR0_GATEWAY:-10.200.0.1/30}"
 OVSDB_SOCK="${OVSDB_SOCK:-/usr/local/var/run/openvswitch/db.sock}"
 
 check_socket() {
@@ -62,19 +71,9 @@ set_gateway_ip() {
     fi
 }
 
-# Bootstrap iptables: allow forwarding between ovsbr0 and opdbus WG
-# These will be replaced by D-Bus-managed rules once op-openvswitch-daemon is up
-set_forwarding() {
-    iptables -C FORWARD -i "$BR" -o opdbus -j ACCEPT 2>/dev/null || \
-        iptables -I FORWARD -i "$BR" -o opdbus -j ACCEPT
-    iptables -C FORWARD -i opdbus -o "$BR" -j ACCEPT 2>/dev/null || \
-        iptables -I FORWARD -i opdbus -o "$BR" -j ACCEPT
-}
-
 check_socket
 ensure_bridge
 remove_veth_ports
 set_gateway_ip
-set_forwarding
 
 echo "ovsbr0-init: $BR ready (datapath_type=$EXPECTED_DATAPATH fail_mode=$EXPECTED_FAIL_MODE gw=$GW_ADDR)"

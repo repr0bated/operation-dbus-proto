@@ -1,8 +1,9 @@
 use op_state_store::PluginSchema;
 // Core trait for pluggable state management
-use anyhow::Result;
+use anyhow::{bail, Result};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use serde_json;
 use simd_json::OwnedValue as Value;
 use std::collections::HashMap;
 
@@ -163,6 +164,19 @@ pub trait StatePlugin: Send + Sync {
     /// Get plugin capabilities and limitations
     #[allow(dead_code)]
     fn capabilities(&self) -> PluginCapabilities;
+
+    /// Call a named method on the plugin with JSON arguments.
+    ///
+    /// This is the D-Bus execution surface: the projection server exposes each
+    /// plugin's declared methods as `ProjectedObject.CallMethod` dispatches to
+    /// this hook. gRPC remains a transport, not the authority.
+    async fn call_method(
+        &self,
+        _method: &str,
+        _args: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        bail!("plugin '{}' does not implement direct method calls", self.name())
+    }
 }
 
 /// Represents the difference between current and desired state

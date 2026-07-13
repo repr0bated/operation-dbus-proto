@@ -16,6 +16,7 @@
 
 use crate::data_models::{FieldSchema, FieldType, PluginSchema};
 use anyhow::Result;
+use op_state::StatePlugin;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -36,14 +37,23 @@ pub struct ProjectedObject {
     pub path_segments: Vec<String>,
     /// Canonical schema captured when the D-Bus object is mounted.
     pub schema: Option<PluginSchema>,
+    /// Runtime plugin instances used to dispatch `CallMethod` on the D-Bus
+    /// execution surface. gRPC remains a transport; D-Bus owns the call.
+    plugins: Arc<HashMap<String, Arc<dyn StatePlugin>>>,
 }
 
 impl ProjectedObject {
-    fn new(plugin_id: &str, path_segments: Vec<String>, schema: Option<PluginSchema>) -> Self {
+    fn new(
+        plugin_id: &str,
+        path_segments: Vec<String>,
+        schema: Option<PluginSchema>,
+        plugins: Arc<HashMap<String, Arc<dyn StatePlugin>>>,
+    ) -> Self {
         Self {
             plugin_id: plugin_id.to_string(),
             path_segments,
             schema: schema.or_else(|| read_plugin_schema(plugin_id)),
+            plugins,
         }
     }
 
@@ -126,6 +136,34 @@ impl ProjectedObject {
     /// Signal emitted when this object's data changes
     #[zbus(signal)]
     async fn updated(emitter: &SignalEmitter<'_>, data_json: &str) -> zbus::Result<()>;
+
+    /// Execute a plugin method on the D-Bus control plane.
+    ///
+    /// `args_json` is a JSON object whose shape matches the plugin method's
+    /// input schema. The result is a JSON string; errors are returned as a JSON
+    /// object with an `error` field. This is the primary mutation surface: the
+    /// gRPC bridge is transport, D-Bus is execution.
+    async fn call_method(&self, method: &str, args_json: &str) -> String {
+        let args: serde_json::Value = match serde_json::from_str(args_json) {
+            Ok(v) => v,
+            Err(e) => {
+                return serde_json::json!({"error": format!("invalid args_json: {e}")})
+                    .to_string();
+            }
+        };
+
+        match self.plugins.get(&self.plugin_id) {
+            Some(plugin) => match plugin.call_method(method, &args).await {
+                Ok(result) => serde_json::to_string(&result)
+                    .unwrap_or_else(|_| "{}".to_string()),
+                Err(e) => serde_json::json!({"error": e.to_string()}).to_string(),
+            },
+            None => serde_json::json!({
+                "error": format!("plugin '{}' not loaded for execution", self.plugin_id)
+            })
+            .to_string(),
+        }
+    }
 }
 
 /// Read projected data for a plugin/path from the shm layer (1:1, zero held cache).
@@ -260,6 +298,7 @@ fn build_projected_path(plugin_id: &str, path_segments: &[String]) -> String {
 pub struct ProjectionRoot {
     objects: Arc<Mutex<HashSet<String>>>,
     schemas: Arc<HashMap<String, PluginSchema>>,
+    plugins: Arc<HashMap<String, Arc<dyn StatePlugin>>>,
 }
 
 #[interface(name = "org.opdbus.v1.plugins")]
@@ -284,7 +323,7 @@ impl ProjectionRoot {
     /// client can call it to force a tree refresh.
     async fn refresh(&self, #[zbus(connection)] conn: &Connection) -> u64 {
         let mut objects = self.objects.lock().await;
-        match sync_all_from_shm(conn, &mut objects, &self.schemas).await {
+        match sync_all_from_shm(conn, &mut objects, &self.schemas, self.plugins.clone()).await {
             Ok(()) => objects.len() as u64,
             Err(e) => {
                 tracing::warn!(error = %e, "refresh() failed");
@@ -304,8 +343,9 @@ async fn sync_all_from_shm(
     conn: &Connection,
     objects: &mut HashSet<String>,
     schemas: &HashMap<String, PluginSchema>,
+    plugins: Arc<HashMap<String, Arc<dyn StatePlugin>>>,
 ) -> Result<()> {
-    let plugins = op_core::projection_shm::list_projected_plugins();
+    let projected_plugins = op_core::projection_shm::list_projected_plugins();
 
     // Unmount plugins that are no longer in shm.
     let plugin_root_base = op_plugins::canonical::plugin_path("");
@@ -323,7 +363,7 @@ async fn sync_all_from_shm(
                 && parts[3] == "plugins"
             {
                 let plugin_id = parts[4];
-                !plugins.iter().any(|p| p.as_str() == plugin_id)
+                !projected_plugins.iter().any(|p| p.as_str() == plugin_id)
             } else {
                 false
             }
@@ -344,9 +384,9 @@ async fn sync_all_from_shm(
     }
 
     // Mount/sync all plugins currently in shm.
-    for plugin_id in &plugins {
+    for plugin_id in &projected_plugins {
         if let Some(paths) = read_and_derive_paths(plugin_id, schemas.get(plugin_id)) {
-            sync_plugin_paths(conn, objects, plugin_id, &paths, schemas).await?;
+            sync_plugin_paths(conn, objects, plugin_id, &paths, schemas, plugins.clone()).await?;
         }
     }
 
@@ -360,6 +400,7 @@ async fn sync_plugin_paths(
     plugin_id: &str,
     paths: &[Vec<String>],
     schemas: &HashMap<String, PluginSchema>,
+    plugins: Arc<HashMap<String, Arc<dyn StatePlugin>>>,
 ) -> Result<()> {
     let new_paths: HashSet<String> = paths
         .iter()
@@ -391,8 +432,12 @@ async fn sync_plugin_paths(
     for segs in paths {
         let path = build_projected_path(plugin_id, segs);
         if !objects.contains(&path) {
-            let obj =
-                ProjectedObject::new(plugin_id, segs.to_vec(), schemas.get(plugin_id).cloned());
+            let obj = ProjectedObject::new(
+                plugin_id,
+                segs.to_vec(),
+                schemas.get(plugin_id).cloned(),
+                plugins.clone(),
+            );
             conn.object_server().at(path.as_str(), obj).await?;
             objects.insert(path.clone());
             debug!(path, "Mounted D-Bus projection object");
@@ -495,19 +540,26 @@ pub struct ProjectionDbusServer {
     objects: Arc<Mutex<HashSet<String>>>,
     /// Canonical schema catalog passed into D-Bus object creation.
     schemas: Arc<HashMap<String, PluginSchema>>,
+    /// Runtime plugin instances used to dispatch `CallMethod`.
+    plugins: Arc<HashMap<String, Arc<dyn StatePlugin>>>,
 }
 
 impl ProjectionDbusServer {
     pub async fn new() -> Result<Self> {
-        Self::new_with_schemas(HashMap::new()).await
+        Self::new_with_schemas(HashMap::new(), HashMap::new()).await
     }
 
-    pub async fn new_with_schemas(schemas: HashMap<String, PluginSchema>) -> Result<Self> {
+    pub async fn new_with_schemas(
+        schemas: HashMap<String, PluginSchema>,
+        plugins: HashMap<String, Arc<dyn StatePlugin>>,
+    ) -> Result<Self> {
         let objects = Arc::new(Mutex::new(HashSet::new()));
         let schemas = Arc::new(schemas);
+        let plugins = Arc::new(plugins);
         let root = ProjectionRoot {
             objects: objects.clone(),
             schemas: schemas.clone(),
+            plugins: plugins.clone(),
         };
 
         let conn = match std::env::var("OP_DBUS_PROJECTION_BUS")
@@ -539,19 +591,25 @@ impl ProjectionDbusServer {
             conn,
             objects,
             schemas,
+            plugins,
         })
     }
 
     pub async fn new_session() -> Result<Self> {
-        Self::new_session_with_schemas(HashMap::new()).await
+        Self::new_session_with_schemas(HashMap::new(), HashMap::new()).await
     }
 
-    pub async fn new_session_with_schemas(schemas: HashMap<String, PluginSchema>) -> Result<Self> {
+    pub async fn new_session_with_schemas(
+        schemas: HashMap<String, PluginSchema>,
+        plugins: HashMap<String, Arc<dyn StatePlugin>>,
+    ) -> Result<Self> {
         let objects = Arc::new(Mutex::new(HashSet::new()));
         let schemas = Arc::new(schemas);
+        let plugins = Arc::new(plugins);
         let root = ProjectionRoot {
             objects: objects.clone(),
             schemas: schemas.clone(),
+            plugins: plugins.clone(),
         };
 
         let conn = Builder::session()?
@@ -569,6 +627,7 @@ impl ProjectionDbusServer {
             conn,
             objects,
             schemas,
+            plugins,
         })
     }
 
@@ -576,7 +635,13 @@ impl ProjectionDbusServer {
     /// Called on startup. At runtime, the `refresh()` D-Bus method does the same.
     pub async fn sync_from_shm(&self) -> Result<()> {
         let mut objects = self.objects.lock().await;
-        sync_all_from_shm(&self.conn, &mut objects, &self.schemas).await
+        sync_all_from_shm(
+            &self.conn,
+            &mut objects,
+            &self.schemas,
+            self.plugins.clone(),
+        )
+        .await
     }
 
     /// Ensure all known plugins have at least a root object mounted, even if
@@ -594,13 +659,25 @@ impl ProjectionDbusServer {
             };
             // If shm has data, sync the full derived tree.
             if let Some(paths) = read_and_derive_paths(plugin_id, Some(schema)) {
-                sync_plugin_paths(&self.conn, &mut objects, plugin_id, &paths, &self.schemas)
-                    .await?;
+                sync_plugin_paths(
+                    &self.conn,
+                    &mut objects,
+                    plugin_id,
+                    &paths,
+                    &self.schemas,
+                    self.plugins.clone(),
+                )
+                .await?;
             } else {
                 // No shm data — mount just the root so the plugin appears in the tree.
                 let root_path = build_projected_path(plugin_id, &[]);
                 if !objects.contains(&root_path) {
-                    let obj = ProjectedObject::new(plugin_id, Vec::new(), Some(schema.clone()));
+                    let obj = ProjectedObject::new(
+                        plugin_id,
+                        Vec::new(),
+                        Some(schema.clone()),
+                        self.plugins.clone(),
+                    );
                     self.conn
                         .object_server()
                         .at(root_path.as_str(), obj)
@@ -616,7 +693,15 @@ impl ProjectionDbusServer {
     /// Sync a single plugin's D-Bus objects to match the derived paths.
     pub async fn sync_plugin(&mut self, plugin_id: &str, paths: &[Vec<String>]) -> Result<()> {
         let mut objects = self.objects.lock().await;
-        sync_plugin_paths(&self.conn, &mut objects, plugin_id, paths, &self.schemas).await
+        sync_plugin_paths(
+            &self.conn,
+            &mut objects,
+            plugin_id,
+            paths,
+            &self.schemas,
+            self.plugins.clone(),
+        )
+        .await
     }
 
     pub async fn object_count(&self) -> usize {
@@ -634,6 +719,7 @@ impl ProjectionDbusServer {
                     plugin_id,
                     path_segments.to_vec(),
                     self.schemas.get(plugin_id).cloned(),
+                    self.plugins.clone(),
                 );
                 self.conn.object_server().at(path.as_str(), obj).await?;
                 objects.insert(path.clone());

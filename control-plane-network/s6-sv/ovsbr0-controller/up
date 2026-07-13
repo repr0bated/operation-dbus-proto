@@ -1,0 +1,2 @@
+#!/bin/execlineb -P
+/usr/local/sbin/ovsbr0-controller

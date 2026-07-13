@@ -12,8 +12,8 @@ use uuid::Uuid;
 use crate::state::AppState;
 use crate::users::{PrivacyUser, VerifiedSignup};
 use crate::zeroclaw_configurable::{
-    load_configurable_options, resolve_provision_features,
-    substitute_template, withhold_email, ZeroclawConfigurableOptions,
+    load_configurable_options, resolve_provision_features, substitute_template, withhold_email,
+    ZeroclawConfigurableOptions,
 };
 
 const PROVISION_ACTOR: &str = "mut.service.registration-provision.apply@v1";
@@ -71,7 +71,11 @@ pub async fn provision_verified_signup(
         .await
 }
 
-async fn write_identity_sled(state: &Arc<AppState>, user: &PrivacyUser, psk_b64: &str) -> Result<()> {
+async fn write_identity_sled(
+    state: &Arc<AppState>,
+    user: &PrivacyUser,
+    psk_b64: &str,
+) -> Result<()> {
     let blob_ref = op_blob::catalog::read_manifest_plugin_ids_shm()
         .and_then(|ids| ids.into_iter().find(|id| id == "identity_sled"))
         .map(|id| format!("{id}.blob"));
@@ -112,7 +116,10 @@ async fn provision_memory_namespaces(
     let mcp_url = std::env::var("COGNITIVE_MCP_URL")
         .unwrap_or_else(|_| options.user_container.cognitive_mcp_endpoint.clone());
     let container_id = &user.id;
-    let mcp_token = derive_mcp_token(&user.wg_public_key, &options.identity_chain.mcp_token_derivation);
+    let mcp_token = derive_mcp_token(
+        &user.wg_public_key,
+        &options.identity_chain.mcp_token_derivation,
+    );
 
     // Soul profile (schema: container:{id}:soul)
     cognitive_mcp_call(

@@ -64,6 +64,11 @@ echo "    Waiting for init..."
 sleep 3
 incus exec "$CONTAINER_ID" -- sh -c "until [ -f /run/systemd/private ] || [ -d /run/s6 ] || pgrep -x init >/dev/null 2>&1 || sleep 1; do sleep 1; done" 2>/dev/null || sleep 2
 
+# Every identity container gets the same pinned, supervised socket owner.  Its
+# installer performs a real readiness gate and fails provisioning unless the
+# declared Unix socket exists.
+"$(dirname "$0")/install-rust-network-mgr.sh" "$CONTAINER_ID"
+
 # ── 2. Base packages ──────────────────────────────────────────────────────────
 echo "[2] Installing base packages..."
 incus exec "$CONTAINER_ID" -- apt-get update -qq

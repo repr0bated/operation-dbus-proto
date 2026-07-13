@@ -4472,7 +4472,6 @@ dependencies = [
  "op-cozo-store",
  "op-grpc-adapters",
  "op-identity",
- "op-jsonrpc",
  "op-network",
  "op-plugins",
  "op-state",
@@ -4482,6 +4481,7 @@ dependencies = [
  "prost-types 0.13.5",
  "qdrant-client",
  "rcgen",
+ "reqwest 0.11.27",
  "rustls 0.23.41",
  "schemars 0.8.22",
  "serde",
@@ -4799,6 +4799,9 @@ dependencies = [
  "parking_lot 0.12.5",
  "regex",
  "reqwest 0.11.27",
+ "rovs-jsonrpc",
+ "rovs-ovsdb",
+ "rovs-transport",
  "schemars 1.2.1",
  "serde",
  "serde_json",
@@ -4849,6 +4852,34 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "zbus 5.16.0",
+]
+
+[[package]]
+name = "op-reflection-socket"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "bytes",
+ "hex",
+ "http-body 1.0.1",
+ "http-body-util",
+ "op-blob",
+ "op-identity",
+ "op-state-store",
+ "prost 0.13.5",
+ "prost-reflect",
+ "prost-types 0.13.5",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tonic-build 0.12.3",
+ "tonic-reflection",
+ "tower 0.4.13",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -4995,6 +5026,7 @@ dependencies = [
  "axum-embed",
  "base64 0.22.1",
  "blake3",
+ "bytes",
  "chrono",
  "futures",
  "gethostname",
@@ -5023,6 +5055,7 @@ dependencies = [
  "op-state",
  "op-state-store",
  "op-tools",
+ "prost-reflect",
  "qdrant-client",
  "qrcode",
  "regex",

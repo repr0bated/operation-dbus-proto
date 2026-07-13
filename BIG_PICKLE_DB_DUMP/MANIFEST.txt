@@ -1,0 +1,43 @@
+Big Pickle OpenCode Session Dump
+================================
+
+Session: ses_0b516ef36ffeY2Uc26WsdLIdZW
+Source DB: ~/.local/share/opencode/opencode.db
+Repo path: /home/jeremy/git/operation-dbus-proto
+Created: 2026-07-10T07:08:35-04:00
+
+DB matched table counts:
+- event,3194
+- event_sequence,1
+- message,269
+- part,926
+- session,5
+- todo,8
+
+Files:
+BIG_PICKLE_DB_DUMP/MANIFEST.txt	350 bytes
+BIG_PICKLE_DB_DUMP/all-session-rows.sql	6589305 bytes
+BIG_PICKLE_DB_DUMP/all-session-tables/event.csv	4598029 bytes
+BIG_PICKLE_DB_DUMP/all-session-tables/event.json	4845864 bytes
+BIG_PICKLE_DB_DUMP/all-session-tables/event_sequence.csv	65 bytes
+BIG_PICKLE_DB_DUMP/all-session-tables/event_sequence.json	79 bytes
+BIG_PICKLE_DB_DUMP/all-session-tables/message.csv	156626 bytes
+BIG_PICKLE_DB_DUMP/all-session-tables/message.json	174053 bytes
+BIG_PICKLE_DB_DUMP/all-session-tables/part.csv	1985309 bytes
+BIG_PICKLE_DB_DUMP/all-session-tables/part.json	2117403 bytes
+BIG_PICKLE_DB_DUMP/all-session-tables/session.csv	2677 bytes
+BIG_PICKLE_DB_DUMP/all-session-tables/session.json	4497 bytes
+BIG_PICKLE_DB_DUMP/all-session-tables/todo.csv	1059 bytes
+BIG_PICKLE_DB_DUMP/all-session-tables/todo.json	1725 bytes
+BIG_PICKLE_DB_DUMP/log/opencode-session.log	84577 bytes
+BIG_PICKLE_DB_DUMP/messages.csv	160920 bytes
+BIG_PICKLE_DB_DUMP/messages.json	174053 bytes
+BIG_PICKLE_DB_DUMP/opencode-schema.sql	8410 bytes
+BIG_PICKLE_DB_DUMP/opencode-tables.txt	8407 bytes
+BIG_PICKLE_DB_DUMP/parts-expanded.json	3264681 bytes
+BIG_PICKLE_DB_DUMP/parts.csv	2000115 bytes
+BIG_PICKLE_DB_DUMP/parts.json	2117403 bytes
+BIG_PICKLE_DB_DUMP/session-table-counts.csv	66 bytes
+BIG_PICKLE_DB_DUMP/session.json	749 bytes
+BIG_PICKLE_DB_DUMP/tool-output/tool_f4b10c8a0001S0aqap1jFmRlO6	114497 bytes
+BIG_PICKLE_DB_DUMP/transcript.md	1198038 bytes

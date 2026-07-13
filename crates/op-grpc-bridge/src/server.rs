@@ -8,6 +8,7 @@
 //! sealed blob in the SHM catalog (`/dev/shm/opdbus/plugin-blobs`).
 
 use std::net::SocketAddr;
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -256,8 +257,7 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
     let event_chain = Arc::new(tokio::sync::RwLock::new(op_state_store::EventChain::new(
         op_state_store::ChainConfig::default(),
     )));
-    let ovsdb = Arc::new(op_network::rovs_proxy::OvsdbDbusClient::new());
-    let mutation_engine = Arc::new(MutationEngine::new(event_chain, ovsdb));
+    let mutation_engine = Arc::new(MutationEngine::new(event_chain));
     mutation_engine.seed_missing_plugin_projections().await?;
     let operation_server = OperationGrpcServer::new(mutation_engine);
     // The sealed SHM blob catalog IS the plugin set: hydrate reflection from
@@ -311,6 +311,13 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
     }
     let _ = std::fs::remove_file(&unix_socket);
     let unix_listener = tokio::net::UnixListener::bind(&unix_socket)?;
+    // Make the socket usable by the unprivileged user (uid 1000) that external
+    // clients and tools run as. The bridge itself stays root for IdentitySled
+    // and D-Bus access, but the UDS is gated by filesystem ownership.
+    let _ = std::os::unix::fs::chown(&unix_socket, Some(1000), Some(1000));
+    let mut perms = std::fs::metadata(&unix_socket)?.permissions();
+    perms.set_mode(0o660);
+    std::fs::set_permissions(&unix_socket, perms)?;
     info!(path = %unix_socket.display(), "zeroclaw native gRPC listening on Unix socket");
 
     let unix_incoming = tokio_stream::wrappers::UnixListenerStream::new(unix_listener);
