@@ -4147,6 +4147,7 @@ dependencies = [
  "op-cozo-store",
  "op-dynamic-loader",
  "op-identity",
+ "op-inspector",
  "op-mcp",
  "op-plugins",
  "op-state-store",

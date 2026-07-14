@@ -1,0 +1,22 @@
+#!/sbin/openrc-run
+
+name="rust-network-mgr"
+description="Rust network manager and control socket owner"
+command="/usr/local/bin/rust-network-mgr"
+command_background="yes"
+pidfile="/run/${RC_SVCNAME}.pid"
+output_log="/var/log/${RC_SVCNAME}.log"
+error_log="/var/log/${RC_SVCNAME}.log"
+respawn_delay=5
+respawn_max=0
+
+export RUST_LOG="${RUST_LOG:-info}"
+export RUST_NETWORK_MGR_CONFIG="${RUST_NETWORK_MGR_CONFIG:-/etc/rust-network-mgr/config.yaml}"
+
+depend() {
+    need localmount
+}
+
+start_pre() {
+    checkpath --directory --mode 0755 /run/rust-network-manager
+}

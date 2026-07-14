@@ -13,6 +13,7 @@ op-state-store = { path = "../op-state-store" }
 op-plugins = { path = "../op-plugins" }
 op-dynamic-loader = { path = "../op-dynamic-loader" }
 op-cache = { path = "../op-cache" }
+op-inspector = { path = "../op-inspector" }
 op-cozo-store = { workspace = true }
 base64 = { workspace = true }
 hex = { workspace = true }

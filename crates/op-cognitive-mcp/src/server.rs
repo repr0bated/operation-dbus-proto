@@ -9,6 +9,8 @@ use crate::context_awareness::{ContextAwarenessConfig, ContextAwarenessEngine};
 use crate::cozo_shuttle::CozoGraphShuttle;
 use crate::gemini_fallback::GeminiFallback;
 use crate::grpc_service::CognitiveGrpcService;
+use crate::inspector_tools;
+use crate::zcall_tools;
 use crate::memory_store::CognitiveMemoryStore;
 use crate::proto::cognitive_tool_service_server::CognitiveToolServiceServer;
 use crate::qdrant_shuttle::QdrantSemanticShuttle;
@@ -72,6 +74,9 @@ impl CognitiveMcpServer {
             quota_manager.clone(),
         )
         .await?;
+
+        inspector_tools::register_inspector_tools(&tool_registry).await?;
+        zcall_tools::register_zcall_tools(&tool_registry).await?;
 
         // Code-RAG pipeline: optional, like qdrant_shuttle. Without a Voyage key
         // (env or ~/.ssh/mongo-voyage) the cognitive MCP still serves memory tools.

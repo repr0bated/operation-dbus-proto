@@ -22,17 +22,35 @@
     {
       "name": "assistant",
       "role": "legacy-assistant-rollback",
-      "depends_on": ["socket:rust_service.socket", "service:rust_service.service"],
-      "services": ["rust_service.socket", "rust_service.service"],
-      "unix_sockets": ["/tmp/rust_service.sock"],
+      "depends_on": [
+        "artifact:rust-network-mgr",
+        "service:rust-network-mgr.service",
+        "socket:rust_service.socket",
+        "service:rust_service.service"
+      ],
+      "services": [
+        "rust-network-mgr.service",
+        "rust_service.socket",
+        "rust_service.service"
+      ],
+      "unix_sockets": [
+        "/run/rust-network-manager/rust-network-manager.sock",
+        "/tmp/rust_service.sock"
+      ],
       "tcp_ports": []
     },
     {
       "name": "fa2f0210-926a-7cf4-4044-16186cb8085a",
       "role": "control-plane-chatbot",
-      "depends_on": ["mount:controlplane-runtime", "service:controlplane-ui.service"],
-      "services": ["controlplane-ui.service"],
+      "depends_on": [
+        "artifact:rust-network-mgr",
+        "service:rust-network-mgr.service",
+        "mount:controlplane-runtime",
+        "service:controlplane-ui.service"
+      ],
+      "services": ["rust-network-mgr.service", "controlplane-ui.service"],
       "unix_sockets": [
+        "/run/rust-network-manager/rust-network-manager.sock",
         "/run/assistant-controlplane/http.sock",
         "/run/assistant-controlplane/http1.sock"
       ],
@@ -41,41 +59,80 @@
     {
       "name": "netmaker",
       "role": "network-control",
-      "depends_on": ["artifact:rust-network-mgr", "service:rust-network-mgr.service"],
+      "depends_on": [
+        "artifact:rust-network-mgr",
+        "service:rust-network-mgr.service",
+        "mount:netmaker-runtime"
+      ],
       "services": ["rust-network-mgr.service", "netmaker.service", "netmaker-exporter.service"],
       "unix_sockets": [
         "/run/rust-network-manager/rust-network-manager.sock",
-        "/run/netmaker/netmaker.sock"
+        "/var/lib/netmaker-runtime/netmaker.sock"
       ],
       "tcp_ports": [8081, 50051]
     },
     {
       "name": "qdrant",
       "role": "semantic-store",
-      "depends_on": ["service:qdrant.service"],
-      "services": ["qdrant.service"],
-      "unix_sockets": [],
+      "depends_on": [
+        "artifact:rust-network-mgr",
+        "service:rust-network-mgr.service",
+        "service:qdrant.service",
+        "service:qdrant-socat-grpc.service"
+      ],
+      "services": ["rust-network-mgr.service", "qdrant.service", "qdrant-socat-grpc.service"],
+      "unix_sockets": [
+        "/run/rust-network-manager/rust-network-manager.sock",
+        "/var/lib/opdbus-runtime/qdrant/qdrant-grpc.sock"
+      ],
       "tcp_ports": [6333, 6334]
     },
     {
       "name": "mail-3tched",
       "role": "mail",
-      "depends_on": ["process:postfix", "process:dovecot"],
-      "services": [],
-      "unix_sockets": [],
+      "depends_on": [
+        "artifact:rust-network-mgr",
+        "service:rust-network-mgr.service",
+        "process:postfix",
+        "process:dovecot"
+      ],
+      "services": ["rust-network-mgr.service"],
+      "unix_sockets": ["/run/rust-network-manager/rust-network-manager.sock"],
       "tcp_ports": [25, 143, 465, 587, 993]
     },
     {
       "name": "cozo",
       "role": "identity-store",
-      "depends_on": ["workload:cozo"],
-      "services": [],
-      "unix_sockets": [],
+      "depends_on": [
+        "artifact:rust-network-mgr",
+        "service:rust-network-mgr.service",
+        "workload:cozo"
+      ],
+      "services": ["rust-network-mgr.service"],
+      "unix_sockets": ["/run/rust-network-manager/rust-network-manager.sock"],
       "tcp_ports": [],
       "require_endpoint": true
     }
   ],
   "host_listeners": [
+    {
+      "name": "netmaker-api-loopback",
+      "depends_on": [
+        "container:netmaker",
+        "socket:/var/lib/netmaker-runtime/netmaker.sock"
+      ],
+      "address": "127.0.0.1",
+      "port": 8081
+    },
+    {
+      "name": "qdrant-grpc-loopback",
+      "depends_on": [
+        "container:qdrant",
+        "socket:/var/lib/opdbus-runtime/qdrant/qdrant-grpc.sock"
+      ],
+      "address": "127.0.0.1",
+      "port": 6334
+    },
     {
       "name": "assistant-direct",
       "depends_on": [

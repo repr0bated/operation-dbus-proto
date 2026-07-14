@@ -10,12 +10,16 @@
 
 pub mod gcloud;
 mod introspective_gadget;
+pub mod plugin_codegen;
+pub mod zcall;
 
 // Re-export main types
 pub use gcloud::{
     introspect_gcloud, GCloudArg, GCloudCommand, GCloudFlag, GCloudParser, GCloudSchema,
     GCloudStats,
 };
+pub use plugin_codegen::generate_plugin_scaffold;
+pub use zcall::{introspect_zcall, ZcallMethod, ZcallParser, ZcallPlugin, ZcallSchema};
 pub use introspective_gadget::{
     BinaryPattern, ContainerInspection, ContainerInspectionWithKnowledge, ContainerMount,
     ContainerProcess, InspectionInput, InspectionResult, InspectionSource, IntrospectiveGadget,

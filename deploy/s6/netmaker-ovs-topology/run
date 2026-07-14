@@ -1,0 +1,67 @@
+#!/bin/sh
+set -eu
+
+exec 2>&1
+
+BRIDGE=${BRIDGE:-ovsbr0}
+NETMAKER_IFACE=${NETMAKER_IFACE:-netmaker}
+UPLINK_IFACE=${UPLINK_IFACE:-eth0}
+ZCALL=${ZCALL:-/usr/local/bin/zcall}
+
+wait_for_link() {
+    link=$1
+    count=0
+    until ip link show "$link" >/dev/null 2>&1; do
+        count=$((count + 1))
+        [ "$count" -le 120 ] || return 1
+        sleep 1
+    done
+}
+
+wait_for_control_plane() {
+    count=0
+    until "$ZCALL" rovs_commands list_ports \
+        --arguments "{\"bridge_name\":\"$BRIDGE\"}" >/dev/null 2>&1; do
+        count=$((count + 1))
+        [ "$count" -le 120 ] || return 1
+        sleep 1
+    done
+}
+
+ensure_port() {
+    port=$1
+    ports=$("$ZCALL" rovs_commands list_ports \
+        --arguments "{\"bridge_name\":\"$BRIDGE\"}")
+    if printf '%s' "$ports" | jq -e --arg port "$port" \
+        '.ports | index($port) != null' >/dev/null; then
+        return 0
+    fi
+    "$ZCALL" rovs_commands add_port --arguments \
+        "{\"bridge_name\":\"$BRIDGE\",\"port_name\":\"$port\",\"interface_type\":\"system\"}"
+}
+
+wait_for_link "$BRIDGE"
+wait_for_link "$UPLINK_IFACE"
+wait_for_link "$NETMAKER_IFACE"
+wait_for_control_plane
+
+"$ZCALL" rovs_commands set_bridge_property --arguments \
+    "{\"bridge_name\":\"$BRIDGE\",\"property\":\"fail_mode\",\"value\":\"standalone\"}"
+"$ZCALL" rovs_commands set_bridge_property --arguments \
+    "{\"bridge_name\":\"$BRIDGE\",\"property\":\"protocols\",\"value\":\"OpenFlow10,OpenFlow11,OpenFlow12,OpenFlow13,OpenFlow14,OpenFlow15\"}"
+
+ensure_port "$UPLINK_IFACE"
+ensure_port "$NETMAKER_IFACE"
+
+"$ZCALL" rtnetlink set_link_state --arguments \
+    "{\"name\":\"$UPLINK_IFACE\",\"state\":\"up\"}"
+"$ZCALL" rtnetlink set_link_state --arguments \
+    "{\"name\":\"$NETMAKER_IFACE\",\"state\":\"up\"}"
+
+touch /run/netmaker-ovs-topology.ready
+
+# Keep supervision active and replay after either link is recreated.
+while sleep 5; do
+    wait_for_link "$NETMAKER_IFACE" || continue
+    ensure_port "$NETMAKER_IFACE" || true
+done

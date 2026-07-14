@@ -49,6 +49,106 @@ pub struct SchemaDefinition {
     pub metadata: HashMap<String, String>,
 }
 
+/// Cap on retained examples per knowledge-base entry, so repeated inspection
+/// of a high-traffic shape doesn't grow `examples` unbounded.
+const MAX_RETAINED_EXAMPLES: usize = 10;
+
+/// Merge a freshly-inspected `SchemaDefinition` into an existing entry of the
+/// same name, narrowing `required` to the intersection across every sample
+/// seen so far and unioning `properties` (a field absent from `new` but
+/// present in `existing` — or vice versa — is optional, not missing).
+fn merge_schema_definitions(existing: &SchemaDefinition, new: &SchemaDefinition) -> SchemaDefinition {
+    let merged_schema = merge_schema_values(&existing.schema, &new.schema);
+
+    let mut validation_rules = existing.validation_rules.clone();
+    for rule in &new.validation_rules {
+        if !validation_rules.contains(rule) {
+            validation_rules.push(rule.clone());
+        }
+    }
+
+    let mut examples = existing.examples.clone();
+    examples.extend(new.examples.iter().cloned());
+    if examples.len() > MAX_RETAINED_EXAMPLES {
+        let overflow = examples.len() - MAX_RETAINED_EXAMPLES;
+        examples.drain(0..overflow);
+    }
+
+    let mut metadata = existing.metadata.clone();
+    metadata.extend(new.metadata.clone());
+    metadata.insert(
+        "sample_count".to_string(),
+        (existing
+            .metadata
+            .get("sample_count")
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(1)
+            + 1)
+        .to_string(),
+    );
+
+    SchemaDefinition {
+        name: existing.name.clone(),
+        object_type: new.object_type.clone(),
+        source_type: new.source_type.clone(),
+        source_data: new.source_data.clone(),
+        schema: merged_schema,
+        generated_schemas: existing.generated_schemas.clone(),
+        validation_rules,
+        examples,
+        metadata,
+    }
+}
+
+/// Merge two `ObjectSchema::to_value()` JSON shapes: union `properties`,
+/// intersect `required` (a field must appear in every sample to stay
+/// required), and keep the newer `type`/`array_items`/`object_patterns`.
+fn merge_schema_values(old: &Value, new: &Value) -> Value {
+    use std::collections::HashSet;
+
+    let old_props = old
+        .get("properties")
+        .and_then(|v| v.as_object())
+        .cloned()
+        .unwrap_or_default();
+    let new_props = new
+        .get("properties")
+        .and_then(|v| v.as_object())
+        .cloned()
+        .unwrap_or_default();
+
+    let str_set = |v: &Value| -> HashSet<String> {
+        v.as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let old_required = old.get("required").map(str_set).unwrap_or_default();
+    let new_required = new.get("required").map(str_set).unwrap_or_default();
+
+    let mut merged_required: Vec<String> = old_required
+        .intersection(&new_required)
+        .cloned()
+        .collect();
+    merged_required.sort();
+
+    let mut merged_props = old_props;
+    for (k, v) in new_props {
+        merged_props.entry(k).or_insert(v);
+    }
+
+    json!({
+        "type": new.get("type").cloned().unwrap_or_else(|| Value::from("object")),
+        "properties": merged_props,
+        "required": merged_required,
+        "array_items": new.get("array_items").cloned(),
+        "object_patterns": new.get("object_patterns").cloned().unwrap_or_else(|| Value::from(Vec::<Value>::new())),
+    })
+}
+
 // ============================================================================
 // INTROSPECTIVE GADGET - THE OBJECT INSPECTOR
 // ============================================================================
@@ -155,11 +255,21 @@ impl IntrospectiveGadget {
             .generate_knowledge_base_entry(&best_result, &input)
             .await?;
 
-        // Add to knowledge base
-        {
+        // Add to knowledge base, merging with any prior entry of the same
+        // name instead of overwriting it. A single sample cannot tell which
+        // fields are truly required vs. just present in that one example;
+        // merging narrows `required` to the intersection across every
+        // sample seen so far, and unions `properties` so fields that only
+        // appear in some samples are still captured (as optional).
+        let merged_entry = {
             let mut kb = self.knowledge_base.write().await;
-            kb.schemas.insert(kb_entry.name.clone(), kb_entry.clone());
-        }
+            let merged = match kb.schemas.get(&kb_entry.name) {
+                Some(existing) => merge_schema_definitions(existing, &kb_entry),
+                None => kb_entry.clone(),
+            };
+            kb.schemas.insert(merged.name.clone(), merged.clone());
+            merged
+        };
 
         let inspection_time = start_time.elapsed().as_millis();
 
@@ -168,7 +278,7 @@ impl IntrospectiveGadget {
             detected_format,
             parsed_data: best_result.data,
             schema: best_result.schema,
-            knowledge_base_entry: kb_entry.name,
+            knowledge_base_entry: merged_entry.name,
             inspection_time_ms: inspection_time,
             parsing_errors: errors,
         })
@@ -420,9 +530,19 @@ impl IntrospectiveGadget {
     }
 
     fn analyze_xml_elements(&self, xml: &str) -> Vec<XmlElementInfo> {
-        let mut elements = Vec::new();
-        let re = Regex::new(r#"<([^\s>/]+)([^>]*)>"#).unwrap();
+        // Element regex was already compiled once here (fine); the bug was
+        // one level down, in parse_xml_attributes, which used to compile a
+        // FRESH regex on every single call -- i.e. once per matched element.
+        // On a large real file (16MB repomix dump, tens of thousands of
+        // `<...>`-shaped matches once you count false positives from
+        // embedded source code -- Rust generics, comparisons, etc.) that
+        // was thousands of redundant regex compilations, taking minutes.
+        // Confirmed by profiling: killed after 2:46 wall-clock still
+        // running on the same input that completes in ~1s once fixed.
+        static ELEMENT_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+        let re = ELEMENT_RE.get_or_init(|| Regex::new(r#"<([^\s>/]+)([^>]*)>"#).unwrap());
 
+        let mut elements = Vec::new();
         for cap in re.captures_iter(xml) {
             let name = cap
                 .get(1)
@@ -438,9 +558,10 @@ impl IntrospectiveGadget {
     }
 
     fn parse_xml_attributes(&self, attrs: &str) -> HashMap<String, String> {
-        let mut attributes = HashMap::new();
-        let re = Regex::new(r#"(\w+)\s*=\s*["']([^"']*)["']"#).unwrap();
+        static ATTR_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+        let re = ATTR_RE.get_or_init(|| Regex::new(r#"(\w+)\s*=\s*["']([^"']*)["']"#).unwrap());
 
+        let mut attributes = HashMap::new();
         for cap in re.captures_iter(attrs) {
             if let (Some(key), Some(value)) = (cap.get(1), cap.get(2)) {
                 attributes.insert(key.as_str().to_string(), value.as_str().to_string());
@@ -490,32 +611,31 @@ impl IntrospectiveGadget {
     }
 
     fn analyze_binary_patterns(&self, data: &[u8]) -> Vec<BinaryPattern> {
-        let mut patterns = Vec::new();
+        // Previously O(n^2)-ish: for every starting offset, a fresh linear
+        // scan of the whole buffer looking for that window's repeats -- on a
+        // full multi-KB+ blob (not just a truncated demo prefix) this took
+        // minutes. Single linear pass with a frequency map instead: O(n)
+        // hashing every 8-byte window once, only quadratic in `data.len()`
+        // going away entirely.
+        let mut counts: HashMap<&[u8], (usize, usize)> = HashMap::new(); // window -> (count, first_offset)
 
-        // Look for repeating patterns
         if data.len() >= 8 {
-            for i in 0..data.len().saturating_sub(8) {
-                let pattern = &data[i..i + 8];
-                let mut count = 0;
-                let mut pos = 0;
-
-                while let Some(found) = data[pos..].windows(8).position(|w| w == pattern) {
-                    count += 1;
-                    pos += found + 8;
-                    if pos >= data.len() - 8 {
-                        break;
-                    }
-                }
-
-                if count > 1 {
-                    patterns.push(BinaryPattern {
-                        pattern: pattern.to_vec(),
-                        count,
-                        offset: i,
-                    });
-                }
+            for i in 0..=data.len() - 8 {
+                let window = &data[i..i + 8];
+                let entry = counts.entry(window).or_insert((0, i));
+                entry.0 += 1;
             }
         }
+
+        let mut patterns: Vec<BinaryPattern> = counts
+            .into_iter()
+            .filter(|(_, (count, _))| *count > 1)
+            .map(|(window, (count, offset))| BinaryPattern {
+                pattern: window.to_vec(),
+                count,
+                offset,
+            })
+            .collect();
 
         patterns.sort_by_key(|a| std::cmp::Reverse(a.count));
         patterns.truncate(10); // Top 10 patterns
@@ -723,27 +843,35 @@ pub struct SchemaProperty {
 
 impl SchemaProperty {
     fn to_value(&self) -> Value {
+        // Build via as_object_mut().insert(...) rather than index-assignment
+        // (`obj["key"] = ...`) -- the latter panics ("index out of bounds")
+        // on simd_json::OwnedValue in practice; confirmed by running this
+        // path on a real 16MB input (repomix-output.xml) where it crashed
+        // every time a SchemaProperty had a `description` set.
         let mut obj = json!({
             "type": self.data_type
         });
+        let map = obj
+            .as_object_mut()
+            .expect("json!({\"type\": ..}) always builds an object");
 
         if let Some(desc) = &self.description {
-            obj["description"] = json!(desc);
+            map.insert("description".into(), json!(desc));
         }
         if let Some(pattern) = &self.pattern {
-            obj["pattern"] = json!(pattern);
+            map.insert("pattern".into(), json!(pattern));
         }
         if let Some(min) = self.minimum {
-            obj["minimum"] = json!(min);
+            map.insert("minimum".into(), json!(min));
         }
         if let Some(max) = self.maximum {
-            obj["maximum"] = json!(max);
+            map.insert("maximum".into(), json!(max));
         }
         if let Some(enum_vals) = &self.enum_values {
-            obj["enum"] = json!(enum_vals);
+            map.insert("enum".into(), json!(enum_vals));
         }
         if let Some(nested) = &self.nested_schema {
-            obj["properties"] = nested.to_value();
+            map.insert("properties".into(), nested.to_value());
         }
 
         obj

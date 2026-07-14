@@ -1,0 +1,15 @@
+#!/bin/sh
+set -eu
+
+exec 2>&1
+
+SOCKET=${NETMAKER_API_SOCKET:-/var/lib/netmaker-runtime/netmaker.sock}
+PORT=${NETMAKER_API_PORT:-8081}
+
+while [ ! -S "$SOCKET" ]; do
+    sleep 1
+done
+
+exec socat \
+    "TCP-LISTEN:${PORT},bind=127.0.0.1,reuseaddr,fork" \
+    "UNIX-CONNECT:${SOCKET}"
