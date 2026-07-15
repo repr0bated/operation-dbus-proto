@@ -1,3 +1,7 @@
+# Repomix exports (huge generated dumps, not source)
+factory-repomix.xml
+*-repomix.xml
+
 # Build artifacts
 target/
 target-cache/
