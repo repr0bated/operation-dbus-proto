@@ -38,6 +38,7 @@ members = [
     "crates/op-projection",
     "crates/op-assistant-grpc",
     "crates/op-s6-systemctl",
+    "crates/op-schema-codegen",
     "crates/op-xray-daemon",
     "crates/op-mcp-shim",
     "crates/op-mindstudio-shim",

@@ -37,7 +37,7 @@ Identity, mutations, traces, and accountability are always bound to the current 
     - `X-Ghostbridge-Trace-ID`
     - `X-WireGuard-Pubkey` (when applicable).
 - **GhostbridgeInterceptor** (`op-grpc-bridge/src/interceptor.rs` + similar in other crates):
-  - Enforces the Accountability Loop on every gRPC ingress (port 18789).
+  - Enforces the Accountability Loop on every gRPC ingress (port 8090).
   - Requires the two Ghostbridge headers.
   - Re-reads the live sled (zero-copy).
   - Rejects on:

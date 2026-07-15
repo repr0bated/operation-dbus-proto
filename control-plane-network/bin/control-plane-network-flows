@@ -1,0 +1,3 @@
+#!/bin/sh
+# Post-controller flow reconciliation entry point.
+exec /usr/local/sbin/control-plane-network --flows-only "$@"

@@ -11,7 +11,7 @@
 # Files you've masked in upper stay masked; unmasked files pick up the upgrade.
 #
 # domain: assistant.3tched.com
-# port:   18789 (internal)
+# port:   18090 (internal; intentionally distinct from legacy 18789 and gRPC 8090)
 #
 # NO NETWORK INTERFACE — sealed container. Traffic via Unix socket proxies
 # (Incus proxy devices) bridged by Xray ds outbound / OpenFlow on the host.
@@ -21,7 +21,7 @@ set -euo pipefail
 
 CONTAINER="assistant"
 DOMAIN="assistant.3tched.com"
-GATEWAY_PORT=18789
+GATEWAY_PORT=18090
 
 # Host paths
 OVERLAY_HOST="${HOME}/.assistant"              # user customisation layer
@@ -47,6 +47,7 @@ die() { echo "[assistant-setup] ERROR: $*" >&2; exit 1; }
 
 [[ $EUID -eq 0 ]] || die "Run as root: sudo bash $0"
 command -v incus &>/dev/null || die "incus not found"
+command -v python3 &>/dev/null || die "python3 not found"
 
 # ─── host overlay directory structure ─────────────────────────────────────────
 
@@ -73,7 +74,7 @@ if [[ ! -f "$OVERLAY_HOST/assistant.json" ]]; then
 {
   "name": "assistant",
   "version": "1.0.0",
-  "gateway": { "host": "0.0.0.0", "port": 18789, "trust_proxy": true },
+  "gateway": { "host": "0.0.0.0", "port": 18090, "trust_proxy": true },
   "agents": { "workspace": "/root/.assistant/workspace", "default": "main" },
   "models": {
     "primary": "opencode/kimi-k2.5-free",
@@ -90,6 +91,26 @@ if [[ ! -f "$OVERLAY_HOST/assistant.json" ]]; then
 }
 JSON
 fi
+
+# Existing overlays survive container recreation, so reconcile the port in the
+# persisted JSON as well as in the seed above. Preserve its ownership and mode.
+ASSISTANT_CONFIG="$OVERLAY_HOST/assistant.json"
+ASSISTANT_CONFIG_TMP="$(mktemp "${ASSISTANT_CONFIG}.tmp.XXXXXX")"
+python3 - "$ASSISTANT_CONFIG" "$GATEWAY_PORT" > "$ASSISTANT_CONFIG_TMP" <<'PY'
+import json
+import sys
+
+path, port = sys.argv[1], int(sys.argv[2])
+with open(path, encoding="utf-8") as handle:
+    config = json.load(handle)
+gateway = config.setdefault("gateway", {})
+gateway["port"] = port
+json.dump(config, sys.stdout, indent=2)
+sys.stdout.write("\n")
+PY
+chmod --reference="$ASSISTANT_CONFIG" "$ASSISTANT_CONFIG_TMP"
+chown --reference="$ASSISTANT_CONFIG" "$ASSISTANT_CONFIG_TMP"
+mv -f "$ASSISTANT_CONFIG_TMP" "$ASSISTANT_CONFIG"
 
 # ─── container lifecycle ───────────────────────────────────────────────────────
 
@@ -400,7 +421,7 @@ fi
 
 log "Configuring host proxy devices"
 
-# TCP: host 127.0.0.1:18789 → container:18789
+# TCP: host 127.0.0.1:18090 → container:18090
 incus config device remove "$CONTAINER" assistant-tcp 2>/dev/null || true
 incus config device add "$CONTAINER" assistant-tcp proxy \
     listen=tcp:127.0.0.1:$GATEWAY_PORT \

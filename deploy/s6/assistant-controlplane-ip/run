@@ -4,5 +4,5 @@ set -eu
 # Direct IP entry for the NIC-less chatbot identity container.  The container
 # owns only the shared Unix socket; the host owns the routable decoy address.
 exec socat \
-    TCP-LISTEN:8090,bind=10.0.0.2,reuseaddr,fork \
+    TCP-LISTEN:18090,bind=10.0.0.2,reuseaddr,fork \
     UNIX-CONNECT:/var/lib/assistant-controlplane/http1.sock

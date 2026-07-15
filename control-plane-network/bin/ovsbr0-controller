@@ -1,43 +1,5 @@
 #!/bin/sh
-# ovsbr0-controller
-#
-# Assigns the OVS OpenFlow controller on ovsbr0. Split out from
-# control-plane-network deliberately: that script is zcall-only (no raw
-# ovs-vsctl/ovs-ofctl) per policy, but there is currently no D-Bus method
-# for set-controller (rovs_commands has no controller method; rtnetlink's
-# zcall dispatch has an argument-unwrapping bug — see SIGNALS.md). This is
-# a narrow, single-purpose, easy-to-find exception, not a precedent.
-#
-# Runs after control-plane-network so the bridge exists and eth0/netmaker
-# are already up. Setting a controller causes a brief (few-second) forwarding
-# blip while OVS's connection state machine settles into "unreachable, fall
-# back to fail_mode standalone" — confirmed empirically 2026-07-12, harmless
-# once boot has already established connectivity.
-#
-# TODO: retire this once rovs_commands (or rtnetlink) exposes a working
-# set_controller method over D-Bus; fold into control-plane-network then.
-
-set -eu
-
-PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-export PATH
-
-CONF="${CONTROL_PLANE_NETWORK_CONF:-/etc/control-plane-network/network.conf}"
-[ -r "$CONF" ] && . "$CONF"
-
-BRIDGE="${BRIDGE:-ovsbr0}"
-OF_CONTROLLER="${OF_CONTROLLER:-tcp:10.200.0.1:6653}"
-OVSDB_SOCK="${OVSDB_SOCK:-/usr/local/var/run/openvswitch/db.sock}"
-
-ts() { date -Iseconds; }
-log() { printf '%s [ovsbr0-controller] %s\n' "$(ts)" "$*"; }
-
-i=0
-while ! ovs-vsctl --db="unix:$OVSDB_SOCK" br-exists "$BRIDGE" 2>/dev/null; do
-    i=$((i + 1))
-    [ "$i" -gt 30 ] && { log "$BRIDGE not found after 30s, giving up"; exit 1; }
-    sleep 1
-done
-
-ovs-vsctl --db="unix:$OVSDB_SOCK" set-controller "$BRIDGE" "$OF_CONTROLLER"
-log "$BRIDGE controller -> $OF_CONTROLLER"
+# Compatibility entry point retained for existing s6 bundles. Controller
+# assignment now uses rovs_commands.set_controller through the same hardened
+# control-plane-network implementation and lock as normal bootstrap.
+exec /usr/local/sbin/control-plane-network --controller-only "$@"

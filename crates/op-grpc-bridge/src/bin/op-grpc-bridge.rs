@@ -8,7 +8,7 @@
 //! Design:
 //!   - Does NOT write the sled; the MutationEngine or A.N.N.A. Scribe does.
 //!   - If no valid sled exists, all inbound requests are rejected.
-//!   - Bind address defaults to 127.0.0.1:18789 (Xray redirect target).
+//!   - Bind address defaults to 127.0.0.1:8090 (Xray redirect target).
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -86,9 +86,9 @@ async fn main() -> anyhow::Result<()> {
     let mutation_engine = Arc::new(MutationEngine::new(event_chain));
 
     // ── Bind address ─────────────────────────────────────────────────────────
-    // Per spec: Xray redirects gRPC traffic to 127.0.0.1:18789.
+    // Per spec: Xray redirects gRPC traffic to 127.0.0.1:8090.
     let addr: SocketAddr = std::env::var("GRPC_BIND")
-        .unwrap_or_else(|_| "127.0.0.1:18789".to_string())
+        .unwrap_or_else(|_| "127.0.0.1:8090".to_string())
         .parse()
         .expect("GRPC_BIND must be a valid socket address");
 

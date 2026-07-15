@@ -13,7 +13,4 @@ export OP_MEMORY_DB="${OP_MEMORY_DB:-/var/lib/op-dbus/cognitive.db}"
 export OP_WEB_STATIC_DIR="${OP_WEB_STATIC_DIR-}"
 export RUST_LOG="${RUST_LOG:-op_web=info,info}"
 
-# Decoy ingress alias (10.0.0.2) + mesh grpc-uplink alias (10.200.0.2)
-. /usr/local/lib/ghostbridge/bind-hub-aliases.sh
-
 exec s6-setuidgid jeremy /usr/local/bin/op-web-server

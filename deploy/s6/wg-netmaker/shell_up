@@ -1,0 +1,53 @@
+#!/bin/sh
+set -eu
+
+# Host-side WireGuard tunnel to oracle (the decoy relay VPS). Live-verified
+# 2026-07-14: this had gone stale (no interface at all), traced to
+# wg-netmaker previously execing `netclient daemon` (a longrun), which
+# stalled forever with "failed to pull server config not found" -- its
+# local server registration was gone. The wg-conf/netmaker.conf file
+# (local only, gitignored -- it holds the private key) is the actual working
+# config for this tunnel;
+# wg-quick against it is a oneshot operation (the interface persists in the
+# kernel independently of any supervising process), matching the
+# ovsbr0-init pattern, not a longrun daemon.
+
+WG_CONF="${WG_NETMAKER_CONF:-/home/jeremy/git/operation-dbus-proto/wg-conf/netmaker.conf}"
+IFACE="netmaker"
+BRIDGE="${BRIDGE:-ovsbr0}"
+DBUS_SVC="org.opdbus.v1.plugins"
+DBUS_OBJ="/org/opdbus/v1/plugins/rovs_commands"
+DBUS_IFACE="org.opdbus.v1.plugins.ProjectedObject"
+
+if ! [ -f "$WG_CONF" ]; then
+    echo "wg-netmaker: config not found at $WG_CONF" >&2
+    exit 1
+fi
+
+if ip link show "$IFACE" >/dev/null 2>&1; then
+    echo "wg-netmaker: $IFACE already up"
+    exit 0
+fi
+
+# Bridge dependency is enforced by the s6-rc dependencies.d edge on
+# control-plane-network, but that stage can itself fail past the bridge
+# step (e.g. eth0 enslave rolling back) while still leaving the bridge
+# oneshot marked up. Confirm ovsbr0 actually exists via the rovs_commands
+# D-Bus plugin (busctl, not raw ovs-vsctl) before bringing the tunnel up.
+i=0
+while :; do
+    result="$(busctl call "$DBUS_SVC" "$DBUS_OBJ" "$DBUS_IFACE" CallMethod ss \
+        list_bridges '{}' 2>/dev/null || true)"
+    case "$result" in
+        *"\"$BRIDGE\""*) break ;;
+    esac
+    i=$((i + 1))
+    if [ "$i" -gt 30 ]; then
+        echo "wg-netmaker: bridge $BRIDGE not reported by rovs_commands after 30s" >&2
+        exit 1
+    fi
+    sleep 1
+done
+
+wg-quick up "$WG_CONF"
+echo "wg-netmaker: $IFACE tunnel established"

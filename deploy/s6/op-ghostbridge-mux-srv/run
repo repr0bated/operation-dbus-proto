@@ -1,0 +1,36 @@
+#!/bin/sh
+# Ghostbridge container socket mux daemon.
+#
+# Owns /run/ghostbridge/container.sock. Per connection: SO_PEERCRED → schema
+# lookup → control (forward to gRPC bridge) or governed (bind+connect through
+# relay netns into OVS). Replaces the socat fleet.
+#
+# Runs inside the relay netns so outbound TCP originates from the veth into OVS.
+# UDS listening is mount-namespace scoped (unaffected by netns).
+
+set -eu
+exec 2>&1
+
+if [ -r /etc/op-dbus/environment ]; then
+  set -a
+  . /etc/op-dbus/environment
+  set +a
+fi
+
+export GHOSTBRIDGE_SOCKET_PATH="${GHOSTBRIDGE_SOCKET_PATH:-/run/ghostbridge/container.sock}"
+export GRPC_BRIDGE_SOCKET="${GRPC_BRIDGE_SOCKET:-/run/ghostbridge/grpc-bridge.sock}"
+export RUST_LOG="${RUST_LOG:-op_ghostbridge_mux=info,info}"
+
+# Relay netns name — single source of truth is the unix_socket schema's
+# relay_netns field. The env var lets deploy config override without touching
+# the binary; defaults to "relay" to match the schema default.
+RELAY_NETNS="${RELAY_NETNS:-relay}"
+
+# Run inside relay netns so outbound TCP originates from the veth into OVS.
+# UDS listening is mount-namespace scoped (unaffected by netns).
+if ip netns list | grep -qw "$RELAY_NETNS"; then
+  exec ip netns exec "$RELAY_NETNS" /usr/local/bin/op-ghostbridge-mux
+else
+  echo "warning: relay netns '$RELAY_NETNS' not found, running on host netns" >&2
+  exec /usr/local/bin/op-ghostbridge-mux
+fi

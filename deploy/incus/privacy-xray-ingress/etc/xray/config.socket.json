@@ -19,7 +19,7 @@
         "decryption": "none",
         "fallbacks": [
           {
-            "dest": 18789
+            "dest": 8090
           }
         ]
       },
@@ -106,7 +106,7 @@
       "tag": "grpc-bridge-out",
       "protocol": "freedom",
       "settings": {
-        "redirect": "127.0.0.1:18789"
+        "redirect": "127.0.0.1:8090"
       }
     }
   ],

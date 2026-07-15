@@ -1,0 +1,22 @@
+[package]
+name = "op-schema-codegen"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Standalone CLI: generate Rust types from a JSON Schema (draft 4) file, no build.rs/macro required"
+
+[dependencies]
+schemafy_lib = "0.6"
+schemafy_core = "0.6"
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true }
+syn = { version = "2", features = ["full", "parsing", "printing"] }
+quote = "1"
+proc-macro2 = "1"
+
+[[bin]]
+name = "op-schema-codegen"
+path = "src/main.rs"

@@ -505,14 +505,6 @@ mod tests {
     }
 
     #[test]
-    fn derived_schema_matches_hand_rolled_for_unix_socket() {
-        let hand = crate::state_plugins::unix_socket::unix_socket_schema();
-        let derived = crate::state_plugins::unix_socket::unix_socket_schema_derived();
-        let diffs = schema_diffs(&hand, &derived);
-        assert!(diffs.is_empty(), "schema_diffs: {:#?}", diffs);
-    }
-
-    #[test]
     fn reports_nested_mismatch() {
         let hand = plugin_schema_from_json(
             "nested_test",

@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+exec 2>&1
+
+# OpenFlow controller — D-Bus service (org.opdbus.of_controller) that
+# maintains the TCP connection to OVS and exposes the org.opdbus.rovs.openflow
+# interface for the openflow plugin to call send_flow / dump_flows / etc.
+# No flow logic here — all flow programming comes via D-Bus from the
+# openflow plugin (busctl -> projection_server -> openflow.add_flow).
+export OF_CONTROLLER_LISTEN="${OF_CONTROLLER_LISTEN:-10.200.0.1:6653}"
+export RUST_LOG="${RUST_LOG:-op_network=info,info}"
+
+exec /usr/local/bin/op-of-controller

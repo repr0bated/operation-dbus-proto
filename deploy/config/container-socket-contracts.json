@@ -140,7 +140,7 @@
         "socket:/var/lib/assistant-controlplane/http1.sock"
       ],
       "address": "10.0.0.2",
-      "port": 8090
+      "port": 18090
     },
     {
       "name": "control-plane-grpc",

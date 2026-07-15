@@ -45,6 +45,7 @@ client_secret*.json
 
 # WireGuard client configs / QR codes (contain private keys)
 wireguard_clients/
+wg-conf/
 
 # Operation Dashboard UI submodule (if excluded)
 operation-dashboard-ui/

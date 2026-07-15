@@ -12,8 +12,5 @@ if [ -f /etc/ghostbridge/xray.env ]; then
     . /etc/ghostbridge/xray.env
 fi
 
-# Alias 10.0.0.2 on ovsbr0 for Netmaker gRPC bridge
-ip addr replace 10.0.0.2/32 dev ovsbr0 2>/dev/null || true
-
 exec 2>&1
 exec /usr/local/bin/xray run -c "$XRAY_CONFIG"

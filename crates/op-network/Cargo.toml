@@ -69,4 +69,7 @@ path = "src/bin/op-ovsbr0-afxdp.rs"
 name = "op-ovsbr0-setup"
 path = "src/bin/op-ovsbr0-setup.rs"
 
+[[bin]]
+name = "op-ghostbridge-mux"
+path = "src/bin/op-ghostbridge-mux.rs"
 

@@ -416,7 +416,11 @@ pub enum OvsdbOperation {
         table: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         row: Option<BTreeMap<String, OvsdbDatum>>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            rename = "uuid-name",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
         uuid_name: Option<String>,
     },
     /// Select rows matching a condition.
@@ -512,7 +516,8 @@ impl<'de> Deserialize<'de> for OvsdbCondition {
 /// OVSDB condition functions.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub enum OvsdbConditionFunction {
-    #[serde(rename = "=")]
+    // RFC 7047 §5.1: the equality function is "==", not "=".
+    #[serde(rename = "==")]
     Equals,
     #[serde(rename = "!=")]
     NotEquals,
@@ -694,6 +699,57 @@ pub struct AddPortOutput {
     pub destination: String,
 }
 
+/// One port in an atomic multi-port attach.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PortSpec {
+    pub port_name: String,
+    #[serde(default = "default_interface_type")]
+    pub interface_type: String,
+}
+
+/// Attach multiple ports to a bridge in ONE OVSDB transaction.
+/// Port names come from the caller (e.g. control-plane-network); this
+/// method never hardcodes host interfaces.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AddPortsInput {
+    pub bridge_name: String,
+    pub ports: Vec<PortSpec>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AddPortsOutput {
+    pub added: Vec<String>,
+    pub already_attached: Vec<String>,
+    #[serde(rename = "to")]
+    pub destination: String,
+}
+
+/// Create bridge (if missing) AND attach ports in ONE OVSDB transaction.
+/// Separate create_bridge + add_port calls leave a window where eth0 is not
+/// yet on the bridge — that does not work for boot. Port names come only from
+/// the caller (control-plane-network / network.conf).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct EnsureBridgePortsInput {
+    pub bridge_name: String,
+    pub ports: Vec<PortSpec>,
+    #[serde(default = "default_datapath_type")]
+    pub datapath_type: String,
+    #[serde(default = "default_fail_mode")]
+    pub fail_mode: String,
+}
+
+fn default_fail_mode() -> String {
+    "standalone".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct EnsureBridgePortsOutput {
+    pub bridge: String,
+    pub created_bridge: bool,
+    pub added: Vec<String>,
+    pub already_attached: Vec<String>,
+}
+
 fn default_interface_type() -> String {
     "internal".to_string()
 }
@@ -867,6 +923,20 @@ impl RovsCommandsPlugin {
                     destination: input.bridge_name,
                 })?)
             }
+            "add_ports" => {
+                let input: AddPortsInput = serde_json::from_value(args.clone())?;
+                let (added, already) = Self::add_ports(&input).await?;
+                Ok(serde_json::to_value(AddPortsOutput {
+                    added,
+                    already_attached: already,
+                    destination: input.bridge_name,
+                })?)
+            }
+            "ensure_bridge_ports" => {
+                let input: EnsureBridgePortsInput = serde_json::from_value(args.clone())?;
+                let out = Self::ensure_bridge_ports(&input).await?;
+                Ok(serde_json::to_value(out)?)
+            }
             "remove_port" => {
                 let input: RemovePortInput = serde_json::from_value(args.clone())?;
                 Self::remove_port(&input.bridge_name, &input.port_name).await?;
@@ -1001,6 +1071,24 @@ impl RovsCommandsPlugin {
     }
 
     async fn add_port(input: &AddPortInput) -> Result<()> {
+        let (added, _) = Self::add_ports(&AddPortsInput {
+            bridge_name: input.bridge_name.clone(),
+            ports: vec![PortSpec {
+                port_name: input.port_name.clone(),
+                interface_type: input.interface_type.clone(),
+            }],
+        })
+        .await?;
+        let _ = added;
+        Ok(())
+    }
+
+    /// Attach every port in `input.ports` that is not already on the bridge,
+    /// as a single OVSDB transaction (all-or-nothing).
+    async fn add_ports(input: &AddPortsInput) -> Result<(Vec<String>, Vec<String>)> {
+        if input.ports.is_empty() {
+            return Ok((Vec::new(), Vec::new()));
+        }
         let mut client = Self::connect(&["Bridge", "Port", "Interface"]).await?;
         let Some(bridge) = client
             .idl()
@@ -1009,19 +1097,134 @@ impl RovsCommandsPlugin {
         else {
             bail!("bridge '{}' not found", input.bridge_name);
         };
-        let attached = bridge
+        let attached_names: std::collections::HashSet<String> = bridge
             .get("ports")
             .map(Self::uuid_set)
             .unwrap_or_default()
             .into_iter()
             .filter_map(|uuid| client.idl().row("Port", &uuid))
-            .any(|port| port.get_string("name") == Some(input.port_name.as_str()));
-        if attached {
-            return Ok(());
+            .filter_map(|port| port.get_string("name").map(str::to_string))
+            .collect();
+
+        let mut already = Vec::new();
+        let mut to_add: Vec<&PortSpec> = Vec::new();
+        for p in &input.ports {
+            if attached_names.contains(&p.port_name) {
+                already.push(p.port_name.clone());
+            } else {
+                to_add.push(p);
+            }
         }
+        if to_add.is_empty() {
+            return Ok((Vec::new(), already));
+        }
+
         let mut transaction = Transaction::new("Open_vSwitch");
-        transaction.add_port(&input.bridge_name, &input.port_name, &input.interface_type);
-        Self::commit(&mut client, &mut transaction).await
+        let mut added = Vec::new();
+        for p in to_add {
+            transaction.add_port(&input.bridge_name, &p.port_name, &p.interface_type);
+            added.push(p.port_name.clone());
+        }
+        Self::commit(&mut client, &mut transaction).await?;
+        Ok((added, already))
+    }
+
+    /// ONE OVSDB transaction: create bridge if missing, set datapath/fail_mode,
+    /// attach every requested system port. Strictly typed via EnsureBridgePortsInput.
+    async fn ensure_bridge_ports(input: &EnsureBridgePortsInput) -> Result<EnsureBridgePortsOutput> {
+        let mut client =
+            Self::connect(&["Open_vSwitch", "Bridge", "Port", "Interface"]).await?;
+        let bridge_exists = client
+            .idl()
+            .rows("Bridge")
+            .any(|row| row.get_string("name") == Some(input.bridge_name.as_str()));
+
+        let mut already = Vec::new();
+        let mut to_add: Vec<&PortSpec> = Vec::new();
+        if bridge_exists {
+            let bridge = client
+                .idl()
+                .rows("Bridge")
+                .find(|row| row.get_string("name") == Some(input.bridge_name.as_str()))
+                .expect("bridge exists");
+            let attached_names: std::collections::HashSet<String> = bridge
+                .get("ports")
+                .map(Self::uuid_set)
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|uuid| client.idl().row("Port", &uuid))
+                .filter_map(|port| port.get_string("name").map(str::to_string))
+                .collect();
+            for p in &input.ports {
+                if attached_names.contains(&p.port_name) {
+                    already.push(p.port_name.clone());
+                } else {
+                    to_add.push(p);
+                }
+            }
+        } else {
+            to_add = input.ports.iter().collect();
+        }
+
+        // Nothing to do.
+        if bridge_exists && to_add.is_empty() {
+            // Still refresh fail_mode / datapath if requested.
+            let mut transaction = Transaction::new("Open_vSwitch");
+            let mut row = serde_json::Map::new();
+            row.insert(
+                "datapath_type".into(),
+                serde_json::Value::String(input.datapath_type.clone()),
+            );
+            row.insert(
+                "fail_mode".into(),
+                serde_json::Value::String(input.fail_mode.clone()),
+            );
+            transaction.update_by_name(
+                "Bridge",
+                &input.bridge_name,
+                serde_json::Value::Object(row),
+            );
+            Self::commit(&mut client, &mut transaction).await?;
+            return Ok(EnsureBridgePortsOutput {
+                bridge: input.bridge_name.clone(),
+                created_bridge: false,
+                added: Vec::new(),
+                already_attached: already,
+            });
+        }
+
+        let mut transaction = Transaction::new("Open_vSwitch");
+        let created_bridge = !bridge_exists;
+        if !bridge_exists {
+            transaction.create_bridge(&input.bridge_name);
+        }
+        // Properties on the bridge (new or existing) in the same txn.
+        let mut row = serde_json::Map::new();
+        row.insert(
+            "datapath_type".into(),
+            serde_json::Value::String(input.datapath_type.clone()),
+        );
+        row.insert(
+            "fail_mode".into(),
+            serde_json::Value::String(input.fail_mode.clone()),
+        );
+        transaction.update_by_name(
+            "Bridge",
+            &input.bridge_name,
+            serde_json::Value::Object(row),
+        );
+        let mut added = Vec::new();
+        for p in to_add {
+            transaction.add_port(&input.bridge_name, &p.port_name, &p.interface_type);
+            added.push(p.port_name.clone());
+        }
+        Self::commit(&mut client, &mut transaction).await?;
+        Ok(EnsureBridgePortsOutput {
+            bridge: input.bridge_name.clone(),
+            created_bridge,
+            added,
+            already_attached: already,
+        })
     }
 
     async fn remove_port(bridge_name: &str, port_name: &str) -> Result<()> {
@@ -1120,8 +1323,16 @@ impl RovsCommandsPlugin {
 
     async fn transact(request: TransactRequest) -> Result<Vec<OvsdbOperationResult>> {
         let mut conn = Self::raw_connection().await?;
-        let ops = serde_json::to_value(request.operations)?;
-        let params = serde_json::json!([request.database, ops]);
+        // RFC 7047 §4.1.1: the "transact" params array is [db, op1, op2, ...]
+        // -- a FLAT array with the database name followed by each operation
+        // as its own top-level element, not the database name plus a
+        // nested sub-array of operations.
+        let mut params = vec![serde_json::Value::String(request.database.clone())];
+        match serde_json::to_value(request.operations)? {
+            serde_json::Value::Array(op_values) => params.extend(op_values),
+            other => return Err(anyhow::anyhow!("operations did not serialize to an array: {other}")),
+        }
+        let params = serde_json::Value::Array(params);
         let result = conn
             .transact("transact", params)
             .await
@@ -1444,6 +1655,26 @@ pub(crate) fn rovs_commands_schema() -> PluginSchema {
             false,
             "cap.network.ovsdb.port.add@v1",
             "mut.network.ovsdb.port.add@v1",
+        ),
+    );
+    methods.insert(
+        "add_ports".to_string(),
+        method_decl_from_schemars_with_output::<AddPortsInput, AddPortsOutput>(
+            "add_ports",
+            SideEffect::Mutation,
+            false,
+            "cap.network.ovsdb.port.add@v1",
+            "mut.network.ovsdb.ports.add@v1",
+        ),
+    );
+    methods.insert(
+        "ensure_bridge_ports".to_string(),
+        method_decl_from_schemars_with_output::<EnsureBridgePortsInput, EnsureBridgePortsOutput>(
+            "ensure_bridge_ports",
+            SideEffect::Mutation,
+            false,
+            "cap.network.ovsdb.bridge.ensure-ports@v1",
+            "mut.network.ovsdb.bridge.ensure-ports@v1",
         ),
     );
     methods.insert(

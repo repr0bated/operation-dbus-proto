@@ -4,5 +4,10 @@ exec 2>&1
 export DBUS_SESSION_BUS_ADDRESS
 export OP_DBUS_PROJECTION_BUS
 : "${OP_DBUS_PROJECTION_BUS:?OP_DBUS_PROJECTION_BUS must be set in /etc/op-dbus/environment}"
+# rovs_commands (dispatched via ProjectedObject.CallMethod) dials OVSDB at
+# this address; the built-in default is /run/openvswitch/db.sock which does
+# not exist on this host — without the export the D-Bus enslavement path
+# used by control-plane-network can never reach ovsdb-server.
+export OVSDB_SOCK="${OVSDB_SOCK:-/usr/local/var/run/openvswitch/db.sock}"
 export RUST_LOG="${RUST_LOG:-op_projection=info,info}"
 exec /usr/local/bin/projection_server

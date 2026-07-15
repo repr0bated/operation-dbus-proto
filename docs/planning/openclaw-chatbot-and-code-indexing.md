@@ -2,7 +2,7 @@
 
 ## Context
 
-operation-dbus needs a stable chatbot backed by OpenClaw (a full agent platform at `127.0.0.1:18789` with OpenAI-compatible API, model failover, stateful sessions, and MCP integration). The op-web `UnifiedOrchestrator` is already a working multi-turn chatbot with tool calling — it just needs a reliable LLM backend wired in.
+operation-dbus needs a stable chatbot backed by OpenClaw (a full agent platform at `127.0.0.1:8090` with OpenAI-compatible API, model failover, stateful sessions, and MCP integration). The op-web `UnifiedOrchestrator` is already a working multi-turn chatbot with tool calling — it just needs a reliable LLM backend wired in.
 
 Separately, 59 git repos (~180k files) at `/home/jeremy/git/` have GEMINI.md context files but no searchable index. Google Code Assist indexing is blocked by auth issues. A local FTS5-based code index will enable the chatbot to retrieve relevant code context.
 
@@ -19,7 +19,7 @@ New ~200-line module implementing `LlmProvider` trait. Pattern follows `anthropi
 ```
 OpenClawProvider {
     client: reqwest::Client,
-    base_url: String,              // OPENCLAW_BASE_URL, default http://127.0.0.1:18789
+    base_url: String,              // OPENCLAW_BASE_URL, default http://127.0.0.1:8090
     session_key: Option<String>,   // OPENCLAW_SESSION_KEY (stateful sessions)
     agent_id: Option<String>,      // OPENCLAW_AGENT_ID (agent routing)
 }

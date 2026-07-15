@@ -75,11 +75,11 @@ pub async fn jsonrpc_proxy() -> Result<RovsJsonRpcProxy<'static>> {
 
 /// Proxy for the OpenFlow passthrough interface.
 ///
-/// D-Bus destination: `org.opdbus.v1.plugins.ovsdb`
+/// D-Bus destination: `org.opdbus.of_controller`
 /// Object path: `/org/opdbus/rovs/openflow`
 /// Interface: `org.opdbus.rovs.openflow`
 #[proxy(
-    default_service = "org.opdbus.v1.plugins.ovsdb",
+    default_service = "org.opdbus.of_controller",
     default_path = "/org/opdbus/rovs/openflow",
     interface = "org.opdbus.rovs.openflow"
 )]

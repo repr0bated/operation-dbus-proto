@@ -1,8 +1,8 @@
 #!/bin/sh
 # 🟢 🛷 Zeroclaw Axum Host — gRPC / gRPC-Web (tonic-web) schema bridge
 #
-# Mesh entry: http://10.200.0.2:8090 (alias bound by bind-hub-aliases.sh)
-# Unix socket: /run/ghostbridge/container.sock
+# Mesh entry: http://10.200.0.2:8090 (alias owned by control-plane-network)
+# Internal socket: /run/ghostbridge/grpc-bridge.sock (mux daemon forwards from container.sock)
 
 set -eu
 exec 2>&1
@@ -16,13 +16,11 @@ fi
 export DBUS_SESSION_BUS_ADDRESS
 : "${DBUS_SESSION_BUS_ADDRESS:?DBUS_SESSION_BUS_ADDRESS must be set in /etc/op-dbus/environment}"
 # Keep the control-plane bridge on its mesh identity.  The decoy ingress IP
-# (10.0.0.2) owns :8090 separately and forwards it to the assistant UI socket.
+# (10.0.0.2) owns :18090 separately and forwards it to the assistant UI socket.
 export ZEROCLAW_BIND_ADDR="${ZEROCLAW_BIND_ADDR:-10.200.0.2:8090}"
 export ZEROCLAW_SCHEMA_PATH="${ZEROCLAW_SCHEMA_PATH:-/dev/shm/opdbus/plugin-blobs}"
-export ZEROCLAW_UNIX_SOCKET="${ZEROCLAW_UNIX_SOCKET:-/run/ghostbridge/container.sock}"
+export ZEROCLAW_UNIX_SOCKET="${ZEROCLAW_UNIX_SOCKET:-/run/ghostbridge/grpc-bridge.sock}"
 export OP_GRPC_BRIDGE_MODE="${OP_GRPC_BRIDGE_MODE:-zeroclaw}"
 export RUST_LOG="${RUST_LOG:-op_grpc_bridge=info,info}"
-
-. /usr/local/lib/ghostbridge/bind-hub-aliases.sh
 
 exec /usr/local/bin/op-grpc-bridge

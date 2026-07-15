@@ -2,32 +2,238 @@
 # control-plane-network
 # Staged s6 network initialization for main or decoy nodes.
 #
-# This is the sanctioned bootstrap exception: it brings the network into
-# existence natively (OVSDB CLI, ip, wg). Once up, the rovs/wireguard
-# plugins own all further mutation via D-Bus. The OpenFlow controller
-# assignment lives in the separate ovsbr0-controller oneshot, not here —
-# see that script for why.
+# This is the sanctioned bootstrap exception: it brings Linux links,
+# addresses, routes, and WireGuard into existence natively. Every OVSDB and
+# OpenFlow operation goes through the projected D-Bus plugin surface; there
+# is no ovs-vsctl/ovs-ofctl fallback.
 #
 # Configuration: /etc/control-plane-network/network.conf
 # Layout source: docs/topology-designed-2026-07-10.mmd (reconciled with Codex)
 
-set -eu
+# `errexit` is intentionally not used. Stages are explicit transactions whose
+# failures must be recorded, reported, and (for the uplink) rolled back. POSIX
+# `set -e` is disabled inside conditional function calls on several shells and
+# would make those guarantees dependent on call context.
+set -u
+umask 077
 
-# s6-rc oneshots run with a minimal PATH; ovs-vsctl/zcall live in /usr/local.
-PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# s6-rc oneshots run with a minimal PATH. Tests may prepend a private mock
+# directory, but production command lookup is fixed before trusted config is
+# sourced and restored immediately afterward.
+BASE_PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+TEST_PATH="${CONTROL_PLANE_NETWORK_TEST_PATH:-}"
+PATH="$BASE_PATH"
 export PATH
 
+PROGRAM="${0##*/}"
 CONF="${CONTROL_PLANE_NETWORK_CONF:-/etc/control-plane-network/network.conf}"
-[ -r "$CONF" ] && . "$CONF"
+TEST_MODE="${CONTROL_PLANE_NETWORK_TEST_MODE:-0}"
+TEST_ROOT="${CONTROL_PLANE_NETWORK_TEST_ROOT:-}"
+MODE=bootstrap
+CLI_ROLE=""
+CLI_MODE=""
 
-ROLE="${NODE_ROLE:-${1:-main}}"
-case "$ROLE" in main|decoy) ;; *) echo "role must be main or decoy" >&2; exit 2;; esac
+usage() {
+    cat <<EOF
+Usage: $PROGRAM [main|decoy] [MODE]
+
+Modes:
+  --check-config     Validate configuration and dependencies; make no changes.
+  --flows-only       Reconcile OpenFlow after op-of-controller is ready.
+  --controller-only  Reassert the bridge controller through D-Bus.
+  -h, --help         Show this help.
+EOF
+}
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        main|decoy)
+            [ -z "$CLI_ROLE" ] || { echo "$PROGRAM: role specified twice" >&2; exit 2; }
+            CLI_ROLE="$1"
+            ;;
+        --check-config|--flows-only|--controller-only)
+            [ -z "$CLI_MODE" ] || {
+                echo "$PROGRAM: mode specified twice: $CLI_MODE and $1" >&2
+                exit 2
+            }
+            CLI_MODE="$1"
+            case "$1" in
+                --check-config) MODE=check ;;
+                --flows-only) MODE=flows ;;
+                --controller-only) MODE=controller ;;
+            esac
+            ;;
+        -h|--help) usage; exit 0 ;;
+        --) shift; break ;;
+        *) echo "$PROGRAM: unknown argument: $1" >&2; usage >&2; exit 2 ;;
+    esac
+    shift
+done
+[ "$#" -eq 0 ] || { echo "$PROGRAM: unexpected arguments: $*" >&2; exit 2; }
+
+die() {
+    printf '%s: %s\n' "$PROGRAM" "$*" >&2
+    exit 2
+}
+
+validate_test_envelope() {
+    case "$TEST_MODE" in
+        0) return 0 ;;
+        1) ;;
+        *) die "CONTROL_PLANE_NETWORK_TEST_MODE must be 0 or 1" ;;
+    esac
+    case "$TEST_ROOT" in
+        /|''|*[!A-Za-z0-9_./:+-]*|*'/../'*|*'/./'*|*'//'*)
+            die "test mode requires a safe, non-root CONTROL_PLANE_NETWORK_TEST_ROOT"
+            ;;
+    esac
+    [ "$TEST_PATH" = "$TEST_ROOT/bin" ] \
+        || die "test mode command path must be TEST_ROOT/bin"
+    case "$CONF" in
+        "$TEST_ROOT"/*) ;;
+        *) die "test mode configuration must be inside TEST_ROOT" ;;
+    esac
+    for _vte_command in busctl ip ping sleep wg wg-quick; do
+        [ -x "$TEST_PATH/$_vte_command" ] \
+            || die "test mode requires mock command: $_vte_command"
+    done
+}
+
+# network.conf is privileged policy, so refuse symlinks, non-regular files,
+# and group/world-writable content. It is parsed as declarative assignments;
+# no shell content from the file is executed.
+validate_config_source() {
+    [ -e "$CONF" ] || {
+        die "configuration file does not exist: $CONF"
+    }
+    [ -f "$CONF" ] || die "configuration is not a regular file: $CONF"
+    [ ! -L "$CONF" ] || die "configuration must not be a symlink: $CONF"
+    [ -r "$CONF" ] || die "configuration is not readable: $CONF"
+    if [ "$TEST_MODE" != 1 ]; then
+        _conf_owner="$(stat -c %u "$CONF" 2>/dev/null)" \
+            || die "cannot stat configuration: $CONF"
+        _conf_mode="$(stat -c %a "$CONF" 2>/dev/null)" \
+            || die "cannot read configuration mode: $CONF"
+        [ "$_conf_owner" -eq 0 ] \
+            || die "configuration must be owned by root: $CONF"
+        [ $((0$_conf_mode & 022)) -eq 0 ] \
+            || die "configuration must not be group/world writable: $CONF"
+    fi
+}
+
+load_config() {
+    [ -r "$CONF" ] || return 0
+    command -v python3 >/dev/null 2>&1 || die "python3 is required to parse $CONF"
+    _lc_rows="$(python3 - "$CONF" <<'PY'
+import re
+import shlex
+import sys
+
+path = sys.argv[1]
+with open(path, encoding="utf-8") as handle:
+    for number, raw in enumerate(handle, 1):
+        lexer = shlex.shlex(raw, posix=True)
+        lexer.whitespace_split = True
+        lexer.commenters = "#"
+        try:
+            tokens = list(lexer)
+        except ValueError as exc:
+            raise SystemExit(f"{path}:{number}: {exc}")
+        if not tokens:
+            continue
+        if len(tokens) != 1 or "=" not in tokens[0]:
+            raise SystemExit(f"{path}:{number}: expected one NAME=value assignment")
+        name, value = tokens[0].split("=", 1)
+        if not re.fullmatch(r"[A-Z][A-Z0-9_]*", name):
+            raise SystemExit(f"{path}:{number}: invalid setting name")
+        if "\t" in value or "\n" in value:
+            raise SystemExit(f"{path}:{number}: tabs/newlines are not allowed")
+        print(f"{name}\t{value}")
+PY
+)" || die "cannot parse configuration: $CONF"
+
+    _lc_tab="$(printf '\t')"
+    while IFS="$_lc_tab" read -r _lc_name _lc_value; do
+        [ -n "$_lc_name" ] || continue
+        case "$_lc_name" in
+            NODE_ROLE) NODE_ROLE="$_lc_value" ;;
+            BIRTHDAY) BIRTHDAY="$_lc_value" ;;
+            STATE_DIR) STATE_DIR="$_lc_value" ;;
+            REPORT_DIR) REPORT_DIR="$_lc_value" ;;
+            DBUS_WAIT) DBUS_WAIT="$_lc_value" ;;
+            OVSDB_WAIT) OVSDB_WAIT="$_lc_value" ;;
+            PLUGIN_BUS_WAIT) PLUGIN_BUS_WAIT="$_lc_value" ;;
+            CONTROLLER_WAIT) CONTROLLER_WAIT="$_lc_value" ;;
+            BRIDGE_NETDEV_WAIT) BRIDGE_NETDEV_WAIT="$_lc_value" ;;
+            COMMAND_TIMEOUT) COMMAND_TIMEOUT="$_lc_value" ;;
+            GATEWAY_PROBE_ATTEMPTS) GATEWAY_PROBE_ATTEMPTS="$_lc_value" ;;
+            GATEWAY_PROBE_TIMEOUT) GATEWAY_PROBE_TIMEOUT="$_lc_value" ;;
+            FLOW_RETRY_ATTEMPTS) FLOW_RETRY_ATTEMPTS="$_lc_value" ;;
+            FLOW_RETRY_PAUSE) FLOW_RETRY_PAUSE="$_lc_value" ;;
+            BRIDGE) BRIDGE="$_lc_value" ;;
+            BRIDGE_ADDRESSES) BRIDGE_ADDRESSES="$_lc_value" ;;
+            BRIDGE_DATAPATH) BRIDGE_DATAPATH="$_lc_value" ;;
+            BRIDGE_FAIL_MODE) BRIDGE_FAIL_MODE="$_lc_value" ;;
+            BRIDGE_SYSTEM_PORTS) BRIDGE_SYSTEM_PORTS="$_lc_value" ;;
+            UPLINK_NIC) UPLINK_NIC="$_lc_value" ;;
+            PUBLIC_IP) PUBLIC_IP="$_lc_value" ;;
+            PUBLIC_GW) PUBLIC_GW="$_lc_value" ;;
+            UPLINK_ALIASES) UPLINK_ALIASES="$_lc_value" ;;
+            ROGUE_PORTS) ROGUE_PORTS="$_lc_value" ;;
+            OVSDB_SOCK) OVSDB_SOCK="$_lc_value" ;;
+            DBUS_SOCKET) DBUS_SOCKET="$_lc_value" ;;
+            DHCPCD_CONF) DHCPCD_CONF="$_lc_value" ;;
+            TAME_DHCPCD) TAME_DHCPCD="$_lc_value" ;;
+            NETMAKER_IFACE) NETMAKER_IFACE="$_lc_value" ;;
+            NETMAKER_ALIASES) NETMAKER_ALIASES="$_lc_value" ;;
+            NETMAKER_ROUTES) NETMAKER_ROUTES="$_lc_value" ;;
+            NETMAKER_PING_TARGET) NETMAKER_PING_TARGET="$_lc_value" ;;
+            WIREGUARD_CONF_DIR) WIREGUARD_CONF_DIR="$_lc_value" ;;
+            OF_CONTROLLER) OF_CONTROLLER="$_lc_value" ;;
+            OF_CONTROLLER_BUS) OF_CONTROLLER_BUS="$_lc_value" ;;
+            PLUGIN_BUS) PLUGIN_BUS="$_lc_value" ;;
+            ROVS_PATH) ROVS_PATH="$_lc_value" ;;
+            OPENFLOW_PATH) OPENFLOW_PATH="$_lc_value" ;;
+            UNIX_SOCKET_PATH) UNIX_SOCKET_PATH="$_lc_value" ;;
+            PROJECTED_IFACE) PROJECTED_IFACE="$_lc_value" ;;
+            # Accepted but intentionally ignored legacy settings.
+            SHORT_PAUSE|LONG_PAUSE|UPLINK_PORT|UPLINK_ADDR|NETMAKER_ALIAS) ;;
+            *) die "unknown configuration setting: $_lc_name" ;;
+        esac
+    done <<EOF
+$_lc_rows
+EOF
+}
+
+validate_test_envelope
+validate_config_source
+load_config
+# Restore command lookup and parsing semantics after configuration parsing.
+if [ "$TEST_MODE" = 1 ] && [ -n "$TEST_PATH" ]; then
+    PATH="$TEST_PATH:$BASE_PATH"
+else
+    PATH="$BASE_PATH"
+fi
+export PATH
+IFS="$(printf ' \t\nx')"
+IFS="${IFS%x}"
+
+ROLE="${CLI_ROLE:-${NODE_ROLE:-main}}"
+case "$ROLE" in main|decoy) ;; *) die "role must be main or decoy" ;; esac
 
 STATE_DIR="${STATE_DIR:-/var/lib/control-plane-network}"
 REPORT_DIR="${REPORT_DIR:-/var/log/control-plane-network}"
 BIRTHDAY="${BIRTHDAY:-2026-07-11}"
-SHORT_PAUSE="${SHORT_PAUSE:-2}"
-LONG_PAUSE="${LONG_PAUSE:-7}"
+DBUS_WAIT="${DBUS_WAIT:-120}"
+OVSDB_WAIT="${OVSDB_WAIT:-60}"
+PLUGIN_BUS_WAIT="${PLUGIN_BUS_WAIT:-45}"
+CONTROLLER_WAIT="${CONTROLLER_WAIT:-45}"
+BRIDGE_NETDEV_WAIT="${BRIDGE_NETDEV_WAIT:-10}"
+COMMAND_TIMEOUT="${COMMAND_TIMEOUT:-15}"
+GATEWAY_PROBE_ATTEMPTS="${GATEWAY_PROBE_ATTEMPTS:-3}"
+GATEWAY_PROBE_TIMEOUT="${GATEWAY_PROBE_TIMEOUT:-2}"
+FLOW_RETRY_ATTEMPTS="${FLOW_RETRY_ATTEMPTS:-15}"
+FLOW_RETRY_PAUSE="${FLOW_RETRY_PAUSE:-1}"
 
 # Network layout — override per node in network.conf.
 # ovsbr0 keeps only its own Incus-managed identity (10.200.0.1/30). The two
@@ -53,6 +259,9 @@ UPLINK_ALIASES="${UPLINK_ALIASES:-10.200.0.2/32 10.0.0.2/32}"
 # Stale OVSDB ports that resurrect from conf.db; removed every boot.
 ROGUE_PORTS="${ROGUE_PORTS:-ovsbr0-sock ovsbr0-mgmt gbr_wg gbr_warp gbr_xray}"
 OVSDB_SOCK="${OVSDB_SOCK:-/usr/local/var/run/openvswitch/db.sock}"
+DBUS_SOCKET="${DBUS_SOCKET:-/run/dbus/system_bus_socket}"
+DHCPCD_CONF="${DHCPCD_CONF:-/etc/dhcpcd.conf}"
+TAME_DHCPCD="${TAME_DHCPCD:-yes}"
 
 # The ONLY WireGuard interface on the host is the netmaker mesh. It is
 # hub-and-spoke through the oracle (one stable peer), so a static config
@@ -65,36 +274,335 @@ NETMAKER_ALIASES="${NETMAKER_ALIASES:-10.0.0.3/32 100.90.37.254/32 fd3c:8a39:2d9
 # net=src pairs — AllowedIPs routed out the WG port, sourced from the
 # aliases above (now genuinely local to the interface).
 NETMAKER_ROUTES="${NETMAKER_ROUTES:-10.0.0.0/24=10.0.0.3 100.90.37.0/24=100.90.37.254 fd3c:8a39:2d9e:9577::/64=fd3c:8a39:2d9e:9577:ffff:ffff:ffff:fffe}"
+WIREGUARD_CONF_DIR="${WIREGUARD_CONF_DIR:-/etc/wireguard}"
+BRIDGE_SYSTEM_PORTS="${BRIDGE_SYSTEM_PORTS:-$UPLINK_NIC $NETMAKER_IFACE}"
+OF_CONTROLLER="${OF_CONTROLLER:-tcp:10.200.0.1:6653}"
 
-ZCALL="${ZCALL:-zcall}"
+# D-Bus control-plane surface: ALL OVSDB reads and mutations go through
+# busctl -> projection_server (org.opdbus.v1.plugins) -> rovs_commands.
+# There is no ovs-vsctl fallback — D-Bus is the only control plane, so
+# op-projection being on the bus is a hard boot dependency.
+PLUGIN_BUS="${PLUGIN_BUS:-org.opdbus.v1.plugins}"
+ROVS_PATH="${ROVS_PATH:-/org/opdbus/v1/plugins/rovs_commands}"
+OPENFLOW_PATH="${OPENFLOW_PATH:-/org/opdbus/v1/plugins/openflow}"
+UNIX_SOCKET_PATH="${UNIX_SOCKET_PATH:-/org/opdbus/v1/plugins/unix_socket}"
+PROJECTED_IFACE="${PROJECTED_IFACE:-org.opdbus.v1.plugins.ProjectedObject}"
+OF_CONTROLLER_BUS="${OF_CONTROLLER_BUS:-org.opdbus.of_controller}"
 
 HEARTBEAT=0
 FAILED_STAGES=""
-
-mkdir -p "$STATE_DIR" "$REPORT_DIR"
+TEMP_FILES=""
+UPLINK_BATCH=""
+UPLINK_CRITICAL=0
+UPLINK_WAS_ATTACHED=0
+LOCK_HELD=0
 
 ts() { date -Iseconds; }
 log() { printf '%s [%s] %s\n' "$(ts)" "$ROLE" "$*"; }
-pause_short() { log "short pause: ${SHORT_PAUSE}s"; sleep "$SHORT_PAUSE"; }
-pause_long()  { log "long pause: ${LONG_PAUSE}s"; sleep "$LONG_PAUSE"; }
 
-# Run a stage; record failure but keep bringing up whatever else can come up.
+validate_uint() {
+    _vu_name="$1"
+    _vu_value="$2"
+    _vu_max="$3"
+    case "$_vu_value" in ''|*[!0-9]*) die "$_vu_name must be an integer" ;; esac
+    [ "$_vu_value" -le "$_vu_max" ] || die "$_vu_name exceeds $_vu_max"
+}
+
+validate_path() {
+    _vp_name="$1"
+    _vp_value="$2"
+    case "$_vp_value" in
+        /*) ;;
+        *) die "$_vp_name must be an absolute path" ;;
+    esac
+    case "$_vp_value" in
+        /|*[!A-Za-z0-9_./:+-]*) die "$_vp_name contains unsafe characters" ;;
+    esac
+    case "$_vp_value/" in
+        *"/../"*|*"/./"*|*"//"*) die "$_vp_name contains an unsafe path segment" ;;
+    esac
+}
+
+validate_ifname() {
+    _vi_name="$1"
+    _vi_value="$2"
+    case "$_vi_value" in
+        ''|*[!A-Za-z0-9_.:+-]*) die "$_vi_name is not a safe interface name" ;;
+    esac
+    [ "${#_vi_value}" -le 15 ] || die "$_vi_name exceeds Linux IFNAMSIZ: $_vi_value"
+}
+
+validate_bus_value() {
+    _vb_name="$1"
+    _vb_value="$2"
+    case "$_vb_value" in
+        ''|*[!A-Za-z0-9_./:-]*) die "$_vb_name contains unsafe characters" ;;
+    esac
+}
+
+list_contains_word() {
+    _lc_list="$1"
+    _lc_needle="$2"
+    for _lc_word in $_lc_list; do
+        [ "$_lc_word" = "$_lc_needle" ] && return 0
+    done
+    return 1
+}
+
+validate_config_values() {
+    for _vc_pair in \
+        "DBUS_WAIT:$DBUS_WAIT:600" \
+        "OVSDB_WAIT:$OVSDB_WAIT:600" \
+        "PLUGIN_BUS_WAIT:$PLUGIN_BUS_WAIT:600" \
+        "CONTROLLER_WAIT:$CONTROLLER_WAIT:600" \
+        "BRIDGE_NETDEV_WAIT:$BRIDGE_NETDEV_WAIT:120" \
+        "COMMAND_TIMEOUT:$COMMAND_TIMEOUT:120" \
+        "GATEWAY_PROBE_ATTEMPTS:$GATEWAY_PROBE_ATTEMPTS:20" \
+        "GATEWAY_PROBE_TIMEOUT:$GATEWAY_PROBE_TIMEOUT:30" \
+        "FLOW_RETRY_ATTEMPTS:$FLOW_RETRY_ATTEMPTS:120" \
+        "FLOW_RETRY_PAUSE:$FLOW_RETRY_PAUSE:30"; do
+        _vc_name="${_vc_pair%%:*}"
+        _vc_rest="${_vc_pair#*:}"
+        _vc_value="${_vc_rest%%:*}"
+        _vc_max="${_vc_rest##*:}"
+        validate_uint "$_vc_name" "$_vc_value" "$_vc_max"
+    done
+    [ "$COMMAND_TIMEOUT" -gt 0 ] || die "COMMAND_TIMEOUT must be greater than zero"
+    [ "$GATEWAY_PROBE_ATTEMPTS" -gt 0 ] \
+        || die "GATEWAY_PROBE_ATTEMPTS must be greater than zero"
+    [ "$GATEWAY_PROBE_TIMEOUT" -gt 0 ] \
+        || die "GATEWAY_PROBE_TIMEOUT must be greater than zero"
+    [ "$FLOW_RETRY_ATTEMPTS" -gt 0 ] \
+        || die "FLOW_RETRY_ATTEMPTS must be greater than zero"
+
+    validate_path STATE_DIR "$STATE_DIR"
+    validate_path REPORT_DIR "$REPORT_DIR"
+    validate_path DBUS_SOCKET "$DBUS_SOCKET"
+    validate_path OVSDB_SOCK "$OVSDB_SOCK"
+    validate_path DHCPCD_CONF "$DHCPCD_CONF"
+    validate_path WIREGUARD_CONF_DIR "$WIREGUARD_CONF_DIR"
+    if [ "$TEST_MODE" = 1 ]; then
+        for _vc_test_path in "$STATE_DIR" "$REPORT_DIR" "$DBUS_SOCKET" \
+                "$OVSDB_SOCK" "$DHCPCD_CONF" "$WIREGUARD_CONF_DIR"; do
+            case "$_vc_test_path" in
+                "$TEST_ROOT"/*) ;;
+                *) die "test mode path escapes TEST_ROOT: $_vc_test_path" ;;
+            esac
+        done
+        [ "$TAME_DHCPCD" = no ] \
+            || die "test mode requires TAME_DHCPCD=no"
+    fi
+    validate_ifname BRIDGE "$BRIDGE"
+    validate_ifname UPLINK_NIC "$UPLINK_NIC"
+    validate_ifname NETMAKER_IFACE "$NETMAKER_IFACE"
+    [ "$BRIDGE" != "$UPLINK_NIC" ] && [ "$BRIDGE" != "$NETMAKER_IFACE" ] \
+        && [ "$UPLINK_NIC" != "$NETMAKER_IFACE" ] \
+        || die "bridge, uplink, and netmaker interface names must be distinct"
+    case "$BRIDGE_DATAPATH" in system|netdev) ;; *) die "invalid BRIDGE_DATAPATH" ;; esac
+    case "$BRIDGE_FAIL_MODE" in standalone|secure) ;; *) die "invalid BRIDGE_FAIL_MODE" ;; esac
+    case "$TAME_DHCPCD" in yes|no) ;; *) die "TAME_DHCPCD must be yes or no" ;; esac
+
+    validate_bus_value PLUGIN_BUS "$PLUGIN_BUS"
+    validate_bus_value ROVS_PATH "$ROVS_PATH"
+    validate_bus_value OPENFLOW_PATH "$OPENFLOW_PATH"
+    validate_bus_value UNIX_SOCKET_PATH "$UNIX_SOCKET_PATH"
+    validate_bus_value PROJECTED_IFACE "$PROJECTED_IFACE"
+    validate_bus_value OF_CONTROLLER_BUS "$OF_CONTROLLER_BUS"
+
+    _vc_seen=""
+    for _vc_port in $BRIDGE_SYSTEM_PORTS; do
+        validate_ifname BRIDGE_SYSTEM_PORTS "$_vc_port"
+        list_contains_word "$_vc_seen" "$_vc_port" \
+            && die "duplicate bridge system port: $_vc_port"
+        _vc_seen="$_vc_seen $_vc_port"
+    done
+    list_contains_word "$BRIDGE_SYSTEM_PORTS" "$UPLINK_NIC" \
+        || die "BRIDGE_SYSTEM_PORTS must contain UPLINK_NIC ($UPLINK_NIC)"
+    list_contains_word "$BRIDGE_SYSTEM_PORTS" "$NETMAKER_IFACE" \
+        || die "BRIDGE_SYSTEM_PORTS must contain NETMAKER_IFACE ($NETMAKER_IFACE)"
+    for _vc_port in $ROGUE_PORTS; do
+        validate_ifname ROGUE_PORTS "$_vc_port"
+        list_contains_word "$BRIDGE_SYSTEM_PORTS $BRIDGE" "$_vc_port" \
+            && die "required port is also configured as rogue: $_vc_port"
+    done
+
+    # ipaddress performs strict family, prefix, route/source, and controller
+    # validation without interpolating configuration into executable code.
+    python3 - "$PUBLIC_IP" "$PUBLIC_GW" "$BRIDGE_ADDRESSES" \
+        "$UPLINK_ALIASES" "$NETMAKER_ALIASES" "$NETMAKER_ROUTES" \
+        "$OF_CONTROLLER" <<'PY' || die "invalid IP, route, or controller configuration"
+import ipaddress
+import sys
+
+public = ipaddress.ip_interface(sys.argv[1])
+gateway = ipaddress.ip_address(sys.argv[2])
+if public.version != 4 or gateway.version != 4:
+    raise SystemExit("PUBLIC_IP and PUBLIC_GW must be IPv4")
+parsed_lists = []
+for value in (sys.argv[3], sys.argv[4], sys.argv[5]):
+    if not value.split():
+        raise SystemExit("address list must not be empty")
+    parsed = [ipaddress.ip_interface(item) for item in value.split()]
+    if len({str(item) for item in parsed}) != len(parsed):
+        raise SystemExit("address list contains duplicates")
+    parsed_lists.append(parsed)
+netmaker_sources = {item.ip for item in parsed_lists[2]}
+for pair in sys.argv[6].split():
+    if pair.count("=") != 1:
+        raise SystemExit("route must be network=source")
+    network, source = pair.split("=", 1)
+    source_ip = ipaddress.ip_address(source)
+    if ipaddress.ip_network(network, strict=True).version != source_ip.version:
+        raise SystemExit("route/source families differ")
+    if source_ip not in netmaker_sources:
+        raise SystemExit("route source is not configured on NETMAKER_IFACE")
+controller = sys.argv[7]
+if not controller.startswith("tcp:"):
+    raise SystemExit("only tcp: OpenFlow controllers are supported")
+host, sep, port = controller[4:].rpartition(":")
+if not sep or not host or not port.isdigit() or not (1 <= int(port) <= 65535):
+    raise SystemExit("invalid controller endpoint")
+if ipaddress.ip_address(host).version != 4:
+    raise SystemExit("controller endpoint must be IPv4")
+PY
+}
+
+require_commands() {
+    _rc_missing=""
+    _rc_required="awk busctl cat chmod chown date flock grep id ip ln mkdir mktemp mv ping python3 rm sed stat timeout touch uname wg wg-quick"
+    for _rc_cmd in $_rc_required; do
+        command -v "$_rc_cmd" >/dev/null 2>&1 || _rc_missing="$_rc_missing $_rc_cmd"
+    done
+    [ -z "$_rc_missing" ] || die "missing required commands:$_rc_missing"
+}
+
+require_privilege() {
+    [ "$MODE" = check ] && return 0
+    [ "$(id -u)" -eq 0 ] || [ "$TEST_MODE" = 1 ] \
+        || die "must run as root"
+}
+
+validate_wireguard_source() {
+    _vws_conf="$WIREGUARD_CONF_DIR/$NETMAKER_IFACE.conf"
+    [ -f "$_vws_conf" ] && [ ! -L "$_vws_conf" ] && [ -r "$_vws_conf" ] || {
+        log "WireGuard config is missing, unreadable, non-regular, or symlinked: $_vws_conf"
+        return 1
+    }
+    if [ "$TEST_MODE" != 1 ]; then
+        _vws_owner="$(stat -c %u "$_vws_conf" 2>/dev/null)" || {
+            log "cannot read WireGuard config owner: $_vws_conf"
+            return 1
+        }
+        _vws_mode="$(stat -c %a "$_vws_conf" 2>/dev/null)" || {
+            log "cannot read WireGuard config mode: $_vws_conf"
+            return 1
+        }
+        [ "$_vws_owner" -eq 0 ] || {
+            log "WireGuard config must be owned by root: $_vws_conf"
+            return 1
+        }
+        [ $((0$_vws_mode & 077)) -eq 0 ] || {
+            log "WireGuard config must not grant group/other permissions: $_vws_conf"
+            return 1
+        }
+    fi
+    return 0
+}
+
+prepare_runtime() {
+    for _pr_dir in "$STATE_DIR" "$REPORT_DIR"; do
+        [ ! -L "$_pr_dir" ] || die "runtime directory must not be a symlink: $_pr_dir"
+        mkdir -p "$_pr_dir" || die "cannot create runtime directory: $_pr_dir"
+        chmod 0750 "$_pr_dir" || die "cannot secure runtime directory: $_pr_dir"
+    done
+    exec 9>"$STATE_DIR/control-plane-network.lock" \
+        || die "cannot open runtime lock"
+    if ! flock -n 9; then
+        log "another control-plane-network invocation holds the lock"
+        exit 75
+    fi
+    LOCK_HELD=1
+}
+
+register_temp() {
+    TEMP_FILES="$TEMP_FILES $1"
+}
+
+cleanup_temp_files() {
+    for _ct_file in $TEMP_FILES; do
+        rm -f -- "$_ct_file"
+    done
+    TEMP_FILES=""
+}
+
+# If this invocation attached an uplink that was not attached beforehand,
+# remove only that port and restore its exact pre-attach address/route layout.
+# An already-attached uplink is never detached merely because a later check
+# failed.
+rollback_uplink() {
+    [ "$UPLINK_CRITICAL" -eq 1 ] || return 0
+    _ru_failed=0
+    log "uplink rollback: removing newly attached $UPLINK_NIC from $BRIDGE"
+    deslave_port "$UPLINK_NIC" || _ru_failed=1
+    if [ -n "$UPLINK_BATCH" ] && [ -r "$UPLINK_BATCH" ]; then
+        ip -batch "$UPLINK_BATCH" || _ru_failed=1
+    fi
+    if [ "$_ru_failed" -ne 0 ]; then
+        log "uplink rollback FAILED; local console recovery may be required"
+        return 1
+    fi
+    UPLINK_CRITICAL=0
+    log "uplink rollback complete; $UPLINK_NIC is a plain interface"
+    return 0
+}
+
+handle_exit() {
+    _he_rc="$1"
+    trap - 0
+    rollback_uplink || _he_rc=1
+    cleanup_temp_files
+    exit "$_he_rc"
+}
+
+handle_signal() {
+    _hs_name="$1"
+    _hs_rc="$2"
+    log "received $_hs_name; aborting current transaction"
+    exit "$_hs_rc"
+}
+
+install_runtime_traps() {
+    trap 'handle_exit "$?"' 0
+    trap 'handle_signal HUP 129' HUP
+    trap 'handle_signal INT 130' INT
+    trap 'handle_signal TERM 143' TERM
+}
+
+# Run a stage and retain its actual status so callers can stop dependent
+# mutations while still producing a failure report.
 stage() {
-    _name="$1"; shift
-    log "stage: $_name"
+    _stage_name="$1"; shift
+    log "stage: $_stage_name"
     if "$@"; then
-        log "stage ok: $_name"
+        log "stage ok: $_stage_name"
+        return 0
     else
-        log "stage FAILED: $_name"
-        FAILED_STAGES="$FAILED_STAGES $_name"
+        _stage_rc="$?"
+        log "stage FAILED: $_stage_name"
+        case " $FAILED_STAGES " in
+            *" $_stage_name "*) ;;
+            *) FAILED_STAGES="$FAILED_STAGES $_stage_name" ;;
+        esac
+        return "$_stage_rc"
     fi
 }
 
 wait_dbus() {
-    i=0
-    while [ ! -S /run/dbus/system_bus_socket ]; do
-        i=$((i + 1))
-        [ "$i" -gt 120 ] && { log "D-Bus socket missing after 120s"; return 1; }
+    _wd_i=0
+    while [ ! -S "$DBUS_SOCKET" ]; do
+        [ "$_wd_i" -ge "$DBUS_WAIT" ] \
+            && { log "D-Bus socket missing after ${DBUS_WAIT}s: $DBUS_SOCKET"; return 1; }
+        _wd_i=$((_wd_i + 1))
         log "waiting for D-Bus"
         sleep 1
     done
@@ -102,180 +610,804 @@ wait_dbus() {
 }
 
 wait_ovsdb() {
-    i=0
+    _wo_i=0
     while [ ! -S "$OVSDB_SOCK" ]; do
-        i=$((i + 1))
-        [ "$i" -gt 60 ] && { log "OVSDB socket missing after 60s: $OVSDB_SOCK"; return 1; }
+        [ "$_wo_i" -ge "$OVSDB_WAIT" ] \
+            && { log "OVSDB socket missing after ${OVSDB_WAIT}s: $OVSDB_SOCK"; return 1; }
+        _wo_i=$((_wo_i + 1))
         sleep 1
     done
     return 0
 }
 
-# Incus owns ovsbr0 (creates it with dnsmasq, 10.200.0.1/30). We wait for
-# Incus to create the bridge, then configure datapath/fail-mode and strip
-# rogue ports. We do NOT create the bridge ourselves.
-ensure_bridge() {
-    i=0
-    while ! ovs-vsctl --db="unix:$OVSDB_SOCK" br-exists "$BRIDGE" 2>/dev/null; do
-        i=$((i + 1))
-        [ "$i" -gt 60 ] && { log "bridge $BRIDGE not created after 60s (Incus must create it)"; return 1; }
-        sleep 1
-    done
-    log "ensure_bridge: $BRIDGE exists (Incus-managed)"
-
-    ovs-vsctl --db="unix:$OVSDB_SOCK" set bridge "$BRIDGE" \
-        datapath_type="$BRIDGE_DATAPATH" fail_mode="$BRIDGE_FAIL_MODE" || return 1
-    for _port in $ROGUE_PORTS; do
-        ovs-vsctl --db="unix:$OVSDB_SOCK" --if-exists del-port "$BRIDGE" "$_port" || true
-    done
-    return 0
-}
-
-# Incus assigns 10.200.0.1/30 via its network config. `ip addr replace` is
-# idempotent so this is safe to re-run regardless of what's already present.
-assign_addresses() {
-    ip link set "$BRIDGE" up || return 1
-    for _addr in $BRIDGE_ADDRESSES; do
-        ip addr replace "$_addr" dev "$BRIDGE" || return 1
-    done
-    return 0
-}
-
-# Stop dhcpcd from managing eth0 so it doesn't fight the bridge enslavement.
-# dhcpcd re-acquires the DHCP lease on eth0 and overrides the bridge route.
-tame_dhcpcd() {
-    # Add eth0 to denyinterfaces if not already there.
-    _conf=/etc/dhcpcd.conf
-    if [ -f "$_conf" ] && ! grep -q 'denyinterfaces.*eth0' "$_conf" 2>/dev/null; then
-        # Append eth0 to the existing denyinterfaces line, or add one.
-        if grep -q '^denyinterfaces' "$_conf" 2>/dev/null; then
-            sed -i 's/^denyinterfaces.*/& eth0/' "$_conf"
-        else
-            echo 'denyinterfaces eth0' >> "$_conf"
-        fi
-        log "tame_dhcpcd: added eth0 to denyinterfaces in $_conf"
-    else
-        log "tame_dhcpcd: eth0 already denied"
-    fi
-    # Release the eth0 lease and stop dhcpcd on it.
-    dhcpcd -x "$UPLINK_NIC" 2>/dev/null || true
-    log "tame_dhcpcd: released dhcpcd on $UPLINK_NIC"
-    return 0
-}
-
-# Enslave the physical NIC into the OVS bridge and keep its own addresses on
-# it directly (confirmed live 2026-07-12: an enslaved "system" port under
-# fail_mode=standalone with no controller still passes real external
-# traffic — OVS's built-in learning-switch fallback handles this fine).
-# This is the single riskiest stage in the whole script — a bad move here
-# is what cost remote reachability on 2026-07-12 and required local console
-# recovery — so every step is idempotent, and the move is verified with a
-# rollback instead of just hoped to work.
-enslave_eth0() {
-    if ovs-vsctl --db="unix:$OVSDB_SOCK" list-ports "$BRIDGE" 2>/dev/null \
-            | grep -qx "$UPLINK_NIC"; then
-        log "enslave_eth0: $UPLINK_NIC already on $BRIDGE"
-    else
-        ovs-vsctl --db="unix:$OVSDB_SOCK" --may-exist add-port "$BRIDGE" "$UPLINK_NIC" \
-            || { log "enslave_eth0: cannot add $UPLINK_NIC to $BRIDGE"; return 1; }
-        log "enslave_eth0: added $UPLINK_NIC to $BRIDGE"
-    fi
-    ip link set "$UPLINK_NIC" up || return 1
-
-    ip addr replace "$PUBLIC_IP" dev "$UPLINK_NIC" || return 1
-    for _addr in $UPLINK_ALIASES; do
-        ip addr replace "$_addr" dev "$UPLINK_NIC" || return 1
-    done
-    ip route replace default via "$PUBLIC_GW" dev "$UPLINK_NIC" src "${PUBLIC_IP%/*}" \
+bus_name_owned() {
+    _bn_name="$1"
+    _bn_raw="$(timeout "$COMMAND_TIMEOUT" busctl --json=short --system call \
+        org.freedesktop.DBus /org/freedesktop/DBus \
+        org.freedesktop.DBus NameHasOwner s "$_bn_name" 2>/dev/null)" \
         || return 1
-    log "enslave_eth0: $PUBLIC_IP + aliases + default route on $UPLINK_NIC"
+    printf '%s' "$_bn_raw" | python3 -c '
+import json, sys
+value = json.load(sys.stdin)
+raise SystemExit(0 if value.get("type") == "b" and value.get("data") == [True] else 1)
+' >/dev/null 2>&1
+}
 
-    # Verify the enslavement actually preserved reachability before
-    # committing to it. If the gateway is unreachable, de-enslave eth0
-    # entirely so a future boot doesn't need a local console to recover —
-    # self-heal instead of silently staying broken.
-    #
-    # Deliberately NOT `ping -I $UPLINK_NIC`: device-bound ping doesn't
-    # reliably follow the same route the kernel's normal FIB lookup would
-    # use (confirmed live 2026-07-12 — `-I eth0` gave 100% loss while a
-    # plain ping over the identical route/src succeeded cleanly moments
-    # later). A plain ping matches what real traffic through the default
-    # route actually experiences.
-    if ! ping -c 2 -W 2 "$PUBLIC_GW" >/dev/null 2>&1; then
-        log "enslave_eth0: gateway $PUBLIC_GW unreachable via $UPLINK_NIC — rolling back"
-        ovs-vsctl --db="unix:$OVSDB_SOCK" --if-exists del-port "$BRIDGE" "$UPLINK_NIC" \
-            2>/dev/null || true
-        ip addr replace "$PUBLIC_IP" dev "$UPLINK_NIC" || true
-        ip route replace default via "$PUBLIC_GW" dev "$UPLINK_NIC" \
-            src "${PUBLIC_IP%/*}" || true
-        log "enslave_eth0: rolled back — $UPLINK_NIC restored as a plain interface"
+PLUGIN_BUS_STATE=""
+wait_plugin_bus() {
+    [ "$PLUGIN_BUS_STATE" = up ] && return 0
+    _wp_i=0
+    while ! bus_name_owned "$PLUGIN_BUS"; do
+        if [ "$_wp_i" -ge "$PLUGIN_BUS_WAIT" ]; then
+            log "$PLUGIN_BUS not on the system bus after ${PLUGIN_BUS_WAIT}s"
+            return 1
+        fi
+        _wp_i=$((_wp_i + 1))
+        sleep 1
+    done
+    PLUGIN_BUS_STATE=up
+    return 0
+}
+
+wait_controller_bus() {
+    _wc_i=0
+    while ! bus_name_owned "$OF_CONTROLLER_BUS"; do
+        if [ "$_wc_i" -ge "$CONTROLLER_WAIT" ]; then
+            log "$OF_CONTROLLER_BUS not on the system bus after ${CONTROLLER_WAIT}s"
+            return 1
+        fi
+        _wc_i=$((_wc_i + 1))
+        sleep 1
+    done
+    return 0
+}
+
+# ProjectedObject.CallMethod returns a D-Bus string containing JSON. Ask
+# busctl for machine JSON, then decode both layers and reject in-band errors.
+plugin_call_json() {
+    _pc_path="$1"
+    _pc_method="$2"
+    _pc_args="$3"
+    _pc_raw="$(timeout "$COMMAND_TIMEOUT" busctl --json=short --system call \
+        "$PLUGIN_BUS" "$_pc_path" "$PROJECTED_IFACE" \
+        CallMethod ss "$_pc_method" "$_pc_args" 2>&1)" || {
+        log "plugin call $_pc_method failed: $_pc_raw" >&2
+        return 1
+    }
+    _pc_json="$(printf '%s' "$_pc_raw" | python3 -c '
+import json, sys
+outer = json.load(sys.stdin)
+if outer.get("type") != "s" or not isinstance(outer.get("data"), list) or len(outer["data"]) != 1:
+    raise SystemExit("unexpected busctl response shape")
+inner = json.loads(outer["data"][0])
+if isinstance(inner, dict) and "error" in inner:
+    raise SystemExit("plugin error: %s" % inner["error"])
+sys.stdout.write(json.dumps(inner, separators=(",", ":"), sort_keys=True))
+')" || {
+        log "plugin call $_pc_method returned invalid/error payload: $_pc_raw" >&2
+        return 1
+    }
+    printf '%s\n' "$_pc_json"
+}
+
+rovs_call() { plugin_call_json "$ROVS_PATH" "$1" "$2"; }
+
+# Exact-name membership test against the decoded rovs_call JSON reply. Return
+# 0 when present, 1 when absent, and 2 when the control-plane read failed or
+# returned an invalid shape.
+rovs_has() {
+    _rh_method="$1"
+    _rh_args="$2"
+    _rh_needle="$3"
+    case "$_rh_method" in
+        list_bridges) _rh_key=bridges ;;
+        list_ports) _rh_key=ports ;;
+        *) log "rovs_has: unsupported list method: $_rh_method"; return 2 ;;
+    esac
+    _rh_json="$(rovs_call "$_rh_method" "$_rh_args")" || return 2
+    printf '%s' "$_rh_json" | python3 -c '
+import json, sys
+key, needle = sys.argv[1:3]
+value = json.load(sys.stdin)
+items = value.get(key) if isinstance(value, dict) else None
+if not isinstance(items, list):
+    raise SystemExit(2)
+raise SystemExit(0 if needle in items else 1)
+' "$_rh_key" "$_rh_needle"
+}
+
+# Call an openflow plugin method through the D-Bus control plane.
+# Same busctl -> projection_server -> CallMethod door as rovs_call,
+# but targets the openflow plugin at /org/opdbus/v1/plugins/openflow.
+openflow_call() {
+    plugin_call_json "$OPENFLOW_PATH" "$1" "$2"
+}
+
+# The controller bus name can appear just before its TCP session with OVS is
+# usable. Retry boundedly so a normal service-start race does not turn into a
+# failed reconciliation.
+openflow_call_retry() {
+    _ocr_method="$1"
+    _ocr_args="$2"
+    _ocr_label="$3"
+    _ocr_try=1
+    while [ "$_ocr_try" -le "$FLOW_RETRY_ATTEMPTS" ]; do
+        if openflow_call "$_ocr_method" "$_ocr_args"; then
+            return 0
+        fi
+        if [ "$_ocr_try" -ge "$FLOW_RETRY_ATTEMPTS" ]; then
+            break
+        fi
+        log "$_ocr_label not ready (attempt $_ocr_try/$FLOW_RETRY_ATTEMPTS)"
+        sleep "$FLOW_RETRY_PAUSE"
+        _ocr_try=$((_ocr_try + 1))
+    done
+    log "$_ocr_label failed after $FLOW_RETRY_ATTEMPTS attempts"
+    return 1
+}
+
+# Call a unix_socket plugin method through the D-Bus control plane.
+unix_socket_call() {
+    plugin_call_json "$UNIX_SOCKET_PATH" "$1" "$2"
+}
+
+# Install table-0 classification flows for every governed unix_socket
+# registration. The mux binds outbound TCP as bind_address:ports[0] inside
+# the relay netns; OVS sees that as nw_src/tp_src and we stamp reg0 with
+# uid_base so downstream tables can dispatch on identity.
+#
+# This runs in --flows-only mode, after the controller longrun is ready.
+sync_governed_flows() {
+    wait_plugin_bus || { log "sync_governed_flows: control plane not on the bus"; return 1; }
+
+    _json="$(unix_socket_call list_registrations '{}')" || {
+        log "sync_governed_flows: list_registrations failed"
+        return 1
+    }
+
+    # Emit one line per governed registration:
+    #   name|uid_base|bind_address|tp_src
+    # Invalid governed records are a hard failure; silently installing a
+    # partial identity policy would be worse than refusing reconciliation.
+    _rows="$(printf '%s' "$_json" | python3 -c '
+import ipaddress, json, re, sys
+data = json.load(sys.stdin)
+if not isinstance(data, dict) or not isinstance(data.get("sockets", []), list):
+    raise SystemExit("list_registrations returned an invalid shape")
+sockets = data.get("sockets", [])
+for s in sockets:
+    if not isinstance(s, dict):
+        raise SystemExit("socket registration is not an object")
+    if s.get("mode") != "governed":
+        continue
+    bind = s.get("bind_address") or ""
+    ports = s.get("ports") or []
+    if not bind or not ports:
+        raise SystemExit("governed registration lacks bind_address or ports")
+    name = s.get("name") or ""
+    if not re.fullmatch(r"[A-Za-z0-9_.:+-]{1,128}", name):
+        raise SystemExit("unsafe registration name")
+    uid = int(s.get("uid_base") or 0)
+    tp = int(ports[0])
+    if not (0 <= uid <= 0xffffffff) or not (1 <= tp <= 65535):
+        raise SystemExit("uid_base or source port out of range")
+    if ipaddress.ip_address(bind).version != 4:
+        raise SystemExit("governed flow bind_address must be IPv4")
+    print("%s|%s|%s|%s" % (name, uid, bind, tp))
+')" || { log "sync_governed_flows: invalid registration data"; return 1; }
+
+    if [ -z "$_rows" ]; then
+        log "sync_governed_flows: no governed registrations to install"
+        return 0
+    fi
+
+    _fail=0
+    # Avoid pipeline subshell so failures accumulate in this function.
+    while IFS='|' read -r _name _uid _bind _tp; do
+        [ -n "$_bind" ] || continue
+        # Cookie namespace 0x6d757800 ("mux") | uid_base low 32 bits.
+        # cookie field is hex string without 0x prefix (openflow plugin
+        # parses via from_str_radix(_, 16)).
+        _cookie="$(printf '6d757800%08x' "$_uid")"
+        _flow_json="{\"bridge\":\"$BRIDGE\",\"flow_mod\":{\"table_id\":0,\"command\":\"OFPFC_ADD\",\"idle_timeout\":0,\"hard_timeout\":0,\"priority\":200,\"cookie\":\"$_cookie\",\"match\":{\"match_type\":\"OFPMT_OXM\",\"length\":4,\"oxm_fields\":[{\"oxm_class\":\"OFPXMC_OPENFLOW_BASIC\",\"oxm_field\":\"OFPXMT_OFB_ETH_TYPE\",\"oxm_hasmask\":false,\"oxm_length\":2,\"oxm_value\":\"0x0800\"},{\"oxm_class\":\"OFPXMC_OPENFLOW_BASIC\",\"oxm_field\":\"OFPXMT_OFB_IP_PROTO\",\"oxm_hasmask\":false,\"oxm_length\":1,\"oxm_value\":\"6\"},{\"oxm_class\":\"OFPXMC_OPENFLOW_BASIC\",\"oxm_field\":\"OFPXMT_OFB_IPV4_SRC\",\"oxm_hasmask\":false,\"oxm_length\":4,\"oxm_value\":\"$_bind\"},{\"oxm_class\":\"OFPXMC_OPENFLOW_BASIC\",\"oxm_field\":\"OFPXMT_OFB_TCP_SRC\",\"oxm_hasmask\":false,\"oxm_length\":2,\"oxm_value\":\"$_tp\"}]},\"actions\":[{\"type\":\"OFPAT_SET_FIELD\",\"field\":\"reg0\",\"value\":\"$_uid\"},{\"type\":\"OFPAT_OUTPUT\",\"port\":\"NORMAL\"}]}}"
+        if openflow_call_retry add_flow "$_flow_json" \
+                "sync_governed_flows: $_name" >/dev/null; then
+            log "sync_governed_flows: stamped reg0=$_uid for $_name (nw_src=$_bind tp_src=$_tp)"
+        else
+            log "sync_governed_flows: add_flow failed for $_name"
+            _fail=1
+        fi
+    done <<EOF
+$_rows
+EOF
+
+    [ "$_fail" -eq 0 ] || return 1
+    log "sync_governed_flows: done"
+    return 0
+}
+
+# Bridge + system ports are created together later via ensure_bridge_ports
+# (one busctl). This stage only strips rogue ports if the bridge already
+# exists; it does not create the bridge alone (create-then-add fails at boot).
+ensure_bridge() {
+    wait_plugin_bus || { log "ensure_bridge: control plane not on the bus"; return 1; }
+    if rovs_has list_bridges '{}' "$BRIDGE"; then
+        log "ensure_bridge: $BRIDGE present; stripping rogues"
+    else
+        _eb_rc="$?"
+        if [ "$_eb_rc" -eq 1 ]; then
+            log "ensure_bridge: $BRIDGE not yet in OVSDB — will be created with ports in enslave stage"
+            return 0
+        fi
+        log "ensure_bridge: cannot read bridge inventory"
         return 1
     fi
-    log "enslave_eth0: verified reachable ($PUBLIC_GW via $UPLINK_NIC)"
+    for _eb_port in $ROGUE_PORTS; do
+        if rovs_has list_ports "{\"bridge_name\":\"$BRIDGE\"}" "$_eb_port"; then
+            deslave_port "$_eb_port" || return 1
+        else
+            _eb_rc="$?"
+            [ "$_eb_rc" -eq 1 ] || return 1
+        fi
+    done
     return 0
 }
+
+# OVS protocol and controller assignment are OVSDB mutations, so they can be
+# applied before the controller process starts. The later --flows-only pass
+# reasserts them after the controller is ready.
+configure_bridge_control() {
+    wait_plugin_bus || {
+        log "configure_bridge_control: control plane not on the bus"
+        return 1
+    }
+    _cbc_protocols='["set",["OpenFlow10","OpenFlow11","OpenFlow12","OpenFlow13","OpenFlow14","OpenFlow15"]]'
+    _cbc_escaped="$(printf '%s' "$_cbc_protocols" | sed 's/"/\\"/g')"
+    rovs_call set_bridge_property \
+        "{\"bridge_name\":\"$BRIDGE\",\"property\":\"protocols\",\"value\":\"$_cbc_escaped\"}" \
+        >/dev/null || {
+            log "configure_bridge_control: cannot enable OpenFlow protocols"
+            return 1
+        }
+    rovs_call set_controller \
+        "{\"bridge_name\":\"$BRIDGE\",\"controller\":\"$OF_CONTROLLER\"}" \
+        >/dev/null || {
+            log "configure_bridge_control: cannot set controller $OF_CONTROLLER"
+            return 1
+        }
+    log "configure_bridge_control: $BRIDGE -> $OF_CONTROLLER via D-Bus"
+    return 0
+}
+
+# Assign the bridge identity only after ensure_bridge_ports has atomically
+# created the bridge and attached its system ports. OVSDB commit can precede
+# creation of the kernel netdev by a moment, so wait briefly for it to appear.
+assign_addresses() {
+    _aa_i=0
+    while ! ip link show "$BRIDGE" >/dev/null 2>&1; do
+        if [ "$_aa_i" -ge "$BRIDGE_NETDEV_WAIT" ]; then
+            log "assign_addresses: $BRIDGE netdev missing after ensure_bridge_ports"
+            return 1
+        fi
+        _aa_i=$((_aa_i + 1))
+        sleep 1
+    done
+    ip link set "$BRIDGE" up || return 1
+    for _aa_addr in $BRIDGE_ADDRESSES; do
+        ip addr replace "$_aa_addr" dev "$BRIDGE" || return 1
+    done
+
+    # ovsbr0 is an identity endpoint, not an address bucket. Remove stale
+    # global addresses left by older boot layouts while retaining link-local.
+    _aa_raw="$(ip -o addr show dev "$BRIDGE" scope global 2>/dev/null)" || return 1
+    _aa_current="$(printf '%s\n' "$_aa_raw" | awk '{print $4}')"
+    for _aa_addr in $_aa_current; do
+        if ! list_contains_word "$BRIDGE_ADDRESSES" "$_aa_addr"; then
+            ip addr del "$_aa_addr" dev "$BRIDGE" || return 1
+            log "assign_addresses: removed stale $_aa_addr from $BRIDGE"
+        fi
+    done
+    return 0
+}
+
+# Stop dhcpcd from managing the uplink so it cannot overwrite the static
+# provider route. The persistent edit is atomic and idempotent.
+tame_dhcpcd() {
+    [ "$TAME_DHCPCD" = yes ] || { log "tame_dhcpcd: disabled by configuration"; return 0; }
+    _td_conf="$DHCPCD_CONF"
+    [ ! -L "$_td_conf" ] || { log "tame_dhcpcd: refuse symlink $_td_conf"; return 1; }
+
+    if [ -f "$_td_conf" ] && awk -v iface="$UPLINK_NIC" '
+$1 == "denyinterfaces" { for (i = 2; i <= NF; i++) if ($i == iface) found = 1 }
+END { exit(found ? 0 : 1) }
+' "$_td_conf"; then
+        log "tame_dhcpcd: $UPLINK_NIC already denied in $_td_conf"
+    elif [ -f "$_td_conf" ] || command -v dhcpcd >/dev/null 2>&1; then
+        _td_tmp="$(mktemp "${_td_conf}.tmp.XXXXXX")" \
+            || { log "tame_dhcpcd: cannot create temporary config"; return 1; }
+        register_temp "$_td_tmp"
+        if [ -f "$_td_conf" ]; then
+            awk -v iface="$UPLINK_NIC" '
+BEGIN { changed = 0 }
+$1 == "denyinterfaces" && !changed {
+    present = 0
+    for (i = 2; i <= NF; i++) if ($i == iface) present = 1
+    print present ? $0 : $0 " " iface
+    changed = 1
+    next
+}
+{ print }
+END { if (!changed) print "denyinterfaces " iface }
+' "$_td_conf" > "$_td_tmp" || { rm -f "$_td_tmp"; return 1; }
+            chmod --reference="$_td_conf" "$_td_tmp" || { rm -f "$_td_tmp"; return 1; }
+            chown --reference="$_td_conf" "$_td_tmp" || { rm -f "$_td_tmp"; return 1; }
+        else
+            printf 'denyinterfaces %s\n' "$UPLINK_NIC" > "$_td_tmp" \
+                || { rm -f "$_td_tmp"; return 1; }
+            chmod 0644 "$_td_tmp" || { rm -f "$_td_tmp"; return 1; }
+        fi
+        mv -f "$_td_tmp" "$_td_conf" || { rm -f "$_td_tmp"; return 1; }
+        log "tame_dhcpcd: persisted denyinterfaces $UPLINK_NIC in $_td_conf"
+    else
+        log "tame_dhcpcd: dhcpcd not installed; no persistent edit needed"
+    fi
+
+    if command -v dhcpcd >/dev/null 2>&1; then
+        dhcpcd -x "$UPLINK_NIC" 2>/dev/null || true
+        log "tame_dhcpcd: released dhcpcd on $UPLINK_NIC"
+    fi
+    return 0
+}
+
+# Write the eth0 replumb (link up, public IP, service anchors, default
+# route) as a single ip -batch file. The same file serves the commit AND
+# the rollback: the address/route layout on the NIC is identical whether
+# eth0 is enslaved or plain, only the OVSDB port membership differs.
+write_uplink_batch() {
+    _wub_batch="$1"
+    {
+        printf 'link set dev %s up\n' "$UPLINK_NIC"
+        printf 'addr replace %s dev %s\n' "$PUBLIC_IP" "$UPLINK_NIC"
+        for _wub_addr in $UPLINK_ALIASES; do
+            printf 'addr replace %s dev %s\n' "$_wub_addr" "$UPLINK_NIC"
+        done
+        printf 'route replace %s/32 dev %s scope link src %s\n' \
+            "$PUBLIC_GW" "$UPLINK_NIC" "${PUBLIC_IP%/*}"
+        printf 'route replace default via %s dev %s src %s\n' \
+            "$PUBLIC_GW" "$UPLINK_NIC" "${PUBLIC_IP%/*}"
+    } > "$_wub_batch"
+}
+
+# ONE busctl -> rovs_commands.ensure_bridge_ports: create bridge if missing
+# AND attach every system port in BRIDGE_SYSTEM_PORTS (default: eth0 +
+# netmaker) in a single OVSDB transaction. Interface names live only here /
+# network.conf — never in the Rust plugin. Separate create+add does not work.
+enslave_system_ports() {
+    wait_plugin_bus || { log "enslave_system_ports: control plane not on the bus"; return 1; }
+    _ports="${BRIDGE_SYSTEM_PORTS:-$UPLINK_NIC $NETMAKER_IFACE}"
+    _json_ports=""
+    for _p in $_ports; do
+        [ -n "$_json_ports" ] && _json_ports="$_json_ports,"
+        _json_ports="$_json_ports{\"port_name\":\"$_p\",\"interface_type\":\"system\"}"
+    done
+    [ -n "$_json_ports" ] || { log "enslave_system_ports: no ports configured"; return 1; }
+    rovs_call ensure_bridge_ports \
+        "{\"bridge_name\":\"$BRIDGE\",\"datapath_type\":\"$BRIDGE_DATAPATH\",\"fail_mode\":\"$BRIDGE_FAIL_MODE\",\"ports\":[$_json_ports]}" \
+        >/dev/null \
+        || { log "enslave_system_ports: ensure_bridge_ports failed for: $_ports"; return 1; }
+    log "enslave_system_ports: ensure_bridge_ports [$BRIDGE + $_ports] via one busctl"
+    return 0
+}
+
+# Remove a port ($1) from the bridge (rollback path). Same door as
+# enslave_port; if the bus vanished mid-rollback there is nothing this
+# script is allowed to do about it, so the failure is loud but non-fatal
+# for callers that use it best-effort.
+deslave_port() {
+    _eport="$1"
+    if rovs_has list_bridges '{}' "$BRIDGE"; then
+        :
+    else
+        _dp_rc="$?"
+        if [ "$_dp_rc" -eq 1 ]; then
+            log "deslave_port: $BRIDGE is already absent"
+            return 0
+        fi
+        return 1
+    fi
+    if rovs_has list_ports "{\"bridge_name\":\"$BRIDGE\"}" "$_eport"; then
+        :
+    else
+        _dp_rc="$?"
+        if [ "$_dp_rc" -eq 1 ]; then
+            log "deslave_port: $_eport is already absent from $BRIDGE"
+            return 0
+        fi
+        return 1
+    fi
+    rovs_call remove_port \
+        "{\"bridge_name\":\"$BRIDGE\",\"port_name\":\"$_eport\"}" >/dev/null \
+        || { log "deslave_port: cannot remove $_eport from $BRIDGE"; return 1; }
+    log "deslave_port: removed $_eport from $BRIDGE via D-Bus (rovs_commands.remove_port)"
+    return 0
+}
+
+# Create/configure $BRIDGE and attach BRIDGE_SYSTEM_PORTS (default: uplink NIC
+# + netmaker) with ONE busctl -> rovs_commands.ensure_bridge_ports mutation.
+# Interface names come only from network.conf / env — never from the Rust
+# plugin.
+#
+# CONSOLE-RISK: enslaving $UPLINK_NIC can blackhole remote SSH if the
+# datapath is wrong. Safety order (do not reorder):
+#   0. require gateway reachable BEFORE attach (no attach if already broken)
+#   1. ip -batch uplink addresses/routes already applied before attach
+#   2. ONE OVSDB transaction creates/configures $BRIDGE and attaches all ports
+#   3. re-apply same ip -batch (idempotent)
+#   4. plain-ping gateway; on failure deslave ONLY $UPLINK_NIC + re-apply batch
+# Never live-test eth0 attach without console/noVNC.
+enslave_bridge_ports() {
+    UPLINK_BATCH="$(mktemp "$STATE_DIR/uplink-replumb.XXXXXX")" || {
+        log "enslave_bridge_ports: cannot create secure batch file"
+        return 1
+    }
+    register_temp "$UPLINK_BATCH"
+    write_uplink_batch "$UPLINK_BATCH" || return 1
+
+    wait_plugin_bus || { log "enslave_bridge_ports: control plane not on the bus"; return 1; }
+
+    # Apply the intended plain-interface layout before probing. This matters
+    # when tame_dhcpcd just released a dynamic lease.
+    ip -batch "$UPLINK_BATCH" \
+        || { log "enslave_bridge_ports: pre-attach ip -batch failed"; return 1; }
+    if ! ping -c 1 -W "$GATEWAY_PROBE_TIMEOUT" "$PUBLIC_GW" >/dev/null 2>&1; then
+        log "enslave_bridge_ports: preflight gateway $PUBLIC_GW unreachable — refuse attach"
+        return 1
+    fi
+
+    # Record whether this run owns the attach. We only roll back a port that
+    # this invocation introduced.
+    UPLINK_WAS_ATTACHED=0
+    if rovs_has list_bridges '{}' "$BRIDGE"; then
+        if rovs_has list_ports "{\"bridge_name\":\"$BRIDGE\"}" "$UPLINK_NIC"; then
+            UPLINK_WAS_ATTACHED=1
+        else
+            _ebp_rc="$?"
+            [ "$_ebp_rc" -eq 1 ] || {
+                log "enslave_bridge_ports: cannot establish existing port state"
+                return 1
+            }
+        fi
+    else
+        _ebp_rc="$?"
+        [ "$_ebp_rc" -eq 1 ] || {
+            log "enslave_bridge_ports: cannot establish existing bridge state"
+            return 1
+        }
+    fi
+    [ "$UPLINK_WAS_ATTACHED" -eq 1 ] || UPLINK_CRITICAL=1
+
+    if ! enslave_system_ports; then
+        rollback_uplink || true
+        return 1
+    fi
+
+    # Re-apply after attach (OVS may have disturbed link state).
+    if ! ip -batch "$UPLINK_BATCH"; then
+        log "enslave_bridge_ports: post-attach ip -batch failed"
+        rollback_uplink || true
+        return 1
+    fi
+    log "enslave_bridge_ports: $PUBLIC_IP + aliases + default route on $UPLINK_NIC"
+
+    _ebp_reachable=""
+    _ebp_try=1
+    while [ "$_ebp_try" -le "$GATEWAY_PROBE_ATTEMPTS" ]; do
+        if ping -c 1 -W "$GATEWAY_PROBE_TIMEOUT" "$PUBLIC_GW" >/dev/null 2>&1; then
+            _ebp_reachable=1
+            break
+        fi
+        log "enslave_bridge_ports: gateway probe $_ebp_try/$GATEWAY_PROBE_ATTEMPTS failed"
+        sleep 1
+        _ebp_try=$((_ebp_try + 1))
+    done
+    if [ -z "$_ebp_reachable" ]; then
+        log "enslave_bridge_ports: gateway $PUBLIC_GW unreachable after attach"
+        rollback_uplink || true
+        return 1
+    fi
+    UPLINK_CRITICAL=0
+    log "enslave_bridge_ports: verified reachable ($PUBLIC_GW)"
+    return 0
+}
+
+# Back-compat name used by older docs/logs.
+enslave_eth0() { enslave_bridge_ports; }
 
 # Static WG mesh: wg-quick only parses (strip); mesh identity addresses and
 # the Table=off equivalent (AllowedIPs as device routes) are applied here.
-netmaker_up() {
-    _conf="/etc/wireguard/${NETMAKER_IFACE}.conf"
-    [ -r "$_conf" ] || { log "no static config: $_conf"; return 1; }
-    ip link show "$NETMAKER_IFACE" >/dev/null 2>&1 \
-        || ip link add "$NETMAKER_IFACE" type wireguard || return 1
-    _tmp="$STATE_DIR/.wg-${NETMAKER_IFACE}.stripped"
-    wg-quick strip "$NETMAKER_IFACE" > "$_tmp" || { rm -f "$_tmp"; return 1; }
-    wg setconf "$NETMAKER_IFACE" "$_tmp" || { rm -f "$_tmp"; return 1; }
-    rm -f "$_tmp"
-    for _addr in $NETMAKER_ALIASES; do
-        ip addr replace "$_addr" dev "$NETMAKER_IFACE" || return 1
-    done
-    _mtu="$(sed -n 's/^MTU[[:space:]]*=[[:space:]]*//p' "$_conf" | head -n 1)"
-    if [ -n "$_mtu" ]; then
-        ip link set "$NETMAKER_IFACE" mtu "$_mtu" || return 1
+netmaker_remove_new_link() {
+    if [ "$_nmu_created" -eq 1 ]; then
+        ip link del "$NETMAKER_IFACE" 2>/dev/null || true
+        log "netmaker_up: removed newly created interface after failure"
     fi
-    ip link set "$NETMAKER_IFACE" up || return 1
-    for _pair in $NETMAKER_ROUTES; do
-        _net="${_pair%%=*}"
-        _src="${_pair#*=}"
-        ip route replace "$_net" dev "$NETMAKER_IFACE" src "$_src" || return 1
+}
+
+netmaker_up() {
+    _nmu_conf="$WIREGUARD_CONF_DIR/$NETMAKER_IFACE.conf"
+    validate_wireguard_source || return 1
+
+    # Parse first, before mutating the link. The stripped file contains the
+    # private key, so it is random-named, mode 0600, registered for signal and
+    # normal-exit cleanup, and never retained as state.
+    _nmu_tmp="$(mktemp "$STATE_DIR/wg-$NETMAKER_IFACE.XXXXXX")" || return 1
+    register_temp "$_nmu_tmp"
+    chmod 0600 "$_nmu_tmp" || return 1
+    wg-quick strip "$_nmu_conf" > "$_nmu_tmp" || {
+        log "netmaker_up: cannot parse $_nmu_conf"
+        return 1
+    }
+
+    _nmu_mtu="$(awk -F= '
+/^[[:space:]]*MTU[[:space:]]*=/ {
+    value=$2
+    gsub(/[[:space:]]/, "", value)
+    print value
+    exit
+}
+' "$_nmu_conf")" || return 1
+    if [ -n "$_nmu_mtu" ]; then
+        case "$_nmu_mtu" in
+            *[!0-9]*) log "netmaker_up: invalid MTU: $_nmu_mtu"; return 1 ;;
+        esac
+        if [ "$_nmu_mtu" -lt 576 ] || [ "$_nmu_mtu" -gt 65535 ]; then
+            log "netmaker_up: MTU outside 576..65535: $_nmu_mtu"
+            return 1
+        fi
+    fi
+
+    _nmu_created=0
+    if ! ip link show "$NETMAKER_IFACE" >/dev/null 2>&1; then
+        ip link add "$NETMAKER_IFACE" type wireguard || return 1
+        _nmu_created=1
+    fi
+    wg setconf "$NETMAKER_IFACE" "$_nmu_tmp" || {
+        netmaker_remove_new_link
+        return 1
+    }
+    # The stripped file contains PrivateKey. Remove it as soon as setconf has
+    # consumed it; the exit trap remains a second line of cleanup.
+    rm -f -- "$_nmu_tmp" || {
+        log "netmaker_up: cannot remove stripped private-key file"
+        netmaker_remove_new_link
+        return 1
+    }
+    for _nmu_addr in $NETMAKER_ALIASES; do
+        ip addr replace "$_nmu_addr" dev "$NETMAKER_IFACE" || {
+            netmaker_remove_new_link
+            return 1
+        }
     done
-    ovs-vsctl --db="unix:$OVSDB_SOCK" --may-exist add-port "$BRIDGE" "$NETMAKER_IFACE" \
-        || return 1
-    # Packet-type-aware flows need OpenFlow15 enabled on the bridge.
-    ovs-vsctl --db="unix:$OVSDB_SOCK" set bridge "$BRIDGE" \
-        protocols=OpenFlow10,OpenFlow11,OpenFlow12,OpenFlow13,OpenFlow14,OpenFlow15 \
-        || return 1
-    _mac="$(ip -o link show "$BRIDGE" | sed -n 's/.*link\/ether \([0-9a-f:]*\).*/\1/p')"
-    [ -n "$_mac" ] || { log "cannot read $BRIDGE MAC"; return 1; }
-    # The WG port delivers pure L3 packets (no Ethernet header); without
-    # these flows the datapath compiles them to drop. Encap a header and
-    # hand them to the host stack. xray/OpenFlow tag routing layers richer
-    # flows on top of this bootstrap set.
-    # TODO: convert to `zcall openflow add_flow` + rovs_commands once the
-    # rovs->OVSDB hang (FIX #5) is resolved; OVS CLI here is the sanctioned
-    # bootstrap exception until then.
-    for _pt in 0x800 0x86dd; do
-        ovs-ofctl -O OpenFlow15 add-flow "$BRIDGE" \
-            "priority=100,packet_type=(1,$_pt),in_port=$NETMAKER_IFACE,actions=encap(ethernet),set_field:$_mac->eth_dst,LOCAL" \
-            || return 1
+    if [ -n "$_nmu_mtu" ]; then
+        ip link set "$NETMAKER_IFACE" mtu "$_nmu_mtu" || {
+            netmaker_remove_new_link
+            return 1
+        }
+    fi
+    ip link set "$NETMAKER_IFACE" up || {
+        netmaker_remove_new_link
+        return 1
+    }
+    for _nmu_pair in $NETMAKER_ROUTES; do
+        _nmu_net="${_nmu_pair%%=*}"
+        _nmu_src="${_nmu_pair#*=}"
+        case "$_nmu_net" in
+            *:*) _nmu_family=-6 ;;
+            *) _nmu_family=-4 ;;
+        esac
+        ip "$_nmu_family" route replace "$_nmu_net" \
+            dev "$NETMAKER_IFACE" src "$_nmu_src" || {
+                netmaker_remove_new_link
+                return 1
+            }
+    done
+    # Port attach + netmaker OpenFlow flows run later (after enslave_bridge_ports).
+    return 0
+}
+
+# After system ports are on the bridge: enable OF1.5 and install netmaker
+# L3->encap flows (needs ofport for $NETMAKER_IFACE to resolve).
+netmaker_flows() {
+    wait_plugin_bus || { log "netmaker_flows: control plane not on the bus"; return 1; }
+    _nf_mac="$(ip -o link show "$BRIDGE" | sed -n 's/.*link\/ether \([0-9a-f:]*\).*/\1/p')"
+    [ -n "$_nf_mac" ] || { log "cannot read $BRIDGE MAC"; return 1; }
+    for _nf_pt in 0x800 0x86dd; do
+        _nf_json="{\"bridge\":\"$BRIDGE\",\"flow_mod\":{\"table_id\":0,\"command\":\"OFPFC_ADD\",\"idle_timeout\":0,\"hard_timeout\":0,\"priority\":100,\"match\":{\"match_type\":\"OFPMT_OXM\",\"length\":4,\"oxm_fields\":[{\"oxm_class\":\"OFPXMC_OPENFLOW_BASIC\",\"oxm_field\":\"OFPXMT_OFB_PACKET_TYPE\",\"oxm_hasmask\":false,\"oxm_length\":4,\"oxm_value\":\"1,$_nf_pt\"},{\"oxm_class\":\"OFPXMC_OPENFLOW_BASIC\",\"oxm_field\":\"OFPXMT_OFB_IN_PORT\",\"oxm_hasmask\":false,\"oxm_length\":4,\"oxm_value\":\"$NETMAKER_IFACE\"}]},\"actions\":[{\"type\":\"OFPAT_ENCAP\",\"ether_type\":\"ethernet\"},{\"type\":\"OFPAT_SET_FIELD\",\"field\":\"eth_dst\",\"value\":\"$_nf_mac\"},{\"type\":\"OFPAT_OUTPUT\",\"port\":\"LOCAL\"}]}}"
+        openflow_call_retry add_flow "$_nf_json" \
+            "netmaker_flows: packet_type $_nf_pt" >/dev/null || return 1
     done
     return 0
 }
 
 write_dns() {
-    cat > "$STATE_DIR/resolv.conf" <<'EOF'
+    _wdns_tmp="$(mktemp "$STATE_DIR/resolv.conf.XXXXXX")" || return 1
+    register_temp "$_wdns_tmp"
+    cat > "$_wdns_tmp" <<'EOF'
 nameserver 2a07:a8c0::68:9ec7
 nameserver 2a07:a8c1::68:9ec7
 EOF
+    chmod 0644 "$_wdns_tmp" || return 1
+    mv -f "$_wdns_tmp" "$STATE_DIR/resolv.conf" || return 1
     log "wrote IPv6-only NextDNS resolver fragment"
 }
 
+# Boot-time validation: assert the network actually CONVERGED to the
+# intended shape, not merely that each stage ran. Every check logs
+# pass/fail; the stage fails (visible in FAILED_STAGES and the oneshot
+# exit code) if any check fails.
+interface_has_address() {
+    ip -o addr show dev "$1" scope global 2>/dev/null | awk -v wanted="$2" '
+$4 == wanted { found = 1 }
+END { exit(found ? 0 : 1) }
+'
+}
+
+route_matches() {
+    _rm_family="$1"
+    _rm_network="$2"
+    _rm_device="$3"
+    _rm_source="$4"
+    ip "$_rm_family" route show "$_rm_network" 2>/dev/null | awk \
+        -v network="$_rm_network" -v device="$_rm_device" -v source="$_rm_source" '
+$1 == network {
+    found_device = 0
+    found_source = 0
+    for (i = 1; i <= NF; i++) {
+        if ($i == "dev" && $(i + 1) == device) found_device = 1
+        if ($i == "src" && $(i + 1) == source) found_source = 1
+    }
+    if (found_device && found_source) found = 1
+}
+END { exit(found ? 0 : 1) }
+'
+}
+
+validate_network() {
+    _fail=""
+
+    # Control-plane door answers with real data (smoke test of the busctl
+    # -> projection_server -> rovs_commands -> OVSDB path). Hard FAIL: it
+    # is the only door, there is no CLI fallback.
+    if wait_plugin_bus \
+            && rovs_call list_ports "{\"bridge_name\":\"$BRIDGE\"}" >/dev/null; then
+        log "validate: D-Bus control plane answers (rovs_commands.list_ports)"
+    else
+        log "validate FAIL: D-Bus control plane not answering"
+        _fail=1
+    fi
+
+    for _vn_port in $BRIDGE_SYSTEM_PORTS; do
+        if rovs_has list_ports "{\"bridge_name\":\"$BRIDGE\"}" "$_vn_port"; then
+            log "validate: $_vn_port enslaved on $BRIDGE"
+        else
+            log "validate FAIL: $_vn_port not enslaved on $BRIDGE"
+            _fail=1
+        fi
+    done
+
+    if interface_has_address "$UPLINK_NIC" "$PUBLIC_IP"; then
+        log "validate: $PUBLIC_IP present on $UPLINK_NIC"
+    else
+        log "validate FAIL: $PUBLIC_IP missing on $UPLINK_NIC"
+        _fail=1
+    fi
+
+    for _vn_addr in $UPLINK_ALIASES; do
+        if interface_has_address "$UPLINK_NIC" "$_vn_addr"; then
+            log "validate: $_vn_addr present on $UPLINK_NIC"
+        else
+            log "validate FAIL: $_vn_addr missing on $UPLINK_NIC"
+            _fail=1
+        fi
+    done
+    for _vn_addr in $BRIDGE_ADDRESSES; do
+        if interface_has_address "$BRIDGE" "$_vn_addr"; then
+            log "validate: $_vn_addr present on $BRIDGE"
+        else
+            log "validate FAIL: $_vn_addr missing on $BRIDGE"
+            _fail=1
+        fi
+    done
+    for _vn_addr in $NETMAKER_ALIASES; do
+        if interface_has_address "$NETMAKER_IFACE" "$_vn_addr"; then
+            log "validate: $_vn_addr present on $NETMAKER_IFACE"
+        else
+            log "validate FAIL: $_vn_addr missing on $NETMAKER_IFACE"
+            _fail=1
+        fi
+    done
+
+    for _vn_pair in $NETMAKER_ROUTES; do
+        _vn_network="${_vn_pair%%=*}"
+        _vn_source="${_vn_pair#*=}"
+        case "$_vn_network" in
+            *:*) _vn_family=-6 ;;
+            *) _vn_family=-4 ;;
+        esac
+        if route_matches "$_vn_family" "$_vn_network" \
+                "$NETMAKER_IFACE" "$_vn_source"; then
+            log "validate: $_vn_network via $NETMAKER_IFACE src $_vn_source"
+        else
+            log "validate FAIL: $_vn_network via $NETMAKER_IFACE src $_vn_source missing"
+            _fail=1
+        fi
+    done
+
+    if ip -4 route show default 2>/dev/null \
+            | grep -qF "via $PUBLIC_GW dev $UPLINK_NIC"; then
+        log "validate: default route via $PUBLIC_GW dev $UPLINK_NIC"
+    else
+        log "validate FAIL: default route via $PUBLIC_GW dev $UPLINK_NIC missing"
+        _fail=1
+    fi
+
+    if ip -4 route show "$PUBLIC_GW/32" 2>/dev/null \
+            | grep -qF "$PUBLIC_GW dev $UPLINK_NIC"; then
+        log "validate: provider gateway has an on-link host route"
+    else
+        log "validate FAIL: on-link route for $PUBLIC_GW missing"
+        _fail=1
+    fi
+
+    if ping -c 1 -W "$GATEWAY_PROBE_TIMEOUT" "$PUBLIC_GW" >/dev/null 2>&1; then
+        log "validate: gateway $PUBLIC_GW reachable"
+    else
+        log "validate FAIL: gateway $PUBLIC_GW unreachable"
+        _fail=1
+    fi
+
+    _flags="$(ip -o link show dev "$NETMAKER_IFACE" 2>/dev/null \
+        | sed -n 's/.*<\([^>]*\)>.*/\1/p')"
+    case ",$_flags," in
+        *,UP,*) log "validate: $NETMAKER_IFACE link is up" ;;
+        *) log "validate FAIL: $NETMAKER_IFACE link not up (flags: $_flags)"; _fail=1 ;;
+    esac
+
+    if [ -n "$(wg show "$NETMAKER_IFACE" peers 2>/dev/null)" ]; then
+        log "validate: $NETMAKER_IFACE has WG peers configured"
+    else
+        log "validate FAIL: $NETMAKER_IFACE has no WG peers"
+        _fail=1
+    fi
+
+    # Optional mesh reachability probe (set NETMAKER_PING_TARGET in
+    # network.conf to a mesh peer address to enable).
+    if [ -n "${NETMAKER_PING_TARGET:-}" ]; then
+        if ping -c 2 -W 3 "$NETMAKER_PING_TARGET" >/dev/null 2>&1; then
+            log "validate: mesh peer $NETMAKER_PING_TARGET reachable"
+        else
+            log "validate FAIL: mesh peer $NETMAKER_PING_TARGET unreachable"
+            _fail=1
+        fi
+    fi
+
+    [ -z "$_fail" ] || return 1
+    log "validate: network converged"
+    return 0
+}
+
 increment_heartbeat() {
-    _file="$STATE_DIR/heartbeat"
-    _n=0
-    [ -r "$_file" ] && _n="$(cat "$_file" 2>/dev/null || echo 0)"
-    HEARTBEAT=$((_n + 1))
-    printf '%s\n' "$HEARTBEAT" > "$_file"
+    _ih_file="$STATE_DIR/heartbeat"
+    _ih_n=0
+    if [ -r "$_ih_file" ]; then
+        _ih_n="$(cat "$_ih_file" 2>/dev/null)" || _ih_n=0
+        case "$_ih_n" in ''|*[!0-9]*) _ih_n=0 ;; esac
+    fi
+    HEARTBEAT=$((_ih_n + 1))
+    _ih_tmp="$(mktemp "$STATE_DIR/heartbeat.XXXXXX")" || return 1
+    register_temp "$_ih_tmp"
+    printf '%s\n' "$HEARTBEAT" > "$_ih_tmp" || return 1
+    chmod 0640 "$_ih_tmp" || return 1
+    mv -f "$_ih_tmp" "$_ih_file" || return 1
 }
 
 age_days() {
@@ -289,74 +1421,182 @@ age_days() {
 }
 
 capture() {
-    _title="$1"; shift
-    printf '\n## %s\n\n```\n' "$_title"
+    _cap_title="$1"; shift
+    printf '\n## %s\n\n```\n' "$_cap_title"
     "$@" 2>&1 || true
     printf '```\n'
 }
 
 startup_report() {
-    _stamp="$(date +%Y%m%d-%H%M%S)"
-    _report="$REPORT_DIR/${ROLE}-${_stamp}.md"
+    _sr_stamp="$(date +%Y%m%d-%H%M%S)"
+    _sr_report="$REPORT_DIR/$ROLE-$MODE-$_sr_stamp.md"
+    _sr_tmp="$(mktemp "$REPORT_DIR/report.XXXXXX")" || return 1
+    register_temp "$_sr_tmp"
 
     {
         echo "# Control Plane Startup Report"
         echo
         echo "- Node: $(uname -n)"
         echo "- Role: $ROLE"
+        echo "- Mode: $MODE"
         echo "- Birthday: $BIRTHDAY"
         echo "- Age: $(age_days) days"
-        echo "- Soul: present"
         echo "- Heartbeat: $HEARTBEAT"
-        echo "- State: awake"
         echo "- Generated: $(ts)"
         if [ -n "$FAILED_STAGES" ]; then
+            echo "- Result: failed"
             echo "- Failed stages:$FAILED_STAGES"
         else
+            echo "- Result: success"
             echo "- Failed stages: none"
         fi
 
         capture "Interfaces" ip -brief address
-        capture "IPv4 routes" ip route
+        capture "IPv4 routes" ip -4 route
         capture "IPv6 routes" ip -6 route
-        capture "OVS bridge $BRIDGE" ovs-vsctl --db="unix:$OVSDB_SOCK" list-ports "$BRIDGE"
-        capture "OpenFlow flows" ovs-ofctl -O OpenFlow15 dump-flows "$BRIDGE"
+        capture "OVS bridge $BRIDGE ports (D-Bus)" \
+            rovs_call list_ports "{\"bridge_name\":\"$BRIDGE\"}"
         capture "WireGuard $NETMAKER_IFACE" wg show "$NETMAKER_IFACE"
         capture "Listening sockets" ss -lntup
         capture "Current logins" who
         capture "Recent logins" last -n 20
-    } > "$_report"
+    } > "$_sr_tmp" || return 1
 
-    ln -sfn "$_report" "$REPORT_DIR/latest-${ROLE}.md"
-    log "startup report: $_report"
+    chmod 0600 "$_sr_tmp" || return 1
+    mv -f "$_sr_tmp" "$_sr_report" || return 1
+    _sr_link_tmp="$REPORT_DIR/.latest-$ROLE-$MODE.$$"
+    register_temp "$_sr_link_tmp"
+    rm -f "$_sr_link_tmp"
+    ln -s "$_sr_report" "$_sr_link_tmp" || return 1
+    mv -f "$_sr_link_tmp" "$REPORT_DIR/latest-$ROLE-$MODE.md" || {
+        rm -f "$_sr_link_tmp"
+        return 1
+    }
+    log "startup report: $_sr_report"
+    return 0
+}
+
+ready_marker_path() {
+    case "$MODE" in
+        bootstrap) printf '%s/%s.ready\n' "$STATE_DIR" "$ROLE" ;;
+        flows) printf '%s/%s.flows-ready\n' "$STATE_DIR" "$ROLE" ;;
+        controller) printf '%s/%s.controller-ready\n' "$STATE_DIR" "$ROLE" ;;
+        *) return 1 ;;
+    esac
+}
+
+write_mode_marker() {
+    _wm_path="$1"
+    _wm_result="$2"
+    _wm_tmp="$(mktemp "$STATE_DIR/marker.XXXXXX")" || return 1
+    register_temp "$_wm_tmp"
+    {
+        printf 'generated=%s\n' "$(ts)"
+        printf 'role=%s\n' "$ROLE"
+        printf 'mode=%s\n' "$MODE"
+        printf 'result=%s\n' "$_wm_result"
+        printf 'heartbeat=%s\n' "$HEARTBEAT"
+        printf 'failed_stages=%s\n' "$FAILED_STAGES"
+    } > "$_wm_tmp" || return 1
+    chmod 0640 "$_wm_tmp" || return 1
+    mv -f "$_wm_tmp" "$_wm_path"
+}
+
+begin_mode() {
+    _bm_ready="$(ready_marker_path)" || return 1
+    rm -f "$_bm_ready" "$STATE_DIR/$ROLE.$MODE.failed"
+    write_mode_marker "$STATE_DIR/$ROLE.$MODE.starting" starting
+}
+
+finish_mode_success() {
+    _fms_ready="$(ready_marker_path)" || return 1
+    write_mode_marker "$_fms_ready" success || return 1
+    rm -f "$STATE_DIR/$ROLE.$MODE.starting" "$STATE_DIR/$ROLE.$MODE.failed"
+}
+
+finish_mode_failure() {
+    write_mode_marker "$STATE_DIR/$ROLE.$MODE.failed" failed || return 1
+    rm -f "$STATE_DIR/$ROLE.$MODE.starting"
+}
+
+run_bootstrap() {
+    stage "heartbeat" increment_heartbeat || return 1
+    log "starting staged network initialization (heartbeat $HEARTBEAT, age $(age_days) days)"
+
+    stage "dbus-wait" wait_dbus || return 1
+    stage "ovsdb-wait" wait_ovsdb || return 1
+    stage "plugin-bus-wait" wait_plugin_bus || return 1
+    stage "bridge-inventory" ensure_bridge || return 1
+    stage "tame-dhcpcd" tame_dhcpcd || return 1
+
+    # netmaker iface must exist before the atomic multi-port attach.
+    stage "netmaker-mesh" netmaker_up || return 1
+    # ONE busctl ensure_bridge_ports creates/configures the bridge and attaches
+    # every port from BRIDGE_SYSTEM_PORTS (shell/config only).
+    stage "enslave-bridge-ports" enslave_bridge_ports || return 1
+    stage "addresses" assign_addresses || return 1
+    stage "bridge-control" configure_bridge_control || return 1
+    stage "dns-fragment" write_dns || return 1
+    stage "validate" validate_network || return 1
+    return 0
+}
+
+run_flows() {
+    log "starting post-controller OpenFlow reconciliation"
+    stage "dbus-wait" wait_dbus || return 1
+    stage "ovsdb-wait" wait_ovsdb || return 1
+    stage "plugin-bus-wait" wait_plugin_bus || return 1
+    stage "controller-bus-wait" wait_controller_bus || return 1
+    stage "network-prerequisites" validate_network || return 1
+    stage "bridge-control" configure_bridge_control || return 1
+    stage "netmaker-flows" netmaker_flows || return 1
+    stage "sync-governed-flows" sync_governed_flows || return 1
+    return 0
+}
+
+run_controller() {
+    log "reasserting OpenFlow controller configuration"
+    stage "dbus-wait" wait_dbus || return 1
+    stage "ovsdb-wait" wait_ovsdb || return 1
+    stage "plugin-bus-wait" wait_plugin_bus || return 1
+    stage "bridge-control" configure_bridge_control || return 1
+    return 0
 }
 
 main() {
-    increment_heartbeat
-    log "starting staged network initialization (heartbeat $HEARTBEAT, age $(age_days) days)"
-
-    stage "dbus-wait" wait_dbus
-    pause_short
-
-    stage "ovsdb-wait" wait_ovsdb
-    stage "bridge" ensure_bridge
-    stage "addresses" assign_addresses
-    stage "tame-dhcpcd" tame_dhcpcd
-    stage "enslave-eth0" enslave_eth0
-    pause_long
-
-    stage "netmaker-mesh" netmaker_up
-    stage "dns-fragment" write_dns
-    pause_short
-
-    startup_report
-    touch "$STATE_DIR/${ROLE}.ready"
-
-    if [ -n "$FAILED_STAGES" ]; then
-        log "network initialization completed with failures:$FAILED_STAGES"
-        exit 1
+    require_commands
+    validate_config_values
+    validate_wireguard_source || die "invalid WireGuard configuration source"
+    require_privilege
+    if [ "$MODE" = check ]; then
+        log "configuration and command dependencies are valid; no changes made"
+        return 0
     fi
-    log "network initialization complete"
+
+    prepare_runtime
+    install_runtime_traps
+    begin_mode || die "cannot initialize state markers"
+
+    _main_rc=0
+    case "$MODE" in
+        bootstrap) run_bootstrap || _main_rc=1 ;;
+        flows) run_flows || _main_rc=1 ;;
+        controller) run_controller || _main_rc=1 ;;
+    esac
+    stage "startup-report" startup_report || _main_rc=1
+
+    if [ "$_main_rc" -eq 0 ] && [ -z "$FAILED_STAGES" ]; then
+        finish_mode_success || {
+            log "cannot publish ready marker"
+            return 1
+        }
+        log "$MODE reconciliation complete"
+        return 0
+    fi
+
+    finish_mode_failure || log "cannot publish failure marker"
+    log "$MODE reconciliation failed:$FAILED_STAGES"
+    return 1
 }
 
 main "$@"

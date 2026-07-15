@@ -1,6 +1,14 @@
 # Database and State
 OP_DBUS_STATE_DIR=/var/lib/op-dbus
 
+# Projection D-Bus surface (org.opdbus.v1.plugins) — system bus; required
+# by deploy/s6/op-projection/run.
+OP_DBUS_PROJECTION_BUS=system
+
+# OVSDB server socket used by the rovs plugins (host build lives under
+# /usr/local, not the upstream /run/openvswitch default).
+OVSDB_SOCK=/usr/local/var/run/openvswitch/db.sock
+
 # gRPC — op-dbus server on ovsbr0 (reachable by all containers)
 OP_DBUS_GRPC_ADDR=http://10.200.0.2:50051
 
@@ -23,5 +31,5 @@ OP_TRUSTED_NETWORKS=10.0.0.0/24,10.200.0.0/24
 
 # OpenClaw Gateway Configuration
 OPENCLAW_TOKEN=your-openclaw-api-token-here
-OPENCLAW_BASE_URL=http://10.0.0.1:18789
+OPENCLAW_BASE_URL=http://10.0.0.1:8090
 OPENCLAW_DEFAULT_MODEL=openclaw:main

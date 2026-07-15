@@ -1,0 +1,512 @@
+$schema: http://json-schema.org/draft-04/schema#
+description: Schema for common OpenFlow definitions, version 1.3
+id: of13/definitions.json
+
+# standard way to pass arbitrary data as hex string
+data:
+  description: Arbitrary data as hex string
+  type: string
+  pattern: ^([a-fA-F0-9]{2})+$
+optional_data:
+  description: Optional data as hex string
+  type: string
+  pattern: ^([a-fA-F0-9]{2})*$
+
+# every message has (at minimum) a header
+ofp_header:
+  description: OpenFlow 1.3 header
+  type: object
+  properties:
+    version:
+      description: version 1.3 == 0x04
+      type: integer
+      minimum: 1
+      maximum: 255 # 8-bit unsigned integer
+      default: 4
+    type:
+      description: Message type (OFPT_HELLO, OFPT_ERROR, etc)
+      type: string
+      enum:
+        - OFPT_HELLO
+        - OFPT_ERROR
+        - OFPT_ECHO_REQUEST
+        - OFPT_ECHO_REPLY
+        - OFPT_EXPERIMENTER
+        - OFPT_FEATURES_REQUEST
+        - OFPT_FEATURES_REPLY
+        - OFPT_GET_CONFIG_REQUEST
+        - OFPT_GET_CONFIG_REPLY
+        - OFPT_SET_CONFIG
+        - OFPT_PACKET_IN
+        - OFPT_FLOW_REMOVED
+        - OFPT_PORT_STATUS
+        - OFPT_PACKET_OUT
+        - OFPT_FLOW_MOD
+        - OFPT_GROUP_MOD
+        - OFPT_PORT_MOD
+        - OFPT_TABLE_MOD
+        - OFPT_MULTIPART_REQUEST
+        - OFPT_MULTIPART_REPLY
+        - OFPT_BARRIER_REQUEST
+        - OFPT_BARRIER_REPLY
+        - OFPT_QUEUE_GET_CONFIG_REQUEST
+        - OFPT_QUEUE_GET_CONFIG_REPLY
+        - OFPT_ROLE_REQUEST
+        - OFPT_ROLE_REPLY
+        - OFPT_GET_ASYNC_REQUEST
+        - OFPT_GET_ASYNC_REPLY
+        - OFPT_SET_ASYNC
+        - OFPT_METER_MOD
+    length:
+      description: Message length in bytes
+      type: integer
+      minimum: 8
+      maximum: 65535 # 16-bit unsigned integer
+      default: 8
+    xid:
+      description: Transaction ID
+      type: integer
+      minimum: 0
+      maximum: 4294967295 # 32-bit unsigned integer
+      default: 0
+  required:
+    - version
+    - type
+    - length
+    - xid
+
+# ethernet address
+ethernet:
+  description: Ethernet address
+  type: string
+  default: '000000000000'
+  # TODO: Make pattern reject invalid MACs
+  pattern: ^([a-fA-F0-9]{2}:?){5}[a-fA-F0-9]{2}$
+
+ofp_flow_removed_reason:
+  type: string
+  default: OFPRR_IDLE_TIMEOUT
+  enum:
+    - OFPRR_IDLE_TIMEOUT
+    - OFPRR_HARD_TIMEOUT
+    - OFPRR_DELETE
+    - OFPRR_GROUP_DELETE
+
+oxm_field:
+  type: object
+  required:
+    - oxm_class
+    - oxm_field
+    - oxm_hasmask
+    - oxm_length
+  properties:
+    oxm_class:
+      type: string
+      default: OFPXMC_OPENFLOW_BASIC
+      enum:
+        - OFPXMC_NXM_0
+        - OFPXMC_NXM_1
+        - OFPXMC_OPENFLOW_BASIC
+        - OFPXMC_EXPERIMENTER
+    oxm_field:
+      type: string
+      default: OFPXMT_OFB_IN_PORT
+      enum:
+        - OFPXMT_OFB_IN_PORT
+        - OFPXMT_OFB_IN_PHY_PORT
+        - OFPXMT_OFB_METADATA
+        - OFPXMT_OFB_ETH_DST
+        - OFPXMT_OFB_ETH_SRC
+        - OFPXMT_OFB_ETH_TYPE
+        - OFPXMT_OFB_VLAN_VID
+        - OFPXMT_OFB_VLAN_PCP
+        - OFPXMT_OFB_IP_DSCP
+        - OFPXMT_OFB_IP_ECN
+        - OFPXMT_OFB_IP_PROTO
+        - OFPXMT_OFB_IPV4_SRC
+        - OFPXMT_OFB_IPV4_DST
+        - OFPXMT_OFB_TCP_SRC
+        - OFPXMT_OFB_TCP_DST
+        - OFPXMT_OFB_UDP_SRC
+        - OFPXMT_OFB_UDP_DST
+        - OFPXMT_OFB_SCTP_SRC
+        - OFPXMT_OFB_SCTP_DST
+        - OFPXMT_OFB_ICMPV4_TYPE
+        - OFPXMT_OFB_ICMPV4_CODE
+        - OFPXMT_OFB_ARP_OP
+        - OFPXMT_OFB_ARP_SPA
+        - OFPXMT_OFB_ARP_TPA
+        - OFPXMT_OFB_ARP_SHA
+        - OFPXMT_OFB_ARP_THA
+        - OFPXMT_OFB_IPV6_SRC
+        - OFPXMT_OFB_IPV6_DST
+        - OFPXMT_OFB_IPV6_FLABEL
+        - OFPXMT_OFB_ICMPV6_TYPE
+        - OFPXMT_OFB_ICMPV6_CODE
+        - OFPXMT_OFB_IPV6_ND_TARGET
+        - OFPXMT_OFB_IPV6_ND_SLL
+        - OFPXMT_OFB_IPV6_ND_TLL
+        - OFPXMT_OFB_MPLS_LABEL
+        - OFPXMT_OFB_MPLS_TC
+        - OFPXMT_OFB_MPLS_BOS
+        - OFPXMT_OFB_PBB_ISID
+        - OFPXMT_OFB_TUNNEL_ID
+        - OFPXMT_OFB_IPV6_EXTHDR
+    oxm_hasmask:
+      type: boolean
+      default: false
+    oxm_length:
+      type: integer
+      minimum: 0
+      maximum: 255
+    oxm_value:
+      $ref: "#/data"
+    oxm_mask:
+      $ref: "#/optional_data"
+
+ofp_match:
+  type: object
+  required: [type, length]
+  properties:
+    type:
+      type: string
+      default: OFPMT_OXM
+      enum:
+        - OFPMT_STANDARD # deprecated
+        - OFPMT_OXM
+    length:
+      type: integer
+      minimum: 0
+      maximum: 65535
+      default: 4
+    oxm_fields:
+      type: array
+      items:
+        $ref: "#/oxm_field"
+
+ofp_packet_in_reason:
+  type: string
+  default: OFPR_NO_MATCH
+  enum:
+    - OFPR_NO_MATCH
+    - OFPR_ACTION
+    - OFPR_INVALID_TTL
+
+ofp_action_type:
+  type: string
+  enum:
+    - OFPAT_OUTPUT
+    - OFPAT_COPY_TTL_OUT
+    - OFPAT_COPY_TTL_IN
+    - OFPAT_SET_MPLS_TTL
+    - OFPAT_DEC_MPLS_TTL
+    - OFPAT_PUSH_VLAN
+    - OFPAT_POP_VLAN
+    - OFPAT_PUSH_MPLS
+    - OFPAT_POP_MPLS
+    - OFPAT_SET_QUEUE
+    - OFPAT_GROUP
+    - OFPAT_SET_NW_TTL
+    - OFPAT_DEC_NW_TTL
+    - OFPAT_SET_FIELD
+    - OFPAT_PUSH_PBB
+    - OFPAT_POP_PBB
+    - OFPAT_EXPERIMENTER
+
+# TODO: add specific action type headers
+ofp_action_header:
+  type: object
+  required: [type, len]
+  properties:
+    type:
+      $ref: "#/ofp_action_type"
+    len:
+      type: integer
+      maximum: 65535
+
+ofp_bucket:
+  type: object
+  required:
+    - len
+    - weight
+    - watch_port
+    - watch_group
+  properties:
+    len:
+      type: integer
+      maximum: 65535
+    weight:
+      type: integer
+      maximum: 65535
+    watch_port:
+      type: integer
+      maximum: 4294967295
+    watch_group:
+      type: integer
+      maximum: 4294967295
+    actions:
+      $ref: "#/ofp_action_header"
+
+multipart_type:
+  type: string
+  default: OFPMP_DESC
+  enum:
+    - OFPMP_DESC
+    - OFPMP_FLOW
+    - OFPMP_AGGREGATE
+    - OFPMP_TABLE
+    - OFPMP_PORT_STATS
+    - OFPMP_QUEUE
+    - OFPMP_GROUP
+    - OFPMP_GROUP_DESC
+    - OFPMP_GROUP_FEATURES
+    - OFPMP_METER
+    - OFPMP_METER_CONFIG
+    - OFPMP_METER_FEATURES
+    - OFPMP_TABLE_FEATURES
+    - OFPMP_PORT_DESC
+    - OFPMP_EXPERIMENTER
+
+# FIXME: does blank strink allow optional?
+ofp_multipart_request_flags:
+  type: array
+  default: ['']
+  items:
+    type: string
+    enum:
+      - ''
+      - OFPMPF_REQ_MORE
+
+ofp_multipart_reply_flags:
+  type: array
+  default: ['']
+  items:
+    type: string
+    enum:
+      - ''
+      - OFPMPF_REPLY_MORE
+
+ofp_queue_properties:
+  type: string
+  default: OFPQT_MIN_RATE
+  enum:
+    - OFPQT_MIN_RATE
+    - OFPQT_MAX_RATE
+    - OFPQT_EXPERIMENTER
+
+# TODO: add min/max rate and experimenter fields
+ofp_queue_prop_header:
+  type: object
+  required: [property, len]
+  properties:
+    property:
+      $ref: "#/ofp_queue_properties"
+    len:
+      type: integer
+      maximum: 65535
+      default: 0
+    rate:
+      type: integer
+      maximum: 65535
+      default: 0
+
+ofp_packet_queue:
+  type: object
+  required: [queue_id, port, len, properties]
+  properties:
+    queue_id:
+      type: integer
+      maximum: 4294967295
+      default: 0
+    port:
+      type: integer
+      maximum: 4294967295
+      default: 0
+    len:
+      type: integer
+      maximum: 65535
+      default: 0
+    properties:
+      type: array
+      default:
+        - property: OFPQT_MIN_RATE
+          len: 0
+          rate: 0
+      items:
+        $ref: "#/ofp_queue_prop_header"
+
+ofp_controller_role:
+  type: string
+  default: OFPCR_ROLE_NOCHANGE
+  enum:
+    - OFPCR_ROLE_NOCHANGE
+    - OFPCR_ROLE_EQUAL
+    - OFPCR_ROLE_MASTER
+    - OFPCR_ROLE_SLAVE
+
+async_config:
+  type: object
+  required:
+    - header
+    - packet_in_mask
+    - "port_status_mask"
+    - "flow_removed_mask"
+  properties:
+    header:
+      $ref: "#/ofp_header"
+    packet_in_mask:
+      type: "array"
+      minItems: 2
+      maxItems: 2
+      default:
+        - - "OFPR_NO_MATCH"
+        - - "OFPR_NO_MATCH"
+      items:
+        type: "array"
+        items:
+          $ref: "#/ofp_packet_in_reason"
+    port_status_mask:
+      type: "array"
+      minItems: 2
+      maxItems: 2
+      default:
+        - - "OFPPR_ADD"
+        - - "OFPPR_ADD"
+      items:
+        type: "array"
+        items:
+          $ref: "#/ofp_port_reason"
+    flow_removed_mask:
+      type: "array"
+      minItems: 2
+      maxItems: 2
+      default:
+        - - "OFPRR_IDLE_TIMEOUT"
+        - - "OFPRR_IDLE_TIMEOUT"
+      items:
+        type: "array"
+        items:
+          $ref: "#/ofp_flow_removed_reason"
+
+
+# TODO: add other meter bands
+ofp_meter_band_header:
+  type: "object"
+  required: ["type", "len", "rate", "burst_size"]
+  properties:
+    type:
+      type: "string"
+      default: "OFPMBT_DROP"
+      enum:
+        - "OFPMBT_DROP"
+        - "OFPMBT_DSCP_REMARK"
+        - "OFPMBT_EXPERIMENTER"
+    len:
+      type: "integer"
+      maximum: 65535
+      default: 0
+    rate:
+      type: "integer"
+      maximum: 4294967295
+      default: 0
+    burst_size:
+      type: "integer"
+      maximum: 4294967295
+      default: 0
+
+ofp_port:
+  type: "object"
+  required:
+    - "port_no"
+    - "hw_addr"
+    - "name"
+    - "config"
+    - "state"
+    - "curr"
+    - "advertised"
+    - "supported"
+    - "peer"
+    - "curr_speed"
+    - "max_speed"
+  properties:
+    port_no:
+      type: "integer"
+      maximum: 4294967295
+      default: 0
+    hw_addr:
+      $ref: "#/ethernet"
+    name:
+      type: "string"
+      maxLength: 16
+      # FIXME: make pattern more restrictive?
+      #pattern: ".*\0$"
+      default: "port"
+    config:
+      $ref: "#/port_config"
+    state:
+      type: "array"
+      default: ["OFPPS_LINK_DOWN"]
+      items:
+        type: "string"
+        enum:
+          - "OFPPS_LINK_DOWN"
+          - "OFPPS_BLOCKED"
+          - "OFPPS_LIVE"
+    curr:
+      $ref: "#/port_features"
+    advertised:
+      $ref: "#/port_features"
+    supported:
+      $ref: "#/port_features"
+    peer:
+      $ref: "#/port_features"
+    curr_speed:
+      type: "integer"
+      maximum: 4294967295
+      default: 0
+    max_speed:
+      type: "integer"
+      maximum: 4294967295
+      default: 0
+
+ofp_port_reason:
+  type: "string"
+  default: "OFPPR_ADD"
+  enum:
+    - "OFPPR_ADD"
+    - "OFPPR_DELETE"
+    - "OFPPR_MODIFY"
+
+port_config:
+  type: "array"
+  default: ["OFPPC_PORT_DOWN"]
+  items:
+    type: "string"
+    enum:
+      - "OFPPC_PORT_DOWN"
+      - "OFPPC_NO_RECV"
+      - "OFPPC_NO_FWD"
+      - "OFPPC_NO_PACKET_IN"
+
+port_features:
+  type: "array"
+  default: ["OFPPF_1GB_HD"]
+  items:
+    type: "string"
+    enum:
+      - "OFPPF_10MB_HD"
+      - "OFPPF_10MB_FD"
+      - "OFPPF_100MB_HD"
+      - "OFPPF_100MB_FD"
+      - "OFPPF_1GB_HD"
+      - "OFPPF_1GB_FD"
+      - "OFPPF_10GB_FD"
+      - "OFPPF_40GB_FD"
+      - "OFPPF_100GB_FD"
+      - "OFPPF_1TB_FD"
+      - "OFPPF_OTHER"
+      - "OFPPF_COPPER"
+      - "OFPPF_FIBER"
+      - "OFPPF_AUTONEG"
+      - "OFPPF_PAUSE"
+      - "OFPPF_PAUSE_ASYM"

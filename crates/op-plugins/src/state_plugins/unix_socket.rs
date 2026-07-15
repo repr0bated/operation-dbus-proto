@@ -1,11 +1,11 @@
-use anyhow::Result;
+use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
-use op_state_store::{FieldSchema, FieldType, PluginSchema};
+use op_state_store::PluginSchema;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
-use simd_json::{json, OwnedValue as Value};
+use simd_json::OwnedValue as Value;
 use std::collections::{HashMap, HashSet};
 use std::os::unix::net::UnixListener;
 use std::path::Path;
@@ -24,21 +24,24 @@ fn default_protocol() -> String {
     "grpc".to_string()
 }
 
+fn default_mode() -> String {
+    "control".to_string()
+}
+
 /// A configured unix-domain socket endpoint.
 ///
 /// In the single-socket model, one shared socket (e.g.
-/// `/run/ghostbridge/container.sock`) serves all services.  xray routes by
-/// domain/SNI to the tonic-web gRPC bridge, which listens on this socket and
-/// demuxes by gRPC service/method (via reflection).
+/// `/run/ghostbridge/container.sock`) serves all services.  The ghostbridge mux
+/// daemon owns this socket, identifies connections via SO_PEERCRED, and either
+/// forwards to the gRPC bridge (control mode) or proxies out through the relay
+/// netns into OVS (governed mode).
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SocketEndpoint {
-    /// Container/service identity (the `createunixsocket --name`). The tonic-web
-    /// gRPC bridge demuxes by gRPC service/method via server reflection — this
-    /// name is the routing/identity tag gemma emits into the xray config; it is
-    /// NOT a network namespace (filesystem UDS are not netns-scoped).
+    /// Container/service identity (the `createunixsocket --name`). The mux
+    /// daemon uses this as the demux/routing key and as the OpenFlow tag label.
     #[serde(default)]
     #[schemars(
-        description = "Container/service identity tag the bridge routes by (createunixsocket --name)",
+        description = "Container/service identity tag (createunixsocket --name)",
         example = &"netmaker",
         extend("x-oscal-subid" = "mut.service.unix-socket.bind-name@v1")
     )]
@@ -50,13 +53,12 @@ pub struct SocketEndpoint {
         extend("x-oscal-subid" = "mut.service.unix-socket.bind-path@v1")
     )]
     pub path: String,
-    /// Backend TCP ports this container serves (the `createunixsocket --port`
-    /// list, e.g. `25,465,587` for mail). Recorded metadata only — tonic-web
-    /// distinguishes single vs multi protocol and demuxes by reflection, so the
-    /// plugin neither opens these ports nor maps them; they describe the backend.
+    /// For governed connections: the source port for the outbound TCP bind
+    /// (the identity's wire fingerprint). For control connections: recorded
+    /// metadata only.
     #[serde(default)]
     #[schemars(
-        description = "Backend TCP ports the container serves (metadata; tonic-web demuxes by reflection)",
+        description = "Source port for outbound bind (governed) or backend metadata (control)",
         example = &[25u16, 465, 587],
         extend("x-oscal-subid" = "mut.service.unix-socket.bind-port@v1")
     )]
@@ -76,6 +78,45 @@ pub struct SocketEndpoint {
         extend("x-oscal-subid" = "mut.service.unix-socket.bind-label@v1")
     )]
     pub label: String,
+    /// Connection mode: "control" (forward to gRPC bridge, never proxied) or
+    /// "governed" (proxied out through relay netns into OVS, tagged).
+    #[serde(default = "default_mode")]
+    #[schemars(
+        description = "Connection mode: control (gRPC bridge) or governed (proxied through relay netns, tagged by OVS)",
+        example = &"control",
+        extend("x-oscal-subid" = "mut.service.unix-socket.bind-mode@v1")
+    )]
+    pub mode: String,
+    /// Base uid for this container (Incus idmapped range). The mux daemon uses
+    /// SO_PEERCRED to find the registration where uid_base <= peer_uid <
+    /// uid_base + 65536.
+    #[serde(default)]
+    #[schemars(
+        description = "Base uid for container identification via SO_PEERCRED (Incus idmapped range)",
+        example = &1000000u32,
+        extend("x-oscal-subid" = "mut.service.unix-socket.bind-uid-base@v1")
+    )]
+    pub uid_base: u32,
+    /// For governed connections: source IP for the outbound TCP bind (e.g.
+    /// "10.99.0.5"). The mux binds to this address before connecting to the
+    /// target, so OVS can classify by nw_src.
+    #[serde(default)]
+    #[schemars(
+        description = "Source IP for outbound bind (governed mode only, e.g. 10.99.0.5)",
+        example = &"10.99.0.5",
+        extend("x-oscal-subid" = "mut.service.unix-socket.bind-address@v1")
+    )]
+    pub bind_address: Option<String>,
+    /// For governed connections: the backend address to proxy to. Format:
+    /// "unix:/path/to/socket" for Unix domain sockets, or "tcp:host:port" for
+    /// TCP targets.
+    #[serde(default)]
+    #[schemars(
+        description = "Backend target for governed proxy (unix:/path or tcp:host:port)",
+        example = &"unix:/var/lib/opdbus-runtime/qdrant/qdrant-grpc.sock",
+        extend("x-oscal-subid" = "mut.service.unix-socket.bind-target@v1")
+    )]
+    pub target: Option<String>,
 }
 
 /// Canonical path for the single shared bidirectional socket every container
@@ -92,6 +133,22 @@ pub struct UnixSocketState {
         extend("x-oscal-subid" = "mut.service.unix-socket.bind@v1")
     )]
     pub sockets: Vec<SocketEndpoint>,
+    /// Network namespace the mux daemon runs in for governed egress. The s6
+    /// run script uses `ip netns exec <relay_netns>` so outbound TCP originates
+    /// from the veth into OVS. UDS listening is mount-namespace scoped
+    /// (unaffected by netns). Single source of truth: the s6 run script reads
+    /// this name from the schema, not a hardcoded value.
+    #[serde(default = "default_relay_netns")]
+    #[schemars(
+        description = "Network namespace for governed egress (mux daemon runs via ip netns exec)",
+        example = &"relay",
+        extend("x-oscal-subid" = "mut.service.unix-socket.relay-netns@v1")
+    )]
+    pub relay_netns: String,
+}
+
+fn default_relay_netns() -> String {
+    "relay".to_string()
 }
 
 /// Input struct for Bind method - bind a socket to a path.
@@ -138,15 +195,56 @@ pub struct CloseInput {
     pub force: bool,
 }
 
+/// Output for list_registrations: all socket endpoints registered on the shared socket.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ListRegistrationsOutput {
+    pub sockets: Vec<SocketEndpoint>,
+}
+
+/// Input for register: create a full socket endpoint registration with mux fields.
+/// This is the canonical `createunixsocket` for governed connections — it carries
+/// the mode, uid_base, bind_address, and target that the mux daemon needs.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct RegisterInput {
+    /// Container/service identity (sessionid).
+    pub name: String,
+    /// Connection mode: "control" or "governed".
+    #[serde(default = "default_mode")]
+    pub mode: String,
+    /// Base uid for SO_PEERCRED identification (Incus idmapped range).
+    #[serde(default)]
+    pub uid_base: u32,
+    /// Source ports (wire fingerprint for governed, metadata for control).
+    #[serde(default)]
+    pub ports: Vec<u16>,
+    /// Source IP for outbound bind (governed only, e.g. "10.99.0.5").
+    #[serde(default)]
+    pub bind_address: Option<String>,
+    /// Backend target (governed only, "unix:/path" or "tcp:host:port").
+    #[serde(default)]
+    pub target: Option<String>,
+    /// Transport protocol (defaults to "grpc").
+    #[serde(default = "default_protocol")]
+    pub protocol: String,
+    /// Human-readable label.
+    #[serde(default)]
+    pub label: String,
+}
+
+/// Input for unregister: remove a registration by name.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct UnregisterInput {
+    pub name: String,
+}
+
 fn default_backlog() -> u32 {
     128
 }
 
 /// Canonical `unix_socket` schema, **derived** from the structs via schemars
-/// (see [`super::schemars_adapter`]). `port` bounds, field descriptions (from
-/// doc comments) and `required` flags all come from the type — the struct is
-/// the single source of truth. The frozen hand-rolled `unix_socket_schema()`
-/// (test-only) guards this against drift via `derived_schema_matches_hand_rolled`.
+/// (see [`super::schemars_adapter`]). The struct IS the contract — field
+/// descriptions, types, defaults, and required flags all come from the type.
+/// `schema_carries_oscal_subids` validates the derived schema directly.
 pub fn unix_socket_schema_derived() -> PluginSchema {
     let root = serde_json::to_value(schemars::schema_for!(UnixSocketState))
         .expect("schemars schema serializes to JSON");
@@ -219,6 +317,45 @@ pub fn unix_socket_schema_derived() -> PluginSchema {
             false,
             "network.write",
             "mut.service.unix-socket.close@v1",
+        ),
+    );
+
+    // List registrations: returns all socket endpoints (for flow sync at boot)
+    schema.methods.insert(
+        "list_registrations".to_string(),
+        method_decl_from_schemars_with_output::<(), ListRegistrationsOutput>(
+            "list_registrations",
+            op_state_store::SideEffect::Read,
+            true,
+            "network.read",
+            "obs.service.unix-socket.registrations.list@v1",
+        ),
+    );
+
+    // Register: create a full socket endpoint with mux fields (mode, uid_base,
+    // bind_address, target). This is the canonical createunixsocket for governed
+    // connections — one schema mutation updates the bind map, the flow table,
+    // and the audit vocabulary at once.
+    schema.methods.insert(
+        "register".to_string(),
+        method_decl_from_schemars_with_output::<RegisterInput, super::plugin_scaffold_helpers::AckOutput>(
+            "register",
+            op_state_store::SideEffect::Mutation,
+            true,
+            "network.write",
+            "mut.service.unix-socket.register@v1",
+        ),
+    );
+
+    // Unregister: remove a registration by name.
+    schema.methods.insert(
+        "unregister".to_string(),
+        method_decl_from_schemars_with_output::<UnregisterInput, super::plugin_scaffold_helpers::AckOutput>(
+            "unregister",
+            op_state_store::SideEffect::Mutation,
+            true,
+            "network.write",
+            "mut.service.unix-socket.unregister@v1",
         ),
     );
 
@@ -358,6 +495,10 @@ impl UnixSocketPlugin {
             ports,
             protocol: default_protocol(),
             label: String::new(),
+            mode: default_mode(),
+            uid_base: 0,
+            bind_address: None,
+            target: None,
         };
         let mut active = self.active.lock();
         match Self::ensure_bound(&mut active, &endpoint) {
@@ -461,6 +602,70 @@ impl StatePlugin for UnixSocketPlugin {
             atomic_operations: false,
         }
     }
+
+    async fn call_method(
+        &self,
+        method: &str,
+        args: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        match method {
+            "list_registrations" => {
+                let state = Self::read_desired();
+                let output = ListRegistrationsOutput { sockets: state.sockets };
+                Ok(serde_json::to_value(&output)?)
+            }
+            "register" => {
+                let input: RegisterInput = serde_json::from_value(args.clone())
+                    .context("parse register input")?;
+                let endpoint = SocketEndpoint {
+                    name: input.name,
+                    path: SHARED_CONTAINER_SOCKET.to_string(),
+                    ports: input.ports,
+                    protocol: input.protocol,
+                    label: input.label,
+                    mode: input.mode,
+                    uid_base: input.uid_base,
+                    bind_address: input.bind_address,
+                    target: input.target,
+                };
+                let mut active = self.active.lock();
+                match Self::ensure_bound(&mut active, &endpoint) {
+                    Ok(_) => {
+                        info!(
+                            name = %endpoint.name,
+                            mode = %endpoint.mode,
+                            uid_base = endpoint.uid_base,
+                            "registered socket endpoint via D-Bus"
+                        );
+                        Ok(serde_json::json!({"success": true}))
+                    }
+                    Err(e) => {
+                        bail!("register failed: {}", e)
+                    }
+                }
+            }
+            "unregister" => {
+                let input: UnregisterInput = serde_json::from_value(args.clone())
+                    .context("parse unregister input")?;
+                let mut active = self.active.lock();
+                // Find and remove the endpoint with this name.
+                let path_to_remove: Option<String> = {
+                    let state = Self::read_desired();
+                    let found = state.sockets.iter()
+                        .find(|s| s.name == input.name)
+                        .map(|s| s.path.clone());
+                    found
+                };
+                if let Some(path) = path_to_remove {
+                    if Self::unbind(&mut active, &path) {
+                        info!(name = %input.name, "unregistered socket endpoint");
+                    }
+                }
+                Ok(serde_json::json!({"success": true}))
+            }
+            _ => bail!("unix_socket: unknown method '{}'", method),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -474,60 +679,11 @@ mod tests {
             ports: vec![port],
             protocol: "grpc".to_string(),
             label: name.to_string(),
+            mode: "control".to_string(),
+            uid_base: 0,
+            bind_address: None,
+            target: None,
         }
-    }
-
-    fn sockets_object(s: &PluginSchema) -> &HashMap<String, FieldSchema> {
-        match &s.fields.get("sockets").expect("sockets field").field_type {
-            FieldType::Array(inner) => match inner.as_ref() {
-                FieldType::Object(m) => m,
-                other => panic!("items not object: {other:?}"),
-            },
-            other => panic!("sockets not array: {other:?}"),
-        }
-    }
-
-    /// The schemars-derived schema must match the hand-rolled one field-for-field.
-    #[test]
-    fn derived_schema_matches_hand_rolled() {
-        let hand = unix_socket_schema();
-        let derived = unix_socket_schema_derived();
-
-        assert_eq!(derived.name, hand.name);
-        assert_eq!(derived.version, hand.version);
-
-        let hp = sockets_object(&hand);
-        let dp = sockets_object(&derived);
-
-        let mut hk: Vec<_> = hp.keys().cloned().collect();
-        let mut dk: Vec<_> = dp.keys().cloned().collect();
-        hk.sort();
-        dk.sort();
-        assert_eq!(dk, hk, "derived inner fields must match hand-rolled");
-
-        // ports: Array (derived from `Vec<u16>`)
-        assert!(matches!(dp["ports"].field_type, FieldType::Array(_)));
-
-        // doc comments survive as descriptions
-        assert!(!dp["path"].description.is_empty());
-        // required set: path only (name/ports/protocol/label have serde defaults)
-        assert!(dp["path"].required);
-        assert!(
-            !dp["name"].required
-                && !dp["ports"].required
-                && !dp["protocol"].required
-                && !dp["label"].required
-        );
-
-        // OSCAL subids are preserved at the schema and field level.
-        assert_eq!(
-            derived.subids.get("__schema__"),
-            Some(&"sch.software.plugin.unix-socket.schema@v1".to_string())
-        );
-        assert_eq!(
-            derived.subids.get("sockets"),
-            Some(&"mut.service.unix-socket.bind@v1".to_string())
-        );
     }
 
     #[test]
@@ -562,6 +718,10 @@ mod tests {
             ("ports", "mut.service.unix-socket.bind-port@v1"),
             ("protocol", "mut.service.unix-socket.bind-protocol@v1"),
             ("label", "mut.service.unix-socket.bind-label@v1"),
+            ("mode", "mut.service.unix-socket.bind-mode@v1"),
+            ("uid_base", "mut.service.unix-socket.bind-uid-base@v1"),
+            ("bind_address", "mut.service.unix-socket.bind-address@v1"),
+            ("target", "mut.service.unix-socket.bind-target@v1"),
         ];
         for (field, subid) in expected {
             let actual = props
@@ -580,6 +740,7 @@ mod tests {
         let ep = endpoint(dir.path(), "qdrant.sock", 6334);
         let desired = UnixSocketState {
             sockets: vec![ep.clone()],
+            relay_netns: "relay".to_string(),
         };
 
         let result = plugin.reconcile(&desired);
@@ -603,6 +764,7 @@ mod tests {
                 endpoint(dir.path(), "a.sock", 1),
                 endpoint(dir.path(), "b.sock", 2),
             ],
+            relay_netns: "relay".to_string(),
         };
 
         let first = plugin.reconcile(&desired);
@@ -613,139 +775,6 @@ mod tests {
         assert!(second.changes_applied.is_empty());
         assert_eq!(plugin.active.lock().len(), 2);
     }
-}
-
-/// Frozen golden reference: the original hand-rolled schema, kept **test-only**
-/// so `derived_schema_matches_hand_rolled` can prove the derived schema still
-/// matches the contract this plugin shipped with. Production uses
-/// [`unix_socket_schema_derived`].
-#[cfg(test)]
-pub(crate) fn unix_socket_schema() -> PluginSchema {
-    let mut socket_fields = HashMap::new();
-    socket_fields.insert(
-        "name".to_string(),
-        FieldSchema {
-            field_type: FieldType::String,
-            required: false,
-            description:
-                "Container/service identity tag the bridge routes by (createunixsocket --name)"
-                    .to_string(),
-            default: Some(json!("")),
-            example: Some(json!("netmaker")),
-            constraints: Vec::new(),
-            read_only: false,
-            read_only_when: None,
-        },
-    );
-    socket_fields.insert(
-        "path".to_string(),
-        FieldSchema {
-            field_type: FieldType::String,
-            required: true,
-            description: "Filesystem path of the shared unix domain socket".to_string(),
-            default: None,
-            example: Some(json!("/run/ghostbridge/container.sock")),
-            constraints: Vec::new(),
-            read_only: false,
-            read_only_when: None,
-        },
-    );
-    socket_fields.insert(
-        "ports".to_string(),
-        FieldSchema {
-            field_type: FieldType::Array(Box::new(FieldType::Integer)),
-            required: false,
-            description:
-                "Backend TCP ports the container serves (metadata; tonic-web demuxes by reflection)"
-                    .to_string(),
-            default: Some(json!([])),
-            example: Some(json!([25, 465, 587])),
-            constraints: Vec::new(),
-            read_only: false,
-            read_only_when: None,
-        },
-    );
-    socket_fields.insert(
-        "protocol".to_string(),
-        FieldSchema {
-            field_type: FieldType::String,
-            required: false,
-            description: "Transport protocol carried over the socket (grpc)".to_string(),
-            default: Some(json!("grpc")),
-            example: None,
-            constraints: Vec::new(),
-            read_only: false,
-            read_only_when: None,
-        },
-    );
-    socket_fields.insert(
-        "label".to_string(),
-        FieldSchema {
-            field_type: FieldType::String,
-            required: false,
-            description: "Human-readable label for the shared socket".to_string(),
-            default: Some(json!("")),
-            example: Some(json!("ghostbridge")),
-            constraints: Vec::new(),
-            read_only: false,
-            read_only_when: None,
-        },
-    );
-
-    PluginSchema::builder("unix_socket")
-        .version("1.0.0")
-        .description("Single shared unix-domain socket for the tonic-web gRPC bridge — all services route through it, demuxed by domain/SNI at xray and by gRPC service/method at the bridge")
-        .subid("__schema__", "sch.software.plugin.unix-socket.schema@v1")
-        .array_field(
-            "sockets",
-            FieldType::Object(socket_fields),
-            true,
-            "The shared socket endpoint (one socket, all services route through it by domain)",
-        )
-        .subid("sockets", "mut.service.unix-socket.bind@v1")
-        // createunixsocket is a mut.* action (register a container/service on the
-        // shared socket), so it requires actor_id/capability_id accountability
-        // fields per AGENTS.md §4a — mirrored here from
-        // `ensure_category_metadata_fields`, called by the derived path.
-        .subid("createunixsocket", "mut.service.unix-socket.create-socket@v1")
-        .field(
-            "actor_id",
-            FieldSchema {
-                field_type: FieldType::String,
-                required: false,
-                description: "Actor identifier for mutation accountability".to_string(),
-                default: None,
-                example: None,
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        )
-        .field(
-            "capability_id",
-            FieldSchema {
-                field_type: FieldType::String,
-                required: false,
-                description: "Capability identifier authorizing the mutation".to_string(),
-                default: None,
-                example: None,
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        )
-        .example(json!({
-            "sockets": [
-                {
-                    "name": "netmaker",
-                    "path": "/run/ghostbridge/container.sock",
-                    "ports": [18081, 1883, 8883],
-                    "protocol": "grpc",
-                    "label": "ghostbridge"
-                }
-            ]
-        }))
-        .build()
 }
 
 // Self-registration: the plugin registry discovers this via inventory

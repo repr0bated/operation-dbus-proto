@@ -19,6 +19,15 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use super::incus_device::{Device, NamedDevice};
 
+// Schema-generated reference types from the real upstream Incus REST API
+// spec (schemas/incus/rest-api.yaml, github.com/lxc/incus doc/rest-api.yaml)
+// via op-schema-codegen. Available in the sealed blob for future use;
+// IncusInstance/CreateInstanceInput/etc. below stay hand-authored and wired
+// to their own D-Bus method schemas -- this is not a replacement for them.
+#[path = "incus_generated.rs"]
+mod incus_generated;
+pub use incus_generated::*;
+
 /// Top-level state representing all Incus instances on the system.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct IncusState {

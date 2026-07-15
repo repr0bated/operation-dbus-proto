@@ -7,7 +7,7 @@ flowchart TB
 
     subgraph oracle["Oracle decoy VPS 129.153.134.63"]
         wg0["wg0 hub :51821/udp  10.0.0.1/24"]:::ok
-        dnat["iptables DNAT tcp 443,8443,3003,18789,<br/>50051,50052,mail -> 10.0.0.2"]:::ok
+        dnat["iptables DNAT tcp 443,8443,3003,8090,<br/>50051,50052,mail -> 10.0.0.2"]:::ok
     end
 
     subgraph host["3tched host (Artix s6)  eth0 148.113.204.83"]

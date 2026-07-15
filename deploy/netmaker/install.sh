@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INCUS_COMPOSE="${HOME}/go/bin/incus-compose"
 MCP_ENDPOINT="${MCP_ENDPOINT:-http://100.90.37.254:3003/mcp}"
-BRIDGE_GRPC_ADDR="${BRIDGE_GRPC_ADDR:-127.0.0.1:18789}"
+BRIDGE_GRPC_ADDR="${BRIDGE_GRPC_ADDR:-127.0.0.1:8090}"
 
 register_socket_via_grpc() {
   local name="$1"
