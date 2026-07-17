@@ -16,9 +16,18 @@
 #      consumer (producer-for / consumer-for / pipeline-name), logging to
 #      /var/log/op-dbus/<service>/ as the s6log user.
 #   5. Brings the network up via s6: ovsdb-server -> ovs-vswitchd (netdev
-#      datapath seeded through rovs OVSDB by op-ovsbr0-setup --seed-only)
-#      -> ovsbr0 addressing -> OpenFlow controller -> WireGuard identity
-#      tunnel (wg0, 10.0.0.2 <-> 10.0.0.1, Table=off + manual routes).
+#      datapath seeded through rovs OVSDB by op-ovsbr0-setup --seed-only;
+#      bridge creation and eth0 enslavement happen in ONE OVSDB transact or
+#      the uplink capture does not start correctly) -> ovsbr0 addressing +
+#      uplink IP migration -> OpenFlow controller.  NO WireGuard and NO
+#      AF_XDP on the host: the netmaker mesh is self-contained in the
+#      netmaker container (its bridge iface carries 10.0.0.2 + 10.200.0.2;
+#      WG terminates at the decoy server; 10.0.0.2 egress forwards to host
+#      xray, which injects the identity header — traffic leaves as gRPC).
+#   6. Supervises Incus containers with s6 (+ log pipelines) via the
+#      generated 3tched-incus-svcgen helper — never Incus autostart; the
+#      netmaker container joins the bridge LAST, after its internal systemd
+#      has settled.
 #
 # The deploy/ tree is deprecated; this script derives everything from the
 # crates/ workspace (op-core config constants, op-network binaries,
@@ -33,9 +42,6 @@
 #   --skip-desktop       Skip Hyprland/Wayland desktop installation
 #   --skip-build         Skip cargo/npm builds (system + services only)
 #   --skip-start         Install and enable services but do not start them
-#   --with-uplink        Also ENABLE the ovsbr0-uplink AF_XDP cutover oneshot
-#                        (enslaves the physical NIC into ovsbr0 — configure
-#                        /etc/op-dbus/network.conf first; off by default)
 #   --with-headless-gui  Install weston + wayvnc headless compositor services
 #   --with-dev-ui        Also npm-build the primary UI dev tree in crates/
 #   --help               Show this help
@@ -60,7 +66,6 @@ ZBUS_GIT_URL="${ZBUS_GIT_URL:-https://github.com/dbus2/zbus.git}"
 SKIP_DESKTOP=0
 SKIP_BUILD=0
 SKIP_START=0
-WITH_UPLINK=0
 WITH_HEADLESS_GUI=0
 WITH_DEV_UI=0
 
@@ -103,7 +108,6 @@ while [[ $# -gt 0 ]]; do
         --skip-desktop)      SKIP_DESKTOP=1; shift ;;
         --skip-build)        SKIP_BUILD=1; shift ;;
         --skip-start)        SKIP_START=1; shift ;;
-        --with-uplink)       WITH_UPLINK=1; shift ;;
         --with-headless-gui) WITH_HEADLESS_GUI=1; shift ;;
         --with-dev-ui)       WITH_DEV_UI=1; shift ;;
         --help|-h)           usage ;;
@@ -187,7 +191,11 @@ install_packages() {
         dbus dbus-s6
 
     log "Installing network stack packages..."
-    pac openvswitch wireguard-tools iproute2 iptables-nft xdp-tools \
+    # No wireguard-tools and no AF_XDP tooling: there is NO WireGuard on this
+    # host (the netmaker mesh is self-contained inside the netmaker container).
+    # The uplink NIC is enslaved into ovsbr0 as a plain OVS port — atomically
+    # with bridge creation (op-ovsbr0-setup UPLINK env, one OVSDB transact).
+    pac openvswitch iproute2 iptables-nft \
         incus btrfs-progs xray
 
     if [[ $SKIP_DESKTOP -eq 0 ]]; then
@@ -233,7 +241,7 @@ setup_users() {
 
     # Dedicated log-writer for every s6-log consumer
     if ! id s6log >/dev/null 2>&1; then
-        useradd --system --no-create-home --shell /usr/bin/nologin s6log
+        useradd --system --user-group --no-create-home --shell /usr/bin/nologin s6log
     fi
 
     install -d -m 0755 /etc/op-dbus
@@ -336,7 +344,7 @@ build_project() {
     if [[ -d ${REPO_DIR}/crates/op-web/ui ]]; then
         ( cd "${REPO_DIR}/crates/op-web/ui" &&
           build_as npm install --no-audit --no-fund &&
-          build_as npx vite build ) || warn "op-web UI build failed — release build of op-web will panic without ui/dist"
+          build_as npx vite build ) || die "op-web UI build failed — the release build of op-web panics without ui/dist"
     fi
 
     if [[ $WITH_DEV_UI -eq 1 ]]; then
@@ -371,7 +379,7 @@ build_project() {
         op-mcp-compact op-mcp-server op-mcp-agents
         s6d op-s6-systemctl
         op-xray-daemon
-        op-of-controller op-ovsbr0-setup op-ovsbr0-afxdp op-xdp-wg
+        op-of-controller op-ovsbr0-setup
         opblob
         op-dbus-mirror ovs-dbus-init
     )
@@ -444,49 +452,26 @@ SHARED_MAC=fa:16:3e:f1:71:d2
 OVSDB_SOCKET=/run/openvswitch/db.sock
 VSWITCHD_SVC=/run/service/ovs-vswitchd
 
+# Physical NIC enslaved into the bridge.  Bridge creation and enslavement
+# happen in ONE OVSDB transact (op-ovsbr0-setup UPLINK env) — done as two
+# steps the uplink capture does not start correctly.  The NIC's IPv4 and
+# default route are migrated onto the bridge by ovsbr0-addr.  Set empty to
+# skip enslavement (e.g. when the NIC is not named eth0 yet).
+UPLINK=eth0
+
 # NAT 10.200.0.0/24 out through the default route (1 = enable)
 NAT_ENABLE=1
 
-# WireGuard identity tunnel (hypervisor <-> VPS): wg0, 10.0.0.2 <-> 10.0.0.1
-WG_IFACE=wg0
-WG_NETWORK=10.0.0.0/24
-WG_PEER_IP=10.0.0.1
-
-# AF_XDP uplink cutover (ovsbr0-uplink oneshot; only with --with-uplink).
-# MGMT_ADDR/GW MUST be set to this host's public address before enabling.
-UPLINK=eth0
-MGMT_ADDR=
-GW=
+# Netmaker network, routed over the bridge — NO WireGuard on this host.
+# The netmaker container is self-contained: its bridge interface carries both
+# 10.0.0.2 and 10.200.0.2, the WG protocol terminates at the decoy server,
+# and 10.0.0.2 egress forwards to host xray for identity header injection
+# (traffic leaves xray as gRPC with the header).
+NETMAKER_NET=10.0.0.0/24
 EOF
         chmod 0640 "$NET_CONF"
     else
         log "Keeping existing $NET_CONF"
-    fi
-
-    # WireGuard identity tunnel config template (keys generated, peer left
-    # for the operator — the tunnel idles until the peer is configured).
-    if [[ ! -f /etc/wireguard/wg0.conf ]] && have wg; then
-        log "Generating /etc/wireguard/wg0.conf (peer must be filled in)..."
-        install -d -m 0700 /etc/wireguard
-        local wg_priv wg_pub
-        wg_priv="$(wg genkey)"
-        wg_pub="$(printf '%s' "$wg_priv" | wg pubkey)"
-        cat > /etc/wireguard/wg0.conf <<EOF
-[Interface]
-# 3tched hypervisor identity tunnel: 10.0.0.2 <-> 10.0.0.1
-# Public key (register with the VPS peer): ${wg_pub}
-PrivateKey = ${wg_priv}
-Address = 10.0.0.2/24
-Table = off
-
-[Peer]
-PublicKey = REPLACE_WITH_PEER_PUBLIC_KEY
-Endpoint = REPLACE_WITH_ENDPOINT:51820
-AllowedIPs = 10.0.0.0/24
-PersistentKeepalive = 25
-EOF
-        chmod 0600 /etc/wireguard/wg0.conf
-        echo "$wg_pub" > /etc/wireguard/wg0.pub
     fi
 
     # sysctl + modules
@@ -640,6 +625,9 @@ set -a; [ -r ${ENV_FILE} ] && . ${ENV_FILE}; set +a
 SOCKET_PATH="\${DBUS_SESSION_BUS_ADDRESS#unix:path=}"
 install -d -m 0755 "\$(dirname "\$SOCKET_PATH")"
 rm -f "\$SOCKET_PATH"
+# the bus runs as root; loosen the socket so the operator's tools (zbusctl)
+# can connect — access control is the identity layer, not filesystem bits
+umask 0111
 if command -v busd >/dev/null 2>&1; then
     exec busd -a "\$DBUS_SESSION_BUS_ADDRESS"
 fi
@@ -682,7 +670,7 @@ EOF
 set -eu
 set -a; [ -r ${NET_CONF} ] && . ${NET_CONF}; set +a
 BRIDGE="\${BRIDGE:-ovsbr0}"
-export BRIDGE VETH_HOST FAIL_MODE SHARED_MAC OVSDB_SOCKET VSWITCHD_SVC
+export BRIDGE VETH_HOST UPLINK FAIL_MODE SHARED_MAC OVSDB_SOCKET VSWITCHD_SVC
 if [ -x ${BIN_DIR}/op-ovsbr0-setup ]; then
     ${BIN_DIR}/op-ovsbr0-setup || echo "op-ovsbr0-setup failed (continuing)"
 fi
@@ -694,37 +682,31 @@ until ip link show "\$BRIDGE" >/dev/null 2>&1; do
 done
 ip addr replace "\${BRIDGE_ADDR:-10.200.0.1/24}" dev "\$BRIDGE"
 ip link set "\$BRIDGE" up
+# netmaker net rides the bridge (container iface holds 10.0.0.2 + 10.200.0.2);
+# this route lets 10.0.0.2 egress reach host xray for identity header injection
+ip route replace "\${NETMAKER_NET:-10.0.0.0/24}" dev "\$BRIDGE" 2>/dev/null || true
+# uplink is enslaved into the bridge (same transact as bridge creation, via
+# op-ovsbr0-setup UPLINK) — migrate its IPv4 + default route onto the bridge
+if [ -n "\${UPLINK:-}" ] && ip link show "\$UPLINK" >/dev/null 2>&1; then
+    UPLINK_ADDR="\$(ip -4 -o addr show dev "\$UPLINK" scope global | awk '{print \$4; exit}')"
+    if [ -n "\$UPLINK_ADDR" ]; then
+        UPLINK_GW="\$(ip -4 route show default dev "\$UPLINK" | awk '{print \$3; exit}')"
+        echo "migrating \$UPLINK_ADDR (gw \${UPLINK_GW:-none}) from \$UPLINK to \$BRIDGE"
+        ip addr replace "\$UPLINK_ADDR" dev "\$BRIDGE"
+        ip addr flush dev "\$UPLINK" scope global
+        [ -n "\$UPLINK_GW" ] && ip route replace default via "\$UPLINK_GW" dev "\$BRIDGE"
+    fi
+    ip link set "\$UPLINK" up
+fi
 sysctl -qw net.ipv4.ip_forward=1 || true
 if [ "\${NAT_ENABLE:-1}" = "1" ] && command -v iptables >/dev/null 2>&1; then
-    iptables -t nat -C POSTROUTING -s "\${BRIDGE_NET:-10.200.0.0/24}" ! -o "\$BRIDGE" -j MASQUERADE 2>/dev/null || \
-    iptables -t nat -A POSTROUTING -s "\${BRIDGE_NET:-10.200.0.0/24}" ! -o "\$BRIDGE" -j MASQUERADE
+    iptables -t nat -C POSTROUTING -s "\${BRIDGE_NET:-10.200.0.0/24}" ! -d "\${BRIDGE_NET:-10.200.0.0/24}" -j MASQUERADE 2>/dev/null || \
+    iptables -t nat -A POSTROUTING -s "\${BRIDGE_NET:-10.200.0.0/24}" ! -d "\${BRIDGE_NET:-10.200.0.0/24}" -j MASQUERADE
 fi
 echo "\$BRIDGE ready at \${BRIDGE_ADDR:-10.200.0.1/24}"
 EOF
     chmod 0755 "${LIBEXEC_DIR}/ovsbr0-addr-up"
     mk_oneshot ovsbr0-addr "ovs-vswitchd" "${LIBEXEC_DIR}/ovsbr0-addr-up"
-
-    # ---- wg-opdbus: hypervisor WireGuard identity tunnel -------------------
-    # Table=off in wg0.conf, so routes are added manually here (the wg_opdbus
-    # plugin contract: identity role bound to the wireguard-described iface).
-    mk_longrun wg-opdbus "opdbus-rundirs" <<EOF
-#!/bin/sh
-exec 2>&1
-set -a; [ -r ${NET_CONF} ] && . ${NET_CONF}; set +a
-IFACE="\${WG_IFACE:-wg0}"
-CONF="/etc/wireguard/\${IFACE}.conf"
-if [ ! -f "\$CONF" ] || grep -q REPLACE_WITH_PEER_PUBLIC_KEY "\$CONF"; then
-    echo "wg-opdbus: \$CONF absent or peer unconfigured — idling until configured"
-    exec sleep infinity
-fi
-if ! wg show "\$IFACE" >/dev/null 2>&1; then
-    wg-quick up "\$IFACE"
-fi
-ip route replace "\${WG_NETWORK:-10.0.0.0/24}" dev "\$IFACE" 2>/dev/null || true
-ip route replace "\${WG_PEER_IP:-10.0.0.1}/32" dev "\$IFACE" 2>/dev/null || true
-echo "wg-opdbus: \$IFACE up"
-exec sleep infinity
-EOF
 
     # ---- op-of-controller: OpenFlow 1.3 controller for ovsbr0 --------------
     mk_longrun op-of-controller "ovsbr0-addr" <<EOF
@@ -738,36 +720,6 @@ export OF_CONTROLLER_LISTEN="\${OF_CONTROLLER_LISTEN:-10.200.0.1:6653}"
 export RUST_LOG="\${RUST_LOG:-info}"
 exec ${BIN_DIR}/op-of-controller
 EOF
-
-    # ---- ovsbr0-uplink (oneshot, NOT enabled unless --with-uplink) ---------
-    # AF_XDP cutover: enslaves the physical NIC into ovsbr0 and migrates the
-    # management IP onto the bridge internal interface.  Misconfiguration
-    # cuts host connectivity, so this stays opt-in.
-    cat > "${LIBEXEC_DIR}/ovsbr0-uplink-up" <<EOF
-#!/bin/sh
-set -eu
-set -a; [ -r ${NET_CONF} ] && . ${NET_CONF}; set +a
-[ -n "\${MGMT_ADDR:-}" ] && [ -n "\${GW:-}" ] || {
-    echo "ovsbr0-uplink: MGMT_ADDR/GW not set in ${NET_CONF} — refusing cutover"
-    exit 1
-}
-export BR="\${BRIDGE:-ovsbr0}" UPLINK MGMT_ADDR GW OVSDB_SOCKET
-exec ${BIN_DIR}/op-ovsbr0-afxdp up
-EOF
-    cat > "${LIBEXEC_DIR}/ovsbr0-uplink-down" <<EOF
-#!/bin/sh
-set -a; [ -r ${NET_CONF} ] && . ${NET_CONF}; set +a
-export BR="\${BRIDGE:-ovsbr0}" UPLINK MGMT_ADDR GW OVSDB_SOCKET
-exec ${BIN_DIR}/op-ovsbr0-afxdp down
-EOF
-    chmod 0755 "${LIBEXEC_DIR}/ovsbr0-uplink-up" "${LIBEXEC_DIR}/ovsbr0-uplink-down"
-    # registered in the bundle only when --with-uplink is given (see enable step)
-    local dir="${S6_SV_DIR}/ovsbr0-uplink"
-    install -d "$dir" "${dir}/dependencies.d"
-    echo oneshot > "${dir}/type"
-    echo "${LIBEXEC_DIR}/ovsbr0-uplink-up" > "${dir}/up"
-    echo "${LIBEXEC_DIR}/ovsbr0-uplink-down" > "${dir}/down"
-    touch "${dir}/dependencies.d/ovsbr0-addr"
 
     # ---- incusd: container runtime (all container I/O is UDS) --------------
     if have incusd; then
@@ -991,7 +943,7 @@ exec s6-setuidgid "\$OP_GUI_USER" env \
     HOME="/home/\${OP_GUI_USER}" \
     XDG_RUNTIME_DIR="\$runtime_dir" \
     WAYLAND_DISPLAY=3tched-wayland \
-    weston --backend=headless-backend.so --socket=3tched-wayland --idle-time=0
+    weston --backend=headless --socket=3tched-wayland --idle-time=0
 EOF
 
     mk_longrun wayvnc "weston-headless" <<EOF
@@ -1011,6 +963,152 @@ exec s6-setuidgid "\$OP_GUI_USER" env \
     wayvnc 127.0.0.1 5901
 EOF
     ok "Headless GUI services configured"
+}
+
+write_incus_svcgen() {
+    # Containers come up under s6 supervision with log pipelines — NEVER via
+    # Incus autostart.  This helper generates an incus-ct-<name> longrun (+
+    # s6-log consumer) for a container; the installer runs it for every
+    # existing container and the operator runs it for future ones.
+    log "Installing 3tched-incus-svcgen (s6-supervised Incus containers)..."
+    cat > "${BIN_DIR}/3tched-incus-svcgen" <<'SVCGEN'
+#!/bin/sh
+# 3tched-incus-svcgen — generate an s6-supervised service (with an s6-log
+# pipeline) for an Incus container.  Containers come up with s6, not Incus
+# autostart, and their console streams into /var/log/op-dbus/.
+#
+# Usage: 3tched-incus-svcgen <container> [--attach-bridge <bridge>] [--no-start]
+#
+# --attach-bridge: join the container to the OVS bridge LAST — after its
+#   internal systemd has settled (used for netmaker: the container is
+#   self-contained; its bridge interface carries 10.0.0.2 + 10.200.0.2 and
+#   its 10.0.0.2 egress forwards to host xray for identity header injection).
+
+set -eu
+
+SV_DIR=/etc/s6/sv
+LOG_ROOT=/var/log/op-dbus
+LOG_DIRECTIVES="n10 s4000000 T"
+
+name=""
+bridge=""
+start=1
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --attach-bridge) bridge="$2"; shift 2 ;;
+        --no-start)      start=0; shift ;;
+        -*) echo "unknown option: $1" >&2; exit 2 ;;
+        *)  name="$1"; shift ;;
+    esac
+done
+[ -n "$name" ] || {
+    echo "usage: 3tched-incus-svcgen <container> [--attach-bridge <bridge>] [--no-start]" >&2
+    exit 2
+}
+
+svc="incus-ct-${name}"
+dir="${SV_DIR}/${svc}"
+
+install -d "$dir" "${dir}/dependencies.d"
+echo longrun > "${dir}/type"
+echo "${svc}-log" > "${dir}/producer-for"
+[ -d "${SV_DIR}/incusd" ] && touch "${dir}/dependencies.d/incusd"
+if [ -n "$bridge" ] && [ -d "${SV_DIR}/op-of-controller" ]; then
+    # bridge-attached containers come up after the network is fully up
+    touch "${dir}/dependencies.d/op-of-controller"
+fi
+
+cat > "${dir}/run" <<EOF
+#!/bin/sh
+# s6-supervised Incus container '${name}' — s6 owns the lifecycle, not Incus.
+exec 2>&1
+NAME='${name}'
+ATTACH_BRIDGE='${bridge}'
+i=0
+until incus info >/dev/null 2>&1; do
+    i=\$((i+1)); [ "\$i" -ge 60 ] && { echo "incusd not ready"; exit 1; }
+    sleep 1
+done
+incus config set "\$NAME" boot.autostart=false 2>/dev/null || true
+if ! incus list -f csv -c ns | grep -q "^\${NAME},RUNNING"; then
+    echo "starting container \$NAME"
+    incus start "\$NAME"
+fi
+if [ -n "\$ATTACH_BRIDGE" ]; then
+    if ! incus config device show "\$NAME" 2>/dev/null | grep -q '^eth0:'; then
+        # join the bridge LAST: give systemd inside the container time to settle
+        echo "waiting for systemd inside \$NAME to settle before joining \$ATTACH_BRIDGE..."
+        state="\$(timeout 180 incus exec "\$NAME" -- systemctl is-system-running --wait 2>/dev/null || true)"
+        echo "\$NAME systemd state: \${state:-unknown}"
+        incus config device add "\$NAME" eth0 nic nictype=bridged parent="\$ATTACH_BRIDGE"
+        echo "\$NAME joined \$ATTACH_BRIDGE"
+    fi
+fi
+# hold supervision and stream the container console into the log pipeline;
+# stopping this service stops the container ('script' provides the pty
+# incus console needs).
+script -qefc "incus console \$NAME" /dev/null &
+pid=\$!
+trap 'incus stop "\$NAME" --timeout 30 2>/dev/null || true; kill "\$pid" 2>/dev/null || true' TERM INT
+wait "\$pid"
+EOF
+
+ldir="${SV_DIR}/${svc}-log"
+install -d "$ldir"
+echo longrun > "${ldir}/type"
+echo "$svc" > "${ldir}/consumer-for"
+echo "${svc}-pipeline" > "${ldir}/pipeline-name"
+echo 3 > "${ldir}/notification-fd"
+cat > "${ldir}/run" <<EOF
+#!/bin/execlineb -P
+foreground { install -d -o s6log -g s6log ${LOG_ROOT}/${svc} }
+s6-setuidgid s6log
+exec -c s6-log -d3 -b -- ${LOG_DIRECTIVES} ${LOG_ROOT}/${svc}
+EOF
+chmod 0755 "${dir}/run" "${ldir}/run"
+
+bdir="${SV_DIR}/3tched"
+install -d "${bdir}/contents.d"
+[ -f "${bdir}/type" ] || echo bundle > "${bdir}/type"
+touch "${bdir}/contents.d/${svc}-pipeline"
+
+if command -v s6-db-reload >/dev/null 2>&1; then
+    s6-db-reload
+else
+    echo "warning: s6-db-reload not found — recompile the s6-rc database manually" >&2
+fi
+if [ "$start" = 1 ]; then
+    s6-rc -u change "${svc}-pipeline" || true
+fi
+echo "generated ${svc} (+ log pipeline); logs: ${LOG_ROOT}/${svc}/current"
+SVCGEN
+    chmod 0755 "${BIN_DIR}/3tched-incus-svcgen"
+    ok "3tched-incus-svcgen installed"
+}
+
+generate_container_services() {
+    # s6-supervise every container that already exists (netmaker gets the
+    # settle-then-bridge-attach treatment).  New containers: run
+    # 3tched-incus-svcgen <name> after creating them.
+    have incus || return 0
+    if ! incus info >/dev/null 2>&1; then
+        warn "incusd not reachable — run 3tched-incus-svcgen <name> per container later"
+        return 0
+    fi
+    local bridge cts ct
+    bridge="$(set -a; . "$NET_CONF" 2>/dev/null; set +a; echo "${BRIDGE:-ovsbr0}")"
+    cts="$(incus list -f csv -c n 2>/dev/null || true)"
+    if [[ -z $cts ]]; then
+        log "no Incus containers yet — use 3tched-incus-svcgen <name> after creating them"
+        return 0
+    fi
+    for ct in $cts; do
+        case "$ct" in
+            netmaker*) "${BIN_DIR}/3tched-incus-svcgen" "$ct" --attach-bridge "$bridge" ;;
+            *)         "${BIN_DIR}/3tched-incus-svcgen" "$ct" ;;
+        esac
+    done
+    ok "container services generated"
 }
 
 # ============================================================================
@@ -1052,11 +1150,6 @@ enable_services() {
     for entry in "${SVC_PIPELINES[@]}"; do
         add_to_bundle 3tched "$entry"
     done
-    if [[ $WITH_UPLINK -eq 1 ]]; then
-        add_to_bundle 3tched ovsbr0-uplink
-    else
-        log "ovsbr0-uplink installed but NOT enabled (use --with-uplink after configuring ${NET_CONF})"
-    fi
 
     enable_default 3tched
     # System bus + seat manager come from the Artix -s6 packages
@@ -1138,19 +1231,23 @@ summary() {
     echo "Network (s6-managed):"
     echo "  ovsdb-server -> ovs-vswitchd (netdev, rovs-seeded) -> ovsbr0-addr"
     echo "  ovsbr0: 10.200.0.1/24 · OpenFlow controller: 10.200.0.1:6653"
-    echo "  wg0 identity tunnel: 10.0.0.2 <-> 10.0.0.1 (idles until peer set)"
-    if [[ -f /etc/wireguard/wg0.pub ]]; then
-        echo "  wg0 public key (register with the VPS): $(cat /etc/wireguard/wg0.pub)"
-    fi
+    echo "  Uplink (UPLINK in network.conf) enslaved atomically with bridge"
+    echo "  creation — ONE OVSDB transact — and its IP migrated to the bridge"
+    echo "  No WireGuard and no AF_XDP on this host — the netmaker mesh is"
+    echo "  self-contained in the netmaker container (iface: 10.0.0.2 +"
+    echo "  10.200.0.2, WG terminates at the decoy server; 10.0.0.2 egress ->"
+    echo "  host xray -> gRPC with identity header)"
+    echo
+    echo "Containers (s6-supervised with log pipelines — never Incus autostart):"
+    echo "  3tched-incus-svcgen <name>                        # any container"
+    echo "  3tched-incus-svcgen netmaker --attach-bridge ovsbr0"
+    echo "  (netmaker joins the bridge LAST, after its internal systemd settles)"
     echo
     echo "Next steps:"
-    echo "  1. Fill in the [Peer] section of /etc/wireguard/wg0.conf, then:"
-    echo "       s6-rc -d change wg-opdbus-pipeline && s6-rc -u change wg-opdbus-pipeline"
-    echo "  2. For the AF_XDP uplink cutover: set UPLINK/MGMT_ADDR/GW in ${NET_CONF}"
-    echo "     and re-run with --with-uplink (or: s6-rc -u change ovsbr0-uplink)"
-    echo "  3. Containers: incus admin init  (expose sockets via zbusctl createsocket)"
+    echo "  1. Containers: incus admin init, create containers, then run"
+    echo "     3tched-incus-svcgen per container (sockets via zbusctl createsocket)"
     if [[ $SKIP_DESKTOP -eq 0 ]]; then
-        echo "  4. Desktop: greetd/tuigreet on VT2 -> Hyprland (Super+Enter = foot)"
+        echo "  2. Desktop: greetd/tuigreet on VT2 -> Hyprland (Super+Enter = foot)"
     fi
     if [[ ${#MISSING_PKGS[@]} -gt 0 ]]; then
         echo
@@ -1187,8 +1284,10 @@ main() {
     write_s6_services
     write_desktop_services
     write_headless_gui_services
+    write_incus_svcgen
     enable_services
     start_services
+    generate_container_services
     verify
     summary
 }

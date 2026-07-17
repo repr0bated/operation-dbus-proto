@@ -9,6 +9,10 @@
 //! Environment variables:
 //!   BRIDGE         OVS bridge name          (default: ovsbr0)
 //!   VETH_HOST      Veth to add as port      (default: grpc-uplink)
+//!   UPLINK         Physical NIC to enslave  (optional; enslaved in the SAME
+//!                  OVSDB transact as bridge creation — uplink capture only
+//!                  starts correctly when vswitchd first reads the bridge and
+//!                  its ports together, so this must not be a second step)
 //!   FAIL_MODE      OVS fail mode            (default: standalone)
 //!   SHARED_MAC     Bridge/container MAC     (default: fa:16:3e:f1:71:d2)
 //!   OVSDB_SOCKET   Path to OVSDB socket     (default: auto-detect)
@@ -35,6 +39,7 @@ use uuid::Uuid;
 struct Config {
     bridge: String,
     veth_host: String,
+    uplink: String,
     fail_mode: String,
     shared_mac: String,
     ovsdb_socket: String,
@@ -46,6 +51,7 @@ impl Config {
         Config {
             bridge: std::env::var("BRIDGE").unwrap_or_else(|_| "ovsbr0".into()),
             veth_host: std::env::var("VETH_HOST").unwrap_or_else(|_| "grpc-uplink".into()),
+            uplink: std::env::var("UPLINK").unwrap_or_default(),
             fail_mode: std::env::var("FAIL_MODE").unwrap_or_else(|_| "standalone".into()),
             shared_mac: std::env::var("SHARED_MAC").unwrap_or_else(|_| "fa:16:3e:f1:71:d2".into()),
             ovsdb_socket: std::env::var("OVSDB_SOCKET").unwrap_or_else(|_| find_socket_path()),
@@ -334,25 +340,44 @@ async fn purge_by_name(client: &mut Client, name: &str) -> Result<()> {
 }
 
 /// Create ovsbr0 with datapath_type=netdev.
+///
+/// `extra_ports` (the veth and, when configured, the physical UPLINK) are
+/// enslaved in the SAME atomic transact (RFC 7047, official Open_vSwitch
+/// schema): vswitchd must first read the bridge and its ports together or
+/// uplink capture does not start correctly.  Enslavement is never a second
+/// transaction on the create path.
 async fn create_bridge_netdev(
     client: &mut Client,
     bridge: &str,
     fail_mode: &str,
     mac: &str,
+    extra_ports: &[&str],
 ) -> Result<()> {
     info!(
-        "creating bridge {} with datapath_type=netdev fail_mode={}",
-        bridge, fail_mode
+        "creating bridge {} with datapath_type=netdev fail_mode={} extra_ports={:?}",
+        bridge, fail_mode, extra_ports
     );
     purge_by_name(client, bridge).await?;
 
     let mut txn = Transaction::new("Open_vSwitch");
 
     let iface_ref = txn.insert("Interface", json!({"name": bridge, "type": "internal"}));
-    let port_ref = txn.insert(
+    let mut port_refs = vec![txn.insert(
         "Port",
         json!({"name": bridge, "interfaces": iface_ref.to_json()}),
-    );
+    )];
+    for name in extra_ports {
+        let extra_iface_ref = txn.insert("Interface", json!({"name": name, "type": ""}));
+        port_refs.push(txn.insert(
+            "Port",
+            json!({"name": name, "interfaces": extra_iface_ref.to_json()}),
+        ));
+    }
+    let ports_json = if port_refs.len() == 1 {
+        port_refs[0].to_json()
+    } else {
+        json!(["set", port_refs.iter().map(|p| p.to_json()).collect::<Vec<_>>()])
+    };
     let bridge_ref = txn.insert(
         "Bridge",
         json!({
@@ -360,7 +385,7 @@ async fn create_bridge_netdev(
             "datapath_type": "netdev",
             "fail_mode": fail_mode,
             "other_config": ["map", [["hwaddr", mac]]],
-            "ports": port_ref.to_json()
+            "ports": ports_json
         }),
     );
     txn.mutate_where(
@@ -457,6 +482,13 @@ async fn main() -> Result<()> {
         None => info!("bridge {} not found in OVSDB", cfg.bridge),
     }
 
+    // The veth and (when configured) the physical uplink ride in the same
+    // create transact — see create_bridge_netdev.
+    let mut seed_ports: Vec<&str> = vec![cfg.veth_host.as_str()];
+    if !cfg.uplink.is_empty() {
+        seed_ports.push(cfg.uplink.as_str());
+    }
+
     if seed_only {
         info!("seed-only mode: writing netdev OVSDB rows without starting vswitchd");
         clear_kernel_datapath(&cfg.bridge);
@@ -465,8 +497,14 @@ async fn main() -> Result<()> {
         client = Client::connect(&addr)
             .await
             .context("reconnect after seed delete")?;
-        create_bridge_netdev(&mut client, &cfg.bridge, &cfg.fail_mode, &cfg.shared_mac).await?;
-        add_port(&mut client, &cfg.bridge, &cfg.veth_host).await?;
+        create_bridge_netdev(
+            &mut client,
+            &cfg.bridge,
+            &cfg.fail_mode,
+            &cfg.shared_mac,
+            &seed_ports,
+        )
+        .await?;
         info!("seed-only complete: {} datapath_type=netdev", cfg.bridge);
         return Ok(());
     }
@@ -496,8 +534,15 @@ async fn main() -> Result<()> {
             .await
             .context("reconnect after delete")?;
 
-        // Create with netdev
-        create_bridge_netdev(&mut client, &cfg.bridge, &cfg.fail_mode, &cfg.shared_mac).await?;
+        // Create with netdev (veth + uplink enslaved in the same transact)
+        create_bridge_netdev(
+            &mut client,
+            &cfg.bridge,
+            &cfg.fail_mode,
+            &cfg.shared_mac,
+            &seed_ports,
+        )
+        .await?;
         info!("OVSDB updated: datapath_type=netdev");
 
         // Start vswitchd — it reads netdev from OVSDB and initializes netdev dpif
@@ -530,13 +575,23 @@ async fn main() -> Result<()> {
         info!("bridge {} already netdev — no restart needed", cfg.bridge);
     }
 
-    // ── 4. Add grpc-uplink port ───────────────────────────────────────────────
+    // ── 4. Idempotent port adds for a pre-existing netdev bridge ─────────────
+    // (On the create path these are no-ops: the ports were enslaved inside
+    // the create transact.)
     add_port(&mut client, &cfg.bridge, &cfg.veth_host).await?;
+    if !cfg.uplink.is_empty() {
+        add_port(&mut client, &cfg.bridge, &cfg.uplink).await?;
+    }
 
-    // ── 5. Bring veth up (ip link is a network utility, not an OVS tool) ─────
+    // ── 5. Bring ports up (ip link is a network utility, not an OVS tool) ────
     let _ = Command::new("ip")
         .args(["link", "set", &cfg.veth_host, "up"])
         .status();
+    if !cfg.uplink.is_empty() {
+        let _ = Command::new("ip")
+            .args(["link", "set", &cfg.uplink, "up"])
+            .status();
+    }
     info!("op-ovsbr0-setup: done");
     Ok(())
 }
@@ -551,6 +606,9 @@ fn print_help() {
          Environment:\n\
            BRIDGE       bridge name (default: ovsbr0)\n\
            VETH_HOST    veth port to add (default: grpc-uplink)\n\
+           UPLINK       physical NIC enslaved in the same create transact\n\
+                        (optional; atomic with bridge creation so capture\n\
+                        starts correctly)\n\
            FAIL_MODE    bridge fail mode (default: standalone)\n\
            SHARED_MAC   bridge MAC (default: fa:16:3e:f1:71:d2)\n\
            OVSDB_SOCKET OVSDB socket path\n\
