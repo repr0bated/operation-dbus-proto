@@ -626,12 +626,13 @@ SOCKET_PATH="\${DBUS_SESSION_BUS_ADDRESS#unix:path=}"
 install -d -m 0755 "\$(dirname "\$SOCKET_PATH")"
 rm -f "\$SOCKET_PATH"
 # the bus runs as root; loosen the socket so the operator's tools (zbusctl)
-# can connect — access control is the identity layer, not filesystem bits
-umask 0111
+install -d -m 0755 "\\$(dirname "\\$SOCKET_PATH")"
+rm -f "\\$SOCKET_PATH"
+umask 000
 if command -v busd >/dev/null 2>&1; then
-    exec busd -a "\$DBUS_SESSION_BUS_ADDRESS"
+    exec busd -a "\\$DBUS_SESSION_BUS_ADDRESS"
 fi
-exec dbus-daemon --session --nofork --nopidfile --address="\$DBUS_SESSION_BUS_ADDRESS"
+exec dbus-daemon --session --nofork --nopidfile --address="\\$DBUS_SESSION_BUS_ADDRESS"
 EOF
 
     # ======================= NETWORK (all via s6) ==========================
