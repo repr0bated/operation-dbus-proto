@@ -1,0 +1,30 @@
+/* 3tched Design System Variables */
+:root {
+  /* Primary Brand Colors */
+  --brand-primary: #1D1C19;      /* Graphite ink — text, marks, dark surfaces */
+  --brand-secondary: #7A766C;    /* Weathered stone — structure, rules, secondary UI */
+  --brand-accent: #2F6E62;       /* Verdigris — the patina of a permanent record */
+
+  /* Brand Color Variations */
+  --brand-primary-light: #3B3934;
+  --brand-primary-dark: #0F0E0C;
+  --brand-secondary-light: #A7A399;
+  --brand-secondary-dark: #4A4740;
+
+  /* Neutral Brand Palette */
+  --brand-neutral-100: #EFEEE8;  /* Limestone */
+  --brand-neutral-500: #8F8B82;  /* Stone dust */
+  --brand-neutral-900: #14130F;  /* Carbon */
+
+  /* Brand Typography — slot semantics: primary=body/UI, secondary=display, accent=evidence */
+  --brand-font-primary: 'IBM Plex Sans', -apple-system, 'Segoe UI', sans-serif;
+  --brand-font-secondary: 'IBM Plex Serif', Georgia, serif;         /* display: +0.01em tracking; small-caps eyebrows */
+  --brand-font-accent: 'IBM Plex Mono', 'SFMono-Regular', Menlo, monospace;  /* hashes, control IDs, evidence excerpts */
+
+  /* Brand Spacing System */
+  --brand-space-xs: 0.25rem;
+  --brand-space-sm: 0.5rem;
+  --brand-space-md: 1rem;
+  --brand-space-lg: 2rem;
+  --brand-space-xl: 4rem;
+}
