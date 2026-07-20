@@ -84,18 +84,26 @@ eventually run locally:
   dump-protos` (bulk proto dump) — but only as offline/batch reads of already-sealed blobs, never as a
   live control action.
 
-### Inputs: raw SHM blobs + vectorized view, one model, one output
-The old agent relay is GONE — no separate vectorized/agent pipeline producing a different output. The
-generation model now runs locally (cloud GPU, fixed cost) and is fed BOTH:
+### Inputs: raw SHM blobs + own vector collection, one model, one output
+The old generation agent relay is GONE — no separate vectorized/agent pipeline producing a different
+output. The generation model now runs locally (cloud GPU, fixed cost). A lightweight **middleware agent**
+sits between the chat interface and the data: it assembles per-turn context, then discards it (NO
+persistent memory). It is fed BOTH:
 - **Raw `PluginSchema`** from the SHM catalog (SSOT, catalog-bound, exact fields/methods/subids), and
-- **A vectorized view of the blobs** held in **`cognitive_mcp`'s Qdrant** (semantic / domain-specific
-  discovery — "connect schema slices a human wouldn't", land in domain framings like privacy-ops,
-  network-eng, compliance).
-Both are derived from the SAME sealed blobs, so the vectors cannot drift from the raw schema. The vectors
-are INPUT context only; the emitted spec is still strictly bound to the json-render.dev catalog (the
-"never invent a component/prop/action" rule is unchanged). This extends the vague base prompt into
-domain-specific GUI without naming the domain — the embeddings surface the neighborhood, the model
-proposes the lens. Single model, single output.
+- **Semantic context from its OWN Qdrant collection** (vectorized view of the blobs — "connect schema
+  slices a human wouldn't", land in domain framings like privacy-ops, network-eng, compliance).
+Separation rules (the middleware was ALWAYS meant to be separate from the memory loop):
+- The middleware has its **own Qdrant collection** — distinct from `cognitive_mcp`'s collection(s). Shared
+  Qdrant *service*, partitioned *data*; the loops never touch.
+- The middleware does **NOT use CozoDB** (Cozo is `cognitive_mcp`'s graph store only).
+- The middleware does **NOT feed from or into the `cognitive_mcp` memory loop**. `cognitive_mcp` is the
+  separate persistent system-memory loop (Cozo + Qdrant → `system-plane-chatbot` / `ctl_plane_chatbot`,
+  interrogable by the user about its actions). The middleware merely borrows the Qdrant service for
+  ephemeral retrieval; it never becomes part of that loop.
+Both raw and vector inputs derive from the SAME sealed blobs (so they can't disagree), and the vectors are
+INPUT context only. The emitted spec is still strictly bound to the json-render.dev catalog (the "never
+invent a component/prop/action" rule is unchanged). This extends the vague base prompt into domain-specific
+GUI without naming the domain. Single model, single output.
 
 ## Workflow
 1. Receive the vague, UI-agnostic goal. Do not rename it.
