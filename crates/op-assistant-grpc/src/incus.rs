@@ -5,7 +5,7 @@
 //! - The `wg-xray` Incus container is DEPRECATED and STOPPED. Do not
 //!   reference it.
 //! - Xray runs on the HOST via the `gbr-xray` s6 service
-//!   (config: `/dev/shm/xray-ghostbridge.json` or `/etc/xray/config.json`).
+//!   (canonical live config: `/dev/shm/xray_config.json`).
 //! - The operation.v1 gRPC server (StateSync, etc., port 50051) runs on the
 //!   HOST served by `op-dbus` at `10.200.0.2:50051` (the `grpc-uplink` veth
 //!   IP). The old `10.200.0.1:50051` lived inside the wg-xray container and

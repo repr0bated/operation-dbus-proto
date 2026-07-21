@@ -113,7 +113,7 @@ Several critical components utilize hardcoded targets, local addresses, ports, a
 
 ### Localhost / Port Mapping
 *   **`crates/op-llm/src/openclaw.rs:25`**
-    *   `const DEFAULT_BASE_URL: &str = "http://127.0.0.1:18789";`
+    *   `const DEFAULT_BASE_URL: &str = "http://127.0.0.1:8090";`
     *   **Risk**: Points by default to a specific local loopback port. If the cluster runs OpenClaw on an alternate port or containerized network boundary, requests will fail silently without active base URL variable specification.
 *   **`crates/op-llm/src/antigravity.rs:104`**
     *   `"1. Connect to Antigravity Bridge: export ANTIGRAVITY_BRIDGE_URL=http://127.0.0.1:7788"`

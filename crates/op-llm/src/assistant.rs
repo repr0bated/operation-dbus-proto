@@ -8,7 +8,7 @@
 //! ## Configuration
 //!
 //! ```bash
-//! ASSISTANT_BASE_URL=http://127.0.0.1:18789       # checked first
+//! ASSISTANT_BASE_URL=http://127.0.0.1:8090       # checked first
 //! ASSISTANT_DEFAULT_MODEL=assistant:main            # checked first
 //! # Falls back to OPENCLAW_BASE_URL / OPENCLAW_DEFAULT_MODEL if unset
 //! ```

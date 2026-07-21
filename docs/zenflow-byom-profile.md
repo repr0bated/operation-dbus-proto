@@ -12,7 +12,7 @@ Use this profile to run Zenflow in parallel with your 7-day Gemini trial. It con
 3. Optional: override the OpenClaw/Gemini model or endpoint if you need a different one:
    ```bash
    export ZENFLOW_OPENCLAW_MODEL=openclaw:gemini3-adc
-   export ZENFLOW_OPENCLAW_BASE_URL=http://127.0.0.1:18789
+   export ZENFLOW_OPENCLAW_BASE_URL=http://127.0.0.1:8090
    ```
 4. Source the profile helper before running Zenflow:
    ```bash
@@ -33,7 +33,7 @@ Use this profile to run Zenflow in parallel with your 7-day Gemini trial. It con
 After sourcing the profile:
 
 1. Start Zenflow (e.g., `./run-zenflow.sh` or the usual startup command).
-2. Watch the OpenClaw/log output to confirm it connects to `http://127.0.0.1:18789/v1/chat/completions` with the configured model.
+2. Watch the OpenClaw/log output to confirm it connects to `http://127.0.0.1:8090/v1/chat/completions` with the configured model.
 3. Check the SSE stream (`/api/events`) to ensure `system_chat`, `state_update`, and `audit_event` payloads continue to emit `agent_id`, `document_type`, and `chat_session` metadata.
 4. Once the trial credit is used or you switch models, unset the profile:
    ```bash

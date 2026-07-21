@@ -63,7 +63,7 @@ The implementation is **architecturally coherent in intent but fragmented in exe
 ### CF-7: Hardcoded IP Addresses, Ports, Tags, and OSCAL IDs Throughout the Stack
 - **Severity:** High
 - **Affected files/modules:** `crates/op-identity/src/schema_bridge.rs`, `crates/op-xray-daemon/src/dbus.rs`, `crates/op-grpc-bridge/src/grpc_server.rs`, `crates/op-cognitive-mcp/src/server.rs`, `crates/op-web/ui/src/hooks/use-event-stream.ts`
-- **Why it matters:** Multiple hardcoded values: `127.0.0.1:18789`, `10.200.0.1`, `10.200.0.2:50052`, `127.0.0.1:11434`, `1080`, `12345`, `ovsbr0`, `gbr_wg`, `gbr_xray`, `wg-xray`. These appear in Rust source, generated Xray JSON strings, and UI hooks. There is no central configuration schema driving these. The Xray config is generated via `format!()` macro into a raw JSON string, making it impossible to validate against a schema.
+- **Why it matters:** Multiple hardcoded values: `127.0.0.1:8090`, `10.200.0.1`, `10.200.0.2:50052`, `127.0.0.1:11434`, `1080`, `12345`, `ovsbr0`, `gbr_wg`, `gbr_xray`, `wg-xray`. These appear in Rust source, generated Xray JSON strings, and UI hooks. There is no central configuration schema driving these. The Xray config is generated via `format!()` macro into a raw JSON string, making it impossible to validate against a schema.
 - **Recommended direction:** Centralize all network endpoints in a `NetworkTopology` schema. Generate Xray config via `serde_json::Value` constructed from typed structs, not string formatting.
 - **Blocks production readiness:** Partially. Hardcoded networking values prevent multi-environment deployment.
 
@@ -114,7 +114,7 @@ The implementation is **architecturally coherent in intent but fragmented in exe
 ## 3. Architecture Map
 
 ### gRPC Layer
-- **Entry Point:** `op-grpc-bridge::grpc_server::run_grpc_server` (port 18789), `op-cognitive-mcp::server::start_grpc_server` (port 50052), `op-assistant-grpc::server::serve` (port 50051).
+- **Entry Point:** `op-grpc-bridge::grpc_server::run_grpc_server` (port 8090), `op-cognitive-mcp::server::start_grpc_server` (port 50052), `op-assistant-grpc::server::serve` (port 50051).
 - **Services:** StateSync, PluginService, EventChainService, OvsdbMirror, RuntimeMirror, ComponentRegistry, MailService, PrivacyNetworkService, RegistrationService, DbusPassthrough, CognitiveToolService, AgentService, SessionService, TaskService, ModelService, CronService, SoulService, NamespaceMemoryService, MemoryService.
 - **Reflection:** Enabled via `tonic-reflection` with combined `FILE_DESCRIPTOR_SET`.
 - **Health:** `tonic-health` reporters for all major services.
@@ -129,7 +129,7 @@ The implementation is **architecturally coherent in intent but fragmented in exe
 
 ### Socket Layer
 - **Unix Sockets:** `/run/qdrant.sock` (proxied via xray), `/run/netmaker/*.sock`, D-Bus system socket.
-- **TCP Sockets:** gRPC (50051, 50052, 18789), Qdrant (6334 via xray proxy), Ollama (11434).
+- **TCP Sockets:** gRPC (50051, 50052, 8090), Qdrant (6334 via xray proxy), Ollama (11434).
 - **WireGuard:** `netmaker` interface (default), `wg0` in container.
 
 ### Schema Layer
@@ -211,7 +211,7 @@ The implementation is **architecturally coherent in intent but fragmented in exe
 | Protocol | Entry Point | Schema Object | Identity Propagation | Routing Metadata | OSCAL Mapping | Audit Support | UI Rendering | Gaps |
 |----------|-------------|---------------|---------------------|------------------|---------------|---------------|--------------|------|
 | HTTP/HTTPS | `op-web` Axum server | None (REST is secondary) | Session cookie | None | No | No | React pages | Not schema-bound |
-| gRPC | `op-grpc-bridge` (port 18789) | `MutateRequest`, `StateChange` | `actor_id`, `capability_id` | `plugin_id`, `tags_touched` | No | `event_id`, `event_hash` | gRPC-Web via `useEventStream` | OSCAL missing; no schema_id field |
+| gRPC | `op-grpc-bridge` (port 8090) | `MutateRequest`, `StateChange` | `actor_id`, `capability_id` | `plugin_id`, `tags_touched` | No | `event_id`, `event_hash` | gRPC-Web via `useEventStream` | OSCAL missing; no schema_id field |
 | gRPC-Web | Same as gRPC (tonic-web) | Same | Same | Same | No | Same | React hooks | Same gaps |
 | WebSocket | `op-web::websocket.rs` | Raw JSON | Session | None | No | No | Chat UI | No schema binding |
 | Unix socket IPC | `/run/qdrant.sock`, `/run/netmaker/*.sock` | None | Unix perms | Xray tag | No | No | No | Not integrated into schema pipeline |

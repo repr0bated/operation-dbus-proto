@@ -54090,11 +54090,11 @@ op-llm (lib.rs)
 * **Description**: 
   The `OpenClawProvider` connects to the local OpenClaw agent platform over an unencrypted HTTP route by default:
   ```rust
-  const DEFAULT_BASE_URL: &str = "http://127.0.0.1:18789";
+  const DEFAULT_BASE_URL: &str = "http://127.0.0.1:8090";
   ```
   While labeled as a "trusted internal network" endpoint, relying on cleartext HTTP means all prompt contents, tool definitions, execution arguments, and session outputs are transmitted unencrypted. On systems with multi-tenant namespaces, containerized overlays, or shared virtual interfaces, attackers on the same segment can inspect or tamper with internal control packets. This exposes sensitive metadata, internal database structures, and dynamic system interaction schemas to network-level interception.
 * **Remediation**: 
-  Configure the provider to enforce HTTPS by default (e.g. `https://127.0.0.1:18789`), requiring TLS certificate verification even on internal or loopback networks. If HTTP is explicitly required for local diagnostic environments, issue a warning when the target IP resolves outside safe loopback boundaries.
+  Configure the provider to enforce HTTPS by default (e.g. `https://127.0.0.1:8090`), requiring TLS certificate verification even on internal or loopback networks. If HTTP is explicitly required for local diagnostic environments, issue a warning when the target IP resolves outside safe loopback boundaries.
 
 ---
 
@@ -55197,7 +55197,7 @@ The following values are hardcoded in the codebase:
 *   **Hardcoded Local API Base URL**:
     `crates/op-llm/src/openclaw.rs:27`
     ```rust
-    const DEFAULT_BASE_URL: &str = "http://127.0.0.1:18789";
+    const DEFAULT_BASE_URL: &str = "http://127.0.0.1:8090";
     ```
     *Severity: Low.* Establishes a default connection string over localhost for the OpenClaw agent platform.
 
@@ -55619,7 +55619,7 @@ A core tenet of modern system-of-systems engineering is the maintenance of stric
   * `crates/op-llm/src/openclaw.rs:51`
 
 * **Description**:
-  The `OpenClawProvider` defines `DEFAULT_BASE_URL` as `http://127.0.0.1:18789`. If the provider base URL is modified to route to an external agent platform over a physical or virtual network, all chat histories, tool schemas, and responses will be transmitted over unencrypted HTTP. This exposes sensitive system commands, internal database schemas, and API payloads to unencrypted passive network eavesdropping.
+  The `OpenClawProvider` defines `DEFAULT_BASE_URL` as `http://127.0.0.1:8090`. If the provider base URL is modified to route to an external agent platform over a physical or virtual network, all chat histories, tool schemas, and responses will be transmitted over unencrypted HTTP. This exposes sensitive system commands, internal database schemas, and API payloads to unencrypted passive network eavesdropping.
 
 * **Remediation**:
   Default to `https://` endpoints, or enforce transit encryption (TLS) whenever communicating with host addresses other than loopback `127.0.0.1` or `localhost`.
@@ -55801,7 +55801,7 @@ Several critical components utilize hardcoded targets, local addresses, ports, a
 
 ### Localhost / Port Mapping
 *   **`crates/op-llm/src/openclaw.rs:25`**
-    *   `const DEFAULT_BASE_URL: &str = "http://127.0.0.1:18789";`
+    *   `const DEFAULT_BASE_URL: &str = "http://127.0.0.1:8090";`
     *   **Risk**: Points by default to a specific local loopback port. If the cluster runs OpenClaw on an alternate port or containerized network boundary, requests will fail silently without active base URL variable specification.
 *   **`crates/op-llm/src/antigravity.rs:104`**
     *   `"1. Connect to Antigravity Bridge: export ANTIGRAVITY_BRIDGE_URL=http://127.0.0.1:7788"`
@@ -91682,7 +91682,7 @@ The following is a comprehensive inventory of all `std::env::var` calls inside t
 | `crates/op-web/src/wireguard.rs` | 39 | `WG_DNS` | `"10.200.0.1"` |
 | `crates/op-web/src/wireguard.rs` | 40 | `VPN_DNS` | `"10.200.0.1"` |
 | `crates/op-web/src/bin/op-dbus.rs` | 25 | `OP_DBUS_GRPC_LISTEN` | `"10.200.0.2:50051"` |
-| `crates/op-web/src/handlers/openclaw.rs` | 19 | `OPENCLAW_BASE_URL` | `"http://127.0.0.1:18789"` |
+| `crates/op-web/src/handlers/openclaw.rs` | 19 | `OPENCLAW_BASE_URL` | `"http://127.0.0.1:8090"` |
 | `crates/op-web/src/handlers/openclaw.rs` | 25 | `OPENCLAW_DEFAULT_MODEL` | `"openclaw:main"` |
 | `crates/op-web/src/handlers/vpn.rs` | 120 | `VPN_ENDPOINT` | `"148.113.204.83:51820"` |
 | `crates/op-web/src/routes/admin.rs` | 238 | `OP_SELF_REPO_PATH` | `None` (Safely handled via `is_ok()`/`ok()`) |
@@ -91751,7 +91751,7 @@ In Rust/Cargo, features are strictly **additive**.
 *   **`10.200.0.1`** — `crates/op-web/src/wireguard.rs:41`, `crates/op-web/src/privacy_network.rs:26`, `crates/op-web/src/privacy_network.rs:27`, `crates/op-web/src/privacy_network.rs:60` (Chokepoint gateway DNS and Xray proxy routing IP).
 *   **`10.200.0.2:50051`** — `crates/op-web/src/bin/op-dbus.rs:24`, `crates/op-web/src/state.rs:232` (Hardcoded default listener/client endpoint for gRPC bridge interactions).
 *   **`10.100.0.2/32`** — `crates/op-web/src/privacy_container.rs:179` & `crates/op-web/src/wireguard.rs:114` (Hardcoded static assignment addresses for test users).
-*   **`http://127.0.0.1:18789`** — `crates/op-web/src/handlers/openclaw.rs:14` & `16` (Hardcoded local loopback gateway configuration for OpenClaw components).
+*   **`http://127.0.0.1:8090`** — `crates/op-web/src/handlers/openclaw.rs:14` & `16` (Hardcoded local loopback gateway configuration for OpenClaw components).
 *   **`1.1.1.1`** — `crates/op-web/src/handlers/vpn.rs:125` (Default fallback resolver IP).
 
 ---
@@ -199387,7 +199387,7 @@ enum RegistryErrorCode {
 //! Design:
 //!   - Does NOT write the sled; the SchemaEngine or A.N.N.A. Scribe does.
 //!   - If no valid sled exists, all inbound requests are rejected.
-//!   - Bind address defaults to 127.0.0.1:18789 (Xray redirect target).
+//!   - Bind address defaults to 127.0.0.1:8090 (Xray redirect target).
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -199415,9 +199415,9 @@ async fn main() -> anyhow::Result<()> {
     let schema_engine = Arc::new(SchemaEngine::new(event_chain, ovsdb, nonnet));
 
     // ── Bind address ─────────────────────────────────────────────────────────
-    // Per spec: Xray redirects gRPC traffic to 127.0.0.1:18789.
+    // Per spec: Xray redirects gRPC traffic to 127.0.0.1:8090.
     let addr: SocketAddr = std::env::var("GRPC_BIND")
-        .unwrap_or_else(|_| "127.0.0.1:18789".to_string())
+        .unwrap_or_else(|_| "127.0.0.1:8090".to_string())
         .parse()
         .expect("GRPC_BIND must be a valid socket address");
 
@@ -204654,7 +204654,7 @@ impl crate::proto::dbus_passthrough_server::DbusPassthrough for OperationGrpcSer
 
 <file path="op-grpc-bridge/src/interceptor.rs">
 // 🟢 🛡️ The Tonic gRPC Gatekeeper (Middleware Interceptor)
-// Sits on the primary gRPC ingress at port 18789. Intercepts Xray-injected headers,
+// Sits on the primary gRPC ingress at port 8090. Intercepts Xray-injected headers,
 // performs a zero-copy check against the IdentitySled in shared memory, and either
 // allows the gRPC payload through or drops the connection instantly.
 //
@@ -204669,7 +204669,7 @@ fn is_sled_valid(sled: &IdentitySled) -> bool {
     sled.hashed_footprint != [0u8; 32] && sled.trace_id != [0u8; 16]
 }
 
-/// THE GATEKEEPER: Tonic gRPC Interceptor on port 18789.
+/// THE GATEKEEPER: Tonic gRPC Interceptor on port 8090.
 ///
 /// Enforces the Absolute Base rule: if the `x-ghostbridge-footprint` provided by Xray
 /// does not perfectly match the hashed footprint sitting in shared memory, the payload
@@ -209470,7 +209470,7 @@ fn write_xray_config_with_sockets(
     {{
       "tag": "to-grpc-bridge",
       "protocol": "freedom",
-      "settings": {{ "redirect": "127.0.0.1:18789" }},
+      "settings": {{ "redirect": "127.0.0.1:8090" }},
       "streamSettings": {{
         "network": "grpc",
         "sockopt": {{ "tcpNoDelay": true, "mark": 255 }},
@@ -223756,7 +223756,7 @@ impl LlmProvider for AntigravityProvider {
 //! ## Configuration
 //!
 //! ```bash
-//! ASSISTANT_BASE_URL=http://127.0.0.1:18789       # checked first
+//! ASSISTANT_BASE_URL=http://127.0.0.1:8090       # checked first
 //! ASSISTANT_DEFAULT_MODEL=assistant:main            # checked first
 //! # Falls back to OPENCLAW_BASE_URL / OPENCLAW_DEFAULT_MODEL if unset
 //! ```
@@ -227896,7 +227896,7 @@ pub mod prelude {
 //! ## Configuration
 //!
 //! ```bash
-//! OPENCLAW_BASE_URL=http://127.0.0.1:18789  # default
+//! OPENCLAW_BASE_URL=http://127.0.0.1:8090  # default
 //! ```
 
 use anyhow::{Context, Result};
@@ -227912,7 +227912,7 @@ use crate::provider::{
     ToolCallInfo,
 };
 
-const DEFAULT_BASE_URL: &str = "http://127.0.0.1:18789";
+const DEFAULT_BASE_URL: &str = "http://127.0.0.1:8090";
 const DEFAULT_MODEL: &str = "openclaw:main";
 
 pub struct OpenClawProvider {
@@ -335021,7 +335021,7 @@ pub mod zeroclaw;
 <file path="op-web/src/handlers/openclaw.rs">
 //! OpenClaw Gateway Handlers
 //!
-//! Provides direct access to the OpenClaw gateway (127.0.0.1:18789 by default)
+//! Provides direct access to the OpenClaw gateway (127.0.0.1:8090 by default)
 //! for health checks, configuration, and proxied requests.
 
 use axum::{extract::Extension, response::Json};
@@ -335035,7 +335035,7 @@ use tracing::{debug, error};
 
 use crate::state::AppState;
 
-const DEFAULT_OPENCLAW_BASE_URL: &str = "http://127.0.0.1:18789";
+const DEFAULT_OPENCLAW_BASE_URL: &str = "http://127.0.0.1:8090";
 const DEFAULT_OPENCLAW_MODEL: &str = "openclaw:main";
 const DEFAULT_OPENCLAW_HOST: &str = "127.0.0.1";
 
@@ -335157,7 +335157,7 @@ pub async fn openclaw_config_handler(
         model: openclaw_default_model(),
         internal_only: true,
         container_ip: openclaw_host_label(&endpoint),
-        container_port: 18789,
+        container_port: 8090,
     })
 }
 
@@ -367824,7 +367824,7 @@ export function connectWebSocket(
 
   No, OpenClaw should NOT handle MCP. Here's why:
 
-  OpenClaw (at 10.149.181.114:18789) is your LLM gateway - it handles:
+  OpenClaw (at 10.149.181.114:8090) is your LLM gateway - it handles:
   - Chat completions (/v1/chat/completions)
   - Model selection and routing
   - Authentication to Gemini via Code Assist OAuth
@@ -368619,7 +368619,7 @@ export function connectWebSocket(
 ● Bash(curl -s http://localhost:8080/api/openclaw/status | jq .)
   ⎿  {
        "available": true,
-       "endpoint": "http://10.149.181.114:18789",
+       "endpoint": "http://10.149.181.114:8090",
      … +4 lines (ctrl+o to expand)
 
 ● I see the problem! The model is set to "opencode/big-pickle" which doesn't

@@ -1,4 +1,5 @@
 #![recursion_limit = "512"]
+#![deny(rustdoc::broken_intra_doc_links)]
 #![allow(
     dead_code,
     unused_imports,
@@ -102,8 +103,7 @@ pub mod prelude {
         OvsBridgePlugin, PackageKitPlugin, PciDeclPlugin, ProcfsPlugin, ProxyServerPlugin,
         RovsCommandsPlugin, RtnetlinkPlugin, S6SystemctlPlugin, SchemaRendererPlugin,
         ServicePlugin, SessDeclPlugin, SoftwarePlugin, ToolDefinition, UnixSocketPlugin,
-        UsersPlugin, WebUiPlugin, WgOpdbusPlugin, WireGuardPlugin, WorkflowsPlugin,
-        ZeroclawPlugin,
+        UsersPlugin, WebUiPlugin, WgOpdbusPlugin, WireGuardPlugin, WorkflowsPlugin, ZeroclawPlugin,
     };
 }
 pub mod state_publisher;

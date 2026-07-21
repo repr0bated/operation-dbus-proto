@@ -117,11 +117,11 @@ op-llm (lib.rs)
 * **Description**: 
   The `OpenClawProvider` connects to the local OpenClaw agent platform over an unencrypted HTTP route by default:
   ```rust
-  const DEFAULT_BASE_URL: &str = "http://127.0.0.1:18789";
+  const DEFAULT_BASE_URL: &str = "http://127.0.0.1:8090";
   ```
   While labeled as a "trusted internal network" endpoint, relying on cleartext HTTP means all prompt contents, tool definitions, execution arguments, and session outputs are transmitted unencrypted. On systems with multi-tenant namespaces, containerized overlays, or shared virtual interfaces, attackers on the same segment can inspect or tamper with internal control packets. This exposes sensitive metadata, internal database structures, and dynamic system interaction schemas to network-level interception.
 * **Remediation**: 
-  Configure the provider to enforce HTTPS by default (e.g. `https://127.0.0.1:18789`), requiring TLS certificate verification even on internal or loopback networks. If HTTP is explicitly required for local diagnostic environments, issue a warning when the target IP resolves outside safe loopback boundaries.
+  Configure the provider to enforce HTTPS by default (e.g. `https://127.0.0.1:8090`), requiring TLS certificate verification even on internal or loopback networks. If HTTP is explicitly required for local diagnostic environments, issue a warning when the target IP resolves outside safe loopback boundaries.
 
 ---
 

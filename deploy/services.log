@@ -1,5 +1,0 @@
-[2m2026-02-14T07:24:26.389775Z[0m [32m INFO[0m [2mop_services[0m[2m:[0m Starting op-services daemon
-Error: error returned from database: (code: 14) unable to open database file
-
-Caused by:
-    (code: 14) unable to open database file

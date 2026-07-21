@@ -82,8 +82,7 @@ fn main() -> Result<()> {
         // Per-plugin typed method services (one service per method).
         let per_plugin_proto = generate_plugin_method_protos(plugin_id, &schema);
         let dest = dyn_dir.join(format!("{plugin_id}.proto"));
-        fs::write(&dest, &per_plugin_proto)
-            .with_context(|| format!("write {}", dest.display()))?;
+        fs::write(&dest, &per_plugin_proto).with_context(|| format!("write {}", dest.display()))?;
         dynamic_count += 1;
 
         // Also feed the unified catalog so the combined proto is available.
@@ -93,8 +92,7 @@ fn main() -> Result<()> {
     if !plugin_ids.is_empty() {
         let unified = gen.generate_for_catalog(&catalog);
         let dest = out_dir.join("plugin_methods_unified.proto");
-        fs::write(&dest, &unified)
-            .with_context(|| format!("write {}", dest.display()))?;
+        fs::write(&dest, &unified).with_context(|| format!("write {}", dest.display()))?;
         dynamic_count += 1;
     }
 

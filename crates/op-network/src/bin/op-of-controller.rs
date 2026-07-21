@@ -8,13 +8,48 @@
 //!   OF_FLOW_PAIRS          comma-separated port pairs, e.g. "grpc-bridge:ovsbr0-sock"
 //!                          defaults to "grpc-bridge:ovsbr0-sock"
 //!   OF_FLOW_PRIORITY       flow priority (default: 100)
+//!
+//! Also exposes `org.opdbus.v1.plugins.openflow` at
+//! `/org/opdbus/v1/plugins/openflow` on the system bus so the `openflow`
+//! plugin (crates/op-plugins/src/state_plugins/openflow.rs) can push
+//! schema-driven flows to whichever switch is currently connected.
 
 use std::net::SocketAddr;
 
-use anyhow::Result;
-use op_network::OpenFlowController;
+use anyhow::{Context, Result};
+use op_network::{OpenFlowController, OpenFlowControllerHandle};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
+use zbus::interface;
+
+struct OpenFlowDbusService {
+    handle: OpenFlowControllerHandle,
+}
+
+#[interface(name = "org.opdbus.v1.plugins.openflow")]
+impl OpenFlowDbusService {
+    /// Install a schema-driven flow (JSON-encoded `FlowEntry`).
+    async fn send_flow(&self, flow_json: String) -> zbus::fdo::Result<String> {
+        self.handle
+            .send_flow(flow_json, false)
+            .await
+            .map_err(|e| zbus::fdo::Error::Failed(format!("{e:#}")))
+    }
+
+    /// Delete a schema-driven flow (JSON-encoded `FlowEntry`).
+    async fn delete_flow(&self, flow_json: String) -> zbus::fdo::Result<String> {
+        self.handle
+            .send_flow(flow_json, true)
+            .await
+            .map_err(|e| zbus::fdo::Error::Failed(format!("{e:#}")))
+    }
+
+    /// Dump flows this controller has pushed (in-memory tracking, not a live
+    /// re-query of the switch's flow table).
+    async fn dump_flows(&self) -> Vec<String> {
+        self.handle.dump_flows()
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -49,6 +84,18 @@ async fn main() -> Result<()> {
         );
         controller = controller.add_port_pair(parts[0], parts[1], priority);
     }
+
+    let dbus_handle = controller.handle();
+    let service = OpenFlowDbusService {
+        handle: dbus_handle,
+    };
+    let _dbus_conn = zbus::connection::Builder::system()?
+        .name("org.opdbus.v1.plugins.openflow")?
+        .serve_at("/org/opdbus/v1/plugins/openflow", service)?
+        .build()
+        .await
+        .context("registering org.opdbus.v1.plugins.openflow on the system bus")?;
+    info!("org.opdbus.v1.plugins.openflow registered on the system bus");
 
     controller.run().await
 }

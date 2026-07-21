@@ -1,6 +1,8 @@
 //! Identity crate – WireGuard pubkey as identity + OAuth token cache via
 //! org.freedesktop.secrets. Zero passwords; the WireGuard handshake is the login.
 
+#![deny(rustdoc::broken_intra_doc_links)]
+
 pub mod anna_scribe;
 pub mod gcloud_auth;
 pub mod identity_vault;

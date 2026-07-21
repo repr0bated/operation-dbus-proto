@@ -36,7 +36,7 @@ Tags used by the host consolidation:
 |---|---|---|---|
 | `xray-tls` | xray TLS ingress on 443 | `src.network.xray-serve@v1` | ingress |
 | `xray-reality` | xray REALITY ingress on 8443 | `src.network.xray-serve@v1` | ingress |
-| `grpc-bridge` | zeroclaw gateway on 127.0.0.1:18789 | `exp.service.zeroclaw-serve@v1` | gRPC |
+| `grpc-bridge` | zeroclaw gateway on 127.0.0.1:8090 | `exp.service.zeroclaw-serve@v1` | gRPC |
 | `cognitive-mcp` | cognitive MCP on 127.0.0.1:3003 | `exp.service.cognitive-mcp-serve@v1` | gRPC |
 | `qdrant` | qdrant vector store on 127.0.0.1:6334 | `src.service.qdrant-serve@v1` | TCP |
 | `netmaker-api` | Netmaker REST API on 127.0.0.1:28081 | `src.service.netmaker-api-serve@v1` | TCP |

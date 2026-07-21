@@ -112,12 +112,12 @@ async fn main() -> Result<()> {
         .context("Failed to register D-Bus object")?;
 
     // Request the bus name
-    conn.request_name("opdbus.v1")
+    conn.request_name("org.opdbus.v1")
         .await
         .context("Failed to request bus name")?;
 
     info!("D-Bus service registered at /org/opdbus/v1/plugins/xray");
-    info!("Interface: opdbus.v1.Xray");
+    info!("Interface: org.opdbus.v1.Xray");
 
     // Set up signal handlers for graceful shutdown
     let mut sigterm = signal::unix::signal(signal::unix::SignalKind::terminate())

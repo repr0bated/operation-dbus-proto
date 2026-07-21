@@ -2312,7 +2312,7 @@ pub mod vpn;
 <file path="src/handlers/openclaw.rs">
 //! OpenClaw Gateway Handlers
 //!
-//! Provides direct access to the OpenClaw gateway (127.0.0.1:18789 by default)
+//! Provides direct access to the OpenClaw gateway (127.0.0.1:8090 by default)
 //! for health checks, configuration, and proxied requests.
 
 use axum::{extract::Extension, response::Json};
@@ -2326,7 +2326,7 @@ use tracing::{debug, error};
 
 use crate::state::AppState;
 
-const DEFAULT_OPENCLAW_BASE_URL: &str = "http://127.0.0.1:18789";
+const DEFAULT_OPENCLAW_BASE_URL: &str = "http://127.0.0.1:8090";
 const DEFAULT_OPENCLAW_MODEL: &str = "openclaw:main";
 const DEFAULT_OPENCLAW_HOST: &str = "127.0.0.1";
 
@@ -2448,7 +2448,7 @@ pub async fn openclaw_config_handler(
         model: openclaw_default_model(),
         internal_only: true,
         container_ip: openclaw_host_label(&endpoint),
-        container_port: 18789,
+        container_port: 8090,
     })
 }
 

@@ -37,9 +37,6 @@ in the `operation-dbus-proto` workspace (26 files across 8 crates). Vendored pro
 | op-assistant-grpc | [session.proto](./op-assistant-grpc/session.proto.md) | `assistant.v1` | SessionService |
 | op-assistant-grpc | [soul.proto](./op-assistant-grpc/soul.proto.md) | `assistant.v1` | SoulService |
 | op-assistant-grpc | [task.proto](./op-assistant-grpc/task.proto.md) | `assistant.v1` | TaskService |
-| op-openvswitch-daemon | [ovsdaemon.proto](./op-openvswitch-daemon/ovsdaemon.proto.md) | `ovsdaemon.v1` | OvsdbService |
-| op-openvswitch-daemon | [ovsdb.proto](./op-openvswitch-daemon/ovsdb.proto.md) | `ovsdaemon.v1` | OvsdbService _(overlaps ovsdaemon.proto)_ |
-| op-openvswitch-daemon | [streaming.proto](./op-openvswitch-daemon/streaming.proto.md) | `ovsdaemon.v1` | OvsdbStreamService |
 
 ## Conventions in these docs
 
@@ -50,10 +47,6 @@ in the `operation-dbus-proto` workspace (26 files across 8 crates). Vendored pro
 
 ## Known gaps
 
-- **OVSDB service duplication:** `ovsdaemon.proto` and `ovsdb.proto` both declare
-  `OvsdbService` in package `ovsdaemon.v1`. `ovsdb.proto` is the superset. This collides
-  at codegen and needs cleanup; `op-openvswitch-daemon` may not be an active workspace
-  member.
 - **MailService duplication:** exists in both `op-grpc-bridge/mail.proto`
   (`operation.mail.v1`, bridge projection) and `op-grpc-adapters/adapters.proto`
   (`op.adapters.v1`, adapter transport).

@@ -7,7 +7,7 @@
 //!
 //! Column types (from docs.cozodb.org/en/latest/datatypes.html):
 //!   Atomic: Int, Float, Bool, String, Bytes, Uuid, Json, Validity
-//!   Composite: [Type] (list), (T1, T2) (tuple), <F32; N> (vector)
+//!   Composite: \[Type\] (list), (T1, T2) (tuple), <F32; N> (vector)
 //!   Special: Any, Any? (nullable)
 //!
 //! Engines: mem, sled, rocksdb, sqlite

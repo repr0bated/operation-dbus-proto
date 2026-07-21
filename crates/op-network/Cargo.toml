@@ -47,7 +47,7 @@ rovs-transport = "0.2"
 # Bytes for wire-protocol encoding in controller.rs
 bytes = "1"
 
-# D-Bus proxies for op-openvswitch-daemon passthrough
+# D-Bus proxy for the OVSDB JSON-RPC passthrough interface
 zbus = { workspace = true }
 
 # simd-json — for the transact_simd compatibility shim in ovsdb.rs
@@ -56,14 +56,6 @@ simd-json = { workspace = true }
 [[bin]]
 name = "op-of-controller"
 path = "src/bin/op-of-controller.rs"
-
-[[bin]]
-name = "op-xdp-wg"
-path = "src/bin/op-xdp-wg.rs"
-
-[[bin]]
-name = "op-ovsbr0-afxdp"
-path = "src/bin/op-ovsbr0-afxdp.rs"
 
 [[bin]]
 name = "op-ovsbr0-setup"

@@ -1,7 +1,7 @@
 //! Axum HTTP/gRPC-Web host for the zeroclaw plugin schema.
 //!
 //! Serves the plugin-owned schema JSON on:
-//!   - native gRPC over Unix socket `/run/opdbus/zeroclaw-grpc.sock`
+//!   - native gRPC over Unix socket `/run/ghostbridge/grpc.sock`
 //!   - HTTP/1.1 + gRPC-Web on TCP `0.0.0.0:8090` (configurable via D-Bus)
 //!
 //! The schema itself is never generated here; it is read from the plugin's
@@ -32,7 +32,7 @@ use crate::proto::zeroclaw::{
     GetSchemaRequest, SchemaEvent, SchemaResponse, WatchSchemaRequest,
 };
 
-const DEFAULT_UNIX_SOCKET: &str = "/run/opdbus/zeroclaw-grpc.sock";
+const DEFAULT_UNIX_SOCKET: &str = "/run/ghostbridge/grpc.sock";
 const DEFAULT_BIND_ADDR: &str = "0.0.0.0:8090";
 /// Default schema source: the sealed blob catalog dir. When `schema_path`
 /// is a directory the loader reads the plugin's own blob from it (a blob in
@@ -80,6 +80,7 @@ impl ServerConfig {
                     .unwrap_or_else(|_| DEFAULT_UNIX_SOCKET.to_string()),
             ),
             bind_addr: std::env::var("ZEROCLAW_BIND_ADDR")
+                .or_else(|_| std::env::var("GRPC_BIND"))
                 .unwrap_or_else(|_| DEFAULT_BIND_ADDR.to_string()),
             tls_bind_addr: std::env::var("ZEROCLAW_TLS_BIND_ADDR").ok(),
             tls_identity: Self::load_tls_identity(),
@@ -95,7 +96,9 @@ impl ServerConfig {
 
         match (cert_pem, key_pem) {
             (Some(cert), Some(key)) => {
-                tracing::info!("TLS identity loaded from ZEROCLAW_TLS_CERT/ZEROCLAW_TLS_KEY env vars");
+                tracing::info!(
+                    "TLS identity loaded from ZEROCLAW_TLS_CERT/ZEROCLAW_TLS_KEY env vars"
+                );
                 Some(Identity::from_pem(cert, key))
             }
             _ => {
@@ -339,7 +342,9 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
                 .allow_methods(Any)
                 .allow_headers(Any);
             let tls_config = ServerTlsConfig::new().identity(identity);
-            let server: std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), tonic::transport::Error>> + Send>> = Box::pin(
+            let server: std::pin::Pin<
+                Box<dyn std::future::Future<Output = Result<(), tonic::transport::Error>> + Send>,
+            > = Box::pin(
                 tonic::transport::Server::builder()
                     .accept_http1(true)
                     .tls_config(tls_config)

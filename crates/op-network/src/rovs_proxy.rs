@@ -1,13 +1,20 @@
-//! D-Bus proxies for the op-openvswitch-daemon
+//! D-Bus proxy for the OVSDB JSON-RPC passthrough interface.
 //!
-//! These zbus proxy types allow any crate in the workspace to call the
-//! hypervisor daemon through D-Bus instead of directly linking rovs_ovsdb
-//! or shelling out to ovs-vsctl / ovs-ofctl.
+//! This zbus proxy type allows any crate in the workspace to call an
+//! OVSDB JSON-RPC service through D-Bus instead of directly linking rovs_ovsdb
+//! or shelling out to ovs-vsctl.
 //!
 //! Locked design (AGENTS.md §4):
-//! - Daemon paths: `/org/opdbus/rovs/jsonrpc` and `/org/opdbus/rovs/openflow`
-//! - Interfaces: `org.opdbus.rovs.jsonrpc` and `org.opdbus.rovs.openflow`
-//! - The daemon is a pure passthrough; business logic stays in the plugins.
+//! - Path: `/org/opdbus/rovs/jsonrpc`
+//! - Interface: `org.opdbus.rovs.jsonrpc`
+//! - The service is a pure passthrough; business logic stays in the plugins.
+//!
+//! NOTE: the OpenFlow passthrough half of this module (`RovsOpenFlow`,
+//! `openflow_proxy`, `ensure_proxies`) was removed along with
+//! `op-openvswitch-daemon` (deprecated, purged — see CLAUDE.md). OpenFlow
+//! control now runs entirely through `op-network::openflow::OpenFlowClient`
+//! (direct TCP, no D-Bus hop) and the passive `op-of-controller` service in
+//! `crates/op-network/src/controller.rs`.
 
 use anyhow::{Context, Result};
 use std::sync::Arc;
@@ -72,87 +79,6 @@ pub async fn jsonrpc_proxy() -> Result<RovsJsonRpcProxy<'static>> {
     Ok(RovsJsonRpcProxy::new(&conn).await?)
 }
 
-// ── RovsOpenFlowProxy ─────────────────────────────────────────────────────────
-
-/// Proxy for the OpenFlow passthrough interface.
-///
-/// D-Bus destination: `org.opdbus.v1.plugins.ovsdb`
-/// Object path: `/org/opdbus/rovs/openflow`
-/// Interface: `org.opdbus.rovs.openflow`
-#[proxy(
-    default_service = "org.opdbus.v1.plugins.ovsdb",
-    default_path = "/org/opdbus/rovs/openflow",
-    interface = "org.opdbus.rovs.openflow"
-)]
-pub trait RovsOpenFlow {
-    /// Connect to a switch at `addr` (e.g. `"tcp:127.0.0.1:6653"`).
-    /// Returns connection handle id or error JSON.
-    async fn connect(&self, addr: &str) -> zbus::Result<String>;
-
-    /// Return negotiated OpenFlow version JSON.
-    async fn version(&self) -> zbus::Result<String>;
-
-    /// Send a flow_mod. `flow_json` is a JSON-encoded Flow struct.
-    async fn send_flow(&self, flow_json: &str) -> zbus::Result<String>;
-
-    /// Send a flow_mod and wait for barrier reply.
-    async fn send_flow_sync(&self, flow_json: &str) -> zbus::Result<String>;
-
-    /// Raw `ovs-ofctl` passthrough (temporary until pure OpenFlow binary is wired).
-    /// `bridge` is the bridge name, `args_json` is a JSON array of extra CLI args.
-    async fn ofctl(&self, bridge: &str, args_json: &str) -> zbus::Result<String>;
-
-    /// Send an echo request, return echo reply JSON.
-    async fn echo(&self) -> zbus::Result<String>;
-
-    /// Send a barrier request, return barrier reply JSON.
-    async fn barrier(&self) -> zbus::Result<String>;
-
-    /// Dump all flows. Returns JSON array of FlowStatsEntry.
-    async fn dump_flows(&self) -> zbus::Result<Vec<String>>;
-
-    /// Dump flows matching a filter request JSON.
-    async fn dump_flows_filtered(&self, request: &str) -> zbus::Result<Vec<String>>;
-
-    /// Block until a PacketIn message arrives. Returns JSON PacketIn.
-    async fn recv_packet_in(&self) -> zbus::Result<String>;
-
-    /// Non-blocking try-receive PacketIn. Returns JSON or empty string.
-    async fn try_recv_packet_in(&self) -> zbus::Result<String>;
-
-    /// Start flow monitor with request JSON. Returns initial updates.
-    async fn monitor_flows(&self, request: &str) -> zbus::Result<Vec<String>>;
-
-    /// Block until flow updates arrive. Returns JSON array of FlowUpdate.
-    async fn recv_flow_updates(&self) -> zbus::Result<Vec<String>>;
-
-    /// Send a packet_out. `packet_out_json` is JSON-encoded PacketOut.
-    async fn send_packet_out(&self, packet_out_json: &str) -> zbus::Result<String>;
-
-    /// Controller status JSON.
-    async fn status(&self) -> zbus::Result<String>;
-}
-
-/// Convenience constructor: build a `RovsOpenFlowProxy` on the system bus.
-pub async fn openflow_proxy() -> Result<RovsOpenFlowProxy<'static>> {
-    let conn = Connection::system()
-        .await
-        .context("connect to system D-Bus for RovsOpenFlowProxy")?;
-    Ok(RovsOpenFlowProxy::new(&conn).await?)
-}
-
-// ── Unified helper ────────────────────────────────────────────────────────────
-
-/// Ensure the op-openvswitch-daemon is reachable on D-Bus before proceeding.
-///
-/// This is the preferred entry-point for plugins: call this, then use the
-/// returned proxies instead of `OvsdbClient` or `Command::new("ovs-vsctl")`.
-pub async fn ensure_proxies() -> Result<(RovsJsonRpcProxy<'static>, RovsOpenFlowProxy<'static>)> {
-    let json = jsonrpc_proxy().await?;
-    let of = openflow_proxy().await?;
-    Ok((json, of))
-}
-
 // ── OvsdbDbusClient ─────────────────────────────────────────────────────────
 
 /// High-level OVSDB client that routes through the D-Bus daemon.
@@ -186,7 +112,7 @@ impl OvsdbDbusClient {
         self.proxy
             .get_or_try_init(|| async { jsonrpc_proxy().await })
             .await
-            .context("connect to op-openvswitch-daemon via D-Bus")
+            .context("connect to OVSDB JSON-RPC D-Bus service")
     }
 
     // ── Internal: build & send a transact ───────────────────────────────
@@ -742,8 +668,8 @@ impl OvsdbDbusClient {
 
     /// Monitor OVSDB for changes to a database.
     /// Returns a broadcast receiver that will receive JSON updates.
-    /// NOTE: This is a compatibility shim. In the new architecture, use gRPC streaming
-    /// (op-openvswitch-daemon/src/grpc_streaming.rs) for production monitoring.
+    /// NOTE: This is a compatibility shim built on polling; it is not a
+    /// production-grade change feed.
     pub async fn monitor_db(
         &self,
         database: &str,

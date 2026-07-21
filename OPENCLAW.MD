@@ -1194,7 +1194,7 @@ Now I have a good understanding. Let me create a comprehensive plan for integrat
 ## OpenClaw Integration Plan - Cognitive MCP
 
 ### Current State
-- **OpenClaw**: Running in Incus container at `10.149.181.114:18789`
+- **OpenClaw**: Running in Incus container at `10.149.181.114:8090`
 - **op-cognitive-mcp**: Basic skeleton with memory store and cognitive tools
 - **op-llm**: Has OpenClaw provider but only for chat completions
 - **op-web**: Has OpenClaw handlers for status/config/chat

@@ -973,7 +973,7 @@ pub fn etch_footprint(
 }
 
 /// Per-session WireGuard source port observed for peer_pubkey, parsed from
-/// wg show <iface> dump (iface from WG_INTERFACE, default wg0).
+/// `wg show <iface> dump` (`iface` from `WG_INTERFACE`, default `wg0`).
 ///
 /// Returns 0 when the peer has no current endpoint (not connected, or a local self-write),
 /// so the footprint degrades gracefully to the port-less base.

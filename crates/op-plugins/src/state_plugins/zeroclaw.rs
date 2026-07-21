@@ -546,8 +546,7 @@ impl Default for ZeroclawPlugin {
 
 impl ZeroclawPlugin {
     const DBUS_OBJECT: &'static str = "/org/opdbus/v1/plugins/zeroclaw";
-    const OSCAL_SUBID_REGISTRY_OBJECT: &'static str =
-        "/org/opdbus/v1/plugins/oscal_subid_registry";
+    const OSCAL_SUBID_REGISTRY_OBJECT: &'static str = "/org/opdbus/v1/plugins/oscal_subid_registry";
     const DEFAULT_LOCAL_MODEL: &'static str = "gemma3:4b";
 
     pub fn new() -> Self {
@@ -650,6 +649,17 @@ impl ZeroclawPlugin {
                         route: "openrouter".to_string(),
                         kind: "router".to_string(),
                         aliases: vec![],
+                        ..Default::default()
+                    },
+                    Provider {
+                        id: "salad".to_string(),
+                        route: "salad".to_string(),
+                        kind: "provider".to_string(),
+                        aliases: vec!["salad-ai".to_string(), "salad_ai".to_string()],
+                        endpoint: "https://ai.salad.cloud/v1".to_string(),
+                        auth: "bearer".to_string(),
+                        sdk: "openai-compatible".to_string(),
+                        description: "Salad AI Gateway — managed OpenAI-compatible LLM API on SaladCloud GPUs.".to_string(),
                         ..Default::default()
                     },
                     Provider {
@@ -823,6 +833,45 @@ impl ZeroclawPlugin {
                         available: false,
                         status_reason: "OSCAL policy provider is declared; unavailable until oscal_subid_registry is projected.".to_string(),
                         source: Self::OSCAL_SUBID_REGISTRY_OBJECT.to_string(),
+                        api_key: Some(JsonValue::Null),
+                        ..Default::default()
+                    },
+                    ModelRoute {
+                        hint: "reasoning".to_string(),
+                        provider: "salad".to_string(),
+                        upstream_provider: "salad".to_string(),
+                        transport: "direct".to_string(),
+                        model: "qwen3.6-35b-a3b".to_string(),
+                        kind: "chat".to_string(),
+                        status: "declared".to_string(),
+                        available: false,
+                        status_reason: "Salad qwen3.6-35b-a3b; requires SALAD_API_KEY and backend projection.".to_string(),
+                        api_key: Some(JsonValue::Null),
+                        ..Default::default()
+                    },
+                    ModelRoute {
+                        hint: "balanced".to_string(),
+                        provider: "salad".to_string(),
+                        upstream_provider: "salad".to_string(),
+                        transport: "direct".to_string(),
+                        model: "qwen3.6-27b".to_string(),
+                        kind: "chat".to_string(),
+                        status: "declared".to_string(),
+                        available: false,
+                        status_reason: "Salad qwen3.6-27b; requires SALAD_API_KEY and backend projection.".to_string(),
+                        api_key: Some(JsonValue::Null),
+                        ..Default::default()
+                    },
+                    ModelRoute {
+                        hint: "fast".to_string(),
+                        provider: "salad".to_string(),
+                        upstream_provider: "salad".to_string(),
+                        transport: "direct".to_string(),
+                        model: "qwen3.5-9b".to_string(),
+                        kind: "chat".to_string(),
+                        status: "declared".to_string(),
+                        available: false,
+                        status_reason: "Salad qwen3.5-9b; requires SALAD_API_KEY and backend projection.".to_string(),
                         api_key: Some(JsonValue::Null),
                         ..Default::default()
                     },

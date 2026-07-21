@@ -120,8 +120,8 @@ impl From<WgOpdbusState> for WgOpdbusStatusOutput {
 }
 
 fn default_state_value() -> Value {
-    let bytes = serde_json::to_vec(&WgOpdbusState::default())
-        .expect("wg_opdbus default state serializes");
+    let bytes =
+        serde_json::to_vec(&WgOpdbusState::default()).expect("wg_opdbus default state serializes");
     let mut bytes = bytes;
     simd_json::to_owned_value(&mut bytes).expect("wg_opdbus default state is valid JSON")
 }
@@ -162,7 +162,10 @@ impl StatePlugin for WgOpdbusPlugin {
     }
 
     async fn verify_state(&self, desired: &Value) -> Result<bool> {
-        Ok(desired.get("wireguard_plugin").and_then(|v| v.as_str()).is_some()
+        Ok(desired
+            .get("wireguard_plugin")
+            .and_then(|v| v.as_str())
+            .is_some()
             && desired.get("interface").is_some())
     }
 

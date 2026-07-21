@@ -64,7 +64,7 @@
 ● Bash(sudo -n incus exec wg-xray -- ss -tlnp 2>/dev/null | grep -E
       "11435|50051|LISTEN" | head -30; echo "=== processes ==="; sudo -n incus
       exec wg-xray -- ps aux 2>/…)
-  ⎿  LISTEN 0      128          0.0.0.0:18789      0.0.0.0:*    users:(("ze
+  ⎿  LISTEN 0      128          0.0.0.0:8090      0.0.0.0:*    users:(("ze
      roclaw",pid=21032,fd=9))
      LISTEN 0      4096        10.0.0.1:53         0.0.0.0:*    users:(("ne
      … +16 lines (ctrl+o to expand)
@@ -226,7 +226,7 @@
   And to be clear on your other suspicion: zeroclaw is not the culprit either.
   Its config (/root/.zeroclaw/config.toml in wg-xray) has only an ollama/gemma4
   provider at localhost:11434 — no Google/Vertex provider at all. The zeroclaw
-  gateway on :18789 is up and healthy (just unpaired).
+  gateway on :8090 is up and healthy (just unpaired).
 
   Two ways to fix
 
@@ -746,7 +746,7 @@
 
 ● Bash(cd /home/jeremy/git/operation-dbus-proto
       echo "=== zeroclaw gateway model endpoints referenced in code ==="; grep
-      -rniE "18789|/api/models|models.list|zeroclaw.…)
+      -rniE "8090|/api/models|models.list|zeroclaw.…)
   ⎿  === zeroclaw gateway model endpoints referenced in code ===
      crates/op-agents/src/agents/architecture/graphql_architect.rs:39:
         if input.contains("federation") || input.contains("gateway") {
@@ -759,7 +759,7 @@
   for models and how op-web could reach it, before wiring anything.
 
 ● Bash(echo "=== zeroclaw gateway health + models (in wg-xray) ==="; sudo -n
-      incus exec wg-xray -- sh -c 'curl -s -m 5 http://127.0.0.1:18789/health;
+      incus exec wg-xray -- sh -c 'curl -s -m 5 http://127.0.0.1:8090/health;
       echo; echo "--- /…)
   ⎿  === zeroclaw gateway health + models (in wg-xray) ===
      {
@@ -768,7 +768,7 @@
 
   Read 1 file (ctrl+o to expand)
 
-● The zeroclaw gateway (:18789) is gated behind pairing (paired:false) and its
+● The zeroclaw gateway (:8090) is gated behind pairing (paired:false) and its
   config only has ollama/gemma4 — so it's not currently a usable live model
   source over HTTP. But your op-plugins/zeroclaw.rs state plugin publishes a
   providers + model_routes contract over D-Bus/projection "so the UI can render
