@@ -1365,7 +1365,7 @@ fn write_xray_config_with_sockets(
     {{
       "tag": "to-grpc-bridge",
       "protocol": "freedom",
-      "settings": {{ "redirect": "127.0.0.1:18789" }},
+      "settings": {{ "redirect": "127.0.0.1:8090" }},
       "streamSettings": {{
         "network": "grpc",
         "sockopt": {{ "tcpNoDelay": true, "mark": 255 }},

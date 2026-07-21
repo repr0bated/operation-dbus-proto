@@ -191,7 +191,10 @@ impl ActiveReflectionCatalog {
     /// plugin ids. This is how a full re-seal deregisters plugins that no
     /// longer exist — a blob in the catalog IS the plugin, so a plugin that
     /// vanished from the build must vanish from the catalog.
-    pub fn retain_plugins(&mut self, keep: &std::collections::HashSet<String>) -> io::Result<Vec<String>> {
+    pub fn retain_plugins(
+        &mut self,
+        keep: &std::collections::HashSet<String>,
+    ) -> io::Result<Vec<String>> {
         let stale: Vec<String> = self
             .entries
             .keys()

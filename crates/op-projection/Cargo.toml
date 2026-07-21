@@ -11,13 +11,12 @@ op-core = { path = "../op-core" }
 op-state = { path = "../op-state" }
 op-state-store = { path = "../op-state-store" }
 op-plugins = { path = "../op-plugins" }
-op-dbus-mirror = { path = "../op-dbus-mirror" }
 op-blockchain = { path = "../op-blockchain" }
 op-identity = { path = "../op-identity" }
 
 # Async runtime
 tokio = { workspace = true, features = ["full", "sync"] }
-tokio-stream = { workspace = true }
+tokio-stream = { workspace = true, features = ["sync"] }
 futures = { workspace = true }
 
 # Web

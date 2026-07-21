@@ -6,7 +6,7 @@
 //! ## Configuration
 //!
 //! ```bash
-//! OPENCLAW_BASE_URL=http://127.0.0.1:18789  # default
+//! OPENCLAW_BASE_URL=http://127.0.0.1:8090  # default
 //! ```
 
 use anyhow::{Context, Result};
@@ -22,7 +22,7 @@ use crate::provider::{
     ToolCallInfo,
 };
 
-const DEFAULT_BASE_URL: &str = "http://127.0.0.1:18789";
+const DEFAULT_BASE_URL: &str = "http://127.0.0.1:8090";
 const DEFAULT_MODEL: &str = "openclaw:main";
 
 pub struct OpenClawProvider {

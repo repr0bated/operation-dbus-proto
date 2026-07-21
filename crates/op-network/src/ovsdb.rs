@@ -2,8 +2,7 @@
 //!
 //! This module provides an OVSDB client for OVS bridge management.
 //! It uses D-Bus (zbus) to call the `org.opdbus.rovs.jsonrpc` interface
-//! served by op-openvswitch-daemon at `/org/opdbus/rovs/jsonrpc` on the
-//! system bus (bus name `org.opdbus.v1`).
+//! at `/org/opdbus/rovs/jsonrpc` on the system bus (bus name `org.opdbus.v1`).
 //!
 //! Per AGENTS.md §4: D-Bus is the ONLY control plane.
 

@@ -33,7 +33,6 @@ members = [
     "crates/op-dbus-model",
     "crates/op-grpc-bridge",
     "crates/op-grpc-adapters",
-    "crates/op-dbus-mirror",
     "crates/op-compliance",
     "crates/op-projection",
     "crates/op-assistant-grpc",
@@ -73,7 +72,6 @@ op-mcp = { path = "crates/op-mcp" }
 op-web = { path = "crates/op-web" }
 op-grpc-bridge = { path = "crates/op-grpc-bridge" }
 op-identity = { path = "crates/op-identity" }
-op-dbus-mirror = { path = "crates/op-dbus-mirror" }
 op-jsonrpc = { path = "crates/op-jsonrpc" }
 op-projection = { path = "crates/op-projection" }
 op-cozo-store = { path = "crates/op-cozo-store" }
@@ -230,7 +228,6 @@ op-blockchain.workspace = true
 op-inspector.workspace = true
 op-web.workspace = true
 op-grpc-bridge.workspace = true
-op-dbus-mirror.workspace = true
 op-mcp.workspace = true
 op-cognitive-mcp = { path = "crates/op-cognitive-mcp" }
 

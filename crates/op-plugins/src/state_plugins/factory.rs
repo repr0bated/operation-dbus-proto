@@ -24,6 +24,9 @@ pub struct FactoryState {
     pub status: String,
     pub endpoint: String,
     pub auth_method: String,
+    /// Credential metadata only. Secret values are supplied through the
+    /// referenced environment variables and are never projected.
+    pub api_keys: Value,
     pub computers: Value,
     pub sessions: Value,
     pub session_settings: Value,
@@ -143,11 +146,21 @@ impl FactoryPlugin {
     pub(crate) fn current_state() -> FactoryState {
         let endpoint = Self::env_or("FACTORY_API_ENDPOINT", "https://api.factory.ai/api/v0");
         let auth_method = Self::env_or("FACTORY_AUTH_METHOD", "bearer");
+        let openrouter_configured =
+            std::env::var_os("FACTORY_OR_API").is_some_and(|value| !value.is_empty());
 
         FactoryState {
             status: "active".to_string(),
             endpoint,
             auth_method,
+            api_keys: json!({
+                "openrouter": {
+                    "env_var": "FACTORY_OR_API",
+                    "configured": openrouter_configured,
+                    "mode": "byok",
+                    "project_secret": false
+                }
+            }),
             computers: json!({
                 "endpoint": "/api/v0/computers",
                 "provider_types": ["byom", "e2b"],
@@ -184,10 +197,15 @@ impl FactoryPlugin {
                 ],
                 "provider_locks": [
                     "anthropic", "openai", "generic-chat-completion-api",
-                    "factory", "google", "xai", "voyage", "bedrock-converse"
+                    "factory", "openrouter", "google", "xai", "voyage", "bedrock-converse"
                 ]
             }),
             models: json!({
+                "categories": [
+                    {"id": "factory", "name": "Factory"},
+                    {"id": "openrouter", "name": "OpenRouter"},
+                    {"id": "openrouter-free", "name": "OpenRouter Free"}
+                ],
                 "catalog": [
                     {"id": "claude-sonnet-4-6", "family": "anthropic"},
                     {"id": "claude-opus-4-6", "family": "anthropic"},
@@ -209,7 +227,33 @@ impl FactoryPlugin {
                     {"id": "kimi-k2.5", "family": "moonshot"},
                     {"id": "minimax-m2.7", "family": "minimax"},
                     {"id": "aspen-05-15", "family": "factory-internal"},
-                    {"id": "almond-05-27", "family": "factory-internal"}
+                    {"id": "almond-05-27", "family": "factory-internal"},
+
+                    {"id": "openrouter/auto", "family": "openrouter", "category": "openrouter", "billing": "byok", "requires_api_key": true},
+                    {"id": "anthropic/claude-sonnet-4.6", "family": "anthropic", "category": "openrouter", "billing": "byok", "requires_api_key": true},
+                    {"id": "anthropic/claude-opus-4.6", "family": "anthropic", "category": "openrouter", "billing": "byok", "requires_api_key": true},
+                    {"id": "anthropic/claude-opus-4.7", "family": "anthropic", "category": "openrouter", "billing": "byok", "requires_api_key": true},
+                    {"id": "anthropic/claude-opus-4.8", "family": "anthropic", "category": "openrouter", "billing": "byok", "requires_api_key": true},
+                    {"id": "google/gemini-2.5-pro", "family": "google", "category": "openrouter", "billing": "byok", "requires_api_key": true},
+                    {"id": "google/gemini-2.5-flash", "family": "google", "category": "openrouter", "billing": "byok", "requires_api_key": true},
+                    {"id": "google/gemini-3.5-flash", "family": "google", "category": "openrouter", "billing": "byok", "requires_api_key": true},
+                    {"id": "deepseek/deepseek-v4-pro", "family": "deepseek", "category": "openrouter", "billing": "byok", "requires_api_key": true},
+                    {"id": "deepseek/deepseek-v4-flash", "family": "deepseek", "category": "openrouter", "billing": "byok", "requires_api_key": true},
+
+                    {"id": "openrouter/free", "family": "openrouter", "category": "openrouter-free"},
+                    {"id": "tencent/hy3:free", "family": "tencent", "category": "openrouter-free"},
+                    {"id": "poolside/laguna-xs-2.1:free", "family": "poolside", "category": "openrouter-free"},
+                    {"id": "cohere/north-mini-code:free", "family": "cohere", "category": "openrouter-free"},
+                    {"id": "nvidia/nemotron-3-ultra-550b-a55b:free", "family": "nvidia", "category": "openrouter-free"},
+                    {"id": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free", "family": "nvidia", "category": "openrouter-free"},
+                    {"id": "poolside/laguna-m.1:free", "family": "poolside", "category": "openrouter-free"},
+                    {"id": "google/gemma-4-26b-a4b-it:free", "family": "google", "category": "openrouter-free"},
+                    {"id": "google/gemma-4-31b-it:free", "family": "google", "category": "openrouter-free"},
+                    {"id": "nvidia/nemotron-3-super-120b-a12b:free", "family": "nvidia", "category": "openrouter-free"},
+                    {"id": "nvidia/nemotron-3-nano-30b-a3b:free", "family": "nvidia", "category": "openrouter-free"},
+                    {"id": "nvidia/nemotron-nano-12b-v2-vl:free", "family": "nvidia", "category": "openrouter-free"},
+                    {"id": "nvidia/nemotron-nano-9b-v2:free", "family": "nvidia", "category": "openrouter-free"},
+                    {"id": "openai/gpt-oss-20b:free", "family": "openai", "category": "openrouter-free"}
                 ],
                 "model_routes": [
                     {"hint": "best", "provider": "factory", "model": "auto", "kind": "orchestrator", "available": true, "status_reason": "Factory auto-selects best model"},
@@ -221,6 +265,8 @@ impl FactoryPlugin {
                     {"hint": "fast", "provider": "factory", "model": "gemini-2.5-flash", "kind": "chat", "available": true, "status_reason": "Gemini 2.5 Flash via Factory"},
                     {"hint": "fast", "provider": "factory", "model": "gpt-5.5-fast", "kind": "chat", "available": true, "status_reason": "GPT 5.5 Fast via Factory"},
                     {"hint": "code", "provider": "factory", "model": "deepseek-v4-pro", "kind": "chat", "available": true, "status_reason": "DeepSeek V4 Pro via Factory"}
+                    ,{"hint": "auto", "provider": "openrouter", "model": "openrouter/auto", "kind": "router", "available": openrouter_configured, "billing": "byok", "api_key_env": "FACTORY_OR_API", "status_reason": if openrouter_configured { "OpenRouter BYOK auto-router is configured" } else { "Set FACTORY_OR_API to enable OpenRouter BYOK models" }}
+                    ,{"hint": "free", "provider": "openrouter", "model": "openrouter/free", "kind": "router", "available": openrouter_configured, "billing": "free", "api_key_env": "FACTORY_OR_API", "status_reason": if openrouter_configured { "OpenRouter selects an available free model" } else { "Set FACTORY_OR_API to use the OpenRouter free router" }}
                 ]
             }),
             providers: json!([
@@ -228,6 +274,13 @@ impl FactoryPlugin {
                     "id": "factory", "route": "factory", "kind": "orchestrator",
                     "aliases": ["default", "auto", "droid"],
                     "endpoint": "https://api.factory.ai/api/v0", "auth": "bearer"
+                },
+                {
+                    "id": "openrouter", "route": "openrouter", "kind": "router",
+                    "aliases": ["open-router"],
+                    "endpoint": "https://openrouter.ai/api/v1", "auth": "bearer",
+                    "credential_mode": "byok", "api_key_env": "FACTORY_OR_API",
+                    "configured": openrouter_configured
                 },
                 {
                     "id": "zeroclaw", "route": "zeroclaw", "kind": "byom_router",
@@ -429,4 +482,60 @@ pub(crate) fn factory_schema() -> PluginSchema {
 // (single source of the catalog; no central dispatch list).
 inventory::submit! {
     crate::default_registry::PluginReg::new("factory", |_ctx| std::sync::Arc::new(FactoryPlugin::new()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use simd_json::prelude::*;
+
+    #[test]
+    fn openrouter_byok_and_free_models_have_distinct_categories() {
+        let state = FactoryPlugin::current_state();
+        let catalog = state
+            .models
+            .get("catalog")
+            .and_then(Value::as_array)
+            .unwrap();
+
+        let paid = catalog
+            .iter()
+            .filter(|model| model.get("category").and_then(Value::as_str) == Some("openrouter"));
+        assert!(paid.count() > 0);
+        assert!(catalog
+            .iter()
+            .filter(|model| { model.get("category").and_then(Value::as_str) == Some("openrouter") })
+            .all(|model| {
+                model.get("billing").and_then(Value::as_str) == Some("byok")
+                    && model.get("requires_api_key").and_then(Value::as_bool) == Some(true)
+            }));
+
+        let free: Vec<_> = catalog
+            .iter()
+            .filter(|model| {
+                model.get("category").and_then(Value::as_str) == Some("openrouter-free")
+            })
+            .collect();
+        assert!(!free.is_empty());
+        assert!(free.iter().all(|model| {
+            let id = model.get("id").and_then(Value::as_str).unwrap_or_default();
+            id == "openrouter/free" || id.ends_with(":free")
+        }));
+    }
+
+    #[test]
+    fn openrouter_provider_uses_non_secret_byok_reference() {
+        let state = FactoryPlugin::current_state();
+        let credential = state.api_keys.get("openrouter").unwrap();
+
+        assert_eq!(
+            credential.get("env_var").and_then(Value::as_str),
+            Some("FACTORY_OR_API")
+        );
+        assert_eq!(credential.get("mode").and_then(Value::as_str), Some("byok"));
+        assert_eq!(
+            credential.get("project_secret").and_then(Value::as_bool),
+            Some(false)
+        );
+    }
 }

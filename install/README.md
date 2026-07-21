@@ -32,7 +32,7 @@ sudo ./install/3tched-artix-s6-install.sh --help          # all options
 - **Workspace binaries** (built `--release`, installed to `/usr/local/bin`):
   `op-web-server`, `opdbus`, `projection_server`, `op-grpc-bridge`,
   `op-cognitive-mcp`, `op-mcp-compact`, `s6d`/`op-s6-systemctl`,
-  `op-xray-daemon`, `op-of-controller`, `op-ovsbr0-setup`, `op-ovsbr0-afxdp`,
+  `op-xray-daemon`, `op-of-controller`, `op-ovsbr0-setup`,
   `opblob`, `op-dbus-mirror`, and friends.
 
 ## s6 layout it generates
@@ -49,8 +49,8 @@ contract):
 
 ```
 opdbus-rundirs (oneshot: /run/opdbus, /dev/shm/opdbus/plugin-blobs)
-└─ ovsdb-server ─ ovs-vswitchd (op-ovsbr0-setup --seed-only: netdev bridge +
-   │              veth + UPLINK enslaved in ONE atomic OVSDB transact)
+└─ ovsdb-server ─ ovs-vswitchd (op-ovsbr0-setup --seed-only: system bridge +
+   │              UPLINK enslaved in ONE atomic OVSDB transact)
    └─ ovsbr0-addr (oneshot: op-ovsbr0-setup, 10.200.0.1/24, uplink IP
       │            migration, NAT, route 10.0.0.0/24 dev ovsbr0)
       ├─ op-of-controller (OpenFlow 1.3 @ 10.200.0.1:6653)
@@ -59,7 +59,7 @@ opdbus-rundirs (oneshot: /run/opdbus, /dev/shm/opdbus/plugin-blobs)
       └─ opdbus (gRPC state manager @ ovsbr0:50051)
 op-session-bus (busd @ unix:/run/opdbus/session-bus.sock)
 ├─ op-projection ─ op-web (:8080)
-├─ op-grpc-bridge (127.0.0.1:18789)
+├─ op-grpc-bridge (127.0.0.1:8090; Xray publishes it on the uplink)
 ├─ op-cognitive-mcp · op-mcp-compact · op-dbus-mirror · op-xray-daemon
 ```
 

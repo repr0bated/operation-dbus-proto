@@ -52768,11 +52768,11 @@ op-llm (lib.rs)
 * **Description**: 
   The `OpenClawProvider` connects to the local OpenClaw agent platform over an unencrypted HTTP route by default:
   ```rust
-  const DEFAULT_BASE_URL: &str = "http://127.0.0.1:18789";
+  const DEFAULT_BASE_URL: &str = "http://127.0.0.1:8090";
   ```
   While labeled as a "trusted internal network" endpoint, relying on cleartext HTTP means all prompt contents, tool definitions, execution arguments, and session outputs are transmitted unencrypted. On systems with multi-tenant namespaces, containerized overlays, or shared virtual interfaces, attackers on the same segment can inspect or tamper with internal control packets. This exposes sensitive metadata, internal database structures, and dynamic system interaction schemas to network-level interception.
 * **Remediation**: 
-  Configure the provider to enforce HTTPS by default (e.g. `https://127.0.0.1:18789`), requiring TLS certificate verification even on internal or loopback networks. If HTTP is explicitly required for local diagnostic environments, issue a warning when the target IP resolves outside safe loopback boundaries.
+  Configure the provider to enforce HTTPS by default (e.g. `https://127.0.0.1:8090`), requiring TLS certificate verification even on internal or loopback networks. If HTTP is explicitly required for local diagnostic environments, issue a warning when the target IP resolves outside safe loopback boundaries.
 
 ---
 
@@ -53875,7 +53875,7 @@ The following values are hardcoded in the codebase:
 *   **Hardcoded Local API Base URL**:
     `crates/op-llm/src/openclaw.rs:27`
     ```rust
-    const DEFAULT_BASE_URL: &str = "http://127.0.0.1:18789";
+    const DEFAULT_BASE_URL: &str = "http://127.0.0.1:8090";
     ```
     *Severity: Low.* Establishes a default connection string over localhost for the OpenClaw agent platform.
 
@@ -54297,7 +54297,7 @@ A core tenet of modern system-of-systems engineering is the maintenance of stric
   * `crates/op-llm/src/openclaw.rs:51`
 
 * **Description**:
-  The `OpenClawProvider` defines `DEFAULT_BASE_URL` as `http://127.0.0.1:18789`. If the provider base URL is modified to route to an external agent platform over a physical or virtual network, all chat histories, tool schemas, and responses will be transmitted over unencrypted HTTP. This exposes sensitive system commands, internal database schemas, and API payloads to unencrypted passive network eavesdropping.
+  The `OpenClawProvider` defines `DEFAULT_BASE_URL` as `http://127.0.0.1:8090`. If the provider base URL is modified to route to an external agent platform over a physical or virtual network, all chat histories, tool schemas, and responses will be transmitted over unencrypted HTTP. This exposes sensitive system commands, internal database schemas, and API payloads to unencrypted passive network eavesdropping.
 
 * **Remediation**:
   Default to `https://` endpoints, or enforce transit encryption (TLS) whenever communicating with host addresses other than loopback `127.0.0.1` or `localhost`.
@@ -54479,7 +54479,7 @@ Several critical components utilize hardcoded targets, local addresses, ports, a
 
 ### Localhost / Port Mapping
 *   **`crates/op-llm/src/openclaw.rs:25`**
-    *   `const DEFAULT_BASE_URL: &str = "http://127.0.0.1:18789";`
+    *   `const DEFAULT_BASE_URL: &str = "http://127.0.0.1:8090";`
     *   **Risk**: Points by default to a specific local loopback port. If the cluster runs OpenClaw on an alternate port or containerized network boundary, requests will fail silently without active base URL variable specification.
 *   **`crates/op-llm/src/antigravity.rs:104`**
     *   `"1. Connect to Antigravity Bridge: export ANTIGRAVITY_BRIDGE_URL=http://127.0.0.1:7788"`
@@ -90360,7 +90360,7 @@ The following is a comprehensive inventory of all `std::env::var` calls inside t
 | `crates/op-web/src/wireguard.rs` | 39 | `WG_DNS` | `"10.200.0.1"` |
 | `crates/op-web/src/wireguard.rs` | 40 | `VPN_DNS` | `"10.200.0.1"` |
 | `crates/op-web/src/bin/op-dbus.rs` | 25 | `OP_DBUS_GRPC_LISTEN` | `"10.200.0.2:50051"` |
-| `crates/op-web/src/handlers/openclaw.rs` | 19 | `OPENCLAW_BASE_URL` | `"http://127.0.0.1:18789"` |
+| `crates/op-web/src/handlers/openclaw.rs` | 19 | `OPENCLAW_BASE_URL` | `"http://127.0.0.1:8090"` |
 | `crates/op-web/src/handlers/openclaw.rs` | 25 | `OPENCLAW_DEFAULT_MODEL` | `"openclaw:main"` |
 | `crates/op-web/src/handlers/vpn.rs` | 120 | `VPN_ENDPOINT` | `"148.113.204.83:51820"` |
 | `crates/op-web/src/routes/admin.rs` | 238 | `OP_SELF_REPO_PATH` | `None` (Safely handled via `is_ok()`/`ok()`) |
@@ -90429,7 +90429,7 @@ In Rust/Cargo, features are strictly **additive**.
 *   **`10.200.0.1`** — `crates/op-web/src/wireguard.rs:41`, `crates/op-web/src/privacy_network.rs:26`, `crates/op-web/src/privacy_network.rs:27`, `crates/op-web/src/privacy_network.rs:60` (Chokepoint gateway DNS and Xray proxy routing IP).
 *   **`10.200.0.2:50051`** — `crates/op-web/src/bin/op-dbus.rs:24`, `crates/op-web/src/state.rs:232` (Hardcoded default listener/client endpoint for gRPC bridge interactions).
 *   **`10.100.0.2/32`** — `crates/op-web/src/privacy_container.rs:179` & `crates/op-web/src/wireguard.rs:114` (Hardcoded static assignment addresses for test users).
-*   **`http://127.0.0.1:18789`** — `crates/op-web/src/handlers/openclaw.rs:14` & `16` (Hardcoded local loopback gateway configuration for OpenClaw components).
+*   **`http://127.0.0.1:8090`** — `crates/op-web/src/handlers/openclaw.rs:14` & `16` (Hardcoded local loopback gateway configuration for OpenClaw components).
 *   **`1.1.1.1`** — `crates/op-web/src/handlers/vpn.rs:125` (Default fallback resolver IP).
 
 ---

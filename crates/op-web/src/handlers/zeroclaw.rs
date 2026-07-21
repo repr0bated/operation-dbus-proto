@@ -9,7 +9,7 @@ use serde::Deserialize;
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
 use std::sync::Arc;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::state::AppState;
 
@@ -239,44 +239,26 @@ fn json_error_response(status: StatusCode, message: &str) -> Response {
         })
 }
 
-/// Read zeroclaw schema directly from shared memory (Absolute Base)
-/// Per AGENTS.md: "The Absolute Base: PluginSchema is the single source of truth"
-fn read_zeroclaw_from_shm() -> Option<Value> {
-    const SHM_SCHEMA_PATH: &str = "/dev/shm/live-schema.json";
-
-    let mut bytes = op_identity::read_schema_blob()
-        .or_else(|_| std::fs::read(SHM_SCHEMA_PATH))
-        .ok()?;
-    let schema: Value = simd_json::to_owned_value(&mut bytes).ok()?;
-
-    // Extract zeroclaw from the schema examples (the canonical source)
-    let zeroclaw_schema = schema.get("zeroclaw")?.as_array()?.first()?;
-    let fields = zeroclaw_schema.get("fields")?.as_array()?;
-
-    // Helper: find field example by name
-    fn find_example(fields: &[Value], name: &str) -> Option<Value> {
-        for f in fields {
-            let field_name = f.get("name")?.as_str()?;
-            if field_name == name {
-                return f.get("example").cloned();
+/// Read the zeroclaw `PluginSchema` directly from the sealed blob catalog
+/// (Absolute Base). Per AGENTS.md the sealed blob IS the plugin; the monolithic
+/// `/dev/shm/live-schema.json` is gone. The live provider/model catalog lives
+/// in the D-Bus projection (see `zeroclaw_schema_handler`), not in the blob —
+/// this returns the schema contract only.
+fn read_zeroclaw_schema_shm() -> Option<Value> {
+    let schema = op_blob::catalog::read_plugin_schema_shm("zeroclaw")?;
+    // `PluginSchema` serializes to { name, version, fields, methods, … }.
+    let mut v: Value = simd_json::to_owned_value(&mut serde_json::to_vec(&schema).ok()?).ok()?;
+    // Stamp the catalog_hash so consumers can verify lineage.
+    if let Ok(bytes) = std::fs::read("/dev/shm/opdbus/plugin-blobs/.manifest.json") {
+        if let Ok(manifest) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+            if let Some(hash) = manifest.get("catalog_hash").and_then(|h| h.as_str()) {
+                if let Some(obj) = v.as_object_mut() {
+                    obj.insert("catalog_hash".to_string(), simd_json::json!(hash));
+                }
             }
         }
-        None
     }
-
-    Some(json!({
-        "active": true,
-        "status": find_example(fields, "status").and_then(|v| v.as_str().map(String::from)).unwrap_or_else(|| "declared".to_string()),
-        "selected_provider": find_example(fields, "selected_provider").and_then(|v| v.as_str().map(String::from)).unwrap_or_else(|| "antigravity".to_string()),
-        "selected_model": find_example(fields, "selected_model").and_then(|v| v.as_str().map(String::from)).unwrap_or_else(|| "gemini-2.5-flash".to_string()),
-        "providers": find_example(fields, "providers")?,
-        "model_routes": find_example(fields, "model_routes")?,
-        "router": find_example(fields, "router")?,
-        "tools": find_example(fields, "tools")?,
-        "structured_output": find_example(fields, "structured_output")?,
-        "transport": find_example(fields, "transport")?,
-        "ui_surfaces": find_example(fields, "ui_surfaces")?,
-    }))
+    Some(v)
 }
 
 /// Serve the combined schema for schema-driven UI rendering.
@@ -319,29 +301,43 @@ pub async fn zeroclaw_schema_handler(Extension(state): Extension<Arc<AppState>>)
         }
     };
 
-    // Fetch zeroclaw from shared memory (Absolute Base) first
-    // Per AGENTS.md: "1:1 Direct Read (Zero-Copy)" from /dev/shm
-    let zeroclaw = if let Some(shm_data) = read_zeroclaw_from_shm() {
-        info!("Using zeroclaw from shared memory (Absolute Base)");
-        shm_data
-    } else {
-        // Fallback to D-Bus projection
-        match crate::projection_client::get_projection(&state.projection_cache, "zeroclaw").await {
-            Some(v) => v,
+    // Prefer the D-Bus projection (live provider/model catalog), since the
+    // sealed blob only carries the PluginSchema contract, not the live
+    // `projection.providers` / `projection.model_routes`. Fall back to the SHM
+    // PluginSchema so the schema surface still renders when D-Bus is down.
+    let (zeroclaw, zeroclaw_schema) = match crate::projection_client::get_projection(
+        &state.projection_cache,
+        "zeroclaw",
+    )
+    .await
+    {
+        Some(v) => {
+            info!("Using zeroclaw from D-Bus projection (live provider/model catalog)");
+            (v, read_zeroclaw_schema_shm())
+        }
+        None => match read_zeroclaw_schema_shm() {
+            Some(schema) => {
+                warn!("Zeroclaw D-Bus projection unavailable; using SHM PluginSchema only");
+                (schema.clone(), Some(schema))
+            }
             None => {
-                error!("Zeroclaw not available from shared memory or D-Bus");
+                error!("Zeroclaw not available from D-Bus or SHM");
                 return json_error_response(
                     StatusCode::SERVICE_UNAVAILABLE,
                     "Zeroclaw projection not available",
                 );
             }
-        }
+        },
     };
 
+    // Providers + model_routes live under `projection` in the live state.
+    let projection = zeroclaw.get("projection").and_then(|v| v.as_object());
+
     // Build a JSON Schema for the chat form from zeroclaw providers + model_routes
-    let providers = zeroclaw
-        .get("providers")
+    let providers = projection
+        .and_then(|p| p.get("providers"))
         .and_then(|v| v.as_array())
+        .or_else(|| zeroclaw.get("providers").and_then(|v| v.as_array()))
         .map(|arr| {
             arr.iter()
                 .filter_map(|p| p.get("id").and_then(|v| v.as_str()).map(String::from))
@@ -349,9 +345,10 @@ pub async fn zeroclaw_schema_handler(Extension(state): Extension<Arc<AppState>>)
         })
         .unwrap_or_default();
 
-    let model_routes = zeroclaw
-        .get("model_routes")
+    let model_routes = projection
+        .and_then(|p| p.get("model_routes"))
         .and_then(|v| v.as_array())
+        .or_else(|| zeroclaw.get("model_routes").and_then(|v| v.as_array()))
         .map(|arr| {
             arr.iter()
                 .filter_map(|r| {
@@ -409,9 +406,18 @@ pub async fn zeroclaw_schema_handler(Extension(state): Extension<Arc<AppState>>)
         "openapi": openapi,
         "zeroclaw": {
             "plugin_state": zeroclaw,
+            "schema": zeroclaw_schema,
             "chat_form_schema": chat_schema,
-            "structured_output": zeroclaw.get("structured_output").cloned().unwrap_or(json!({})),
-            "tools": zeroclaw.get("tools").cloned().unwrap_or(json!([])),
+            "structured_output": projection
+                .and_then(|p| p.get("structured_output"))
+                .cloned()
+                .or_else(|| zeroclaw.get("structured_output").cloned())
+                .unwrap_or(json!({})),
+            "tools": projection
+                .and_then(|p| p.get("tools"))
+                .cloned()
+                .or_else(|| zeroclaw.get("tools").cloned())
+                .unwrap_or(json!([])),
         }
     });
 

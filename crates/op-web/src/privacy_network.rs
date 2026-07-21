@@ -1,7 +1,7 @@
 //! Host-level privacy network provisioning — OVS switching fabric only.
 //
 // Current architecture (Artix Linux + s6 + Incus + rovs):
-// - Host runs ovsbr0 via OVSDB (datapath=system or netdev for AF_XDP)
+// - Host runs ovsbr0 via OVSDB (datapath=system)
 // - All privacy services (Xray, mail) run on the HOST (xray via the
 //   `gbr-xray` s6 service); the deprecated `wg-xray` Incus container is
 //   stopped and no longer referenced.
@@ -106,8 +106,7 @@ async fn ensure_host_privacy_network_with_config(cfg: &PrivacyNetworkHostConfig)
             .with_context(|| format!("Failed to create OVS bridge '{}'", cfg.bridge_name))?;
     }
 
-    // Configure bridge for controller-driven forwarding. AF_XDP cutover sets
-    // PRIVACY_DATAPATH_TYPE=netdev so this path does not undo the datapath.
+    // Configure bridge for controller-driven forwarding.
     info!(
         "Configuring {} datapath_type={} fail_mode={}",
         cfg.bridge_name, cfg.datapath_type, cfg.fail_mode

@@ -23,6 +23,8 @@
 //! - `json_stream`: Real-time UI delivery
 //! - `access_control`: Access control and redaction
 
+#![deny(rustdoc::broken_intra_doc_links)]
+
 pub mod access_control;
 pub mod data_models;
 pub mod dbus_reader;

@@ -193,7 +193,10 @@ impl GhostbridgePlugin {
     pub fn current_state() -> GhostbridgeState {
         let wg_pubkey = Self::env_or("GHOSTBRIDGE_WG_PUBKEY", "");
         let tls_subject = Self::env_or("GHOSTBRIDGE_TLS_SUBJECT", "ghostbridge.tech");
-        let tls_sans = Self::env_or("GHOSTBRIDGE_TLS_SANS", "localhost,ghostbridge.tech,3tched.com");
+        let tls_sans = Self::env_or(
+            "GHOSTBRIDGE_TLS_SANS",
+            "localhost,ghostbridge.tech,3tched.com",
+        );
         let tls_expires = Self::env_or("GHOSTBRIDGE_TLS_EXPIRES", "");
         let tls_self_signed = std::env::var("GHOSTBRIDGE_TLS_SELF_SIGNED")
             .map(|v| v == "1" || v == "true")
@@ -202,10 +205,8 @@ impl GhostbridgePlugin {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(Self::DEFAULT_GHOSTRUNNER_PORT);
-        let ghostrunner_bind =
-            Self::env_or("GHOSTBRIDGE_UI_BIND", Self::DEFAULT_GHOSTRUNNER_BIND);
-        let ghostrunner_path =
-            Self::env_or("GHOSTBRIDGE_UI_PATH", Self::DEFAULT_GHOSTRUNNER_PATH);
+        let ghostrunner_bind = Self::env_or("GHOSTBRIDGE_UI_BIND", Self::DEFAULT_GHOSTRUNNER_BIND);
+        let ghostrunner_path = Self::env_or("GHOSTBRIDGE_UI_PATH", Self::DEFAULT_GHOSTRUNNER_PATH);
         let ghostrunner_enabled = std::env::var("GHOSTBRIDGE_UI_ENABLED")
             .map(|v| v == "1" || v == "true")
             .unwrap_or(true);
@@ -381,7 +382,10 @@ mod tests {
     use crate::state_plugins::common::oscal::validate_subid;
 
     fn collect_subids(node: &serde_json::Value, out: &mut Vec<String>) {
-        if let Some(subid) = node.get("x-oscal-subid").and_then(serde_json::Value::as_str) {
+        if let Some(subid) = node
+            .get("x-oscal-subid")
+            .and_then(serde_json::Value::as_str)
+        {
             out.push(subid.to_string());
         }
         if let Some(obj) = node.as_object() {

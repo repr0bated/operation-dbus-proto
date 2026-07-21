@@ -41,14 +41,14 @@ Container `wg-xray` only existed for the old external/gateway addr (gone). Colla
    - `/etc/ssl/xray/{3tched.com,ghostbridge.tech}.{pem,key}` → host `/etc/ssl/xray/`
 2. **zeroclaw → host**: binary `wg-xray:/root/.cargo/bin/zeroclaw` (check glibc compat
    Debian→Artix; if not, `cargo install` on host). s6 service `zeroclaw`: `zeroclaw gateway start`,
-   env `ZEROCLAW_GATEWAY_HOST=0.0.0.0 ZEROCLAW_GATEWAY_PORT=18789`, `FACTORY_API_KEY` →
+   env `ZEROCLAW_GATEWAY_HOST=0.0.0.0 ZEROCLAW_GATEWAY_PORT=8090`, `FACTORY_API_KEY` →
    `/etc/ghostbridge/zeroclaw.env` (rotate the key — it was plaintext in the container unit).
 3. **xray → host s6**: fix `gbr-xray` to run `xray run -config /dev/shm/xray-ghostbridge.json`
    (dynamic) — falls back to `/usr/local/etc/xray/config.json` (static) until T3 cutover.
 4. **Network**: alias `10.200.0.1` on host (grpc-uplink). Host already has 10.0.0.2 (opdbus) +
    10.200.0.2 (ovsbr0). Do this carefully — don't drop the chrome-remote-desktop session.
 5. **Retire openclaw**: disable assistant `openclaw.service` (Node `/usr/bin/openclaw gateway run`).
-   Rewire xray config outbound `assistant-openclaw-out` → host zeroclaw `127.0.0.1:18789`.
+   Rewire xray config outbound `assistant-openclaw-out` → host zeroclaw `127.0.0.1:8090`.
 6. **Kill duplicates + decommission**: container xray(181)+zeroclaw, stray host xray(3599);
    then `incus stop wg-xray` and remove. Sled stays host /dev/shm (no container mount).
 

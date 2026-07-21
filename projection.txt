@@ -155,7 +155,7 @@
           rsistent (`s6 set enable xray` + default bundle). BUT most subd
           omains still return HTTP 000 because their **backends are down*
           *, not the forwarder: `op-web :8080` (the default route) — noth
-          ing listening; `assistant :18789` — nothing; `mail :10143` — no
+          ing listening; `assistant :8090` — nothing; `mail :10143` — no
           thing; and `api/dashboard/broker` (:28081/28082/21883) accept o
           n the host forkproxy but reset because the **`netmaker` app con
           tainer is STOPPED**. Next: bring up op-web (8080) + the netmake
@@ -168,7 +168,7 @@
           a `dokodemo-door` SNI dispatcher on :443 → `tls-h2:8444` (qdran
           t) / `tls-h1:8445` (web). Verified: qdrant→200(h2), dashboard→2
           00(h1, was 000), op-web/chat→200. **Two backends still down (se
-          rvice health, not forwarding):** `assistant :18789` (ghostbridg
+          rvice health, not forwarding):** `assistant :8090` (ghostbridg
           e gRPC bridge not running) and the **`netmaker` API container c
           rash-loops** on LXC mount error `Failed to mount "none" onto "/
           usr/lib/lxc/rootfs/run"` (netmaker-ui + netmaker-mq stay up). N
@@ -1518,7 +1518,7 @@
           rsistent (`s6 set enable xray` + default bundle). BUT most subd
           omains still return HTTP 000 because their **backends are down*
           *, not the forwarder: `op-web :8080` (the default route) — noth
-          ing listening; `assistant :18789` — nothing; `mail :10143` — no
+          ing listening; `assistant :8090` — nothing; `mail :10143` — no
           thing; and `api/dashboard/broker` (:28081/28082/21883) accept o
           n the host forkproxy but reset because the **`netmaker` app con
           tainer is STOPPED**. Next: bring up op-web (8080) + the netmake

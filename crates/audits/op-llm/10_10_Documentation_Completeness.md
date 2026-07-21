@@ -53,7 +53,7 @@
   * `crates/op-llm/src/openclaw.rs:51`
 
 * **Description**:
-  The `OpenClawProvider` defines `DEFAULT_BASE_URL` as `http://127.0.0.1:18789`. If the provider base URL is modified to route to an external agent platform over a physical or virtual network, all chat histories, tool schemas, and responses will be transmitted over unencrypted HTTP. This exposes sensitive system commands, internal database schemas, and API payloads to unencrypted passive network eavesdropping.
+  The `OpenClawProvider` defines `DEFAULT_BASE_URL` as `http://127.0.0.1:8090`. If the provider base URL is modified to route to an external agent platform over a physical or virtual network, all chat histories, tool schemas, and responses will be transmitted over unencrypted HTTP. This exposes sensitive system commands, internal database schemas, and API payloads to unencrypted passive network eavesdropping.
 
 * **Remediation**:
   Default to `https://` endpoints, or enforce transit encryption (TLS) whenever communicating with host addresses other than loopback `127.0.0.1` or `localhost`.

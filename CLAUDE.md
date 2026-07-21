@@ -53,7 +53,7 @@ Build gotchas:
 
 **MCP gateways (settled — do not redesign).** `op-cognitive-mcp` is the universal gateway for ALL external clients (tonic-web gRPC :50052 + server reflection for tool discovery). `compact-mcp` is loopback-only for the chatbot. Never create new shims or point external clients at `op-assistant-grpc`.
 
-**Host tooling.** Manage s6 services via the `s6d` CLI (from `op-s6-systemctl`), not raw `s6-svc`. OVS is driven natively over OVSDB JSON-RPC via the rovs plugins (`op-openvswitch-daemon` is deprecated — don't extend it). Containers are Incus; expose sockets via `zbusctl createsocket`, not raw incus proxy devices.
+**Host tooling.** Agents must manage s6 services exclusively through `sudo service6 ...`. Never invoke raw `s6`, `s6-*`, `s6d`, renamed copies, or a shell/interpreter used to bypass this policy; native commands are reserved for boot and explicit human console recovery. OVS is driven natively over OVSDB JSON-RPC via the rovs plugins (`op-openvswitch-daemon` was the deprecated D-Bus-passthrough predecessor to this — it has been removed from the tree; don't recreate it). Containers are Incus; expose sockets via `zbusctl createsocket`, not raw incus proxy devices.
 
 ## Crate map (the ones you'll actually touch)
 

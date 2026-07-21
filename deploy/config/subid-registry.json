@@ -46,7 +46,7 @@
         "backend": {
           "type": "grpc",
           "host": "127.0.0.1",
-          "port": 18789,
+          "port": 8090,
           "service_name": "Ghostbridge.StateSync"
         }
       }
