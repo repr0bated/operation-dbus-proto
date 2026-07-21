@@ -11,7 +11,7 @@ set -euo pipefail
 ZENFLOW_ADC_ACCOUNT=${ZENFLOW_ADC_ACCOUNT:-jeremy@3tched.com}
 ZENFLOW_OPENCLAW_MODEL=${ZENFLOW_OPENCLAW_MODEL:-openclaw:gemini3-adc}
 # Base URL only — op-llm appends /v1/chat/completions itself
-ZENFLOW_OPENCLAW_BASE_URL=${ZENFLOW_OPENCLAW_BASE_URL:-http://127.0.0.1:18789}
+ZENFLOW_OPENCLAW_BASE_URL=${ZENFLOW_OPENCLAW_BASE_URL:-http://127.0.0.1:8090}
 if ! command -v gcloud >/dev/null; then
   echo "gcloud is required to verify the ADC account; install Cloud SDK first."
   exit 1

@@ -54,7 +54,7 @@ The following is a comprehensive inventory of all `std::env::var` calls inside t
 | `crates/op-web/src/wireguard.rs` | 39 | `WG_DNS` | `"10.200.0.1"` |
 | `crates/op-web/src/wireguard.rs` | 40 | `VPN_DNS` | `"10.200.0.1"` |
 | `crates/op-web/src/bin/op-dbus.rs` | 25 | `OP_DBUS_GRPC_LISTEN` | `"10.200.0.2:50051"` |
-| `crates/op-web/src/handlers/openclaw.rs` | 19 | `OPENCLAW_BASE_URL` | `"http://127.0.0.1:18789"` |
+| `crates/op-web/src/handlers/openclaw.rs` | 19 | `OPENCLAW_BASE_URL` | `"http://127.0.0.1:8090"` |
 | `crates/op-web/src/handlers/openclaw.rs` | 25 | `OPENCLAW_DEFAULT_MODEL` | `"openclaw:main"` |
 | `crates/op-web/src/handlers/vpn.rs` | 120 | `VPN_ENDPOINT` | `"148.113.204.83:51820"` |
 | `crates/op-web/src/routes/admin.rs` | 238 | `OP_SELF_REPO_PATH` | `None` (Safely handled via `is_ok()`/`ok()`) |
@@ -123,7 +123,7 @@ In Rust/Cargo, features are strictly **additive**.
 *   **`10.200.0.1`** — `crates/op-web/src/wireguard.rs:41`, `crates/op-web/src/privacy_network.rs:26`, `crates/op-web/src/privacy_network.rs:27`, `crates/op-web/src/privacy_network.rs:60` (Chokepoint gateway DNS and Xray proxy routing IP).
 *   **`10.200.0.2:50051`** — `crates/op-web/src/bin/op-dbus.rs:24`, `crates/op-web/src/state.rs:232` (Hardcoded default listener/client endpoint for gRPC bridge interactions).
 *   **`10.100.0.2/32`** — `crates/op-web/src/privacy_container.rs:179` & `crates/op-web/src/wireguard.rs:114` (Hardcoded static assignment addresses for test users).
-*   **`http://127.0.0.1:18789`** — `crates/op-web/src/handlers/openclaw.rs:14` & `16` (Hardcoded local loopback gateway configuration for OpenClaw components).
+*   **`http://127.0.0.1:8090`** — `crates/op-web/src/handlers/openclaw.rs:14` & `16` (Hardcoded local loopback gateway configuration for OpenClaw components).
 *   **`1.1.1.1`** — `crates/op-web/src/handlers/vpn.rs:125` (Default fallback resolver IP).
 
 ---

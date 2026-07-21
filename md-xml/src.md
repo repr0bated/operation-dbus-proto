@@ -558,7 +558,7 @@ export function connectWebSocket(
 
   No, OpenClaw should NOT handle MCP. Here's why:
 
-  OpenClaw (at 10.149.181.114:18789) is your LLM gateway - it handles:
+  OpenClaw (at 10.149.181.114:8090) is your LLM gateway - it handles:
   - Chat completions (/v1/chat/completions)
   - Model selection and routing
   - Authentication to Gemini via Code Assist OAuth
@@ -1353,7 +1353,7 @@ export function connectWebSocket(
 ● Bash(curl -s http://localhost:8080/api/openclaw/status | jq .)
   ⎿  {
        "available": true,
-       "endpoint": "http://10.149.181.114:18789",
+       "endpoint": "http://10.149.181.114:8090",
      … +4 lines (ctrl+o to expand)
 
 ● I see the problem! The model is set to "opencode/big-pickle" which doesn't

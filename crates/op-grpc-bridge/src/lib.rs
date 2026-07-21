@@ -25,6 +25,7 @@ pub mod callable_reflection;
 pub mod chat_service;
 pub mod dbus_object;
 pub mod dynamic_reflection;
+pub mod emqx_hook_provider;
 pub mod grpc_client;
 pub mod grpc_server;
 pub mod interceptor;
@@ -77,6 +78,11 @@ pub mod proto {
     }
     pub mod registry {
         tonic::include_proto!("operation.registry.v1");
+    }
+
+    /// EMQX ExHook v2 broker callback service.
+    pub mod emqx_exhook {
+        tonic::include_proto!("emqx.exhook.v2");
     }
 
     /// Zeroclaw plugin schema gRPC service (GetSchema / WatchSchema).

@@ -1,0 +1,5 @@
+# Agents retain the existing broad wheel workflow, but direct privileged s6
+# entry points are rejected. `sudo service6 ...` remains allowed and invokes
+# its native helpers after becoming root.
+%wheel ALL=(ALL) NOPASSWD: ALL, !/usr/bin/s6*, !/bin/s6*, !/usr/local/bin/s6*
+

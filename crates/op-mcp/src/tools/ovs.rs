@@ -1,7 +1,8 @@
 //! Open vSwitch Tools
 //!
 //! AGENTS.md §4: D-Bus first. D-Bus always. D-Bus only.
-//! These tools use the op-openvswitch-daemon via D-Bus instead of CLI subprocesses.
+//! Bridge/port queries go through the `rovs_commands` D-Bus plugin; flow
+//! operations connect directly via `op_network::OpenFlowClient` (no daemon).
 
 use crate::tool_registry::{Tool, ToolRegistry};
 use anyhow::Result;
@@ -42,7 +43,7 @@ async fn ovsdb_client() -> Result<op_network::ovsdb::OvsdbClient> {
     Ok(op_network::ovsdb::OvsdbClient::new())
 }
 
-ovs_tool!(OvsListBridgesTool, "ovs_list_bridges", "List all OVS bridges via D-Bus daemon.",
+ovs_tool!(OvsListBridgesTool, "ovs_list_bridges", "List all OVS bridges via native OVSDB client.",
     json!({"type": "object", "properties": {}}),
     |_input: Value| async {
         let client = ovsdb_client().await?;
@@ -52,7 +53,7 @@ ovs_tool!(OvsListBridgesTool, "ovs_list_bridges", "List all OVS bridges via D-Bu
     }
 );
 
-ovs_tool!(OvsShowBridgeTool, "ovs_show_bridge", "Show OVS bridge details via D-Bus daemon.",
+ovs_tool!(OvsShowBridgeTool, "ovs_show_bridge", "Show OVS bridge details via native OVSDB client.",
     json!({"type": "object", "properties": {"bridge": {"type": "string"}}, "required": ["bridge"]}),
     |input: Value| async move {
         let bridge = input.get("bridge").and_then(|v| v.as_str()).ok_or_else(|| anyhow::anyhow!("Missing bridge"))?;
@@ -63,7 +64,7 @@ ovs_tool!(OvsShowBridgeTool, "ovs_show_bridge", "Show OVS bridge details via D-B
     }
 );
 
-ovs_tool!(OvsListPortsTool, "ovs_list_ports", "List ports on an OVS bridge via D-Bus daemon.",
+ovs_tool!(OvsListPortsTool, "ovs_list_ports", "List ports on an OVS bridge via native OVSDB client.",
     json!({"type": "object", "properties": {"bridge": {"type": "string"}}, "required": ["bridge"]}),
     |input: Value| async move {
         let bridge = input.get("bridge").and_then(|v| v.as_str()).ok_or_else(|| anyhow::anyhow!("Missing bridge"))?;
@@ -74,13 +75,11 @@ ovs_tool!(OvsListPortsTool, "ovs_list_ports", "List ports on an OVS bridge via D
     }
 );
 
-ovs_tool!(OvsDumpFlowsTool, "ovs_dump_flows", "Dump flows from an OVS bridge via D-Bus daemon (OpenFlow native).",
+ovs_tool!(OvsDumpFlowsTool, "ovs_dump_flows", "Dump flows from an OVS bridge's OVSDB Flow table via native OVSDB client.",
     json!({"type": "object", "properties": {"bridge": {"type": "string"}}, "required": ["bridge"]}),
     |input: Value| async move {
         let bridge = input.get("bridge").and_then(|v| v.as_str()).ok_or_else(|| anyhow::anyhow!("Missing bridge"))?;
-        // Use D-Bus daemon's OpenFlow service via JSON-RPC passthrough
         let client = ovsdb_client().await?;
-        // Query flows via OVSDB monitoring (native D-Bus)
         let dump = client.dump_db("Open_vSwitch").await
             .map_err(|e| anyhow::anyhow!("D-Bus dump_db failed: {}", e))?;
         // Extract flows from the dump (flows table in OVSDB)
@@ -94,7 +93,7 @@ ovs_tool!(OvsDumpFlowsTool, "ovs_dump_flows", "Dump flows from an OVS bridge via
     }
 );
 
-ovs_tool!(OvsAddBridgeTool, "ovs_add_bridge", "Create an OVS bridge via D-Bus daemon.",
+ovs_tool!(OvsAddBridgeTool, "ovs_add_bridge", "Create an OVS bridge via native OVSDB client.",
     json!({"type": "object", "properties": {"bridge": {"type": "string"}}, "required": ["bridge"]}),
     |input: Value| async move {
         let bridge = input.get("bridge").and_then(|v| v.as_str()).ok_or_else(|| anyhow::anyhow!("Missing bridge"))?;
@@ -105,7 +104,7 @@ ovs_tool!(OvsAddBridgeTool, "ovs_add_bridge", "Create an OVS bridge via D-Bus da
     }
 );
 
-ovs_tool!(OvsDelBridgeTool, "ovs_del_bridge", "Delete an OVS bridge via D-Bus daemon.",
+ovs_tool!(OvsDelBridgeTool, "ovs_del_bridge", "Delete an OVS bridge via native OVSDB client.",
     json!({"type": "object", "properties": {"bridge": {"type": "string"}}, "required": ["bridge"]}),
     |input: Value| async move {
         let bridge = input.get("bridge").and_then(|v| v.as_str()).ok_or_else(|| anyhow::anyhow!("Missing bridge"))?;

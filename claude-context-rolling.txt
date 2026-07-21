@@ -14,7 +14,7 @@
 ### Fixes Applied
 - **Incus proxy fix**: Changed `port-443` from `listen: tcp:148.113.204.83:443` to `listen: tcp:0.0.0.0:443` — now accepts connections from any interface including the WG-tunneled 10.0.0.2
 - **xray config fix**: Deployed full xray config with:
-  - TLS inbound (`op-tls`) on port 443 with VLESS + fallback to gRPC bridge (18789)
+  - TLS inbound (`op-tls`) on port 443 with VLESS + fallback to gRPC bridge (8090)
   - Reality inbound (`ghostbridge-reality`) on port 8443
   - gRPC outbound with IdentitySled headers (`x-ghostbridge-footprint`, `x-ghostbridge-trace-id`)
 
@@ -30,7 +30,7 @@
 ### Key Architectural Facts
 - **ALL traffic is gRPC, not raw HTTP.** Browsers connect via gRPC-Web (tonic supports this with `tonic_web::enable` and `accept_http1(true)`)
 - **No NICs on containers** — unix socket networking only. All inter-service communication via unix domain sockets
-- **xray uses tag routing** — all traffic routed to gRPC bridge (zeroclaw at `127.0.0.1:18789` inside wg-xray)
+- **xray uses tag routing** — all traffic routed to gRPC bridge (zeroclaw at `127.0.0.1:8090` inside wg-xray)
 - **Oracle VPS is decoy front by design** — DNAT forwards to hypervisor via WG tunnel (10.0.0.2)
 - **OVS bridge handles obfuscation** (not xray Reality) — xray Reality is a separate transport layer
 - **Two controller tables planned**: xray for transport routing, OVS for domain routing
@@ -42,7 +42,7 @@ Browser → gRPC-Web
   → WG tunnel → 10.0.0.2 :443
   → Incus proxy → wg-xray container :443
   → xray op-tls inbound (VLESS+TLS)
-  → fallback → 127.0.0.1:18789 (zeroclaw gRPC bridge)
+  → fallback → 127.0.0.1:8090 (zeroclaw gRPC bridge)
   → unix sockets → individual service backends
 ```
 
@@ -93,7 +93,7 @@ Browser → gRPC-Web
 
 ### Changes Made
 - Updated `write_xray_config_with_sockets()` in `crates/op-identity/src/schema_bridge.rs`
-- **Added TLS inbound** (`op-tls`) on port 443 with SNI fallback to gRPC bridge (18789)
+- **Added TLS inbound** (`op-tls`) on port 443 with SNI fallback to gRPC bridge (8090)
 - **Added Reality inbound** (`ghostbridge-reality`) on port 8443
 - **Removed old 10.200.0.1 socks/tproxy inbounds** (NIC-based, replaced by socket networking)
 - **gRPC outbounds**: `to-grpc-bridge`, `to-cognitive-mcp` with sled header injection
@@ -180,7 +180,7 @@ sled mutation → triggers zeroclaw_chat via D-Bus
 
 ### Important Notes
 - `zeroclaw_chat` is NOT in cognitive MCP's tool registry — it's in zeroclaw's own plugin tree
-- Direct HTTP to zeroclaw gateway (`127.0.0.1:18789`) returns web UI; chat API path TBD
+- Direct HTTP to zeroclaw gateway (`127.0.0.1:8090`) returns web UI; chat API path TBD
 - The dynamic config generation loop depends on Ollama being operational
 
 ---
@@ -191,9 +191,9 @@ sled mutation → triggers zeroclaw_chat via D-Bus
 - Config at `/etc/xray/config.json`, written via `python3` inside container (to avoid shell redaction of secrets)
 
 ### Structure
-- `op-tls` inbound: TLS, port 443, VLESS with fallback to 18789
+- `op-tls` inbound: TLS, port 443, VLESS with fallback to 8090
 - `ghostbridge-reality` inbound: Reality, port 8443
-- `grpc-bridge-out` outbound: gRPC transport with sled headers, redirect `127.0.0.1:18789`
+- `grpc-bridge-out` outbound: gRPC transport with sled headers, redirect `127.0.0.1:8090`
 - Single routing rule: all traffic from `op-tls`/`ghostbridge-reality` → `grpc-bridge-out`
 
 ### TLS Certificates
@@ -247,7 +247,7 @@ sled mutation → triggers zeroclaw_chat via D-Bus
 - `443` → `10.0.0.2:443`
 - `80` → `10.0.0.2:80`
 - `8443` → `10.0.0.2:8443`
-- FORWARD allows `ens3→wg0` for ports `80, 443, 3003, 18789, 50051, 50052` to `10.0.0.2`
+- FORWARD allows `ens3→wg0` for ports `80, 443, 3003, 8090, 50051, 50052` to `10.0.0.2`
 
 ### SSH Access
 - `ubuntu@10.189.0.1` via `~/.ssh/vps_key`
@@ -298,7 +298,7 @@ sled mutation → triggers zeroclaw_chat via D-Bus
 | Identity sled (shm) | `/dev/shm/plugin_schema.dat` |
 | xray config (dynamic) | `/dev/shm/xray-ghostbridge.json` |
 | xray config (static, in container) | `/etc/xray/config.json` |
-| zeroclaw gRPC bridge | `127.0.0.1:18789` |
+| zeroclaw gRPC bridge | `127.0.0.1:8090` |
 | cognitive MCP | `:3003` / `100.90.37.254:3003` |
 | compact MCP (loopback only) | `127.0.0.1:11436` |
 | Ollama (when running) | `localhost:11434` |

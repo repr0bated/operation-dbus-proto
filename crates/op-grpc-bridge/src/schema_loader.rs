@@ -81,8 +81,8 @@ impl SchemaLoader {
     /// dir. The blob in the catalog IS the plugin — no monolith, no registry.
     fn load_from_blob_catalog(&self, dir: &Path, start: Instant) -> anyhow::Result<()> {
         let plugin_id = self.plugin_id();
-        let schema = op_blob::catalog::read_plugin_state_store_schema(dir, &plugin_id)
-            .ok_or_else(|| {
+        let schema =
+            op_blob::catalog::read_plugin_state_store_schema(dir, &plugin_id).ok_or_else(|| {
                 anyhow::anyhow!(
                     "no sealed blob for '{}' in catalog {}. \
                      Ensure the catalog has been sealed (opblob seal-shm) first.",

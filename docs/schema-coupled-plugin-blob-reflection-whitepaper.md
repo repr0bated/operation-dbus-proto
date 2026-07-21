@@ -232,7 +232,7 @@ Example shape:
 Use `grpcurl` against the bridge when you want the generated method surface:
 
 ```bash
-grpcurl -plaintext 127.0.0.1:18789 list operation.plugin.v1.ZeroclawPluginMethods
+grpcurl -plaintext 127.0.0.1:8090 list operation.plugin.v1.ZeroclawPluginMethods
 ```
 
 The reflection service advertises only active plugin blobs. If a plugin is not mounted, it should not appear in `ListServices`.

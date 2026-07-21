@@ -31,7 +31,7 @@ const CUSTOM_PROMPT_PATHS: &[&str] = &[
 const FIXED_BASE_PROMPT: &str = r#"3tched AI infrastructure platform — Artix Linux, s6 service supervision, Incus containers, OVS switching fabric, Netmaker WireGuard mesh.
 
 Capabilities:
-- **OVS management** via rovs suite (rovs-ovsdb, rovs-openflow) — bridges, ports, flows, AF_XDP uplink
+- **OVS management** via rovs suite (rovs-ovsdb, rovs-openflow) — bridges, ports, flows
 - **Container orchestration** via Incus (`assistant`, `mail-3tched`)
 - **Xray + gRPC-bridge on the HOST** — xray via the `gbr-xray` s6 service; the operation.v1 gRPC server (StateSync) at `10.200.0.2:50051` is served on the host by `op-dbus`. The deprecated `wg-xray` Incus container is stopped.
 - **Service management** via s6 — NOT systemd, NOT systemctl
@@ -91,7 +91,7 @@ You should call:
 - `list_network_interfaces {}` - List all interfaces with addresses, state, MTU
 
 ### OVS write operations:
-Write tools (add/delete bridge, add/delete port) are not yet registered. For bridge/port mutations use `shell_execute` to invoke `op-ovsbr0-setup` or `op-ovsbr0-afxdp` — these use rovs-ovsdb natively.
+Write tools (add/delete bridge, add/delete port) are not yet registered. For bridge/port mutations use `shell_execute` to invoke `op-ovsbr0-setup` — it uses rovs-ovsdb natively.
 
 ## s6 Service Management
 
@@ -196,7 +196,7 @@ const FIXED_TOPOLOGY_SPEC: &str = r#"
 ### Host
 ```
 OS:       Artix Linux (xanmod kernel), s6 service supervision
-eth0      148.113.204.83/32   Physical NIC, XDP program id 54 attached
+eth0      148.113.204.83/32   Physical NIC, enslaved into ovsbr0
           Gateway: 148.113.204.1
 ```
 
@@ -204,24 +204,20 @@ eth0      148.113.204.83/32   Physical NIC, XDP program id 54 attached
 ```
 INTERFACE      ADDRESS              TYPE              PURPOSE
 ────────────────────────────────────────────────────────────────────────────
-eth0           148.113.204.83/32   Physical / XDP    WAN uplink
-grpc-uplink    10.200.0.2/30       veth pair         gRPC transport to host op-dbus (operation.v1)
-               peer 10.200.0.1/32                     (deprecated: was wg-xray container)
+eth0           148.113.204.83/32   Physical          WAN uplink, enslaved into ovsbr0
 netmaker       100.90.37.254/32    WireGuard         Netmaker mesh (privacy-mesh)
                10.0.0.0/24 scope
                100.90.37.0/24 scope
-ovsbr0         (DOWN)              OVS bridge        Switching fabric (netdev datapath)
-ovs-netdev     (DOWN)              OVS internal      OVS netdev port
+ovsbr0         (DOWN)              OVS bridge        Switching fabric (system datapath)
 ```
 
 ### OVS Bridge — ovsbr0
 ```
 BRIDGE     DATAPATH   FAIL_MODE    DESCRIPTION
 ────────────────────────────────────────────────────────────
-ovsbr0     netdev     standalone   Switching fabric
+ovsbr0     system     standalone   Switching fabric
 ```
-- AF_XDP uplink: `eth0` attached via `op-ovsbr0-afxdp` (migrates management IP to/from bridge)
-- veth port: `grpc-uplink` (host op-dbus operation.v1 gRPC at 10.200.0.2:50051)
+- Uplink: `eth0` enslaved via `op-ovsbr0-setup` (migrates management IP to/from bridge)
 - Managed via rovs suite — no ovs-vsctl
 
 ### Port Naming Convention
@@ -251,7 +247,7 @@ now run on the host (xray via the `gbr-xray` s6 service; operation.v1 gRPC at
 ### Traffic Flow
 ```
 GhostBridge (gb-*) → ovsbr0 → netmaker (WireGuard) → encrypted mesh
-gRPC traffic       → grpc-uplink veth → host op-dbus (10.200.0.2:50051)
+gRPC traffic       → ovsbr0 bridge IP → host op-dbus (10.200.0.1:50051)
 Xray/privacy egress→ host gbr-xray service → internet
 Mesh access        → netmaker 100.90.37.254 → WireGuard peers
 ```
@@ -288,8 +284,8 @@ fail2ban             Intrusion prevention
 
 ### Expected State
 When properly configured:
-- ovsbr0 UP with datapath=netdev, grpc-uplink as veth port
-- eth0 AF_XDP program attached (id 54), management IP on ovsbr0 internal port when bridge is up
+- ovsbr0 UP with datapath=system, eth0 enslaved as a port
+- management IP on ovsbr0 internal port when bridge is up
 - netmaker UP, 100.90.37.254/32, WireGuard mesh active
 - Xray + gRPC-bridge running on the HOST (gbr-xray s6 service; operation.v1
   gRPC at 10.200.0.2:50051 served by op-dbus); the wg-xray container is stopped

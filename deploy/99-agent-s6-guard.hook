@@ -1,0 +1,15 @@
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Type = Package
+Target = s6
+Target = s6-rc
+Target = s6-contrib
+Target = s6-frontend
+Target = op-s6-systemctl
+
+[Action]
+Description = Reapplying the agent service6-only command guard
+When = PostTransaction
+Exec = /usr/local/sbin/agent-s6-guard
+

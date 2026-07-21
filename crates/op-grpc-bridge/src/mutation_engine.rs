@@ -122,10 +122,7 @@ impl op_core::state_publisher::StatePublisher for MutationEngine {
 
 impl MutationEngine {
     /// Create a new authoritative Mutation Engine
-    pub fn new(
-        event_chain: Arc<RwLock<EventChain>>,
-        ovsdb: Arc<OvsdbDbusClient>,
-    ) -> Self {
+    pub fn new(event_chain: Arc<RwLock<EventChain>>, ovsdb: Arc<OvsdbDbusClient>) -> Self {
         let (change_tx, _) = broadcast::channel(1024);
         Self {
             event_chain,

@@ -183,7 +183,7 @@ pub struct OscalSubidRegistryEntry {
     )]
     pub uuid: String,
 
-    /// Human-readable operational taxonomy key. Format: <category>.<component-type>.<subject>.<verb>[.<facet>][@vN]. Immutable per subject.
+    /// Human-readable operational taxonomy key. Format: <category>.<component-type>.<subject>.<verb>\[.<facet>\]\[@vN\]. Immutable per subject.
     #[schemars(
         pattern(r"^(src|prj|sch|mut|obs|evt|exp)\.(this-system|system|interconnection|software|hardware|service|policy|physical|process-procedure|plan|guidance|standard|validation|network)\.[a-z0-9]+(?:-[a-z0-9]+)*\.[a-z0-9]+(?:-[a-z0-9]+)*(?:\.[a-z0-9]+(?:-[a-z0-9]+)*){0,2}(?:@v[1-9][0-9]*)?$"),
         extend("x-oscal-subid" = "sch.standard.oscal-subid-registry.subid@v1"),

@@ -195,3 +195,33 @@ This documentation should be updated when:
 
 *Generated as part of comprehensive architecture documentation initiative*
 *Reference: docs/planning/op-chat-review.md for quality standards*
+
+---
+
+## Consolidated documentation added 2026-07-20
+
+The following documents were consolidated from the inspect copy under `/mnt/opt-inspect/home/git/operation-dbus-proto/` and corrected against the current codebase.
+
+### Operational runbooks
+- [Artix s6 bootdb recovery](operations/artix-s6-bootdb-recovery.md) — recovery procedure and root-cause findings from the 2026-07-02 incident
+- [OVS native JSON-RPC guide](guides/ovs-native-jsonrpc.md) — using `op_network::OvsdbClient` over the D-Bus rovs service
+
+### Architecture and design
+- [Blob architecture appendix](schema-coupled-plugin-blob-reflection-whitepaper-appendix.md) — current state of `PluginObjectBlob`, `ActiveReflectionCatalog`, and remaining blob-deployment work
+- [Privacy network architecture](architecture/privacy-network-architecture.md) — wgcf/WARP privacy routing design
+- WireGuard identity principles — not promoted; the extract contained major inaccuracies against current `op-identity` and remains in `.consolidation-staging/docs-stale-excerpts/major-rewrite/`
+
+### Historical review and planning
+- [Feature review matrix](feature-review/README.md) — per-crate build/feature review from 2026-02-16
+- Collected code reviews — historical review transcripts under `collected-code-reviews/`
+- [Factory MCP setup](FACTORY_MCP_SETUP.md) — Factory/Droid MCP configuration guide
+- [Kiro spec workflow](kiro-spec-workflow.md) — Kiro spec workflow guide
+- [Code-assist escalation](operations/code-assist-escalation-2026-02-11.md) — historical escalation note
+- Planning notes — historical planning and review docs under `planning/`
+- [dbus-mirror session refactor prompt](prompts/dbus-mirror-event-session-refactor.md) — one-time task prompt
+
+### Stale excerpts archived
+The following extracted documents were found to contain major inaccuracies against the current codebase and were moved to `.consolidation-staging/docs-stale-excerpts/major-rewrite/` rather than promoted:
+- `xdp-debugging-patterns.md` — references forbidden host AF_XDP binaries that no longer exist
+- `wireguard-identity-principles.md` — crypto model and several identity claims do not match current `op-identity` implementation
+- `deploy-readme-evolution.md` — describes a deployment structure that no longer exists

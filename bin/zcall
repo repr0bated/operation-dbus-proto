@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SERVICE="operation.v1.PluginService/CallMethod"
-DEFAULT_ENDPOINT="${ZCALL_ENDPOINT:-127.0.0.1:18789}"
+DEFAULT_ENDPOINT="${ZCALL_ENDPOINT:-127.0.0.1:8090}"
 DEFAULT_BLOB_DIR="${ZCALL_BLOB_DIR:-/dev/shm/opdbus/plugin-blobs}"
 SLED_PATH="${ZCALL_SLED_PATH:-/dev/shm/plugin_schema.dat}"
 DBUS_SERVICE="${ZCALL_DBUS_SERVICE:-org.opdbus.v1.plugins}"
@@ -39,7 +39,7 @@ Options:
       --actor ID            Actor id for PluginService.CallMethod.
       --object PATH         Override object path.
       --interface NAME      Override interface name.
-      --endpoint HOST:PORT  gRPC endpoint. Default: 127.0.0.1:18789.
+      --endpoint HOST:PORT  gRPC endpoint. Default: 127.0.0.1:8090.
       --blob-dir DIR        Blob catalog. Default: /dev/shm/opdbus/plugin-blobs.
       --source MODE         blob, auto, schema, dbus. Default: blob.
       --print               Print the expanded grpcurl command and request.
