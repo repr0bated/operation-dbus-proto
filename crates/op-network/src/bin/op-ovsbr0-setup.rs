@@ -1,27 +1,30 @@
-//! op-ovsbr0-setup — ensure ovsbr0 exists with datapath_type=netdev and add ports.
+//! op-ovsbr0-setup — ensure ovsbr0 exists with datapath_type=system and add ports.
 //!
-//! Replaces the original (deleted-source) Rust binary that always created the
-//! bridge with datapath_type=system.  Uses the rovs crate family to manipulate
-//! OVSDB directly and the vswitchd unixctl socket to stop the daemon cleanly.
-//! No ovs-vsctl/ovsdb-client shell commands are used.  `ovs-dpctl del-dp` is
-//! used only while vswitchd is down to clear stale kernel datapath state.
+//! Uses the rovs crate family to manipulate OVSDB directly and the vswitchd
+//! unixctl socket to stop the daemon cleanly.  No ovs-vsctl/ovsdb-client shell
+//! commands are used.  `ovs-dpctl del-dp` is used only while vswitchd is down
+//! to clear stale kernel datapath state.
 //!
 //! Environment variables:
 //!   BRIDGE         OVS bridge name          (default: ovsbr0)
-//!   VETH_HOST      Veth to add as port      (default: grpc-uplink)
 //!   UPLINK         Physical NIC to enslave  (optional; enslaved in the SAME
 //!                  OVSDB transact as bridge creation — uplink capture only
 //!                  starts correctly when vswitchd first reads the bridge and
 //!                  its ports together, so this must not be a second step)
 //!   FAIL_MODE      OVS fail mode            (default: standalone)
-//!   SHARED_MAC     Bridge/container MAC     (default: fa:16:3e:f1:71:d2)
+//!   SHARED_MAC     Bridge MAC override      (default: UPLINK's own MAC when
+//!                  UPLINK is set, so the bridge presents the same address
+//!                  upstream as the NIC always did; fa:16:3e:f1:71:d2 only
+//!                  when there's no UPLINK to match)
 //!   OVSDB_SOCKET   Path to OVSDB socket     (default: auto-detect)
-//!   VSWITCHD_SVC   s6 service path          (default: /run/service/ovs-vswitchd)
+//!   VSWITCHD_SVC   s6 service NAME          (default: ovs-vswitchd; lifecycle
+//!                  goes through the sanctioned `service6` wrapper only —
+//!                  never raw s6-svc/s6-svstat)
 //!   VSWITCHD_CTL   Glob for vswitchd unixctl socket
 //!                  (default: /usr/local/var/run/openvswitch/ovs-vswitchd.*.ctl)
 //!
 //! Modes:
-//!   --seed-only     Write OVSDB netdev bridge/port rows and exit.  This is
+//!   --seed-only     Write OVSDB system bridge/port rows and exit.  This is
 //!                   for the s6 ovs-vswitchd run script before vswitchd starts.
 
 use anyhow::{bail, Context, Result};
@@ -38,10 +41,15 @@ use uuid::Uuid;
 
 struct Config {
     bridge: String,
-    veth_host: String,
     uplink: String,
     fail_mode: String,
-    shared_mac: String,
+    /// `SHARED_MAC` env var, if explicitly set. When unset and `uplink` is
+    /// configured, the bridge's MAC is taken from the uplink NIC's real
+    /// hardware address instead (see `resolve_shared_mac`) — a hosting
+    /// provider's virtual switch typically filters on the MAC it originally
+    /// handed the NIC, so presenting any other MAC on that link silently
+    /// blackholes all traffic once the NIC is enslaved.
+    shared_mac_override: Option<String>,
     ovsdb_socket: String,
     vswitchd_svc: String,
 }
@@ -50,14 +58,118 @@ impl Config {
     fn from_env() -> Self {
         Config {
             bridge: std::env::var("BRIDGE").unwrap_or_else(|_| "ovsbr0".into()),
-            veth_host: std::env::var("VETH_HOST").unwrap_or_else(|_| "grpc-uplink".into()),
             uplink: std::env::var("UPLINK").unwrap_or_default(),
             fail_mode: std::env::var("FAIL_MODE").unwrap_or_else(|_| "standalone".into()),
-            shared_mac: std::env::var("SHARED_MAC").unwrap_or_else(|_| "fa:16:3e:f1:71:d2".into()),
+            shared_mac_override: std::env::var("SHARED_MAC").ok(),
             ovsdb_socket: std::env::var("OVSDB_SOCKET").unwrap_or_else(|_| find_socket_path()),
-            vswitchd_svc: std::env::var("VSWITCHD_SVC")
-                .unwrap_or_else(|_| "/run/service/ovs-vswitchd".into()),
+            vswitchd_svc: std::env::var("VSWITCHD_SVC").unwrap_or_else(|_| "ovs-vswitchd".into()),
         }
+    }
+}
+
+/// Read a network interface's real hardware address from sysfs.
+fn read_iface_mac(iface: &str) -> Result<String> {
+    let path = format!("/sys/class/net/{iface}/address");
+    let mac = std::fs::read_to_string(&path)
+        .with_context(|| format!("reading MAC address from {path}"))?;
+    Ok(mac.trim().to_string())
+}
+
+/// Resolve the bridge's MAC: an explicit `SHARED_MAC` override always wins;
+/// otherwise, when an uplink is configured, use *its* real MAC so the bridge
+/// presents the same address upstream as the NIC always did (enslaving a
+/// physical NIC changes nothing about which MAC the hosting provider's
+/// virtual switch expects on that link). Only falls back to a placeholder
+/// when there's no physical uplink to match at all.
+fn resolve_shared_mac(cfg: &Config) -> String {
+    if let Some(mac) = &cfg.shared_mac_override {
+        return mac.clone();
+    }
+    if !cfg.uplink.is_empty() {
+        match read_iface_mac(&cfg.uplink) {
+            Ok(mac) => {
+                info!("using {}'s own MAC {} for the bridge", cfg.uplink, mac);
+                return mac;
+            }
+            Err(e) => {
+                warn!(
+                    "could not read {}'s MAC ({}); falling back to placeholder — \
+                     traffic on this uplink may be dropped upstream if the provider \
+                     filters by MAC",
+                    cfg.uplink, e
+                );
+            }
+        }
+    }
+    "fa:16:3e:f1:71:d2".to_string()
+}
+
+/// Where the uplink's pre-enslavement IPv4 addresses/gateway are persisted
+/// (a tmpfs path already created by the opdbus-rundirs oneshot).
+const UPLINK_SNAPSHOT_PATH: &str = "/run/opdbus/uplink-migration.env";
+
+/// Snapshot `uplink`'s current IPv4 addresses and default gateway to
+/// `UPLINK_SNAPSHOT_PATH`, so a later step (after the uplink has been
+/// enslaved into the bridge) can apply them to the bridge instead of
+/// re-reading the uplink — the kernel strips all IPs from an interface the
+/// instant it's captured into a bridge, so by the time anything downstream
+/// looks, the uplink itself has nothing left to read.
+///
+/// Only overwrites the snapshot when the uplink currently *has* addresses;
+/// if it's already been stripped (e.g. a later idempotent run), an existing
+/// good snapshot from the real capture is left alone rather than clobbered
+/// with an empty one.
+fn snapshot_uplink_before_enslavement(uplink: &str) {
+    if uplink.is_empty() {
+        return;
+    }
+    let addrs = Command::new("ip")
+        .args(["-4", "-o", "addr", "show", "dev", uplink, "scope", "global"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+        .unwrap_or_default();
+    let addrs: Vec<String> = addrs
+        .lines()
+        .filter_map(|line| line.split_whitespace().nth(3))
+        .map(|s| s.to_string())
+        .collect();
+    if addrs.is_empty() {
+        info!(
+            "{} has no IPv4 addresses right now — leaving any existing {} in place",
+            uplink, UPLINK_SNAPSHOT_PATH
+        );
+        return;
+    }
+
+    let gw = Command::new("ip")
+        .args(["-4", "route", "show", "default", "dev", uplink])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+        .unwrap_or_default()
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(2))
+        .map(|s| s.to_string())
+        .unwrap_or_default();
+
+    let contents = format!(
+        "UPLINK_ADDRS=\"{}\"\nUPLINK_GW=\"{}\"\n",
+        addrs.join(" "),
+        gw
+    );
+    match std::fs::write(UPLINK_SNAPSHOT_PATH, &contents) {
+        Ok(()) => info!(
+            "captured {} (gw {}) from {} to {} before enslavement",
+            addrs.join(" "),
+            if gw.is_empty() { "none" } else { &gw },
+            uplink,
+            UPLINK_SNAPSHOT_PATH
+        ),
+        Err(e) => warn!("failed to write {}: {}", UPLINK_SNAPSHOT_PATH, e),
     }
 }
 
@@ -107,36 +219,41 @@ async fn vswitchd_send_exit(ctl_path: &str) -> Result<()> {
 }
 
 /// Stop vswitchd:
-///   1. Send `exit` via unixctl (graceful shutdown)
-///   2. Use s6-svc -d to prevent auto-restart
-///   3. Wait for the OVSDB socket to be unresponsive (vswitchd releases it)
+///   1. `service6 stop <name>` — the only sanctioned host service-manager
+///      entry point (raw s6-svc/s6-svstat are policy violations outside boot
+///      supervisors and human console recovery)
+///   2. Fall back to a graceful `exit` via unixctl if the wrapper failed
+///   3. Wait for the unixctl socket to vanish (vswitchd removes it on exit)
 ///      and for kernel OVS interfaces to disappear
 async fn stop_vswitchd(svc: &str, bridge: &str) -> Result<()> {
-    // Mark service down in s6 (prevents auto-restart when process exits)
-    let _ = Command::new("s6-svc").args(["-d", svc]).status();
-    std::thread::sleep(Duration::from_millis(100));
-
-    // Send exit via unixctl if socket exists
-    if let Some(ctl) = find_vswitchd_ctl() {
-        let _ = vswitchd_send_exit(&ctl).await;
-    } else {
-        // Fall back to SIGTERM via s6
-        warn!("vswitchd ctl socket not found, using s6 SIGTERM");
-        let _ = Command::new("s6-svc").args(["-t", svc]).status();
+    let stopped = Command::new("service6")
+        .args(["stop", svc])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !stopped {
+        warn!(
+            "service6 stop {} failed — falling back to unixctl exit",
+            svc
+        );
+        if let Some(ctl) = find_vswitchd_ctl() {
+            let _ = vswitchd_send_exit(&ctl).await;
+        }
     }
 
-    // Wait for vswitchd to fully exit: poll s6-svstat for "down"
+    // Wait for vswitchd to fully exit: its unixctl socket disappears with it.
     info!("waiting for vswitchd to exit...");
     for i in 0..50 {
         std::thread::sleep(Duration::from_millis(200));
-        let out = Command::new("s6-svstat").arg(svc).output();
-        if let Ok(o) = out {
-            let s = String::from_utf8_lossy(&o.stdout);
-            if s.trim_start().starts_with("down") {
-                info!("vswitchd exited after {}ms", (i + 1) * 200);
-                break;
-            }
+        if find_vswitchd_ctl().is_none() {
+            info!("vswitchd exited after {}ms", (i + 1) * 200);
+            break;
         }
+    }
+    if let Some(ctl) = find_vswitchd_ctl() {
+        // The supervisor did not take it down in time — last graceful nudge.
+        let _ = vswitchd_send_exit(&ctl).await;
+        std::thread::sleep(Duration::from_millis(500));
     }
 
     clear_kernel_datapath(bridge);
@@ -144,7 +261,7 @@ async fn stop_vswitchd(svc: &str, bridge: &str) -> Result<()> {
     // Wait for kernel OVS interfaces to be cleaned up by the kernel module.
     // When vswitchd exits it releases the kernel datapath; the kernel then
     // GC-removes the ovsbr0 interface (async).  A new vswitchd trying to
-    // create a netdev internal port named "ovsbr0" will get EINVAL if this
+    // create an internal port named "ovsbr0" will get EINVAL if this
     // interface still exists in the kernel.
     let sysfs_path = format!("/sys/class/net/{}", bridge);
     info!("waiting for kernel interface {} to disappear...", bridge);
@@ -161,7 +278,7 @@ async fn stop_vswitchd(svc: &str, bridge: &str) -> Result<()> {
     if Path::new(&sysfs_path).exists() {
         bail!(
             "kernel interface {} still exists after stopping vswitchd; \
-             refusing netdev recreate because vswitchd will fall back to system datapath",
+             refusing recreate until the stale interface is gone",
             bridge
         );
     }
@@ -177,10 +294,10 @@ fn clear_kernel_datapath(bridge: &str) {
     let _ = Command::new("ip").args(["link", "del", bridge]).status();
 }
 
-/// Start vswitchd via s6 and wait until its OVSDB connection is visible.
+/// Start vswitchd through the sanctioned `service6` wrapper.
 fn start_vswitchd(svc: &str) {
-    info!("starting vswitchd via s6: {}", svc);
-    let _ = Command::new("s6-svc").args(["-u", svc]).status();
+    info!("starting vswitchd via service6: {}", svc);
+    let _ = Command::new("service6").args(["start", svc]).status();
 }
 
 /// Wait for vswitchd to fully start: poll OVSDB until bridge row appears AND
@@ -339,14 +456,14 @@ async fn purge_by_name(client: &mut Client, name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Create ovsbr0 with datapath_type=netdev.
+/// Create ovsbr0 with datapath_type=system.
 ///
-/// `extra_ports` (the veth and, when configured, the physical UPLINK) are
-/// enslaved in the SAME atomic transact (RFC 7047, official Open_vSwitch
-/// schema): vswitchd must first read the bridge and its ports together or
-/// uplink capture does not start correctly.  Enslavement is never a second
-/// transaction on the create path.
-async fn create_bridge_netdev(
+/// `extra_ports` (the physical UPLINK, when configured) is enslaved in the
+/// SAME atomic transact (RFC 7047, official Open_vSwitch schema): vswitchd
+/// must first read the bridge and its ports together or uplink capture does
+/// not start correctly.  Enslavement is never a second transaction on the
+/// create path.
+async fn create_bridge_system(
     client: &mut Client,
     bridge: &str,
     fail_mode: &str,
@@ -354,7 +471,7 @@ async fn create_bridge_netdev(
     extra_ports: &[&str],
 ) -> Result<()> {
     info!(
-        "creating bridge {} with datapath_type=netdev fail_mode={} extra_ports={:?}",
+        "creating bridge {} with datapath_type=system fail_mode={} extra_ports={:?}",
         bridge, fail_mode, extra_ports
     );
     purge_by_name(client, bridge).await?;
@@ -376,13 +493,16 @@ async fn create_bridge_netdev(
     let ports_json = if port_refs.len() == 1 {
         port_refs[0].to_json()
     } else {
-        json!(["set", port_refs.iter().map(|p| p.to_json()).collect::<Vec<_>>()])
+        json!([
+            "set",
+            port_refs.iter().map(|p| p.to_json()).collect::<Vec<_>>()
+        ])
     };
     let bridge_ref = txn.insert(
         "Bridge",
         json!({
             "name": bridge,
-            "datapath_type": "netdev",
+            "datapath_type": "system",
             "fail_mode": fail_mode,
             "other_config": ["map", [["hwaddr", mac]]],
             "ports": ports_json
@@ -394,7 +514,7 @@ async fn create_bridge_netdev(
         vec![json!(["bridges", "insert", bridge_ref.to_json()])],
     );
 
-    commit(client, &mut txn, "create bridge netdev").await
+    commit(client, &mut txn, "create bridge system").await
 }
 
 /// Add a port to the bridge if not already present.
@@ -482,41 +602,50 @@ async fn main() -> Result<()> {
         None => info!("bridge {} not found in OVSDB", cfg.bridge),
     }
 
-    // The veth and (when configured) the physical uplink ride in the same
-    // create transact — see create_bridge_netdev.
-    let mut seed_ports: Vec<&str> = vec![cfg.veth_host.as_str()];
+    // The physical uplink (when configured) rides in the same create
+    // transact — see create_bridge_system.
+    let mut seed_ports: Vec<&str> = Vec::new();
     if !cfg.uplink.is_empty() {
         seed_ports.push(cfg.uplink.as_str());
     }
+    let shared_mac = resolve_shared_mac(&cfg);
 
     if seed_only {
-        info!("seed-only mode: writing netdev OVSDB rows without starting vswitchd");
+        info!("seed-only mode: writing system OVSDB rows without starting vswitchd");
+        // Must happen before create_bridge_system: once vswitchd (started by
+        // the caller right after this process exits) reads this seed and
+        // captures the uplink, the kernel strips its IPs immediately.
+        snapshot_uplink_before_enslavement(&cfg.uplink);
         clear_kernel_datapath(&cfg.bridge);
         delete_bridge(&mut client, &cfg.bridge).await?;
         tokio::time::sleep(Duration::from_millis(300)).await;
         client = Client::connect(&addr)
             .await
             .context("reconnect after seed delete")?;
-        create_bridge_netdev(
+        create_bridge_system(
             &mut client,
             &cfg.bridge,
             &cfg.fail_mode,
-            &cfg.shared_mac,
+            &shared_mac,
             &seed_ports,
         )
         .await?;
-        info!("seed-only complete: {} datapath_type=netdev", cfg.bridge);
+        info!("seed-only complete: {} datapath_type=system", cfg.bridge);
         return Ok(());
     }
 
     let needs_recreate = match &br_state {
         None => true,
-        Some((_, dt)) => dt != "netdev",
+        Some((_, dt)) => dt != "system",
     };
 
     // ── 3. If wrong datapath: stop vswitchd, rewrite OVSDB, restart ──────────
     if needs_recreate {
         warn!("bridge has wrong/missing datapath_type — stopping vswitchd");
+
+        // Same reasoning as the seed-only path: capture before vswitchd
+        // (re)captures the uplink and the kernel strips its IPs.
+        snapshot_uplink_before_enslavement(&cfg.uplink);
 
         stop_vswitchd(&cfg.vswitchd_svc, &cfg.bridge).await?;
 
@@ -534,18 +663,18 @@ async fn main() -> Result<()> {
             .await
             .context("reconnect after delete")?;
 
-        // Create with netdev (veth + uplink enslaved in the same transact)
-        create_bridge_netdev(
+        // Create with system datapath (uplink enslaved in the same transact)
+        create_bridge_system(
             &mut client,
             &cfg.bridge,
             &cfg.fail_mode,
-            &cfg.shared_mac,
+            &shared_mac,
             &seed_ports,
         )
         .await?;
-        info!("OVSDB updated: datapath_type=netdev");
+        info!("OVSDB updated: datapath_type=system");
 
-        // Start vswitchd — it reads netdev from OVSDB and initializes netdev dpif
+        // Start vswitchd — it reads system from OVSDB and initializes the kernel dpif
         start_vswitchd(&cfg.vswitchd_svc);
 
         // Wait for vswitchd to be genuinely up (ctl socket + bridge in OVSDB)
@@ -563,30 +692,26 @@ async fn main() -> Result<()> {
             .unwrap_or("")
             .to_string();
 
-        if live_dt != "netdev" {
+        if live_dt != "system" {
             bail!(
-                "vswitchd reset datapath_type to '{}' — expected netdev. \
+                "vswitchd reset datapath_type to '{}' — expected system. \
                  Check /run/uncaught-logs/current for WARN messages from bridge module.",
                 live_dt
             );
         }
-        info!("confirmed: bridge {} datapath_type=netdev", cfg.bridge);
+        info!("confirmed: bridge {} datapath_type=system", cfg.bridge);
     } else {
-        info!("bridge {} already netdev — no restart needed", cfg.bridge);
+        info!("bridge {} already system — no restart needed", cfg.bridge);
     }
 
-    // ── 4. Idempotent port adds for a pre-existing netdev bridge ─────────────
+    // ── 4. Idempotent port adds for a pre-existing bridge ────────────────────
     // (On the create path these are no-ops: the ports were enslaved inside
     // the create transact.)
-    add_port(&mut client, &cfg.bridge, &cfg.veth_host).await?;
     if !cfg.uplink.is_empty() {
         add_port(&mut client, &cfg.bridge, &cfg.uplink).await?;
     }
 
     // ── 5. Bring ports up (ip link is a network utility, not an OVS tool) ────
-    let _ = Command::new("ip")
-        .args(["link", "set", &cfg.veth_host, "up"])
-        .status();
     if !cfg.uplink.is_empty() {
         let _ = Command::new("ip")
             .args(["link", "set", &cfg.uplink, "up"])
@@ -599,19 +724,18 @@ async fn main() -> Result<()> {
 fn print_help() {
     println!(
         "Usage: op-ovsbr0-setup [--seed-only]\n\n\
-         Ensures ovsbr0 exists with datapath_type=netdev, using rovs for OVSDB \
-         changes and s6 for ovs-vswitchd control.\n\n\
+         Ensures ovsbr0 exists with datapath_type=system, using rovs for OVSDB \
+         changes and the service6 wrapper for ovs-vswitchd control.\n\n\
          Modes:\n\
-           --seed-only Write OVSDB netdev rows and exit without starting vswitchd\n\n\
+           --seed-only Write OVSDB system rows and exit without starting vswitchd\n\n\
          Environment:\n\
            BRIDGE       bridge name (default: ovsbr0)\n\
-           VETH_HOST    veth port to add (default: grpc-uplink)\n\
            UPLINK       physical NIC enslaved in the same create transact\n\
                         (optional; atomic with bridge creation so capture\n\
                         starts correctly)\n\
            FAIL_MODE    bridge fail mode (default: standalone)\n\
-           SHARED_MAC   bridge MAC (default: fa:16:3e:f1:71:d2)\n\
+           SHARED_MAC   bridge MAC override (default: UPLINK's own MAC)\n\
            OVSDB_SOCKET OVSDB socket path\n\
-           VSWITCHD_SVC s6 service path (default: /run/service/ovs-vswitchd)"
+           VSWITCHD_SVC s6 service name for service6 (default: ovs-vswitchd)"
     );
 }

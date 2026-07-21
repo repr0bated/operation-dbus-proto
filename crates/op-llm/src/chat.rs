@@ -38,6 +38,7 @@ use crate::gcloud_adc::GCloudADCProvider;
 use crate::gemini::GeminiClient;
 use crate::gemini_cli::create_gemini_cli_provider;
 use crate::openclaw::OpenClawProvider;
+use crate::salad::SaladProvider;
 use crate::provider::{
     BoxedProvider, ChatMessage, ChatRequest, ChatResponse, LlmProvider, ModelInfo, ProviderType,
 };
@@ -188,6 +189,28 @@ impl ChatManager {
                 }
                 Err(e) => {
                     debug!("OpenClaw provider failed: {}", e);
+                }
+            }
+        }
+
+        // =====================================================
+        // Salad AI Gateway - managed OpenAI-compatible endpoint (Bearer auth)
+        // =====================================================
+        if matches!(env_provider.as_deref(), Some("salad"))
+            || std::env::var("SALAD_BASE_URL").is_ok()
+            || std::env::var("SALAD_API_KEY").is_ok()
+            || std::env::var("SALAD_DEFAULT_MODEL").is_ok()
+        {
+            match SaladProvider::from_env() {
+                Ok(salad) => {
+                    info!("✅ Salad AI Gateway provider initialized");
+                    providers.insert(ProviderType::Salad, Box::new(salad));
+                    if default_provider.is_none() {
+                        default_provider = Some(ProviderType::Salad);
+                    }
+                }
+                Err(e) => {
+                    debug!("Salad provider failed: {}", e);
                 }
             }
         }
@@ -600,6 +623,15 @@ impl ChatManager {
                 ProviderType::OpenClaw => (
                     "Trusted internal network (OPENCLAW_BASE_URL)",
                     vec!["OpenAI-compatible API", "Agent platform", "Tool use"],
+                ),
+                ProviderType::Salad => (
+                    "API key (SALAD_API_KEY, Bearer)",
+                    vec![
+                        "OpenAI-compatible API",
+                        "SaladCloud GPU network",
+                        "Qwen models",
+                        "Tool use",
+                    ],
                 ),
                 ProviderType::Assistant => (
                     "Trusted internal network (ASSISTANT_BASE_URL)",

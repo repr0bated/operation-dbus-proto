@@ -30,14 +30,14 @@ Identity, mutations, traces, and accountability are always bound to the current 
   - Readers (Shuttle) mmap once, cast, extract `GB_FOOTPRINT` / `GB_TRACE_ID` (optionally WG pubkey) into env.
   - Writes stateless Xray config (`/dev/shm/xray-ghostbridge.json`) and hands off.
   - Strictly avoids any disk I/O that would hit Btrfs.
-- **Xray** (in the wg-xray datapath):
+- **Xray** (on the host, attached to the OVS datapath):
   - Receives GB_* env vars.
   - Injects into gRPC metadata on outbound:
     - `X-Ghostbridge-Footprint`
     - `X-Ghostbridge-Trace-ID`
     - `X-WireGuard-Pubkey` (when applicable).
 - **GhostbridgeInterceptor** (`op-grpc-bridge/src/interceptor.rs` + similar in other crates):
-  - Enforces the Accountability Loop on every gRPC ingress (port 18789).
+  - Enforces the Accountability Loop on every gRPC ingress (port 8090).
   - Requires the two Ghostbridge headers.
   - Re-reads the live sled (zero-copy).
   - Rejects on:

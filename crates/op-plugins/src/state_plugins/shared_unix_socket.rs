@@ -113,7 +113,7 @@ impl SharedUnixSocketPlugin {
     /// against the one shared socket and records the registration as metadata.
     /// It is idempotent — re-registering the same `(name, ports)` is a no-op —
     /// and never binds per-service sockets (the shared socket is the only bind,
-    /// owned by [`Self::ensure_bound`]).
+    /// owned by `Self::ensure_bound`).
     pub fn create_unix_socket(&self, name: impl Into<String>, ports: Vec<u16>) -> ApplyResult {
         let reg = SharedRegistration::new(name, ports);
         info!(

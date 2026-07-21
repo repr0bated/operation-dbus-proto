@@ -5,7 +5,9 @@ use op_state_store::PluginSchema;
 use serde::{Deserialize, Serialize};
 use simd_json::OwnedValue as Value;
 
-use super::plugin_scaffold_helpers::{method_decl_from_schemars, method_decl_from_schemars_with_output};
+use super::plugin_scaffold_helpers::{
+    method_decl_from_schemars, method_decl_from_schemars_with_output,
+};
 
 /// Xray proxy configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
@@ -30,7 +32,7 @@ impl Default for XrayConfig {
         Self {
             enabled: true,
             socket_port: "gbr_xray".to_string(),
-            config_path: "/etc/xray/config.json".to_string(),
+            config_path: "/dev/shm/xray_config.json".to_string(),
         }
     }
 }
@@ -330,7 +332,7 @@ pub(crate) fn xray_schema_golden() -> PluginSchema {
             field_type: FieldType::String,
             required: false,
             description: "Path to the xray JSON config.".to_string(),
-            default: Some(json!("/etc/xray/config.json")),
+            default: Some(json!("/dev/shm/xray_config.json")),
             example: None,
             constraints: Vec::new(),
             read_only: false,
@@ -398,7 +400,7 @@ pub(crate) fn xray_schema_golden() -> PluginSchema {
             required: false,
             description: "Xray configuration.".to_string(),
             default: Some(json!({
-                "config_path": "/etc/xray/config.json",
+                "config_path": "/dev/shm/xray_config.json",
                 "enabled": true,
                 "socket_port": "gbr_xray"
             })),

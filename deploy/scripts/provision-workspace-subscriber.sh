@@ -63,6 +63,10 @@ echo "    Waiting for init..."
 sleep 3
 incus exec "$CONTAINER_ID" -- sh -c "until [ -f /run/systemd/private ] || [ -d /run/s6 ] || pgrep -x init >/dev/null 2>&1 || sleep 1; do sleep 1; done" 2>/dev/null || sleep 2
 
+# Install the immutable, socket-owning Rust network manager before dependent
+# workload setup. Its installer fails unless the control socket becomes live.
+"$(dirname "$0")/install-rust-network-mgr.sh" "$CONTAINER_ID"
+
 # ── 2. Base packages ──────────────────────────────────────────────────────────
 echo "[2] Installing base packages..."
 incus exec "$CONTAINER_ID" -- apt-get update -qq

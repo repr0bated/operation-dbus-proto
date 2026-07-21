@@ -173,7 +173,7 @@ impl GemmaBrainPlugin {
             routing: GemmaRouting {
                 subid_classification: Self::env_bool("GEMMA_SUBID_CLASSIFICATION", true),
                 tag_routing: Self::env_bool("GEMMA_TAG_ROUTING", true),
-                xray_config_path: Self::env_or("GEMMA_XRAY_CONFIG", "/etc/xray/config.json"),
+                xray_config_path: Self::env_or("GEMMA_XRAY_CONFIG", "/dev/shm/xray_config.json"),
             },
             gallery: GemmaGallery {
                 specs_path: GEMMA_SPECS_PATH.to_string(),

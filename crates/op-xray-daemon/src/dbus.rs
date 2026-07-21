@@ -91,7 +91,7 @@ impl XrayService {
 }
 
 /// D-Bus interface implementation for org.opdbus.v1.Xray
-#[interface(name = "opdbus.v1.Xray")]
+#[interface(name = "org.opdbus.v1.Xray")]
 impl XrayService {
     /// Start xray with the specified config path
     /// Returns (success, message)

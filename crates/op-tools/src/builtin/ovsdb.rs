@@ -1,6 +1,6 @@
 //! OVSDB Tools — D-Bus based tools for Open vSwitch
 //!
-//! Uses op-openvswitch-daemon via D-Bus (org.opdbus.rovs.jsonrpc).
+//! Uses the OVSDB JSON-RPC D-Bus passthrough (org.opdbus.rovs.jsonrpc).
 //! No direct Unix-socket connections or CLI tools (ovs-vsctl, ovs-ofctl).
 
 use anyhow::Result;

@@ -136,7 +136,7 @@ The following values are hardcoded in the codebase:
 *   **Hardcoded Local API Base URL**:
     `crates/op-llm/src/openclaw.rs:27`
     ```rust
-    const DEFAULT_BASE_URL: &str = "http://127.0.0.1:18789";
+    const DEFAULT_BASE_URL: &str = "http://127.0.0.1:8090";
     ```
     *Severity: Low.* Establishes a default connection string over localhost for the OpenClaw agent platform.
 

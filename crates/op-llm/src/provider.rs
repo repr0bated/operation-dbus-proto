@@ -23,6 +23,7 @@ pub enum ProviderType {
     OpenAI,
     OpenClaw,
     Perplexity,
+    Salad,
     Custom(String),
 }
 
@@ -39,6 +40,7 @@ impl fmt::Display for ProviderType {
             ProviderType::OpenAI => write!(f, "openai"),
             ProviderType::OpenClaw => write!(f, "openclaw"),
             ProviderType::Perplexity => write!(f, "perplexity"),
+            ProviderType::Salad => write!(f, "salad"),
             ProviderType::Custom(name) => write!(f, "{}", name),
         }
     }
@@ -62,6 +64,7 @@ impl FromStr for ProviderType {
             "openai" | "open_ai" => Ok(ProviderType::OpenAI),
             "openclaw" | "open_claw" => Ok(ProviderType::OpenClaw),
             "perplexity" => Ok(ProviderType::Perplexity),
+            "salad" | "salad-ai" | "salad_ai" => Ok(ProviderType::Salad),
             other => Err(format!("Unknown provider type: {}", other)),
         }
     }

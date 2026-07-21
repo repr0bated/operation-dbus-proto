@@ -152,11 +152,8 @@ Descriptions are taken from each crate's `Cargo.toml` and current source.
 ### Data / system
 - **op-network** — Native networking: OpenFlow (all versions, pure Rust), OVSDB
   JSON-RPC, rtnetlink, Proxmox API, container networking.
-- **op-services** — System-wide service manager (systemd replacement, dinit
-  backend).
-- **op-s6-systemctl** — D-Bus service mapping `systemctl` calls to s6 on Artix.
-- **op-openvswitch-daemon** — D-Bus daemon for OVS management via native `rovs`
-  primitives.
+- **op-services** — Service metadata and lifecycle integration.
+- **op-s6-systemctl** — D-Bus service facade for the Artix s6 control plane.
 - **op-xray-daemon** — D-Bus service managing the Xray proxy daemon lifecycle.
 - **op-gemma** — Gemma routing brain: maps `subid → tag → xray + OpenFlow` rules.
 - **op-cozo-store** — Embedded CozoDB graph-relational-vector database.
@@ -180,9 +177,7 @@ Descriptions are taken from each crate's `Cargo.toml` and current source.
 - **op-compliance** — OSCAL compliance engine ("Law Firm").
 
 > `op-ml` exists but is currently disabled in the workspace (ort API
-> compatibility). `op-gemma` and `op-openvswitch-daemon` are present in source but
-> not all are listed as active workspace members — check `Cargo.toml` before
-> building.
+> compatibility). Check `Cargo.toml` for the authoritative workspace members.
 
 ## 5. The schema-as-contract model
 

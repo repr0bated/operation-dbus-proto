@@ -8,6 +8,8 @@
 //! - Rolling retention policies
 //! - btrfs send/receive for replication
 
+#![deny(rustdoc::broken_intra_doc_links)]
+
 pub mod blockchain;
 pub mod btrfs_numa_integration;
 pub mod footprint;

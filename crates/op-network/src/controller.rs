@@ -14,10 +14,21 @@ use rovs_openflow::{ActionList, Flow, Match, Message, MessageType, OutputPort, V
 use rovs_transport::Reconnect;
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::{mpsc, oneshot};
+
+use crate::openflow_translate::{json_flow_to_add, json_flow_to_delete};
+
+/// A request to install or delete a schema-driven flow on the currently
+/// connected switch, submitted via `OpenFlowControllerHandle::send_flow`.
+struct FlowRequest {
+    flow_json: String,
+    delete: bool,
+    reply: oneshot::Sender<Result<String>>,
+}
 
 // ── OF1.3 constants ────────────────────────────────────────────────────────────
 
@@ -178,6 +189,7 @@ async fn discover_ports(stream: &mut TcpStream, xid: u32) -> Result<HashMap<Stri
 async fn handle_connection(
     mut stream: TcpStream,
     flows: Arc<Vec<(String, String, u16)>>,
+    active_conn: Arc<Mutex<Option<mpsc::UnboundedSender<FlowRequest>>>>,
 ) -> Result<()> {
     let mut xid: u32 = 1;
 
@@ -260,15 +272,67 @@ async fn handle_connection(
         installed
     );
 
-    // 7. Keepalive loop — reply to Echo requests indefinitely.
-    loop {
-        let msg = recv_msg(&mut stream).await?;
-        if msg.msg_type == 2
-        /* EchoRequest */
-        {
-            send_msg(&mut stream, &build_echo_reply(msg.xid, &msg.payload)).await?;
+    // 7. Register this connection's command channel so
+    // `OpenFlowControllerHandle::send_flow` can reach the live switch, then
+    // keepalive: reply to Echo requests and service schema-driven flow
+    // requests for as long as this connection lasts.
+    let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<FlowRequest>();
+    *active_conn.lock().unwrap() = Some(cmd_tx);
+
+    let result = loop {
+        tokio::select! {
+            msg = recv_msg(&mut stream) => {
+                match msg {
+                    Ok(msg) if msg.msg_type == 2 /* EchoRequest */ => {
+                        if let Err(e) = send_msg(&mut stream, &build_echo_reply(msg.xid, &msg.payload)).await {
+                            break Err(e);
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(e) => break Err(e),
+                }
+            }
+            Some(req) = cmd_rx.recv() => {
+                let outcome = if req.delete {
+                    push_flow_delete(&mut stream, &req.flow_json, &port_map, &mut xid).await
+                } else {
+                    push_flow_add(&mut stream, &req.flow_json, &port_map, &mut xid).await
+                };
+                let _ = req.reply.send(outcome);
+            }
         }
-    }
+    };
+
+    *active_conn.lock().unwrap() = None;
+    result
+}
+
+/// Translate and push one schema-driven flow ADD to the connected switch.
+async fn push_flow_add(
+    stream: &mut TcpStream,
+    flow_json: &str,
+    port_map: &HashMap<String, u32>,
+    xid: &mut u32,
+) -> Result<String> {
+    let flow = json_flow_to_add(flow_json, port_map)?;
+    let msg = flow.to_message(Version::Of13, *xid);
+    *xid += 1;
+    send_msg(stream, &msg.encode().to_vec()).await?;
+    Ok(serde_json::json!({"ok": true, "action": "add"}).to_string())
+}
+
+/// Translate and push one schema-driven flow DELETE to the connected switch.
+async fn push_flow_delete(
+    stream: &mut TcpStream,
+    flow_json: &str,
+    port_map: &HashMap<String, u32>,
+    xid: &mut u32,
+) -> Result<String> {
+    let flow = json_flow_to_delete(flow_json, port_map)?;
+    let msg = flow.to_message(Version::Of13, *xid);
+    *xid += 1;
+    send_msg(stream, &msg.encode().to_vec()).await?;
+    Ok(serde_json::json!({"ok": true, "action": "delete"}).to_string())
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -280,6 +344,8 @@ async fn handle_connection(
 pub struct OpenFlowController {
     listen_addr: SocketAddr,
     flows: Vec<(String, String, u16)>,
+    active_conn: Arc<Mutex<Option<mpsc::UnboundedSender<FlowRequest>>>>,
+    installed_flows: Arc<Mutex<Vec<serde_json::Value>>>,
 }
 
 impl OpenFlowController {
@@ -288,6 +354,17 @@ impl OpenFlowController {
         Self {
             listen_addr,
             flows: Vec::new(),
+            active_conn: Arc::new(Mutex::new(None)),
+            installed_flows: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    /// Get a cloneable handle for pushing schema-driven flows while the
+    /// controller runs. Must be called before `run()` consumes `self`.
+    pub fn handle(&self) -> OpenFlowControllerHandle {
+        OpenFlowControllerHandle {
+            active_conn: self.active_conn.clone(),
+            installed_flows: self.installed_flows.clone(),
         }
     }
 
@@ -320,10 +397,12 @@ impl OpenFlowController {
         log::info!("OpenFlow controller listening on {}", self.listen_addr);
 
         let flows = Arc::new(self.flows);
+        let active_conn = self.active_conn;
 
         loop {
             let (stream, peer) = listener.accept().await?;
             let flows = flows.clone();
+            let active_conn = active_conn.clone();
             log::info!("OpenFlow controller: OVS connected from {}", peer);
 
             tokio::spawn(async move {
@@ -334,7 +413,7 @@ impl OpenFlowController {
                 reconnect.set_max_backoff(Duration::from_secs(30));
                 reconnect.connecting();
 
-                match handle_connection(stream, flows).await {
+                match handle_connection(stream, flows, active_conn).await {
                     Ok(()) => {
                         // Clean close — mark disconnected so next accept starts fresh.
                         reconnect.disconnected();
@@ -354,6 +433,65 @@ impl OpenFlowController {
                 }
             });
         }
+    }
+}
+
+/// A cloneable handle for pushing schema-driven flows to whichever switch is
+/// currently connected to an `OpenFlowController`, obtained via
+/// `OpenFlowController::handle()` before calling `run()`.
+///
+/// This is what backs the `org.opdbus.v1.plugins.openflow` D-Bus interface
+/// exposed by the `op-of-controller` binary — the openflow plugin's
+/// `install_flow`/`delete_flow`/`query_flows` call through it instead of the
+/// old (broken, now-removed) `op-openvswitch-daemon` passthrough.
+#[derive(Clone)]
+pub struct OpenFlowControllerHandle {
+    active_conn: Arc<Mutex<Option<mpsc::UnboundedSender<FlowRequest>>>>,
+    installed_flows: Arc<Mutex<Vec<serde_json::Value>>>,
+}
+
+impl OpenFlowControllerHandle {
+    /// Install or delete one schema-driven `FlowEntry` (JSON, matching the
+    /// openflow plugin's shape) on the currently connected switch.
+    pub async fn send_flow(&self, flow_json: String, delete: bool) -> Result<String> {
+        let value: serde_json::Value =
+            serde_json::from_str(&flow_json).context("invalid flow JSON")?;
+
+        let (tx, rx) = oneshot::channel();
+        {
+            let guard = self.active_conn.lock().unwrap();
+            let sender = guard
+                .as_ref()
+                .context("no OVS switch currently connected to the OpenFlow controller")?;
+            sender
+                .send(FlowRequest {
+                    flow_json,
+                    delete,
+                    reply: tx,
+                })
+                .map_err(|_| anyhow::anyhow!("controller connection task is no longer running"))?;
+        }
+        let result: Result<String> = rx.await.context("controller dropped the reply channel")?;
+        let result = result?;
+
+        let mut flows = self.installed_flows.lock().unwrap();
+        flows.retain(|f| f != &value);
+        if !delete {
+            flows.push(value);
+        }
+        Ok(result)
+    }
+
+    /// Return the flows this handle believes are currently installed
+    /// (tracked in-memory since they were pushed through `send_flow` —
+    /// this is not a live re-query of the switch's flow table).
+    pub fn dump_flows(&self) -> Vec<String> {
+        self.installed_flows
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|v| v.to_string())
+            .collect()
     }
 }
 

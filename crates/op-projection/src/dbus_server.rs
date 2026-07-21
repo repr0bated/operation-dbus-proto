@@ -1,7 +1,7 @@
 //! D-Bus object server for projections.
 //!
 //! Serves every Projection through org.opdbus.v1.plugins at
-//! /org/opdbus/v1/plugins/<plugin>. Nothing mounts outside the plugins root:
+//! `/org/opdbus/v1/plugins/<plugin>`. Nothing mounts outside the plugins root:
 //! no plugin means no schema means no object.
 //!
 //! Data is read 1:1 from the shared-memory projection layer

@@ -2599,9 +2599,9 @@
   X-Ghostbridge-Footprint / X-Ghostbridge-Trace-ID headers.
   - Server side (config.socket.json): two inbounds —
     - op-tls on :443 (VLESS+TLS, certs for both 3tched.com and ghostbridge.tech)
-  with a fallback to :18789
+  with a fallback to :8090
     - ghostbridge-reality on :8443 (VLESS+REALITY, xtls-rprx-vision)
-    - Both route to a single outbound grpc-bridge-out → 127.0.0.1:18789 (the
+    - Both route to a single outbound grpc-bridge-out → 127.0.0.1:8090 (the
   gRPC bridge).
   - Dynamic cutover: deploy/s6/gbr-xray/run prefers a schema-shuttle-generated
   config at /dev/shm/xray-ghostbridge.json, falling back to the static one.
@@ -2628,7 +2628,7 @@
   Two gaps I want to flag honestly
 
   1. Xray does no per-subdomain dispatch. Both 443 and 8443 funnel everything
-  into the single gRPC bridge (:18789). So "subdomain → backend" routing is
+  into the single gRPC bridge (:8090). So "subdomain → backend" routing is
   entirely nginx's job right now — xray just terminates REALITY/TLS and hands
   off. If you want xray itself to route by SNI/host, that routing block doesn't
   exist yet.
@@ -2906,7 +2906,7 @@
   │ api / dashboard / │ :28081/28082/21883 │ listening, but netmaker app    │
   │  broker.*         │                    │ container is STOPPED → resets  │
   ├───────────────────┼────────────────────┼────────────────────────────────┤
-  │ assistant.*       │ :18789             │ nothing listening              │
+  │ assistant.*       │ :8090             │ nothing listening              │
   ├───────────────────┼────────────────────┼────────────────────────────────┤
   │ default (op-web)  │ :8080              │ nothing listening              │
   ├───────────────────┼────────────────────┼────────────────────────────────┤
@@ -3009,7 +3009,7 @@
          +rsistent (`s6 set enable xray` + default bundle). BUT most subd
          +omains still return HTTP 000 because their **backends are down*
          +*, not the forwarder: `op-web :8080` (the default route) — noth
-         +ing listening; `assistant :18789` — nothing; `mail :10143` — no
+         +ing listening; `assistant :8090` — nothing; `mail :10143` — no
          +thing; and `api/dashboard/broker` (:28081/28082/21883) accept o
          +n the host forkproxy but reset because the **`netmaker` app con
          +tainer is STOPPED**. Next: bring up op-web (8080) + the netmake
@@ -3051,7 +3051,7 @@
   ├───────────────────┼────────────────────┼─────────────────────────────────┤
   │ default / op-web  │ :8080              │ nothing listening               │
   ├───────────────────┼────────────────────┼─────────────────────────────────┤
-  │ assistant.*       │ :18789             │ nothing listening               │
+  │ assistant.*       │ :8090             │ nothing listening               │
   ├───────────────────┼────────────────────┼─────────────────────────────────┤
   │ mail.*            │ :10143             │ nothing listening               │
   ├───────────────────┼────────────────────┼─────────────────────────────────┤
@@ -3246,7 +3246,7 @@
   ├───────────────────┼────────┼────────────────────────────────────┤
   │ op-web.* / chat.* │ 200    │ HTTP/1.1 ✅                        │
   ├───────────────────┼────────┼────────────────────────────────────┤
-  │ assistant.*       │ 000    │ backend :18789 not running         │
+  │ assistant.*       │ 000    │ backend :8090 not running         │
   ├───────────────────┼────────┼────────────────────────────────────┤
   │ api.*             │ 000    │ netmaker API container crash-loops │
   └───────────────────┴────────┴────────────────────────────────────┘
@@ -3285,7 +3285,7 @@
          -rsistent (`s6 set enable xray` + default bundle). BUT most subd
          -omains still return HTTP 000 because their **backends are down*
          -*, not the forwarder: `op-web :8080` (the default route) — noth
-         -ing listening; `assistant :18789` — nothing; `mail :10143` — no
+         -ing listening; `assistant :8090` — nothing; `mail :10143` — no
          -thing; and `api/dashboard/broker` (:28081/28082/21883) accept o
          -n the host forkproxy but reset because the **`netmaker` app con
          -tainer is STOPPED**. Next: bring up op-web (8080) + the netmake
@@ -3297,7 +3297,7 @@
          +rsistent (`s6 set enable xray` + default bundle). BUT most subd
          +omains still return HTTP 000 because their **backends are down*
          +*, not the forwarder: `op-web :8080` (the default route) — noth
-         +ing listening; `assistant :18789` — nothing; `mail :10143` — no
+         +ing listening; `assistant :8090` — nothing; `mail :10143` — no
          +thing; and `api/dashboard/broker` (:28081/28082/21883) accept o
          +n the host forkproxy but reset because the **`netmaker` app con
          +tainer is STOPPED**. Next: bring up op-web (8080) + the netmake
@@ -3310,7 +3310,7 @@
          +a `dokodemo-door` SNI dispatcher on :443 → `tls-h2:8444` (qdran
          +t) / `tls-h1:8445` (web). Verified: qdrant→200(h2), dashboard→2
          +00(h1, was 000), op-web/chat→200. **Two backends still down (se
-         +rvice health, not forwarding):** `assistant :18789` (ghostbridg
+         +rvice health, not forwarding):** `assistant :8090` (ghostbridg
          +e gRPC bridge not running) and the **`netmaker` API container c
          +rash-loops** on LXC mount error `Failed to mount "none" onto "/
          +usr/lib/lxc/rootfs/run"` (netmaker-ui + netmaker-mq stay up). N
@@ -3339,13 +3339,13 @@
   mount error: Failed to mount "none" onto "/usr/lib/lxc/rootfs/run".
   (netmaker-ui + netmaker-mq stay up fine; only the main netmaker app container
   dies.)
-  2. assistant.* — nothing listening on :18789 (the ghostbridge/assistant gRPC
+  2. assistant.* — nothing listening on :8090 (the ghostbridge/assistant gRPC
   bridge service isn't running).
 
   Both are independent of the forwarder, which is now correct end-to-end.
 
   Want me to tackle these next — debug the netmaker container's /run mount
-  failure, and bring up the assistant gRPC bridge on 18789? They're separate
+  failure, and bring up the assistant gRPC bridge on 8090? They're separate
   problems; I can take them one at a time (netmaker's mount error is the deeper
   one).
 
@@ -3411,7 +3411,7 @@
 
   Still outstanding from before (separate backend-health issues, not
   forwarding): api.* (netmaker API container crash-loops on the /run LXC mount
-  error) and assistant.* (:18789 not running). Say the word and I'll take those
+  error) and assistant.* (:8090 not running). Say the word and I'll take those
   on.
 
 ✻ Churned for 2m 16s
@@ -3419,7 +3419,7 @@
 ❯ go for it                                                                     
 
 ● On it. Let me investigate both backends in parallel — netmaker's container
-  config (the /run mount error) and what's supposed to serve :18789 for
+  config (the /run mount error) and what's supposed to serve :8090 for
   assistant:
 
   Ran 2 shell commands (ctrl+o to expand)
@@ -3427,7 +3427,7 @@
 ● Good — different stories for each:
 
   assistant: the container is RUNNING and bridged (/run/assistant.sock → 
-  container:50051), but nothing's on :18789. There's an op-assistant-grpc-srv s6
+  container:50051), but nothing's on :8090. There's an op-assistant-grpc-srv s6
   service whose supervisor is up but the binary isn't — likely the same
   "service not enabled" pattern as op-web. netmaker: it's a privileged OCI 
   container (gravitl/netmaker:v1.5.1) failing on the /run tmpfs mount. Let me
@@ -3435,13 +3435,13 @@
   Ran 2 shell commands (ctrl+o to expand)
 
 ● Key mismatch found for assistant: op-assistant-grpc-srv listens on 50052, not
-  18789 — so starting it wouldn't fill :18789. Let me find what actually owns
-  :18789, and check whether netmaker's image has /run as a symlink (the classic
+  8090 — so starting it wouldn't fill :8090. Let me find what actually owns
+  :8090, and check whether netmaker's image has /run as a symlink (the classic
   cause of that tmpfs mount EINVAL):
 
   Ran 2 shell commands (ctrl+o to expand)
 
-● :18789 is the OpenClaw/assistant gateway — and /etc/s6/sv/zeroclaw/run is what
+● :8090 is the OpenClaw/assistant gateway — and /etc/s6/sv/zeroclaw/run is what
   binds it (the openclaw→zeroclaw component from your recent git history).
   netmaker's rootfs /run is a real dir (not a symlink), so the EINVAL is in
   Incus's OCI mount setup. Let me check zeroclaw's state and pull the
@@ -3450,13 +3450,13 @@
   Ran 2 shell commands (ctrl+o to expand)
 
 ● Both are actually further along than expected:
-  - zeroclaw IS running (PID 2981) and binds :18789 — but it's running inside
+  - zeroclaw IS running (PID 2981) and binds :8090 — but it's running inside
   the assistant container (note /root/.cargo/...), and there's no host→container
-  proxy for 18789 (only the /run/assistant.sock→:50051 one). xray dials host
-  127.0.0.1:18789, which is empty.
+  proxy for 8090 (only the /run/assistant.sock→:50051 one). xray dials host
+  127.0.0.1:8090, which is empty.
   - netmaker just started cleanly and is RUNNING — the crash is intermittent.
 
-  Let me confirm the assistant container's internal :18789 and netmaker's
+  Let me confirm the assistant container's internal :8090 and netmaker's
   internal API/stability:
 
   Ran 1 shell command (ctrl+o to expand)
@@ -3471,13 +3471,13 @@
 
   Ran 1 shell command (ctrl+o to expand)
 
-● Plot twist — zeroclaw (the :18789 gateway) runs inside the wg-xray container,
-  not assistant. So the fix is a host→wg-xray proxy device for 18789. Adding it:
+● Plot twist — zeroclaw (the :8090 gateway) runs inside the wg-xray container,
+  not assistant. So the fix is a host→wg-xray proxy device for 8090. Adding it:
 
   Ran 1 shell command (ctrl+o to expand)
 
 ● assistant. is now working* — 200 over https (both domains) and http. The
-  :18789 zeroclaw gateway (running inside wg-xray) is now bridged to the host,
+  :8090 zeroclaw gateway (running inside wg-xray) is now bridged to the host,
   so xray reaches it. The device persists in wg-xray's config.
 
   Now back to netmaker. Its crash is broker connectivity
@@ -3592,7 +3592,7 @@
 ● The doc is explicit: ovsbr0-sock is the shared socket port — "Multiple 
   containers share one port instead of per-container ports," with OpenFlow doing
   the routing. So my hand-rolled per-service incus config device add proxies
-  (broker-1883, gw-18789) were exactly the anti-pattern. Let me check whether
+  (broker-1883, gw-8090) were exactly the anti-pattern. Let me check whether
   the shared socket actually exists live before deciding whether to create your
   "dummy container" owner for it:
 
@@ -3684,7 +3684,7 @@
   aligned:
 
   - xray on the host ⇒ no incus proxy devices / forkproxies (that's "no incus
-  mounting"). The forkproxies I added (broker-1883, gw-18789) are exactly the
+  mounting"). The forkproxies I added (broker-1883, gw-8090) are exactly the
   thing that shouldn't exist.
   - The socket that matters is the container end — mail/assistant/etc. each bind
   their own socket (the "other end" from xray).
@@ -3703,7 +3703,7 @@
   1. Is there a canonical path you already have in mind for that shared dir
   (e.g. /run/op-sockets), or should I pick one?
   2. Do you want me to roll back the two forkproxies I added (netmaker 
-  broker-1883, wg-xray gw-18789) since they're the wrong pattern — and re-wire
+  broker-1883, wg-xray gw-8090) since they're the wrong pattern — and re-wire
   those via the shared mount + createsocket instead?
 
 ✻ Brewed for 1m 8s
@@ -3720,7 +3720,7 @@
   Here's what's actually still inside / behind it:
 
   Running inside wg-xray (full systemd container):
-  - zeroclaw gateway → listening 0.0.0.0:18789 (this is the assistant.* backend
+  - zeroclaw gateway → listening 0.0.0.0:8090 (this is the assistant.* backend
   I bridged)
   - nextdns → 127.0.0.1:53 (DNS resolver)
   - plus init/journald/networkd/dbus/logind
@@ -3739,7 +3739,7 @@
 
   To actually finish the migration (your "no incus mounting" goal), these need
   to come off wg-xray too:
-  - zeroclaw (18789) → run on host, expose its socket via the shared mount
+  - zeroclaw (8090) → run on host, expose its socket via the shared mount
   - nextdns (53) → host
   - netmaker reachability → xray-on-host hits the netmaker containers' sockets
   directly through the shared socket dir (no wg-xray middleman)
@@ -3775,11 +3775,11 @@
   the zeroclaw home — the process was just never started there.
 
   zeroclaw is actually running in wg-xray (/root/.cargo/bin/zeroclaw gateway 
-  start, listening 0.0.0.0:18789).
+  start, listening 0.0.0.0:8090).
 
   So: the assistant container = zeroclaw by design, but the running zeroclaw
   landed in wg-xray instead, and the assistant container is sitting empty. That
-  makes my gw-18789 bridge wrong twice over — wrong method (raw incus proxy) and
+  makes my gw-8090 bridge wrong twice over — wrong method (raw incus proxy) and
   wrong target (wg-xray instead of the assistant container).
 
   The correct shape is: zeroclaw runs inside the assistant container, binds its
@@ -3818,7 +3818,7 @@
 
   - openclaw (the post-revert intended gateway): installed in assistant, not 
   started
-  - zeroclaw (the reverted-away experiment): still running in wg-xray on :18789,
+  - zeroclaw (the reverted-away experiment): still running in wg-xray on :8090,
   and that's what assistant.* is currently hitting through my bridge
 
   So neither side of the revert fully landed here. Which do you actually want
@@ -4603,7 +4603,7 @@
           rsistent (`s6 set enable xray` + default bundle). BUT most subd
           omains still return HTTP 000 because their **backends are down*
           *, not the forwarder: `op-web :8080` (the default route) — noth
-          ing listening; `assistant :18789` — nothing; `mail :10143` — no
+          ing listening; `assistant :8090` — nothing; `mail :10143` — no
           thing; and `api/dashboard/broker` (:28081/28082/21883) accept o
           n the host forkproxy but reset because the **`netmaker` app con
           tainer is STOPPED**. Next: bring up op-web (8080) + the netmake
@@ -4616,7 +4616,7 @@
           a `dokodemo-door` SNI dispatcher on :443 → `tls-h2:8444` (qdran
           t) / `tls-h1:8445` (web). Verified: qdrant→200(h2), dashboard→2
           00(h1, was 000), op-web/chat→200. **Two backends still down (se
-          rvice health, not forwarding):** `assistant :18789` (ghostbridg
+          rvice health, not forwarding):** `assistant :8090` (ghostbridg
           e gRPC bridge not running) and the **`netmaker` API container c
           rash-loops** on LXC mount error `Failed to mount "none" onto "/
           usr/lib/lxc/rootfs/run"` (netmaker-ui + netmaker-mq stay up). N

@@ -147,7 +147,7 @@ impl OvsError {
             OvsError::MissingCapNetAdmin => {
                 "Run with CAP_NET_ADMIN: sudo setcap cap_net_admin+ep <binary>"
             }
-            OvsError::OvsNotRunning => "Start OVS: sudo systemctl start openvswitch-switch",
+            OvsError::OvsNotRunning => "Start OVS: sudo service6 start ovs-vswitchd",
             OvsError::KernelModuleNotLoaded => "Load module: sudo modprobe openvswitch",
             OvsError::OvsdbSocketNotFound(_) => {
                 "Check if OVS is installed: apt install openvswitch-switch"

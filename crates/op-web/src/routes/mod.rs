@@ -87,6 +87,26 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             "/zeroclaw/schema",
             get(handlers::zeroclaw::zeroclaw_schema_handler),
         )
+        // Gemma / agent-GPU UI-spec gallery + catalog (render slices of the
+        // sealed blob PluginSchema; promote a winning lens into the catalog).
+        .route("/gemma/gallery", get(handlers::gemma::gemma_gallery_handler))
+        .route(
+            "/gemma/gallery/:id",
+            delete(handlers::gemma::gemma_gallery_delete_handler),
+        )
+        .route("/gemma/catalog", get(handlers::gemma::gemma_catalog_handler))
+        .route(
+            "/gemma/catalog/promote/:id",
+            post(handlers::gemma::gemma_catalog_promote_handler),
+        )
+        .route(
+            "/gemma/catalog/:id",
+            delete(handlers::gemma::gemma_catalog_delete_handler),
+        )
+        .route(
+            "/gemma/plugin-schema/:plugin",
+            get(handlers::gemma::gemma_plugin_schema_handler),
+        )
         .route("/chat/sessions", get(handlers::chat::list_sessions_handler))
         .route(
             "/chat/sessions",

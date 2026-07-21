@@ -1,5 +1,5 @@
 // 🟢 🛡️ The Tonic gRPC Gatekeeper (Middleware Interceptor)
-// Sits on the primary gRPC ingress at port 18789. Intercepts Xray-injected headers,
+// Sits on the primary gRPC ingress at port 8090. Intercepts Xray-injected headers,
 // performs a zero-copy check against the IdentitySled in shared memory, and either
 // allows the gRPC payload through or drops the connection instantly.
 //
@@ -22,7 +22,7 @@ fn is_sled_valid(sled: &IdentitySled) -> bool {
     sled.hashed_footprint != [0u8; 32] && sled.trace_id != [0u8; 16]
 }
 
-/// THE GATEKEEPER: Tonic gRPC Interceptor on port 18789.
+/// THE GATEKEEPER: Tonic gRPC Interceptor on port 8090.
 ///
 /// Enforces the Absolute Base rule: if the `x-ghostbridge-footprint` provided by Xray
 /// does not perfectly match the hashed footprint sitting in shared memory, the payload

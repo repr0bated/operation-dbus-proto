@@ -23,7 +23,7 @@ const defaultConfig = `{
     }
   },
   "gateway": {
-    "port": 18789,
+    "port": 8090,
     "bind": "loopback",
     "auth": {
       "mode": "token",
@@ -132,7 +132,7 @@ export default function ConfigPage() {
               <div className="grid gap-4 md:grid-cols-3">
                 <div className="space-y-2">
                   <Label className="text-xs">Port</Label>
-                  <Input type="number" defaultValue="18789" className="text-sm font-mono" onChange={() => setHasChanges(true)} />
+                  <Input type="number" defaultValue="8090" className="text-sm font-mono" onChange={() => setHasChanges(true)} />
                 </div>
                 <div className="space-y-2">
                   <Label className="text-xs">Bind</Label>

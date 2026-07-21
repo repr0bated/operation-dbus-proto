@@ -14,6 +14,26 @@ use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
 use std::collections::HashMap;
+use zbus::proxy;
+
+/// Proxy for the OpenFlow controller's dynamic flow-mod interface.
+///
+/// Served by the `op-of-controller` binary (crates/op-network/src/bin/op-of-controller.rs),
+/// backed by `op_network::OpenFlowControllerHandle`. Replaces the old
+/// `org.opdbus.rovs.openflow` passthrough, which was served solely by the
+/// deprecated, now-removed `op-openvswitch-daemon` and never correctly
+/// translated most of this plugin's match fields/actions (see git history of
+/// that daemon's `parse_json_flow`).
+#[proxy(
+    default_service = "org.opdbus.v1.plugins.openflow",
+    default_path = "/org/opdbus/v1/plugins/openflow",
+    interface = "org.opdbus.v1.plugins.openflow"
+)]
+trait OpenFlowController {
+    async fn send_flow(&self, flow_json: &str) -> zbus::Result<String>;
+    async fn delete_flow(&self, flow_json: &str) -> zbus::Result<String>;
+    async fn dump_flows(&self) -> zbus::Result<Vec<String>>;
+}
 
 /// OpenFlow controller configuration - Policy-based, not interface-based
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -167,23 +187,6 @@ impl OpenFlowPlugin {
         }
     }
 
-    /// Create OpenFlow client for a bridge
-    #[allow(dead_code)]
-    async fn create_openflow_client(
-        &self,
-        bridge: &str,
-    ) -> Result<op_network::openflow::OpenFlowClient> {
-        // Connect to OpenFlow switch (OVS typically listens on localhost:6633)
-        let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 6633));
-        let client = op_network::openflow::OpenFlowClient::connect(addr)
-            .await
-            .context(format!(
-                "Failed to connect to OpenFlow switch for bridge {}",
-                bridge
-            ))?;
-        Ok(client)
-    }
-
     /// Check if port is a privacy socket (gbr_wg, gbr_xray, gbr_warp)
     fn is_privacy_socket(port_name: &str) -> bool {
         port_name == "gbr_wg" || port_name == "gbr_xray" || port_name == "gbr_warp"
@@ -228,13 +231,13 @@ impl OpenFlowPlugin {
             .context("Failed to create RovsJsonRpcProxy")
     }
 
-    async fn get_openflow_proxy<'a>() -> Result<op_network::rovs_proxy::RovsOpenFlowProxy<'a>> {
+    async fn get_controller_proxy<'a>() -> Result<OpenFlowControllerProxy<'a>> {
         let conn = zbus::Connection::system()
             .await
             .context("Failed to connect to system bus")?;
-        op_network::rovs_proxy::RovsOpenFlowProxy::new(&conn)
+        OpenFlowControllerProxy::new(&conn)
             .await
-            .context("Failed to create RovsOpenFlowProxy")
+            .context("Failed to create OpenFlowControllerProxy")
     }
 
     fn is_managed_socket_port(port_name: &str) -> Option<SocketPortType> {
@@ -303,46 +306,44 @@ impl OpenFlowPlugin {
         Ok(normalized)
     }
 
-    /// Install a flow via native DBus OpenFlow protocol
+    /// Install a flow via `op-of-controller`'s dynamic flow-mod interface.
     async fn install_flow(&self, bridge: &str, flow: &FlowEntry) -> Result<()> {
         let normalized = self.normalize_flow_for_bridge(bridge, flow).await?;
         let flow_json = serde_json::to_string(&normalized)?;
-        log::info!("Installing flow on {}: {}", bridge, flow_json);
-
-        let proxy = Self::get_openflow_proxy().await?;
-        proxy
-            .send_flow(&flow_json)
-            .await
-            .context("DBus send_flow failed")?;
+        let proxy = Self::get_controller_proxy().await?;
+        proxy.send_flow(&flow_json).await.with_context(|| {
+            format!(
+                "send_flow failed for {} on {}",
+                Self::flow_resource_id(&normalized),
+                bridge
+            )
+        })?;
         Ok(())
     }
 
-    /// Query current flows via native DBus OpenFlow protocol
+    /// Query flows `op-of-controller` has pushed (in-memory tracking on its
+    /// side, not a live re-query of the switch's flow table).
     async fn query_flows(&self, _bridge: &str) -> Result<Vec<FlowEntry>> {
-        let proxy = Self::get_openflow_proxy().await?;
-        let flow_strings = proxy.dump_flows().await.context("DBus dump_flows failed")?;
-
-        let mut flows = Vec::new();
-        for s in flow_strings {
-            if let Ok(f) = serde_json::from_str::<FlowEntry>(&s) {
-                flows.push(f);
-            }
-        }
-        Ok(flows)
+        let proxy = Self::get_controller_proxy().await?;
+        let flow_strings = proxy.dump_flows().await.context("dump_flows failed")?;
+        Ok(flow_strings
+            .iter()
+            .filter_map(|s| serde_json::from_str::<FlowEntry>(s).ok())
+            .collect())
     }
 
+    /// Delete a flow via `op-of-controller`'s dynamic flow-mod interface.
     async fn delete_flow(&self, bridge: &str, flow: &FlowEntry) -> Result<()> {
         let normalized = self.normalize_flow_for_bridge(bridge, flow).await?;
         let flow_json = serde_json::to_string(&normalized)?;
-        log::info!("Deleting flow on {}: {}", bridge, flow_json);
-
-        let proxy = Self::get_openflow_proxy().await?;
-        // For now, OpenFlow deletions might need a specialized method or send_flow with a delete command.
-        // Assuming send_flow handles the delete action via its JSON schema.
-        proxy
-            .send_flow(&flow_json)
-            .await
-            .context("DBus send_flow failed for delete")?;
+        let proxy = Self::get_controller_proxy().await?;
+        proxy.delete_flow(&flow_json).await.with_context(|| {
+            format!(
+                "delete_flow failed for {} on {}",
+                Self::flow_resource_id(&normalized),
+                bridge
+            )
+        })?;
         Ok(())
     }
 

@@ -7,7 +7,7 @@ use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-const DEFAULT_GATEWAY: &str = "http://assistant.3tched.com:18789";
+const DEFAULT_GATEWAY: &str = "http://assistant.3tched.com:8090";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthState {

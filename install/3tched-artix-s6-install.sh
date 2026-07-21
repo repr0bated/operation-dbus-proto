@@ -15,19 +15,24 @@
 #      plane and the network, every longrun paired with a dedicated s6-log
 #      consumer (producer-for / consumer-for / pipeline-name), logging to
 #      /var/log/op-dbus/<service>/ as the s6log user.
-#   5. Brings the network up via s6: ovsdb-server -> ovs-vswitchd (netdev
-#      datapath seeded through rovs OVSDB by op-ovsbr0-setup --seed-only;
-#      bridge creation and eth0 enslavement happen in ONE OVSDB transact or
-#      the uplink capture does not start correctly) -> ovsbr0 addressing +
-#      uplink IP migration -> OpenFlow controller.  NO WireGuard and NO
-#      AF_XDP on the host: the netmaker mesh is self-contained in the
-#      netmaker container (its bridge iface carries 10.0.0.2 + 10.200.0.2;
-#      WG terminates at the decoy server; 10.0.0.2 egress forwards to host
-#      xray, which injects the identity header — traffic leaves as gRPC).
+#   5. Brings the network up via s6 through ONE command (3tched-bridge-up),
+#      each phase an idempotent oneshot body:
+#        dhcp (lease + snapshot on the physical NIC, before OVS owns it)
+#        -> ovsdb-server -> ovs-vswitchd (bridge creation and eth0
+#        enslavement in ONE OVSDB transact via op-ovsbr0-setup --seed-only)
+#        -> uplink migration onto ovsbr0 (host network stable BEFORE any
+#        container) -> netmaker enslaved -> service addresses (10.200.0.1 +
+#        10.0.0.2) applied LAST, after netmaker, to avoid racing its
+#        bring-up -> OpenFlow controller.  NO WireGuard and NO AF_XDP on
+#      the host: the netmaker mesh is self-contained in the netmaker
+#      container (WG terminates at the decoy server; 10.0.0.2 egress
+#      forwards to host xray, which injects the identity header — traffic
+#      leaves as gRPC).  The D-Bus session bus and the gRPC bridge (UDS +
+#      loopback :8090) start EARLY, in parallel with the network chain.
 #   6. Supervises Incus containers with s6 (+ log pipelines) via the
 #      generated 3tched-incus-svcgen helper — never Incus autostart; the
-#      netmaker container joins the bridge LAST, after its internal systemd
-#      has settled.
+#      netmaker container joins the bridge before the service addresses,
+#      readiness probed over D-Bus with busctl (never systemctl).
 #
 # The deploy/ tree is deprecated; this script derives everything from the
 # crates/ workspace (op-core config constants, op-network binaries,
@@ -195,7 +200,7 @@ install_packages() {
     # host (the netmaker mesh is self-contained inside the netmaker container).
     # The uplink NIC is enslaved into ovsbr0 as a plain OVS port — atomically
     # with bridge creation (op-ovsbr0-setup UPLINK env, one OVSDB transact).
-    pac openvswitch iproute2 iptables-nft \
+    pac openvswitch iproute2 iptables-nft dhcpcd \
         incus btrfs-progs xray
 
     if [[ $SKIP_DESKTOP -eq 0 ]]; then
@@ -374,7 +379,7 @@ build_project() {
     local bins=(
         op-web-server opdbus
         projection_server
-        op-grpc-bridge op-grpc-bridge-zeroclaw
+        op-grpc-bridge
         op-cognitive-mcp rag-ingest op-cog-admin
         op-mcp-compact op-mcp-server op-mcp-agents
         s6d op-s6-systemctl
@@ -420,7 +425,8 @@ OP_DBUS_GRPC_IFACE=ovsbr0
 OP_DBUS_GRPC_ADDR=http://10.200.0.1:50051
 
 # zero-trust gRPC bridge (xray redirects gRPC traffic here)
-GRPC_BIND=127.0.0.1:18789
+GRPC_BIND=127.0.0.1:8090
+ZEROCLAW_TLS_BIND_ADDR=127.0.0.1:8443
 
 # OpenFlow controller for ovsbr0
 OF_CONTROLLER_LISTEN=10.200.0.1:6653
@@ -440,15 +446,17 @@ EOF
         log "Writing $NET_CONF..."
         cat > "$NET_CONF" <<'EOF'
 # 3tched network configuration — consumed by the s6 network services and the
-# op-network binaries (op-ovsbr0-setup / op-ovsbr0-afxdp / op-of-controller).
+# op-network binaries (op-ovsbr0-setup / op-of-controller).
 
-# OVS bridge (userspace datapath, seeded natively over OVSDB JSON-RPC)
+# OVS bridge (kernel datapath, seeded natively over OVSDB JSON-RPC)
 BRIDGE=ovsbr0
 BRIDGE_ADDR=10.200.0.1/24
 BRIDGE_NET=10.200.0.0/24
-VETH_HOST=grpc-uplink
 FAIL_MODE=standalone
-SHARED_MAC=fa:16:3e:f1:71:d2
+# SHARED_MAC intentionally unset: op-ovsbr0-setup defaults to UPLINK's own
+# MAC so the bridge presents the same address upstream as the NIC always
+# did. Only set this to override — most hosting providers filter by MAC on
+# the virtual NIC, so a mismatched bridge MAC silently blackholes traffic.
 OVSDB_SOCKET=/run/openvswitch/db.sock
 VSWITCHD_SVC=/run/service/ovs-vswitchd
 
@@ -600,6 +608,207 @@ mk_oneshot() {
     SVC_ONESHOTS+=("$svc")
 }
 
+install_bridge_up_cmd() {
+    # 3tched-bridge-up — THE one network bring-up command.  Every network
+    # oneshot is a thin call into one phase of this script, so the whole
+    # sequence is reviewable (and manually runnable) as a single artifact.
+    # Paths are the canonical constants (must match NET_CONF / BIN_DIR).
+    log "Installing 3tched-bridge-up (single-command network bring-up)..."
+    cat > "${BIN_DIR}/3tched-bridge-up" <<'BRIDGEUP'
+#!/bin/sh
+# 3tched-bridge-up — the ONE network bring-up command.
+#
+# Ordered contract (each phase is an idempotent s6 oneshot body):
+#
+#   dhcp           acquire an IPv4 lease on UPLINK while it is still a plain
+#                  physical NIC, then snapshot addresses + default gateway
+#                  to tmpfs.  Later phases only ever consume the snapshot —
+#                  the kernel strips a NIC's IPs the instant OVS captures it.
+#   seed           create BRIDGE and enslave UPLINK in ONE OVSDB transact
+#                  (op-ovsbr0-setup --seed-only).  Called from the
+#                  ovs-vswitchd run script BEFORE vswitchd starts, so
+#                  vswitchd reads bridge + port together and uplink capture
+#                  starts correctly.  Never split into create-then-add-port.
+#   uplink         migrate the snapshot addresses and default route onto
+#                  BRIDGE.  The host uplink is COMPLETE here, strictly
+#                  before any container starts.
+#   netmaker-wait  bounded wait for the netmaker container to be RUNNING
+#                  and its internal service manager ready — probed over
+#                  D-Bus with busctl, never systemctl.
+#   service-addrs  apply BRIDGE_SVC_ADDRS (10.200.0.1 + 10.0.0.2) + netmaker
+#                  route + NAT, strictly AFTER netmaker is enslaved so the
+#                  host service addresses never race the container bring-up.
+#   all            full sequence for manual/recovery use.  Boot never runs
+#                  this: the s6 graph calls the individual phases
+#                  (uplink-dhcp -> seed inside ovs-vswitchd run ->
+#                  ovsbr0-uplink -> incus-ct-netmaker -> ovsbr0-svc-addr).
+#                  Supervised pieces are started through `service6` only.
+set -eu
+
+NET_CONF=/etc/op-dbus/network.conf
+SNAPSHOT=/run/opdbus/uplink-migration.env
+OVSBR0_SETUP=/usr/local/bin/op-ovsbr0-setup
+
+[ "$(id -u)" -eq 0 ] || { echo "3tched-bridge-up: run as root" >&2; exit 1; }
+set -a; [ -r "$NET_CONF" ] && . "$NET_CONF"; set +a
+BRIDGE="${BRIDGE:-ovsbr0}"
+UPLINK="${UPLINK:-eth0}"
+NETMAKER_CT="${NETMAKER_CT:-netmaker}"
+
+phase_dhcp() {
+    [ -n "$UPLINK" ] || return 0
+    ip link show "$UPLINK" >/dev/null 2>&1 || { echo "uplink $UPLINK not present"; exit 1; }
+    ip link set "$UPLINK" up
+    # A restored static/retained lease is already valid input.  Otherwise
+    # obtain one synchronously while the NIC is still a normal interface.
+    if ! ip -4 -o addr show dev "$UPLINK" scope global | grep -q .; then
+        command -v dhcpcd >/dev/null 2>&1 || { echo "dhcpcd is required for $UPLINK"; exit 1; }
+        echo "acquiring IPv4 DHCP lease on $UPLINK before OVS attachment"
+        # -1 -B: one synchronous boot transaction, no lingering supervisor
+        dhcpcd -4 -1 -B -q "$UPLINK"
+    fi
+    addrs="$(ip -4 -o addr show dev "$UPLINK" scope global | awk '{print $4}' | tr '\n' ' ')"
+    addrs="${addrs% }"
+    [ -n "$addrs" ] || { echo "$UPLINK has no global IPv4 lease"; exit 1; }
+    gw="$(ip -4 route show default dev "$UPLINK" | awk '{print $3; exit}')"
+    tmp="${SNAPSHOT}.new"
+    {
+        printf 'UPLINK_ADDRS="%s"\n' "$addrs"
+        printf 'UPLINK_GW="%s"\n' "$gw"
+    } >"$tmp"
+    chmod 0600 "$tmp"
+    mv -f "$tmp" "$SNAPSHOT"
+    echo "captured $addrs (gw ${gw:-none}) before OVS attachment"
+}
+
+phase_seed() {
+    # bridge + UPLINK enslavement in ONE OVSDB transact — this IS the atomic
+    # bridge-creation step (op-ovsbr0-setup refuses to do it as two steps).
+    [ -x "$OVSBR0_SETUP" ] || { echo "$OVSBR0_SETUP missing"; exit 1; }
+    export BRIDGE UPLINK FAIL_MODE SHARED_MAC OVSDB_SOCKET VSWITCHD_SVC
+    exec "$OVSBR0_SETUP" --seed-only
+}
+
+phase_uplink() {
+    export BRIDGE UPLINK FAIL_MODE SHARED_MAC OVSDB_SOCKET VSWITCHD_SVC
+    if [ -x "$OVSBR0_SETUP" ]; then
+        "$OVSBR0_SETUP" || echo "op-ovsbr0-setup failed (continuing)"
+    fi
+    i=0
+    until ip link show "$BRIDGE" >/dev/null 2>&1; do
+        i=$((i+1))
+        [ "$i" -ge 30 ] && { echo "$BRIDGE did not appear"; exit 1; }
+        sleep 1
+    done
+    ip link set "$BRIDGE" up
+    # UPLINK is already an OVS port.  Consume the pre-enslavement snapshot;
+    # never query the enslaved NIC.
+    if [ -r "$SNAPSHOT" ]; then
+        UPLINK_ADDRS=""
+        UPLINK_GW=""
+        . "$SNAPSHOT"
+        if [ -n "$UPLINK_ADDRS" ]; then
+            echo "migrating $UPLINK_ADDRS (gw ${UPLINK_GW:-none}) from $UPLINK to $BRIDGE"
+            for a in $UPLINK_ADDRS; do
+                ip addr replace "$a" dev "$BRIDGE"
+            done
+            [ -n "$UPLINK" ] && ip addr flush dev "$UPLINK" scope global
+            [ -n "$UPLINK_GW" ] && ip route replace default via "$UPLINK_GW" dev "$BRIDGE"
+        fi
+    else
+        echo "warning: no snapshot at $SNAPSHOT — uplink addresses not migrated"
+    fi
+    if [ -n "$UPLINK" ] && ip link show "$UPLINK" >/dev/null 2>&1; then
+        ip link set "$UPLINK" up
+    fi
+    sysctl -qw net.ipv4.ip_forward=1 || true
+    echo "$BRIDGE uplink complete — host network stable before containers"
+}
+
+phase_netmaker_wait() {
+    command -v incus >/dev/null 2>&1 || return 0
+    incus info >/dev/null 2>&1 || { echo "incusd not reachable — skipping netmaker wait"; return 0; }
+    if ! incus list -f csv -c n 2>/dev/null | grep -qx "$NETMAKER_CT"; then
+        echo "no $NETMAKER_CT container — skipping netmaker wait"
+        return 0
+    fi
+    echo "waiting for $NETMAKER_CT (RUNNING + service manager ready over D-Bus)"
+    i=0
+    until incus list -f csv -c ns 2>/dev/null | grep -q "^${NETMAKER_CT},RUNNING"; do
+        i=$((i+1))
+        [ "$i" -ge 60 ] && { echo "$NETMAKER_CT not RUNNING after 60s — continuing without it"; return 0; }
+        sleep 1
+    done
+    # container service-manager readiness over D-Bus — busctl, NEVER systemctl
+    i=0
+    state=""
+    while :; do
+        state="$(incus exec "$NETMAKER_CT" -- busctl --system get-property \
+            org.freedesktop.systemd1 /org/freedesktop/systemd1 \
+            org.freedesktop.systemd1.Manager SystemState 2>/dev/null |
+            tr -d '"' | awk '{print $2}')" || true
+        case "$state" in
+            running|degraded) break ;;
+        esac
+        i=$((i+1))
+        [ "$i" -ge 180 ] && { echo "$NETMAKER_CT service manager not ready after 180s (state: ${state:-none}) — continuing"; return 0; }
+        sleep 1
+    done
+    echo "$NETMAKER_CT enslaved and ready (service manager: $state)"
+}
+
+phase_service_addrs() {
+    # STRICTLY after netmaker: the host service addresses must never race
+    # the container's own bring-up on the bridge.
+    phase_netmaker_wait
+    for a in ${BRIDGE_SVC_ADDRS:-10.200.0.1/24 10.0.0.2/24}; do
+        ip addr replace "$a" dev "$BRIDGE"
+    done
+    # netmaker net rides the bridge; this route lets 10.0.0.2 egress reach
+    # host xray for identity header injection
+    ip route replace "${NETMAKER_NET:-10.0.0.0/24}" dev "$BRIDGE" 2>/dev/null || true
+    sysctl -qw net.ipv4.ip_forward=1 || true
+    if [ "${NAT_ENABLE:-1}" = "1" ] && command -v iptables >/dev/null 2>&1; then
+        iptables -t nat -C POSTROUTING -s "${BRIDGE_NET:-10.200.0.0/24}" ! -d "${BRIDGE_NET:-10.200.0.0/24}" -j MASQUERADE 2>/dev/null ||
+        iptables -t nat -A POSTROUTING -s "${BRIDGE_NET:-10.200.0.0/24}" ! -d "${BRIDGE_NET:-10.200.0.0/24}" -j MASQUERADE
+    fi
+    echo "$BRIDGE service addresses applied after netmaker: ${BRIDGE_SVC_ADDRS:-10.200.0.1/24 10.0.0.2/24}"
+}
+
+phase_all() {
+    install -d -m 0755 /run/opdbus
+    phase_dhcp
+    if ! pgrep -x ovs-vswitchd >/dev/null 2>&1; then
+        # supervised pieces go through the sanctioned wrapper only
+        service6 start ovs-vswitchd-pipeline ||
+            service6 start ovs-vswitchd ||
+            { echo "service6 start ovs-vswitchd failed"; exit 1; }
+    fi
+    phase_uplink
+    if [ -d "/etc/s6/sv/incus-ct-${NETMAKER_CT}" ]; then
+        service6 start "incus-ct-${NETMAKER_CT}-pipeline" ||
+            service6 start "incus-ct-${NETMAKER_CT}" || true
+    fi
+    phase_service_addrs
+}
+
+case "${1:-all}" in
+    dhcp)          phase_dhcp ;;
+    seed)          phase_seed ;;
+    uplink)        phase_uplink ;;
+    netmaker-wait) phase_netmaker_wait ;;
+    service-addrs) phase_service_addrs ;;
+    all)           phase_all ;;
+    *)
+        echo "usage: 3tched-bridge-up [dhcp|seed|uplink|netmaker-wait|service-addrs|all]" >&2
+        exit 2
+        ;;
+esac
+BRIDGEUP
+    chmod 0755 "${BIN_DIR}/3tched-bridge-up"
+    ok "3tched-bridge-up installed"
+}
+
 write_s6_services() {
     log "Generating s6-rc service definitions..."
 
@@ -611,11 +820,63 @@ install -d -m 0755 /run/opdbus
 install -d -m 0755 /run/op-dbus
 install -d -m 0755 ${BLOB_SHM_DIR}
 install -d -m 0755 -o s6log -g s6log ${LOG_ROOT}
+# Seal the plugin blobs BEFORE op-grpc-bridge starts: the bridge hydrates its
+# gRPC reflection from this catalog and enters a ~40s retry loop against an
+# empty tmpfs otherwise.  This is what lets the gRPC bridge come up early.
+if [ -x ${BIN_DIR}/opblob ]; then
+    ${BIN_DIR}/opblob seal-shm >/dev/null
+else
+    echo "warning: ${BIN_DIR}/opblob missing — blob catalog not sealed"
+fi
+cat > /dev/shm/xray_config.json <<'XRAY_CONFIG_EOF'
+{
+  "log": { "loglevel": "warning" },
+  "inbounds": [
+    {
+      "tag": "egress-proxy",
+      "listen": "127.0.0.1",
+      "port": 10809,
+      "protocol": "http",
+      "settings": {}
+    },
+    {
+      "tag": "grpc-uplink",
+      "listen": "188.68.58.237",
+      "port": 8443,
+      "protocol": "dokodemo-door",
+      "settings": {
+        "address": "127.0.0.1",
+        "port": 8443,
+        "network": "tcp"
+      }
+    },
+    {
+      "tag": "netmaker-api-uplink",
+      "listen": "188.68.58.237",
+      "port": 8081,
+      "protocol": "dokodemo-door",
+      "settings": {
+        "address": "127.0.0.1",
+        "port": 8081,
+        "network": "tcp"
+      }
+    }
+  ],
+  "outbounds": [
+    { "tag": "direct", "protocol": "freedom", "settings": {} }
+  ]
+}
+XRAY_CONFIG_EOF
+chown root:xray /dev/shm/xray_config.json
+chmod 0640 /dev/shm/xray_config.json
 EOF
     chmod 0755 "${LIBEXEC_DIR}/opdbus-rundirs-up"
     mk_oneshot opdbus-rundirs "" "${LIBEXEC_DIR}/opdbus-rundirs-up"
 
     # ---- op-session-bus: busd on the canonical SESSION bus socket ----------
+    # EARLY BY DESIGN: depends only on opdbus-rundirs, never on the network
+    # chain — the whole D-Bus control plane and the gRPC bridge must be up
+    # while OVS/netmaker are still converging.
     mk_longrun op-session-bus "opdbus-rundirs" <<EOF
 #!/bin/sh
 # 3tched SESSION bus — the WG-identity-gated plugin surface.
@@ -626,19 +887,57 @@ SOCKET_PATH="\${DBUS_SESSION_BUS_ADDRESS#unix:path=}"
 install -d -m 0755 "\$(dirname "\$SOCKET_PATH")"
 rm -f "\$SOCKET_PATH"
 # the bus runs as root; loosen the socket so the operator's tools (zbusctl)
-install -d -m 0755 "\\$(dirname "\\$SOCKET_PATH")"
-rm -f "\\$SOCKET_PATH"
+# can reach it
 umask 000
 if command -v busd >/dev/null 2>&1; then
-    exec busd -a "\\$DBUS_SESSION_BUS_ADDRESS"
+    exec busd -a "\$DBUS_SESSION_BUS_ADDRESS"
 fi
-exec dbus-daemon --session --nofork --nopidfile --address="\\$DBUS_SESSION_BUS_ADDRESS"
+exec dbus-daemon --session --nofork --nopidfile --address="\$DBUS_SESSION_BUS_ADDRESS"
 EOF
 
     # ======================= NETWORK (all via s6) ==========================
 
+    # ---- uplink-dhcp (oneshot): lease + immutable migration snapshot -------
+    # This must complete before any OVS row can enslave UPLINK.  The snapshot
+    # is the hand-off contract: later stages never try to rediscover an address
+    # from a physical interface after it has become an OVS port.
+    cat > "${LIBEXEC_DIR}/uplink-dhcp-up" <<EOF
+#!/bin/sh
+set -eu
+set -a; [ -r ${NET_CONF} ] && . ${NET_CONF}; set +a
+UPLINK="\${UPLINK:-eth0}"
+SNAPSHOT=/run/opdbus/uplink-migration.env
+[ -n "\$UPLINK" ] || exit 0
+ip link show "\$UPLINK" >/dev/null 2>&1 || { echo "uplink \$UPLINK not present"; exit 1; }
+ip link set "\$UPLINK" up
+
+# A restored static/retained lease is already valid input.  Otherwise obtain
+# one synchronously while the NIC is still a normal physical interface.
+if ! ip -4 -o addr show dev "\$UPLINK" scope global | grep -q .; then
+    command -v dhcpcd >/dev/null 2>&1 || { echo "dhcpcd is required for \$UPLINK"; exit 1; }
+    echo "acquiring IPv4 DHCP lease on \$UPLINK before OVS attachment"
+    # -B keeps this as a synchronous boot transaction rather than leaving a
+    # second network supervisor behind after the address is handed to OVS.
+    dhcpcd -4 -1 -B -q "\$UPLINK"
+fi
+
+UPLINK_ADDRS="\$(ip -4 -o addr show dev "\$UPLINK" scope global | awk '{print \$4}')"
+[ -n "\$UPLINK_ADDRS" ] || { echo "\$UPLINK has no global IPv4 lease"; exit 1; }
+UPLINK_GW="\$(ip -4 route show default dev "\$UPLINK" | awk '{print \$3; exit}')"
+tmp="\${SNAPSHOT}.new"
+{
+    printf 'UPLINK_ADDRS="%s"\\n' "\$(printf '%s' "\$UPLINK_ADDRS" | tr '\\n' ' ')"
+    printf 'UPLINK_GW="%s"\\n' "\$UPLINK_GW"
+} >"\$tmp"
+chmod 0600 "\$tmp"
+mv -f "\$tmp" "\$SNAPSHOT"
+echo "captured \$(printf '%s' "\$UPLINK_ADDRS" | tr '\\n' ' ') (gw \${UPLINK_GW:-none}) before OVS attachment"
+EOF
+    chmod 0755 "${LIBEXEC_DIR}/uplink-dhcp-up"
+    mk_oneshot uplink-dhcp "opdbus-rundirs" "${LIBEXEC_DIR}/uplink-dhcp-up"
+
     # ---- ovsdb-server ------------------------------------------------------
-    mk_longrun ovsdb-server "opdbus-rundirs" <<'EOF'
+    mk_longrun ovsdb-server "uplink-dhcp" <<'EOF'
 #!/bin/sh
 # OVSDB — the native JSON-RPC control surface for OVS (no ovs-vsctl anywhere).
 exec 2>&1
@@ -652,8 +951,8 @@ exec ovsdb-server "$DB" \
 EOF
 
     # ---- ovs-vswitchd ------------------------------------------------------
-    # op-ovsbr0-setup --seed-only writes the netdev bridge/port rows over
-    # OVSDB JSON-RPC *before* vswitchd starts (crates/op-network contract).
+    # op-ovsbr0-setup --seed-only writes the system-datapath bridge/port rows
+    # over OVSDB JSON-RPC *before* vswitchd starts (crates/op-network contract).
     mk_longrun ovs-vswitchd "ovsdb-server" <<EOF
 #!/bin/sh
 exec 2>&1
@@ -671,7 +970,7 @@ EOF
 set -eu
 set -a; [ -r ${NET_CONF} ] && . ${NET_CONF}; set +a
 BRIDGE="\${BRIDGE:-ovsbr0}"
-export BRIDGE VETH_HOST UPLINK FAIL_MODE SHARED_MAC OVSDB_SOCKET VSWITCHD_SVC
+export BRIDGE UPLINK FAIL_MODE SHARED_MAC OVSDB_SOCKET VSWITCHD_SVC
 if [ -x ${BIN_DIR}/op-ovsbr0-setup ]; then
     ${BIN_DIR}/op-ovsbr0-setup || echo "op-ovsbr0-setup failed (continuing)"
 fi
@@ -686,17 +985,23 @@ ip link set "\$BRIDGE" up
 # netmaker net rides the bridge (container iface holds 10.0.0.2 + 10.200.0.2);
 # this route lets 10.0.0.2 egress reach host xray for identity header injection
 ip route replace "\${NETMAKER_NET:-10.0.0.0/24}" dev "\$BRIDGE" 2>/dev/null || true
-# uplink is enslaved into the bridge (same transact as bridge creation, via
-# op-ovsbr0-setup UPLINK) — migrate its IPv4 + default route onto the bridge
-if [ -n "\${UPLINK:-}" ] && ip link show "\$UPLINK" >/dev/null 2>&1; then
-    UPLINK_ADDR="\$(ip -4 -o addr show dev "\$UPLINK" scope global | awk '{print \$4; exit}')"
-    if [ -n "\$UPLINK_ADDR" ]; then
-        UPLINK_GW="\$(ip -4 route show default dev "\$UPLINK" | awk '{print \$3; exit}')"
-        echo "migrating \$UPLINK_ADDR (gw \${UPLINK_GW:-none}) from \$UPLINK to \$BRIDGE"
-        ip addr replace "\$UPLINK_ADDR" dev "\$BRIDGE"
-        ip addr flush dev "\$UPLINK" scope global
+# UPLINK is already an OVS port.  Consume the snapshot made before ovsdb-server
+# was allowed to start; never race by querying the enslaved NIC here.
+SNAPSHOT=/run/opdbus/uplink-migration.env
+if [ -r "\$SNAPSHOT" ]; then
+    UPLINK_ADDRS=""
+    UPLINK_GW=""
+    . "\$SNAPSHOT"
+    if [ -n "\$UPLINK_ADDRS" ]; then
+        echo "migrating \$(echo "\$UPLINK_ADDRS" | tr '\\n' ' ') (gw \${UPLINK_GW:-none}) from \$UPLINK to \$BRIDGE"
+        printf '%s\\n' \$UPLINK_ADDRS | while IFS= read -r a; do
+            [ -n "\$a" ] && ip addr replace "\$a" dev "\$BRIDGE"
+        done
+        [ -n "\${UPLINK:-}" ] && ip addr flush dev "\$UPLINK" scope global
         [ -n "\$UPLINK_GW" ] && ip route replace default via "\$UPLINK_GW" dev "\$BRIDGE"
     fi
+fi
+if [ -n "\${UPLINK:-}" ] && ip link show "\$UPLINK" >/dev/null 2>&1; then
     ip link set "\$UPLINK" up
 fi
 sysctl -qw net.ipv4.ip_forward=1 || true
@@ -764,13 +1069,17 @@ exec ${BIN_DIR}/op-web-server
 EOF
 
     # ---- op-grpc-bridge: zero-trust gRPC bridge (xray redirects here) ------
-    mk_longrun op-grpc-bridge "op-session-bus" <<EOF
+    # Keep the SHM blob seal explicit even though op-session-bus also depends on
+    # opdbus-rundirs.  The bridge must never enter its retry loop against an
+    # empty tmpfs catalog after reboot or a regenerated service graph.
+    mk_longrun op-grpc-bridge "opdbus-rundirs op-session-bus" <<EOF
 #!/bin/sh
 exec 2>&1
 set -a; [ -r ${ENV_FILE} ] && . ${ENV_FILE}; set +a
 : "\${DBUS_SESSION_BUS_ADDRESS:?must be set in ${ENV_FILE}}"
-export GRPC_BIND="\${GRPC_BIND:-127.0.0.1:18789}"
-export RUST_LOG="\${RUST_LOG:-op_grpc_bridge=info,info}"
+export GRPC_BIND="\${GRPC_BIND:-127.0.0.1:8090}"
+export ZEROCLAW_TLS_BIND_ADDR="\${ZEROCLAW_TLS_BIND_ADDR:-127.0.0.1:8443}"
+export RUST_LOG="\${GRPC_RUST_LOG:-off}"
 exec ${BIN_DIR}/op-grpc-bridge
 EOF
 
@@ -805,7 +1114,7 @@ EOF
     fi
 
     # ---- op-xray-daemon: xray router (identity header injection) -----------
-    # xray runs on the HOST (container path is deprecated in op-xdp-wg).
+    # xray runs on the HOST (the old wg-xray container path is deprecated).
     # Config arrives at /dev/shm/xray_config.json via the D-Bus surface.
     mk_longrun op-xray-daemon "op-session-bus" <<EOF
 #!/bin/sh
@@ -814,6 +1123,20 @@ set -a; [ -r ${ENV_FILE} ] && . ${ENV_FILE}; set +a
 export RUST_LOG="\${RUST_LOG:-info}"
 exec ${BIN_DIR}/op-xray-daemon
 EOF
+
+    # ---- xray: live config is SHM-only; static bootstrap is materialized by
+    # opdbus-rundirs until the validated model routing generator replaces it.
+    install -d "${S6_SV_DIR}/xray/dependencies.d"
+    echo longrun > "${S6_SV_DIR}/xray/type"
+    touch "${S6_SV_DIR}/xray/dependencies.d/opdbus-rundirs"
+    cat > "${S6_SV_DIR}/xray/run" <<'EOF'
+#!/bin/sh
+exec 2>&1
+: "${XRAY_CONFIG_PATH:=/dev/shm/xray_config.json}"
+[ -r "$XRAY_CONFIG_PATH" ] || { echo "missing SHM Xray config: $XRAY_CONFIG_PATH"; exit 1; }
+exec /usr/bin/xray run -config "$XRAY_CONFIG_PATH"
+EOF
+    chmod 0755 "${S6_SV_DIR}/xray/run"
 
     ok "s6 service definitions generated"
 }
@@ -981,7 +1304,7 @@ write_incus_svcgen() {
 # Usage: 3tched-incus-svcgen <container> [--attach-bridge <bridge>] [--no-start]
 #
 # --attach-bridge: join the container to the OVS bridge LAST — after its
-#   internal systemd has settled (used for netmaker: the container is
+#   internal service manager reports readiness over D-Bus (used for netmaker: the container is
 #   self-contained; its bridge interface carries 10.0.0.2 + 10.200.0.2 and
 #   its 10.0.0.2 egress forwards to host xray for identity header injection).
 
@@ -1036,14 +1359,11 @@ if ! incus list -f csv -c ns | grep -q "^\${NAME},RUNNING"; then
     incus start "\$NAME"
 fi
 if [ -n "\$ATTACH_BRIDGE" ]; then
-    if ! incus config device show "\$NAME" 2>/dev/null | grep -q '^eth0:'; then
-        # join the bridge LAST: give systemd inside the container time to settle
-        echo "waiting for systemd inside \$NAME to settle before joining \$ATTACH_BRIDGE..."
-        state="\$(timeout 180 incus exec "\$NAME" -- systemctl is-system-running --wait 2>/dev/null || true)"
-        echo "\$NAME systemd state: \${state:-unknown}"
-        incus config device add "\$NAME" eth0 nic nictype=bridged parent="\$ATTACH_BRIDGE"
-        echo "\$NAME joined \$ATTACH_BRIDGE"
-    fi
+    incus config device show "\$NAME" 2>/dev/null | grep -q '^eth0:' || {
+        echo "\$NAME has no configured eth0; refusing to create a NIC implicitly"
+        exit 1
+    }
+    echo "\$NAME started last with its existing eth0 on \$ATTACH_BRIDGE"
 fi
 # hold supervision and stream the container console into the log pipeline;
 # stopping this service stops the container ('script' provides the pty
@@ -1230,7 +1550,7 @@ summary() {
     echo "  Oneshot output:      s6-rc catch-all logger (/run/uncaught-logs)"
     echo
     echo "Network (s6-managed):"
-    echo "  ovsdb-server -> ovs-vswitchd (netdev, rovs-seeded) -> ovsbr0-addr"
+    echo "  uplink-dhcp -> ovsdb-server -> ovs-vswitchd (system, rovs-seeded) -> ovsbr0-addr"
     echo "  ovsbr0: 10.200.0.1/24 · OpenFlow controller: 10.200.0.1:6653"
     echo "  Uplink (UPLINK in network.conf) enslaved atomically with bridge"
     echo "  creation — ONE OVSDB transact — and its IP migrated to the bridge"
