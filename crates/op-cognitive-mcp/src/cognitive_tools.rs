@@ -4,6 +4,8 @@
 //! Operations: store, retrieve, query, delete, list_namespaces, stats.
 
 use crate::agent_tools::register_agent_tools;
+use crate::blob_catalog_tool::register_blob_catalog_tool;
+use crate::blob_vectors_tool::register_blob_vectors_tools;
 use crate::memory_store::{CognitiveMemoryStore, EntryQuery, NamespaceKind};
 use crate::notebooklm::register_notebooklm_tools;
 use crate::qdrant_shuttle::QdrantSemanticShuttle;
@@ -23,13 +25,15 @@ impl CognitiveToolRegistry {
         qdrant: Option<Arc<QdrantSemanticShuttle>>,
     ) -> Result<()> {
         registry
-            .register(Arc::new(MemoryTool::new(store.clone(), qdrant)) as BoxedTool)
+            .register(Arc::new(MemoryTool::new(store.clone(), qdrant.clone())) as BoxedTool)
             .await?;
         registry
             .register(Arc::new(RegisterToolTool) as BoxedTool)
             .await?;
         register_agent_tools(registry).await?;
         register_notebooklm_tools(registry).await?;
+        register_blob_catalog_tool(registry).await?;
+        register_blob_vectors_tools(registry, qdrant).await?;
         Ok(())
     }
 }
