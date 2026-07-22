@@ -544,7 +544,7 @@ impl IncusPlugin {
     }
 
     /// Apply a single Create action for an instance.
-    async fn apply_create(instance: &IncusInstance) -> Result<Vec<String>> {
+    pub async fn apply_create(instance: &IncusInstance) -> Result<Vec<String>> {
         let mut changes = Vec::new();
         let name = &instance.name;
 

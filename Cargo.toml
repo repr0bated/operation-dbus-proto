@@ -110,8 +110,8 @@ reqwest = { version = "0.11", features = ["json", "stream"] }
 qdrant-client = "1.7"
 
 # Graph DB — Datalog relational-graph-vector DB
-# storage-sled: pure-Rust embedded store (avoids the sqlite3 link conflict with rusqlite/op-cache)
-cozo = { version = "0.7.6", default-features = false, features = ["rayon", "storage-sled"] }
+# Cozo is the durable registry; RocksDB is its embedded persistence engine.
+cozo = { version = "0.7.6", default-features = false, features = ["rayon", "storage-rocksdb"] }
 
 # Error handling
 anyhow = "1"

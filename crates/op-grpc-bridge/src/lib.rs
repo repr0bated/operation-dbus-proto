@@ -28,6 +28,7 @@ pub mod dynamic_reflection;
 pub mod emqx_hook_provider;
 pub mod grpc_client;
 pub mod grpc_server;
+pub mod identity_sled_dispatch;
 pub mod interceptor;
 pub mod mutation_engine;
 pub mod per_plugin_reflection;
