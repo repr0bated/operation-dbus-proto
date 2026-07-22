@@ -951,6 +951,213 @@ impl ZeroclawPlugin {
         }
     }
 
+    /// Query the Salad AI Gateway's live model list (`GET /v1/models`), Bearer-
+    /// authenticated with `SALAD_API_KEY`. Returns the reported model IDs, or an
+    /// empty list if the key is absent, the request fails, or the response is
+    /// unparsable — this is a best-effort present-state probe, never a hard
+    /// dependency for schema construction.
+    ///
+    /// Implemented independently of `op_llm::salad::SaladProvider`: `op-llm`
+    /// already depends on `op-plugins`, so the reverse dependency isn't
+    /// available without introducing a cycle. The request shape mirrors
+    /// `SaladProvider::list_models`.
+    async fn probe_salad_models() -> Vec<String> {
+        let Ok(api_key) = std::env::var("SALAD_API_KEY") else {
+            return Vec::new();
+        };
+        let base_url = Self::env_or("SALAD_BASE_URL", "https://ai.salad.cloud/v1");
+        let url = format!("{}/models", base_url.trim_end_matches('/'));
+
+        let Ok(client) = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+        else {
+            return Vec::new();
+        };
+
+        let response = match client.get(&url).bearer_auth(&api_key).send().await {
+            Ok(r) if r.status().is_success() => r,
+            Ok(r) => {
+                tracing::warn!("Salad models probe failed ({}): {}", r.status(), url);
+                return Vec::new();
+            }
+            Err(e) => {
+                tracing::warn!("Salad models probe unreachable: {}", e);
+                return Vec::new();
+            }
+        };
+
+        let Ok(body) = response.text().await else {
+            return Vec::new();
+        };
+        let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&body) else {
+            return Vec::new();
+        };
+
+        parsed
+            .get("data")
+            .and_then(|d| d.as_array())
+            .map(|entries| {
+                entries
+                    .iter()
+                    .filter_map(|e| e.get("id").and_then(|v| v.as_str()).map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Send a minimal real chat-completion request to confirm a specific
+    /// model actually answers within a bounded time — not just that it's
+    /// *listed*. `/v1/models` reports every model Salad has ever declared;
+    /// it does not guarantee a warm replica is currently serving it. Larger,
+    /// less-popular models on Salad's distributed marketplace have been
+    /// observed to 503 for minutes with no warm replica while smaller models
+    /// answer in seconds, so presence in `/v1/models` alone overstates
+    /// availability.
+    async fn probe_salad_model_reachable(model: &str, api_key: &str, base_url: &str) -> bool {
+        let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
+        let Ok(client) = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(20))
+            .build()
+        else {
+            return false;
+        };
+        let body = serde_json::json!({
+            "model": model,
+            "messages": [{"role": "user", "content": "ping"}],
+            "max_tokens": 4,
+            "stream": false
+        });
+        match client
+            .post(&url)
+            .bearer_auth(api_key)
+            .json(&body)
+            .send()
+            .await
+        {
+            Ok(r) if r.status().is_success() => true,
+            Ok(r) => {
+                tracing::warn!(
+                    "Salad reachability probe for {} failed ({})",
+                    model,
+                    r.status()
+                );
+                false
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Salad reachability probe for {} unreachable/timed out: {}",
+                    model,
+                    e
+                );
+                false
+            }
+        }
+    }
+
+    /// Live variant of [`current_state`](Self::current_state): folds real
+    /// Salad Gateway checks into the declared model routes — both
+    /// [`probe_salad_models`](Self::probe_salad_models) (is the model listed
+    /// at all) and [`probe_salad_model_reachable`](Self::probe_salad_model_reachable)
+    /// (does it actually answer a real request right now). A model must pass
+    /// both to be marked `available: true`.
+    ///
+    /// - Declared routes get `available` = listed AND reachable, with a
+    ///   status reason distinguishing "not listed", "listed but didn't
+    ///   answer (no warm replica / timeout)", and "confirmed live."
+    /// - Any listed-and-reachable model that ISN'T one of the statically
+    ///   declared routes is appended as a `"discovered"` route, so new Salad
+    ///   models surface without a code change — this is the same live list
+    ///   that feeds `zeroclaw.models.list` and the `/models` UI surface, so
+    ///   they inherit it for free once schema construction uses this path.
+    /// - If `SALAD_API_KEY` is absent or `/v1/models` returns nothing, the
+    ///   declared defaults from `current_state()` are left untouched.
+    pub async fn current_state_live() -> ZeroclawState {
+        let mut state = Self::current_state();
+        let Ok(api_key) = std::env::var("SALAD_API_KEY") else {
+            return state;
+        };
+        let live_models = Self::probe_salad_models().await;
+        if live_models.is_empty() {
+            return state;
+        }
+        let base_url = Self::env_or("SALAD_BASE_URL", "https://ai.salad.cloud/v1");
+
+        let live_set: std::collections::HashSet<&str> =
+            live_models.iter().map(String::as_str).collect();
+
+        // Reachability is real per-request I/O (up to 20s each); only worth
+        // paying for models the catalog actually lists. Sequential is fine
+        // here — this runs during an explicit `opblob seal-shm`, not a
+        // per-request hot path, and Salad's declared catalog is tiny.
+        let mut reachable: std::collections::HashMap<String, bool> =
+            std::collections::HashMap::new();
+        for model in &live_models {
+            let ok = Self::probe_salad_model_reachable(model, &api_key, &base_url).await;
+            reachable.insert(model.clone(), ok);
+        }
+
+        for route in state.projection.model_routes.iter_mut() {
+            if route.provider != "salad" {
+                continue;
+            }
+            let listed = live_set.contains(route.model.as_str());
+            let is_reachable = reachable.get(&route.model).copied().unwrap_or(false);
+            route.available = listed && is_reachable;
+            route.status_reason = match (listed, is_reachable) {
+                (true, true) => format!(
+                    "{}; confirmed live — listed in /v1/models and answered a real request.",
+                    route.model
+                ),
+                (true, false) => format!(
+                    "{}; listed in Salad /v1/models but did not answer a live test request (no warm replica or timeout).",
+                    route.model
+                ),
+                (false, _) => format!(
+                    "{}; not present in the live /v1/models response.",
+                    route.model
+                ),
+            };
+        }
+
+        let declared_models: std::collections::HashSet<String> = state
+            .projection
+            .model_routes
+            .iter()
+            .filter(|r| r.provider == "salad")
+            .map(|r| r.model.clone())
+            .collect();
+        for model in &live_models {
+            if declared_models.contains(model.as_str()) {
+                continue;
+            }
+            let is_reachable = reachable.get(model).copied().unwrap_or(false);
+            state.projection.model_routes.push(ModelRoute {
+                hint: "discovered".to_string(),
+                provider: "salad".to_string(),
+                upstream_provider: "salad".to_string(),
+                transport: "direct".to_string(),
+                model: model.clone(),
+                kind: "chat".to_string(),
+                status: "discovered".to_string(),
+                available: is_reachable,
+                status_reason: if is_reachable {
+                    format!(
+                        "{model}; discovered live via Salad GET /v1/models and confirmed reachable (not statically declared)."
+                    )
+                } else {
+                    format!(
+                        "{model}; discovered via Salad GET /v1/models but did not answer a live test request (not statically declared)."
+                    )
+                },
+                api_key: Some(JsonValue::Null),
+                ..Default::default()
+            });
+        }
+
+        state
+    }
+
     fn option_field(
         name: &str,
         proto_type: &str,
@@ -1437,6 +1644,16 @@ impl StatePlugin for ZeroclawPlugin {
         Some(schema)
     }
 
+    async fn schema_live(&self) -> Option<PluginSchema> {
+        let mut schema = zeroclaw_schema_live().await;
+        super::common::llm_projection::rewrite_projection_subids_for_plugin(
+            &mut schema,
+            PLUGIN_NAME,
+        );
+        super::common::oscal::ensure_category_metadata_fields(&mut schema);
+        Some(schema)
+    }
+
     async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {
         Ok(StateDiff {
             plugin: PLUGIN_NAME.to_string(),
@@ -1492,6 +1709,20 @@ impl StatePlugin for ZeroclawPlugin {
 
 /// Canonical `zeroclaw` schema derived from [`ZeroclawState`] via schemars.
 pub(crate) fn zeroclaw_schema() -> PluginSchema {
+    zeroclaw_schema_from_state(ZeroclawPlugin::current_state())
+}
+
+/// Live variant of [`zeroclaw_schema`]: folds in a real reachability probe
+/// against the Salad AI Gateway (`SALAD_API_KEY` + `GET /v1/models`) so
+/// `available`/`status_reason` on Salad routes reflect the backend's actual
+/// current answer instead of a static declaration, and any model the gateway
+/// reports that isn't already a declared route is surfaced too. See
+/// [`ZeroclawPlugin::current_state_live`].
+pub(crate) async fn zeroclaw_schema_live() -> PluginSchema {
+    zeroclaw_schema_from_state(ZeroclawPlugin::current_state_live().await)
+}
+
+fn zeroclaw_schema_from_state(state: ZeroclawState) -> PluginSchema {
     let root = serde_json::to_value(schemars::schema_for!(ZeroclawState))
         .expect("schemars schema serializes to JSON");
     let mut schema = super::schemars_adapter::plugin_schema_from_json(
@@ -1503,7 +1734,7 @@ pub(crate) fn zeroclaw_schema() -> PluginSchema {
     schema.category = PLUGIN_CATEGORY.to_string();
     schema.display_name = Some(PLUGIN_DISPLAY_NAME.to_string());
 
-    if let Ok(state) = simd_json::serde::to_owned_value(ZeroclawPlugin::current_state()) {
+    if let Ok(state) = simd_json::serde::to_owned_value(state) {
         super::schemars_adapter::apply_state_defaults(&mut schema, &state);
         schema.example = Some(state);
     }

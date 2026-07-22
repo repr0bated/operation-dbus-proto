@@ -10975,6 +10975,8 @@ dependencies = [
 [[package]]
 name = "zbus"
 version = "5.18.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fe18fb60dc696039e738717b76eaea21e7a4489bbb1885020b43c94236d7e98a"
 dependencies = [
  "async-broadcast 0.7.2",
  "async-executor",
@@ -11036,11 +11038,13 @@ dependencies = [
 [[package]]
 name = "zbus_macros"
 version = "5.18.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fe96480bed92df2b442a1a30df364e12d08eed03aeb061f2b8dc6afb2be91119"
 dependencies = [
  "proc-macro-crate 3.5.0",
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 2.0.119",
  "zbus_names 4.3.4",
  "zvariant 5.13.1",
  "zvariant_utils 3.5.0",
@@ -11071,6 +11075,8 @@ dependencies = [
 [[package]]
 name = "zbus_names"
 version = "4.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d8bf88b4a3ff53e883001e0e0115b297a9d53c31b9c1edd2bfdd853e3428624e"
 dependencies = [
  "serde",
  "winnow 1.0.4",
@@ -11080,6 +11086,8 @@ dependencies = [
 [[package]]
 name = "zbus_xml"
 version = "5.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d1586c021a01ca0a9216dcd874e546382e156a5cbab5fab6cb5f10087e22682a"
 dependencies = [
  "serde",
  "winnow 1.0.4",
@@ -11321,6 +11329,8 @@ dependencies = [
 [[package]]
 name = "zvariant"
 version = "5.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bee2a0bcd2a907786a456fff45aaaaf54c9ba5f50b71ae9ec1a4edd200c94911"
 dependencies = [
  "endi",
  "enumflags2",
@@ -11359,11 +11369,13 @@ dependencies = [
 [[package]]
 name = "zvariant_derive"
 version = "5.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "38a708216a18780796770bfe3f4739c7c83a3e8f789b755534bbbc06e4e23e12"
 dependencies = [
  "proc-macro-crate 3.5.0",
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 2.0.119",
  "zvariant_utils 3.5.0",
 ]
 
@@ -11392,10 +11404,12 @@ dependencies = [
 [[package]]
 name = "zvariant_utils"
 version = "3.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "90cb9383f9b45290407a1258b202d3f8f01db719eb60b4e4055c6375af4fc7c7"
 dependencies = [
  "proc-macro2",
  "quote",
  "serde",
- "syn 3.0.3",
+ "syn 2.0.119",
  "winnow 1.0.4",
 ]

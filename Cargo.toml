@@ -251,12 +251,3 @@ mime_guess = "2.0"
 
 [dev-dependencies]
 tempfile.workspace = true
-
-[patch.crates-io]
-zbus = { path = "/home/jeremy/git/zbus/zbus" }
-zbus_xml = { path = "/home/jeremy/git/zbus/zbus_xml" }
-zbus_macros = { path = "/home/jeremy/git/zbus/zbus_macros" }
-zbus_names = { path = "/home/jeremy/git/zbus/zbus_names" }
-zvariant = { path = "/home/jeremy/git/zbus/zvariant" }
-zvariant_derive = { path = "/home/jeremy/git/zbus/zvariant_derive" }
-zvariant_utils = { path = "/home/jeremy/git/zbus/zvariant_utils" }

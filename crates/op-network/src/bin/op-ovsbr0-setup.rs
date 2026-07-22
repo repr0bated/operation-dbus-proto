@@ -12,10 +12,17 @@
 //!                  starts correctly when vswitchd first reads the bridge and
 //!                  its ports together, so this must not be a second step)
 //!   FAIL_MODE      OVS fail mode            (default: standalone)
-//!   SHARED_MAC     Bridge MAC override      (default: UPLINK's own MAC when
-//!                  UPLINK is set, so the bridge presents the same address
-//!                  upstream as the NIC always did; fa:16:3e:f1:71:d2 only
-//!                  when there's no UPLINK to match)
+//!   PUBLIC_PORT    Internal port carrying the public uplink IP
+//!                  (default: pub0) — the uplink's MAC is pinned on THIS
+//!                  port's Interface row, never on the bridge itself
+//!   INTERNAL_PORTS Space-separated extra internal ports seeded with the
+//!                  bridge (default: "svc0 grpc"; svc0 = grpc endpoint,
+//!                  grpc = named spare for the container/grpc link)
+//!   SHARED_MAC     PUBLIC_PORT MAC override (default: UPLINK's own MAC when
+//!                  UPLINK is set, so the public port presents the same
+//!                  address upstream as the NIC always did; fa:16:3e:f1:71:d2
+//!                  only when there's no UPLINK to match). The bridge device
+//!                  itself NEVER gets this MAC — it keeps a random one.
 //!   OVSDB_SOCKET   Path to OVSDB socket     (default: auto-detect)
 //!   VSWITCHD_SVC   s6 service NAME          (default: ovs-vswitchd; lifecycle
 //!                  goes through the sanctioned `service6` wrapper only —
@@ -43,8 +50,16 @@ struct Config {
     bridge: String,
     uplink: String,
     fail_mode: String,
+    /// `PUBLIC_PORT` env var: internal port that carries the public uplink
+    /// IP (and the uplink's MAC). The bridge device itself never gets the
+    /// uplink MAC — pinning it on the bridge and later moving the IP off
+    /// blackholes inbound traffic (the provider filters on this MAC).
+    public_port: String,
+    /// `INTERNAL_PORTS` env var: space-separated extra internal ports seeded
+    /// alongside the bridge (e.g. "svc0 grpc").
+    internal_ports: Vec<String>,
     /// `SHARED_MAC` env var, if explicitly set. When unset and `uplink` is
-    /// configured, the bridge's MAC is taken from the uplink NIC's real
+    /// configured, the public port's MAC is taken from the uplink NIC's real
     /// hardware address instead (see `resolve_shared_mac`) — a hosting
     /// provider's virtual switch typically filters on the MAC it originally
     /// handed the NIC, so presenting any other MAC on that link silently
@@ -60,6 +75,12 @@ impl Config {
             bridge: std::env::var("BRIDGE").unwrap_or_else(|_| "ovsbr0".into()),
             uplink: std::env::var("UPLINK").unwrap_or_default(),
             fail_mode: std::env::var("FAIL_MODE").unwrap_or_else(|_| "standalone".into()),
+            public_port: std::env::var("PUBLIC_PORT").unwrap_or_else(|_| "pub0".into()),
+            internal_ports: std::env::var("INTERNAL_PORTS")
+                .unwrap_or_else(|_| "svc0 grpc".into())
+                .split_whitespace()
+                .map(|s| s.to_string())
+                .collect(),
             shared_mac_override: std::env::var("SHARED_MAC").ok(),
             ovsdb_socket: std::env::var("OVSDB_SOCKET").unwrap_or_else(|_| find_socket_path()),
             vswitchd_svc: std::env::var("VSWITCHD_SVC").unwrap_or_else(|_| "ovs-vswitchd".into()),
@@ -75,12 +96,13 @@ fn read_iface_mac(iface: &str) -> Result<String> {
     Ok(mac.trim().to_string())
 }
 
-/// Resolve the bridge's MAC: an explicit `SHARED_MAC` override always wins;
-/// otherwise, when an uplink is configured, use *its* real MAC so the bridge
-/// presents the same address upstream as the NIC always did (enslaving a
-/// physical NIC changes nothing about which MAC the hosting provider's
-/// virtual switch expects on that link). Only falls back to a placeholder
-/// when there's no physical uplink to match at all.
+/// Resolve the public port's MAC: an explicit `SHARED_MAC` override always
+/// wins; otherwise, when an uplink is configured, use *its* real MAC so the
+/// public port presents the same address upstream as the NIC always did
+/// (enslaving a physical NIC changes nothing about which MAC the hosting
+/// provider's virtual switch expects on that link). Only falls back to a
+/// placeholder when there's no physical uplink to match at all. This MAC is
+/// pinned on the PUBLIC_PORT interface row — never on the bridge row.
 fn resolve_shared_mac(cfg: &Config) -> String {
     if let Some(mac) = &cfg.shared_mac_override {
         return mac.clone();
@@ -458,21 +480,29 @@ async fn purge_by_name(client: &mut Client, name: &str) -> Result<()> {
 
 /// Create ovsbr0 with datapath_type=system.
 ///
-/// `extra_ports` (the physical UPLINK, when configured) is enslaved in the
-/// SAME atomic transact (RFC 7047, official Open_vSwitch schema): vswitchd
-/// must first read the bridge and its ports together or uplink capture does
-/// not start correctly.  Enslavement is never a second transaction on the
-/// create path.
+/// All ports ride in the SAME atomic transact (RFC 7047, official
+/// Open_vSwitch schema): vswitchd must first read the bridge and its ports
+/// together or uplink capture does not start correctly.  Enslavement is
+/// never a second transaction on the create path.
+///
+/// `mac` (the uplink's real MAC) is pinned on `public_port`'s Interface row
+/// via other_config.hwaddr.  The Bridge row NEVER carries hwaddr: the bridge
+/// device must keep a random MAC, because the public IP lives on
+/// `public_port`, and the provider filters on the uplink MAC — if the bridge
+/// device held that MAC and the IP later moved, inbound would blackhole.
 async fn create_bridge_system(
     client: &mut Client,
     bridge: &str,
     fail_mode: &str,
     mac: &str,
     extra_ports: &[&str],
+    public_port: &str,
+    internal_ports: &[String],
 ) -> Result<()> {
     info!(
-        "creating bridge {} with datapath_type=system fail_mode={} extra_ports={:?}",
-        bridge, fail_mode, extra_ports
+        "creating bridge {} with datapath_type=system fail_mode={} extra_ports={:?} \
+         public_port={} internal_ports={:?}",
+        bridge, fail_mode, extra_ports, public_port, internal_ports
     );
     purge_by_name(client, bridge).await?;
 
@@ -490,6 +520,26 @@ async fn create_bridge_system(
             json!({"name": name, "interfaces": extra_iface_ref.to_json()}),
         ));
     }
+    // public port: internal, carries the uplink MAC (and later the public IP)
+    let pub_iface_ref = txn.insert(
+        "Interface",
+        json!({
+            "name": public_port,
+            "type": "internal",
+            "other_config": ["map", [["hwaddr", mac]]]
+        }),
+    );
+    port_refs.push(txn.insert(
+        "Port",
+        json!({"name": public_port, "interfaces": pub_iface_ref.to_json()}),
+    ));
+    for name in internal_ports {
+        let int_iface_ref = txn.insert("Interface", json!({"name": name, "type": "internal"}));
+        port_refs.push(txn.insert(
+            "Port",
+            json!({"name": name, "interfaces": int_iface_ref.to_json()}),
+        ));
+    }
     let ports_json = if port_refs.len() == 1 {
         port_refs[0].to_json()
     } else {
@@ -504,7 +554,6 @@ async fn create_bridge_system(
             "name": bridge,
             "datapath_type": "system",
             "fail_mode": fail_mode,
-            "other_config": ["map", [["hwaddr", mac]]],
             "ports": ports_json
         }),
     );
@@ -628,6 +677,8 @@ async fn main() -> Result<()> {
             &cfg.fail_mode,
             &shared_mac,
             &seed_ports,
+            &cfg.public_port,
+            &cfg.internal_ports,
         )
         .await?;
         info!("seed-only complete: {} datapath_type=system", cfg.bridge);
@@ -670,6 +721,8 @@ async fn main() -> Result<()> {
             &cfg.fail_mode,
             &shared_mac,
             &seed_ports,
+            &cfg.public_port,
+            &cfg.internal_ports,
         )
         .await?;
         info!("OVSDB updated: datapath_type=system");
@@ -733,9 +786,12 @@ fn print_help() {
            UPLINK       physical NIC enslaved in the same create transact\n\
                         (optional; atomic with bridge creation so capture\n\
                         starts correctly)\n\
-           FAIL_MODE    bridge fail mode (default: standalone)\n\
-           SHARED_MAC   bridge MAC override (default: UPLINK's own MAC)\n\
-           OVSDB_SOCKET OVSDB socket path\n\
-           VSWITCHD_SVC s6 service name for service6 (default: ovs-vswitchd)"
+            FAIL_MODE    bridge fail mode (default: standalone)\n\
+            PUBLIC_PORT  internal port for the public IP (default: pub0; the\n\
+                         uplink MAC is pinned here, never on the bridge)\n\
+            INTERNAL_PORTS extra internal ports (default: \"svc0 grpc\")\n\
+            SHARED_MAC   PUBLIC_PORT MAC override (default: UPLINK's own MAC)\n\
+            OVSDB_SOCKET OVSDB socket path\n\
+            VSWITCHD_SVC s6 service name for service6 (default: ovs-vswitchd)"
     );
 }
