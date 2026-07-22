@@ -36,7 +36,7 @@ COLLECTION = "code_lsp"
 VOYAGE_DIM = 1024
 NAMESPACE = uuid.UUID(int=0x1a2b_3c4d_5e6f_7081_92a3_b4c5d6e7f809)
 MAX_CHUNK_CHARS = 20_000
-TOKEN_SAFETY_MARGIN = 1_750_000
+TOKEN_SAFETY_MARGIN = 180_000_000  # real cap confirmed at 200M/account; leave a 20M buffer
 MAX_CHARS_PER_GROUP = 80_000
 MAX_CHARS_PER_CALL = 250_000
 MAX_GROUPS_PER_CALL = 5
@@ -184,6 +184,10 @@ _VOYAGE_CREDENTIALS = [
     # direct api.voyageai.com) — a second Mongo-routed account, despite
     # the name suggesting otherwise.
     ("mongo_voyager", os.environ["MONGO_VOYAGER"], "https://ai.mongodb.com/v1/contextualizedembeddings"),
+    # Fourth credential: also ai.mongodb.com-routed, confirmed working with
+    # voyage-context-4 given the correct request shape (inputs list-of-lists,
+    # Authorization: Bearer, input_type: document).
+    ("mongo_lsp", os.environ["MONGO_LSP_API"], "https://ai.mongodb.com/v1/contextualizedembeddings"),
 ]
 
 
@@ -334,7 +338,7 @@ def process_repo(repo_dir: str, repo_name: str, rotator: VoyageRotator):
         pending.append((ids, texts))
         pending_chars += group_chars
     flush()
-    print(f"{repo_name}: {n_chunks} chunks -> {total} points, {n_skipped} skipped")
+    print(f"{repo_name}: {n_chunks} chunks -> {total} points, {n_skipped} skipped", flush=True)
     print(f"  token usage: {dict(rotator.used)}")
 
 
@@ -356,20 +360,50 @@ DIRECT_DEP_REPOS = [
 
 BULK_DIR = "/home/admin/git/repos-bulk"
 
+# Ecosystem/adjacent tier: everything else cloned into repos-bulk that isn't
+# a direct dep, isn't compliance (handled by vectorize_compliance.py's
+# `repos` target), isn't rust-lang/rust (LSP-only, separate script), and
+# isn't a pure schema/spec-text dump with no real source to chunk.
+_EXCLUDED_FROM_ECOSYSTEM = set(DIRECT_DEP_REPOS) | {
+    "rust-lang__rust",  # too large/submodule-heavy for tree-sitter; LSP-only
+    # compliance repos (see vectorize_compliance.py COMPLIANCE_REPOS)
+    "usnistgov__OSCAL", "ComplianceAsCode__content", "opencontrol__schemas",
+    "LINCnil__GDPR-Developer-Guide", "OpenGovDataMirror__A_gsa_fedramp-automation",
+    "TechShieldOlamide__trustgrid-compliance-templates",
+    "vaibhavjain2608__compliance-policy-templates", "microsoft__presidio",
+    "cloud-custodian__cloud-custodian",
+    "Auxin-io__cybersecurity-templates",  # docx, needs different extraction
+    # pure spec/schema text dumps, not code
+    "json-schema-org__json-schema-spec", "jsontypedef__json-typedef-spec",
+    "OAI__OpenAPI-Specification", "xdg__xdg-specs", "APIs-guru__openapi-directory",
+    "rust-lang__rustlings",  # tutorial exercises, low value
+}
+
+ECOSYSTEM_REPOS = sorted(
+    d for d in os.listdir(BULK_DIR)
+    if os.path.isdir(os.path.join(BULK_DIR, d)) and d not in _EXCLUDED_FROM_ECOSYSTEM
+)
+
+
+def _run_batch(repo_list):
+    rotator = VoyageRotator()
+    for repo in repo_list:
+        repo_dir = os.path.join(BULK_DIR, repo)
+        if not os.path.isdir(repo_dir):
+            print(f"SKIP (not cloned): {repo}", file=sys.stderr)
+            continue
+        if rotator.exhausted():
+            print(f"STOPPING batch: all credentials exhausted before reaching '{repo}'", file=sys.stderr)
+            break
+        print(f"=== {repo} ===", file=sys.stderr)
+        process_repo(repo_dir, repo, rotator)
+
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "direct-deps":
-        rotator = VoyageRotator()
-        for repo in DIRECT_DEP_REPOS:
-            repo_dir = os.path.join(BULK_DIR, repo)
-            if not os.path.isdir(repo_dir):
-                print(f"SKIP (not cloned): {repo}", file=sys.stderr)
-                continue
-            if rotator.exhausted():
-                print(f"STOPPING batch: all credentials exhausted before reaching '{repo}'", file=sys.stderr)
-                break
-            print(f"=== {repo} ===", file=sys.stderr)
-            process_repo(repo_dir, repo, rotator)
+        _run_batch(DIRECT_DEP_REPOS)
+    elif len(sys.argv) > 1 and sys.argv[1] == "ecosystem":
+        _run_batch(ECOSYSTEM_REPOS)
     else:
         repo_dir = sys.argv[1]
         repo_name = sys.argv[2] if len(sys.argv) > 2 else os.path.basename(repo_dir)
