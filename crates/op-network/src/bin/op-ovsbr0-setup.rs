@@ -534,10 +534,7 @@ async fn create_bridge_system(
         json!({"name": public_port, "interfaces": pub_iface_ref.to_json()}),
     ));
     for name in internal_ports {
-        let int_iface_ref = txn.insert(
-            "Interface",
-            json!({"name": name, "type": "internal"}),
-        );
+        let int_iface_ref = txn.insert("Interface", json!({"name": name, "type": "internal"}));
         port_refs.push(txn.insert(
             "Port",
             json!({"name": name, "interfaces": int_iface_ref.to_json()}),

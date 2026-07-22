@@ -107,9 +107,16 @@ fn seal_plugins(dir: &Path) -> Result<(), String> {
     let mut missing_schema = Vec::new();
     for plugin in plugins {
         let plugin_id = plugin.name().to_string();
-        let Some(schema) = plugin.schema() else {
-            missing_schema.push(plugin_id);
-            continue;
+        // Prefer a live-probed schema (real backend reachability folded in)
+        // over the static declaration; most plugins have nothing to probe
+        // and schema_live() defaults to None, in which case schema() is used.
+        let live = rt.block_on(plugin.schema_live());
+        let schema = match live.or_else(|| plugin.schema()) {
+            Some(schema) => schema,
+            None => {
+                missing_schema.push(plugin_id);
+                continue;
+            }
         };
         let blob = blobify_plugin_schema(&plugin_id, schema);
         sealed_ids.insert(blob.manifest.plugin_id.clone());

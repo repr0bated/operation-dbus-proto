@@ -63,11 +63,11 @@ pub use headless_oauth::{HeadlessOAuthProvider, OAuthToken};
 pub use huggingface::HuggingFaceClient;
 pub use openclaw::OpenClawProvider;
 pub use perplexity::PerplexityClient;
-pub use salad::SaladProvider;
 pub use provider::{
     ChatMessage, ChatRequest, ChatResponse, LlmProvider, ModelInfo, ProviderConfig, ProviderType,
     ToolChoice, ToolDefinition,
 };
+pub use salad::SaladProvider;
 
 /// Prelude for convenient imports
 pub mod prelude {
@@ -81,9 +81,9 @@ pub mod prelude {
     pub use super::huggingface::HuggingFaceClient;
     pub use super::openclaw::OpenClawProvider;
     pub use super::perplexity::PerplexityClient;
-    pub use super::salad::SaladProvider;
     pub use super::provider::{
         ChatMessage, ChatRequest, ChatResponse, LlmProvider, ModelInfo, ProviderConfig,
         ProviderType, ToolChoice, ToolDefinition,
     };
+    pub use super::salad::SaladProvider;
 }

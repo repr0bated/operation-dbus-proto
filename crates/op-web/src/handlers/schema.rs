@@ -16,7 +16,10 @@ pub async fn schema_catalog_handler(Extension(_state): Extension<Arc<AppState>>)
         Ok(mut bytes) => match simd_json::to_owned_value(&mut bytes) {
             Ok(value) => {
                 let count = if let Some(obj) = value.as_object() {
-                    obj.get("plugins").and_then(|p| p.as_object()).map(|p| p.len()).unwrap_or(0)
+                    obj.get("plugins")
+                        .and_then(|p| p.as_object())
+                        .map(|p| p.len())
+                        .unwrap_or(0)
                 } else {
                     0
                 };

@@ -126,6 +126,18 @@ pub trait StatePlugin: Send + Sync {
         None
     }
 
+    /// Get the plugin structured schema with any live-probed present-state
+    /// folded in (e.g. a real reachability check against a remote backend),
+    /// for callers that seal/publish present-state and want it to reflect
+    /// reality rather than static declarations.
+    ///
+    /// Default: `None`, meaning "no live variant — use [`schema`](Self::schema)".
+    /// Plugins with something worth probing live (a remote API, a daemon
+    /// socket) override this; everyone else is unaffected.
+    async fn schema_live(&self) -> Option<PluginSchema> {
+        None
+    }
+
     /// Plugin identifier (e.g., "network", "filesystem", "user")
     fn name(&self) -> &str;
 
