@@ -38,10 +38,10 @@ use crate::gcloud_adc::GCloudADCProvider;
 use crate::gemini::GeminiClient;
 use crate::gemini_cli::create_gemini_cli_provider;
 use crate::openclaw::OpenClawProvider;
-use crate::salad::SaladProvider;
 use crate::provider::{
     BoxedProvider, ChatMessage, ChatRequest, ChatResponse, LlmProvider, ModelInfo, ProviderType,
 };
+use crate::salad::SaladProvider;
 use async_trait::async_trait;
 
 /// Chat manager - handles multiple providers and model selection

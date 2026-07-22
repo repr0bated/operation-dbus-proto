@@ -75,7 +75,8 @@ fn read_json<T: for<'de> Deserialize<'de>>(path: &str) -> Option<T> {
 /// Atomically rewrite a tmpfs JSON file via a temp file + rename.
 fn write_json_atomic(path: &str, value: &Value) -> std::io::Result<()> {
     let tmp = format!("{path}.tmp");
-    let bytes = serde_json::to_vec_pretty(value).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    let bytes = serde_json::to_vec_pretty(value)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     std::fs::write(&tmp, bytes)?;
     std::fs::rename(&tmp, path)?;
     Ok(())
@@ -90,11 +91,17 @@ fn now_secs() -> u64 {
 }
 
 fn empty_gallery() -> SpecGallery {
-    SpecGallery { version: 1, specs: vec![] }
+    SpecGallery {
+        version: 1,
+        specs: vec![],
+    }
 }
 
 fn empty_catalog() -> Catalog {
-    Catalog { version: 1, entries: vec![] }
+    Catalog {
+        version: 1,
+        entries: vec![],
+    }
 }
 
 fn ok(value: Value) -> Response {
@@ -120,9 +127,15 @@ pub async fn gemma_gallery_delete_handler(
 ) -> Response {
     let mut gallery: SpecGallery = read_json(GEMMA_SPECS_PATH).unwrap_or_else(empty_gallery);
     gallery.specs.retain(|s| s.id != id);
-    match write_json_atomic(GEMMA_SPECS_PATH, &json!({ "version": gallery.version, "specs": gallery.specs })) {
+    match write_json_atomic(
+        GEMMA_SPECS_PATH,
+        &json!({ "version": gallery.version, "specs": gallery.specs }),
+    ) {
         Ok(_) => ok(json!({ "ok": true })),
-        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, &format!("write failed: {e}")),
+        Err(e) => err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("write failed: {e}"),
+        ),
     }
 }
 
@@ -167,11 +180,20 @@ pub async fn gemma_catalog_promote_handler(
         GEMMA_SPECS_PATH,
         &json!({ "version": gallery.version, "specs": gallery.specs }),
     ) {
-        return err(StatusCode::INTERNAL_SERVER_ERROR, &format!("gallery write failed: {e}"));
+        return err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("gallery write failed: {e}"),
+        );
     }
-    match write_json_atomic(GEMMA_CATALOG_PATH, &json!({ "version": catalog.version, "entries": catalog.entries })) {
+    match write_json_atomic(
+        GEMMA_CATALOG_PATH,
+        &json!({ "version": catalog.version, "entries": catalog.entries }),
+    ) {
         Ok(_) => ok(json!({ "ok": true, "id": entry.id })),
-        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, &format!("catalog write failed: {e}")),
+        Err(e) => err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("catalog write failed: {e}"),
+        ),
     }
 }
 
@@ -182,9 +204,15 @@ pub async fn gemma_catalog_delete_handler(
 ) -> Response {
     let mut catalog: Catalog = read_json(GEMMA_CATALOG_PATH).unwrap_or_else(empty_catalog);
     catalog.entries.retain(|e| e.id != id);
-    match write_json_atomic(GEMMA_CATALOG_PATH, &json!({ "version": catalog.version, "entries": catalog.entries })) {
+    match write_json_atomic(
+        GEMMA_CATALOG_PATH,
+        &json!({ "version": catalog.version, "entries": catalog.entries }),
+    ) {
         Ok(_) => ok(json!({ "ok": true })),
-        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, &format!("write failed: {e}")),
+        Err(e) => err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("write failed: {e}"),
+        ),
     }
 }
 
@@ -201,7 +229,12 @@ pub async fn gemma_plugin_schema_handler(
         Some(s) => (plugin.clone(), s),
         None => match resolve_plugin_by_prefix(&plugin) {
             Some((id, s)) => (id, s),
-            None => return err(StatusCode::NOT_FOUND, &format!("plugin schema not found: {plugin}")),
+            None => {
+                return err(
+                    StatusCode::NOT_FOUND,
+                    &format!("plugin schema not found: {plugin}"),
+                )
+            }
         },
     };
 
@@ -226,5 +259,8 @@ fn schema_hash_for(plugin: &str) -> Option<String> {
     let bytes = std::fs::read(BLOB_MANIFEST_PATH).ok()?;
     let v: Value = serde_json::from_slice(&bytes).ok()?;
     let plugins = v.get("plugins")?.as_object()?;
-    plugins.get(plugin).and_then(|h| h.as_str()).map(|s| s.to_string())
+    plugins
+        .get(plugin)
+        .and_then(|h| h.as_str())
+        .map(|s| s.to_string())
 }

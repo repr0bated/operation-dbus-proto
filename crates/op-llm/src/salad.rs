@@ -9,10 +9,19 @@
 //! SALAD_API_KEY=salad-...            # required (Bearer auth)
 //! SALAD_BASE_URL=https://ai.salad.cloud/v1  # default
 //! SALAD_DEFAULT_MODEL=qwen3.6-35b-a3b        # default
+//! SALAD_MAX_TOKENS=4096              # default cap when a caller doesn't set one; "0"/"unlimited" disables it
 //! ```
 //!
 //! The API key is read from the environment only and is never embedded in
 //! source. Authentication uses the standard `Authorization: Bearer` header.
+//!
+//! ## Reasoning models
+//!
+//! The Qwen models served behind this gateway emit a `reasoning` block ahead
+//! of `content`. A `max_tokens` budget that's too tight for that reasoning
+//! phase truncates the response with `finish_reason: "length"` and an empty
+//! `content` — [`SaladProvider::chat_with_request`] falls back to `reasoning`
+//! in that case so callers never see a silently empty reply.
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -30,12 +39,18 @@ use crate::provider::{
 const DEFAULT_BASE_URL: &str = "https://ai.salad.cloud/v1";
 const DEFAULT_MODEL: &str = "qwen3.6-35b-a3b";
 const API_KEY_ENV: &str = "SALAD_API_KEY";
+/// Fallback `max_tokens` applied only when a caller doesn't set one — sized
+/// to absorb the reasoning-model preamble seen in practice (~200-300 tokens
+/// for trivial prompts) while still bounding worst-case latency/cost.
+const DEFAULT_MAX_TOKENS: u32 = 4096;
 
 pub struct SaladProvider {
     client: Client,
     base_url: String,
     default_model: String,
     api_key: Option<String>,
+    /// `None` means unbounded (no `max_tokens` sent when the caller omits one).
+    default_max_tokens: Option<u32>,
 }
 
 impl SaladProvider {
@@ -43,6 +58,15 @@ impl SaladProvider {
         api_key: Option<String>,
         base_url: Option<String>,
         default_model: Option<String>,
+    ) -> Self {
+        Self::with_max_tokens(api_key, base_url, default_model, Some(DEFAULT_MAX_TOKENS))
+    }
+
+    pub fn with_max_tokens(
+        api_key: Option<String>,
+        base_url: Option<String>,
+        default_model: Option<String>,
+        default_max_tokens: Option<u32>,
     ) -> Self {
         let client = Client::builder()
             .timeout(Duration::from_secs(180))
@@ -57,6 +81,7 @@ impl SaladProvider {
                 .to_string(),
             default_model: default_model.unwrap_or_else(|| DEFAULT_MODEL.to_string()),
             api_key,
+            default_max_tokens,
         }
     }
 
@@ -64,7 +89,26 @@ impl SaladProvider {
         let api_key = std::env::var(API_KEY_ENV).ok();
         let base_url = std::env::var("SALAD_BASE_URL").ok();
         let default_model = std::env::var("SALAD_DEFAULT_MODEL").ok();
-        Ok(Self::new(api_key, base_url, default_model))
+        let default_max_tokens = match std::env::var("SALAD_MAX_TOKENS") {
+            Ok(v) if v.eq_ignore_ascii_case("unlimited") || v == "0" => None,
+            Ok(v) => match v.parse::<u32>() {
+                Ok(n) => Some(n),
+                Err(_) => {
+                    warn!(
+                        "Invalid SALAD_MAX_TOKENS={:?}, using default {}",
+                        v, DEFAULT_MAX_TOKENS
+                    );
+                    Some(DEFAULT_MAX_TOKENS)
+                }
+            },
+            Err(_) => Some(DEFAULT_MAX_TOKENS),
+        };
+        Ok(Self::with_max_tokens(
+            api_key,
+            base_url,
+            default_model,
+            default_max_tokens,
+        ))
     }
 
     fn models_url(&self) -> String {
@@ -100,7 +144,11 @@ impl SaladProvider {
             ),
             parameters: None,
             available: true,
-            tags: vec!["salad".to_string(), "qwen".to_string(), "remote".to_string()],
+            tags: vec![
+                "salad".to_string(),
+                "qwen".to_string(),
+                "remote".to_string(),
+            ],
             downloads: None,
             updated_at: None,
         }
@@ -269,7 +317,9 @@ impl LlmProvider for SaladProvider {
             );
         }
 
-        if let Some(max_tokens) = request.max_tokens {
+        // Caller-supplied max_tokens always wins; otherwise fall back to the
+        // provider default so reasoning models get enough headroom to answer.
+        if let Some(max_tokens) = request.max_tokens.or(self.default_max_tokens) {
             body_object.insert("max_tokens".into(), json!(max_tokens));
         }
         if let Some(temp) = request.temperature {
@@ -328,11 +378,29 @@ impl LlmProvider for SaladProvider {
             .get("message")
             .ok_or_else(|| anyhow::anyhow!("No message in Salad response"))?;
 
-        let content = message
-            .get("content")
-            .and_then(|c| c.as_str())
-            .unwrap_or("")
-            .to_string();
+        let reasoning = message.get("reasoning").and_then(|c| c.as_str());
+        let has_tool_calls = message
+            .get("tool_calls")
+            .and_then(|tc| tc.as_array())
+            .is_some_and(|a| !a.is_empty());
+
+        let content = match message.get("content").and_then(|c| c.as_str()) {
+            Some(c) if !c.is_empty() => c.to_string(),
+            _ if has_tool_calls => String::new(),
+            // Reasoning models (e.g. Qwen) can exhaust max_tokens mid-"thinking"
+            // and return empty content; surface the reasoning trace instead of
+            // silently handing the caller an empty reply.
+            _ => match reasoning {
+                Some(r) if !r.is_empty() => {
+                    warn!(
+                        "Salad: empty content, falling back to reasoning trace ({} chars) - consider raising max_tokens",
+                        r.len()
+                    );
+                    r.to_string()
+                }
+                _ => String::new(),
+            },
+        };
 
         let role = message
             .get("role")
