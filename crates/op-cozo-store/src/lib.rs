@@ -44,6 +44,58 @@ pub struct PolicyVerdict {
     pub reason: String,
 }
 
+/// Full WireGuard gateway session record (mirrors op-gateway's `WireGuardSession`),
+/// persisted so a gateway restart doesn't drop live sessions. `flags_json` is the
+/// caller's flags map, pre-serialized to a JSON string.
+#[derive(Debug, Clone)]
+pub struct WgSessionRecord {
+    pub session_id: String,
+    pub peer_pubkey: String,
+    pub psk: String,
+    pub created_at: u64,
+    pub expires_at: u64,
+    pub is_active: bool,
+    pub last_used: u64,
+    pub client_ip: Option<String>,
+    pub client_version: Option<String>,
+    pub auth_method: String,
+    pub key_rotation_count: u32,
+    pub flags_json: String,
+}
+
+/// One container identity sled row (mirrors op-plugins' `ContainerIdentitySled`).
+/// `btrfs_device_json` is the sled's btrfs device record pre-serialized to JSON;
+/// `peer_ip`, `blob_ref`, and `btrfs_device_json` use `""` for absent.
+#[derive(Debug, Clone)]
+pub struct IdentitySledRecord {
+    pub session_id: String,
+    pub wireguard_pubkey: String,
+    pub interface: String,
+    pub peer_ip: String,
+    pub mutation_index: i64,
+    pub hashed_footprint: String,
+    pub trace_id: String,
+    pub schema_version: i64,
+    pub vector_id: String,
+    pub blob_ref: String,
+    pub btrfs_device_json: String,
+    pub instance_json: String,
+    pub session_started_at: i64,
+    pub last_seen_at: i64,
+    pub active: bool,
+}
+
+/// One row of a session's append-only "snowball" event ledger.
+#[derive(Debug, Clone)]
+pub struct SessionEventRecord {
+    pub session_id: String,
+    pub seq: i64,
+    pub kind: String,
+    pub subid: String,
+    pub content: String,
+    pub created_at: i64,
+}
+
 /// CozoDB graph database shuttle.
 ///
 /// Manages the unified Datalog relations:
@@ -73,8 +125,8 @@ impl CozoGraphShuttle {
 
     pub fn new_persistent(path: PathBuf) -> std::result::Result<Self, CozoError> {
         let ps = path.to_string_lossy().to_string();
-        // "sled" engine: pure-Rust embedded store, no native lib conflicts with rusqlite
-        let db = DbInstance::new("sled", &ps, Default::default())
+        // RocksDB is the durable storage engine beneath CozoDB.
+        let db = DbInstance::new("rocksdb", &ps, Default::default())
             .map_err(|e| CozoError::Other(format!("failed to open CozoDB at {ps}: {e}")))?;
         let s = Self { db: Arc::new(db) };
         s.seed_schema().map_err(CozoError::from)?;
@@ -174,6 +226,54 @@ impl CozoGraphShuttle {
                 created_at: String default "",
                 expires_at: String default ""
             }"#,
+            // consumer account proof — wg_pubkey keyed, no email/PII
+            r#":create account_sessions {
+                wg_pubkey: String
+                =>
+                session_id: String default "",
+                session_proof: String default "",
+                created_at: String default ""
+            }"#,
+            // GhostBridge consumer operational state — session_id keyed, no email/PII
+            r#":create consumer_accounts {
+                session_id: String
+                =>
+                wg_public_key: String default "",
+                wg_private_key_encrypted: String default "",
+                assigned_ip: String default "",
+                email_verified: String default "true",
+                privacy_quota_bytes: Int default 1073741824,
+                privacy_quota_used_bytes: Int default 0,
+                privacy_container_name: String default "",
+                privacy_route_id: String default "",
+                privacy_network_connected: String default "false",
+                privacy_network_connected_at: String default "",
+                api_credentials_json: String default "null",
+                created_at: String default ""
+            }"#,
+            // full WireGuard gateway session record (op-gateway::WireGuardSession),
+            // persisted so restarts don't drop live sessions
+            r#":create wg_sessions {
+                session_id: String
+                =>
+                peer_pubkey: String default "",
+                psk: String default "",
+                created_at: Int default 0,
+                expires_at: Int default 0,
+                is_active: Bool default true,
+                last_used: Int default 0,
+                client_ip: String default "",
+                client_version: String default "",
+                auth_method: String default "",
+                key_rotation_count: Int default 0,
+                flags_json: String default "{}"
+            }"#,
+            // peer_pubkey → session_id, mirrors op-gateway's in-memory peer_sessions map
+            r#":create wg_peer_sessions {
+                peer_pubkey: String
+                =>
+                session_id: String default ""
+            }"#,
             // named MCP memory contexts (replaces SQLite memory_namespaces)
             r#":create memory_namespaces {
                 name: String
@@ -218,6 +318,39 @@ impl CozoGraphShuttle {
                 namespace: String default "",
                 created_at: String default "",
                 updated_at: String default ""
+            }"#,
+            // one row per container identity sled (the container IS the sled IS
+            // the identity; host = container zero). btrfs_device_json is the
+            // sled's Cozo-registered btrfs persistence device, pre-serialized
+            // ("" = none); peer_ip/blob_ref use "" for absent.
+            r#":create identity_sleds {
+                session_id: String
+                =>
+                wireguard_pubkey: String,
+                interface: String default "",
+                peer_ip: String default "",
+                mutation_index: Int default 0,
+                hashed_footprint: String default "",
+                trace_id: String default "",
+                schema_version: Int default 0,
+                vector_id: String default "",
+                blob_ref: String default "",
+                btrfs_device_json: String default "",
+                instance_json: String default "",
+                session_started_at: Int default 0,
+                last_seen_at: Int default 0,
+                active: Bool default false
+            }"#,
+            // append-only per-session "snowball" event ledger archive
+            // (the immutable event chain is the proof; this is the queryable copy)
+            r#":create session_events {
+                session_id: String,
+                seq: Int
+                =>
+                kind: String,
+                subid: String default "",
+                content: String default "",
+                created_at: Int default 0
             }"#,
         ];
 
@@ -775,6 +908,600 @@ impl CozoGraphShuttle {
         Ok(())
     }
 
+    // ── Account sessions (consumer path — no PII) ─────────────────────────────
+
+    /// Persist a verified account: session_id + blake3(session_id) proof keyed by wg_pubkey.
+    pub fn upsert_account_session(
+        &self,
+        wg_pubkey: &str,
+        session_id: &str,
+        session_proof: &str,
+    ) -> std::result::Result<(), CozoError> {
+        let query = r#"
+            ?[wg_pubkey, session_id, session_proof, created_at]
+                <- [[$wg, $sid, $proof, $ts]]
+            :put account_sessions {
+                wg_pubkey => session_id, session_proof, created_at
+            }
+        "#;
+        let mut p: Params = BTreeMap::new();
+        p.insert("wg".into(), DataValue::Str(wg_pubkey.into()));
+        p.insert("sid".into(), DataValue::Str(session_id.into()));
+        p.insert("proof".into(), DataValue::Str(session_proof.into()));
+        p.insert("ts".into(), DataValue::Str(now_rfc3339().into()));
+        cozo_run(&self.db, query, p)
+            .map_err(|e| CozoError::Other(format!("upsert account session: {e}")))?;
+        Ok(())
+    }
+
+    // ── Consumer accounts (GhostBridge path — no email) ───────────────────────
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn upsert_consumer_account(
+        &self,
+        session_id: &str,
+        wg_public_key: &str,
+        wg_private_key_encrypted: &str,
+        assigned_ip: &str,
+        email_verified: bool,
+        privacy_quota_bytes: i64,
+        privacy_quota_used_bytes: i64,
+        privacy_container_name: &str,
+        privacy_route_id: &str,
+        privacy_network_connected: bool,
+        privacy_network_connected_at: &str,
+        api_credentials_json: &str,
+        created_at: &str,
+    ) -> std::result::Result<(), CozoError> {
+        let query = r#"
+            ?[session_id, wg_public_key, wg_private_key_encrypted, assigned_ip, email_verified,
+              privacy_quota_bytes, privacy_quota_used_bytes, privacy_container_name,
+              privacy_route_id, privacy_network_connected, privacy_network_connected_at,
+              api_credentials_json, created_at]
+                <- [[$sid, $wg, $wg_priv, $ip, $ev, $quota, $used, $container, $route,
+                     $pnc, $pnc_at, $api_json, $ts]]
+            :put consumer_accounts {
+                session_id => wg_public_key, wg_private_key_encrypted, assigned_ip,
+                    email_verified, privacy_quota_bytes, privacy_quota_used_bytes,
+                    privacy_container_name, privacy_route_id, privacy_network_connected,
+                    privacy_network_connected_at, api_credentials_json, created_at
+            }
+        "#;
+        let mut p: Params = BTreeMap::new();
+        p.insert("sid".into(), DataValue::Str(session_id.into()));
+        p.insert("wg".into(), DataValue::Str(wg_public_key.into()));
+        p.insert(
+            "wg_priv".into(),
+            DataValue::Str(wg_private_key_encrypted.into()),
+        );
+        p.insert("ip".into(), DataValue::Str(assigned_ip.into()));
+        p.insert(
+            "ev".into(),
+            DataValue::Str(email_verified.to_string().into()),
+        );
+        p.insert("quota".into(), dv_int(privacy_quota_bytes));
+        p.insert("used".into(), dv_int(privacy_quota_used_bytes));
+        p.insert(
+            "container".into(),
+            DataValue::Str(privacy_container_name.into()),
+        );
+        p.insert("route".into(), DataValue::Str(privacy_route_id.into()));
+        p.insert(
+            "pnc".into(),
+            DataValue::Str(privacy_network_connected.to_string().into()),
+        );
+        p.insert(
+            "pnc_at".into(),
+            DataValue::Str(privacy_network_connected_at.into()),
+        );
+        p.insert(
+            "api_json".into(),
+            DataValue::Str(api_credentials_json.into()),
+        );
+        p.insert("ts".into(), DataValue::Str(created_at.into()));
+        cozo_run(&self.db, query, p)
+            .map_err(|e| CozoError::Other(format!("upsert consumer account: {e}")))?;
+        Ok(())
+    }
+
+    pub fn get_consumer_account(
+        &self,
+        session_id: &str,
+    ) -> std::result::Result<Option<Vec<DataValue>>, CozoError> {
+        let mut p: Params = BTreeMap::new();
+        p.insert("sid".into(), DataValue::Str(session_id.into()));
+        let r = cozo_run(
+            &self.db,
+            "?[wg_public_key, wg_private_key_encrypted, assigned_ip, email_verified,
+             privacy_quota_bytes, privacy_quota_used_bytes, privacy_container_name,
+             privacy_route_id, privacy_network_connected, privacy_network_connected_at,
+             api_credentials_json, created_at] := \
+             *consumer_accounts[session_id, wg_public_key, wg_private_key_encrypted, assigned_ip,
+             email_verified, privacy_quota_bytes, privacy_quota_used_bytes,
+             privacy_container_name, privacy_route_id, privacy_network_connected,
+             privacy_network_connected_at, api_credentials_json, created_at], session_id = $sid",
+            p,
+        )
+        .map_err(|e| CozoError::Other(format!("get consumer account: {e}")))?;
+        Ok(r.rows.into_iter().next())
+    }
+
+    pub fn list_consumer_accounts(&self) -> std::result::Result<Vec<Vec<DataValue>>, CozoError> {
+        let r = cozo_run(
+            &self.db,
+            "?[session_id, wg_public_key, wg_private_key_encrypted, assigned_ip, email_verified,
+             privacy_quota_bytes, privacy_quota_used_bytes, privacy_container_name,
+             privacy_route_id, privacy_network_connected, privacy_network_connected_at,
+             api_credentials_json, created_at] := \
+             *consumer_accounts[session_id, wg_public_key, wg_private_key_encrypted, assigned_ip,
+             email_verified, privacy_quota_bytes, privacy_quota_used_bytes,
+             privacy_container_name, privacy_route_id, privacy_network_connected,
+             privacy_network_connected_at, api_credentials_json, created_at]",
+            BTreeMap::new(),
+        )
+        .map_err(|e| CozoError::Other(format!("list consumer accounts: {e}")))?;
+        Ok(r.rows)
+    }
+
+    /// Lookup account session proof by wg_pubkey.
+    pub fn lookup_account_session(
+        &self,
+        wg_pubkey: &str,
+    ) -> std::result::Result<Option<(String, String, String)>, CozoError> {
+        let mut p: Params = BTreeMap::new();
+        p.insert("wg".into(), DataValue::Str(wg_pubkey.into()));
+        let r = cozo_run(
+            &self.db,
+            "?[session_id, session_proof, created_at] := \
+             *account_sessions[wg_pubkey, session_id, session_proof, created_at], \
+             wg_pubkey = $wg",
+            p,
+        )
+        .map_err(|e| CozoError::Other(format!("lookup account session: {e}")))?;
+        if let Some(row) = r.rows.first() {
+            let sid = dv_as_str(&row[0]).unwrap_or("").to_string();
+            let proof = dv_as_str(&row[1]).unwrap_or("").to_string();
+            let created = dv_as_str(&row[2]).unwrap_or("").to_string();
+            Ok(Some((sid, proof, created)))
+        } else {
+            Ok(None)
+        }
+    }
+
+    // ── WireGuard gateway sessions ───────────────────────────────────────────────
+
+    /// Upsert a full WireGuard gateway session record and its peer_pubkey → session_id
+    /// mapping, atomically. Uses Cozo's `multi_transaction` so a failure partway
+    /// through (e.g. the peer-mapping write) rolls back the session write too —
+    /// otherwise a restart could resurrect a session row with no peer mapping.
+    /// Also deactivates any *other* still-active `wg_sessions` row for this same
+    /// peer_pubkey — otherwise `load_wireguard_sessions()` would reload both the
+    /// old and new session as valid bearers after a restart.
+    pub fn put_wg_session(&self, rec: &WgSessionRecord) -> std::result::Result<(), CozoError> {
+        let txn = self.db.multi_transaction(true);
+
+        let mut dp: Params = BTreeMap::new();
+        dp.insert(
+            "peer".into(),
+            DataValue::Str(rec.peer_pubkey.as_str().into()),
+        );
+        dp.insert(
+            "new_sid".into(),
+            DataValue::Str(rec.session_id.as_str().into()),
+        );
+        if let Err(e) = txn.run_script(
+            r#"
+                superseded[session_id] := *wg_peer_sessions[peer_pubkey, session_id],
+                                           peer_pubkey = $peer, session_id != $new_sid
+                ?[session_id, is_active] := superseded[session_id], is_active = false
+                :update wg_sessions { session_id => is_active }
+            "#,
+            dp,
+        ) {
+            let _ = txn.abort();
+            return Err(CozoError::Other(format!(
+                "deactivate superseded wg session: {e}"
+            )));
+        }
+
+        let query = r#"
+            ?[session_id, peer_pubkey, psk, created_at, expires_at, is_active, last_used,
+              client_ip, client_version, auth_method, key_rotation_count, flags_json]
+                <- [[$sid, $peer, $psk, $created, $expires, $active, $last_used,
+                     $client_ip, $client_version, $auth_method, $rotations, $flags]]
+            :put wg_sessions {
+                session_id => peer_pubkey, psk, created_at, expires_at, is_active, last_used,
+                client_ip, client_version, auth_method, key_rotation_count, flags_json
+            }
+        "#;
+        let mut p: Params = BTreeMap::new();
+        p.insert("sid".into(), DataValue::Str(rec.session_id.as_str().into()));
+        p.insert(
+            "peer".into(),
+            DataValue::Str(rec.peer_pubkey.as_str().into()),
+        );
+        p.insert("psk".into(), DataValue::Str(rec.psk.as_str().into()));
+        p.insert("created".into(), dv_int(rec.created_at as i64));
+        p.insert("expires".into(), dv_int(rec.expires_at as i64));
+        p.insert("active".into(), DataValue::Bool(rec.is_active));
+        p.insert("last_used".into(), dv_int(rec.last_used as i64));
+        p.insert(
+            "client_ip".into(),
+            DataValue::Str(rec.client_ip.clone().unwrap_or_default().into()),
+        );
+        p.insert(
+            "client_version".into(),
+            DataValue::Str(rec.client_version.clone().unwrap_or_default().into()),
+        );
+        p.insert(
+            "auth_method".into(),
+            DataValue::Str(rec.auth_method.as_str().into()),
+        );
+        p.insert("rotations".into(), dv_int(rec.key_rotation_count as i64));
+        p.insert(
+            "flags".into(),
+            DataValue::Str(rec.flags_json.as_str().into()),
+        );
+        if let Err(e) = txn.run_script(query, p) {
+            let _ = txn.abort();
+            return Err(CozoError::Other(format!("put wg session: {e}")));
+        }
+
+        let mut pp: Params = BTreeMap::new();
+        pp.insert(
+            "peer".into(),
+            DataValue::Str(rec.peer_pubkey.as_str().into()),
+        );
+        pp.insert("sid".into(), DataValue::Str(rec.session_id.as_str().into()));
+        if let Err(e) = txn.run_script(
+            "?[peer_pubkey, session_id] <- [[$peer, $sid]] :put wg_peer_sessions { peer_pubkey => session_id }",
+            pp,
+        ) {
+            let _ = txn.abort();
+            return Err(CozoError::Other(format!("put wg peer session: {e}")));
+        }
+
+        txn.commit()
+            .map_err(|e| CozoError::Other(format!("commit wg session write: {e}")))?;
+        Ok(())
+    }
+
+    /// Atomically bump only the `last_used` column of a WireGuard gateway session.
+    /// Uses Cozo's `:update` (partial-column update) rather than a read-modify-write
+    /// of the full record, so a concurrent `put_wg_session` (e.g. a key rotation
+    /// changing `flags`/`key_rotation_count`) can't be silently clobbered by a
+    /// stale copy of those fields being written back here.
+    pub fn update_wg_session_last_used(
+        &self,
+        session_id: &str,
+        last_used: u64,
+    ) -> std::result::Result<(), CozoError> {
+        let mut p: Params = BTreeMap::new();
+        p.insert("sid".into(), DataValue::Str(session_id.into()));
+        p.insert("last_used".into(), dv_int(last_used as i64));
+        cozo_run(
+            &self.db,
+            "?[session_id, last_used] <- [[$sid, $last_used]] \
+             :update wg_sessions { session_id => last_used }",
+            p,
+        )
+        .map_err(|e| CozoError::Other(format!("update wg session last_used: {e}")))?;
+        Ok(())
+    }
+
+    /// Fetch a single WireGuard gateway session by session_id.
+    pub fn get_wg_session(
+        &self,
+        session_id: &str,
+    ) -> std::result::Result<Option<WgSessionRecord>, CozoError> {
+        let mut p: Params = BTreeMap::new();
+        p.insert("sid".into(), DataValue::Str(session_id.into()));
+        let r = cozo_run(
+            &self.db,
+            "?[session_id, peer_pubkey, psk, created_at, expires_at, is_active, last_used, \
+             client_ip, client_version, auth_method, key_rotation_count, flags_json] := \
+             *wg_sessions[session_id, peer_pubkey, psk, created_at, expires_at, is_active, \
+             last_used, client_ip, client_version, auth_method, key_rotation_count, flags_json], \
+             session_id = $sid",
+            p,
+        )
+        .map_err(|e| CozoError::Other(format!("get wg session: {e}")))?;
+        Ok(r.rows.first().map(row_to_wg_session))
+    }
+
+    /// List every persisted WireGuard gateway session (used to warm the in-memory
+    /// cache on `WireGuardAuthManager` startup).
+    pub fn list_wg_sessions(&self) -> std::result::Result<Vec<WgSessionRecord>, CozoError> {
+        let r = cozo_run(
+            &self.db,
+            "?[session_id, peer_pubkey, psk, created_at, expires_at, is_active, last_used, \
+             client_ip, client_version, auth_method, key_rotation_count, flags_json] := \
+             *wg_sessions[session_id, peer_pubkey, psk, created_at, expires_at, is_active, \
+             last_used, client_ip, client_version, auth_method, key_rotation_count, flags_json]",
+            BTreeMap::new(),
+        )
+        .map_err(|e| CozoError::Other(format!("list wg sessions: {e}")))?;
+        Ok(r.rows.iter().map(row_to_wg_session).collect())
+    }
+
+    /// Resolve a peer_pubkey to its current session_id, if any.
+    pub fn lookup_wg_peer_session(
+        &self,
+        peer_pubkey: &str,
+    ) -> std::result::Result<Option<String>, CozoError> {
+        let mut p: Params = BTreeMap::new();
+        p.insert("peer".into(), DataValue::Str(peer_pubkey.into()));
+        let r = cozo_run(
+            &self.db,
+            "?[session_id] := *wg_peer_sessions[peer_pubkey, session_id], peer_pubkey = $peer",
+            p,
+        )
+        .map_err(|e| CozoError::Other(format!("lookup wg peer session: {e}")))?;
+        Ok(r.rows
+            .first()
+            .and_then(|row| dv_as_str(&row[0]))
+            .map(String::from))
+    }
+
+    /// Delete a WireGuard gateway session and its peer mapping.
+    pub fn delete_wg_session(
+        &self,
+        session_id: &str,
+        peer_pubkey: &str,
+    ) -> std::result::Result<(), CozoError> {
+        let mut p: Params = BTreeMap::new();
+        p.insert("sid".into(), DataValue::Str(session_id.into()));
+        cozo_run(
+            &self.db,
+            "?[session_id] <- [[$sid]] :rm wg_sessions { session_id }",
+            p,
+        )
+        .map_err(|e| CozoError::Other(format!("delete wg session: {e}")))?;
+
+        // Only clear the peer -> session mapping if it still points at the session
+        // being deleted. Without this check, deleting an *expired* session whose
+        // peer has since re-authenticated into a newer session would wipe that
+        // newer session's mapping too — the derivation of the delete set from
+        // *wg_peer_sessions itself (matching on both peer_pubkey and session_id)
+        // makes this a single atomic conditional delete, not a check-then-act.
+        let mut pp: Params = BTreeMap::new();
+        pp.insert("peer".into(), DataValue::Str(peer_pubkey.into()));
+        pp.insert("sid".into(), DataValue::Str(session_id.into()));
+        cozo_run(
+            &self.db,
+            r#"
+                matched[peer_pubkey] := *wg_peer_sessions[peer_pubkey, session_id],
+                                         peer_pubkey = $peer, session_id = $sid
+                ?[peer_pubkey] := matched[peer_pubkey]
+                :rm wg_peer_sessions { peer_pubkey }
+            "#,
+            pp,
+        )
+        .map_err(|e| CozoError::Other(format!("delete wg peer session: {e}")))?;
+        Ok(())
+    }
+
+    // ── Container identity sleds ─────────────────────────────────────────────────
+
+    /// Upsert a full container identity sled row.
+    pub fn put_identity_sled(
+        &self,
+        rec: &IdentitySledRecord,
+    ) -> std::result::Result<(), CozoError> {
+        let query = r#"
+            ?[session_id, wireguard_pubkey, interface, peer_ip, mutation_index,
+              hashed_footprint, trace_id, schema_version, vector_id, blob_ref,
+              btrfs_device_json, instance_json, session_started_at, last_seen_at, active]
+                <- [[$sid, $pubkey, $iface, $peer_ip, $mut_idx, $footprint, $trace,
+                     $schema_ver, $vector, $blob_ref, $btrfs_dev, $instance, $started, $seen, $active]]
+            :put identity_sleds {
+                session_id => wireguard_pubkey, interface, peer_ip, mutation_index,
+                hashed_footprint, trace_id, schema_version, vector_id, blob_ref,
+                btrfs_device_json, instance_json, session_started_at, last_seen_at, active
+            }
+        "#;
+        let mut p: Params = BTreeMap::new();
+        p.insert("sid".into(), DataValue::Str(rec.session_id.as_str().into()));
+        p.insert(
+            "pubkey".into(),
+            DataValue::Str(rec.wireguard_pubkey.as_str().into()),
+        );
+        p.insert(
+            "iface".into(),
+            DataValue::Str(rec.interface.as_str().into()),
+        );
+        p.insert(
+            "peer_ip".into(),
+            DataValue::Str(rec.peer_ip.as_str().into()),
+        );
+        p.insert("mut_idx".into(), dv_int(rec.mutation_index));
+        p.insert(
+            "footprint".into(),
+            DataValue::Str(rec.hashed_footprint.as_str().into()),
+        );
+        p.insert("trace".into(), DataValue::Str(rec.trace_id.as_str().into()));
+        p.insert("schema_ver".into(), dv_int(rec.schema_version));
+        p.insert(
+            "vector".into(),
+            DataValue::Str(rec.vector_id.as_str().into()),
+        );
+        p.insert(
+            "blob_ref".into(),
+            DataValue::Str(rec.blob_ref.as_str().into()),
+        );
+        p.insert(
+            "btrfs_dev".into(),
+            DataValue::Str(rec.btrfs_device_json.as_str().into()),
+        );
+        p.insert(
+            "instance".into(),
+            DataValue::Str(rec.instance_json.as_str().into()),
+        );
+        p.insert("started".into(), dv_int(rec.session_started_at));
+        p.insert("seen".into(), dv_int(rec.last_seen_at));
+        p.insert("active".into(), DataValue::Bool(rec.active));
+        cozo_run(&self.db, query, p)
+            .map_err(|e| CozoError::Other(format!("put identity sled: {e}")))?;
+        Ok(())
+    }
+
+    /// Fetch a single identity sled row by session_id.
+    pub fn get_identity_sled(
+        &self,
+        session_id: &str,
+    ) -> std::result::Result<Option<IdentitySledRecord>, CozoError> {
+        let mut p: Params = BTreeMap::new();
+        p.insert("sid".into(), DataValue::Str(session_id.into()));
+        let r = cozo_run(
+            &self.db,
+            "?[session_id, wireguard_pubkey, interface, peer_ip, mutation_index, \
+             hashed_footprint, trace_id, schema_version, vector_id, blob_ref, \
+             btrfs_device_json, instance_json, session_started_at, last_seen_at, active] := \
+             *identity_sleds[session_id, wireguard_pubkey, interface, peer_ip, mutation_index, \
+             hashed_footprint, trace_id, schema_version, vector_id, blob_ref, \
+             btrfs_device_json, instance_json, session_started_at, last_seen_at, active], \
+             session_id = $sid",
+            p,
+        )
+        .map_err(|e| CozoError::Other(format!("get identity sled: {e}")))?;
+        Ok(r.rows.first().map(row_to_identity_sled))
+    }
+
+    /// List every persisted identity sled (used to warm the dispatch cache on
+    /// engine startup).
+    pub fn list_identity_sleds(&self) -> std::result::Result<Vec<IdentitySledRecord>, CozoError> {
+        let r = cozo_run(
+            &self.db,
+            "?[session_id, wireguard_pubkey, interface, peer_ip, mutation_index, \
+             hashed_footprint, trace_id, schema_version, vector_id, blob_ref, \
+             btrfs_device_json, instance_json, session_started_at, last_seen_at, active] := \
+             *identity_sleds[session_id, wireguard_pubkey, interface, peer_ip, mutation_index, \
+             hashed_footprint, trace_id, schema_version, vector_id, blob_ref, \
+             btrfs_device_json, instance_json, session_started_at, last_seen_at, active]",
+            BTreeMap::new(),
+        )
+        .map_err(|e| CozoError::Other(format!("list identity sleds: {e}")))?;
+        Ok(r.rows.iter().map(row_to_identity_sled).collect())
+    }
+
+    /// Atomically bump only `last_seen_at`/`active` on an identity sled — an
+    /// `:update` (partial-column) so a concurrent `put_identity_sled` can't be
+    /// clobbered by a stale full-record write-back.
+    pub fn touch_identity_sled(
+        &self,
+        session_id: &str,
+        last_seen_at: i64,
+        active: bool,
+    ) -> std::result::Result<(), CozoError> {
+        let mut p: Params = BTreeMap::new();
+        p.insert("sid".into(), DataValue::Str(session_id.into()));
+        p.insert("seen".into(), dv_int(last_seen_at));
+        p.insert("active".into(), DataValue::Bool(active));
+        cozo_run(
+            &self.db,
+            "?[session_id, last_seen_at, active] <- [[$sid, $seen, $active]] \
+             :update identity_sleds { session_id => last_seen_at, active }",
+            p,
+        )
+        .map_err(|e| CozoError::Other(format!("touch identity sled: {e}")))?;
+        Ok(())
+    }
+
+    /// Append one event to a session's snowball ledger, allocating the next
+    /// `seq` inside a single write transaction (max+1 and the `:put` commit
+    /// together, so two concurrent appends can't mint the same seq and
+    /// silently overwrite each other). Returns the allocated seq.
+    pub fn append_session_event(
+        &self,
+        session_id: &str,
+        kind: &str,
+        subid: &str,
+        content: &str,
+        created_at: i64,
+    ) -> std::result::Result<i64, CozoError> {
+        let txn = self.db.multi_transaction(true);
+
+        let mut mp: Params = BTreeMap::new();
+        mp.insert("sid".into(), DataValue::Str(session_id.into()));
+        let seq = match txn.run_script(
+            "?[max(seq)] := *session_events[session_id, seq, kind, subid, content, created_at], \
+             session_id = $sid",
+            mp,
+        ) {
+            Ok(r) => r
+                .rows
+                .first()
+                .map(|row| match &row[0] {
+                    // max() over an empty set yields a Null row → first seq is 0
+                    DataValue::Null => 0,
+                    v => dv_as_int(v) + 1,
+                })
+                .unwrap_or(0),
+            Err(e) => {
+                let _ = txn.abort();
+                return Err(CozoError::Other(format!("session event max seq: {e}")));
+            }
+        };
+
+        let mut p: Params = BTreeMap::new();
+        p.insert("sid".into(), DataValue::Str(session_id.into()));
+        p.insert("seq".into(), dv_int(seq));
+        p.insert("kind".into(), DataValue::Str(kind.into()));
+        p.insert("subid".into(), DataValue::Str(subid.into()));
+        p.insert("content".into(), DataValue::Str(content.into()));
+        p.insert("created".into(), dv_int(created_at));
+        if let Err(e) = txn.run_script(
+            "?[session_id, seq, kind, subid, content, created_at] \
+             <- [[$sid, $seq, $kind, $subid, $content, $created]] \
+             :put session_events { session_id, seq => kind, subid, content, created_at }",
+            p,
+        ) {
+            let _ = txn.abort();
+            return Err(CozoError::Other(format!("append session event: {e}")));
+        }
+
+        txn.commit()
+            .map_err(|e| CozoError::Other(format!("commit session event: {e}")))?;
+        Ok(seq)
+    }
+
+    /// List a session's events, newest first; `limit` 0 = all.
+    pub fn list_session_events(
+        &self,
+        session_id: &str,
+        limit: usize,
+    ) -> std::result::Result<Vec<SessionEventRecord>, CozoError> {
+        let mut p: Params = BTreeMap::new();
+        p.insert("sid".into(), DataValue::Str(session_id.into()));
+        let script = if limit > 0 {
+            format!(
+                "?[session_id, seq, kind, subid, content, created_at] := \
+                 *session_events[session_id, seq, kind, subid, content, created_at], \
+                 session_id = $sid \
+                 :order -seq :limit {limit}"
+            )
+        } else {
+            "?[session_id, seq, kind, subid, content, created_at] := \
+             *session_events[session_id, seq, kind, subid, content, created_at], \
+             session_id = $sid \
+             :order -seq"
+                .to_string()
+        };
+        let r = cozo_run(&self.db, &script, p)
+            .map_err(|e| CozoError::Other(format!("list session events: {e}")))?;
+        Ok(r.rows
+            .iter()
+            .map(|row| SessionEventRecord {
+                session_id: dv_as_str(&row[0]).unwrap_or("").to_string(),
+                seq: dv_as_int(&row[1]),
+                kind: dv_as_str(&row[2]).unwrap_or("").to_string(),
+                subid: dv_as_str(&row[3]).unwrap_or("").to_string(),
+                content: dv_as_str(&row[4]).unwrap_or("").to_string(),
+                created_at: dv_as_int(&row[5]),
+            })
+            .collect())
+    }
+
     /// Return a shared handle to the underlying DbInstance for advanced queries.
     pub fn db(&self) -> Arc<DbInstance> {
         self.db.clone()
@@ -796,6 +1523,72 @@ fn dv_as_str(dv: &DataValue) -> Option<&str> {
         Some(s.as_str())
     } else {
         None
+    }
+}
+
+fn dv_as_int(dv: &DataValue) -> i64 {
+    match dv {
+        DataValue::Num(cozo::Num::Int(i)) => *i,
+        DataValue::Num(cozo::Num::Float(f)) => *f as i64,
+        _ => 0,
+    }
+}
+
+fn dv_as_bool(dv: &DataValue) -> bool {
+    matches!(dv, DataValue::Bool(true))
+}
+
+fn row_to_wg_session(row: &Vec<DataValue>) -> WgSessionRecord {
+    let s = |i: usize| dv_as_str(&row[i]).unwrap_or("").to_string();
+    let opt = |i: usize| {
+        let v = s(i);
+        if v.is_empty() {
+            None
+        } else {
+            Some(v)
+        }
+    };
+    WgSessionRecord {
+        session_id: s(0),
+        peer_pubkey: s(1),
+        psk: s(2),
+        created_at: dv_as_int(&row[3]) as u64,
+        expires_at: dv_as_int(&row[4]) as u64,
+        is_active: dv_as_bool(&row[5]),
+        last_used: dv_as_int(&row[6]) as u64,
+        client_ip: opt(7),
+        client_version: opt(8),
+        auth_method: s(9),
+        key_rotation_count: dv_as_int(&row[10]) as u32,
+        flags_json: {
+            let v = s(11);
+            if v.is_empty() {
+                "{}".to_string()
+            } else {
+                v
+            }
+        },
+    }
+}
+
+fn row_to_identity_sled(row: &Vec<DataValue>) -> IdentitySledRecord {
+    let s = |i: usize| dv_as_str(&row[i]).unwrap_or("").to_string();
+    IdentitySledRecord {
+        session_id: s(0),
+        wireguard_pubkey: s(1),
+        interface: s(2),
+        peer_ip: s(3),
+        mutation_index: dv_as_int(&row[4]),
+        hashed_footprint: s(5),
+        trace_id: s(6),
+        schema_version: dv_as_int(&row[7]),
+        vector_id: s(8),
+        blob_ref: s(9),
+        btrfs_device_json: s(10),
+        instance_json: s(11),
+        session_started_at: dv_as_int(&row[12]),
+        last_seen_at: dv_as_int(&row[13]),
+        active: dv_as_bool(&row[14]),
     }
 }
 
@@ -854,5 +1647,106 @@ fn dv_to_json(dv: &DataValue) -> Value {
         DataValue::Str(s) => Value::String(s.to_string()),
         DataValue::List(list) => Value::Array(list.iter().map(dv_to_json).collect()),
         other => Value::String(format!("{other:?}")),
+    }
+}
+
+#[cfg(test)]
+mod identity_sled_tests {
+    use super::*;
+
+    fn sample(session_id: &str) -> IdentitySledRecord {
+        IdentitySledRecord {
+            session_id: session_id.to_string(),
+            wireguard_pubkey: "pubkey-A".to_string(),
+            interface: "".to_string(),
+            peer_ip: "10.0.0.2".to_string(),
+            mutation_index: 3,
+            hashed_footprint: "fp".to_string(),
+            trace_id: "tr".to_string(),
+            schema_version: 1,
+            vector_id: "".to_string(),
+            blob_ref: "identity_sled.abc.blob".to_string(),
+            btrfs_device_json: r#"{"device_path":"/dev/loop9","mount_point":"/mnt/x","btrfs_uuid":"","cozo_id":"","attached":false}"#.to_string(),
+            instance_json: r#"{"name":"sid-1","status":"Stopped","type":"container"}"#.to_string(),
+            session_started_at: 100,
+            last_seen_at: 200,
+            active: true,
+        }
+    }
+
+    #[test]
+    fn identity_sled_round_trip() {
+        let store = CozoGraphShuttle::new_in_memory().unwrap();
+        let rec = sample("sid-1");
+        store.put_identity_sled(&rec).unwrap();
+
+        let got = store.get_identity_sled("sid-1").unwrap().unwrap();
+        assert_eq!(got.wireguard_pubkey, "pubkey-A");
+        assert_eq!(got.instance_json, rec.instance_json);
+        assert_eq!(got.btrfs_device_json, rec.btrfs_device_json);
+        assert_eq!(got.mutation_index, 3);
+        assert!(got.active);
+
+        store.touch_identity_sled("sid-1", 999, false).unwrap();
+        let touched = store.get_identity_sled("sid-1").unwrap().unwrap();
+        assert_eq!(touched.last_seen_at, 999);
+        assert!(!touched.active);
+        // Partial-column update must not clobber the rest of the row.
+        assert_eq!(touched.instance_json, rec.instance_json);
+
+        assert_eq!(store.list_identity_sleds().unwrap().len(), 1);
+        assert!(store.get_identity_sled("nope").unwrap().is_none());
+    }
+
+    #[test]
+    fn identity_sled_persists_through_rocksdb_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("identity-rocksdb");
+        {
+            let store = CozoGraphShuttle::new_persistent(db_path.clone()).unwrap();
+            store.put_identity_sled(&sample("chatbot-first")).unwrap();
+        }
+        let reopened = CozoGraphShuttle::new_persistent(db_path).unwrap();
+        let row = reopened
+            .get_identity_sled("chatbot-first")
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.wireguard_pubkey, "pubkey-A");
+        assert_eq!(
+            row.btrfs_device_json,
+            sample("chatbot-first").btrfs_device_json
+        );
+    }
+
+    #[test]
+    fn session_events_allocate_monotonic_seq() {
+        let store = CozoGraphShuttle::new_in_memory().unwrap();
+        assert_eq!(
+            store
+                .append_session_event("s", "arrival", "", "a", 1)
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            store
+                .append_session_event("s", "mutation", "", "b", 2)
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            store
+                .append_session_event("other", "arrival", "", "c", 3)
+                .unwrap(),
+            0
+        );
+
+        let newest_first = store.list_session_events("s", 0).unwrap();
+        assert_eq!(newest_first.len(), 2);
+        assert_eq!(newest_first[0].seq, 1);
+        assert_eq!(newest_first[0].kind, "mutation");
+
+        let limited = store.list_session_events("s", 1).unwrap();
+        assert_eq!(limited.len(), 1);
+        assert_eq!(limited[0].seq, 1);
     }
 }
