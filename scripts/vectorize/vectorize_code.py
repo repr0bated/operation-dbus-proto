@@ -18,6 +18,7 @@ import json
 import os
 import re
 import sys
+import time
 import uuid
 import urllib.request
 import urllib.error
@@ -216,10 +217,31 @@ def point_id(*parts: str) -> str:
     return str(uuid.uuid5(NAMESPACE, "|".join(parts)))
 
 
+def _urlopen_retrying(req, retries=5, base_delay=2.0):
+    """Qdrant has had transient outages mid-batch (connection reset,
+    connection refused — a container restart or momentary proxy hiccup
+    under heavy concurrent load) that previously killed an entire
+    multi-hour run for a problem that resolved itself within seconds.
+    Retry network-level failures (not HTTP error responses, which callers
+    handle themselves) with exponential backoff before giving up."""
+    for attempt in range(retries):
+        try:
+            return urllib.request.urlopen(req)
+        except urllib.error.HTTPError:
+            raise  # a real HTTP error response; not a connectivity problem
+        except urllib.error.URLError as e:
+            if attempt == retries - 1:
+                raise
+            delay = base_delay * (2 ** attempt)
+            print(f"  [qdrant] connection error ({e}), retrying in {delay:.0f}s "
+                  f"(attempt {attempt + 1}/{retries})", file=sys.stderr)
+            time.sleep(delay)
+
+
 def ensure_collection(name: str):
     req = urllib.request.Request(f"{QDRANT_URL}/collections/{name}")
     try:
-        urllib.request.urlopen(req)
+        _urlopen_retrying(req)
         return
     except urllib.error.HTTPError as e:
         if e.code != 404:
@@ -227,7 +249,7 @@ def ensure_collection(name: str):
     body = json.dumps({"vectors": {"size": VOYAGE_DIM, "distance": "Cosine"}}).encode()
     req = urllib.request.Request(f"{QDRANT_URL}/collections/{name}", data=body, method="PUT",
                                   headers={"Content-Type": "application/json"})
-    urllib.request.urlopen(req).read()
+    _urlopen_retrying(req).read()
 
 
 def embed_contextualized_groups(groups: list, rotator: VoyageRotator) -> list:
@@ -250,7 +272,7 @@ def upsert_batch(points: list):
     body = json.dumps({"points": points}).encode()
     req = urllib.request.Request(f"{QDRANT_URL}/collections/{COLLECTION}/points?wait=true",
                                   data=body, method="PUT", headers={"Content-Type": "application/json"})
-    urllib.request.urlopen(req).read()
+    _urlopen_retrying(req).read()
 
 
 def existing_point_ids(ids: list) -> set:
@@ -260,7 +282,7 @@ def existing_point_ids(ids: list) -> set:
     req = urllib.request.Request(f"{QDRANT_URL}/collections/{COLLECTION}/points",
                                   data=body, method="POST", headers={"Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(req) as resp:
+        with _urlopen_retrying(req) as resp:
             data = json.loads(resp.read())
     except urllib.error.HTTPError:
         return set()
