@@ -10,6 +10,7 @@
 
 #![deny(rustdoc::broken_intra_doc_links)]
 
+pub mod btrfs;
 pub mod controller;
 pub mod openflow;
 pub mod openflow_translate;

@@ -26,27 +26,20 @@ async fn main() -> anyhow::Result<()> {
     info!("Starting op-web server...");
     info!("Version: {}", env!("CARGO_PKG_VERSION"));
 
-    // Absolute Base: without a valid schema catalog in shared memory, the entity does not exist.
-    const SHM_SCHEMA_PATH: &str = "/dev/shm/live-schema.json";
-    match op_identity::read_schema_blob()
-        .or_else(|_| std::fs::read(SHM_SCHEMA_PATH))
-        .map(|bytes| bytes.len())
-    {
-        Ok(bytes) if bytes > 2 => {
-            info!(
-                path = SHM_SCHEMA_PATH,
-                bytes = bytes,
-                "Schema catalog present in shared memory"
-            );
-        }
-        _ => {
-            tracing::error!(
-                path = SHM_SCHEMA_PATH,
-                "FATAL: Schema catalog missing from shared memory. Start projection_server first."
-            );
-            std::process::exit(1);
-        }
+    // Absolute Base: the sealed SHM blob catalog is the current schema
+    // authority. `/dev/shm/live-schema.json` was the retired monolithic form.
+    if let Err(error) = op_blob::catalog::BlobStore::open_default() {
+        tracing::error!(
+            path = op_blob::catalog::DEFAULT_SHM_DIR,
+            %error,
+            "FATAL: sealed schema catalog missing from shared memory"
+        );
+        std::process::exit(1);
     }
+    info!(
+        path = op_blob::catalog::DEFAULT_SHM_DIR,
+        "Sealed schema catalog present"
+    );
 
     let state = Arc::new(AppState::new().await?);
     state.clone().start_event_bridge();

@@ -8,6 +8,7 @@ use axum::{
 use std::sync::Arc;
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::{Any, CorsLayer};
+use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 
 use crate::groups_admin;
@@ -89,12 +90,18 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         )
         // Gemma / agent-GPU UI-spec gallery + catalog (render slices of the
         // sealed blob PluginSchema; promote a winning lens into the catalog).
-        .route("/gemma/gallery", get(handlers::gemma::gemma_gallery_handler))
+        .route(
+            "/gemma/gallery",
+            get(handlers::gemma::gemma_gallery_handler),
+        )
         .route(
             "/gemma/gallery/:id",
             delete(handlers::gemma::gemma_gallery_delete_handler),
         )
-        .route("/gemma/catalog", get(handlers::gemma::gemma_catalog_handler))
+        .route(
+            "/gemma/catalog",
+            get(handlers::gemma::gemma_catalog_handler),
+        )
         .route(
             "/gemma/catalog/promote/:id",
             post(handlers::gemma::gemma_catalog_promote_handler),
@@ -288,9 +295,16 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .nest("/groups-admin", groups_admin::create_groups_admin_router())
         .nest("/admin", admin::admin_routes());
 
-    // No SPA fallback: op-web is API/gRPC only. The native zeroclaw-gui client
-    // consumes state over gRPC-Web + reflection; unmatched routes return 404.
+    // Serve the pinned Lovable dashboard while keeping `/api`, `/mcp`, and
+    // websocket routes on this same origin. Client-side routes fall back to
+    // index.html.
+    let static_dir = std::env::var("OP_WEB_STATIC_DIR")
+        .unwrap_or_else(|_| "/usr/local/share/op-dbus/dashboard".to_string());
+    let spa =
+        ServeDir::new(&static_dir).fallback(ServeFile::new(format!("{static_dir}/index.html")));
+
     router
+        .fallback_service(spa)
         .layer(Extension(state))
         .layer(axum::middleware::from_fn(security::ip_security_middleware))
         .layer(cors)
