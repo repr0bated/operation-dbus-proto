@@ -305,30 +305,26 @@ pub async fn zeroclaw_schema_handler(Extension(state): Extension<Arc<AppState>>)
     // sealed blob only carries the PluginSchema contract, not the live
     // `projection.providers` / `projection.model_routes`. Fall back to the SHM
     // PluginSchema so the schema surface still renders when D-Bus is down.
-    let (zeroclaw, zeroclaw_schema) = match crate::projection_client::get_projection(
-        &state.projection_cache,
-        "zeroclaw",
-    )
-    .await
-    {
-        Some(v) => {
-            info!("Using zeroclaw from D-Bus projection (live provider/model catalog)");
-            (v, read_zeroclaw_schema_shm())
-        }
-        None => match read_zeroclaw_schema_shm() {
-            Some(schema) => {
-                warn!("Zeroclaw D-Bus projection unavailable; using SHM PluginSchema only");
-                (schema.clone(), Some(schema))
+    let (zeroclaw, zeroclaw_schema) =
+        match crate::projection_client::get_projection(&state.projection_cache, "zeroclaw").await {
+            Some(v) => {
+                info!("Using zeroclaw from D-Bus projection (live provider/model catalog)");
+                (v, read_zeroclaw_schema_shm())
             }
-            None => {
-                error!("Zeroclaw not available from D-Bus or SHM");
-                return json_error_response(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "Zeroclaw projection not available",
-                );
-            }
-        },
-    };
+            None => match read_zeroclaw_schema_shm() {
+                Some(schema) => {
+                    warn!("Zeroclaw D-Bus projection unavailable; using SHM PluginSchema only");
+                    (schema.clone(), Some(schema))
+                }
+                None => {
+                    error!("Zeroclaw not available from D-Bus or SHM");
+                    return json_error_response(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "Zeroclaw projection not available",
+                    );
+                }
+            },
+        };
 
     // Providers + model_routes live under `projection` in the live state.
     let projection = zeroclaw.get("projection").and_then(|v| v.as_object());
