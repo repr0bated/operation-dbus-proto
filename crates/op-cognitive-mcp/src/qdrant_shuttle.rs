@@ -18,6 +18,7 @@ use serde_json::Value;
 const DEFAULT_QDRANT_URL: &str = "http://127.0.0.1:6334";
 const DEFAULT_COLLECTION_NAME: &str = "ctl_plane_reasoning_episodes";
 const DEFAULT_USER_MEMORY_COLLECTION: &str = "user_memory";
+const DEFAULT_BLOB_VECTORS_COLLECTION: &str = "blob_vectors";
 const DEFAULT_SCHEMA_SLED_PATH: &str = "/dev/shm/plugin_schema.dat";
 const DEFAULT_TRACE_LIMIT: u32 = 5;
 const DEFAULT_VOYAGE_API_URL: &str = "https://api.voyageai.com/v1/embeddings";
@@ -37,6 +38,7 @@ pub struct QdrantSemanticShuttle {
     client: Qdrant,
     collection_name: String,
     user_memory_collection: String,
+    blob_vectors_collection: String,
     sled_path: PathBuf,
     voyage_client: VoyageClient,
 }
@@ -50,6 +52,8 @@ impl QdrantSemanticShuttle {
             .unwrap_or_else(|_| DEFAULT_COLLECTION_NAME.into());
         let user_memory_collection = std::env::var("COGNITIVE_MCP_USER_MEMORY_COLLECTION")
             .unwrap_or_else(|_| DEFAULT_USER_MEMORY_COLLECTION.into());
+        let blob_vectors_collection = std::env::var("COGNITIVE_MCP_BLOB_VECTORS_COLLECTION")
+            .unwrap_or_else(|_| DEFAULT_BLOB_VECTORS_COLLECTION.into());
         let sled_path = std::env::var("COGNITIVE_MCP_SCHEMA_SLED_PATH")
             .unwrap_or_else(|_| DEFAULT_SCHEMA_SLED_PATH.into());
         let voyage_client = VoyageClient::from_env()?;
@@ -58,6 +62,7 @@ impl QdrantSemanticShuttle {
             &qdrant_url,
             collection_name,
             user_memory_collection,
+            blob_vectors_collection,
             sled_path,
             voyage_client,
         )
@@ -68,11 +73,13 @@ impl QdrantSemanticShuttle {
         qdrant_url: &str,
         collection_name: impl Into<String>,
         user_memory_collection: impl Into<String>,
+        blob_vectors_collection: impl Into<String>,
         sled_path: impl Into<PathBuf>,
         voyage_client: VoyageClient,
     ) -> Result<Self> {
         let collection_name = collection_name.into();
         let user_memory_collection = user_memory_collection.into();
+        let blob_vectors_collection = blob_vectors_collection.into();
         let sled_path = sled_path.into();
         let client = Qdrant::from_url(qdrant_url)
             .build()
@@ -86,6 +93,7 @@ impl QdrantSemanticShuttle {
             qdrant_url,
             collection = %collection_name,
             user_memory_collection = %user_memory_collection,
+            blob_vectors_collection = %blob_vectors_collection,
             sled_path = %sled_path.display(),
             "Qdrant Semantic Shuttle linked to the gRPC interface"
         );
@@ -94,6 +102,7 @@ impl QdrantSemanticShuttle {
             client,
             collection_name,
             user_memory_collection,
+            blob_vectors_collection,
             sled_path,
             voyage_client,
         })
@@ -298,6 +307,96 @@ impl QdrantSemanticShuttle {
         Ok(response.result)
     }
 
+    // ── Blob Vectors ──────────────────────────────────────────────────────
+
+    /// Rebuilds the `blob_vectors` collection wholesale: embeds every active
+    /// plugin's current schema text via Voyage and upserts all points. No
+    /// staleness check — the corpus is small enough (<2MB total) that a
+    /// wholesale replace-on-refresh is simpler and cheaper than tracking
+    /// per-plugin schema hashes.
+    pub async fn refresh_blob_vectors(&self) -> Result<RefreshBlobVectorsSummary> {
+        let texts = all_blob_embedding_texts()?;
+        let mut points = Vec::with_capacity(texts.len());
+
+        for (plugin_id, text) in &texts {
+            let vector = self
+                .embed_document(text)
+                .await
+                .with_context(|| format!("failed to embed schema text for plugin '{plugin_id}'"))?;
+
+            let payload: Payload = serde_json::json!({
+                "plugin_id": plugin_id,
+                "text": text,
+            })
+            .try_into()
+            .context("failed to build blob_vectors payload")?;
+
+            points.push(PointStruct::new(
+                plugin_id_to_uuid(plugin_id).to_string(),
+                vector,
+                payload,
+            ));
+        }
+
+        let embedded = points.len();
+        self.client
+            .upsert_points(UpsertPointsBuilder::new(
+                self.blob_vectors_collection.clone(),
+                points,
+            ))
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to upsert {embedded} points into collection '{}'",
+                    self.blob_vectors_collection
+                )
+            })?;
+
+        tracing::info!(
+            collection = %self.blob_vectors_collection,
+            embedded,
+            "blob_vectors collection refreshed"
+        );
+
+        Ok(RefreshBlobVectorsSummary {
+            embedded,
+            collection: self.blob_vectors_collection.clone(),
+        })
+    }
+
+    /// Semantic search over the `blob_vectors` collection. No scoping filter —
+    /// unlike user_memory, this is public catalog data, not per-container.
+    pub async fn search_blob_vectors(&self, query: &str, limit: u64) -> Result<Vec<ScoredPoint>> {
+        let embedding = self
+            .embed_query_text(query)
+            .await
+            .context("failed to embed query for blob_vectors search")?;
+
+        let response = self
+            .client
+            .query(
+                QueryPointsBuilder::new(self.blob_vectors_collection.clone())
+                    .query(embedding)
+                    .limit(limit)
+                    .with_payload(true),
+            )
+            .await
+            .with_context(|| {
+                format!(
+                    "failed semantic query against collection '{}'",
+                    self.blob_vectors_collection
+                )
+            })?;
+
+        tracing::info!(
+            collection = %self.blob_vectors_collection,
+            matches = response.result.len(),
+            "blob_vectors search completed"
+        );
+
+        Ok(response.result)
+    }
+
     fn active_schema_query_text(&self) -> Result<(SessionTraceContext, String)> {
         let (sled, schema) = read_identity_sled_and_schema(&self.sled_path)?;
         ensure!(
@@ -495,6 +594,38 @@ fn format_trace_id(hashed_footprint: [u8; 32]) -> String {
     format!("trace-{}", hex::encode(hashed_footprint))
 }
 
+/// Returns (plugin_id, embedding_text) for every active plugin in the SHM
+/// blob catalog. The multi-plugin counterpart to `current_schema_embedding_text`,
+/// which only ever covers the single sled-resident schema.
+fn all_blob_embedding_texts() -> Result<Vec<(String, String)>> {
+    let ids = op_blob::catalog::read_manifest_plugin_ids_shm()
+        .context("SHM blob manifest is unavailable")?;
+    Ok(ids
+        .into_iter()
+        .filter_map(|id| {
+            op_blob::catalog::read_plugin_schema_shm(&id)
+                .map(|schema| (id, render_schema_embedding_text(&schema)))
+        })
+        .collect())
+}
+
+/// Deterministic UUID v5 from a plugin id, so `refresh_blob_vectors` upserts
+/// idempotently in place instead of accumulating duplicate points.
+fn plugin_id_to_uuid(plugin_id: &str) -> uuid::Uuid {
+    // Project-local namespace for blob_vectors point ids. Fixed and arbitrary
+    // (generated once) — must never change, or a refresh would orphan every
+    // existing point instead of overwriting it.
+    const BLOB_VECTORS_NAMESPACE: uuid::Uuid =
+        uuid::Uuid::from_u128(0x8f2b_6c4a_0d1e_4a3f_9b7c_2e5d1a6f8c3b);
+    uuid::Uuid::new_v5(&BLOB_VECTORS_NAMESPACE, plugin_id.as_bytes())
+}
+
+#[derive(Debug, Serialize)]
+pub struct RefreshBlobVectorsSummary {
+    pub embedded: usize,
+    pub collection: String,
+}
+
 fn render_schema_embedding_text(schema: &PluginSchema) -> String {
     let mut lines = vec![
         format!("schema_name: {}", schema.name),
@@ -660,6 +791,20 @@ mod tests {
     fn should_format_trace_id_from_hashed_footprint() {
         let trace_id = format_trace_id([0xAB; 32]);
         assert_eq!(trace_id, format!("trace-{}", "ab".repeat(32)));
+    }
+
+    #[test]
+    fn plugin_id_to_uuid_is_stable() {
+        assert_eq!(
+            plugin_id_to_uuid("zeroclaw"),
+            plugin_id_to_uuid("zeroclaw"),
+            "same plugin id must produce the same UUID every time"
+        );
+        assert_ne!(
+            plugin_id_to_uuid("zeroclaw"),
+            plugin_id_to_uuid("antigravity"),
+            "different plugin ids must not collide"
+        );
     }
 
     #[test]

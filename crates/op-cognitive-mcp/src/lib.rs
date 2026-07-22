@@ -13,6 +13,8 @@
 
 pub mod activity_filter;
 pub mod agent_tools;
+pub mod blob_catalog_tool;
+pub mod blob_vectors_tool;
 pub mod client_config;
 pub mod code_tools;
 pub mod cognitive_tools;
