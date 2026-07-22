@@ -1,0 +1,44 @@
+{
+  "title": "LLM",
+  "source": {
+    "plugin": "large_language_model",
+    "method": "list_providers",
+    "args": [],
+    "poll_secs": 15
+  },
+  "data": {
+    "active_model": "gemma3:4b",
+    "providers": [
+      { "id": "ollama", "status": "ok", "models": 3 },
+      { "id": "openai", "status": "warn", "models": 0 }
+    ]
+  },
+  "spec": {
+    "kind": "stack",
+    "children": [
+      { "kind": "heading", "text": "LLM Providers", "size": 18 },
+      { "kind": "muted", "text": "Providers from large_language_model.list_providers." },
+      { "kind": "space", "px": 12 },
+      { "kind": "card", "children": [
+        { "kind": "stack", "dir": "h", "children": [
+          { "kind": "label", "text": "Active model:" },
+          { "kind": "label", "bind": "/active_model" }
+        ]}
+      ]},
+      { "kind": "space", "px": 8 },
+      { "kind": "card", "children": [
+        { "kind": "heading", "text": "Providers", "size": 13 },
+        { "kind": "repeat", "bind": "/providers", "child": {
+          "kind": "stack", "dir": "h", "children": [
+            { "kind": "label", "bind": "/id" },
+            { "kind": "space", "px": 12 },
+            { "kind": "status_pill", "bind": "/status" },
+            { "kind": "space", "px": 12 },
+            { "kind": "label", "text": "models:" },
+            { "kind": "label", "bind": "/models" }
+          ]
+        }}
+      ]}
+    ]
+  }
+}
