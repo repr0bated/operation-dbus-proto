@@ -26,7 +26,7 @@ import urllib.error
 
 QDRANT_URL = "http://10.200.0.2:6333"
 VOYAGE_DIM = 1024
-TOKEN_SAFETY_MARGIN = 1_750_000  # switch credential before hitting the real 2M/model free cap
+TOKEN_SAFETY_MARGIN = 180_000_000  # real cap confirmed at 200M/account; leave a 20M buffer
 
 # Rotation pool: separate accounts/keys, each with its own free-tier quota.
 # VOYAGE_API_KEY / VOYAGE_API_KEY_RUST are the same underlying "pa-" key
@@ -39,6 +39,10 @@ _VOYAGE_CREDENTIALS = [
     # direct api.voyageai.com) — a second Mongo-routed account, despite
     # the name suggesting otherwise.
     ("mongo_voyager", os.environ["MONGO_VOYAGER"], "https://ai.mongodb.com/v1/contextualizedembeddings"),
+    # Fourth credential: also ai.mongodb.com-routed, confirmed working with
+    # voyage-context-4 given the correct request shape (inputs list-of-lists,
+    # Authorization: Bearer, input_type: document).
+    ("mongo_lsp", os.environ["MONGO_LSP_API"], "https://ai.mongodb.com/v1/contextualizedembeddings"),
 ]
 
 
@@ -514,8 +518,100 @@ def process(chunk_fn, path: str, collection: str, source_file: str, cozo_db=None
         pending_groups.append((ids, texts, cozo_list))
         pending_chars += group_chars
     flush()
-    print(f"{source_file}: {n_chunks} chunks -> {total} points in '{collection}', {n_cozo} cozo control rows")
+    print(f"{source_file}: {n_chunks} chunks -> {total} points in '{collection}', {n_cozo} cozo control rows", flush=True)
     print(f"  token usage this call: {dict(rotator.used)}")
+
+
+# ── raw compliance repo walking (usnistgov/OSCAL, ComplianceAsCode/content, etc.) ──
+
+REPO_SKIP_DIRS = {".git", "node_modules", "vendor", "dist", "build", "__pycache__", ".venv", "venv", "target"}
+REPO_TEXT_EXTS = {".md", ".markdown", ".json", ".yaml", ".yml", ".xml", ".rego", ".txt"}
+REPO_MAX_FILE_BYTES = 2_000_000
+
+
+def iter_repo_files(repo_dir: str):
+    for root, dirs, files in os.walk(repo_dir):
+        dirs[:] = [d for d in dirs if d not in REPO_SKIP_DIRS and not d.startswith(".")]
+        for fn in files:
+            if os.path.splitext(fn)[1].lower() not in REPO_TEXT_EXTS:
+                continue
+            full = os.path.join(root, fn)
+            try:
+                if os.path.getsize(full) > REPO_MAX_FILE_BYTES:
+                    continue
+            except OSError:
+                continue  # broken symlink or race with a concurrent process
+            yield full
+
+
+def chunk_repo_file(repo_name: str, repo_dir: str, path: str):
+    rel = os.path.relpath(path, repo_dir)
+    file_key = f"{repo_name}/{rel}"
+    ext = os.path.splitext(path)[1].lower()
+    try:
+        text = open(path, encoding="utf-8", errors="ignore").read()
+    except Exception:
+        return
+    if not text.strip():
+        return
+
+    if ext == ".json":
+        try:
+            obj = json.loads(text)
+            yield from json_value_chunks(file_key, obj)
+            return
+        except Exception:
+            pass
+    elif ext in (".yaml", ".yml"):
+        try:
+            import yaml
+            obj = yaml.safe_load(text)
+            if obj is not None:
+                yield from json_value_chunks(file_key, obj)
+                return
+        except Exception:
+            pass
+    elif ext == ".xml" and "<control" in text:
+        for cid, ctext, parent in extract_controls(text):
+            chunk_text = f"file: {file_key}\ncontrol: {cid}\n\n{ctext[:4000]}"
+            cozo_row = {
+                "id": cid, "framework": repo_name, "title": control_title(ctext),
+                "description": "", "severity": "", "source_file": file_key, "parent_id": parent,
+            }
+            yield ([file_key, "control", cid], chunk_text, cozo_row)
+        return
+
+    has_headers = bool(re.search(r"^#{2,3} ", text, re.MULTILINE))
+    if has_headers:
+        for heading, sec_text in split_headers(text):
+            for wi, chunk in enumerate(window_chunks(f"{file_key} :: {heading}", sec_text)):
+                yield ([file_key, "window", heading, wi], chunk, None)
+    else:
+        for wi, chunk in enumerate(window_chunks(file_key, text)):
+            yield ([file_key, "window", wi], chunk, None)
+
+
+def make_repo_chunk_fn(repo_name: str, repo_dir: str):
+    def _fn(_unused_path):
+        for f in iter_repo_files(repo_dir):
+            yield from chunk_repo_file(repo_name, repo_dir, f)
+    return _fn
+
+
+# repo dir name (under /home/admin/git/repos-bulk) -> (display name, collection)
+COMPLIANCE_REPOS = {
+    "usnistgov__OSCAL": ("usnistgov/OSCAL", "compliance_official"),
+    "ComplianceAsCode__content": ("ComplianceAsCode/content", "compliance_general"),
+    "opencontrol__schemas": ("opencontrol/schemas", "compliance_general"),
+    "LINCnil__GDPR-Developer-Guide": ("LINCnil/GDPR-Developer-Guide", "compliance_general"),
+    "OpenGovDataMirror__A_gsa_fedramp-automation": ("gsa/fedramp-automation", "compliance_general"),
+    "TechShieldOlamide__trustgrid-compliance-templates": ("trustgrid-compliance-templates", "compliance_general"),
+    "vaibhavjain2608__compliance-policy-templates": ("compliance-policy-templates", "compliance_general"),
+    "microsoft__presidio": ("microsoft/presidio", "compliance_general"),
+    "cloud-custodian__cloud-custodian": ("cloud-custodian/cloud-custodian", "compliance_general"),
+}
+
+REPOS_BULK_DIR = "/home/admin/git/repos-bulk"
 
 
 COZO_DB_PATH = "/home/admin/compliance-cozo/db"
@@ -549,5 +645,23 @@ if __name__ == "__main__":
                 "oscal-specs.md", cozo_db=cozo_db, rotator=rotator)
         process(chunk_frameworks, f"{bundle}/compliance-specs.md", COLLECTION_FOR_TARGET["frameworks"],
                 "compliance-specs.md", cozo_db=cozo_db, rotator=rotator)
+    elif target == "repos":
+        for repo_dirname, (repo_name, collection) in COMPLIANCE_REPOS.items():
+            repo_dir = os.path.join(REPOS_BULK_DIR, repo_dirname)
+            if not os.path.isdir(repo_dir):
+                print(f"skip {repo_name}: {repo_dir} not found", file=sys.stderr)
+                continue
+            if rotator.exhausted():
+                print("STOPPING: all Voyage credentials exhausted, re-run later to resume", file=sys.stderr)
+                break
+            print(f"=== {repo_name} ===")
+            process(make_repo_chunk_fn(repo_name, repo_dir), repo_dir, collection,
+                    repo_name, cozo_db=cozo_db, rotator=rotator)
+    elif target == "repo":
+        repo_dirname, repo_name = sys.argv[2], sys.argv[3]
+        collection = sys.argv[4] if len(sys.argv) > 4 else "compliance_general"
+        repo_dir = os.path.join(REPOS_BULK_DIR, repo_dirname)
+        process(make_repo_chunk_fn(repo_name, repo_dir), repo_dir, collection,
+                repo_name, cozo_db=cozo_db, rotator=rotator)
     else:
-        print("usage: vectorize_compliance.py [oscal|frameworks|all]")
+        print("usage: vectorize_compliance.py [oscal|frameworks|all|repos|repo <dir> <name> [collection]]")
