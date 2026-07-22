@@ -9,14 +9,24 @@
 
 use crate::PluginFootprint;
 use anyhow::{Context, Result};
+use qdrant_client::qdrant::{
+    vectors_config::Config as VectorsConfigEnum, CreateCollectionBuilder, Distance, PointStruct,
+    UpsertPointsBuilder, VectorParamsBuilder, VectorsConfig,
+};
+use qdrant_client::{Payload, Qdrant, QdrantError};
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::process::Command;
-use tokio::sync::RwLock;
+use tokio::sync::{OnceCell, RwLock};
 use tokio::time::{sleep, Duration, Instant};
 use tracing::{debug, info, warn};
+
+/// Fixed namespace for deriving deterministic Qdrant point IDs from block
+/// hashes (UUID v5), so re-streaming the same footprint is idempotent.
+const BLOCKCHAIN_QDRANT_NAMESPACE: uuid::Uuid =
+    uuid::Uuid::from_u128(0x6f2a_1d4c_8b3e_4f9a_9c6d_2e7b5a1f803c);
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BlockEvent {
@@ -157,6 +167,10 @@ pub struct StreamingBlockchain {
     snapshot_interval: SnapshotInterval,
     retention_policy: RetentionPolicy,
     last_snapshot_time: Arc<RwLock<Instant>>,
+    qdrant: Option<Qdrant>,
+    qdrant_collection: String,
+    qdrant_dim: u64,
+    qdrant_collection_ready: Arc<OnceCell<()>>,
 }
 
 impl StreamingBlockchain {
@@ -178,6 +192,26 @@ impl StreamingBlockchain {
         Self::create_subvolume(&vector_subvol).await?;
         Self::create_subvolume(&state_subvol).await?;
 
+        let qdrant = match std::env::var("OPDBUS_QDRANT_URL") {
+            Ok(url) if !url.is_empty() => match Qdrant::from_url(&url).build() {
+                Ok(client) => {
+                    info!(url = %url, "Blockchain vector streaming to Qdrant enabled");
+                    Some(client)
+                }
+                Err(e) => {
+                    warn!("Failed to build Qdrant client ({}): {}; vector streaming disabled", url, e);
+                    None
+                }
+            },
+            _ => None,
+        };
+        let qdrant_collection = std::env::var("OPDBUS_QDRANT_BLOCKCHAIN_COLLECTION")
+            .unwrap_or_else(|_| "blockchain_footprints".to_string());
+        let qdrant_dim = std::env::var("OPDBUS_QDRANT_BLOCKCHAIN_DIM")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(1024);
+
         Ok(Self {
             base_path,
             timing_subvol,
@@ -186,6 +220,10 @@ impl StreamingBlockchain {
             snapshot_interval,
             retention_policy: RetentionPolicy::from_env(),
             last_snapshot_time: Arc::new(RwLock::new(Instant::now())),
+            qdrant,
+            qdrant_collection,
+            qdrant_dim,
+            qdrant_collection_ready: Arc::new(OnceCell::new()),
         })
     }
 
@@ -248,10 +286,84 @@ impl StreamingBlockchain {
         });
         tokio::fs::write(&vector_file, simd_json::to_string(&vector_data)?).await?;
 
+        // Reactive: stream the vector straight to Qdrant as it's written
+        // (only when one was actually attached — footprints created without
+        // an embedding yet, per PluginFootprint's async-projection comment,
+        // are skipped rather than upserting a zero vector).
+        if let Err(e) = self
+            .push_vector_to_qdrant(&event, &footprint.plugin_id, &footprint.data_hash)
+            .await
+        {
+            warn!("Failed to stream vector to Qdrant for block {}: {}", event.hash, e);
+        }
+
         // Only create snapshot if interval requires it
         self.create_snapshot_if_needed(&event.hash).await?;
         info!("Plugin footprint added with hash: {}", event.hash);
         Ok(event.hash)
+    }
+
+    /// Push a single block's vector to Qdrant, if streaming is configured
+    /// (`OPDBUS_QDRANT_URL`) and the footprint actually carries a vector.
+    /// Idempotent: point id is derived from the block hash.
+    async fn push_vector_to_qdrant(
+        &self,
+        event: &BlockEvent,
+        plugin_id: &str,
+        data_hash: &str,
+    ) -> Result<()> {
+        let Some(qdrant) = &self.qdrant else {
+            return Ok(());
+        };
+        if event.vector.is_empty() {
+            return Ok(());
+        }
+        self.ensure_qdrant_collection(qdrant).await?;
+
+        let point_id = uuid::Uuid::new_v5(&BLOCKCHAIN_QDRANT_NAMESPACE, event.hash.as_bytes());
+        let payload: Payload = serde_json::json!({
+            "hash": event.hash,
+            "category": event.category,
+            "action": event.action,
+            "timestamp": event.timestamp,
+            "plugin_id": plugin_id,
+            "data_hash": data_hash,
+        })
+        .try_into()
+        .context("failed to build Qdrant payload for blockchain vector")?;
+
+        let point = PointStruct::new(point_id.to_string(), event.vector.clone(), payload);
+        qdrant
+            .upsert_points(UpsertPointsBuilder::new(&self.qdrant_collection, vec![point]))
+            .await
+            .context("Qdrant upsert failed for blockchain vector")?;
+
+        Ok(())
+    }
+
+    async fn ensure_qdrant_collection(&self, qdrant: &Qdrant) -> Result<()> {
+        self.qdrant_collection_ready
+            .get_or_try_init(|| async {
+                if !qdrant.collection_exists(&self.qdrant_collection).await? {
+                    match qdrant
+                        .create_collection(CreateCollectionBuilder::new(&self.qdrant_collection).vectors_config(
+                            VectorsConfig {
+                                config: Some(VectorsConfigEnum::Params(
+                                    VectorParamsBuilder::new(self.qdrant_dim, Distance::Cosine).build(),
+                                )),
+                            },
+                        ))
+                        .await
+                    {
+                        Ok(_) => info!(collection = %self.qdrant_collection, "Created Qdrant collection for blockchain vectors"),
+                        Err(err) if is_qdrant_already_exists(&err) => {}
+                        Err(err) => return Err(anyhow::Error::from(err)),
+                    }
+                }
+                Ok::<(), anyhow::Error>(())
+            })
+            .await?;
+        Ok(())
     }
 
     /// Add multiple footprints in batch (for bulk operations)
@@ -819,5 +931,14 @@ impl StreamingBlockchain {
             return true;
         }
         name.starts_with("state-")
+    }
+}
+
+fn is_qdrant_already_exists(err: &QdrantError) -> bool {
+    match err {
+        QdrantError::ResponseError { status } | QdrantError::ResourceExhaustedError { status, .. } => {
+            status.code() == tonic::Code::AlreadyExists
+        }
+        _ => false,
     }
 }
