@@ -20,6 +20,7 @@ import json
 import os
 import re
 import sys
+import time
 import uuid
 import urllib.request
 import urllib.error
@@ -291,10 +292,31 @@ def chunk_frameworks(path: str):
 
 # ── Qdrant / Voyage plumbing ─────────────────────────────────────────────────
 
+def _urlopen_retrying(req, retries=5, base_delay=2.0):
+    """Qdrant has had transient outages mid-batch (connection reset,
+    connection refused — a container restart or momentary proxy hiccup
+    under heavy concurrent load) that previously killed an entire
+    multi-hour run for a problem that resolved itself within seconds.
+    Retry network-level failures (not HTTP error responses, which callers
+    handle themselves) with exponential backoff before giving up."""
+    for attempt in range(retries):
+        try:
+            return urllib.request.urlopen(req)
+        except urllib.error.HTTPError:
+            raise  # a real HTTP error response; not a connectivity problem
+        except urllib.error.URLError as e:
+            if attempt == retries - 1:
+                raise
+            delay = base_delay * (2 ** attempt)
+            print(f"  [qdrant] connection error ({e}), retrying in {delay:.0f}s "
+                  f"(attempt {attempt + 1}/{retries})", file=sys.stderr)
+            time.sleep(delay)
+
+
 def ensure_collection(name: str):
     req = urllib.request.Request(f"{QDRANT_URL}/collections/{name}")
     try:
-        urllib.request.urlopen(req)
+        _urlopen_retrying(req)
         return
     except urllib.error.HTTPError as e:
         if e.code != 404:
@@ -302,7 +324,7 @@ def ensure_collection(name: str):
     body = json.dumps({"vectors": {"size": VOYAGE_DIM, "distance": "Cosine"}}).encode()
     req = urllib.request.Request(f"{QDRANT_URL}/collections/{name}", data=body, method="PUT",
                                   headers={"Content-Type": "application/json"})
-    urllib.request.urlopen(req).read()
+    _urlopen_retrying(req).read()
 
 
 def embed_contextualized_groups(groups: list, rotator: "VoyageRotator") -> list:
@@ -338,7 +360,7 @@ def upsert_batch(collection: str, points: list):
     body = json.dumps({"points": points}).encode()
     req = urllib.request.Request(f"{QDRANT_URL}/collections/{collection}/points?wait=true",
                                   data=body, method="PUT", headers={"Content-Type": "application/json"})
-    urllib.request.urlopen(req).read()
+    _urlopen_retrying(req).read()
 
 
 def existing_point_ids(collection: str, ids: list) -> set:
@@ -351,7 +373,7 @@ def existing_point_ids(collection: str, ids: list) -> set:
     req = urllib.request.Request(f"{QDRANT_URL}/collections/{collection}/points",
                                   data=body, method="POST", headers={"Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(req) as resp:
+        with _urlopen_retrying(req) as resp:
             data = json.loads(resp.read())
     except urllib.error.HTTPError:
         return set()
@@ -525,8 +547,38 @@ def process(chunk_fn, path: str, collection: str, source_file: str, cozo_db=None
 # ── raw compliance repo walking (usnistgov/OSCAL, ComplianceAsCode/content, etc.) ──
 
 REPO_SKIP_DIRS = {".git", "node_modules", "vendor", "dist", "build", "__pycache__", ".venv", "venv", "target"}
-REPO_TEXT_EXTS = {".md", ".markdown", ".json", ".yaml", ".yml", ".xml", ".rego", ".txt"}
+REPO_TEXT_EXTS = {".md", ".markdown", ".json", ".yaml", ".yml", ".xml", ".rego", ".txt", ".docx"}
 REPO_MAX_FILE_BYTES = 2_000_000
+
+
+def docx_to_markdown(path: str) -> str:
+    """Flattens a .docx into a markdown-ish text blob (Heading N styles become
+    '#'*N lines, everything else stays a plain paragraph, tables are rendered
+    as pipe rows) so it can flow through the same has_headers/window_chunks
+    path already used for .md files — no separate chunking logic needed."""
+    import docx as docx_lib
+
+    doc = docx_lib.Document(path)
+    lines = []
+    for para in doc.paragraphs:
+        text = para.text.strip()
+        if not text:
+            continue
+        style = (para.style.name or "") if para.style else ""
+        if style.startswith("Heading"):
+            # split_headers() only recognizes exactly "## "/"### " (2/3
+            # hashes) — flatten every Word heading level to "## " since
+            # these templates are short enough that one section tier is
+            # plenty, rather than teaching split_headers a 3rd format.
+            lines.append(f"## {text}")
+        else:
+            lines.append(text)
+    for table in doc.tables:
+        for row in table.rows:
+            cells = [c.text.strip() for c in row.cells]
+            if any(cells):
+                lines.append("| " + " | ".join(cells) + " |")
+    return "\n\n".join(lines)
 
 
 def iter_repo_files(repo_dir: str):
@@ -548,6 +600,19 @@ def chunk_repo_file(repo_name: str, repo_dir: str, path: str):
     rel = os.path.relpath(path, repo_dir)
     file_key = f"{repo_name}/{rel}"
     ext = os.path.splitext(path)[1].lower()
+
+    if ext == ".docx":
+        try:
+            text = docx_to_markdown(path)
+        except Exception:
+            return
+        if not text.strip():
+            return
+        for heading, sec_text in split_headers(text) if re.search(r"^## ", text, re.MULTILINE) else [("", text)]:
+            for wi, chunk in enumerate(window_chunks(f"{file_key} :: {heading}" if heading else file_key, sec_text)):
+                yield ([file_key, "window", heading, wi], chunk, None)
+        return
+
     try:
         text = open(path, encoding="utf-8", errors="ignore").read()
     except Exception:
@@ -609,6 +674,7 @@ COMPLIANCE_REPOS = {
     "vaibhavjain2608__compliance-policy-templates": ("compliance-policy-templates", "compliance_general"),
     "microsoft__presidio": ("microsoft/presidio", "compliance_general"),
     "cloud-custodian__cloud-custodian": ("cloud-custodian/cloud-custodian", "compliance_general"),
+    "Auxin-io__cybersecurity-templates": ("Auxin-io/cybersecurity-templates", "compliance_general"),
 }
 
 REPOS_BULK_DIR = "/home/admin/git/repos-bulk"
