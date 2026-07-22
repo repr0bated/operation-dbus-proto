@@ -35,6 +35,10 @@ TOKEN_SAFETY_MARGIN = 1_750_000  # switch credential before hitting the real 2M/
 _VOYAGE_CREDENTIALS = [
     ("primary", os.environ["VOYAGE_API_KEY"], "https://api.voyageai.com/v1/contextualizedembeddings"),
     ("lite", os.environ["VOYAGE_API_KEY_LITE"], "https://ai.mongodb.com/v1/contextualizedembeddings"),
+    # Confirmed via live test: only works against ai.mongodb.com (403 on
+    # direct api.voyageai.com) — a second Mongo-routed account, despite
+    # the name suggesting otherwise.
+    ("mongo_voyager", os.environ["MONGO_VOYAGER"], "https://ai.mongodb.com/v1/contextualizedembeddings"),
 ]
 
 

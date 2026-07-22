@@ -180,6 +180,10 @@ def iter_repo_chunks(repo_dir: str, repo_name: str):
 _VOYAGE_CREDENTIALS = [
     ("primary", os.environ["VOYAGE_API_KEY"], "https://api.voyageai.com/v1/contextualizedembeddings"),
     ("lite", os.environ["VOYAGE_API_KEY_LITE"], "https://ai.mongodb.com/v1/contextualizedembeddings"),
+    # Confirmed via live test: only works against ai.mongodb.com (403 on
+    # direct api.voyageai.com) — a second Mongo-routed account, despite
+    # the name suggesting otherwise.
+    ("mongo_voyager", os.environ["MONGO_VOYAGER"], "https://ai.mongodb.com/v1/contextualizedembeddings"),
 ]
 
 
@@ -334,8 +338,40 @@ def process_repo(repo_dir: str, repo_name: str, rotator: VoyageRotator):
     print(f"  token usage: {dict(rotator.used)}")
 
 
+# Direct-dependency tier: actual runtime/build deps of this workspace,
+# plus the closest adjacent tooling (s6/dinit for the runit migration
+# comparison). rust-lang/rust deliberately excluded (see README).
+DIRECT_DEP_REPOS = [
+    "z-galaxy__zbus", "lxc__incus", "openvswitch__ovs", "dbus__dbus", "bus1__dbus-broker",
+    "GREsau__schemars", "qdrant__qdrant", "qdrant__qdrant-client",
+    "tokio-rs__tokio", "tokio-rs__axum", "tokio-rs__tracing", "tokio-rs__bytes",
+    "tokio-rs__mini-redis", "tokio-rs__prost",
+    "hyperium__hyper", "hyperium__http", "hyperium__h2", "hyperium__tonic",
+    "serde-rs__serde", "serde-rs__json", "rustls__rustls",
+    "rust-netlink__netlink-packet-core", "rust-netlink__rtnetlink",
+    "kdave__btrfs-progs",
+    "skarnet__s6", "skarnet__s6-rc", "skarnet__s6-linux-init", "skarnet__execline", "skarnet__skalibs",
+    "davmac314__dinit",
+]
+
+BULK_DIR = "/home/admin/git/repos-bulk"
+
+
 if __name__ == "__main__":
-    repo_dir = sys.argv[1]
-    repo_name = sys.argv[2] if len(sys.argv) > 2 else os.path.basename(repo_dir)
-    rotator = VoyageRotator()
-    process_repo(repo_dir, repo_name, rotator)
+    if len(sys.argv) > 1 and sys.argv[1] == "direct-deps":
+        rotator = VoyageRotator()
+        for repo in DIRECT_DEP_REPOS:
+            repo_dir = os.path.join(BULK_DIR, repo)
+            if not os.path.isdir(repo_dir):
+                print(f"SKIP (not cloned): {repo}", file=sys.stderr)
+                continue
+            if rotator.exhausted():
+                print(f"STOPPING batch: all credentials exhausted before reaching '{repo}'", file=sys.stderr)
+                break
+            print(f"=== {repo} ===", file=sys.stderr)
+            process_repo(repo_dir, repo, rotator)
+    else:
+        repo_dir = sys.argv[1]
+        repo_name = sys.argv[2] if len(sys.argv) > 2 else os.path.basename(repo_dir)
+        rotator = VoyageRotator()
+        process_repo(repo_dir, repo_name, rotator)
