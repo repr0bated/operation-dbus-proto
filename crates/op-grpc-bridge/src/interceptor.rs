@@ -102,6 +102,21 @@ pub fn ghostbridge_interceptor(mut req: Request<()>) -> Result<Request<()>, Stat
     Ok(req)
 }
 
+/// Permit only the two calls needed to establish an identity. Everything else
+/// on RegistrationService still passes through the normal sled gate.
+#[allow(clippy::result_large_err)]
+pub fn registration_interceptor(req: Request<()>) -> Result<Request<()>, Status> {
+    match req.extensions().get::<tonic::GrpcMethod<'_>>() {
+        Some(method)
+            if method.service() == "operation.registration.v1.RegistrationService"
+                && matches!(method.method(), "SendMagicLink" | "VerifyMagicLink") =>
+        {
+            Ok(req)
+        }
+        _ => ghostbridge_interceptor(req),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -117,6 +132,31 @@ mod tests {
         assert!(status
             .message()
             .contains("Missing Ghostbridge Identity Sled"));
+    }
+
+    #[test]
+    fn registration_bootstrap_allows_magic_link_without_identity() {
+        for method in ["SendMagicLink", "VerifyMagicLink"] {
+            let mut req = Request::new(());
+            req.extensions_mut().insert(tonic::GrpcMethod::new(
+                "operation.registration.v1.RegistrationService",
+                method,
+            ));
+            assert!(registration_interceptor(req).is_ok());
+        }
+    }
+
+    #[test]
+    fn registration_bootstrap_does_not_expose_admin_methods() {
+        let mut req = Request::new(());
+        req.extensions_mut().insert(tonic::GrpcMethod::new(
+            "operation.registration.v1.RegistrationService",
+            "ListUsers",
+        ));
+        assert_eq!(
+            registration_interceptor(req).unwrap_err().code(),
+            tonic::Code::Unauthenticated
+        );
     }
 
     #[test]

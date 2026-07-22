@@ -688,7 +688,10 @@ pub fn build_operation_routes(server: OperationGrpcServer) -> tonic::service::Ro
         PrivacyNetworkServiceServer::with_interceptor(server.clone(), intercept),
     ))
     .add_service(tonic_web::enable(
-        RegistrationServiceServer::with_interceptor(server.clone(), intercept),
+        RegistrationServiceServer::with_interceptor(
+            server.clone(),
+            interceptor::registration_interceptor,
+        ),
     ))
     .add_service(tonic_web::enable(DbusPassthroughServer::with_interceptor(
         server.clone(),

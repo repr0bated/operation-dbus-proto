@@ -26,6 +26,7 @@ hex = { workspace = true }
 memmap2 = { workspace = true }
 md5 = { workspace = true }
 blake3 = { workspace = true }
+argon2 = { workspace = true }
 libc = { workspace = true }
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 bip39 = "2"
