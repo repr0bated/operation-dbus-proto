@@ -731,6 +731,20 @@ impl MutationEngine {
                 let result = dispatch_xray_method(method, &args_json).await?;
                 caller_result = Some(simd_json::serde::to_owned_value(&result)?);
             }
+        } else if plugin_id == "netmaker" && change_type == ChangeType::MethodCall {
+            if let Some(method) = &member_name {
+                let mut args_json = serde_json::to_value(&value)?;
+                if let serde_json::Value::Array(items) = &args_json {
+                    args_json = items
+                        .first()
+                        .cloned()
+                        .unwrap_or_else(|| serde_json::Value::Object(Default::default()));
+                }
+                let result =
+                    op_plugins::state_plugins::netmaker::dispatch_netmaker_method(method, &args_json)
+                        .await?;
+                caller_result = Some(simd_json::serde::to_owned_value(&result)?);
+            }
         } else {
             // NonNet / Generic Plugin Path
             if change_type == ChangeType::PropertySet {

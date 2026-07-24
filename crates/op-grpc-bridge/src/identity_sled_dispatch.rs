@@ -373,6 +373,28 @@ pub async fn dispatch_identity_sled_method(
                     if btrfs_device.is_some() {
                         sled.btrfs_device = btrfs_device;
                     }
+                    // Self-heal: identities created via provision_container
+                    // never mint a footprint at all (a separate gap in that
+                    // path), so backfill it here the same way a brand-new
+                    // write_identity sled does — a stable, once-minted
+                    // credential (mutation_index/source_port both 0), not
+                    // recomputed on every call.
+                    if sled.hashed_footprint.is_empty() {
+                        if let Some(footprint) = base64::engine::general_purpose::STANDARD
+                            .decode(pubkey.trim())
+                            .ok()
+                            .and_then(|raw| <[u8; 32]>::try_from(raw).ok())
+                            .map(|pubkey_bytes| {
+                                hex::encode(op_identity::schema_bridge::etch_footprint(
+                                    &pubkey_bytes,
+                                    0,
+                                    0,
+                                ))
+                            })
+                        {
+                            sled.hashed_footprint = footprint;
+                        }
+                    }
                     sled.mutation_index += 1;
                     sled.last_seen_at = ts;
                     sled.active = true;

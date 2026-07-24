@@ -37,7 +37,12 @@ use crate::proto::zeroclaw::{
 const DEFAULT_UNIX_SOCKET: &str = "/run/opdbus/grpc.sock";
 /// Shared container socket — bind-mounted into NIC-less CTs as `/run/ghostbridge`.
 const DEFAULT_SHARED_SOCKET: &str = crate::shared_socket::DEFAULT_SOCKET_PATH;
-const DEFAULT_BIND_ADDR: &str = "0.0.0.0:8090,0.0.0.0:50051,0.0.0.0:50052";
+// NOTE: 50052 deliberately excluded — already owned by op-cognitive-mcp
+// (COGNITIVE_MCP_GRPC_BIND=10.200.0.2:50052; 0.0.0.0:50052 here would
+// collide with that, since 0.0.0.0 covers every interface including
+// 10.200.0.2 — confirmed live via "Address already in use (os error 98)"
+// crash-looping the service before this was narrowed).
+const DEFAULT_BIND_ADDR: &str = "0.0.0.0:8090,0.0.0.0:50051";
 /// Default schema source: the sealed blob catalog dir. When `schema_path`
 /// is a directory the loader reads the plugin's own blob from it (a blob in
 /// the catalog IS the plugin); a file path is still accepted for tests and
