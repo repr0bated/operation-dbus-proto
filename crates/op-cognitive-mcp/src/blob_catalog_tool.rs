@@ -10,7 +10,7 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use op_mcp::tool_registry::{BoxedTool, Tool, ToolRegistry};
-use simd_json::{json, OwnedValue as Value};
+use serde_json::{json, Value};
 use std::sync::Arc;
 
 pub async fn register_blob_catalog_tool(registry: &ToolRegistry) -> Result<()> {
@@ -31,8 +31,8 @@ impl Tool for BlobCatalogTool {
         "Return every active plugin's sealed schema (from the SHM blob catalog) in one \
          payload, keyed by plugin id. Unlike per-plugin schema lookups, this gives a model \
          the full catalog at once so it can reason about connections across plugins.\n\
-         Use mode='summary' for a lightweight overview (id, name, description, category, method/signal counts). \
-         Use mode='full' for complete schemas (may exceed output limits for large catalogs)."
+         Use mode='list' to get plugin IDs only (~2KB), then pass specific IDs to \
+         mode='full' for complete schemas of just those plugins (prevents truncation)."
     }
 
     fn category(&self) -> &str {
@@ -57,9 +57,9 @@ impl Tool for BlobCatalogTool {
             "properties": {
                 "mode": {
                     "type": "string",
-                    "enum": ["summary", "full", "list"],
+                    "enum": ["list", "summary", "full"],
                     "default": "summary",
-                    "description": "Output mode: 'list' returns plugin IDs only, 'summary' returns lightweight metadata (~50KB), 'full' returns complete schemas (~2MB, may truncate)"
+                    "description": "Output mode: 'list' returns plugin IDs only (~2KB), 'summary' returns lightweight metadata (~50KB), 'full' returns complete schemas"
                 },
                 "plugin_ids": {
                     "type": "array",
@@ -79,20 +79,47 @@ impl Tool for BlobCatalogTool {
         let mode = input.get("mode")
             .and_then(|v| v.as_str())
             .unwrap_or("summary");
+        
+        let plugin_ids_filter: Option<Vec<String>> = input.get("plugin_ids")
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect());
+
         let category_filter = input.get("category")
             .and_then(|v| v.as_str());
 
         let ids = op_blob::catalog::read_manifest_plugin_ids_shm()
             .context("failed to read plugin blob manifest from SHM catalog")?;
 
-        let mut plugins = simd_json::owned::Object::new();
+        // If mode is "list", return just the plugin IDs
+        if mode == "list" {
+            return Ok(json!({
+                "plugin_count": ids.len(),
+                "plugin_ids": ids,
+            }));
+        }
+
+        let mut plugins = serde_json::Map::new();
         let mut missing = Vec::new();
 
-        for id in &ids {
+        // Determine which IDs to process
+        let ids_to_process: Vec<String> = match &plugin_ids_filter {
+            Some(filter_ids) => {
+                // Validate that requested IDs exist
+                for id in filter_ids {
+                    if !ids.contains(id) {
+                        missing.push(id.clone());
+                    }
+                }
+                filter_ids.clone()
+            }
+            None => ids.clone(),
+        };
+
+        for id in &ids_to_process {
             if let Some(schema) = op_blob::catalog::read_plugin_schema_shm(id) {
                 // Apply category filter if specified
                 if let Some(cat) = category_filter {
-                    let schema_value = simd_json::to_value(schema.clone())
+                    let schema_value = serde_json::to_value(schema.clone())
                         .with_context(|| format!("failed to serialize schema for '{id}'"))?;
                     if let Some(plugin_category) = schema_value.get("category") {
                         if plugin_category.as_str().unwrap_or("") != cat {
@@ -103,10 +130,10 @@ impl Tool for BlobCatalogTool {
 
                 if mode == "summary" {
                     // Summary mode: return lightweight metadata only
-                    let schema_value = simd_json::to_value(schema.clone())
+                    let schema_value = serde_json::to_value(schema.clone())
                         .with_context(|| format!("failed to serialize schema for '{id}'"))?;
 
-                    let mut summary = simd_json::owned::Object::new();
+                    let mut summary = serde_json::Map::new();
                     summary.insert("name".to_string(),
                         schema_value.get("name").cloned().unwrap_or(Value::Null));
                     summary.insert("description".to_string(),
@@ -132,11 +159,12 @@ impl Tool for BlobCatalogTool {
                     plugins.insert(id.clone(), Value::Object(Box::new(summary)));
                 } else {
                     // Full mode: return complete schema
-                    let value = simd_json::serde::to_owned_value(schema)
+                    let value = serde_json::to_value(schema)
                         .with_context(|| format!("failed to serialize schema for '{id}'"))?;
                     plugins.insert(id.clone(), value);
                 }
-            } else {
+            } else if plugin_ids_filter.is_some() {
+                // Only mark as missing if explicitly requested
                 missing.push(id.clone());
             }
         }
