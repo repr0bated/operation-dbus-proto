@@ -80,6 +80,15 @@ pub struct ContainerIdentitySled {
     /// Whether the identity is currently live (container running / host up).
     #[serde(default)]
     pub active: bool,
+    /// Unix seconds the *current visit/term* stops being valid. The account
+    /// (session_id) can be lifelong (host/user/chatbot) while still having a
+    /// bounded term — lifelong accounts get this renewed on every touch
+    /// (`touch_identity_sled`); temporary consumer identities (e.g. external
+    /// frontends like Lovable) don't, so their term actually lapses.
+    /// `None` before a term has ever been issued.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "src.service.identity-sled.expires-at@v1"))]
+    pub expires_at: Option<i64>,
 }
 
 /// The btrfs device that IS the sled's persistence. The record of truth lives

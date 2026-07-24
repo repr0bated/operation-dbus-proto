@@ -1,8 +1,16 @@
 {
     "mcpServers": {
-        "npx": {
-            "type": "stdio",
-            "command": "notebooklm-mcp"
+        "cognitive-mcp": {
+            "type": "http",
+            "url": "http://10.200.0.2:3003/mcp",
+            "headers": {
+                "X-Ghostbridge-Footprint": "antigravity",
+                "X-Ghostbridge-Trace-ID": "antigravity-local"
+            }
+        },
+        "op-web-mcp": {
+            "type": "http",
+            "url": "http://127.0.0.1:8080/mcp/message"
         }
     }
 }

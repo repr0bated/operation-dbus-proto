@@ -176,21 +176,17 @@ pub async fn signup(
         }
     }
 
-    // New user - generate WireGuard keys
+    // Best-effort host fabric check. Magic-link issuance must not block on OVSDB/D-Bus
+    // (list_dbs via org.opdbus.v1/rovs). Full privacy provision still runs on verify.
     if let Err(e) = crate::privacy_network::ensure_host_privacy_network().await {
-        error!("Failed to provision host privacy network: {}", e);
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(SignupResponse {
-                success: false,
-                message: "Privacy network host setup failed. Please retry shortly.".to_string(),
-            }),
+        warn!(
+            "Privacy network not ready at signup (continuing; will retry on verify): {}",
+            e
         );
     }
 
     // New user - generate WireGuard keys
     let keypair = generate_keypair();
-
     // Create user (we'll encrypt the private key later, for now just store it)
     match state
         .user_store

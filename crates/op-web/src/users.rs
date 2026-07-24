@@ -564,8 +564,27 @@ impl UserStore {
         users
     }
 
-    /// Delete a user by ID
+    /// Delete a user by ID.
+    ///
+    /// Guardrail: refuses to delete a user that still has an attached
+    /// container/privacy route. Deleting the Cozo record out from under a
+    /// live container's storage is exactly the btrfs-corruption trap learned
+    /// the hard way — storage must be cleanly detached (container stopped,
+    /// route unpublished) before the identity record itself goes away. Call
+    /// [`Self::detach_and_delete_user`] for the full teardown, or detach the
+    /// container/route explicitly first if this is truly just an orphaned
+    /// record with no real backing container.
     pub async fn delete_user(&self, user_id: &str) -> Result<()> {
+        if let Some(user) = self.get_user(user_id).await {
+            if user.privacy_container_name.is_some() || user.privacy_network_connected {
+                anyhow::bail!(
+                    "refusing to delete user {user_id}: privacy container/route still attached \
+                     (container={:?}, connected={}) — detach it first",
+                    user.privacy_container_name,
+                    user.privacy_network_connected
+                );
+            }
+        }
         let c = self.cozo_clone();
         let id = user_id.to_string();
         tokio::task::spawn_blocking(move || c.delete_privacy_user(&id))

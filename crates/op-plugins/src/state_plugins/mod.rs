@@ -81,6 +81,7 @@ pub mod wgcf;
 pub mod wireguard;
 pub mod workflows_plugin;
 pub mod xray;
+pub mod xray_config_types;
 pub mod zeroclaw;
 
 // ---------------------------------------------------------------------------

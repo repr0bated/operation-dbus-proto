@@ -40,14 +40,17 @@ pub async fn connect_channel(endpoint: &str) -> Result<Channel> {
     if let Some(path) = unix_socket_path(endpoint) {
         // The HTTP authority below is a placeholder required by tonic; the
         // connector ignores it and dials the Unix socket instead.
-        let channel = Endpoint::try_from("http://[::]:50051")
-            .context("placeholder URI for Unix-socket endpoint")?
-            .connect_with_connector(service_fn(move |_: Uri| {
-                let path = path.clone();
-                async move { Ok::<_, std::io::Error>(TokioIo::new(UnixStream::connect(path).await?)) }
-            }))
-            .await
-            .with_context(|| format!("connecting gRPC over Unix socket: {endpoint}"))?;
+        let channel =
+            Endpoint::try_from("http://[::]:50051")
+                .context("placeholder URI for Unix-socket endpoint")?
+                .connect_with_connector(service_fn(move |_: Uri| {
+                    let path = path.clone();
+                    async move {
+                        Ok::<_, std::io::Error>(TokioIo::new(UnixStream::connect(path).await?))
+                    }
+                }))
+                .await
+                .with_context(|| format!("connecting gRPC over Unix socket: {endpoint}"))?;
         Ok(channel)
     } else {
         let channel = Endpoint::from_shared(endpoint.to_string())

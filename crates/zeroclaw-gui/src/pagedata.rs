@@ -79,7 +79,11 @@ impl PageDataHub {
         let handle = tokio::spawn(async move {
             let poll = Duration::from_secs(source.poll_secs.max(1));
             loop {
-                set_status(&inner, &slug_owned, &format!("polling {}.{}…", source.plugin, source.method));
+                set_status(
+                    &inner,
+                    &slug_owned,
+                    &format!("polling {}.{}…", source.plugin, source.method),
+                );
                 match fetch_plugin(&registry, &source).await {
                     Ok(Some(val)) if is_meaningful_result(&val) => {
                         set_value(
@@ -94,7 +98,10 @@ impl PageDataHub {
                             &inner,
                             &slug_owned,
                             None,
-                            &format!("static sample — {}.{} returned empty", source.plugin, source.method),
+                            &format!(
+                                "static sample — {}.{} returned empty",
+                                source.plugin, source.method
+                            ),
                         );
                     }
                     Err(e) => {
@@ -126,7 +133,10 @@ impl PageDataHub {
     }
 }
 
-async fn fetch_plugin(reg: &ReflectionRegistry, source: &PageSource) -> anyhow::Result<Option<Value>> {
+async fn fetch_plugin(
+    reg: &ReflectionRegistry,
+    source: &PageSource,
+) -> anyhow::Result<Option<Value>> {
     let args = match &source.args {
         Value::Array(arr) => arr.clone(),
         other if other.is_null() => vec![],
@@ -224,7 +234,12 @@ fn set_status(inner: &Arc<Mutex<HashMap<String, Entry>>>, slug: &str, status: &s
     }
 }
 
-fn set_value(inner: &Arc<Mutex<HashMap<String, Entry>>>, slug: &str, value: Option<Value>, status: &str) {
+fn set_value(
+    inner: &Arc<Mutex<HashMap<String, Entry>>>,
+    slug: &str,
+    value: Option<Value>,
+    status: &str,
+) {
     if let Some(e) = inner.lock().get_mut(slug) {
         e.live.value = value;
         e.live.status = status.to_string();

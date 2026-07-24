@@ -4,8 +4,12 @@
 
 use anyhow::{Context, Result};
 use lettre::{
-    message::header::ContentType, transport::smtp::authentication::Credentials, AsyncSmtpTransport,
-    AsyncTransport, Message, Tokio1Executor,
+    message::header::ContentType,
+    transport::smtp::{
+        authentication::Credentials,
+        client::{Tls, TlsParameters},
+    },
+    AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor,
 };
 use tracing::info;
 
@@ -116,15 +120,35 @@ impl EmailSender {
 
         let creds = Credentials::new(self.config.smtp_user.clone(), self.config.smtp_pass.clone());
 
+        // Host mail-3tched (Postfix submission). Use STARTTLS on 587; allow the
+        // container's self-signed cert so local delivery does not fail TLS verify.
+        let tls = TlsParameters::builder(self.config.smtp_host.clone())
+            .dangerous_accept_invalid_certs(true)
+            .build()
+            .context("smtp tls parameters")?;
+
         let mailer: AsyncSmtpTransport<Tokio1Executor> =
-            AsyncSmtpTransport::<Tokio1Executor>::relay(&self.config.smtp_host)?
+            AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&self.config.smtp_host)
                 .port(self.config.smtp_port)
+                .tls(if self.config.smtp_port == 465 {
+                    Tls::Wrapper(tls)
+                } else {
+                    Tls::Required(tls) // STARTTLS
+                })
                 .credentials(creds)
                 .build();
 
-        mailer.send(email).await.context("Failed to send email")?;
+        mailer.send(email).await.with_context(|| {
+            format!(
+                "Failed to send email via {}:{} as {}",
+                self.config.smtp_host, self.config.smtp_port, self.config.smtp_user
+            )
+        })?;
 
-        info!("Sent magic link email to {}", to_email);
+        info!(
+            "Sent magic link email to {} via {}:{}",
+            to_email, self.config.smtp_host, self.config.smtp_port
+        );
         Ok(())
     }
 }

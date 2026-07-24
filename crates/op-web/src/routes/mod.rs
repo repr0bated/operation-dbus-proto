@@ -114,6 +114,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             "/gemma/plugin-schema/:plugin",
             get(handlers::gemma::gemma_plugin_schema_handler),
         )
+        .route("/gemma/plugins", get(handlers::gemma::gemma_list_plugins_handler))
         .route("/chat/sessions", get(handlers::chat::list_sessions_handler))
         .route(
             "/chat/sessions",
@@ -275,6 +276,8 @@ pub fn create_router(state: Arc<AppState>) -> Router {
     // Main router - agents_mcp_route FIRST so it takes precedence
     let router = Router::new()
         .nest("/api", api_routes)
+        // Device pairing (egui / dashboard) — top-level paths match zeroclaw-gui AuthState
+        .route("/pair", post(handlers::pair::pair_handler))
         // Human-facing privacy verification flow (magic-link target)
         .route("/privacy/verify", get(handlers::privacy::verify_redirect))
         .route(

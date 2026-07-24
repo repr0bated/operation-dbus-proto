@@ -5254,11 +5254,14 @@ dependencies = [
  "gethostname 0.5.0",
  "op-cache",
  "op-core",
+ "qdrant-client",
  "serde",
+ "serde_json",
  "sha2 0.10.9",
  "simd-json",
  "thiserror 1.0.69",
  "tokio",
+ "tonic",
  "tracing",
  "uuid",
 ]
@@ -5590,6 +5593,8 @@ name = "op-gemma"
 version = "1.0.0"
 dependencies = [
  "anyhow",
+ "op-blob",
+ "op-state-store",
  "serde",
  "serde_json",
  "tracing",
@@ -5646,6 +5651,7 @@ dependencies = [
  "hex",
  "jsonschema 0.29.1",
  "memmap2",
+ "nix 0.28.0",
  "op-blob",
  "op-cognitive-mcp",
  "op-core",
@@ -5653,10 +5659,12 @@ dependencies = [
  "op-grpc-adapters",
  "op-identity",
  "op-jsonrpc",
+ "op-llm",
  "op-network",
  "op-plugins",
  "op-state",
  "op-state-store",
+ "op-xray-daemon",
  "prost 0.13.5",
  "prost-reflect",
  "prost-types 0.13.5",
@@ -5951,6 +5959,7 @@ dependencies = [
  "inventory",
  "log",
  "md5",
+ "nix 0.28.0",
  "op-agents",
  "op-blob",
  "op-blockchain",
@@ -6237,11 +6246,17 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "hyper-util",
  "nix 0.28.0",
+ "prost 0.13.5",
  "serde",
  "serde_json",
  "tokio",
+ "tokio-stream",
  "tokio-test",
+ "tonic",
+ "tonic-build 0.12.3",
+ "tower 0.4.13",
  "tracing",
  "tracing-subscriber",
  "uuid",
@@ -8349,6 +8364,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "sha1_smol"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbfa15b3dddfee50a0fff136974b3e1bde555604ba463834a7eb7deb6417705d"
+
+[[package]]
 name = "sha2"
 version = "0.10.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9849,6 +9870,7 @@ dependencies = [
  "getrandom 0.4.3",
  "js-sys",
  "serde_core",
+ "sha1_smol",
  "wasm-bindgen",
 ]
 

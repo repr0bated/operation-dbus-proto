@@ -60,7 +60,10 @@ impl ChatTransport {
     ///
     /// Spawns a background task that reads the server-streaming response
     /// and forwards decoded ChatFrameEvent items into the channel.
-    pub async fn send(&self, payload: SendRequestPayload) -> Result<mpsc::Receiver<ChatFrameEvent>> {
+    pub async fn send(
+        &self,
+        payload: SendRequestPayload,
+    ) -> Result<mpsc::Receiver<ChatFrameEvent>> {
         let mut client = chat_service_client::ChatServiceClient::new(self.channel.clone());
 
         let ui_messages_bytes = serde_json::to_vec(&payload.ui_messages)?;
@@ -84,8 +87,9 @@ impl ChatTransport {
             while let Ok(Some(frame)) = stream.message().await {
                 let event = match frame.body {
                     Some(Body::Part(part)) => {
-                        let payload_val = serde_json::from_slice::<serde_json::Value>(&part.payload)
-                            .unwrap_or(serde_json::Value::Null);
+                        let payload_val =
+                            serde_json::from_slice::<serde_json::Value>(&part.payload)
+                                .unwrap_or(serde_json::Value::Null);
                         let msg = ChatMessage {
                             id: part.message_id,
                             role: part.role,

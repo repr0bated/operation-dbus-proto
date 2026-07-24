@@ -458,6 +458,120 @@ pub fn read_sled_at(path: &str) -> std::io::Result<(*const IdentitySled, memmap2
     Ok((ptr, mmap))
 }
 
+/// Why a footprint failed to verify against the live sled — kept transport-
+/// agnostic (no `tonic::Status` here) so both gRPC gatekeepers (op-grpc-bridge
+/// on the WG uplink, op-cognitive-mcp on the external MCP gateway) can map it
+/// to their own error type instead of this crate depending on tonic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FootprintVerifyError {
+    /// The sled file couldn't be read (missing, wrong size, no mutation yet).
+    SledUnreachable,
+    /// The sled exists but is zero-initialized — no valid mutation landed yet.
+    InvalidSled,
+    /// The request's footprint doesn't match the sled's current hashed footprint.
+    Mismatch,
+}
+
+/// Verify a request-supplied hex-encoded footprint against the live
+/// IdentitySled in shared memory. This is the ONE place the Ghostbridge
+/// "Absolute Base" check lives — every gRPC ingress must call this rather
+/// than re-implementing the sled read + compare, so the two checks can never
+/// drift apart again (see SIGNALS.md: op-cognitive-mcp's interceptor had
+/// silently regressed to a presence-only check while op-grpc-bridge's stayed
+/// correct).
+pub fn verify_ghostbridge_footprint(request_footprint_hex: &str) -> Result<(), FootprintVerifyError> {
+    let (sled_ptr, _mmap) = read_sled().map_err(|_| FootprintVerifyError::SledUnreachable)?;
+    let sled = unsafe { &*sled_ptr };
+
+    if sled.hashed_footprint == [0u8; 32] || sled.trace_id == [0u8; 16] {
+        return Err(FootprintVerifyError::InvalidSled);
+    }
+
+    let expected_footprint = hex::encode(sled.hashed_footprint);
+    if request_footprint_hex != expected_footprint {
+        return Err(FootprintVerifyError::Mismatch);
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod ghostbridge_footprint_tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn identity_sled_repr_c_layout_is_152_bytes() {
+        let size = IdentitySled::SIZE;
+        assert_eq!(
+            size, 152,
+            "IdentitySled must be exactly 152 bytes per spec, got {size} bytes"
+        );
+    }
+
+    /// Write a raw `IdentitySled` to `path`, point `OP_SLED_PATH` at it, and
+    /// exercise `verify_ghostbridge_footprint` — the one shared check both
+    /// gRPC gatekeepers call. Single test function (not several) so the
+    /// process-global `OP_SLED_PATH` env var isn't racing across parallel
+    /// test threads.
+    #[test]
+    fn verify_ghostbridge_footprint_covers_all_branches() {
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!(
+            "op-identity-test-sled-{}.dat",
+            std::process::id()
+        ));
+        let path_str = path.to_str().unwrap().to_string();
+        // SAFETY: this test owns the env var for its whole body and runs as
+        // a single test function, so there's no cross-thread interleaving.
+        unsafe { std::env::set_var("OP_SLED_PATH", &path_str) };
+
+        // 1. Sled file missing entirely -> SledUnreachable.
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(
+            verify_ghostbridge_footprint("anything"),
+            Err(FootprintVerifyError::SledUnreachable)
+        );
+
+        // 2. Sled present but zero-initialized -> InvalidSled.
+        let zeroed = IdentitySled::default();
+        write_raw_sled_for_test(&path, &zeroed);
+        assert_eq!(
+            verify_ghostbridge_footprint("anything"),
+            Err(FootprintVerifyError::InvalidSled)
+        );
+
+        // 3. Valid sled, wrong footprint -> Mismatch.
+        let valid = IdentitySled {
+            hashed_footprint: [0xBB; 32],
+            trace_id: [0xEE; 16],
+            ..IdentitySled::default()
+        };
+        write_raw_sled_for_test(&path, &valid);
+        assert_eq!(
+            verify_ghostbridge_footprint(&hex::encode([0xAA; 32])),
+            Err(FootprintVerifyError::Mismatch)
+        );
+
+        // 4. Valid sled, matching footprint -> Ok.
+        assert_eq!(
+            verify_ghostbridge_footprint(&hex::encode([0xBB; 32])),
+            Ok(())
+        );
+
+        let _ = std::fs::remove_file(&path);
+        unsafe { std::env::remove_var("OP_SLED_PATH") };
+    }
+
+    fn write_raw_sled_for_test(path: &std::path::Path, sled: &IdentitySled) {
+        let bytes: &[u8] = unsafe {
+            std::slice::from_raw_parts(sled as *const IdentitySled as *const u8, IdentitySled::SIZE)
+        };
+        let mut f = std::fs::File::create(path).expect("create test sled file");
+        f.write_all(bytes).expect("write test sled bytes");
+    }
+}
+
 // ── Unix socket endpoint ──────────────────────────────────────────────────────
 
 /// A nicless container endpoint: a subdomain routed straight into a unix socket.

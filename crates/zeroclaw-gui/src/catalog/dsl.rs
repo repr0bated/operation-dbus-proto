@@ -59,6 +59,9 @@ pub struct Element {
 
 impl Element {
     pub fn pin(&self) -> PinnedRef {
-        PinnedRef { id: self.id.clone(), version: self.version }
+        PinnedRef {
+            id: self.id.clone(),
+            version: self.version,
+        }
     }
 }

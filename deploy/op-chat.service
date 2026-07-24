@@ -1,0 +1,22 @@
+[Unit]
+Description=OP Chat with CozoDB/RocksDB persistence
+After=local-fs.target rust-network-mgr.service
+Requires=rust-network-mgr.service
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/op-chat
+Restart=on-failure
+RestartSec=5
+EnvironmentFile=-/etc/op-dbus/op-chat-account.env
+Environment=OP_CHAT_LISTEN=127.0.0.1:50052
+Environment=OP_MEMORY_DB=/var/lib/op-dbus/chat-memory-rocksdb
+Environment=RUST_LOG=info
+Environment=http_proxy=http://127.0.0.1:3128
+Environment=https_proxy=http://127.0.0.1:3128
+NoNewPrivileges=true
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

@@ -107,7 +107,7 @@
     "name": "op-cognitive-mcp",
     "description": "Cognitive memory and context tools",
     "command": "/usr/local/bin/op-cognitive-mcp",
-    "args": [],
+    "args": ["--stdio"],
     "transport": "stdio",
     "enabled": true
   }

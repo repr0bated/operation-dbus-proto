@@ -6,13 +6,16 @@
     "cognitive-mcp-gateway": {
       "name": "cognitive-mcp-gateway",
       "description": "Cognitive MCP universal gateway for Droid/Factory (external client)",
-      "url": "http://100.90.37.254:3003",
-      "transport": "http-sse",
+      "url": "http://10.200.0.2:3003/mcp",
+      "transport": "http",
       "enabled": true,
       "auth": {
         "type": "ghostbridge",
-        "wgInterface": "netmaker",
-        "headerName": "X-Ghostbridge-Footprint"
+        "wgInterface": "3tched",
+        "headers": {
+          "X-Ghostbridge-Footprint": "droid",
+          "X-Ghostbridge-Trace-ID": "droid-factory"
+        }
       },
       "clientProfile": "droid",
       "optimization": {
@@ -68,7 +71,7 @@
       "args": [
         "-y",
         "@modelcontextprotocol/server-filesystem",
-        "/home/jeremy/git/operation-dbus-proto"
+        "/home/admin/git/odbus"
       ],
       "enabled": true
     }
@@ -79,7 +82,7 @@
     "source": "factory.ai",
     "endpointRules": {
       "_comment": "Per AGENTS.md Section 4b: external clients MUST use :3003, NEVER use compact-mcp 127.0.0.1:11436",
-      "external": "http://100.90.37.254:3003",
+      "external": "http://10.200.0.2:3003/mcp",
       "loopbackForbidden": [
         "127.0.0.1:11436",
         "localhost:11436"

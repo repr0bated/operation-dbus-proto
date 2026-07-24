@@ -1,20 +1,19 @@
-//! D-Bus proxy for the OVSDB JSON-RPC passthrough interface.
+//! OVSDB access for the workspace.
 //!
-//! This zbus proxy type allows any crate in the workspace to call an
-//! OVSDB JSON-RPC service through D-Bus instead of directly linking rovs_ovsdb
-//! or shelling out to ovs-vsctl.
-//!
-//! Locked design (AGENTS.md §4):
-//! - Path: `/org/opdbus/rovs/jsonrpc`
-//! - Interface: `org.opdbus.rovs.jsonrpc`
-//! - The service is a pure passthrough; business logic stays in the plugins.
+//! `OvsdbDbusClient` (name kept for call-site compatibility) talks to
+//! `ovsdb-server` natively via the vendor `rovs_ovsdb::Client` — no D-Bus hop.
+//! There never was a real D-Bus daemon serving OVSDB JSON-RPC passthrough on
+//! this host; the `RovsJsonRpcProxy` below (still used directly by
+//! `op-plugins::state_plugins::openflow`) targets a service that doesn't
+//! exist for OVSDB either. Business logic (bridge/port CRUD as OVSDB
+//! `transact` operations) stays in this module, matching the original design.
 //!
 //! NOTE: the OpenFlow passthrough half of this module (`RovsOpenFlow`,
 //! `openflow_proxy`, `ensure_proxies`) was removed along with
 //! `op-openvswitch-daemon` (deprecated, purged — see CLAUDE.md). OpenFlow
 //! control now runs entirely through `op-network::openflow::OpenFlowClient`
 //! (direct TCP, no D-Bus hop) and the passive `op-of-controller` service in
-//! `crates/op-network/src/controller.rs`.
+//! `crates/op-network/src/controller.rs` — the same pattern OVSDB now follows.
 
 use anyhow::{Context, Result};
 use std::sync::Arc;
@@ -81,83 +80,113 @@ pub async fn jsonrpc_proxy() -> Result<RovsJsonRpcProxy<'static>> {
 
 // ── OvsdbDbusClient ─────────────────────────────────────────────────────────
 
-/// High-level OVSDB client that routes through the D-Bus daemon.
-///
-/// Mirrors the `OvsdbClient` API so plugin migrations are mechanical.
-///
-/// Construction is **synchronous** (like the original `OvsdbClient`) — the
-/// underlying D-Bus connection is established lazily on the first async call.
-/// This lets `StatePlugin::new()` stay sync.
-#[derive(Clone)]
-pub struct OvsdbDbusClient {
-    proxy: Arc<tokio::sync::OnceCell<RovsJsonRpcProxy<'static>>>,
-}
+/// Default OVSDB socket address, in `rovs_transport::Address` syntax, matching
+/// `ovs_capabilities.rs`'s `ovsdb_socket_path`.
+const DEFAULT_OVSDB_ADDR: &str = "unix:/var/run/openvswitch/db.sock";
 
-impl Default for OvsdbDbusClient {
-    fn default() -> Self {
-        Self::new()
-    }
+/// High-level OVSDB client — wraps the real vendor `rovs_ovsdb::Client`
+/// (crates.io `rovs-ovsdb`, already a workspace dependency and already used
+/// natively — no D-Bus hop — by `op-network::openflow` via `rovs_openflow`/
+/// `rovs_transport`). No separate D-Bus passthrough daemon exists for OVSDB;
+/// one here would (and did, before this fix) target a service that was never
+/// built. `rovs_ovsdb::Client` needs `&mut self`, so the connection is held
+/// behind a mutex and shared/reconnected lazily.
+#[derive(Clone, Default)]
+pub struct OvsdbDbusClient {
+    client: Arc<tokio::sync::Mutex<Option<rovs_ovsdb::Client>>>,
 }
 
 impl OvsdbDbusClient {
-    /// Synchronous constructor — D-Bus connection is deferred until first use.
+    /// Kept sync to preserve the existing construction call sites; the vendor
+    /// client connects lazily on first use.
     pub fn new() -> Self {
         Self {
-            proxy: Arc::new(tokio::sync::OnceCell::new()),
+            client: Arc::new(tokio::sync::Mutex::new(None)),
         }
     }
 
-    /// Internal: get or create the proxy.
-    async fn get_proxy(&self) -> Result<&RovsJsonRpcProxy<'static>> {
-        self.proxy
-            .get_or_try_init(|| async { jsonrpc_proxy().await })
-            .await
-            .context("connect to OVSDB JSON-RPC D-Bus service")
+    /// Run `f` against a connected client, reconnecting once on failure (the
+    /// socket may have been idle-closed by `ovsdb-server` between calls).
+    async fn with_client<T, F>(&self, f: F) -> Result<T>
+    where
+        F: for<'a> Fn(
+            &'a mut rovs_ovsdb::Client,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<T>> + Send + 'a>,
+        >,
+    {
+        let addr =
+            std::env::var("OVSDB_SOCKET_ADDR").unwrap_or_else(|_| DEFAULT_OVSDB_ADDR.to_string());
+        let mut guard = self.client.lock().await;
+        if guard.is_none() {
+            let client = rovs_ovsdb::Client::connect(&addr)
+                .await
+                .with_context(|| format!("failed to connect to OVSDB at {addr}"))?;
+            *guard = Some(client);
+        }
+        match f(guard.as_mut().expect("just ensured Some")).await {
+            Ok(val) => Ok(val),
+            Err(_first_err) => {
+                // Reconnect once and retry — covers idle-closed sockets.
+                let client = rovs_ovsdb::Client::connect(&addr)
+                    .await
+                    .with_context(|| format!("failed to reconnect to OVSDB at {addr}"))?;
+                *guard = Some(client);
+                f(guard.as_mut().expect("just ensured Some")).await
+            }
+        }
     }
 
     // ── Internal: build & send a transact ───────────────────────────────
 
     async fn transact_one(&self, op: serde_json::Value) -> Result<serde_json::Value> {
-        let proxy = self.get_proxy().await?;
-        let params = serde_json::json!(["Open_vSwitch", op]);
-        let raw = proxy
-            .transact("transact", &params.to_string())
-            .await
-            .context("D-Bus transact call failed")?;
-        let val: serde_json::Value = serde_json::from_str(&raw)
-            .with_context(|| format!("daemon returned invalid JSON: {}", raw))?;
-        Ok(val)
+        // rovs_ovsdb::Client::transact() prepends the configured database name
+        // itself, so operations here are passed WITHOUT it (unlike the raw
+        // JSON-RPC ["Open_vSwitch", op, ...] wire shape).
+        let result = self
+            .with_client(move |client| {
+                let op = op.clone();
+                Box::pin(async move {
+                    client
+                        .transact(serde_json::Value::Array(vec![op]))
+                        .await
+                        .context("OVSDB transact failed")
+                })
+            })
+            .await?;
+        // RFC 7047: `result` is an array of one entry per input operation, in
+        // order. Callers of transact_one all expect the single op's result
+        // object directly (e.g. `result.get("rows")`), so unwrap here once
+        // rather than in every caller.
+        Self::check_errors(&result)?;
+        Ok(result
+            .as_array()
+            .and_then(|a| a.first())
+            .cloned()
+            .unwrap_or(serde_json::Value::Null))
     }
 
     async fn transact_many(&self, ops: Vec<serde_json::Value>) -> Result<serde_json::Value> {
-        let proxy = self.get_proxy().await?;
-        let params = serde_json::json!(["Open_vSwitch", ops]);
-        let raw = proxy
-            .transact("transact", &params.to_string())
-            .await
-            .context("D-Bus transact call failed")?;
-        let val: serde_json::Value = serde_json::from_str(&raw)
-            .with_context(|| format!("daemon returned invalid JSON: {}", raw))?;
-        Ok(val)
+        self.with_client(move |client| {
+            let ops = ops.clone();
+            Box::pin(async move {
+                client
+                    .transact(serde_json::Value::Array(ops))
+                    .await
+                    .context("OVSDB transact failed")
+            })
+        })
+        .await
     }
 
     // ── Read helpers ──────────────────────────────────────────────────────
 
     /// Return `true` if the daemon (and OVSDB) is reachable.
     pub async fn list_dbs(&self) -> Result<Vec<String>> {
-        let proxy = self.get_proxy().await?;
-        let raw = proxy
-            .transact("list_dbs", "[]")
-            .await
-            .context("list_dbs D-Bus call failed")?;
-        let val: serde_json::Value = serde_json::from_str(&raw)?;
-        Ok(val
-            .as_array()
-            .cloned()
-            .unwrap_or_default()
-            .iter()
-            .filter_map(|v| v.as_str().map(String::from))
-            .collect())
+        let val = self
+            .with_client(|client| Box::pin(async move { client.list_dbs().await.context("OVSDB list_dbs failed") }))
+            .await?;
+        Ok(val)
     }
 
     /// Return `true` if a bridge with the given name exists.
@@ -667,67 +696,25 @@ impl OvsdbDbusClient {
     }
 
     /// Monitor OVSDB for changes to a database.
-    /// Returns a broadcast receiver that will receive JSON updates.
-    /// NOTE: This is a compatibility shim built on polling; it is not a
-    /// production-grade change feed.
+    ///
+    /// Not yet implemented over the native vendor transport. It never
+    /// actually worked before either (the D-Bus passthrough it depended on
+    /// had no server), so this is a like-for-like failure mode — the only
+    /// caller (`MutationEngine::start`) already treats a monitor error as
+    /// "feature unavailable, skip" and continues without it.
+    ///
+    /// `rovs_ovsdb::Client` does have real monitoring support internally
+    /// (its `Idl`, populated via `run()`/`process_update`), so a proper
+    /// implementation is possible — it needs a background task holding the
+    /// connected client, calling `run()` in a loop, and diffing `idl()`
+    /// state per table into the broadcast channel. Left as a follow-up.
     pub async fn monitor_db(
         &self,
-        database: &str,
+        _database: &str,
     ) -> Result<tokio::sync::broadcast::Receiver<serde_json::Value>> {
-        let proxy = self.get_proxy().await?;
-        // Create a stream/monitor subscription via D-Bus
-        let _stream_id = proxy
-            .new_stream(database)
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to create OVSDB monitor stream: {}", e))?;
-
-        // Create a broadcast channel for updates
-        // In a full implementation, this would be connected to the daemon's notification stream
-        let (tx, rx) = tokio::sync::broadcast::channel(128);
-
-        // Spawn a task that polls for notifications from the daemon
-        let proxy_clone = self.proxy.clone();
-        tokio::spawn(async move {
-            loop {
-                match proxy_clone.get() {
-                    Some(proxy) => {
-                        // Check if there are pending notifications
-                        match proxy.has_pending_notifications().await {
-                            Ok(true) => {
-                                let drain_result: zbus::Result<String> =
-                                    proxy.drain_notifications().await;
-                                match drain_result {
-                                    Ok(json_str) => {
-                                        if let Ok(json) =
-                                            serde_json::from_str::<serde_json::Value>(&json_str)
-                                        {
-                                            let _ = tx.send(json);
-                                        }
-                                    }
-                                    Err(e) => {
-                                        log::warn!("Failed to drain notifications: {}", e);
-                                    }
-                                }
-                            }
-                            Ok(false) => {
-                                // No notifications pending, wait a bit
-                                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                            }
-                            Err(e) => {
-                                log::warn!("Failed to check for pending notifications: {}", e);
-                                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                            }
-                        }
-                    }
-                    None => {
-                        log::warn!("Proxy not available for monitoring");
-                        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                    }
-                }
-            }
-        });
-
-        Ok(rx)
+        anyhow::bail!(
+            "OvsdbDbusClient::monitor_db is not yet implemented over the native OVSDB transport"
+        )
     }
 
     /// Compatibility shim for plugins that pass `simd_json::OwnedValue`.

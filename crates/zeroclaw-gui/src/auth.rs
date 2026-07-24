@@ -61,25 +61,41 @@ impl AuthState {
         let resp = ehttp::fetch_blocking(&ehttp::Request::post(&url, Vec::new()))
             .map_err(|e| anyhow!("{e}"))?;
         if !resp.ok {
-            return Err(anyhow!("HTTP {}: {}", resp.status, String::from_utf8_lossy(&resp.bytes)));
+            return Err(anyhow!(
+                "HTTP {}: {}",
+                resp.status,
+                String::from_utf8_lossy(&resp.bytes)
+            ));
         }
         let body: serde_json::Value = serde_json::from_slice(&resp.bytes)?;
-        body.get("pairing_code").and_then(|v| v.as_str()).map(String::from)
+        body.get("pairing_code")
+            .and_then(|v| v.as_str())
+            .map(String::from)
             .ok_or_else(|| anyhow!("no pairing_code in response"))
     }
 
     /// Blocking: exchange pairing code for bearer token.
     pub fn pair(&mut self, code: &str) -> Result<()> {
         let url = format!("{}/pair", self.gateway);
-        let mut req = ehttp::Request::post(&url, serde_json::to_vec(&serde_json::json!({
-            "device_name": self.device_name,
-            "device_type": "desktop",
-        })).unwrap());
-        req.headers.insert("X-Pairing-Code".to_string(), code.to_string());
-        req.headers.insert("Content-Type".to_string(), "application/json".to_string());
+        let mut req = ehttp::Request::post(
+            &url,
+            serde_json::to_vec(&serde_json::json!({
+                "device_name": self.device_name,
+                "device_type": "desktop",
+            }))
+            .unwrap(),
+        );
+        req.headers
+            .insert("X-Pairing-Code".to_string(), code.to_string());
+        req.headers
+            .insert("Content-Type".to_string(), "application/json".to_string());
         let resp = ehttp::fetch_blocking(&req).map_err(|e| anyhow!("{e}"))?;
         if !resp.ok {
-            return Err(anyhow!("HTTP {}: {}", resp.status, String::from_utf8_lossy(&resp.bytes)));
+            return Err(anyhow!(
+                "HTTP {}: {}",
+                resp.status,
+                String::from_utf8_lossy(&resp.bytes)
+            ));
         }
         let body: serde_json::Value = serde_json::from_slice(&resp.bytes)?;
         self.token = body.get("token").and_then(|v| v.as_str()).map(String::from);

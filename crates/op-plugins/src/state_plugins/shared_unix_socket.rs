@@ -18,7 +18,10 @@ use tracing::info;
 /// registered (name, ports). There is exactly one shared socket — never a
 /// per-container socket file. This constant is the single source of truth for
 /// the path; nothing else should hardcode it.
-pub const SHARED_UNIX_SOCKET: &str = "/run/opdbus/container.socket";
+/// Canonical shared container UDS — same path as
+/// [`crate::state_plugins::unix_socket::SHARED_CONTAINER_SOCKET`] and
+/// `op_grpc_bridge::shared_socket::DEFAULT_SOCKET_PATH`.
+pub const SHARED_UNIX_SOCKET: &str = "/run/ghostbridge/container.sock";
 
 fn default_protocol() -> String {
     "grpc".to_string()

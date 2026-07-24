@@ -24,7 +24,9 @@
 
 use super::store::{ChatMessage, ChatStore};
 use crate::theme::*;
-use egui::{Align, Color32, FontId, Frame, Layout, Margin, RichText, Rounding, Sense, Stroke, Vec2};
+use egui::{
+    Align, Color32, FontId, Frame, Layout, Margin, RichText, Rounding, Sense, Stroke, Vec2,
+};
 
 /// Main entry point. Renders the full chat panel: transcript + composer.
 pub fn render_chat(ui: &mut egui::Ui, store: &mut ChatStore, ctx: &egui::Context) {
@@ -76,8 +78,13 @@ fn render_empty_state(ui: &mut egui::Ui) {
     ui.vertical_centered(|ui| {
         // Identity glyph: ZeroClaw "Z", NOT Sparkles.
         let (rect, _) = ui.allocate_exact_size(Vec2::new(40.0, 40.0), Sense::hover());
-        ui.painter().rect_filled(rect, Rounding::same(8.0), PRIMARY.linear_multiply(0.15));
-        ui.painter().rect_stroke(rect, Rounding::same(8.0), Stroke::new(1.0, PRIMARY.linear_multiply(0.5)));
+        ui.painter()
+            .rect_filled(rect, Rounding::same(8.0), PRIMARY.linear_multiply(0.15));
+        ui.painter().rect_stroke(
+            rect,
+            Rounding::same(8.0),
+            Stroke::new(1.0, PRIMARY.linear_multiply(0.5)),
+        );
         ui.painter().text(
             rect.center(),
             egui::Align2::CENTER_CENTER,
@@ -123,7 +130,8 @@ fn render_assistant_message(ui: &mut egui::Ui, msg: &ChatMessage) {
     ui.horizontal(|ui| {
         // Identity glyph
         let (rect, _) = ui.allocate_exact_size(Vec2::new(20.0, 20.0), Sense::hover());
-        ui.painter().rect_filled(rect, Rounding::same(4.0), PRIMARY.linear_multiply(0.15));
+        ui.painter()
+            .rect_filled(rect, Rounding::same(4.0), PRIMARY.linear_multiply(0.15));
         ui.painter().text(
             rect.center(),
             egui::Align2::CENTER_CENTER,
@@ -133,12 +141,10 @@ fn render_assistant_message(ui: &mut egui::Ui, msg: &ChatMessage) {
         );
         ui.add_space(6.0);
 
-        ui.vertical(|ui| {
-            match msg.kind.as_str() {
-                "reasoning" => render_reasoning(ui, msg),
-                "tool-call" => render_tool_card(ui, msg),
-                _ => render_text_content(ui, msg, FG),
-            }
+        ui.vertical(|ui| match msg.kind.as_str() {
+            "reasoning" => render_reasoning(ui, msg),
+            "tool-call" => render_tool_card(ui, msg),
+            _ => render_text_content(ui, msg, FG),
         });
     });
     ui.add_space(6.0);
@@ -198,7 +204,10 @@ fn render_reasoning(ui: &mut egui::Ui, msg: &ChatMessage) {
         .and_then(|v| v.as_str())
         .unwrap_or("");
     ui.collapsing(
-        RichText::new("▸ reasoning").color(MUTED).size(11.0).italics(),
+        RichText::new("▸ reasoning")
+            .color(MUTED)
+            .size(11.0)
+            .italics(),
         |ui| {
             ui.label(RichText::new(content).color(MUTED).size(12.0).monospace());
             // Plan items if present
@@ -255,8 +264,11 @@ fn render_tool_card(ui: &mut egui::Ui, msg: &ChatMessage) {
             ui.horizontal(|ui| {
                 // Domain icon (not Sparkles — a tool glyph)
                 let (rect, _) = ui.allocate_exact_size(Vec2::new(18.0, 18.0), Sense::hover());
-                ui.painter()
-                    .rect_filled(rect, Rounding::same(4.0), icon_color.linear_multiply(0.15));
+                ui.painter().rect_filled(
+                    rect,
+                    Rounding::same(4.0),
+                    icon_color.linear_multiply(0.15),
+                );
                 ui.painter().text(
                     rect.center(),
                     egui::Align2::CENTER_CENTER,
@@ -292,11 +304,19 @@ fn render_tool_card(ui: &mut egui::Ui, msg: &ChatMessage) {
                     .size(10.0),
                 |ui| {
                     if is_result {
-                        let output = msg.payload.get("output").cloned().unwrap_or(serde_json::Value::Null);
+                        let output = msg
+                            .payload
+                            .get("output")
+                            .cloned()
+                            .unwrap_or(serde_json::Value::Null);
                         let pretty = serde_json::to_string_pretty(&output).unwrap_or_default();
                         ui.label(RichText::new(pretty).color(MUTED).size(11.0).monospace());
                     } else {
-                        let input = msg.payload.get("input").cloned().unwrap_or(serde_json::Value::Null);
+                        let input = msg
+                            .payload
+                            .get("input")
+                            .cloned()
+                            .unwrap_or(serde_json::Value::Null);
                         let pretty = serde_json::to_string_pretty(&input).unwrap_or_default();
                         ui.label(RichText::new(pretty).color(MUTED).size(11.0).monospace());
                     }
@@ -353,11 +373,7 @@ fn render_composer(ui: &mut egui::Ui, store: &mut ChatStore) {
 
                 // Submit button (status-aware)
                 let can_submit = !store.submitted && !draft.trim().is_empty();
-                let btn_label = if store.submitted {
-                    "Cancel"
-                } else {
-                    "Send"
-                };
+                let btn_label = if store.submitted { "Cancel" } else { "Send" };
                 let btn = egui::Button::new(
                     RichText::new(btn_label)
                         .color(Color32::WHITE)
@@ -426,11 +442,6 @@ fn render_thinking(ui: &mut egui::Ui) {
             ui.add_space(2.0);
         }
         ui.add_space(4.0);
-        ui.label(
-            RichText::new("Thinking…")
-                .color(MUTED)
-                .size(11.0)
-                .italics(),
-        );
+        ui.label(RichText::new("Thinking…").color(MUTED).size(11.0).italics());
     });
 }

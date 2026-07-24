@@ -38,10 +38,12 @@ pub fn render(
     pin: &PinnedRef,
     value: &Value,
 ) -> Result<(), RenderError> {
-    let element = snapshot.resolve(pin).ok_or_else(|| RenderError::UnknownElement {
-        id: pin.id.clone(),
-        version: pin.version,
-    })?;
+    let element = snapshot
+        .resolve(pin)
+        .ok_or_else(|| RenderError::UnknownElement {
+            id: pin.id.clone(),
+            version: pin.version,
+        })?;
     walk(ui, &element.spec, value)
 }
 
@@ -53,14 +55,23 @@ pub fn render_spec(ui: &mut Ui, spec: &Value, value: &Value) -> Result<(), Rende
 }
 
 fn walk(ui: &mut Ui, spec: &Value, value: &Value) -> Result<(), RenderError> {
-    let kind = spec.get("kind").and_then(Value::as_str).ok_or(RenderError::MalformedSpec)?;
+    let kind = spec
+        .get("kind")
+        .and_then(Value::as_str)
+        .ok_or(RenderError::MalformedSpec)?;
     match kind {
         // ---------- layout primitives ----------
         "stack" => {
             let dir = spec.get("dir").and_then(Value::as_str).unwrap_or("v");
-            let children = spec.get("children").and_then(Value::as_array).cloned().unwrap_or_default();
+            let children = spec
+                .get("children")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
             let render_children = |ui: &mut Ui| -> Result<(), RenderError> {
-                for child in &children { walk(ui, child, value)?; }
+                for child in &children {
+                    walk(ui, child, value)?;
+                }
                 Ok(())
             };
             let mut out = Ok(());
@@ -73,7 +84,11 @@ fn walk(ui: &mut Ui, spec: &Value, value: &Value) -> Result<(), RenderError> {
         }
 
         "card" => {
-            let children = spec.get("children").and_then(Value::as_array).cloned().unwrap_or_default();
+            let children = spec
+                .get("children")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
             let mut out = Ok(());
             egui::Frame::none()
                 .fill(SURFACE)
@@ -103,7 +118,10 @@ fn walk(ui: &mut Ui, spec: &Value, value: &Value) -> Result<(), RenderError> {
         }
 
         "repeat" => {
-            let bind = spec.get("bind").and_then(Value::as_str).ok_or(RenderError::MalformedSpec)?;
+            let bind = spec
+                .get("bind")
+                .and_then(Value::as_str)
+                .ok_or(RenderError::MalformedSpec)?;
             let child = spec.get("child").ok_or(RenderError::MalformedSpec)?;
             let items = json_pointer(value, bind)
                 .and_then(Value::as_array)
@@ -135,7 +153,11 @@ fn walk(ui: &mut Ui, spec: &Value, value: &Value) -> Result<(), RenderError> {
                 Some(path) => json_pointer(value, path)
                     .and_then(|v| v.as_str().map(|s| s.to_string()))
                     .unwrap_or_default(),
-                None => spec.get("text").and_then(Value::as_str).unwrap_or("").to_string(),
+                None => spec
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
             };
             ui.label(RichText::new(text).color(FG).size(12.0));
             Ok(())
@@ -143,22 +165,34 @@ fn walk(ui: &mut Ui, spec: &Value, value: &Value) -> Result<(), RenderError> {
 
         // ---------- status pill (stable-core) ----------
         "status_pill" => {
-            let bind = spec.get("bind").and_then(Value::as_str).ok_or(RenderError::MalformedSpec)?;
+            let bind = spec
+                .get("bind")
+                .and_then(Value::as_str)
+                .ok_or(RenderError::MalformedSpec)?;
             let v = json_pointer(value, bind).cloned().unwrap_or(Value::Null);
             let (label, color) = match v.as_str().unwrap_or("") {
-                "ok" | "up" | "healthy"   => ("OK", OK),
-                "warn" | "degraded"       => ("WARN", WARN),
+                "ok" | "up" | "healthy" => ("OK", OK),
+                "warn" | "degraded" => ("WARN", WARN),
                 "err" | "down" | "failed" => ("ERR", DANGER),
                 other if !other.is_empty() => (other, MUTED),
-                _                          => ("—", MUTED),
+                _ => ("—", MUTED),
             };
-            ui.label(RichText::new(label).strong().monospace().size(11.0).color(color));
+            ui.label(
+                RichText::new(label)
+                    .strong()
+                    .monospace()
+                    .size(11.0)
+                    .color(color),
+            );
             Ok(())
         }
 
         // ---------- action button (stable-core) ----------
         "button" => {
-            let label = spec.get("label").and_then(Value::as_str).unwrap_or("action");
+            let label = spec
+                .get("label")
+                .and_then(Value::as_str)
+                .unwrap_or("action");
             // Mutation dispatch lands when InvokeHandle integration is wired.
             let _ = ui.button(label);
             Ok(())
@@ -170,7 +204,13 @@ fn walk(ui: &mut Ui, spec: &Value, value: &Value) -> Result<(), RenderError> {
 
 /// Minimal `/foo/bar/0` JSON pointer lookup used by `bind`.
 fn json_pointer<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
-    if path.is_empty() || path == "/" { return Some(value); }
-    let normalized = if path.starts_with('/') { path.to_string() } else { format!("/{path}") };
+    if path.is_empty() || path == "/" {
+        return Some(value);
+    }
+    let normalized = if path.starts_with('/') {
+        path.to_string()
+    } else {
+        format!("/{path}")
+    };
     value.pointer(&normalized)
 }

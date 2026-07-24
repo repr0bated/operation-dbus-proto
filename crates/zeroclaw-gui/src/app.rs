@@ -1,20 +1,21 @@
 //! Root app — topbar + collapsible sidebar + routed content.
 use crate::auth::AuthState;
 use crate::catalog::{interpret, static_pages::StaticPages};
-use crate::pagedata::PageDataHub;
 use crate::chat::ChatTransport;
 use crate::grpc::{InvokeHandle, ReflectionRegistry};
-use crate::views::ExplorerState;
 use crate::nav::{route_title, Route, TopTab, GROUPS};
+use crate::pagedata::PageDataHub;
 use crate::theme::*;
 use crate::views;
+use crate::views::ExplorerState;
 use eframe::CreationContext;
 use egui::{
-    Align, Color32, FontId, Frame, Layout, Margin, RichText, Rounding, Sense, Stroke, TextEdit, Vec2,
+    Align, Color32, FontId, Frame, Layout, Margin, RichText, Rounding, Sense, Stroke, TextEdit,
+    Vec2,
 };
+use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::Arc;
-use parking_lot::Mutex;
 
 pub struct ZeroClawApp {
     pub route: Route,
@@ -44,7 +45,11 @@ pub struct ZeroClawApp {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum ThemeMode { Dark, Light, System }
+pub enum ThemeMode {
+    Dark,
+    Light,
+    System,
+}
 
 impl ZeroClawApp {
     pub fn new(_cc: &CreationContext<'_>) -> Self {
@@ -77,17 +82,31 @@ impl ZeroClawApp {
     fn topbar(&mut self, ctx: &egui::Context) {
         egui::TopBottomPanel::top("topbar")
             .exact_height(56.0)
-            .frame(Frame::none().fill(BG).stroke(Stroke::new(1.0, BORDER)).inner_margin(Margin::symmetric(20.0, 0.0)))
+            .frame(
+                Frame::none()
+                    .fill(BG)
+                    .stroke(Stroke::new(1.0, BORDER))
+                    .inner_margin(Margin::symmetric(20.0, 0.0)),
+            )
             .show(ctx, |ui| {
                 ui.horizontal_centered(|ui| {
                     // Brand
-                    if ui.add(egui::Button::new(RichText::new("☰").color(MUTED)).frame(false)).clicked() {
+                    if ui
+                        .add(egui::Button::new(RichText::new("☰").color(MUTED)).frame(false))
+                        .clicked()
+                    {
                         self.nav_collapsed = !self.nav_collapsed;
                     }
                     ui.add_space(8.0);
                     let (rect, _) = ui.allocate_exact_size(Vec2::new(28.0, 28.0), Sense::hover());
                     ui.painter().rect_filled(rect, Rounding::same(6.0), PRIMARY);
-                    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "Z", FontId::proportional(14.0), Color32::WHITE);
+                    ui.painter().text(
+                        rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        "Z",
+                        FontId::proportional(14.0),
+                        Color32::WHITE,
+                    );
                     ui.add_space(8.0);
                     ui.vertical(|ui| {
                         ui.add_space(8.0);
@@ -102,7 +121,9 @@ impl ZeroClawApp {
                             ui.add_space((ui.available_width() / 2.0) - 90.0);
                             tab_pill(ui, "Console", self.top_tab == TopTab::Console, || {
                                 self.top_tab = TopTab::Console;
-                                if matches!(self.route, Route::Install) { self.route = Route::Overview; }
+                                if matches!(self.route, Route::Install) {
+                                    self.route = Route::Overview;
+                                }
                             });
                             tab_pill(ui, "Install", self.top_tab == TopTab::Install, || {
                                 self.top_tab = TopTab::Install;
@@ -128,7 +149,11 @@ impl ZeroClawApp {
         egui::SidePanel::left("nav")
             .exact_width(220.0)
             .resizable(false)
-            .frame(Frame::none().fill(BG).inner_margin(Margin::symmetric(12.0, 16.0)))
+            .frame(
+                Frame::none()
+                    .fill(BG)
+                    .inner_margin(Margin::symmetric(12.0, 16.0)),
+            )
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     for group in GROUPS {
@@ -151,7 +176,10 @@ impl ZeroClawApp {
                                 let active = item.route == self.route;
                                 let label = format!("{}  {}", item.icon, item.title);
                                 let text = if item.placeholder {
-                                    RichText::new(label).color(MUTED.linear_multiply(0.5)).italics().size(13.0)
+                                    RichText::new(label)
+                                        .color(MUTED.linear_multiply(0.5))
+                                        .italics()
+                                        .size(13.0)
                                 } else if active {
                                     RichText::new(label).color(FG).size(13.0).strong()
                                 } else {
@@ -160,8 +188,16 @@ impl ZeroClawApp {
                                 let btn = egui::Button::new(text)
                                     .min_size(Vec2::new(ui.available_width(), 30.0))
                                     .rounding(Rounding::same(6.0))
-                                    .fill(if active { PRIMARY.linear_multiply(0.12) } else { Color32::TRANSPARENT })
-                                    .stroke(if active { Stroke::new(1.0, PRIMARY.linear_multiply(0.4)) } else { Stroke::NONE });
+                                    .fill(if active {
+                                        PRIMARY.linear_multiply(0.12)
+                                    } else {
+                                        Color32::TRANSPARENT
+                                    })
+                                    .stroke(if active {
+                                        Stroke::new(1.0, PRIMARY.linear_multiply(0.4))
+                                    } else {
+                                        Stroke::NONE
+                                    });
                                 let resp = ui.add_enabled(!item.placeholder, btn);
                                 if resp.clicked() {
                                     self.route = item.route;
@@ -177,7 +213,13 @@ impl ZeroClawApp {
                     ui.separator();
                     ui.add_space(6.0);
                     ui.label(RichText::new("Resources").size(11.0).color(MUTED));
-                    if ui.add(egui::Button::new(RichText::new("📄  Docs").color(MUTED).size(13.0)).frame(false)).clicked() {
+                    if ui
+                        .add(
+                            egui::Button::new(RichText::new("📄  Docs").color(MUTED).size(13.0))
+                                .frame(false),
+                        )
+                        .clicked()
+                    {
                         ctx.open_url(egui::OpenUrl::new_tab("https://docs.zeroclaw.dev"));
                     }
                 });
@@ -192,51 +234,77 @@ impl ZeroClawApp {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("ZeroClaw").color(MUTED).size(11.0));
                     ui.label(RichText::new("/").color(MUTED).size(11.0));
-                    ui.label(RichText::new(route_title(self.route)).color(FG).size(11.0).strong());
+                    ui.label(
+                        RichText::new(route_title(self.route))
+                            .color(FG)
+                            .size(11.0)
+                            .strong(),
+                    );
                 });
                 ui.add_space(10.0);
 
-                egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
-                    if let Some(page) = self.static_pages.get(self.route) {
-                        let slug = crate::catalog::static_pages::route_slug(self.route);
-                        let live = page.source.as_ref().map(|src| {
-                            self.page_data.ensure(&slug, src, self.registry.clone(), ctx.clone());
-                            self.page_data.live(&slug).unwrap_or_default()
-                        });
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false; 2])
+                    .show(ui, |ui| {
+                        if let Some(page) = self.static_pages.get(self.route) {
+                            let slug = crate::catalog::static_pages::route_slug(self.route);
+                            let live = page.source.as_ref().map(|src| {
+                                self.page_data.ensure(
+                                    &slug,
+                                    src,
+                                    self.registry.clone(),
+                                    ctx.clone(),
+                                );
+                                self.page_data.live(&slug).unwrap_or_default()
+                            });
 
-                        if !self.static_pages.is_embedded() {
-                            ui.label(
-                                RichText::new("STATIC DRAFT — pages/*.json, hot-reloaded")
-                                    .color(WARN)
-                                    .size(10.0)
-                                    .monospace(),
+                            if !self.static_pages.is_embedded() {
+                                ui.label(
+                                    RichText::new("STATIC DRAFT — pages/*.json, hot-reloaded")
+                                        .color(WARN)
+                                        .size(10.0)
+                                        .monospace(),
+                                );
+                            }
+                            if let Some(live) = &live {
+                                let is_live = live.value.is_some();
+                                let color = if is_live { OK } else { MUTED };
+                                ui.label(
+                                    RichText::new(&live.status)
+                                        .color(color)
+                                        .size(10.0)
+                                        .monospace(),
+                                );
+                            }
+                            ui.add_space(6.0);
+
+                            let bind_root = live
+                                .as_ref()
+                                .and_then(|l| l.value.clone())
+                                .unwrap_or_else(|| page.data.clone());
+                            if let Some(err) = &page.error {
+                                ui.label(RichText::new(err).color(DANGER).size(12.0).monospace());
+                            } else if let Err(e) =
+                                interpret::render_spec(ui, &page.spec, &bind_root)
+                            {
+                                ui.label(
+                                    RichText::new(format!("render error: {e}"))
+                                        .color(DANGER)
+                                        .size(12.0)
+                                        .monospace(),
+                                );
+                            }
+                        } else {
+                            views::render(
+                                ui,
+                                self.route,
+                                &self.registry,
+                                &mut self.explorer,
+                                &self.invoke,
+                                ctx,
                             );
                         }
-                        if let Some(live) = &live {
-                            let is_live = live.value.is_some();
-                            let color = if is_live { OK } else { MUTED };
-                            ui.label(RichText::new(&live.status).color(color).size(10.0).monospace());
-                        }
-                        ui.add_space(6.0);
-
-                        let bind_root = live
-                            .as_ref()
-                            .and_then(|l| l.value.clone())
-                            .unwrap_or_else(|| page.data.clone());
-                        if let Some(err) = &page.error {
-                            ui.label(RichText::new(err).color(DANGER).size(12.0).monospace());
-                        } else if let Err(e) = interpret::render_spec(ui, &page.spec, &bind_root) {
-                            ui.label(
-                                RichText::new(format!("render error: {e}"))
-                                    .color(DANGER)
-                                    .size(12.0)
-                                    .monospace(),
-                            );
-                        }
-                    } else {
-                        views::render(ui, self.route, &self.registry, &mut self.explorer, &self.invoke, ctx);
-                    }
-                });
+                    });
             });
     }
 }
@@ -284,18 +352,20 @@ impl eframe::App for ZeroClawApp {
                 });
             } else {
                 // No transport connected — show error in store.
-                self.explorer.chat_store.append_part(crate::chat::store::ChatMessage {
-                    id: crate::chat::store::nanoid_pub(),
-                    role: "system".into(),
-                    kind: "text".into(),
-                    payload: serde_json::json!({
-                        "content": "No gRPC connection. Set ZEROCLAW_GRPC and restart."
-                    }),
-                    timestamp: std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_millis() as u64)
-                        .unwrap_or(0),
-                });
+                self.explorer
+                    .chat_store
+                    .append_part(crate::chat::store::ChatMessage {
+                        id: crate::chat::store::nanoid_pub(),
+                        role: "system".into(),
+                        kind: "text".into(),
+                        payload: serde_json::json!({
+                            "content": "No gRPC connection. Set ZEROCLAW_GRPC and restart."
+                        }),
+                        timestamp: std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_millis() as u64)
+                            .unwrap_or(0),
+                    });
                 self.explorer.chat_store.submitted = false;
             }
         }
@@ -322,52 +392,90 @@ impl ZeroClawApp {
                     ui.add_space(120.0);
 
                     let (rect, _) = ui.allocate_exact_size(Vec2::new(48.0, 48.0), Sense::hover());
-                    ui.painter().rect_filled(rect, Rounding::same(10.0), PRIMARY);
-                    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "Z", FontId::proportional(24.0), Color32::WHITE);
+                    ui.painter()
+                        .rect_filled(rect, Rounding::same(10.0), PRIMARY);
+                    ui.painter().text(
+                        rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        "Z",
+                        FontId::proportional(24.0),
+                        Color32::WHITE,
+                    );
                     ui.add_space(12.0);
 
                     ui.label(RichText::new("ZEROCLAW").size(20.0).strong().color(FG));
                     ui.label(RichText::new("OPERATOR CONSOLE").size(11.0).color(MUTED));
                     ui.add_space(24.0);
 
-                    Frame::none().fill(SURFACE).stroke(Stroke::new(1.0, BORDER)).rounding(Rounding::same(8.0)).inner_margin(Margin::same(16.0)).show(ui, |ui| {
-                        ui.set_max_width(360.0);
+                    Frame::none()
+                        .fill(SURFACE)
+                        .stroke(Stroke::new(1.0, BORDER))
+                        .rounding(Rounding::same(8.0))
+                        .inner_margin(Margin::same(16.0))
+                        .show(ui, |ui| {
+                            ui.set_max_width(360.0);
 
-                        ui.label(RichText::new("Gateway").color(MUTED).size(11.0));
-                        ui.add_space(4.0);
-                        ui.add_sized([320.0, 24.0], TextEdit::singleline(&mut self.auth.gateway).text_color(FG));
-                        ui.add_space(12.0);
+                            ui.label(RichText::new("Gateway").color(MUTED).size(11.0));
+                            ui.add_space(4.0);
+                            ui.add_sized(
+                                [320.0, 24.0],
+                                TextEdit::singleline(&mut self.auth.gateway).text_color(FG),
+                            );
+                            ui.add_space(12.0);
 
-                        ui.label(RichText::new("Pairing Code").color(MUTED).size(11.0));
-                        ui.add_space(4.0);
-                        ui.horizontal(|ui| {
-                            ui.add_sized([220.0, 28.0], TextEdit::singleline(&mut self.pairing_code_input).hint_text("Enter code...").text_color(FG));
+                            ui.label(RichText::new("Pairing Code").color(MUTED).size(11.0));
+                            ui.add_space(4.0);
+                            ui.horizontal(|ui| {
+                                ui.add_sized(
+                                    [220.0, 28.0],
+                                    TextEdit::singleline(&mut self.pairing_code_input)
+                                        .hint_text("Enter code...")
+                                        .text_color(FG),
+                                );
+                                ui.add_space(8.0);
+                                if ui
+                                    .add(
+                                        egui::Button::new(
+                                            RichText::new("Pair").color(Color32::WHITE).size(13.0),
+                                        )
+                                        .fill(PRIMARY)
+                                        .rounding(Rounding::same(6.0))
+                                        .min_size(Vec2::new(80.0, 28.0)),
+                                    )
+                                    .clicked()
+                                    && !self.pairing_code_input.is_empty()
+                                {
+                                    match self.auth.pair(&self.pairing_code_input) {
+                                        Ok(_) => {
+                                            self.error_msg = None;
+                                        }
+                                        Err(e) => {
+                                            self.error_msg = Some(format!("{e}"));
+                                        }
+                                    }
+                                }
+                            });
+
+                            if let Some(msg) = &self.error_msg {
+                                ui.add_space(8.0);
+                                ui.label(RichText::new(msg).color(DANGER).size(12.0));
+                            }
+
+                            ui.add_space(12.0);
+                            ui.separator();
                             ui.add_space(8.0);
-                            if ui.add(egui::Button::new(RichText::new("Pair").color(Color32::WHITE).size(13.0))
-                                .fill(PRIMARY).rounding(Rounding::same(6.0)).min_size(Vec2::new(80.0, 28.0))).clicked()
-                                && !self.pairing_code_input.is_empty() {
-                                match self.auth.pair(&self.pairing_code_input) {
-                                    Ok(_) => { self.error_msg = None; }
-                                    Err(e) => { self.error_msg = Some(format!("{e}")); }
+                            if ui.button("Generate new code").clicked() {
+                                match self.auth.generate_code() {
+                                    Ok(code) => {
+                                        self.pairing_code_input = code;
+                                        self.error_msg = None;
+                                    }
+                                    Err(e) => {
+                                        self.error_msg = Some(format!("{e}"));
+                                    }
                                 }
                             }
                         });
-
-                        if let Some(msg) = &self.error_msg {
-                            ui.add_space(8.0);
-                            ui.label(RichText::new(msg).color(DANGER).size(12.0));
-                        }
-
-                        ui.add_space(12.0);
-                        ui.separator();
-                        ui.add_space(8.0);
-                        if ui.button("Generate new code").clicked() {
-                            match self.auth.generate_code() {
-                                Ok(code) => { self.pairing_code_input = code; self.error_msg = None; }
-                                Err(e) => { self.error_msg = Some(format!("{e}")); }
-                            }
-                        }
-                    });
                 });
             });
     }
@@ -375,7 +483,10 @@ impl ZeroClawApp {
 
 fn tab_pill(ui: &mut egui::Ui, label: &str, active: bool, mut on_click: impl FnMut()) {
     let text = if active {
-        RichText::new(label).color(Color32::WHITE).size(12.0).strong()
+        RichText::new(label)
+            .color(Color32::WHITE)
+            .size(12.0)
+            .strong()
     } else {
         RichText::new(label).color(MUTED).size(12.0)
     };
@@ -384,7 +495,9 @@ fn tab_pill(ui: &mut egui::Ui, label: &str, active: bool, mut on_click: impl FnM
         .fill(if active { PRIMARY } else { SURFACE })
         .stroke(Stroke::new(1.0, if active { PRIMARY } else { BORDER }))
         .min_size(Vec2::new(78.0, 26.0));
-    if ui.add(btn).clicked() { on_click(); }
+    if ui.add(btn).clicked() {
+        on_click();
+    }
 }
 
 fn health_pill(ui: &mut egui::Ui, ok: bool) {
@@ -409,16 +522,29 @@ fn theme_toggle(ui: &mut egui::Ui, mode: &mut ThemeMode) {
         .inner_margin(Margin::same(2.0))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                for (m, glyph) in [(ThemeMode::Dark, "☾"), (ThemeMode::Light, "☀"), (ThemeMode::System, "▦")] {
+                for (m, glyph) in [
+                    (ThemeMode::Dark, "☾"),
+                    (ThemeMode::Light, "☀"),
+                    (ThemeMode::System, "▦"),
+                ] {
                     let active = *mode == m;
-                    let text = RichText::new(glyph).size(11.0)
-                        .color(if active { Color32::WHITE } else { MUTED });
+                    let text = RichText::new(glyph).size(11.0).color(if active {
+                        Color32::WHITE
+                    } else {
+                        MUTED
+                    });
                     let btn = egui::Button::new(text)
                         .rounding(Rounding::same(999.0))
-                        .fill(if active { PRIMARY } else { Color32::TRANSPARENT })
+                        .fill(if active {
+                            PRIMARY
+                        } else {
+                            Color32::TRANSPARENT
+                        })
                         .stroke(Stroke::NONE)
                         .min_size(Vec2::new(22.0, 22.0));
-                    if ui.add(btn).clicked() { *mode = m; }
+                    if ui.add(btn).clicked() {
+                        *mode = m;
+                    }
                 }
             });
         });

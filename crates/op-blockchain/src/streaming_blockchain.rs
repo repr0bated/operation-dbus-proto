@@ -937,7 +937,9 @@ impl StreamingBlockchain {
 fn is_qdrant_already_exists(err: &QdrantError) -> bool {
     match err {
         QdrantError::ResponseError { status } | QdrantError::ResourceExhaustedError { status, .. } => {
-            status.code() == tonic::Code::AlreadyExists
+            // tonic::Code::AlreadyExists = 6 (avoid hard dep on tonic path in some builds)
+            status.code() as i32 == 6
+                || format!("{:?}", status.code()).contains("AlreadyExists")
         }
         _ => false,
     }

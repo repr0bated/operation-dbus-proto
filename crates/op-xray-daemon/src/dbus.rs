@@ -2,10 +2,18 @@
 //!
 //! Provides the `org.opdbus.v1.Xray` interface for controlling
 //! xray process lifecycle via D-Bus.
+//!
+//! Production xray runs under the `xray` container's own systemd
+//! (`xray.service`), not spawned by this daemon — `start()` here predates
+//! that and is effectively unsupported now (see its doc comment). Liveness
+//! is detected by scanning `/proc` for the real process, not by tracking a
+//! child handle this daemon itself spawned — the previous in-memory
+//! `Option<Child>` tracking lost all state across a daemon restart and could
+//! never see an externally-started xray process at all, which is the
+//! process this daemon actually needs to observe in practice.
 
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tokio::process::{Child as TokioChild, Command};
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 use zbus::interface;
@@ -16,52 +24,39 @@ struct XrayStatus {
     running: bool,
     pid: Option<u32>,
     config_path: Option<String>,
-    uptime_secs: Option<u64>,
-    start_time: Option<String>,
 }
 
-impl XrayStatus {}
+/// Find running `xray` process PIDs by scanning `/proc` directly — no
+/// `pgrep`/`pkill` subprocess spawning (CLAUDE.md: no `Command::new(...)`
+/// subprocesses in plugin/service code).
+fn find_xray_pids() -> Vec<nix::unistd::Pid> {
+    let mut pids = Vec::new();
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return pids;
+    };
+    for entry in entries.flatten() {
+        let Ok(pid) = entry.file_name().to_string_lossy().parse::<i32>() else {
+            continue;
+        };
+        if let Ok(comm) = std::fs::read_to_string(entry.path().join("comm")) {
+            if comm.trim() == "xray" {
+                pids.push(nix::unistd::Pid::from_raw(pid));
+            }
+        }
+    }
+    pids
+}
 
-/// State container for the xray process
+/// Last config path this daemon was told about via `start()`/`restart()`
+/// (informational only — a real xray process is detected live via `/proc`,
+/// this is just the daemon's own last-instruction memory).
 pub struct XrayProcessState {
-    child: Option<TokioChild>,
     config_path: Option<String>,
-    start_time: Option<std::time::Instant>,
 }
 
 impl XrayProcessState {
     fn new() -> Self {
-        Self {
-            child: None,
-            config_path: None,
-            start_time: None,
-        }
-    }
-
-    fn is_running(&self) -> bool {
-        // Check if child exists. For TokioChild, we can use try_wait via a ref
-        // but we need mutable access. Instead, we track state separately.
-        // For now, just check if child handle exists (we update on operations).
-        self.child.is_some()
-    }
-
-    fn get_pid(&self) -> Option<u32> {
-        // child.id() returns Option<u32>
-        self.child.as_ref().and_then(|c| c.id())
-    }
-
-    fn get_uptime_secs(&self) -> Option<u64> {
-        self.start_time.map(|t| t.elapsed().as_secs())
-    }
-
-    fn get_start_time(&self) -> Option<String> {
-        // Use current time minus elapsed to get start time
-        self.start_time.and_then(|t| {
-            let elapsed = t.elapsed();
-            let now = chrono::Local::now();
-            let start = now - chrono::Duration::from_std(elapsed).ok()?;
-            Some(start.format("%Y-%m-%dT%H:%M:%S").to_string())
-        })
+        Self { config_path: None }
     }
 }
 
@@ -77,138 +72,99 @@ impl XrayService {
         }
     }
 
-    /// Create a status snapshot for external reporting
+    /// Create a status snapshot for external reporting, from real `/proc`
+    /// state — not this daemon's own (possibly stale) memory of it.
     async fn get_status_snapshot(&self) -> XrayStatus {
+        let pids = find_xray_pids();
         let state = self.state.lock().await;
         XrayStatus {
-            running: state.is_running(),
-            pid: state.get_pid(),
+            running: !pids.is_empty(),
+            pid: pids.first().map(|p| p.as_raw() as u32),
             config_path: state.config_path.clone(),
-            uptime_secs: state.get_uptime_secs(),
-            start_time: state.get_start_time(),
         }
+    }
+}
+
+impl Default for XrayService {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
 /// D-Bus interface implementation for org.opdbus.v1.Xray
 #[interface(name = "org.opdbus.v1.Xray")]
 impl XrayService {
-    /// Start xray with the specified config path
-    /// Returns (success, message)
+    /// Start xray with the specified config path.
+    ///
+    /// NOTE: production xray runs under the `xray` container's own systemd
+    /// unit (`xray.service`), started independently of this daemon. This
+    /// method cannot launch a new process without a `Command::new(...)`
+    /// subprocess spawn (prohibited — see module docs), so it only verifies
+    /// an instance is already running rather than starting one. Use the
+    /// container's systemd unit to actually start xray.
     async fn start(&mut self, config_path: &str) -> (bool, String) {
         info!("Xray start requested with config: {}", config_path);
 
-        let mut state = self.state.lock().await;
-
-        // Check if already running
-        if state.is_running() {
-            warn!("Xray is already running, PID: {:?}", state.get_pid());
+        if !find_xray_pids().is_empty() {
+            let mut state = self.state.lock().await;
+            state.config_path = Some(config_path.to_string());
             return (
-                false,
-                format!("Xray is already running (PID: {:?})", state.get_pid()),
+                true,
+                "xray is already running (started by the container's systemd unit, \
+                 not this daemon)"
+                    .to_string(),
             );
         }
 
-        // Validate config path exists
-        if !std::path::Path::new(config_path).exists() {
-            error!("Config file does not exist: {}", config_path);
-            return (
-                false,
-                format!("Config file does not exist: {}", config_path),
-            );
-        }
-
-        // Ensure config is in /dev/shm as per AGENTS.md §4a (Zero-Btrfs)
-        if !config_path.starts_with("/dev/shm") {
-            warn!(
-                "Config path is not in /dev/shm, proceeding anyway: {}",
-                config_path
-            );
-        }
-
-        // Spawn xray process
-        match Command::new("xray")
-            .arg("-c")
-            .arg(config_path)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-        {
-            Ok(child) => {
-                let pid = child.id();
-                state.child = Some(child);
-                state.config_path = Some(config_path.to_string());
-                state.start_time = Some(std::time::Instant::now());
-
-                match pid {
-                    Some(p) => {
-                        info!("Xray started successfully, PID: {}", p);
-                        (true, format!("Xray started successfully (PID: {})", p))
-                    }
-                    None => {
-                        info!("Xray started successfully (PID unavailable)");
-                        (true, "Xray started successfully".to_string())
-                    }
-                }
-            }
-            Err(e) => {
-                error!("Failed to start xray: {}", e);
-                (false, format!("Failed to start xray: {}", e))
-            }
-        }
+        (
+            false,
+            "xray is not running and this daemon cannot start it directly (no subprocess \
+             spawning) — start it via the `xray` container's systemd unit (`xray.service`)"
+                .to_string(),
+        )
     }
 
-    /// Stop the running xray process
+    /// Stop the running xray process (SIGTERM — the container's systemd will
+    /// typically restart it, since it's a supervised unit; use this for a
+    /// deliberate restart-in-place, not to permanently take xray down).
     /// Returns (success, message)
     async fn stop(&mut self) -> (bool, String) {
         info!("Xray stop requested");
 
-        let mut state = self.state.lock().await;
-
-        if !state.is_running() {
+        let pids = find_xray_pids();
+        if pids.is_empty() {
             warn!("Xray is not running");
             return (false, "Xray is not running".to_string());
         }
 
-        if let Some(mut child) = state.child.take() {
-            match child.kill().await {
-                Ok(_) => {
-                    info!("Xray process terminated");
-                    state.config_path = None;
-                    state.start_time = None;
-                    (true, "Xray stopped successfully".to_string())
-                }
-                Err(e) => {
-                    error!("Failed to kill xray process: {}", e);
-                    // Put it back if kill failed
-                    state.child = Some(child);
-                    (false, format!("Failed to stop xray: {}", e))
-                }
+        let mut errors = Vec::new();
+        for pid in &pids {
+            if let Err(e) = nix::sys::signal::kill(*pid, nix::sys::signal::Signal::SIGTERM) {
+                errors.push(format!("pid {pid}: {e}"));
             }
+        }
+
+        if errors.is_empty() {
+            info!("Xray process(es) terminated: {:?}", pids);
+            (true, "Xray stopped successfully".to_string())
         } else {
-            (false, "Xray process handle not available".to_string())
+            error!("Failed to stop xray: {:?}", errors);
+            (false, format!("Failed to stop xray: {}", errors.join(", ")))
         }
     }
 
-    /// Restart xray with the specified config path
+    /// Reload xray configuration by sending SIGHUP to the real running
+    /// process(es). Restart with a config path just updates this daemon's
+    /// own memory of the config path and reloads — it does not actually
+    /// swap xray's config file on disk (that lives elsewhere, per the
+    /// container's own deploy).
     /// Returns (success, message)
     async fn restart(&mut self, config_path: &str) -> (bool, String) {
-        info!("Xray restart requested");
-
-        // Stop first
-        let stop_result = self.stop().await;
-        if !stop_result.0 && !stop_result.1.contains("not running") {
-            return (
-                false,
-                format!("Failed to stop existing xray: {}", stop_result.1),
-            );
-        }
-
-        // Small delay to ensure process cleanup
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-
-        // Then start
-        self.start(config_path).await
+        info!("Xray restart (reload) requested");
+        let mut state = self.state.lock().await;
+        state.config_path = Some(config_path.to_string());
+        drop(state);
+        self.reload().await
     }
 
     /// Get current xray status as JSON string
@@ -231,33 +187,25 @@ impl XrayService {
     async fn reload(&self) -> (bool, String) {
         info!("Xray reload requested");
 
-        let state = self.state.lock().await;
-
-        if !state.is_running() {
+        let pids = find_xray_pids();
+        if pids.is_empty() {
             warn!("Cannot reload: Xray is not running");
             return (false, "Xray is not running".to_string());
         }
 
-        let pid = match state.get_pid() {
-            Some(p) => p,
-            None => {
-                return (false, "Cannot determine xray PID".to_string());
+        let mut errors = Vec::new();
+        for pid in &pids {
+            if let Err(e) = nix::sys::signal::kill(*pid, nix::sys::signal::Signal::SIGHUP) {
+                errors.push(format!("pid {pid}: {e}"));
             }
-        };
+        }
 
-        // Send SIGHUP signal
-        match nix::sys::signal::kill(
-            nix::unistd::Pid::from_raw(pid as i32),
-            nix::sys::signal::Signal::SIGHUP,
-        ) {
-            Ok(_) => {
-                info!("Sent SIGHUP to xray PID {}", pid);
-                (true, format!("Reload signal sent to xray (PID: {})", pid))
-            }
-            Err(e) => {
-                error!("Failed to send SIGHUP to xray PID {}: {}", pid, e);
-                (false, format!("Failed to send reload signal: {}", e))
-            }
+        if errors.is_empty() {
+            info!("Sent SIGHUP to xray {:?}", pids);
+            (true, format!("Reload signal sent to xray (PIDs: {:?})", pids))
+        } else {
+            error!("Failed to send SIGHUP: {:?}", errors);
+            (false, format!("Failed to send reload signal: {}", errors.join(", ")))
         }
     }
 
@@ -265,6 +213,77 @@ impl XrayService {
     async fn get_config(&self) -> String {
         let state = self.state.lock().await;
         state.config_path.clone().unwrap_or_default()
+    }
+
+    /// Query xray-core's own StatsService.QueryStats over the commander UDS
+    /// (`crate::commander_client::DEFAULT_API_SOCKET`). Returns a JSON array
+    /// of `{name, value}`, or a JSON `{"error": ...}` object on failure —
+    /// e.g. if xray's `api`/`stats` blocks aren't configured, or the socket
+    /// isn't up yet.
+    async fn query_stats(&self, pattern: &str, reset: bool) -> String {
+        let result: anyhow::Result<String> = async {
+            let mut client =
+                crate::commander_client::stats_client(crate::commander_client::DEFAULT_API_SOCKET)
+                    .await?;
+            let resp = client
+                .query_stats(crate::commander_client::stats::QueryStatsRequest {
+                    pattern: pattern.to_string(),
+                    reset,
+                })
+                .await?
+                .into_inner();
+            let stats: Vec<serde_json::Value> = resp
+                .stat
+                .into_iter()
+                .map(|s| serde_json::json!({ "name": s.name, "value": s.value }))
+                .collect();
+            serde_json::to_string(&stats).map_err(anyhow::Error::from)
+        }
+        .await;
+
+        match result {
+            Ok(json) => json,
+            Err(e) => {
+                warn!("QueryStats failed: {e:#}");
+                serde_json::json!({ "error": e.to_string() }).to_string()
+            }
+        }
+    }
+
+    /// xray-core's own Go runtime health (StatsService.GetSysStats) —
+    /// goroutines, GC cycles, memory, uptime. Genuine process telemetry.
+    async fn get_sys_stats(&self) -> String {
+        let result: anyhow::Result<String> = async {
+            let mut client =
+                crate::commander_client::stats_client(crate::commander_client::DEFAULT_API_SOCKET)
+                    .await?;
+            let resp = client
+                .get_sys_stats(crate::commander_client::stats::SysStatsRequest {})
+                .await?
+                .into_inner();
+            let json = serde_json::json!({
+                "num_goroutine": resp.num_goroutine,
+                "num_gc": resp.num_gc,
+                "alloc": resp.alloc,
+                "total_alloc": resp.total_alloc,
+                "sys": resp.sys,
+                "mallocs": resp.mallocs,
+                "frees": resp.frees,
+                "live_objects": resp.live_objects,
+                "pause_total_ns": resp.pause_total_ns,
+                "uptime": resp.uptime,
+            });
+            Ok(json.to_string())
+        }
+        .await;
+
+        match result {
+            Ok(json) => json,
+            Err(e) => {
+                warn!("GetSysStats failed: {e:#}");
+                serde_json::json!({ "error": e.to_string() }).to_string()
+            }
+        }
     }
 }
 
@@ -278,8 +297,6 @@ mod tests {
             running: true,
             pid: Some(1234),
             config_path: Some("/dev/shm/xray_config.json".to_string()),
-            uptime_secs: Some(3600),
-            start_time: Some("2024-01-01T00:00:00".to_string()),
         };
 
         let json = serde_json::to_string(&status).unwrap();
@@ -290,9 +307,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_xray_service_creation() {
+        // Real /proc-based detection now, so this reflects actual system
+        // state rather than an isolated fake — just check it doesn't panic
+        // and config_path starts empty (this daemon's own memory, distinct
+        // from whether a real xray process happens to be running).
         let service = XrayService::new();
         let status = service.get_status_snapshot().await;
-        assert!(!status.running);
-        assert_eq!(status.pid, None);
+        assert_eq!(status.config_path, None);
     }
 }

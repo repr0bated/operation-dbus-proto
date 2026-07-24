@@ -51,7 +51,9 @@ pub struct CatalogStore {
 }
 
 impl CatalogStore {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     /// Snapshot for read-only consumers (views, interpreter).
     pub fn snapshot(&self) -> CatalogSnapshot {

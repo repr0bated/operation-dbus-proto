@@ -1,13 +1,13 @@
 //! Visual tokens — graphite/slate dark with red accent, parity with web UI.
 use egui::{Color32, Rounding, Stroke, Style, Visuals};
 
-pub const BG: Color32 = Color32::from_rgb(0x0B, 0x0D, 0x10);          // background
-pub const SURFACE: Color32 = Color32::from_rgb(0x11, 0x14, 0x18);     // panels
-pub const SURFACE_2: Color32 = Color32::from_rgb(0x17, 0x1B, 0x21);   // raised
+pub const BG: Color32 = Color32::from_rgb(0x0B, 0x0D, 0x10); // background
+pub const SURFACE: Color32 = Color32::from_rgb(0x11, 0x14, 0x18); // panels
+pub const SURFACE_2: Color32 = Color32::from_rgb(0x17, 0x1B, 0x21); // raised
 pub const BORDER: Color32 = Color32::from_rgb(0x24, 0x29, 0x31);
 pub const FG: Color32 = Color32::from_rgb(0xE6, 0xE8, 0xEC);
 pub const MUTED: Color32 = Color32::from_rgb(0x8A, 0x93, 0x9E);
-pub const PRIMARY: Color32 = Color32::from_rgb(0xE5, 0x48, 0x4D);     // red accent
+pub const PRIMARY: Color32 = Color32::from_rgb(0xE5, 0x48, 0x4D); // red accent
 pub const OK: Color32 = Color32::from_rgb(0x30, 0xA4, 0x6C);
 pub const WARN: Color32 = Color32::from_rgb(0xE5, 0xB1, 0x4D);
 pub const DANGER: Color32 = PRIMARY;

@@ -9,6 +9,10 @@ use super::plugin_scaffold_helpers::{
     method_decl_from_schemars, method_decl_from_schemars_with_output,
 };
 
+use super::xray_config_types::{
+    DNSConfig, PolicyConfig, XrayInboundProtocolCatalog, XrayOutboundProtocolCatalog, APIConfig,
+};
+
 /// Xray proxy configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "sch.software.plugin.xray.config.schema@v1"))]
@@ -25,6 +29,26 @@ pub struct XrayConfig {
     #[serde(default)]
     #[schemars(extend("x-oscal-subid" = "mut.software.plugin.xray.config.config-path@v1"))]
     pub config_path: String,
+    /// Xray commander API block (`api`) — StatsService/RoutingService/LoggerService.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("x-oscal-subid" = "sch.software.plugin.xray.config.api@v1"))]
+    pub api: Option<APIConfig>,
+    /// Xray DNS block (`dns`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("x-oscal-subid" = "sch.software.plugin.xray.config.dns@v1"))]
+    pub dns: Option<DNSConfig>,
+    /// Xray policy block (`policy`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("x-oscal-subid" = "sch.software.plugin.xray.config.policy@v1"))]
+    pub policy: Option<PolicyConfig>,
+    /// Reference catalog of every inbound-protocol settings shape xray-core defines (dokodemo/http/socks/vmess/vless/trojan/shadowsocks/freedom).
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "sch.software.plugin.xray.config.inbound-protocols@v1"))]
+    pub inbound_protocols: XrayInboundProtocolCatalog,
+    /// Reference catalog of every outbound-protocol settings shape xray-core defines (blackhole/freedom/http/socks/vmess/vless/trojan/shadowsocks).
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "sch.software.plugin.xray.config.outbound-protocols@v1"))]
+    pub outbound_protocols: XrayOutboundProtocolCatalog,
 }
 
 impl Default for XrayConfig {
@@ -33,6 +57,11 @@ impl Default for XrayConfig {
             enabled: true,
             socket_port: "gbr_xray".to_string(),
             config_path: "/dev/shm/xray_config.json".to_string(),
+            api: None,
+            dns: None,
+            policy: None,
+            inbound_protocols: XrayInboundProtocolCatalog::default(),
+            outbound_protocols: XrayOutboundProtocolCatalog::default(),
         }
     }
 }
@@ -100,13 +129,31 @@ impl Default for XrayState {
     }
 }
 
-/// Is an xray process currently running on the host? (`pgrep -x xray`)
+/// Find running `xray` process PIDs by scanning `/proc` directly — no
+/// `pgrep`/`pkill` subprocess spawning (CLAUDE.md: no `Command::new(...)`
+/// subprocesses in plugin/service code).
+fn find_xray_pids() -> Vec<nix::unistd::Pid> {
+    let mut pids = Vec::new();
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return pids;
+    };
+    for entry in entries.flatten() {
+        let Ok(pid) = entry.file_name().to_string_lossy().parse::<i32>() else {
+            continue;
+        };
+        let comm_path = entry.path().join("comm");
+        if let Ok(comm) = std::fs::read_to_string(&comm_path) {
+            if comm.trim() == "xray" {
+                pids.push(nix::unistd::Pid::from_raw(pid));
+            }
+        }
+    }
+    pids
+}
+
+/// Is an xray process currently running on the host?
 fn xray_running() -> bool {
-    std::process::Command::new("pgrep")
-        .args(["-x", "xray"])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    !find_xray_pids().is_empty()
 }
 
 pub struct XrayPlugin {
@@ -189,24 +236,29 @@ impl StatePlugin for XrayPlugin {
         // Host-native lifecycle — no out-of-tree `opdbus.v1.Xray` daemon.
         let mut changes = Vec::new();
         let mut errors = Vec::new();
+        let pids = find_xray_pids();
         if self.config.enabled {
             // Reload (SIGHUP) so a running xray re-reads its config; if none is
-            // running, the s6 supervisor (gbr-xray) is responsible for starting it.
-            match std::process::Command::new("pkill")
-                .args(["-HUP", "-x", "xray"])
-                .status()
-            {
-                Ok(s) if s.success() => changes.push("xray reloaded (SIGHUP)".to_string()),
-                Ok(_) => changes.push("xray not running; supervisor starts it".to_string()),
-                Err(e) => errors.push(format!("xray reload failed: {e}")),
+            // running, the container's own supervisor (systemd, inside the
+            // `xray` container) is responsible for starting it.
+            if pids.is_empty() {
+                changes.push("xray not running; supervisor starts it".to_string());
+            } else {
+                for pid in pids {
+                    match nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGHUP) {
+                        Ok(()) => changes.push(format!("xray reloaded (SIGHUP, pid {pid})")),
+                        Err(e) => errors.push(format!("xray reload failed (pid {pid}): {e}")),
+                    }
+                }
             }
+        } else if pids.is_empty() {
+            changes.push("xray already stopped".to_string());
         } else {
-            match std::process::Command::new("pkill")
-                .args(["-x", "xray"])
-                .status()
-            {
-                Ok(_) => changes.push("xray stopped".to_string()),
-                Err(e) => errors.push(format!("xray stop failed: {e}")),
+            for pid in pids {
+                match nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGTERM) {
+                    Ok(()) => changes.push(format!("xray stopped (pid {pid})")),
+                    Err(e) => errors.push(format!("xray stop failed (pid {pid}): {e}")),
+                }
             }
         }
         Ok(ApplyResult {
@@ -338,6 +390,79 @@ pub(crate) fn xray_schema_golden() -> PluginSchema {
             read_only: false,
             read_only_when: None,
         },
+    );
+
+    // The remaining `config` fields (api/dns/policy/inbound_protocols/
+    // outbound_protocols) are mechanically generated from xray-core's real
+    // Go struct definitions (see `xray_config_types.rs`'s header for
+    // provenance) rather than hand-authored — there's no independent "human
+    // intent" to compare against for their shape, so their expected
+    // FieldSchema is derived via the same schemars_adapter conversion the
+    // plugin itself uses, keeping this golden test meaningful for the fields
+    // that ARE hand-authored while still catching shape breakage here.
+    fn derived_object_field(description: &str, root: serde_json::Value) -> FieldSchema {
+        let derived = super::schemars_adapter::plugin_schema_from_json(
+            "_derived_ref",
+            "0.0.0",
+            description,
+            &root,
+        );
+        FieldSchema {
+            field_type: FieldType::Object(derived.fields),
+            required: false,
+            description: description.to_string(),
+            default: None,
+            example: None,
+            constraints: Vec::new(),
+            read_only: false,
+            read_only_when: None,
+        }
+    }
+    config_fields.insert(
+        "api".to_string(),
+        derived_object_field(
+            "Xray commander API block (`api`) — StatsService/RoutingService/LoggerService.",
+            serde_json::to_value(schemars::schema_for!(super::xray_config_types::APIConfig))
+                .expect("schemars schema serializes"),
+        ),
+    );
+    config_fields.insert(
+        "dns".to_string(),
+        derived_object_field(
+            "Xray DNS block (`dns`).",
+            serde_json::to_value(schemars::schema_for!(super::xray_config_types::DNSConfig))
+                .expect("schemars schema serializes"),
+        ),
+    );
+    config_fields.insert(
+        "policy".to_string(),
+        derived_object_field(
+            "Xray policy block (`policy`).",
+            serde_json::to_value(schemars::schema_for!(super::xray_config_types::PolicyConfig))
+                .expect("schemars schema serializes"),
+        ),
+    );
+    config_fields.insert(
+        "inbound_protocols".to_string(),
+        derived_object_field(
+            "Reference catalog of every inbound-protocol settings shape xray-core \
+             defines (dokodemo/http/socks/vmess/vless/trojan/shadowsocks/freedom).",
+            serde_json::to_value(schemars::schema_for!(
+                super::xray_config_types::XrayInboundProtocolCatalog
+            ))
+            .expect("schemars schema serializes"),
+        ),
+    );
+    config_fields.insert(
+        "outbound_protocols".to_string(),
+        derived_object_field(
+            "Reference catalog of every outbound-protocol settings shape xray-core \
+             defines (blackhole/freedom/http/socks/vmess/vless/trojan/shadowsocks).",
+            serde_json::to_value(schemars::schema_for!(
+                super::xray_config_types::XrayOutboundProtocolCatalog
+            ))
+            .expect("schemars schema serializes"),
+        ),
     );
 
     let mut fields = std::collections::HashMap::new();

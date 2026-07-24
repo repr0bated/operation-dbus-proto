@@ -1,0 +1,39 @@
+#!/bin/sh
+# runit: periodic LLM session export → cleanup ≤300 → notebook ingest
+exec 2>&1
+
+wait_dep() {
+    sv start "$1" >/dev/null 2>&1 || true
+    i=0
+    until sv check "$1" >/dev/null 2>&1; do
+        i=$((i + 1))
+        [ "$i" -ge 90 ] && {
+            echo "dependency $1 not ready after 90s" >&2
+            exit 1
+        }
+        sleep 1
+    done
+}
+
+# Cognitive gRPC + identity sled needed for ingest
+wait_dep opdbus-rundirs
+wait_dep op-cognitive-mcp 2>/dev/null || true
+
+export HOME="${HOME:-/home/admin}"
+export OP_DBUS_ROOT="${OP_DBUS_ROOT:-/home/admin/git/odbus}"
+export NOTEBOOKLM_SOURCES_DIR="${NOTEBOOKLM_SOURCES_DIR:-$HOME/.notebooklm-sources}"
+export PATH="$HOME/.local/bin:/usr/local/bin:/home/linuxbrew/.linuxbrew/bin:/usr/bin:/bin:$PATH"
+
+INTERVAL="${NOTEBOOK_SYNC_INTERVAL_SEC:-300}"
+HELPER=/usr/local/libexec/3tched/notebook-sources-sync-up
+
+echo "notebook-sources-sync: starting (interval=${INTERVAL}s)"
+
+while true; do
+    if [ -x "$HELPER" ]; then
+        "$HELPER" || echo "notebook-sources-sync: cycle error (will retry)"
+    else
+        echo "notebook-sources-sync: missing $HELPER"
+    fi
+    sleep "$INTERVAL"
+done
