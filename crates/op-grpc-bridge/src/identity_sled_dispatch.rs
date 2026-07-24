@@ -104,6 +104,10 @@ fn sled_to_record(sled: &ContainerIdentitySled) -> IdentitySledRecord {
         session_started_at: sled.session_started_at,
         last_seen_at: sled.last_seen_at,
         active: sled.active,
+        // 0 = lifelong (host/user/chatbot identities never expire on their
+        // own); otherwise unix seconds a temporary/consumer identity
+        // (e.g. Lovable) stops being valid.
+        expires_at: sled.expires_at.unwrap_or(0),
     }
 }
 
@@ -142,6 +146,7 @@ fn record_to_sled(rec: &IdentitySledRecord) -> ContainerIdentitySled {
         session_started_at: rec.session_started_at,
         last_seen_at: rec.last_seen_at,
         active: rec.active,
+        expires_at: (rec.expires_at != 0).then_some(rec.expires_at),
     }
 }
 
@@ -243,6 +248,9 @@ fn host_identity_from_raw_sled() -> anyhow::Result<ContainerIdentitySled> {
         session_started_at: ts,
         last_seen_at: ts,
         active: sled.is_sled_valid(),
+        // Read fresh from shared memory every call (not a stored/cached
+        // term), so there's nothing to expire independently here.
+        expires_at: None,
     })
 }
 
@@ -251,6 +259,18 @@ fn arg_str(args: &JsonValue, key: &str) -> String {
         .and_then(|v| v.as_str())
         .unwrap_or_default()
         .to_string()
+}
+
+/// Integer args that round-trip through gRPC's `PluginService.CallMethod`
+/// arrive as a JSON float: `google.protobuf.Struct`'s `Value` only has a
+/// `number_value: double` variant (see `grpc_client.rs`'s
+/// `prost_value_to_serde`/`simd_to_prost_value`), so a plain `as_i64()` on
+/// values from that path silently returns `None` even for whole numbers.
+/// D-Bus-sourced args don't have this problem, but this helper is safe for
+/// both since `as_i64()` is tried first.
+fn arg_i64(args: &JsonValue, key: &str) -> Option<i64> {
+    args.get(key)
+        .and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|f| f as i64)))
 }
 
 /// Derive the session id (= container name) from the supplied pubkey, using
@@ -278,23 +298,31 @@ pub async fn dispatch_identity_sled_method(
     match method {
         "get_identity" => {
             let session_id = arg_str(args, "session_id");
-            if session_id.is_empty() {
+            let trace_id = arg_str(args, "trace_id");
+            if session_id.is_empty() && trace_id.is_empty() {
                 let identity = host_identity_from_raw_sled()?;
                 return Ok(serde_json::json!({ "identity": identity }));
             }
 
             ensure_hydrated(engine).await;
             let cache = read_cache(engine).await;
+            // Vendor/partner identities (e.g. a browser frontend that has no
+            // WireGuard identity of its own) are looked up by the trace_id
+            // they present directly, rather than a pubkey-derived session_id.
             let sled = cache
                 .sleds
                 .iter()
-                .find(|s| s.session_id == session_id)
+                .find(|s| {
+                    (!session_id.is_empty() && s.session_id == session_id)
+                        || (!trace_id.is_empty() && s.trace_id == trace_id)
+                })
                 .cloned();
             match sled {
                 Some(identity) => Ok(serde_json::json!({ "identity": identity })),
                 None => Err(anyhow::anyhow!(
-                    "no identity sled for session '{}'",
-                    session_id
+                    "no identity sled for session '{}' / trace '{}'",
+                    session_id,
+                    trace_id
                 )),
             }
         }
@@ -320,6 +348,12 @@ pub async fn dispatch_identity_sled_method(
                 .get("btrfs_device")
                 .cloned()
                 .and_then(|v| serde_json::from_value(v).ok());
+            // Explicit term length for this call, when given. Omitted (the
+            // common case for host/user/chatbot re-registration) means
+            // "don't touch whatever term is already set" — a generic
+            // write_identity call must never silently extend or shorten a
+            // temporary identity's term as a side effect.
+            let ttl_seconds = arg_i64(args, "ttl_seconds");
 
             let mut cache = read_cache(engine).await;
             let ts = now();
@@ -342,18 +376,48 @@ pub async fn dispatch_identity_sled_method(
                     sled.mutation_index += 1;
                     sled.last_seen_at = ts;
                     sled.active = true;
+                    // Only an explicit ttl_seconds renews the term. A lifelong
+                    // account's caller passes this on every heartbeat to keep
+                    // renewing it; a bare re-registration with no ttl leaves
+                    // an already-set expiry (temporary identity) untouched.
+                    if let Some(ttl) = ttl_seconds {
+                        sled.expires_at = Some(ts + ttl);
+                    }
                     sled.clone()
                 }
                 None => {
+                    // Etch a footprint + mint a trace_id for the new identity now,
+                    // at creation, rather than leaving both blank forever. Unlike
+                    // the host's WireGuard mesh sled (etched per-connection from a
+                    // live source_port), a per-identity Cozo sled — including
+                    // vendor/partner identities with no real WireGuard session,
+                    // e.g. a browser frontend — has no live connection to etch
+                    // against, so mutation_index/source_port are both 0: the
+                    // footprint is a stable credential minted once, not a rotating
+                    // per-connection proof. The caller (provisioning tool) hands
+                    // the resulting footprint + trace_id to the consumer to present
+                    // on every request for the life of its term.
+                    let (hashed_footprint, trace_id) = base64::engine::general_purpose::STANDARD
+                        .decode(pubkey.trim())
+                        .ok()
+                        .and_then(|raw| <[u8; 32]>::try_from(raw).ok())
+                        .map(|pubkey_bytes| {
+                            let footprint =
+                                op_identity::schema_bridge::etch_footprint(&pubkey_bytes, 0, 0);
+                            let trace = *uuid::Uuid::new_v4().as_bytes();
+                            (hex::encode(footprint), hex::encode(trace))
+                        })
+                        .unwrap_or_default();
+
                     let sled = ContainerIdentitySled {
                         session_id: session_id.clone(),
                         wireguard_pubkey: pubkey.clone(),
                         interface,
                         peer_ip,
                         mutation_index: 0,
-                        hashed_footprint: String::new(),
-                        trace_id: String::new(),
-                        schema_version: 0,
+                        hashed_footprint,
+                        trace_id,
+                        schema_version: 1,
                         vector_id: String::new(),
                         blob_ref,
                         btrfs_device,
@@ -361,6 +425,7 @@ pub async fn dispatch_identity_sled_method(
                         session_started_at: ts,
                         last_seen_at: ts,
                         active: true,
+                        expires_at: ttl_seconds.map(|ttl| ts + ttl),
                     };
                     cache.sleds.push(sled.clone());
                     cache.sleds.sort_by(|a, b| a.session_id.cmp(&b.session_id));
@@ -468,6 +533,7 @@ pub async fn dispatch_identity_sled_method(
                 .map_err(|e| anyhow::anyhow!("incus create for '{session_id}' failed: {e:#}"))?;
 
             let ts = now();
+            let ttl_seconds = arg_i64(args, "ttl_seconds");
             let sled = ContainerIdentitySled {
                 session_id: session_id.clone(),
                 wireguard_pubkey: pubkey,
@@ -484,6 +550,7 @@ pub async fn dispatch_identity_sled_method(
                 session_started_at: ts,
                 last_seen_at: ts,
                 active: true,
+                expires_at: ttl_seconds.map(|ttl| ts + ttl),
             };
             let mut cache = read_cache(engine).await;
             cache.sleds.retain(|s| s.session_id != session_id);

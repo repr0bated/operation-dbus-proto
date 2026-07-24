@@ -20,6 +20,7 @@ async fn main() -> anyhow::Result<()> {
         plugin_id = %config.plugin_id,
         schema_path = %config.schema_path.display(),
         unix_socket = %config.unix_socket.display(),
+        shared_socket = %config.shared_socket.display(),
         bind_addr = %config.bind_addr,
         tls_enabled = config.tls_bind_addr.is_some(),
         "Consolidated Operation gRPC bridge starting"

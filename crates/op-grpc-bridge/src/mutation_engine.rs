@@ -6,6 +6,7 @@
 //! - Broadcasts authoritative state changes to gRPC subscribers
 //! - Directly manages authoritative RCP stores (OVSDB, NonNet, SQLite)
 
+use anyhow::Context as _;
 use async_trait::async_trait;
 use serde_json;
 use simd_json::prelude::{ValueAsContainer, ValueAsMutContainer, ValueAsScalar, ValueObjectAccess};
@@ -716,6 +717,20 @@ impl MutationEngine {
                 }
                 caller_result = Some(simd_json::serde::to_owned_value(&domain)?);
             }
+        } else if plugin_id == "xray" && change_type == ChangeType::MethodCall {
+            // PluginService.CallMethod wraps object arguments in a
+            // one-element array, matching identity_sled's convention above.
+            if let Some(method) = &member_name {
+                let mut args_json = serde_json::to_value(&value)?;
+                if let serde_json::Value::Array(items) = &args_json {
+                    args_json = items
+                        .first()
+                        .cloned()
+                        .unwrap_or_else(|| serde_json::Value::Object(Default::default()));
+                }
+                let result = dispatch_xray_method(method, &args_json).await?;
+                caller_result = Some(simd_json::serde::to_owned_value(&result)?);
+            }
         } else {
             // NonNet / Generic Plugin Path
             if change_type == ChangeType::PropertySet {
@@ -882,6 +897,10 @@ impl MutationEngine {
         let method_result: serde_json::Value = match plugin_id {
             "rovs_commands" => {
                 dispatch_rovs_commands_method(&self.ovsdb, method, &parsed_value).await?
+            }
+            "xray" => {
+                let args = serde_json::to_value(&parsed_value)?;
+                dispatch_xray_method(method, &args).await?
             }
             "identity_sled" => {
                 let args = serde_json::to_value(&parsed_value)?;
@@ -1257,6 +1276,89 @@ async fn dispatch_rovs_commands_method(
         }
         _ => Err(anyhow::anyhow!("unknown rovs_commands method: {}", method)),
     }
+}
+
+/// Dispatch for the `xray` plugin's schema-declared methods. Only `get_stats`
+/// is backed by real behavior so far — it calls xray-core's own StatsService
+/// over the commander UDS (see `op_xray_daemon::commander_client`). The
+/// other declared methods (`add_user`, `remove_user`, `add_inbound`,
+/// `restart`, `start_trace`/`end_trace`/`record_span`) are schema-declared
+/// but not yet implemented; they fail closed rather than silently
+/// succeeding or falling through to the generic echo.
+async fn dispatch_xray_method(
+    method: &str,
+    args: &serde_json::Value,
+) -> anyhow::Result<serde_json::Value> {
+    match method {
+        "get_stats" => {
+            let name = args
+                .get("name")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("name required"))?;
+            let mut client = op_xray_daemon::commander_client::stats_client(
+                op_xray_daemon::commander_client::DEFAULT_API_SOCKET,
+            )
+            .await
+            .context("connecting to xray commander API socket")?;
+            let resp = client
+                .get_stats(op_xray_daemon::commander_client::stats::GetStatsRequest {
+                    name: name.to_string(),
+                    reset: false,
+                })
+                .await
+                .context("xray StatsService.GetStats")?
+                .into_inner();
+            let stat = resp
+                .stat
+                .ok_or_else(|| anyhow::anyhow!("no such stat counter: {name}"))?;
+            Ok(serde_json::json!({ "name": stat.name, "value": stat.value }))
+        }
+        "restart" => {
+            // Reload (SIGHUP), not a hard kill+respawn: the `xray` container's
+            // own systemd already supervises the process; a config reload is
+            // the safe, sanctioned action here (see op-plugins::xray's
+            // apply_state, which uses the same pattern). No Command::new
+            // subprocess — signals the real PID directly via /proc + nix.
+            let pids = find_xray_pids();
+            if pids.is_empty() {
+                return Err(anyhow::anyhow!("no running xray process found"));
+            }
+            let mut reloaded = Vec::new();
+            for pid in pids {
+                nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGHUP)
+                    .with_context(|| format!("sending SIGHUP to xray pid {pid}"))?;
+                reloaded.push(pid.as_raw());
+            }
+            Ok(serde_json::json!({ "reloaded_pids": reloaded }))
+        }
+        "add_user" | "remove_user" | "add_inbound" | "start_trace" | "end_trace"
+        | "record_span" => Err(anyhow::anyhow!(
+            "xray.{method} is schema-declared but not yet implemented"
+        )),
+        _ => Err(anyhow::anyhow!("unknown xray method: {}", method)),
+    }
+}
+
+/// Find running `xray` process PIDs via `/proc` — no `pgrep`/`pkill`
+/// subprocess spawning. Mirrors `op_plugins::state_plugins::xray`'s private
+/// helper of the same shape; kept local since it's a few lines and the two
+/// crates don't otherwise share process-inspection utilities.
+fn find_xray_pids() -> Vec<nix::unistd::Pid> {
+    let mut pids = Vec::new();
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return pids;
+    };
+    for entry in entries.flatten() {
+        let Ok(pid) = entry.file_name().to_string_lossy().parse::<i32>() else {
+            continue;
+        };
+        if let Ok(comm) = std::fs::read_to_string(entry.path().join("comm")) {
+            if comm.trim() == "xray" {
+                pids.push(nix::unistd::Pid::from_raw(pid));
+            }
+        }
+    }
+    pids
 }
 
 /// Parse createunixsocket arguments. Accepts either a JSON array
