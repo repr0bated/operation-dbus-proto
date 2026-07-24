@@ -22,6 +22,59 @@ use tokio_stream::wrappers::ReceiverStream;
 use tonic::{transport::Server, Request, Response, Status};
 use tracing::info;
 
+const GHOSTBRIDGE_FOOTPRINT_HEADER: &str = "x-ghostbridge-footprint";
+const GHOSTBRIDGE_TRACE_HEADER: &str = "x-ghostbridge-trace-id";
+
+/// Accept the container identity only from metadata injected by the trusted
+/// Ghostbridge ingress. Workloads do not inspect WireGuard state locally: WG
+/// terminates at the decoy and Ghostbridge carries the resolved identity here.
+#[allow(clippy::result_large_err)]
+fn ghostbridge_identity_interceptor(request: Request<()>) -> Result<Request<()>, Status> {
+    let footprint = request
+        .metadata()
+        .get(GHOSTBRIDGE_FOOTPRINT_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.is_empty());
+    let trace_id = request
+        .metadata()
+        .get(GHOSTBRIDGE_TRACE_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.is_empty());
+
+    if footprint.is_none() || trace_id.is_none() {
+        return Err(Status::unauthenticated(
+            "Missing Ghostbridge container identity metadata",
+        ));
+    }
+
+    Ok(request)
+}
+
+#[cfg(test)]
+mod identity_interceptor_tests {
+    use super::*;
+
+    #[test]
+    fn rejects_requests_without_injected_identity() {
+        let error = ghostbridge_identity_interceptor(Request::new(())).unwrap_err();
+        assert_eq!(error.code(), tonic::Code::Unauthenticated);
+    }
+
+    #[test]
+    fn accepts_injected_container_identity() {
+        let mut request = Request::new(());
+        request.metadata_mut().insert(
+            GHOSTBRIDGE_FOOTPRINT_HEADER,
+            "container-cozo".parse().unwrap(),
+        );
+        request
+            .metadata_mut()
+            .insert(GHOSTBRIDGE_TRACE_HEADER, "trace-1".parse().unwrap());
+
+        assert!(ghostbridge_identity_interceptor(request).is_ok());
+    }
+}
+
 // ============================================================================
 // LOCALLY DEFINED MCP TYPES
 // ============================================================================
@@ -515,7 +568,10 @@ pub async fn run_chat_mcp_server(addr: std::net::SocketAddr, actor: Arc<ChatActo
     info!(%addr, "Starting chat MCP server");
     let service = ChatMcpServer::new(actor);
     Server::builder()
-        .add_service(McpServiceServer::new(service))
+        .add_service(McpServiceServer::with_interceptor(
+            service,
+            ghostbridge_identity_interceptor,
+        ))
         .serve(addr)
         .await?;
     Ok(())

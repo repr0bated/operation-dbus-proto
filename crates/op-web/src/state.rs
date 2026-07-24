@@ -244,10 +244,11 @@ impl AppState {
 
         info!("✅ Application state initialized");
 
-        // Initialize gRPC client for remote operations
+        // Initialize gRPC client for remote operations.
+        // Consolidated control plane is op-grpc-bridge on :8090 (not a separate :50051 opdbus).
         let grpc_addr = std::env::var("OP_DBUS_GRPC_ADDR")
             .or_else(|_| std::env::var("OP_DBUS_ADDR"))
-            .unwrap_or_else(|_| "http://10.200.0.1:50051".to_string());
+            .unwrap_or_else(|_| "http://127.0.0.1:8090".to_string());
         let pool = Arc::new(GrpcClientPool::new());
         let grpc_client = Arc::new(RemoteOperationClient::new(pool, &grpc_addr, "op-web"));
 

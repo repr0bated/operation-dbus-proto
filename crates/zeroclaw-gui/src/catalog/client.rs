@@ -33,10 +33,7 @@ use crate::grpc::ReflectionRegistry;
 
 /// Spawn the catalog subscription. Returns once the initial snapshot has been
 /// applied; subsequent events are folded into `store` on the background task.
-pub async fn run(
-    _registry: ReflectionRegistry,
-    store: CatalogStore,
-) -> Result<()> {
+pub async fn run(_registry: ReflectionRegistry, store: CatalogStore) -> Result<()> {
     // TODO: resolve `gemma.catalog.v1.CatalogService/Subscribe` via reflection,
     //       open the server stream, and dispatch each frame below. Wired as a
     //       no-op stub so the rest of the system compiles while gemma_brain's

@@ -39,10 +39,8 @@ impl MethodKind {
 }
 
 use tonic_reflection::pb::v1::{
-    server_reflection_client::ServerReflectionClient,
-    server_reflection_request::MessageRequest,
-    server_reflection_response::MessageResponse,
-    ServerReflectionRequest,
+    server_reflection_client::ServerReflectionClient, server_reflection_request::MessageRequest,
+    server_reflection_response::MessageResponse, ServerReflectionRequest,
 };
 
 #[derive(Clone, Default)]
@@ -52,7 +50,9 @@ pub struct ReflectionRegistry {
 }
 
 impl ReflectionRegistry {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     pub fn pool(&self) -> Option<DescriptorPool> {
         self.pool.read().ok().and_then(|g| g.clone())
@@ -62,12 +62,20 @@ impl ReflectionRegistry {
     }
 
     pub fn services(&self) -> Vec<String> {
-        let pool = match self.pool() { Some(p) => p, None => return vec![] };
+        let pool = match self.pool() {
+            Some(p) => p,
+            None => return vec![],
+        };
         let svcs: Vec<_> = pool.services().collect();
-        svcs.into_iter().map(|s| s.full_name().to_string()).collect()
+        svcs.into_iter()
+            .map(|s| s.full_name().to_string())
+            .collect()
     }
     pub fn methods(&self, service: &str) -> Vec<String> {
-        let pool = match self.pool() { Some(p) => p, None => return vec![] };
+        let pool = match self.pool() {
+            Some(p) => p,
+            None => return vec![],
+        };
         let svcs: Vec<_> = pool.services().collect();
         svcs.into_iter()
             .find(|s| s.full_name() == service)
@@ -75,25 +83,30 @@ impl ReflectionRegistry {
             .unwrap_or_default()
     }
 
-
-
     pub fn method_kind(&self, service: &str, method: &str) -> Option<MethodKind> {
         let pool = self.pool()?;
-        let m = pool.services().find(|s| s.full_name() == service)?
-            .methods().find(|m| m.name() == method)?;
+        let m = pool
+            .services()
+            .find(|s| s.full_name() == service)?
+            .methods()
+            .find(|m| m.name() == method)?;
         Some(match (m.is_client_streaming(), m.is_server_streaming()) {
             (false, false) => MethodKind::Unary,
-            (false, true)  => MethodKind::ServerStreaming,
-            (true,  false) => MethodKind::ClientStreaming,
-            (true,  true)  => MethodKind::BidiStreaming,
+            (false, true) => MethodKind::ServerStreaming,
+            (true, false) => MethodKind::ClientStreaming,
+            (true, true) => MethodKind::BidiStreaming,
         })
     }
 
     fn set_pool(&self, pool: DescriptorPool) {
-        if let Ok(mut g) = self.pool.write() { *g = Some(pool); }
+        if let Ok(mut g) = self.pool.write() {
+            *g = Some(pool);
+        }
     }
     fn set_channel(&self, ch: Channel) {
-        if let Ok(mut g) = self.channel.write() { *g = Some(ch); }
+        if let Ok(mut g) = self.channel.write() {
+            *g = Some(ch);
+        }
     }
 }
 
@@ -103,8 +116,8 @@ impl ReflectionRegistry {
 /// active blob-backed service → accumulate FileDescriptorSet bytes.
 pub async fn bootstrap(endpoint: &str, reg: ReflectionRegistry) -> Result<()> {
     use prost_types::FileDescriptorProto;
-    use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
     use tokio::sync::mpsc;
+    use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
 
     let channel: Channel = crate::conn::connect_channel(endpoint).await?;
     reg.set_channel(channel.clone());
@@ -152,10 +165,7 @@ pub async fn bootstrap(endpoint: &str, reg: ReflectionRegistry) -> Result<()> {
                 }
             }
             Some(MessageResponse::ErrorResponse(e)) => {
-                eprintln!(
-                    "[zeroclaw] reflection bootstrap: {}",
-                    e.error_message
-                );
+                eprintln!("[zeroclaw] reflection bootstrap: {}", e.error_message);
             }
             _ => {}
         }
@@ -249,10 +259,7 @@ pub fn resolve_plugin_method(
     }
 
     // Legacy build.rs aggregate: operation.plugin.v1.<Plugin>PluginMethods
-    let legacy = format!(
-        "operation.plugin.v1.{}PluginMethods",
-        pascal_case(&plugin)
-    );
+    let legacy = format!("operation.plugin.v1.{}PluginMethods", pascal_case(&plugin));
     for svc in pool.services() {
         if svc.full_name() == legacy {
             for m in svc.methods() {
@@ -365,7 +372,9 @@ fn merge_request_args(body: &mut Value, args: &Value) {
 // ----------------- decoding helpers -----------------
 
 pub fn decode_to_json(reg: &ReflectionRegistry, msg_fqn: &str, bytes: &[u8]) -> Result<Value> {
-    let pool = reg.pool().ok_or_else(|| anyhow!("reflection pool not loaded"))?;
+    let pool = reg
+        .pool()
+        .ok_or_else(|| anyhow!("reflection pool not loaded"))?;
     let descriptor = pool
         .get_message_by_name(msg_fqn)
         .ok_or_else(|| anyhow!("unknown message: {msg_fqn}"))?;
@@ -374,17 +383,29 @@ pub fn decode_to_json(reg: &ReflectionRegistry, msg_fqn: &str, bytes: &[u8]) -> 
 }
 
 /// Walk a request message descriptor and emit a JSON skeleton (zero values).
-pub fn template_for_request(reg: &ReflectionRegistry, service: &str, method: &str) -> Result<Value> {
-    let pool = reg.pool().ok_or_else(|| anyhow!("reflection pool not loaded"))?;
-    let svc = pool.services().find(|s| s.full_name() == service)
+pub fn template_for_request(
+    reg: &ReflectionRegistry,
+    service: &str,
+    method: &str,
+) -> Result<Value> {
+    let pool = reg
+        .pool()
+        .ok_or_else(|| anyhow!("reflection pool not loaded"))?;
+    let svc = pool
+        .services()
+        .find(|s| s.full_name() == service)
         .ok_or_else(|| anyhow!("unknown service {service}"))?;
-    let m = svc.methods().find(|m| m.name() == method)
+    let m = svc
+        .methods()
+        .find(|m| m.name() == method)
         .ok_or_else(|| anyhow!("unknown method {service}/{method}"))?;
     Ok(skeleton_for(&m.input(), 0))
 }
 
 fn skeleton_for(desc: &MessageDescriptor, depth: usize) -> Value {
-    if depth > 4 { return json!({}); }
+    if depth > 4 {
+        return json!({});
+    }
     let mut obj = Map::new();
     for field in desc.fields() {
         let v = if field.is_list() {
@@ -394,13 +415,24 @@ fn skeleton_for(desc: &MessageDescriptor, depth: usize) -> Value {
         } else {
             match field.kind() {
                 Kind::Double | Kind::Float => json!(0.0),
-                Kind::Int32 | Kind::Sint32 | Kind::Sfixed32
-                | Kind::Int64 | Kind::Sint64 | Kind::Sfixed64
-                | Kind::Uint32 | Kind::Fixed32 | Kind::Uint64 | Kind::Fixed64 => json!(0),
+                Kind::Int32
+                | Kind::Sint32
+                | Kind::Sfixed32
+                | Kind::Int64
+                | Kind::Sint64
+                | Kind::Sfixed64
+                | Kind::Uint32
+                | Kind::Fixed32
+                | Kind::Uint64
+                | Kind::Fixed64 => json!(0),
                 Kind::Bool => json!(false),
                 Kind::String => json!(""),
                 Kind::Bytes => json!(""),
-                Kind::Enum(e) => json!(e.values().next().map(|v| v.name().to_string()).unwrap_or_default()),
+                Kind::Enum(e) => json!(e
+                    .values()
+                    .next()
+                    .map(|v| v.name().to_string())
+                    .unwrap_or_default()),
                 Kind::Message(m) => skeleton_for(&m, depth + 1),
             }
         };
@@ -418,12 +450,18 @@ pub async fn invoke_unary(
     method: &str,
     request_json: &Value,
 ) -> Result<Value> {
-    let pool = reg.pool().ok_or_else(|| anyhow!("reflection pool not loaded"))?;
+    let pool = reg
+        .pool()
+        .ok_or_else(|| anyhow!("reflection pool not loaded"))?;
     let channel = reg.channel().ok_or_else(|| anyhow!("no active channel"))?;
 
-    let svc = pool.services().find(|s| s.full_name() == service)
+    let svc = pool
+        .services()
+        .find(|s| s.full_name() == service)
         .ok_or_else(|| anyhow!("unknown service {service}"))?;
-    let m = svc.methods().find(|m| m.name() == method)
+    let m = svc
+        .methods()
+        .find(|m| m.name() == method)
         .ok_or_else(|| anyhow!("unknown method {service}/{method}"))?;
     if m.is_client_streaming() || m.is_server_streaming() {
         return Err(anyhow!("only unary methods are supported by the Explorer"));
@@ -437,7 +475,9 @@ pub async fn invoke_unary(
 
     let path = format!("/{}/{}", service, method);
     let mut grpc = tonic::client::Grpc::new(channel);
-    grpc.ready().await.map_err(|e| anyhow!("channel not ready: {e}"))?;
+    grpc.ready()
+        .await
+        .map_err(|e| anyhow!("channel not ready: {e}"))?;
     let mut request = Request::new(req_bytes);
     attach_ghostbridge_identity(&mut request);
     let resp = grpc
@@ -456,8 +496,8 @@ pub async fn invoke_unary(
 /// The sled is a shared-memory blob (`/dev/shm/plugin_schema.dat`, same layout
 /// `bin/zcall` reads): footprint at bytes 40..72, trace id at 72..88.
 fn ghostbridge_identity() -> Option<(String, String)> {
-    let path = std::env::var("ZCALL_SLED_PATH")
-        .unwrap_or_else(|_| "/dev/shm/plugin_schema.dat".into());
+    let path =
+        std::env::var("ZCALL_SLED_PATH").unwrap_or_else(|_| "/dev/shm/plugin_schema.dat".into());
     let data = std::fs::read(path).ok()?;
     if data.len() < 88 {
         return None;
@@ -493,8 +533,12 @@ impl Codec for BytesCodec {
     type Decode = Vec<u8>;
     type Encoder = BytesCodec;
     type Decoder = BytesCodec;
-    fn encoder(&mut self) -> Self::Encoder { *self }
-    fn decoder(&mut self) -> Self::Decoder { *self }
+    fn encoder(&mut self) -> Self::Encoder {
+        *self
+    }
+    fn decoder(&mut self) -> Self::Decoder {
+        *self
+    }
 }
 
 impl Encoder for BytesCodec {
@@ -532,7 +576,9 @@ struct InvokeState {
 }
 
 impl InvokeHandle {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     pub fn in_flight(&self) -> bool {
         self.inner.lock().map(|g| g.in_flight).unwrap_or(false)
@@ -552,13 +598,16 @@ impl InvokeHandle {
     ) {
         {
             let mut g = self.inner.lock().unwrap();
-            if g.in_flight { return; }
+            if g.in_flight {
+                return;
+            }
             g.in_flight = true;
             g.result = None;
         }
         let inner = self.inner.clone();
         tokio::spawn(async move {
-            let res = invoke_unary(&reg, &service, &method, &body).await
+            let res = invoke_unary(&reg, &service, &method, &body)
+                .await
                 .map_err(|e| format!("{e:#}"));
             if let Ok(mut g) = inner.lock() {
                 g.in_flight = false;
@@ -580,17 +629,29 @@ pub fn validate_request(
     method: &str,
     raw: &str,
 ) -> Result<()> {
-    let pool = reg.pool().ok_or_else(|| anyhow!("reflection pool not loaded"))?;
-    let svc = pool.services().find(|s| s.full_name() == service)
+    let pool = reg
+        .pool()
+        .ok_or_else(|| anyhow!("reflection pool not loaded"))?;
+    let svc = pool
+        .services()
+        .find(|s| s.full_name() == service)
         .ok_or_else(|| anyhow!("unknown service {service}"))?;
-    let m = svc.methods().find(|m| m.name() == method)
+    let m = svc
+        .methods()
+        .find(|m| m.name() == method)
         .ok_or_else(|| anyhow!("unknown method {service}/{method}"))?;
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Err(anyhow!("request body is empty"));
     }
-    let value: Value = serde_json::from_str(trimmed)
-        .map_err(|e| anyhow!("invalid JSON at line {} col {}: {}", e.line(), e.column(), e))?;
+    let value: Value = serde_json::from_str(trimmed).map_err(|e| {
+        anyhow!(
+            "invalid JSON at line {} col {}: {}",
+            e.line(),
+            e.column(),
+            e
+        )
+    })?;
     DynamicMessage::deserialize(m.input(), value)
         .context("JSON does not match input message schema")?;
     Ok(())
@@ -622,7 +683,9 @@ pub struct StreamSnapshot {
 }
 
 impl StreamHandle {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     pub fn snapshot(&self) -> StreamSnapshot {
         let g = self.inner.lock().unwrap();
@@ -636,14 +699,18 @@ impl StreamHandle {
 
     pub fn clear(&self) {
         if let Ok(mut g) = self.inner.lock() {
-            if let Some(a) = g.abort.take() { a.abort(); }
+            if let Some(a) = g.abort.take() {
+                a.abort();
+            }
             *g = StreamState::default();
         }
     }
 
     pub fn cancel(&self) {
         if let Ok(mut g) = self.inner.lock() {
-            if let Some(a) = g.abort.take() { a.abort(); }
+            if let Some(a) = g.abort.take() {
+                a.abort();
+            }
             g.running = false;
             g.closed = true;
         }
@@ -659,13 +726,21 @@ impl StreamHandle {
     ) {
         {
             let mut g = self.inner.lock().unwrap();
-            if g.running { return; }
-            if let Some(a) = g.abort.take() { a.abort(); }
-            *g = StreamState { running: true, ..Default::default() };
+            if g.running {
+                return;
+            }
+            if let Some(a) = g.abort.take() {
+                a.abort();
+            }
+            *g = StreamState {
+                running: true,
+                ..Default::default()
+            };
         }
         let inner = self.inner.clone();
         let handle = tokio::spawn(async move {
-            let res = run_server_streaming(reg, service, method, body, inner.clone(), ctx.clone()).await;
+            let res =
+                run_server_streaming(reg, service, method, body, inner.clone(), ctx.clone()).await;
             if let Ok(mut g) = inner.lock() {
                 g.running = false;
                 g.closed = true;
@@ -689,12 +764,18 @@ async fn run_server_streaming(
     inner: Arc<Mutex<StreamState>>,
     ctx: egui::Context,
 ) -> Result<()> {
-    let pool = reg.pool().ok_or_else(|| anyhow!("reflection pool not loaded"))?;
+    let pool = reg
+        .pool()
+        .ok_or_else(|| anyhow!("reflection pool not loaded"))?;
     let channel = reg.channel().ok_or_else(|| anyhow!("no active channel"))?;
 
-    let svc = pool.services().find(|s| s.full_name() == service)
+    let svc = pool
+        .services()
+        .find(|s| s.full_name() == service)
         .ok_or_else(|| anyhow!("unknown service {service}"))?;
-    let m = svc.methods().find(|m| m.name() == method)
+    let m = svc
+        .methods()
+        .find(|m| m.name() == method)
         .ok_or_else(|| anyhow!("unknown method {service}/{method}"))?;
     if !m.is_server_streaming() || m.is_client_streaming() {
         return Err(anyhow!("method is not server-streaming"));
@@ -708,7 +789,9 @@ async fn run_server_streaming(
 
     let path = format!("/{}/{}", service, method);
     let mut grpc = tonic::client::Grpc::new(channel);
-    grpc.ready().await.map_err(|e| anyhow!("channel not ready: {e}"))?;
+    grpc.ready()
+        .await
+        .map_err(|e| anyhow!("channel not ready: {e}"))?;
     let mut request = Request::new(req_bytes);
     attach_ghostbridge_identity(&mut request);
     let resp = grpc
@@ -742,7 +825,8 @@ fn once_stream<T: Send + 'static>(
 ) -> impl tonic::codegen::tokio_stream::Stream<Item = T> + Send + 'static {
     use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
     let (tx, rx) = tokio::sync::mpsc::channel(1);
-    tokio::spawn(async move { let _ = tx.send(item).await; });
+    tokio::spawn(async move {
+        let _ = tx.send(item).await;
+    });
     ReceiverStream::new(rx)
 }
-

@@ -34,13 +34,20 @@ async fn main() -> anyhow::Result<()> {
             let cozo_arc = Arc::new(cozo);
             let mem_store = Arc::new(CognitiveMemoryStore::new(cozo_arc.clone()).await?);
 
-            // Register chatbot as a user in the CozoDB using its WG identity
-            let identity = op_identity::WireGuardIdentity::new();
-            if let Ok(pubkey) = identity.get_local_pubkey() {
-                if let Err(e) = cozo_arc.upsert_user(&pubkey) {
-                    tracing::error!("Failed to register chatbot in CozoDB: {}", e);
-                } else {
-                    tracing::info!("Registered chatbot in CozoDB with identity: {}", pubkey);
+            // The container account is pre-assigned from the persistent wg0
+            // registry. WG terminates upstream; this process never probes a
+            // local interface or identity file. Registering the account here
+            // seeds Cozo's durable pubkey -> account-session mapping, while
+            // request authentication remains exclusively Ghostbridge metadata.
+            if let Ok(pubkey) = std::env::var("OP_ACCOUNT_WG_PUBKEY") {
+                let pubkey = pubkey.trim();
+                if !pubkey.is_empty() {
+                    let session_id = op_identity::session::derive_session_id(pubkey);
+                    let proof = op_identity::session::session_proof(&session_id);
+                    cozo_arc.upsert_user(pubkey)?;
+                    cozo_arc.upsert_account_session(pubkey, &session_id, &proof)?;
+                    cozo_arc.create_session(&session_id, pubkey, None)?;
+                    tracing::info!("Registered pre-assigned container account in CozoDB");
                 }
             }
 

@@ -28,6 +28,7 @@ use zbus::connection::Connection;
 
 mod dbus;
 use dbus::XrayService;
+use op_xray_daemon::commander_client;
 
 /// CLI arguments
 #[derive(Debug, Clone)]

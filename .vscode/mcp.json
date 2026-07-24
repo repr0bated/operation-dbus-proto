@@ -1,9 +1,16 @@
 {
   "servers": {
     "cognitive-mcp": {
-      "type": "stdio",
-      "command": "cognitive-mcp-server",
-      "args": ["--stdio"]
+      "type": "http",
+      "url": "http://10.200.0.2:3003/mcp",
+      "headers": {
+        "X-Ghostbridge-Footprint": "vscode",
+        "X-Ghostbridge-Trace-ID": "vscode-local"
+      }
+    },
+    "op-web-compact": {
+      "type": "sse",
+      "url": "http://127.0.0.1:8080/mcp/compact"
     }
   }
 }

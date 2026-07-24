@@ -55,7 +55,11 @@ fn render_node(ui: &mut egui::Ui, schema: &Value, value: &Value, path: &str, dep
         .show_header(ui, |ui| {
             ui.label(RichText::new(header).color(FG).strong().size(12.0));
             if let Some(enum_vals) = schema.get("enum").and_then(Value::as_array) {
-                ui.label(RichText::new(format!("enum[{}]", enum_vals.len())).color(MUTED).size(11.0));
+                ui.label(
+                    RichText::new(format!("enum[{}]", enum_vals.len()))
+                        .color(MUTED)
+                        .size(11.0),
+                );
             }
         })
         .body(|ui| {
@@ -73,8 +77,8 @@ fn render_body(ui: &mut egui::Ui, schema: &Value, value: &Value, path: &str, dep
 
     match resolved.get("type").and_then(Value::as_str) {
         Some("object") => render_object(ui, resolved, value, path, depth),
-        Some("array")  => render_array(ui, resolved, value, path, depth),
-        _              => render_leaf(ui, resolved, value),
+        Some("array") => render_array(ui, resolved, value, path, depth),
+        _ => render_leaf(ui, resolved, value),
     }
 }
 
@@ -153,11 +157,11 @@ fn render_array(ui: &mut egui::Ui, schema: &Value, value: &Value, path: &str, de
 
 fn render_leaf(ui: &mut egui::Ui, schema: &Value, value: &Value) {
     let (text, color) = match value {
-        Value::Null      => ("∅ null".to_string(), MUTED),
-        Value::Bool(b)   => (b.to_string(),        if *b { OK } else { DANGER }),
-        Value::Number(n) => (n.to_string(),        PRIMARY),
+        Value::Null => ("∅ null".to_string(), MUTED),
+        Value::Bool(b) => (b.to_string(), if *b { OK } else { DANGER }),
+        Value::Number(n) => (n.to_string(), PRIMARY),
         Value::String(s) => (format!("\"{}\"", s), FG),
-        other            => (other.to_string(),    FG),
+        other => (other.to_string(), FG),
     };
 
     ui.horizontal(|ui| {
@@ -166,7 +170,11 @@ fn render_leaf(ui: &mut egui::Ui, schema: &Value, value: &Value) {
             ui.label(RichText::new(format!("«{}»", fmt)).color(MUTED).size(10.0));
         }
         if let Some(def) = schema.get("default") {
-            ui.label(RichText::new(format!("default={}", def)).color(MUTED).size(10.0));
+            ui.label(
+                RichText::new(format!("default={}", def))
+                    .color(MUTED)
+                    .size(10.0),
+            );
         }
     });
 }
@@ -174,7 +182,11 @@ fn render_leaf(ui: &mut egui::Ui, schema: &Value, value: &Value) {
 // ---------- helpers ----------
 
 fn schema_title(schema: &Value) -> String {
-    schema.get("title").and_then(Value::as_str).unwrap_or("").to_string()
+    schema
+        .get("title")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string()
 }
 
 fn schema_description(schema: &Value) -> Option<&str> {
@@ -185,10 +197,18 @@ fn schema_type(schema: &Value) -> String {
     if let Some(t) = schema.get("type").and_then(Value::as_str) {
         return t.to_string();
     }
-    if schema.get("oneOf").is_some() { return "oneOf".into(); }
-    if schema.get("anyOf").is_some() { return "anyOf".into(); }
-    if schema.get("allOf").is_some() { return "allOf".into(); }
-    if schema.get("$ref").is_some()  { return "ref".into(); }
+    if schema.get("oneOf").is_some() {
+        return "oneOf".into();
+    }
+    if schema.get("anyOf").is_some() {
+        return "anyOf".into();
+    }
+    if schema.get("allOf").is_some() {
+        return "allOf".into();
+    }
+    if schema.get("$ref").is_some() {
+        return "ref".into();
+    }
     "any".into()
 }
 

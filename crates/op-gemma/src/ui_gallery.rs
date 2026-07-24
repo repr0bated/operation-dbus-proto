@@ -1,8 +1,9 @@
 //! Gemma UI Gallery Generator
 //!
-//! Reads active plugin schemas from `/dev/shm/live-schema.json` and generates
-//! 200 unique json-render.dev specs. Each spec is a complete interface — live
-//! logs, procfs dashboards, agent configs, flow tables, network topology, etc.
+//! Reads active plugin schemas from the sealed blob catalog (via
+//! `op_blob::catalog::read_plugin_schema_shm`) and generates 200 unique
+//! json-render.dev specs. Each spec is a complete interface — live logs,
+//! procfs dashboards, agent configs, flow tables, network topology, etc.
 #![allow(
     dead_code,
     unused_imports,
@@ -21,6 +22,7 @@
 //! replaced with new ones that don't match any existing signature.
 
 use anyhow::{Context, Result};
+use op_state_store::{FieldType, PluginSchema};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::collections::{HashMap, HashSet};
@@ -29,7 +31,6 @@ use std::io::Write;
 use std::path::Path;
 use tracing::{info, warn};
 
-const LIVE_SCHEMA: &str = "/dev/shm/live-schema.json";
 const GEMMA_UI_SPECS: &str = "/dev/shm/gemma-ui-specs.json";
 const TARGET_COUNT: usize = 200;
 const MAX_ATTEMPTS_MULTIPLIER: usize = 50;
@@ -50,20 +51,6 @@ pub struct GemmaSpecEntry {
 pub struct GemmaSpecGallery {
     pub version: u32,
     pub specs: Vec<GemmaSpecEntry>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct PluginSchemaCatalog {
-    #[serde(flatten)]
-    plugins: HashMap<String, Vec<PluginSchema>>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct PluginSchema {
-    name: String,
-    description: String,
-    #[serde(default)]
-    fields: Map<String, Value>,
 }
 
 // ── Public API ───────────────────────────────────────────────────────────────
@@ -180,7 +167,7 @@ pub fn delete_and_replace(spec_id: &str) -> Result<()> {
 
 // ── Spec builders ────────────────────────────────────────────────────────────
 
-type Generator = fn(&HashMap<String, Vec<PluginSchema>>, usize) -> Value;
+type Generator = fn(&HashMap<String, PluginSchema>, usize) -> Value;
 
 fn all_generators() -> Vec<(&'static str, Generator)> {
     vec![
@@ -269,7 +256,7 @@ fn leak(s: String) -> &'static str {
 
 // ── Individual generators ────────────────────────────────────────────────────
 
-fn gen_live_logs(_plugins: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Value {
+fn gen_live_logs(_plugins: &HashMap<String, PluginSchema>, n: usize) -> Value {
     let log_lines: Vec<Value> = (0..20).map(|i| {
         let levels = ["debug", "info", "warn", "error"];
         let sources = ["op-dbus", "op-web", "xray", "ovs-dbus-init", "gbr-xray", "netclient"];
@@ -321,7 +308,7 @@ fn gen_live_logs(_plugins: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Val
     )
 }
 
-fn gen_procfs_dashboard(_plugins: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Value {
+fn gen_procfs_dashboard(_plugins: &HashMap<String, PluginSchema>, n: usize) -> Value {
     let cpus = (n % 8) + 1;
     spec(
         "grid-1",
@@ -406,7 +393,7 @@ fn gen_procfs_dashboard(_plugins: &HashMap<String, Vec<PluginSchema>>, n: usize)
     )
 }
 
-fn gen_agent_config(_plugins: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Value {
+fn gen_agent_config(_plugins: &HashMap<String, PluginSchema>, n: usize) -> Value {
     let agents = [
         "rust_pro",
         "memory",
@@ -467,7 +454,7 @@ fn gen_agent_config(_plugins: &HashMap<String, Vec<PluginSchema>>, n: usize) -> 
     )
 }
 
-fn gen_flow_table(_plugins: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Value {
+fn gen_flow_table(_plugins: &HashMap<String, PluginSchema>, n: usize) -> Value {
     let flows: Vec<Value> = (0..12)
         .map(|i| {
             let priorities = [100, 150, 200, 300, 50];
@@ -522,7 +509,7 @@ fn gen_flow_table(_plugins: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Va
     )
 }
 
-fn gen_network_topology(_plugins: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Value {
+fn gen_network_topology(_plugins: &HashMap<String, PluginSchema>, n: usize) -> Value {
     let nodes: Vec<Value> = [
         ("host", "ens3", "host", "up"),
         ("bridge", "ovsbr0", "bridge", "up"),
@@ -578,13 +565,13 @@ fn gen_network_topology(_plugins: &HashMap<String, Vec<PluginSchema>>, n: usize)
     )
 }
 
-fn gen_plugin_state(plugins: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Value {
+fn gen_plugin_state(plugins: &HashMap<String, PluginSchema>, n: usize) -> Value {
     let plugin_names: Vec<&String> = plugins.keys().collect();
     if plugin_names.is_empty() {
         return gen_live_logs(plugins, n);
     }
     let plugin_name = plugin_names[n % plugin_names.len()];
-    let schema = &plugins[plugin_name][0];
+    let schema = &plugins[plugin_name];
     let field_count = schema.fields.len();
 
     let field_elements: Vec<Value> = schema
@@ -593,37 +580,15 @@ fn gen_plugin_state(plugins: &HashMap<String, Vec<PluginSchema>>, n: usize) -> V
         .take(8)
         .enumerate()
         .map(|(i, (fname, fval))| {
-            let ft = fval
-                .get("field_type")
-                .and_then(|v| v.as_str())
-                .unwrap_or("string");
-            let desc = fval
-                .get("description")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let ro = fval
-                .get("read_only")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            let req = fval
-                .get("required")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            let ft_str = if ft == "any" {
-                "string"
-            } else if ft.starts_with('{') {
-                "object"
-            } else {
-                ft
-            };
+            let (ft_str, enum_values) = field_type_label(&fval.field_type);
             json!({
                 "name": fname,
                 "fieldType": ft_str,
-                "description": desc,
+                "description": fval.description.as_str(),
                 "value": null,
-                "readOnly": ro,
-                "required": req,
-                "enumValues": null,
+                "readOnly": fval.read_only,
+                "required": fval.required,
+                "enumValues": enum_values,
             })
         })
         .collect();
@@ -674,7 +639,7 @@ fn gen_plugin_state(plugins: &HashMap<String, Vec<PluginSchema>>, n: usize) -> V
     spec("card-1", elements)
 }
 
-fn gen_service_manager(_plugins: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Value {
+fn gen_service_manager(_plugins: &HashMap<String, PluginSchema>, n: usize) -> Value {
     let services = [
         ("op-dbus", "active", 86400, 0),
         ("op-web-srv", "active", 86400, 0),
@@ -721,7 +686,7 @@ fn gen_service_manager(_plugins: &HashMap<String, Vec<PluginSchema>>, n: usize) 
     )
 }
 
-fn gen_audit_timeline(_plugins: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Value {
+fn gen_audit_timeline(_plugins: &HashMap<String, PluginSchema>, n: usize) -> Value {
     let events: Vec<Value> = (0..15).map(|i| {
         let types = ["mut.service.state-sync.apply-patch", "evt.service.schema.reloaded", "mut.service.unix-socket.create-socket", "obs.service.zeroclaw-schema.fetch", "prj.service.projected-object.publish"];
         let sevs = ["info", "warning", "error", "success"];
@@ -780,7 +745,7 @@ fn gen_audit_timeline(_plugins: &HashMap<String, Vec<PluginSchema>>, n: usize) -
     spec("card-1", elements)
 }
 
-fn gen_data_explorer(_plugins: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Value {
+fn gen_data_explorer(_plugins: &HashMap<String, PluginSchema>, n: usize) -> Value {
     let data = json!({
         "plugins": {
             "openflow": {"controller": "127.0.0.1:6653", "flows": 42, "bridges": ["ovsbr0"]},
@@ -809,13 +774,13 @@ fn gen_data_explorer(_plugins: &HashMap<String, Vec<PluginSchema>>, n: usize) ->
     )
 }
 
-fn gen_schema_gallery(plugins: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Value {
+fn gen_schema_gallery(plugins: &HashMap<String, PluginSchema>, n: usize) -> Value {
     let names: Vec<String> = plugins.keys().take(12).cloned().collect();
     let cards: Vec<Value> = names
         .iter()
         .enumerate()
         .map(|(i, name)| {
-            let schema = &plugins[name][0];
+            let schema = &plugins[name];
             json!({
                 "pluginId": name,
                 "title": name,
@@ -845,7 +810,7 @@ fn gen_schema_gallery(plugins: &HashMap<String, Vec<PluginSchema>>, n: usize) ->
     spec("grid-1", elements)
 }
 
-fn gen_wireguard_status(_plugins: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Value {
+fn gen_wireguard_status(_plugins: &HashMap<String, PluginSchema>, n: usize) -> Value {
     spec(
         "card-1",
         vec![
@@ -870,7 +835,7 @@ fn gen_wireguard_status(_plugins: &HashMap<String, Vec<PluginSchema>>, n: usize)
     )
 }
 
-fn gen_xray_config(_plugins: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Value {
+fn gen_xray_config(_plugins: &HashMap<String, PluginSchema>, n: usize) -> Value {
     spec(
         "card-1",
         vec![
@@ -896,7 +861,7 @@ fn gen_xray_config(_plugins: &HashMap<String, Vec<PluginSchema>>, n: usize) -> V
     )
 }
 
-fn gen_ovs_bridges(_plugins: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Value {
+fn gen_ovs_bridges(_plugins: &HashMap<String, PluginSchema>, n: usize) -> Value {
     spec(
         "card-1",
         vec![
@@ -939,7 +904,7 @@ fn gen_ovs_bridges(_plugins: &HashMap<String, Vec<PluginSchema>>, n: usize) -> V
     )
 }
 
-fn gen_privacy_chain(_plugins: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Value {
+fn gen_privacy_chain(_plugins: &HashMap<String, PluginSchema>, n: usize) -> Value {
     spec(
         "stack-1",
         vec![
@@ -988,7 +953,7 @@ fn gen_privacy_chain(_plugins: &HashMap<String, Vec<PluginSchema>>, n: usize) ->
     )
 }
 
-fn gen_oscal_registry(_plugins: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Value {
+fn gen_oscal_registry(_plugins: &HashMap<String, PluginSchema>, n: usize) -> Value {
     let entries: Vec<Value> = [
         "src.network.xray-serve@v1", "exp.service.zeroclaw-serve@v1",
         "exp.service.cognitive-mcp-serve@v1", "src.service.qdrant-serve@v1",
@@ -1018,7 +983,7 @@ fn gen_oscal_registry(_plugins: &HashMap<String, Vec<PluginSchema>>, n: usize) -
     )
 }
 
-fn gen_mixed_dashboard(plugins: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Value {
+fn gen_mixed_dashboard(plugins: &HashMap<String, PluginSchema>, n: usize) -> Value {
     let variant = n % 4;
     match variant {
         0 => {
@@ -1133,7 +1098,7 @@ fn gen_mixed_dashboard(plugins: &HashMap<String, Vec<PluginSchema>>, n: usize) -
     }
 }
 
-fn gen_nested_dialog(_p: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Value {
+fn gen_nested_dialog(_p: &HashMap<String, PluginSchema>, n: usize) -> Value {
     let titles = [
         "Configuration",
         "Settings",
@@ -1180,7 +1145,7 @@ fn gen_nested_dialog(_p: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Value
     )
 }
 
-fn gen_carousel_badges(_p: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Value {
+fn gen_carousel_badges(_p: &HashMap<String, PluginSchema>, n: usize) -> Value {
     let all_badges = [
         "online",
         "encrypted",
@@ -1208,7 +1173,7 @@ fn gen_carousel_badges(_p: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Val
     )
 }
 
-fn gen_accordion_logs(_p: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Value {
+fn gen_accordion_logs(_p: &HashMap<String, PluginSchema>, n: usize) -> Value {
     spec(
         "acc-1",
         vec![(
@@ -1226,7 +1191,7 @@ fn gen_accordion_logs(_p: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Valu
     )
 }
 
-fn gen_drawer_topology(_p: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Value {
+fn gen_drawer_topology(_p: &HashMap<String, PluginSchema>, n: usize) -> Value {
     spec(
         "stack-1",
         vec![
@@ -1258,7 +1223,7 @@ fn gen_drawer_topology(_p: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Val
     )
 }
 
-fn gen_popover_metrics(_p: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Value {
+fn gen_popover_metrics(_p: &HashMap<String, PluginSchema>, n: usize) -> Value {
     spec(
         "row-1",
         vec![
@@ -1281,7 +1246,7 @@ fn gen_popover_metrics(_p: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Val
     )
 }
 
-fn gen_toggle_filter_table(_p: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Value {
+fn gen_toggle_filter_table(_p: &HashMap<String, PluginSchema>, n: usize) -> Value {
     spec(
         "stack-1",
         vec![
@@ -1310,7 +1275,7 @@ fn gen_toggle_filter_table(_p: &HashMap<String, Vec<PluginSchema>>, n: usize) ->
     )
 }
 
-fn gen_slider_thresholds(_p: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Value {
+fn gen_slider_thresholds(_p: &HashMap<String, PluginSchema>, n: usize) -> Value {
     spec(
         "card-1",
         vec![
@@ -1347,7 +1312,7 @@ fn gen_slider_thresholds(_p: &HashMap<String, Vec<PluginSchema>>, n: usize) -> V
     )
 }
 
-fn gen_collapsible_tree(_p: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Value {
+fn gen_collapsible_tree(_p: &HashMap<String, PluginSchema>, n: usize) -> Value {
     let data = json!({
         "system": {
             "kernel": "7.0.11-xanmod1",
@@ -1388,7 +1353,7 @@ fn gen_collapsible_tree(_p: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Va
     )
 }
 
-fn gen_tabs_config(_p: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Value {
+fn gen_tabs_config(_p: &HashMap<String, PluginSchema>, n: usize) -> Value {
     spec(
         "card-1",
         vec![
@@ -1415,7 +1380,7 @@ fn gen_tabs_config(_p: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Value {
     )
 }
 
-fn gen_kv_inspector(_p: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Value {
+fn gen_kv_inspector(_p: &HashMap<String, PluginSchema>, n: usize) -> Value {
     let pairs: Vec<Value> = [
         ("hostname", "ghostbridge"),
         ("kernel", "7.0.11-xanmod1"),
@@ -1450,7 +1415,7 @@ fn gen_kv_inspector(_p: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Value 
     spec("card-1", elements)
 }
 
-fn gen_button_group_actions(_p: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Value {
+fn gen_button_group_actions(_p: &HashMap<String, PluginSchema>, n: usize) -> Value {
     spec(
         "card-1",
         vec![
@@ -1476,7 +1441,7 @@ fn gen_button_group_actions(_p: &HashMap<String, Vec<PluginSchema>>, n: usize) -
     )
 }
 
-fn gen_progress_ring(_p: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Value {
+fn gen_progress_ring(_p: &HashMap<String, PluginSchema>, n: usize) -> Value {
     spec(
         "grid-1",
         vec![
@@ -1510,7 +1475,7 @@ fn gen_progress_ring(_p: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Value
     )
 }
 
-fn gen_skeleton_loader(_p: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Value {
+fn gen_skeleton_loader(_p: &HashMap<String, PluginSchema>, n: usize) -> Value {
     spec(
         "card-1",
         vec![
@@ -1547,7 +1512,7 @@ fn gen_skeleton_loader(_p: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Val
     )
 }
 
-fn gen_alert_banner(_p: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Value {
+fn gen_alert_banner(_p: &HashMap<String, PluginSchema>, n: usize) -> Value {
     let types = ["info", "warning", "error", "success"];
     let msgs = [
         ("System Healthy", "All 12 services are running normally"),
@@ -1585,7 +1550,7 @@ fn gen_alert_banner(_p: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Value 
     )
 }
 
-fn gen_dropdown_menu_actions(_p: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Value {
+fn gen_dropdown_menu_actions(_p: &HashMap<String, PluginSchema>, n: usize) -> Value {
     spec(
         "card-1",
         vec![
@@ -1606,7 +1571,7 @@ fn gen_dropdown_menu_actions(_p: &HashMap<String, Vec<PluginSchema>>, n: usize) 
     )
 }
 
-fn gen_pagination_table(_p: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Value {
+fn gen_pagination_table(_p: &HashMap<String, PluginSchema>, n: usize) -> Value {
     let rows: Vec<Value> = (0..20)
         .map(|i| {
             json!({
@@ -1642,7 +1607,7 @@ fn gen_pagination_table(_p: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Va
     )
 }
 
-fn gen_grid_metrics(_p: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Value {
+fn gen_grid_metrics(_p: &HashMap<String, PluginSchema>, n: usize) -> Value {
     let cols = (n % 4) + 2;
     let ids: Vec<&str> = (0..cols * 2)
         .map(|i| {
@@ -1677,7 +1642,7 @@ fn gen_grid_metrics(_p: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Value 
     spec("grid-1", elements)
 }
 
-fn gen_stack_forms(_p: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Value {
+fn gen_stack_forms(_p: &HashMap<String, PluginSchema>, n: usize) -> Value {
     spec(
         "stack-1",
         vec![
@@ -1719,7 +1684,7 @@ fn gen_stack_forms(_p: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Value {
     )
 }
 
-fn gen_separator_sections(_p: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Value {
+fn gen_separator_sections(_p: &HashMap<String, PluginSchema>, n: usize) -> Value {
     spec(
         "stack-1",
         vec![
@@ -1759,7 +1724,7 @@ fn gen_separator_sections(_p: &HashMap<String, Vec<PluginSchema>>, n: usize) -> 
     )
 }
 
-fn gen_radio_provider(_p: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Value {
+fn gen_radio_provider(_p: &HashMap<String, PluginSchema>, n: usize) -> Value {
     spec(
         "card-1",
         vec![
@@ -1780,7 +1745,7 @@ fn gen_radio_provider(_p: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Valu
     )
 }
 
-fn gen_checkbox_tools(_p: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Value {
+fn gen_checkbox_tools(_p: &HashMap<String, PluginSchema>, n: usize) -> Value {
     let tools = [
         "ovs_create_bridge",
         "ovs_add_port",
@@ -1816,7 +1781,7 @@ fn gen_checkbox_tools(_p: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Valu
     spec("card-1", elements)
 }
 
-fn gen_textarea_prompt(_p: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Value {
+fn gen_textarea_prompt(_p: &HashMap<String, PluginSchema>, n: usize) -> Value {
     spec(
         "card-1",
         vec![
@@ -1845,7 +1810,7 @@ fn gen_textarea_prompt(_p: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Val
     )
 }
 
-fn gen_link_nav(_p: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Value {
+fn gen_link_nav(_p: &HashMap<String, PluginSchema>, n: usize) -> Value {
     spec(
         "stack-1",
         vec![
@@ -1881,7 +1846,7 @@ fn gen_link_nav(_p: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Value {
     )
 }
 
-fn gen_avatar_agents(_p: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Value {
+fn gen_avatar_agents(_p: &HashMap<String, PluginSchema>, n: usize) -> Value {
     let agents = [
         ("ANNA", "scribe"),
         ("Olivia", "scal"),
@@ -1915,12 +1880,33 @@ fn gen_avatar_agents(_p: &HashMap<String, Vec<PluginSchema>>, n: usize) -> Value
 
 // ── Utilities ────────────────────────────────────────────────────────────────
 
-fn load_plugin_schemas() -> Result<HashMap<String, Vec<PluginSchema>>> {
-    let raw = fs::read_to_string(LIVE_SCHEMA)
-        .with_context(|| format!("failed to read live schema: {LIVE_SCHEMA}"))?;
-    let parsed: PluginSchemaCatalog =
-        serde_json::from_str(&raw).with_context(|| "failed to parse live schema")?;
-    Ok(parsed.plugins)
+/// Map a `FieldType` to a UI-facing type label and, for `Enum`, its values.
+fn field_type_label(ft: &FieldType) -> (&'static str, Option<Value>) {
+    match ft {
+        FieldType::String => ("string", None),
+        FieldType::Integer => ("integer", None),
+        FieldType::Float => ("number", None),
+        FieldType::Boolean => ("boolean", None),
+        FieldType::Array(_) => ("array", None),
+        FieldType::Object(_) => ("object", None),
+        FieldType::Enum(values) => ("string", Some(json!(values))),
+        FieldType::OneOf(_) => ("object", None),
+        FieldType::Any => ("string", None),
+    }
+}
+
+fn load_plugin_schemas() -> Result<HashMap<String, PluginSchema>> {
+    let ids = op_blob::catalog::read_manifest_plugin_ids_shm()
+        .context("failed to read plugin blob manifest from SHM catalog")?;
+    let mut schemas = HashMap::with_capacity(ids.len());
+    for id in ids {
+        if let Some(schema) = op_blob::catalog::read_plugin_schema_shm(&id) {
+            schemas.insert(id, schema);
+        } else {
+            warn!(plugin_id = %id, "Gemma UI gallery: no sealed schema for manifest entry, skipping");
+        }
+    }
+    Ok(schemas)
 }
 
 fn load_existing_specs() -> Result<GemmaSpecGallery> {
@@ -1988,7 +1974,7 @@ fn short_hash(s: &str) -> String {
     format!("{:016x}", hasher.finish())
 }
 
-fn tags_for_generator(gen_name: &str, plugins: &HashMap<String, Vec<PluginSchema>>) -> Vec<String> {
+fn tags_for_generator(gen_name: &str, plugins: &HashMap<String, PluginSchema>) -> Vec<String> {
     let mut tags = vec![gen_name.to_string()];
     // Add a random plugin name as a tag for variety
     let plugin_names: Vec<&String> = plugins.keys().collect();

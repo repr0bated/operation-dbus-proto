@@ -49,7 +49,16 @@ pub fn render(
         Route::State        => state_view(ui),
         Route::Grpc         => grpc_view(ui, registry),
         Route::GrpcExplorer => grpc_explorer(ui, registry, explorer, invoke, ctx),
-        r => stub(ui, route_title(r), description(r)),
+        r => {
+            // Render real plugin state from the catalog store
+            let store = catalog_store.snapshot();
+            if let Some(element) = store.latest_active(&r.to_string()) {
+                ui.label(RichText::new(&format!("Live Plugin: {}", r)).color(MUTED).size(13.0);
+                ui.label(RichText::new(&format!("{}", element.spec["description"].as_str().unwrap_or(""))).size(11.0));
+            } else {
+                stub(ui, route_title(r), description(r))
+            }
+        },
     }
 }
 

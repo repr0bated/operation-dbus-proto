@@ -1,4 +1,10 @@
-# Network Address & Protocol Table (Verified RAM Fabric)
+# Network Address & Protocol Table
+
+> **STALE for the 2026-07 Artix/runit host.** Addresses and interfaces below describe an older layout (ens3, incusbr0, 10.88.88.x).  
+> **Current live inventory:** [operations/host-socket-topology-live.md](src/operations/host-socket-topology-live.md)  
+> **Ops summary:** [src/operations/network.md](src/operations/network.md)
+
+## Historical table (previous host — do not use for runbooks)
 
 | Interface/Service | IPv4/CIDR | Type/Protocol | Port/Binding | Purpose |
 | :--- | :--- | :--- | :--- | :--- |

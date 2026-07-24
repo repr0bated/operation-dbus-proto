@@ -1,9 +1,9 @@
 //! Entry point — native eframe shell + background tokio runtime for tonic.
 mod app;
+mod auth;
 mod catalog;
 mod chat;
 mod conn;
-mod auth;
 mod grpc;
 mod nav;
 mod pagedata;
@@ -23,8 +23,8 @@ fn main() -> eframe::Result<()> {
 
     let registry = ReflectionRegistry::new();
     let chat_transport: Option<std::sync::Arc<crate::chat::ChatTransport>> = {
-        let endpoint = std::env::var("ZEROCLAW_GRPC")
-            .unwrap_or_else(|_| "http://127.0.0.1:18789".into());
+        let endpoint =
+            std::env::var("ZEROCLAW_GRPC").unwrap_or_else(|_| "http://127.0.0.1:8090".into());
         let registry = registry.clone();
         let endpoint_clone = endpoint.clone();
         rt.spawn(async move {

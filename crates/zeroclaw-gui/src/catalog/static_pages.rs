@@ -112,7 +112,12 @@ impl StaticPages {
                 if f.path().extension().and_then(|s| s.to_str()) != Some("json") {
                     continue;
                 }
-                let slug = f.path().file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
+                let slug = f
+                    .path()
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("")
+                    .to_string();
                 if slug.is_empty() {
                     continue;
                 }
@@ -136,12 +141,19 @@ impl StaticPages {
             if path.extension().and_then(|s| s.to_str()) != Some("json") {
                 continue;
             }
-            let slug = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
+            let slug = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_string();
             if slug.is_empty() {
                 continue;
             }
             seen.insert(slug.clone());
-            let mtime = entry.metadata().and_then(|m| m.modified()).unwrap_or(SystemTime::UNIX_EPOCH);
+            let mtime = entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .unwrap_or(SystemTime::UNIX_EPOCH);
             if self.mtimes.get(&slug) == Some(&mtime) {
                 continue;
             }
@@ -192,7 +204,10 @@ fn parse_source(doc: &Value) -> Option<PageSource> {
     Some(PageSource {
         plugin: src.get("plugin")?.as_str()?.to_string(),
         method: src.get("method")?.as_str()?.to_string(),
-        args: src.get("args").cloned().unwrap_or_else(|| Value::Array(vec![])),
+        args: src
+            .get("args")
+            .cloned()
+            .unwrap_or_else(|| Value::Array(vec![])),
         poll_secs: src.get("poll_secs").and_then(Value::as_u64).unwrap_or(5),
     })
 }

@@ -13,7 +13,7 @@
 // - priv_* internal ports are created by ovs-attach-ports.sh
 
 use anyhow::{Context, Result};
-use op_network::{openflow::OpenFlowClient, ovsdb::OvsdbClient};
+use op_network::{openflow::OpenFlowClient, rovs_proxy::OvsdbDbusClient as OvsdbClient};
 use std::path::Path;
 use tracing::{info, warn};
 

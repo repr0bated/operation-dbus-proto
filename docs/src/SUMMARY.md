@@ -29,6 +29,7 @@
 
 - [Service Management](operations/service-management.md)
 - [Network Operations](operations/network.md)
+- [Host Socket & Network Topology (Live)](operations/host-socket-topology-live.md)
 - [Incident Response](operations/incident-response.md)
 
 # Contributors

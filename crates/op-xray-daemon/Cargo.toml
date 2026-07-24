@@ -18,6 +18,14 @@ uuid = { version = "1", features = ["v4"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 nix = { version = "0.28", features = ["signal", "process"] }
 chrono = "0.4"
+tonic = { workspace = true }
+prost = { workspace = true }
+tokio-stream = { workspace = true }
+hyper-util = { version = "0.1", features = ["tokio"] }
+tower = { version = "0.4", features = ["util"] }
+
+[build-dependencies]
+tonic-build = { workspace = true }
 
 [dev-dependencies]
 tokio-test = "0.4"

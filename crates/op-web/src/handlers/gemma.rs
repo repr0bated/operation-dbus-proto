@@ -24,8 +24,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::Arc;
 
-const GEMMA_SPECS_PATH: &str = "/dev/shm/gemma-ui-specs.json";
-const GEMMA_CATALOG_PATH: &str = "/dev/shm/gemma-ui-catalog.json";
+// Deliberately renamed off the old "gemma"-prefixed paths (were independently
+// hardcoded in THREE places with no shared constant: op-gemma/ui_gallery.rs
+// the producer, op-plugins/gemma_brain.rs a third undiscovered reader, and
+// here). Not synced to those other two on purpose — whatever silently keeps
+// assuming the old path was a hidden violator of "the blob/SHM path is the
+// single source of truth," and this will surface it instead of masking it.
+const GEMMA_SPECS_PATH: &str = "/dev/shm/ui-specs.json";
+const GEMMA_CATALOG_PATH: &str = "/dev/shm/ui-catalog.json";
 const BLOB_MANIFEST_PATH: &str = "/dev/shm/opdbus/plugin-blobs/.manifest.json";
 
 // ── Wire types — mirror op-gemma's `GemmaSpecEntry`/`GemmaSpecGallery` ───────
@@ -217,6 +223,21 @@ pub async fn gemma_catalog_delete_handler(
 }
 
 // ── Plugin schema (sealed blob catalog) ─────────────────────────────────────
+
+/// GET /api/gemma/plugins — every plugin actually in the sealed blob catalog.
+/// A plugin exists iff its blob is sealed here; this is NOT the same list as
+/// "plugins with generated RPC methods" (some plugins, e.g. antigravity/
+/// antigravity_chat, are state-only with zero methods, so they're absent
+/// from the frontend's method-index but very much present as real blobs).
+pub async fn gemma_list_plugins_handler(Extension(_state): Extension<Arc<AppState>>) -> Response {
+    match op_blob::catalog::read_manifest_plugin_ids_shm() {
+        Some(ids) => ok(json!({ "plugins": ids })),
+        None => err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "blob catalog manifest unavailable",
+        ),
+    }
+}
 
 /// GET /api/gemma/plugin-schema/:plugin
 /// The base schema is the render source: read straight from the sealed blob

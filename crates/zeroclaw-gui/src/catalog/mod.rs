@@ -25,4 +25,4 @@ pub mod store;
 
 pub use dsl::{Element, ElementId, ElementVersion, PinnedRef};
 pub use interpret::{render, RenderError};
-pub use store::{CatalogStore, CatalogSnapshot};
+pub use store::{CatalogSnapshot, CatalogStore};

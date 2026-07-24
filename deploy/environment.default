@@ -1,8 +1,15 @@
 # Database and State
 OP_DBUS_STATE_DIR=/var/lib/op-dbus
 
-# gRPC — op-dbus server on ovsbr0 (reachable by all containers)
-OP_DBUS_GRPC_ADDR=http://10.200.0.2:50051
+# gRPC — consolidated op-grpc-bridge (HTTP/gRPC-Web + native gRPC)
+# Prefer loopback on the host; containers use shared UDS container.sock.
+OP_DBUS_GRPC_ADDR=http://127.0.0.1:8090
+GRPC_BIND=0.0.0.0:8090
+ZEROCLAW_BIND_ADDR=0.0.0.0:8090
+# Host-local native gRPC (op-web, zbusctl)
+ZEROCLAW_UNIX_SOCKET=/run/opdbus/grpc.sock
+# Shared fabric for NIC-less containers (bind-mount /run/ghostbridge)
+GHOSTBRIDGE_SOCKET_PATH=/run/ghostbridge/container.sock
 
 # OpenFlow controller on ovsbr0
 OPENFLOW_CONTROLLER=tcp:10.200.0.1:6653

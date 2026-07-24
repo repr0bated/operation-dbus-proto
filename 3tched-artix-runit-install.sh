@@ -397,13 +397,17 @@ OP_DBUS_STATE_DIR=${STATE_DIR}
 OP_MEMORY_DB=${STATE_DIR}/cognitive.db
 COGNITIVE_MCP_DB_PATH=${STATE_DIR}/cognitive.db
 
-# gRPC state manager (opdbus binds the IPv4 of OP_DBUS_GRPC_IFACE:50051)
-OP_DBUS_GRPC_IFACE=ovsbr0
-OP_DBUS_GRPC_ADDR=http://10.200.0.1:50051
+# gRPC control plane — consolidated on op-grpc-bridge (:8090 + UDS).
+# No separate opdbus :50051 process in the current runit layout.
+OP_DBUS_GRPC_IFACE=lo
+OP_DBUS_GRPC_ADDR=http://127.0.0.1:8090
 
 # zero-trust gRPC bridge (xray redirects gRPC traffic here)
-GRPC_BIND=127.0.0.1:8090
-ZEROCLAW_TLS_BIND_ADDR=127.0.0.1:8443
+GRPC_BIND=0.0.0.0:8090
+ZEROCLAW_BIND_ADDR=0.0.0.0:8090
+ZEROCLAW_UNIX_SOCKET=/run/opdbus/grpc.sock
+GHOSTBRIDGE_SOCKET_PATH=/run/ghostbridge/container.sock
+# ZEROCLAW_TLS_BIND_ADDR=127.0.0.1:8443
 
 # OpenFlow controller for ovsbr0
 OF_CONTROLLER_LISTEN=10.200.0.1:6653
@@ -823,6 +827,7 @@ write_runit_services() {
 #!/bin/sh
 set -eu
 install -d -m 0755 /run/opdbus
+install -d -m 0755 /run/ghostbridge
 install -d -m 0755 /run/op-dbus
 install -d -m 0755 ${BLOB_SHM_DIR}
 install -d -m 0755 -o s6log -g s6log ${LOG_ROOT}
@@ -830,6 +835,24 @@ if [ -x ${BIN_DIR}/opblob ]; then
     ${BIN_DIR}/opblob seal-shm >/dev/null
 else
     echo "warning: ${BIN_DIR}/opblob missing — blob catalog not sealed"
+fi
+# Host Identity Sled — required by op-web gRPC client + GhostbridgeInterceptor.
+# Lives in tmpfs (/dev/shm/plugin_schema.dat); re-seed every boot from WG iface.
+if [ -x ${BIN_DIR}/op-identity-sled ]; then
+    WG_IFACE="\${OP_IDENTITY_WG_IFACE:-3tched}"
+    PUBKEY=""
+    if command -v wg >/dev/null 2>&1; then
+        PUBKEY=\$(wg show "\$WG_IFACE" public-key 2>/dev/null || true)
+    fi
+    if [ -n "\$PUBKEY" ]; then
+        ${BIN_DIR}/op-identity-sled --refresh --pubkey "\$PUBKEY" >/dev/null 2>&1 \\
+            && echo "identity sled seeded from \$WG_IFACE" \\
+            || echo "warning: op-identity-sled --refresh failed"
+    else
+        echo "warning: no WG pubkey for \$WG_IFACE — identity sled not seeded"
+    fi
+else
+    echo "warning: ${BIN_DIR}/op-identity-sled missing — identity sled not seeded"
 fi
 cat > /dev/shm/xray_config.json <<'XRAY_CONFIG_EOF'
 {

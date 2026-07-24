@@ -1,6 +1,7 @@
 // op-dbus REST API types — mirrors op-core Rust types
 
-export const API_BASE = "https://mail.3tched.com/api";
+// Same-origin when served by op-web; override with VITE_API_BASE for remote dev.
+export const API_BASE = import.meta.env.VITE_API_BASE ?? "/api";
 
 // ── D-Bus Types ──────────────────────────────────────────────
 

@@ -1,0 +1,36 @@
+#!/bin/sh
+# runit: supervise xray SHM config bind into xray container
+exec 2>&1
+
+wait_dep() {
+    sv start "$1" >/dev/null 2>&1 || true
+    i=0
+    until sv check "$1" >/dev/null 2>&1; do
+        i=$((i + 1))
+        [ "$i" -ge 90 ] && {
+            echo "dependency $1 not ready after 90s" >&2
+            exit 1
+        }
+        sleep 1
+    done
+}
+
+wait_dep opdbus-rundirs
+wait_dep incusd
+
+export XRAY_CT="${XRAY_CT:-xray}"
+export XRAY_CONF_HOST="${XRAY_CONF_HOST:-/dev/shm/xray_config.json}"
+export XRAY_CONF_CT="${XRAY_CONF_CT:-/dev/shm/xray_config.json}"
+export XRAY_DEVICE="${XRAY_DEVICE:-xrayconf}"
+export XRAY_RELOAD="${XRAY_RELOAD:-1}"
+
+# Initial attach
+/usr/local/libexec/3tched/xray-config-mount-up once || true
+
+# Poll: Incus file binds go stale when host replaces the inode.
+# inotify is ideal but not always installed; 5s poll is enough for control plane.
+INTERVAL="${XRAY_MOUNT_POLL_SEC:-5}"
+while true; do
+    /usr/local/libexec/3tched/xray-config-mount-up once || true
+    sleep "$INTERVAL"
+done

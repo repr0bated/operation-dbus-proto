@@ -27,7 +27,6 @@ pub struct ExplorerState {
     pub row_cache: Vec<schema_ui::RowHandle>,
 }
 
-
 pub fn render(
     ui: &mut egui::Ui,
     route: Route,
@@ -42,12 +41,12 @@ pub fn render(
     }
 
     match route {
-        Route::Overview     => overview(ui),
-        Route::Install      => install(ui),
-        Route::Chat         => chat::view::render_chat(ui, &mut explorer.chat_store, ctx),
-        Route::Inspector    => inspector(ui),
-        Route::State        => state_view(ui),
-        Route::Grpc         => grpc_view(ui, registry),
+        Route::Overview => overview(ui),
+        Route::Install => install(ui),
+        Route::Chat => chat::view::render_chat(ui, &mut explorer.chat_store, ctx),
+        Route::Inspector => inspector(ui),
+        Route::State => state_view(ui),
+        Route::Grpc => grpc_view(ui, registry),
         Route::GrpcExplorer => grpc_explorer(ui, registry, explorer, invoke, ctx),
         r => stub(ui, route_title(r), description(r)),
     }
@@ -71,23 +70,33 @@ fn stub(ui: &mut egui::Ui, title: &str, desc: &str) {
     card(ui, |ui| {
         ui.label(RichText::new("View not yet ported.").color(FG).size(13.0));
         ui.add_space(4.0);
-        ui.label(RichText::new("Wire this view to the ZeroClaw core (gRPC/D-Bus) and render real state here.").color(MUTED).size(12.0));
+        ui.label(
+            RichText::new(
+                "Wire this view to the ZeroClaw core (gRPC/D-Bus) and render real state here.",
+            )
+            .color(MUTED)
+            .size(12.0),
+        );
     });
 }
 
 fn overview(ui: &mut egui::Ui) {
     ui.label(RichText::new("Overview").size(22.0).strong().color(FG));
     ui.add_space(4.0);
-    ui.label(RichText::new("Live state of the ZeroClaw control plane.").color(MUTED).size(13.0));
+    ui.label(
+        RichText::new("Live state of the ZeroClaw control plane.")
+            .color(MUTED)
+            .size(13.0),
+    );
     ui.add_space(16.0);
 
     ui.horizontal_wrapped(|ui| {
         for (label, value, hint, color) in [
-            ("Core", "ONLINE",  "op-core mirror",    OK),
-            ("Agent", "READY",  "router idle",       OK),
-            ("Web",   "BOUND",  ":8443",             OK),
-            ("Embed", "WARM",   "qdrant linked",     OK),
-            ("Mesh",  "WG-UP",  "3 peers",           OK),
+            ("Core", "ONLINE", "op-core mirror", OK),
+            ("Agent", "READY", "router idle", OK),
+            ("Web", "BOUND", ":8443", OK),
+            ("Embed", "WARM", "qdrant linked", OK),
+            ("Mesh", "WG-UP", "3 peers", OK),
         ] {
             stat_card(ui, label, value, hint, color);
         }
@@ -101,7 +110,13 @@ fn stat_card(ui: &mut egui::Ui, label: &str, value: &str, hint: &str, accent: eg
             ui.set_width(size.x - 32.0);
             ui.label(RichText::new(label).size(10.0).color(MUTED));
             ui.add_space(2.0);
-            ui.label(RichText::new(value).size(18.0).strong().color(accent).monospace());
+            ui.label(
+                RichText::new(value)
+                    .size(18.0)
+                    .strong()
+                    .color(accent)
+                    .monospace(),
+            );
             ui.add_space(2.0);
             ui.label(RichText::new(hint).size(11.0).color(MUTED));
         });
@@ -111,7 +126,11 @@ fn stat_card(ui: &mut egui::Ui, label: &str, value: &str, hint: &str, accent: eg
 fn install(ui: &mut egui::Ui) {
     ui.label(RichText::new("Install").size(22.0).strong().color(FG));
     ui.add_space(4.0);
-    ui.label(RichText::new("Provision a full ZeroClaw stack on this host.").color(MUTED).size(13.0));
+    ui.label(
+        RichText::new("Provision a full ZeroClaw stack on this host.")
+            .color(MUTED)
+            .size(13.0),
+    );
     ui.add_space(16.0);
     for (title, body) in [
         ("1. Prerequisites", "rustc 1.78+, cargo, s6, s6-rc, wireguard-tools, qdrant, btrfs-progs."),
@@ -141,7 +160,10 @@ fn install(ui: &mut egui::Ui) {
 // renders any plugin state without code changes via `schema_ui::render_value`.
 // ------------------------------------------------------------------
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[schemars(title = "DemoPluginState", description = "Reference state struct ported from op-plugins to prove the schemars → schema_ui pipeline.")]
+#[schemars(
+    title = "DemoPluginState",
+    description = "Reference state struct ported from op-plugins to prove the schemars → schema_ui pipeline."
+)]
 struct DemoPluginState {
     /// Plugin identifier (matches s6 service name).
     id: String,
@@ -154,7 +176,12 @@ struct DemoPluginState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-enum Phase { Booting, Ready, Degraded, Stopped }
+enum Phase {
+    Booting,
+    Ready,
+    Degraded,
+    Stopped,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 struct Peer {
@@ -171,10 +198,19 @@ fn demo_payload() -> (schemars::Schema, serde_json::Value) {
         phase: Phase::Ready,
         last_seen: 1_724_400_000,
         peers: vec![
-            Peer { name: "agent-01".into(),  ip: "10.149.181.10".into(), rtt_ms: 0.82 },
-            Peer { name: "embed-01".into(),  ip: "10.149.181.190".into(), rtt_ms: 1.41 },
+            Peer {
+                name: "agent-01".into(),
+                ip: "10.149.181.10".into(),
+                rtt_ms: 0.82,
+            },
+            Peer {
+                name: "embed-01".into(),
+                ip: "10.149.181.190".into(),
+                rtt_ms: 1.41,
+            },
         ],
-    }).unwrap();
+    })
+    .unwrap();
     (schema, value)
 }
 
@@ -195,20 +231,35 @@ fn state_view(ui: &mut egui::Ui) {
 
     let (schema, value) = demo_payload();
     card(ui, |ui| {
-        ui.label(RichText::new("op-core / DemoPluginState").size(12.0).strong().color(FG));
+        ui.label(
+            RichText::new("op-core / DemoPluginState")
+                .size(12.0)
+                .strong()
+                .color(FG),
+        );
         ui.add_space(6.0);
         schema_ui::render_value(ui, &schema, &value);
     });
     ui.add_space(10.0);
     card(ui, |ui| {
         ui.collapsing("raw JSON", |ui| {
-            ui.label(RichText::new(schema_ui::pretty_json(&value)).monospace().size(11.0).color(MUTED));
+            ui.label(
+                RichText::new(schema_ui::pretty_json(&value))
+                    .monospace()
+                    .size(11.0)
+                    .color(MUTED),
+            );
         });
     });
 }
 
 fn grpc_view(ui: &mut egui::Ui, registry: &ReflectionRegistry) {
-    ui.label(RichText::new("gRPC Diagnostics").size(22.0).strong().color(FG));
+    ui.label(
+        RichText::new("gRPC Diagnostics")
+            .size(22.0)
+            .strong()
+            .color(FG),
+    );
     ui.add_space(4.0);
     ui.label(RichText::new("tonic-web client with server reflection. Services below are discovered live via grpc.reflection.v1.ServerReflection.").color(MUTED).size(13.0));
     ui.add_space(16.0);
@@ -216,16 +267,32 @@ fn grpc_view(ui: &mut egui::Ui, registry: &ReflectionRegistry) {
     let services = registry.services();
     card(ui, |ui| {
         if services.is_empty() {
-            ui.label(RichText::new("Reflection pool empty — server unreachable or reflection not enabled.").color(WARN).size(12.0));
+            ui.label(
+                RichText::new(
+                    "Reflection pool empty — server unreachable or reflection not enabled.",
+                )
+                .color(WARN)
+                .size(12.0),
+            );
             ui.add_space(4.0);
             ui.label(RichText::new("Set ZEROCLAW_GRPC=http://host:port and restart. Server must register tonic_reflection::server::Builder with FILE_DESCRIPTOR_SET.").color(MUTED).size(11.0).italics());
         } else {
-            ui.label(RichText::new(format!("{} services", services.len())).color(FG).strong().size(12.0));
+            ui.label(
+                RichText::new(format!("{} services", services.len()))
+                    .color(FG)
+                    .strong()
+                    .size(12.0),
+            );
             ui.add_space(6.0);
             for svc in &services {
                 ui.collapsing(RichText::new(svc).monospace().color(FG).size(12.0), |ui| {
                     for m in registry.methods(svc) {
-                        ui.label(RichText::new(format!("  ▸ {}", m)).monospace().color(MUTED).size(11.0));
+                        ui.label(
+                            RichText::new(format!("  ▸ {}", m))
+                                .monospace()
+                                .color(MUTED)
+                                .size(11.0),
+                        );
                     }
                 });
             }
@@ -248,7 +315,13 @@ fn grpc_explorer(
     let services = registry.services();
     if services.is_empty() {
         card(ui, |ui| {
-            ui.label(RichText::new("Reflection pool empty — server unreachable or reflection not enabled.").color(WARN).size(12.0));
+            ui.label(
+                RichText::new(
+                    "Reflection pool empty — server unreachable or reflection not enabled.",
+                )
+                .color(WARN)
+                .size(12.0),
+            );
         });
         return;
     }
@@ -259,10 +332,17 @@ fn grpc_explorer(
             ui.label(RichText::new("service").color(MUTED).size(11.0).monospace());
             let current_svc = state.service.clone().unwrap_or_default();
             egui::ComboBox::from_id_source("explorer-svc")
-                .selected_text(if current_svc.is_empty() { "—".into() } else { current_svc.clone() })
+                .selected_text(if current_svc.is_empty() {
+                    "—".into()
+                } else {
+                    current_svc.clone()
+                })
                 .show_ui(ui, |ui| {
                     for svc in &services {
-                        if ui.selectable_label(state.service.as_deref() == Some(svc.as_str()), svc).clicked() {
+                        if ui
+                            .selectable_label(state.service.as_deref() == Some(svc.as_str()), svc)
+                            .clicked()
+                        {
                             state.service = Some(svc.clone());
                             state.method = None;
                             state.request_body.clear();
@@ -276,13 +356,24 @@ fn grpc_explorer(
 
             ui.add_space(12.0);
             ui.label(RichText::new("method").color(MUTED).size(11.0).monospace());
-            let methods = state.service.as_deref().map(|s| registry.methods(s)).unwrap_or_default();
+            let methods = state
+                .service
+                .as_deref()
+                .map(|s| registry.methods(s))
+                .unwrap_or_default();
             let current_m = state.method.clone().unwrap_or_default();
             egui::ComboBox::from_id_source("explorer-method")
-                .selected_text(if current_m.is_empty() { "—".into() } else { current_m.clone() })
+                .selected_text(if current_m.is_empty() {
+                    "—".into()
+                } else {
+                    current_m.clone()
+                })
                 .show_ui(ui, |ui| {
                     for m in &methods {
-                        if ui.selectable_label(state.method.as_deref() == Some(m.as_str()), m).clicked() {
+                        if ui
+                            .selectable_label(state.method.as_deref() == Some(m.as_str()), m)
+                            .clicked()
+                        {
                             state.method = Some(m.clone());
                             state.last_signature = None;
                             state.validation = None;
@@ -296,18 +387,25 @@ fn grpc_explorer(
 
     let (Some(svc), Some(method)) = (state.service.clone(), state.method.clone()) else {
         ui.add_space(8.0);
-        ui.label(RichText::new("Select a service + method to continue.").color(MUTED).size(12.0).italics());
+        ui.label(
+            RichText::new("Select a service + method to continue.")
+                .color(MUTED)
+                .size(12.0)
+                .italics(),
+        );
         return;
     };
 
-    let kind = registry.method_kind(&svc, &method).unwrap_or(MethodKind::Unary);
+    let kind = registry
+        .method_kind(&svc, &method)
+        .unwrap_or(MethodKind::Unary);
 
     // Refresh the template when method changes.
     let sig = (svc.clone(), method.clone());
     if state.last_signature.as_ref() != Some(&sig) {
         match crate::grpc::template_for_request(registry, &svc, &method) {
             Ok(tpl) => state.request_body = schema_ui::pretty_json(&tpl),
-            Err(e)  => state.request_body = format!("// {e}\n{{}}"),
+            Err(e) => state.request_body = format!("// {e}\n{{}}"),
         }
         state.last_signature = Some(sig);
         state.last_validated = None;
@@ -333,19 +431,37 @@ fn grpc_explorer(
     // Request editor
     card(ui, |ui| {
         ui.horizontal(|ui| {
-            ui.label(RichText::new(format!("/{}/{}", svc, method)).monospace().color(FG).size(12.0).strong());
+            ui.label(
+                RichText::new(format!("/{}/{}", svc, method))
+                    .monospace()
+                    .color(FG)
+                    .size(12.0)
+                    .strong(),
+            );
             ui.add_space(8.0);
-            ui.label(RichText::new(format!("[{}]", kind.label())).monospace().color(MUTED).size(11.0));
+            ui.label(
+                RichText::new(format!("[{}]", kind.label()))
+                    .monospace()
+                    .color(MUTED)
+                    .size(11.0),
+            );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let supported = matches!(kind, MethodKind::Unary | MethodKind::ServerStreaming);
 
                 if streaming && stream_busy {
-                    let stop = egui::Button::new(RichText::new("■  Stop").color(egui::Color32::WHITE).size(12.0).strong())
-                        .fill(DANGER)
-                        .stroke(Stroke::new(1.0, DANGER))
-                        .rounding(Rounding::same(6.0))
-                        .min_size(egui::Vec2::new(96.0, 26.0));
-                    if ui.add(stop).clicked() { state.stream.cancel(); }
+                    let stop = egui::Button::new(
+                        RichText::new("■  Stop")
+                            .color(egui::Color32::WHITE)
+                            .size(12.0)
+                            .strong(),
+                    )
+                    .fill(DANGER)
+                    .stroke(Stroke::new(1.0, DANGER))
+                    .rounding(Rounding::same(6.0))
+                    .min_size(egui::Vec2::new(96.0, 26.0));
+                    if ui.add(stop).clicked() {
+                        state.stream.cancel();
+                    }
                 } else {
                     let busy = unary_busy || stream_busy;
                     let label = if !supported {
@@ -357,25 +473,49 @@ fn grpc_explorer(
                     } else {
                         "▶  Invoke"
                     };
-                    let btn = egui::Button::new(RichText::new(label).color(egui::Color32::WHITE).size(12.0).strong())
-                        .fill(if busy || !supported || !request_valid { PRIMARY.linear_multiply(0.5) } else { PRIMARY })
-                        .stroke(Stroke::new(1.0, PRIMARY))
-                        .rounding(Rounding::same(6.0))
-                        .min_size(egui::Vec2::new(110.0, 26.0));
+                    let btn = egui::Button::new(
+                        RichText::new(label)
+                            .color(egui::Color32::WHITE)
+                            .size(12.0)
+                            .strong(),
+                    )
+                    .fill(if busy || !supported || !request_valid {
+                        PRIMARY.linear_multiply(0.5)
+                    } else {
+                        PRIMARY
+                    })
+                    .stroke(Stroke::new(1.0, PRIMARY))
+                    .rounding(Rounding::same(6.0))
+                    .min_size(egui::Vec2::new(110.0, 26.0));
                     let enabled = supported && !busy && request_valid;
                     if ui.add_enabled(enabled, btn).clicked() {
                         // safe: validation already parsed it
-                        let body: serde_json::Value =
-                            serde_json::from_str(&state.request_body).unwrap_or(serde_json::Value::Null);
+                        let body: serde_json::Value = serde_json::from_str(&state.request_body)
+                            .unwrap_or(serde_json::Value::Null);
                         if streaming {
                             state.stream.clear();
-                            state.stream.spawn(registry.clone(), svc.clone(), method.clone(), body, ctx.clone());
+                            state.stream.spawn(
+                                registry.clone(),
+                                svc.clone(),
+                                method.clone(),
+                                body,
+                                ctx.clone(),
+                            );
                         } else {
-                            invoke.spawn(registry.clone(), svc.clone(), method.clone(), body, ctx.clone());
+                            invoke.spawn(
+                                registry.clone(),
+                                svc.clone(),
+                                method.clone(),
+                                body,
+                                ctx.clone(),
+                            );
                         }
                     }
                 }
-                if ui.button(RichText::new("↻ Reset").color(MUTED).size(11.0)).clicked() {
+                if ui
+                    .button(RichText::new("↻ Reset").color(MUTED).size(11.0))
+                    .clicked()
+                {
                     state.last_signature = None;
                     state.stream.clear();
                 }
@@ -386,24 +526,41 @@ fn grpc_explorer(
         // Validation banner
         match &state.validation {
             Some(Ok(())) => {
-                ui.label(RichText::new("✓ request matches input schema").color(OK).size(11.0).monospace());
+                ui.label(
+                    RichText::new("✓ request matches input schema")
+                        .color(OK)
+                        .size(11.0)
+                        .monospace(),
+                );
             }
             Some(Err(e)) => {
-                ui.label(RichText::new(format!("✗ {e}")).color(DANGER).size(11.0).monospace());
+                ui.label(
+                    RichText::new(format!("✗ {e}"))
+                        .color(DANGER)
+                        .size(11.0)
+                        .monospace(),
+                );
             }
             None => {}
         }
 
         ui.add_space(6.0);
-        ui.label(RichText::new("request (JSON, schema-derived)").color(MUTED).size(11.0));
-        egui::ScrollArea::vertical().id_source("req-editor").max_height(220.0).show(ui, |ui| {
-            ui.add(
-                egui::TextEdit::multiline(&mut state.request_body)
-                    .code_editor()
-                    .desired_width(f32::INFINITY)
-                    .desired_rows(10),
-            );
-        });
+        ui.label(
+            RichText::new("request (JSON, schema-derived)")
+                .color(MUTED)
+                .size(11.0),
+        );
+        egui::ScrollArea::vertical()
+            .id_source("req-editor")
+            .max_height(220.0)
+            .show(ui, |ui| {
+                ui.add(
+                    egui::TextEdit::multiline(&mut state.request_body)
+                        .code_editor()
+                        .desired_width(f32::INFINITY)
+                        .desired_rows(10),
+                );
+            });
     });
 
     ui.add_space(10.0);
@@ -414,15 +571,33 @@ fn grpc_explorer(
             ui.horizontal(|ui| {
                 ui.label(RichText::new("stream").color(MUTED).size(11.0));
                 ui.add_space(8.0);
-                let status = if snapshot.running { "● live" }
-                    else if snapshot.closed { "● closed" }
-                    else { "○ idle" };
-                let color = if snapshot.running { OK } else if snapshot.error.is_some() { DANGER } else { MUTED };
+                let status = if snapshot.running {
+                    "● live"
+                } else if snapshot.closed {
+                    "● closed"
+                } else {
+                    "○ idle"
+                };
+                let color = if snapshot.running {
+                    OK
+                } else if snapshot.error.is_some() {
+                    DANGER
+                } else {
+                    MUTED
+                };
                 ui.label(RichText::new(status).color(color).size(11.0).monospace());
                 ui.add_space(8.0);
-                ui.label(RichText::new(format!("{} items", snapshot.items.len())).color(MUTED).size(11.0).monospace());
+                ui.label(
+                    RichText::new(format!("{} items", snapshot.items.len()))
+                        .color(MUTED)
+                        .size(11.0)
+                        .monospace(),
+                );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button(RichText::new("Clear").color(MUTED).size(11.0)).clicked() {
+                    if ui
+                        .button(RichText::new("Clear").color(MUTED).size(11.0))
+                        .clicked()
+                    {
                         state.stream.clear();
                     }
                 });
@@ -439,17 +614,27 @@ fn grpc_explorer(
                 .show(ui, |ui| {
                     for (i, item) in snapshot.items.iter().enumerate() {
                         ui.collapsing(
-                            RichText::new(format!("▸ #{i}")).monospace().color(FG).size(11.0),
+                            RichText::new(format!("▸ #{i}"))
+                                .monospace()
+                                .color(FG)
+                                .size(11.0),
                             |ui| {
                                 ui.label(
                                     RichText::new(schema_ui::pretty_json(item))
-                                        .monospace().size(11.0).color(FG),
+                                        .monospace()
+                                        .size(11.0)
+                                        .color(FG),
                                 );
                             },
                         );
                     }
                     if snapshot.items.is_empty() && !snapshot.running {
-                        ui.label(RichText::new("— no items yet —").color(MUTED).italics().size(12.0));
+                        ui.label(
+                            RichText::new("— no items yet —")
+                                .color(MUTED)
+                                .italics()
+                                .size(12.0),
+                        );
                     }
                 });
             if snapshot.running {
@@ -460,51 +645,62 @@ fn grpc_explorer(
             ui.add_space(4.0);
             match &state.last_response {
                 None => {
-                    ui.label(RichText::new("— no invocation yet —").color(MUTED).italics().size(12.0));
+                    ui.label(
+                        RichText::new("— no invocation yet —")
+                            .color(MUTED)
+                            .italics()
+                            .size(12.0),
+                    );
                 }
                 Some(Err(e)) => {
                     ui.label(RichText::new(e).color(DANGER).monospace().size(12.0));
                 }
                 Some(Ok(val)) => {
-                    egui::ScrollArea::vertical().id_source("resp").max_height(360.0).show(ui, |ui| {
-                        ui.label(RichText::new(schema_ui::pretty_json(val)).monospace().size(11.0).color(FG));
-                    });
+                    egui::ScrollArea::vertical()
+                        .id_source("resp")
+                        .max_height(360.0)
+                        .show(ui, |ui| {
+                            ui.label(
+                                RichText::new(schema_ui::pretty_json(val))
+                                    .monospace()
+                                    .size(11.0)
+                                    .color(FG),
+                            );
+                        });
                 }
             }
         }
     });
 }
 
-
-
 fn description(r: Route) -> &'static str {
     match r {
-        Route::Orchestration   => "Plugin lifecycle, dependency graph, restart policy.",
-        Route::Services        => "s6 service control center — start/stop/restart via s6-rc and s6-svc.",
-        Route::Sessions        => "Active client sessions and auth handles.",
-        Route::Llm             => "LLM router status, provider mix, queue depth.",
-        Route::Agents          => "Persona registry sourced from personas.yaml.",
-        Route::Assistant       => "Operator assistant — tool-augmented agent.",
-        Route::Models          => "Routable models registry and availability.",
-        Route::Tools           => "Registered tools and recent invocations.",
-        Route::Workflows       => "Declarative multi-step workflows.",
-        Route::Security        => "RBAC, masking, audit posture.",
-        Route::Accountability  => "Reasoning audit trail and PII review.",
-        Route::Skills          => "Active skills and trigger phrases.",
-        Route::Knowledge       => "Local knowledge base and Qdrant indexer.",
-        Route::Embedding       => "Embedding worker pipeline → Qdrant.",
-        Route::Containers      => "Container runtimes and workloads.",
-        Route::PrivacyNetwork  => "WireGuard / XRay / WARP route map.",
-        Route::Ovs             => "Open vSwitch bridges and ports.",
-        Route::OpenFlow        => "Installed OpenFlow rules.",
-        Route::Btrfs           => "BTRFS subvolumes and snapshots.",
-        Route::DataStores      => "Postgres / Redis / Qdrant endpoints.",
-        Route::Config          => "Tunables and immutable rules.",
-        Route::Logs            => "Actionable structured log stream.",
-        Route::Dreams          => "Coming soon.",
-        Route::Reflections     => "Coming soon.",
-        Route::Observability   => "Coming soon.",
-        Route::LiveTrace       => "Coming soon.",
+        Route::Orchestration => "Plugin lifecycle, dependency graph, restart policy.",
+        Route::Services => "s6 service control center — start/stop/restart via s6-rc and s6-svc.",
+        Route::Sessions => "Active client sessions and auth handles.",
+        Route::Llm => "LLM router status, provider mix, queue depth.",
+        Route::Agents => "Persona registry sourced from personas.yaml.",
+        Route::Assistant => "Operator assistant — tool-augmented agent.",
+        Route::Models => "Routable models registry and availability.",
+        Route::Tools => "Registered tools and recent invocations.",
+        Route::Workflows => "Declarative multi-step workflows.",
+        Route::Security => "RBAC, masking, audit posture.",
+        Route::Accountability => "Reasoning audit trail and PII review.",
+        Route::Skills => "Active skills and trigger phrases.",
+        Route::Knowledge => "Local knowledge base and Qdrant indexer.",
+        Route::Embedding => "Embedding worker pipeline → Qdrant.",
+        Route::Containers => "Container runtimes and workloads.",
+        Route::PrivacyNetwork => "WireGuard / XRay / WARP route map.",
+        Route::Ovs => "Open vSwitch bridges and ports.",
+        Route::OpenFlow => "Installed OpenFlow rules.",
+        Route::Btrfs => "BTRFS subvolumes and snapshots.",
+        Route::DataStores => "Postgres / Redis / Qdrant endpoints.",
+        Route::Config => "Tunables and immutable rules.",
+        Route::Logs => "Actionable structured log stream.",
+        Route::Dreams => "Coming soon.",
+        Route::Reflections => "Coming soon.",
+        Route::Observability => "Coming soon.",
+        Route::LiveTrace => "Coming soon.",
         _ => "",
     }
 }

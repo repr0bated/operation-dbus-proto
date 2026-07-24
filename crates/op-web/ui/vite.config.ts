@@ -4,7 +4,9 @@ import path from "path";
 import { componentTagger } from "lovable-tagger";
 
 // Backend gRPC-Web and API target (adjust for your environment)
-const API_TARGET = process.env.VITE_API_TARGET || "http://localhost:50051";
+// REST on op-web :8080; gRPC-Web / reflection on op-grpc-bridge :8090.
+const API_TARGET = process.env.VITE_API_TARGET || "http://127.0.0.1:8080";
+const GRPC_TARGET = process.env.VITE_GRPC_TARGET || "http://127.0.0.1:8090";
 
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => ({
@@ -15,21 +17,27 @@ export default defineConfig(({ mode }) => ({
       overlay: false,
     },
     proxy: {
-      // Proxy REST API requests
+      // Proxy REST API requests → op-web
       "/api": {
         target: API_TARGET,
         changeOrigin: true,
         secure: false,
       },
-      // Proxy gRPC-Web requests (binary and JSON)
+      // Proxy gRPC-Web requests → op-grpc-bridge
       "/operation.v1": {
-        target: API_TARGET,
+        target: GRPC_TARGET,
         changeOrigin: true,
         secure: false,
         ws: false,
       },
       "/operation.registry.v1": {
-        target: API_TARGET,
+        target: GRPC_TARGET,
+        changeOrigin: true,
+        secure: false,
+        ws: false,
+      },
+      "/grpc.reflection": {
+        target: GRPC_TARGET,
         changeOrigin: true,
         secure: false,
         ws: false,

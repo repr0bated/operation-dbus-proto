@@ -83,6 +83,9 @@ pub struct IdentitySledRecord {
     pub session_started_at: i64,
     pub last_seen_at: i64,
     pub active: bool,
+    /// 0 = permanent (no expiry); otherwise unix seconds this identity
+    /// stops being valid (temporary/consumer identities like Lovable).
+    pub expires_at: i64,
 }
 
 /// One row of a session's append-only "snowball" event ledger.
@@ -339,7 +342,8 @@ impl CozoGraphShuttle {
                 instance_json: String default "",
                 session_started_at: Int default 0,
                 last_seen_at: Int default 0,
-                active: Bool default false
+                active: Bool default false,
+                expires_at: Int default 0
             }"#,
             // append-only per-session "snowball" event ledger archive
             // (the immutable event chain is the proof; this is the queryable copy)
@@ -1291,13 +1295,16 @@ impl CozoGraphShuttle {
         let query = r#"
             ?[session_id, wireguard_pubkey, interface, peer_ip, mutation_index,
               hashed_footprint, trace_id, schema_version, vector_id, blob_ref,
-              btrfs_device_json, instance_json, session_started_at, last_seen_at, active]
+              btrfs_device_json, instance_json, session_started_at, last_seen_at, active,
+              expires_at]
                 <- [[$sid, $pubkey, $iface, $peer_ip, $mut_idx, $footprint, $trace,
-                     $schema_ver, $vector, $blob_ref, $btrfs_dev, $instance, $started, $seen, $active]]
+                     $schema_ver, $vector, $blob_ref, $btrfs_dev, $instance, $started, $seen, $active,
+                     $expires]]
             :put identity_sleds {
                 session_id => wireguard_pubkey, interface, peer_ip, mutation_index,
                 hashed_footprint, trace_id, schema_version, vector_id, blob_ref,
-                btrfs_device_json, instance_json, session_started_at, last_seen_at, active
+                btrfs_device_json, instance_json, session_started_at, last_seen_at, active,
+                expires_at
             }
         "#;
         let mut p: Params = BTreeMap::new();
@@ -1340,6 +1347,7 @@ impl CozoGraphShuttle {
         p.insert("started".into(), dv_int(rec.session_started_at));
         p.insert("seen".into(), dv_int(rec.last_seen_at));
         p.insert("active".into(), DataValue::Bool(rec.active));
+        p.insert("expires".into(), dv_int(rec.expires_at));
         cozo_run(&self.db, query, p)
             .map_err(|e| CozoError::Other(format!("put identity sled: {e}")))?;
         Ok(())
@@ -1356,10 +1364,12 @@ impl CozoGraphShuttle {
             &self.db,
             "?[session_id, wireguard_pubkey, interface, peer_ip, mutation_index, \
              hashed_footprint, trace_id, schema_version, vector_id, blob_ref, \
-             btrfs_device_json, instance_json, session_started_at, last_seen_at, active] := \
+             btrfs_device_json, instance_json, session_started_at, last_seen_at, active, \
+             expires_at] := \
              *identity_sleds[session_id, wireguard_pubkey, interface, peer_ip, mutation_index, \
              hashed_footprint, trace_id, schema_version, vector_id, blob_ref, \
-             btrfs_device_json, instance_json, session_started_at, last_seen_at, active], \
+             btrfs_device_json, instance_json, session_started_at, last_seen_at, active, \
+             expires_at], \
              session_id = $sid",
             p,
         )
@@ -1374,10 +1384,12 @@ impl CozoGraphShuttle {
             &self.db,
             "?[session_id, wireguard_pubkey, interface, peer_ip, mutation_index, \
              hashed_footprint, trace_id, schema_version, vector_id, blob_ref, \
-             btrfs_device_json, instance_json, session_started_at, last_seen_at, active] := \
+             btrfs_device_json, instance_json, session_started_at, last_seen_at, active, \
+             expires_at] := \
              *identity_sleds[session_id, wireguard_pubkey, interface, peer_ip, mutation_index, \
              hashed_footprint, trace_id, schema_version, vector_id, blob_ref, \
-             btrfs_device_json, instance_json, session_started_at, last_seen_at, active]",
+             btrfs_device_json, instance_json, session_started_at, last_seen_at, active, \
+             expires_at]",
             BTreeMap::new(),
         )
         .map_err(|e| CozoError::Other(format!("list identity sleds: {e}")))?;
@@ -1589,6 +1601,7 @@ fn row_to_identity_sled(row: &Vec<DataValue>) -> IdentitySledRecord {
         session_started_at: dv_as_int(&row[12]),
         last_seen_at: dv_as_int(&row[13]),
         active: dv_as_bool(&row[14]),
+        expires_at: dv_as_int(&row[15]),
     }
 }
 
@@ -1671,6 +1684,7 @@ mod identity_sled_tests {
             session_started_at: 100,
             last_seen_at: 200,
             active: true,
+            expires_at: 0,
         }
     }
 
@@ -1715,6 +1729,30 @@ mod identity_sled_tests {
         assert_eq!(
             row.btrfs_device_json,
             sample("chatbot-first").btrfs_device_json
+        );
+    }
+
+    #[test]
+    fn account_session_round_trip() {
+        let store = CozoGraphShuttle::new_in_memory().unwrap();
+        store.upsert_user("wg-public-key").unwrap();
+        store
+            .upsert_account_session("wg-public-key", "stable-session", "session-proof")
+            .unwrap();
+        store
+            .create_session("stable-session", "wg-public-key", None)
+            .unwrap();
+
+        assert!(store.user_exists("wg-public-key").unwrap());
+        let (session_id, proof, _) = store
+            .lookup_account_session("wg-public-key")
+            .unwrap()
+            .unwrap();
+        assert_eq!(session_id, "stable-session");
+        assert_eq!(proof, "session-proof");
+        assert_eq!(
+            store.lookup_session("stable-session").unwrap().unwrap().0,
+            "wg-public-key"
         );
     }
 

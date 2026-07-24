@@ -2,11 +2,14 @@
   "_comment": "Cognitive MCP Client Configuration - External Clients MUST use :3003 endpoint",
   "endpoints": {
     "cognitive_mcp": {
-      "url": "http://100.90.37.254:3003",
+      "url": "http://10.200.0.2:3003/mcp",
       "description": "Universal gateway for ALL external clients (Droid, Cursor, Codex, NotebookLM, Gemini CLI)",
       "auth": {
         "type": "ghostbridge",
-        "header": "X-Ghostbridge-Footprint",
+        "headers": {
+          "X-Ghostbridge-Footprint": "client-id",
+          "X-Ghostbridge-Trace-ID": "session-id"
+        },
         "via_wireguard": true
       },
       "protocols": ["http", "sse", "jsonrpc"],
@@ -19,7 +22,7 @@
       "protocols": ["stdio", "sse"]
     },
     "grpc_cognitive": {
-      "url": "http://100.90.37.254:50052",
+      "url": "http://10.200.0.2:50052",
       "description": "gRPC ingress for high-performance tool execution",
       "auth": {
         "type": "ghostbridge",

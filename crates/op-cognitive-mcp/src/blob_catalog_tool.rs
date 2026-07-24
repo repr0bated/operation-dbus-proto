@@ -51,8 +51,8 @@ impl Tool for BlobCatalogTool {
         ]
     }
 
-    fn input_schema(&self) -> Value {
-        json!({
+    fn input_schema(&self) -> simd_json::OwnedValue {
+        let schema = json!({
             "type": "object",
             "properties": {
                 "mode": {
@@ -72,10 +72,12 @@ impl Tool for BlobCatalogTool {
                 }
             },
             "additionalProperties": false
-        })
+        });
+        simd_json::serde::to_owned_value(&schema).expect("static schema serializes")
     }
 
-    async fn execute(&self, input: Value) -> Result<Value> {
+    async fn execute(&self, input: simd_json::OwnedValue) -> Result<simd_json::OwnedValue> {
+        let input: Value = serde_json::to_value(&input).context("simd_json input -> serde_json")?;
         let mode = input.get("mode")
             .and_then(|v| v.as_str())
             .unwrap_or("summary");
@@ -92,10 +94,11 @@ impl Tool for BlobCatalogTool {
 
         // If mode is "list", return just the plugin IDs
         if mode == "list" {
-            return Ok(json!({
+            let result = json!({
                 "plugin_count": ids.len(),
                 "plugin_ids": ids,
-            }));
+            });
+            return simd_json::serde::to_owned_value(&result).context("serde_json result -> simd_json");
         }
 
         let mut plugins = serde_json::Map::new();
@@ -156,7 +159,7 @@ impl Tool for BlobCatalogTool {
                     summary.insert("method_count".to_string(), json!(method_count));
                     summary.insert("signal_count".to_string(), json!(signal_count));
 
-                    plugins.insert(id.clone(), Value::Object(Box::new(summary)));
+                    plugins.insert(id.clone(), Value::Object(summary));
                 } else {
                     // Full mode: return complete schema
                     let value = serde_json::to_value(schema)
@@ -169,11 +172,12 @@ impl Tool for BlobCatalogTool {
             }
         }
 
-        Ok(json!({
+        let result = json!({
             "plugin_count": plugins.len(),
             "mode": mode,
-            "plugins": Value::Object(Box::new(plugins)),
+            "plugins": Value::Object(plugins),
             "missing_schemas": missing,
-        }))
+        });
+        simd_json::serde::to_owned_value(&result).context("serde_json result -> simd_json")
     }
 }
