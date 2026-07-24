@@ -253,28 +253,65 @@ impl IncusPlugin {
         Ok(body)
     }
 
-    /// Call Incus REST API and extract metadata from sync response
+    /// Call Incus REST API and extract metadata from the (sync or async)
+    /// response. Incus answers most mutating calls (instance create/delete,
+    /// etc.) with `"type": "async"` — a background operation, not the final
+    /// result — which must be polled via `/1.0/operations/<id>/wait` before
+    /// its outcome is known. Treating that initial "Operation created"
+    /// response as the final answer (as this used to) misreads a real
+    /// success as a blank error, since its own `error` field is `""`.
     async fn incus_api_call(method: &str, path: &str, body: Option<&str>) -> Result<Vec<u8>> {
         let response = Self::incus_api_request(method, path, body).await?;
         let mut raw = response;
         let val: simd_json::OwnedValue =
             simd_json::from_slice(&mut raw).context("Failed to parse Incus API response")?;
 
-        let status = val
-            .get("status")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_lowercase();
-        if status == "success" || status == "created" || status == "accepted" {
-            let metadata = val.get("metadata").cloned().unwrap_or(simd_json::json!({}));
-            Ok(simd_json::to_string(&metadata)?.into_bytes())
-        } else {
-            let err = val
-                .get("error")
+        let resp_type = val.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        if resp_type == "async" {
+            let op_path = val
+                .get("operation")
                 .and_then(|v| v.as_str())
-                .or_else(|| val.get("status").and_then(|v| v.as_str()))
-                .unwrap_or("Unknown Incus API error");
-            Err(anyhow::anyhow!("Incus API error: {}", err))
+                .ok_or_else(|| anyhow::anyhow!("async Incus response missing 'operation' path"))?
+                .to_string();
+            let wait_response =
+                Self::incus_api_request("GET", &format!("{op_path}/wait"), None).await?;
+            let mut wait_raw = wait_response;
+            let wait_val: simd_json::OwnedValue = simd_json::from_slice(&mut wait_raw)
+                .context("Failed to parse Incus operation-wait response")?;
+            let op_metadata = wait_val.get("metadata").cloned().unwrap_or(simd_json::json!({}));
+            let op_status = op_metadata
+                .get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if op_status == "Success" {
+                Ok(simd_json::to_string(&op_metadata.get("metadata").cloned().unwrap_or(simd_json::json!({})))?
+                    .into_bytes())
+            } else {
+                let err = op_metadata
+                    .get("err")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or(op_status);
+                Err(anyhow::anyhow!("Incus operation failed: {}", err))
+            }
+        } else {
+            let status = val
+                .get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_lowercase();
+            if status == "success" || status == "created" || status == "accepted" {
+                let metadata = val.get("metadata").cloned().unwrap_or(simd_json::json!({}));
+                Ok(simd_json::to_string(&metadata)?.into_bytes())
+            } else {
+                let err = val
+                    .get("error")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                    .or_else(|| val.get("status").and_then(|v| v.as_str()))
+                    .unwrap_or("Unknown Incus API error");
+                Err(anyhow::anyhow!("Incus API error: {}", err))
+            }
         }
     }
 
