@@ -30,7 +30,9 @@ impl Tool for BlobCatalogTool {
     fn description(&self) -> &str {
         "Return every active plugin's sealed schema (from the SHM blob catalog) in one \
          payload, keyed by plugin id. Unlike per-plugin schema lookups, this gives a model \
-         the full catalog at once so it can reason about connections across plugins."
+         the full catalog at once so it can reason about connections across plugins.\n\
+         Use mode='summary' for a lightweight overview (id, name, description, category, method/signal counts). \
+         Use mode='full' for complete schemas (may exceed output limits for large catalogs)."
     }
 
     fn category(&self) -> &str {
@@ -50,28 +52,93 @@ impl Tool for BlobCatalogTool {
     }
 
     fn input_schema(&self) -> Value {
-        json!({"type": "object", "additionalProperties": false})
+        json!({
+            "type": "object",
+            "properties": {
+                "mode": {
+                    "type": "string",
+                    "enum": ["summary", "full"],
+                    "default": "summary",
+                    "description": "Output mode: 'summary' returns lightweight metadata only (~50KB), 'full' returns complete schemas (~2MB, may truncate)"
+                },
+                "category": {
+                    "type": "string",
+                    "description": "Optional filter: only return plugins matching this category"
+                }
+            },
+            "additionalProperties": false
+        })
     }
 
-    async fn execute(&self, _input: Value) -> Result<Value> {
+    async fn execute(&self, input: Value) -> Result<Value> {
+        let mode = input.get("mode")
+            .and_then(|v| v.as_str())
+            .unwrap_or("summary");
+        let category_filter = input.get("category")
+            .and_then(|v| v.as_str());
+
         let ids = op_blob::catalog::read_manifest_plugin_ids_shm()
             .context("failed to read plugin blob manifest from SHM catalog")?;
 
         let mut plugins = simd_json::owned::Object::new();
         let mut missing = Vec::new();
+
         for id in &ids {
-            match op_blob::catalog::read_plugin_schema_shm(id) {
-                Some(schema) => {
+            if let Some(schema) = op_blob::catalog::read_plugin_schema_shm(id) {
+                // Apply category filter if specified
+                if let Some(cat) = category_filter {
+                    let schema_value = simd_json::to_value(schema.clone())
+                        .with_context(|| format!("failed to serialize schema for '{id}'"))?;
+                    if let Some(plugin_category) = schema_value.get("category") {
+                        if plugin_category.as_str().unwrap_or("") != cat {
+                            continue; // Skip plugins not matching category
+                        }
+                    }
+                }
+
+                if mode == "summary" {
+                    // Summary mode: return lightweight metadata only
+                    let schema_value = simd_json::to_value(schema.clone())
+                        .with_context(|| format!("failed to serialize schema for '{id}'"))?;
+
+                    let mut summary = simd_json::owned::Object::new();
+                    summary.insert("name".to_string(),
+                        schema_value.get("name").cloned().unwrap_or(Value::Null));
+                    summary.insert("description".to_string(),
+                        schema_value.get("description").cloned().unwrap_or(Value::Null));
+                    summary.insert("category".to_string(),
+                        schema_value.get("category").cloned().unwrap_or(Value::Null));
+                    summary.insert("version".to_string(),
+                        schema_value.get("version").cloned().unwrap_or(Value::Null));
+
+                    // Count methods and signals
+                    let method_count = schema_value.get("methods")
+                        .and_then(|m| m.as_object())
+                        .map(|m| m.len())
+                        .unwrap_or(0);
+                    let signal_count = schema_value.get("signals")
+                        .and_then(|s| s.as_array())
+                        .map(|s| s.len())
+                        .unwrap_or(0);
+
+                    summary.insert("method_count".to_string(), json!(method_count));
+                    summary.insert("signal_count".to_string(), json!(signal_count));
+
+                    plugins.insert(id.clone(), Value::Object(Box::new(summary)));
+                } else {
+                    // Full mode: return complete schema
                     let value = simd_json::serde::to_owned_value(schema)
                         .with_context(|| format!("failed to serialize schema for '{id}'"))?;
                     plugins.insert(id.clone(), value);
                 }
-                None => missing.push(id.clone()),
+            } else {
+                missing.push(id.clone());
             }
         }
 
         Ok(json!({
             "plugin_count": plugins.len(),
+            "mode": mode,
             "plugins": Value::Object(Box::new(plugins)),
             "missing_schemas": missing,
         }))
