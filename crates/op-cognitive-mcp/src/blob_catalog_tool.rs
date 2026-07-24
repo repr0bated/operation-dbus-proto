@@ -57,9 +57,14 @@ impl Tool for BlobCatalogTool {
             "properties": {
                 "mode": {
                     "type": "string",
-                    "enum": ["summary", "full"],
+                    "enum": ["summary", "full", "list"],
                     "default": "summary",
-                    "description": "Output mode: 'summary' returns lightweight metadata only (~50KB), 'full' returns complete schemas (~2MB, may truncate)"
+                    "description": "Output mode: 'list' returns plugin IDs only, 'summary' returns lightweight metadata (~50KB), 'full' returns complete schemas (~2MB, may truncate)"
+                },
+                "plugin_ids": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Optional: only return schemas for these specific plugin IDs (empty = all plugins)"
                 },
                 "category": {
                     "type": "string",
