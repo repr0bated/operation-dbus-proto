@@ -296,6 +296,117 @@ impl NetmakerPlugin {
         Ok(())
     }
 
+    /// Base URL of the Netmaker server's own REST API (distinct from
+    /// netclient, which is this host's/container's *client* daemon). Reached
+    /// directly over the OVS bridge — no proxy hop needed since host and the
+    /// `NetMaker` container share `ovsbr0`.
+    fn netmaker_api_base() -> String {
+        std::env::var("NETMAKER_API_BASE").unwrap_or_else(|_| "http://10.200.0.3:8081".to_string())
+    }
+
+    /// Master-key Bearer auth for the Netmaker server API. Fails closed
+    /// (explicit error) rather than silently calling the API unauthenticated.
+    fn netmaker_master_key() -> Result<String> {
+        std::env::var("NETMAKER_MASTER_KEY")
+            .context("NETMAKER_MASTER_KEY not set — cannot authenticate to the Netmaker server API")
+    }
+
+    /// GET /api/networks — real server-side network list (distinct from
+    /// `get_networks`, which reads *this* host's netclient enrollment state).
+    async fn list_networks_api() -> Result<JsonValue> {
+        let master_key = Self::netmaker_master_key()?;
+        let resp = reqwest::Client::new()
+            .get(format!("{}/api/networks", Self::netmaker_api_base()))
+            .bearer_auth(master_key)
+            .send()
+            .await
+            .context("Netmaker API request failed (GET /api/networks)")?;
+        if !resp.status().is_success() {
+            anyhow::bail!("Netmaker API returned {}: GET /api/networks", resp.status());
+        }
+        resp.json()
+            .await
+            .context("Failed to parse Netmaker API response")
+    }
+
+    /// GET /api/nodes, filtered client-side by network — the real Netmaker
+    /// server API has no dedicated per-network list endpoint; every node
+    /// carries its own `network` field.
+    async fn list_nodes_api(network: &str) -> Result<JsonValue> {
+        let master_key = Self::netmaker_master_key()?;
+        let resp = reqwest::Client::new()
+            .get(format!("{}/api/nodes", Self::netmaker_api_base()))
+            .bearer_auth(master_key)
+            .send()
+            .await
+            .context("Netmaker API request failed (GET /api/nodes)")?;
+        if !resp.status().is_success() {
+            anyhow::bail!("Netmaker API returned {}: GET /api/nodes", resp.status());
+        }
+        let all_nodes: JsonValue = resp
+            .json()
+            .await
+            .context("Failed to parse Netmaker API response")?;
+        let filtered: Vec<JsonValue> = all_nodes
+            .as_array()
+            .map(|nodes| {
+                nodes
+                    .iter()
+                    .filter(|n| n.get("network").and_then(|v| v.as_str()) == Some(network))
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
+        Ok(serde_json::Value::Array(filtered))
+    }
+
+    /// GET /api/nodes/{network}/{node_id}
+    async fn get_node_api(network: &str, node_id: &str) -> Result<JsonValue> {
+        let master_key = Self::netmaker_master_key()?;
+        let resp = reqwest::Client::new()
+            .get(format!(
+                "{}/api/nodes/{network}/{node_id}",
+                Self::netmaker_api_base()
+            ))
+            .bearer_auth(master_key)
+            .send()
+            .await
+            .context("Netmaker API request failed (GET /api/nodes/:network/:id)")?;
+        if !resp.status().is_success() {
+            anyhow::bail!(
+                "Netmaker API returned {}: GET /api/nodes/{network}/{node_id}",
+                resp.status()
+            );
+        }
+        resp.json()
+            .await
+            .context("Failed to parse Netmaker API response")
+    }
+
+    /// PUT /api/nodes/{network}/{node_id}
+    async fn update_node_api(network: &str, node_id: &str, payload: &JsonValue) -> Result<JsonValue> {
+        let master_key = Self::netmaker_master_key()?;
+        let resp = reqwest::Client::new()
+            .put(format!(
+                "{}/api/nodes/{network}/{node_id}",
+                Self::netmaker_api_base()
+            ))
+            .bearer_auth(master_key)
+            .json(payload)
+            .send()
+            .await
+            .context("Netmaker API request failed (PUT /api/nodes/:network/:id)")?;
+        if !resp.status().is_success() {
+            anyhow::bail!(
+                "Netmaker API returned {}: PUT /api/nodes/{network}/{node_id}",
+                resp.status()
+            );
+        }
+        resp.json()
+            .await
+            .context("Failed to parse Netmaker API response")
+    }
+
     pub(crate) fn current_state() -> NetmakerState {
         let tools = json!([
             {
@@ -665,6 +776,67 @@ pub(crate) fn netmaker_schema() -> PluginSchema {
         ),
     );
     schema
+}
+
+/// Real dispatch for every method declared in `netmaker_schema()`. Mirrors
+/// `zeroclaw::dispatch_zeroclaw_method`'s role — the plugin crate owns its
+/// own dispatch, the gRPC bridge just calls this one function.
+pub async fn dispatch_netmaker_method(
+    method: &str,
+    args: &JsonValue,
+) -> Result<JsonValue> {
+    let plugin = NetmakerPlugin::new(NetmakerConfig::default());
+    match method {
+        "join_network" => {
+            let network = args
+                .get("network")
+                .and_then(|v| v.as_str())
+                .context("network required")?;
+            let token = args.get("token").and_then(|v| v.as_str()).unwrap_or("");
+            plugin.join_network(network, token).await?;
+            Ok(json!({ "joined": network }))
+        }
+        "leave_network" => {
+            let network = args
+                .get("network")
+                .and_then(|v| v.as_str())
+                .context("network required")?;
+            plugin.leave_network(network).await?;
+            Ok(json!({ "left": network }))
+        }
+        "list_networks" => NetmakerPlugin::list_networks_api().await,
+        "list_nodes" => {
+            let network = args
+                .get("network")
+                .and_then(|v| v.as_str())
+                .context("network required")?;
+            NetmakerPlugin::list_nodes_api(network).await
+        }
+        "get_node" => {
+            let network = args
+                .get("network")
+                .and_then(|v| v.as_str())
+                .context("network required")?;
+            let node_id = args
+                .get("node_id")
+                .and_then(|v| v.as_str())
+                .context("node_id required")?;
+            NetmakerPlugin::get_node_api(network, node_id).await
+        }
+        "update_node" => {
+            let network = args
+                .get("network")
+                .and_then(|v| v.as_str())
+                .context("network required")?;
+            let node_id = args
+                .get("node_id")
+                .and_then(|v| v.as_str())
+                .context("node_id required")?;
+            let payload = args.get("payload").cloned().unwrap_or(json!({}));
+            NetmakerPlugin::update_node_api(network, node_id, &payload).await
+        }
+        _ => anyhow::bail!("unknown netmaker method: {method}"),
+    }
 }
 
 // Self-registration: the plugin registry discovers this via inventory

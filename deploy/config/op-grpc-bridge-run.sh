@@ -19,9 +19,12 @@ set -a
 [ -r /etc/op-dbus/environment ] && . /etc/op-dbus/environment
 set +a
 
-# Hardcode bind addresses - ignore all env overrides
-export ZEROCLAW_BIND_ADDR="0.0.0.0:8090,0.0.0.0:50052"
-export GRPC_BIND="0.0.0.0:8090,0.0.0.0:50052"
+# Hardcode bind address - ignore all env overrides. Single port only:
+# 50052 is op-cognitive-mcp's own gRPC port (see CLAUDE.md crate map) —
+# binding it here too causes a genuine, permanent port conflict and crash
+# loop, not a transient race (confirmed live 2026-07-24).
+export ZEROCLAW_BIND_ADDR="0.0.0.0:8090"
+export GRPC_BIND="0.0.0.0:8090"
 export ZEROCLAW_UNIX_SOCKET="${ZEROCLAW_UNIX_SOCKET:-/run/opdbus/grpc.sock}"
 unset ZEROCLAW_TLS_BIND_ADDR
 export RUST_LOG="${GRPC_RUST_LOG:-info}"
