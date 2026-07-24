@@ -494,16 +494,6 @@ impl OperationGrpcServer {
         self.active_reflection.clone()
     }
 
-    /// Generate the reflection file descriptor set for mounted services.
-    ///
-    /// The build script compiles the generated `operation.plugin.v1` plugin
-    /// method services into the static descriptor set. Do not append synthetic
-    /// `operation.method.*` descriptors here unless those services are mounted
-    /// too; reflection must not advertise routes clients cannot call.
-    pub fn generate_combined_reflection_descriptor(&self) -> Vec<u8> {
-        crate::callable_reflection::descriptor_bytes()
-    }
-
     pub(crate) async fn call_generated_plugin_method_typed<Req, Res>(
         &self,
         plugin_id: &'static str,
@@ -648,13 +638,12 @@ pub fn build_operation_routes(server: OperationGrpcServer) -> tonic::service::Ro
     // tonic-reflection cannot be mutated after the service is mounted, so D-Bus
     // object creation must call `register_plugin_methods` before this point when
     // per-method services should be visible to grpcurl/MCP clients.
-    let descriptor = server.generate_combined_reflection_descriptor();
-    let descriptor: &'static [u8] = Box::leak(descriptor.into_boxed_slice());
+    // Give the interceptor a handle to the engine so it can look up
+    // per-identity sled records (Cozo-backed) instead of only the shared
+    // host legacy sled. Called exactly once, before any interceptor runs.
+    interceptor::set_engine(server.mutation_engine.clone());
+
     let reflection_v1 = DynamicReflectionService::new(server.active_reflection()).into_v1_server();
-    let reflection_v1alpha = tonic_reflection::server::Builder::configure()
-        .register_encoded_file_descriptor_set(descriptor)
-        .build_v1alpha()
-        .expect("failed to build v1alpha reflection service");
 
     let intercept = interceptor::ghostbridge_interceptor;
 
@@ -713,7 +702,6 @@ pub fn build_operation_routes(server: OperationGrpcServer) -> tonic::service::Ro
     let routes = add_routes(routes, server.clone());
     routes
         .add_service(tonic_web::enable(reflection_v1))
-        .add_service(tonic_web::enable(reflection_v1alpha))
 }
 
 /// Run gRPC server for all Operation services.
@@ -804,7 +792,12 @@ pub async fn run_grpc_server(
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
-        .allow_headers(Any);
+        .allow_headers(Any)
+        .expose_headers([
+            "grpc-status".parse().unwrap(),
+            "grpc-message".parse().unwrap(),
+            "grpc-status-details-bin".parse().unwrap(),
+        ]);
 
     let mut builder = tonic::transport::Server::builder()
         .accept_http1(true)
@@ -1647,7 +1640,12 @@ fn simd_to_prost_value(value: &simd_json::OwnedValue) -> ProstValue {
             kind: Some(Kind::BoolValue(b)),
         };
     }
-    if let Some(n) = value.as_f64() {
+    // `as_f64()` is strict — it only matches values already stored as f64,
+    // so a u64/i64 field (mutation_index, session_started_at, ...) silently
+    // fell through every branch to NullValue. `cast_f64()` coerces integers
+    // too; google.protobuf.Struct only has a single f64 number_value anyway,
+    // so this is the correct behavior, not a precision-losing shortcut.
+    if let Some(n) = value.cast_f64() {
         return ProstValue {
             kind: Some(Kind::NumberValue(n)),
         };

@@ -90,17 +90,13 @@ impl ActiveReflectionCatalog {
 
 impl ActiveReflectionInner {
     fn rebuild_index(&mut self) {
+        // Collect all service names from active blobs (including per-method services
+        // like operation.method.*). These are the services that will be listed in
+        // ListServices and available for discovery.
         let active_services = self
             .blobs
             .values()
-            .flat_map(|blob| {
-                // Advertise legacy service names (mounted via build.rs) for
-                // ListServices; per-method typed services are indexed for
-                // file/symbol lookups but not listed unless routes are mounted.
-                // TODO(unify-routes): advertise operation.method.* services
-                // when PerMethodGrpcServices routes are mounted.
-                blob.manifest.grpc.services.clone()
-            })
+            .flat_map(|blob| blob.manifest.grpc.services.clone())
             .collect::<BTreeSet<_>>();
         let mut index = ReflectionIndex::new(active_services);
 

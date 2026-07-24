@@ -21,7 +21,6 @@
 //!     └─────────────────┘            └─────────────────┘
 //! ```
 
-pub mod callable_reflection;
 pub mod chat_service;
 pub mod dbus_object;
 pub mod dynamic_reflection;
