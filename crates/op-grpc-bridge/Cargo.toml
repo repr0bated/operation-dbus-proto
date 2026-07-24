@@ -46,6 +46,9 @@ op-cozo-store = { path = "../op-cozo-store" }
 op-grpc-adapters = { path = "../op-grpc-adapters" }
 op-jsonrpc = { path = "../op-jsonrpc" }
 op-cognitive-mcp = { path = "../op-cognitive-mcp" }
+op-llm = { path = "../op-llm" }
+op-xray-daemon = { path = "../op-xray-daemon" }
+nix = { version = "0.28", features = ["signal"] }
 
 # Zero-copy shared memory (1:1 Direct Read)
 memmap2 = { workspace = true }

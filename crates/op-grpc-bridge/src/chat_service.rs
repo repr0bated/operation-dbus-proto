@@ -102,51 +102,60 @@ impl ChatService for ChatServiceImpl {
                 }))
                 .await;
 
-            // TODO: Wire to gemma_brain routing + ForcedToolPipeline.
-            //
-            // The pipeline will:
-            // 1. Build ChatRequest with tool_choice: Required
-            // 2. Route through gemma_brain to the selected provider/model
-            // 3. For each ModelPart yielded:
-            //    - Text → ChatFrame::Part(text)
-            //    - ToolCall → ChatFrame::Part(tool-call) + ApprovalRequired if needed
-            //    - ToolResult → ChatFrame::Part(tool-result)
-            //    - Reasoning → ChatFrame::Part(reasoning)
-            // 4. Feed completed transcript to MemoryLoop for persistence
-            // 5. Bounded at ≥50 steps, cancellable via cancel_rx
+            // TODO: full gemma_brain routing + ForcedToolPipeline (tool calls,
+            // approvals, MemoryLoop persistence, bounded agent loop) is not
+            // wired yet. For now, delegate straight to the Salad AI Gateway
+            // (SaladCloud-hosted, OpenAI-compatible) so real replies flow —
+            // no antigravity dependency, no forced tool-call pipeline.
+            let llm_messages: Vec<op_llm::ChatMessage> = ui_messages
+                .iter()
+                .map(|m| {
+                    let role = m
+                        .get("role")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("user")
+                        .to_string();
+                    let content = m
+                        .get("content")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    op_llm::ChatMessage {
+                        role,
+                        content,
+                        tool_calls: None,
+                        tool_call_id: None,
+                    }
+                })
+                .collect();
 
-            // Placeholder: echo back the last user message as a reasoning part
-            // so the client can verify the stream is working.
-            if let Some(last_msg) = ui_messages.last() {
-                let role = last_msg
-                    .get("role")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("user");
-                let content = last_msg
-                    .get("content")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
+            let salad_model = if model.is_empty() {
+                std::env::var("SALAD_DEFAULT_MODEL").unwrap_or_else(|_| "qwen3.6-27b".to_string())
+            } else {
+                model.clone()
+            };
 
-                let payload = serde_json::json!({
-                    "type": "text",
-                    "text": format!(
-                        "[ChatService stub] Received message from {role} via {provider}/{model}. \
-                         Delegation pipeline not yet wired. Message: {content}"
-                    )
-                });
+            let text = match op_llm::SaladProvider::from_env() {
+                Ok(salad) => match op_llm::LlmProvider::chat(&salad, &salad_model, llm_messages).await
+                {
+                    Ok(resp) => resp.message.content,
+                    Err(e) => format!("Salad chat request failed: {e:#}"),
+                },
+                Err(e) => format!("Salad provider unavailable: {e:#}"),
+            };
 
-                let _ = tx
-                    .send(Ok(ChatFrame {
-                        cursor: bump(),
-                        body: Some(chat_frame::Body::Part(UiMessagePart {
-                            message_id: uuid::Uuid::new_v4().to_string(),
-                            role: "assistant".to_string(),
-                            kind: "reasoning".to_string(),
-                            payload: serde_json::to_vec(&payload).unwrap_or_default(),
-                        })),
-                    }))
-                    .await;
-            }
+            let payload = serde_json::json!({ "type": "text", "text": text });
+            let _ = tx
+                .send(Ok(ChatFrame {
+                    cursor: bump(),
+                    body: Some(chat_frame::Body::Part(UiMessagePart {
+                        message_id: uuid::Uuid::new_v4().to_string(),
+                        role: "assistant".to_string(),
+                        kind: "text".to_string(),
+                        payload: serde_json::to_vec(&payload).unwrap_or_default(),
+                    })),
+                }))
+                .await;
 
             // Stream done.
             let _ = tx

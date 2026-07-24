@@ -6,8 +6,11 @@
 // Operated by A.N.N.A. Scribe. No payload enters the system without a cryptographic
 // "Snowball" session. No SQL databases, no D-Bus watchers. 1:1 Direct Read only.
 
-use op_identity::IdentitySled;
+use op_identity::FootprintVerifyError;
+use std::sync::{Arc, OnceLock};
 use tonic::{Request, Status};
+
+use crate::mutation_engine::MutationEngine;
 
 /// Identity extracted by the Ghostbridge interceptor and attached to each
 /// accepted request for bridge-layer authorization.
@@ -17,9 +20,77 @@ pub struct GhostbridgeIdentity {
     pub session_id: String,
 }
 
-/// Check whether a sled is "valid" per the Absolute Base rule.
-fn is_sled_valid(sled: &IdentitySled) -> bool {
-    sled.hashed_footprint != [0u8; 32] && sled.trace_id != [0u8; 16]
+/// Process-wide handle to the engine, set once from `build_operation_routes`
+/// (the single choke point all routes are built from) before any interceptor
+/// can run. Lets the interceptor do a per-identity Cozo lookup
+/// (`identity_sled_dispatch::get_identity`) without threading `Arc<MutationEngine>`
+/// through every one of the ~10 `.with_interceptor()` call sites.
+static ENGINE: OnceLock<Arc<MutationEngine>> = OnceLock::new();
+
+pub fn set_engine(engine: Arc<MutationEngine>) {
+    let _ = ENGINE.set(engine);
+}
+
+/// Look up the specific caller's identity sled and check its footprint +
+/// term (`expires_at`) — the per-identity path. Resolves either by a
+/// WireGuard pubkey (host/xray-mesh callers, session_id derived from the
+/// pubkey) or, when there's no pubkey, directly by the trace_id the caller
+/// presents (vendor/partner identities like a browser frontend that has no
+/// WireGuard identity of its own — e.g. Lovable). Returns `None` when
+/// there's no engine registered yet, no identifying header, or no matching
+/// record, so the caller can fall back to the shared host legacy sled.
+fn verify_per_identity(
+    pubkey: Option<&str>,
+    trace_id: Option<&str>,
+    request_footprint: &str,
+) -> Option<Result<String, Status>> {
+    let engine = ENGINE.get()?;
+    let session_id = pubkey.map(op_identity::session::derive_session_id);
+    let args = match (&session_id, trace_id) {
+        (Some(sid), _) => serde_json::json!({ "session_id": sid }),
+        (None, Some(trace)) => serde_json::json!({ "trace_id": trace }),
+        (None, None) => return None,
+    };
+
+    // Bridge the sync interceptor into the async Cozo-backed lookup. The
+    // lookup is an in-memory state-cache read (Cozo is the restart-warm
+    // source, not a per-call read), so blocking briefly here is safe on the
+    // multi-threaded runtime op-grpc-bridge runs under.
+    let result = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(crate::identity_sled_dispatch::dispatch_identity_sled_method(
+            engine.as_ref(),
+            "get_identity",
+            &args,
+        ))
+    });
+
+    let identity = match result {
+        Ok(value) => value.get("identity").cloned()?,
+        Err(_) => return None, // no per-identity record — fall back to the shared sled
+    };
+    let hashed_footprint = identity.get("hashed_footprint")?.as_str()?.to_string();
+    let expires_at = identity.get("expires_at").and_then(|v| v.as_i64());
+
+    if let Some(expires_at) = expires_at {
+        if expires_at != 0 && expires_at <= chrono::Utc::now().timestamp() {
+            return Some(Err(Status::permission_denied(
+                "Identity term has expired. Re-authenticate to renew.",
+            )));
+        }
+    }
+
+    if hashed_footprint != request_footprint {
+        return Some(Err(Status::permission_denied(
+            "Temporal Hash Mismatch. Session footprint is out of sync with current mutation.",
+        )));
+    }
+
+    let resolved_session_id = identity
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .or(session_id)?;
+    Some(Ok(resolved_session_id))
 }
 
 /// THE GATEKEEPER: Tonic gRPC Interceptor on port 8090.
@@ -40,6 +111,18 @@ impl tonic::service::Interceptor for GhostbridgeInterceptor {
 
 #[allow(clippy::result_large_err)]
 pub fn ghostbridge_interceptor(mut req: Request<()>) -> Result<Request<()>, Status> {
+    // TEMPORARY TEST BYPASS — 2026-07-23, requested for a short (5-10 min)
+    // Lovable UI connectivity test. MUST be reverted (unset the env var or
+    // delete this block) once the test is done; this defeats the Absolute
+    // Base check for every service on this interceptor while set.
+    if std::env::var("GHOSTBRIDGE_BYPASS_FOR_TESTING").is_ok() {
+        req.extensions_mut().insert(GhostbridgeIdentity {
+            footprint: "bypass-for-testing".to_string(),
+            session_id: "bypass-for-testing".to_string(),
+        });
+        return Ok(req);
+    }
+
     // 1. Extract the Xray-injected Identity Headers (The Accountability Loop)
     //    Clone header values upfront to release the immutable borrow on `req`,
     //    allowing the mutable `extensions_mut()` call downstream.
@@ -56,36 +139,61 @@ pub fn ghostbridge_interceptor(mut req: Request<()>) -> Result<Request<()>, Stat
         ));
     }
 
-    // 2. 1:1 Direct Read from the MutationEngine's shared memory (No SQL, No Polling)
-    let (sled_ptr, _mmap) = op_identity::read_sled()
-        .map_err(|_| Status::internal("MutationEngine Memory Unreachable"))?;
-    let sled = unsafe { &*sled_ptr };
-
-    // The Absolute Base: No valid schema, it does not exist.
-    if !is_sled_valid(sled) {
-        return Err(Status::failed_precondition(
-            "A.N.N.A. Scribe: Invalid Schema State. Cease and Desist.",
-        ));
-    }
-
-    let current_footprint = sled.hashed_footprint;
-
-    // 3. The Strike/Etch Validation: Check if the payload is in sync with Btrfs.
-    //    If a Btrfs mutation has occurred and the client's footprint is stale,
-    //    the connection is dropped without consuming any NVMe I/O.
     let request_footprint = footprint_value
         .as_ref()
         .unwrap()
         .to_str()
         .map_err(|_| Status::invalid_argument("Invalid footprint header encoding"))?;
-    let expected_footprint = hex::encode(current_footprint);
 
-    if request_footprint != expected_footprint {
-        return Err(Status::permission_denied(
+    // 2. Per-identity path: look up THIS caller's own Cozo-backed sled and
+    // check both footprint match and term (`expires_at`) validity, rather
+    // than only the shared host legacy sled. Resolved either by a real
+    // WireGuard pubkey (host/xray-mesh callers), as its own distinct signal
+    // — not just a trace-id fallback — or, for vendor/partner identities
+    // with no WireGuard identity of their own (e.g. a browser frontend like
+    // Lovable), directly by the trace_id they present. This is what lets
+    // temporary, revocable consumer identities exist alongside the lifelong
+    // host/jeremy/chatbot accounts without either bypassing the gate or
+    // being permanently trusted.
+    let pubkey_value = req.metadata().get("x-wireguard-pubkey").cloned();
+    let raw_trace_value = req.metadata().get("x-ghostbridge-trace-id").cloned();
+    let pubkey_str = pubkey_value
+        .as_ref()
+        .map(|v| v.to_str())
+        .transpose()
+        .map_err(|_| Status::invalid_argument("Invalid pubkey header encoding"))?;
+    let trace_str = raw_trace_value
+        .as_ref()
+        .map(|v| v.to_str())
+        .transpose()
+        .map_err(|_| Status::invalid_argument("Invalid trace header encoding"))?;
+    if pubkey_str.is_some() || trace_str.is_some() {
+        if let Some(outcome) = verify_per_identity(pubkey_str, trace_str, request_footprint) {
+            let session_id = outcome?;
+            req.extensions_mut().insert(GhostbridgeIdentity {
+                footprint: request_footprint.to_string(),
+                session_id,
+            });
+            return Ok(req);
+        }
+    }
+
+    // 3. Fallback: the shared host legacy sled — shared with op-cognitive-mcp
+    // via op_identity::verify_ghostbridge_footprint so the two gatekeepers
+    // can never silently drift apart again. Used when there's no per-identity
+    // record (host's own calls, or before any temporary identity exists).
+    op_identity::verify_ghostbridge_footprint(request_footprint).map_err(|error| match error {
+        FootprintVerifyError::SledUnreachable => {
+            Status::internal("MutationEngine Memory Unreachable")
+        }
+        FootprintVerifyError::InvalidSled => Status::failed_precondition(
+            "A.N.N.A. Scribe: Invalid Schema State. Cease and Desist.",
+        ),
+        FootprintVerifyError::Mismatch => Status::permission_denied(
             "A.N.N.A. Scribe: Temporal Hash Mismatch. \
              Session footprint is out of sync with current Btrfs mutation.",
-        ));
-    }
+        ),
+    })?;
 
     // 4. Pass the Trace ID downstream into the gRPC context for the React GUI.
     let session_id = trace_value
@@ -184,16 +292,6 @@ mod tests {
     }
 
     #[test]
-    fn test_identity_sled_repr_c_layout() {
-        let size = std::mem::size_of::<IdentitySled>();
-        assert_eq!(
-            size, 152,
-            "IdentitySled must be exactly 152 bytes per spec, got {} bytes",
-            size
-        );
-    }
-
-    #[test]
     fn test_footprint_mismatch_detection() {
         let sled_footprint: [u8; 32] = [0xAA; 32];
         let expected = hex::encode(sled_footprint);
@@ -236,31 +334,9 @@ mod tests {
             .contains("MutationEngine Memory Unreachable"));
     }
 
-    #[test]
-    fn test_invalid_sled_rejected() {
-        let sled = IdentitySled {
-            wireguard_pubkey: [0u8; 32],
-            mutation_index: 1,
-            hashed_footprint: [0u8; 32],
-            trace_id: [0u8; 16],
-            schema_version: 0,
-            reserved: [0u8; 44],
-            vector_id: [0u8; 16],
-        };
-        assert!(!is_sled_valid(&sled));
-    }
-
-    #[test]
-    fn test_valid_sled_accepted() {
-        let sled = IdentitySled {
-            wireguard_pubkey: [0xCC; 32],
-            mutation_index: 42,
-            hashed_footprint: [0xDD; 32],
-            trace_id: [0xEE; 16],
-            schema_version: 1,
-            reserved: [0u8; 44],
-            vector_id: [0xDD; 16],
-        };
-        assert!(is_sled_valid(&sled));
-    }
+    // Sled-validity coverage (struct layout, InvalidSled/Mismatch/Ok branches)
+    // now lives in op_identity::schema_bridge, next to the shared
+    // verify_ghostbridge_footprint function itself, rather than duplicated
+    // here against a local IdentitySled/is_sled_valid that no longer exist
+    // in this crate.
 }

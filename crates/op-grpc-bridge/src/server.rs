@@ -1,7 +1,8 @@
 //! Axum HTTP/gRPC-Web host for the zeroclaw plugin schema.
 //!
 //! Serves the plugin-owned schema JSON on:
-//!   - native gRPC over Unix socket `/run/ghostbridge/grpc.sock`
+//!   - host native gRPC over Unix socket `/run/opdbus/grpc.sock`
+//!   - shared container UDS `/run/ghostbridge/container.sock` (same routes)
 //!   - HTTP/1.1 + gRPC-Web on TCP `0.0.0.0:8090` (configurable via D-Bus)
 //!
 //! The schema itself is never generated here; it is read from the plugin's
@@ -32,7 +33,10 @@ use crate::proto::zeroclaw::{
     GetSchemaRequest, SchemaEvent, SchemaResponse, WatchSchemaRequest,
 };
 
-const DEFAULT_UNIX_SOCKET: &str = "/run/ghostbridge/grpc.sock";
+/// Host-local native gRPC UDS (op-web, zbusctl, operators on the host).
+const DEFAULT_UNIX_SOCKET: &str = "/run/opdbus/grpc.sock";
+/// Shared container socket — bind-mounted into NIC-less CTs as `/run/ghostbridge`.
+const DEFAULT_SHARED_SOCKET: &str = crate::shared_socket::DEFAULT_SOCKET_PATH;
 const DEFAULT_BIND_ADDR: &str = "0.0.0.0:8090";
 /// Default schema source: the sealed blob catalog dir. When `schema_path`
 /// is a directory the loader reads the plugin's own blob from it (a blob in
@@ -45,7 +49,12 @@ const DEFAULT_SCHEMA_PATH: &str = op_blob::catalog::DEFAULT_SHM_DIR;
 pub struct ServerConfig {
     pub plugin_id: String,
     pub schema_path: PathBuf,
+    /// Host-local gRPC UDS (`ZEROCLAW_UNIX_SOCKET`, default `/run/opdbus/grpc.sock`).
     pub unix_socket: PathBuf,
+    /// Shared container UDS (`GHOSTBRIDGE_SOCKET_PATH`, default
+    /// `/run/ghostbridge/container.sock`). Served with the same route set.
+    /// When equal to `unix_socket`, only one listener is opened.
+    pub shared_socket: PathBuf,
     pub bind_addr: String,
     pub tls_bind_addr: Option<String>,
     pub tls_identity: Option<Identity>,
@@ -57,6 +66,7 @@ impl Default for ServerConfig {
             plugin_id: "zeroclaw".to_string(),
             schema_path: PathBuf::from(DEFAULT_SCHEMA_PATH),
             unix_socket: PathBuf::from(DEFAULT_UNIX_SOCKET),
+            shared_socket: PathBuf::from(DEFAULT_SHARED_SOCKET),
             bind_addr: DEFAULT_BIND_ADDR.to_string(),
             tls_bind_addr: None,
             tls_identity: None,
@@ -78,6 +88,10 @@ impl ServerConfig {
             unix_socket: PathBuf::from(
                 std::env::var("ZEROCLAW_UNIX_SOCKET")
                     .unwrap_or_else(|_| DEFAULT_UNIX_SOCKET.to_string()),
+            ),
+            shared_socket: PathBuf::from(
+                std::env::var("GHOSTBRIDGE_SOCKET_PATH")
+                    .unwrap_or_else(|_| DEFAULT_SHARED_SOCKET.to_string()),
             ),
             bind_addr: std::env::var("ZEROCLAW_BIND_ADDR")
                 .or_else(|_| std::env::var("GRPC_BIND"))
@@ -211,7 +225,12 @@ pub fn build_axum_app(loader: Arc<SchemaLoader>, server: OperationGrpcServer) ->
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
-        .allow_headers(Any);
+        .allow_headers(Any)
+        .expose_headers([
+            "grpc-status".parse().unwrap(),
+            "grpc-message".parse().unwrap(),
+            "grpc-status-details-bin".parse().unwrap(),
+        ]);
 
     build_routes(loader, server)
         .into_axum_router()
@@ -305,16 +324,28 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
         }
     }
 
-    // Unix socket listener for native gRPC.
+    // Host-local Unix socket (operators / host clients).
     let unix_socket = config.unix_socket.clone();
-    if let Some(parent) = unix_socket.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let _ = std::fs::remove_file(&unix_socket);
-    let unix_listener = tokio::net::UnixListener::bind(&unix_socket)?;
+    let unix_incoming = bind_unix_listener(&unix_socket).await?;
     info!(path = %unix_socket.display(), "zeroclaw native gRPC listening on Unix socket");
 
-    let unix_incoming = tokio_stream::wrappers::UnixListenerStream::new(unix_listener);
+    // Shared container socket — same gRPC surface, path bind-mounted into CTs.
+    // Skip a second bind when env points both knobs at the same path.
+    let shared_socket = config.shared_socket.clone();
+    let shared_incoming = if shared_socket != unix_socket {
+        let incoming = bind_unix_listener(&shared_socket).await?;
+        info!(
+            path = %shared_socket.display(),
+            "shared container.sock listening (ghostbridge UDS fabric)"
+        );
+        Some(incoming)
+    } else {
+        info!(
+            path = %shared_socket.display(),
+            "shared container socket coincides with host UDS; single listener"
+        );
+        None
+    };
 
     // accept_http1(true): tonic-web serves gRPC-Web over HTTP/1.1, which is what
     // browsers (and xray's tls-h1 fallback forwarding to this socket) speak. Without
@@ -323,6 +354,13 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
         .accept_http1(true)
         .add_routes(build_tonic_routes(loader.clone(), operation_server.clone()))
         .serve_with_incoming(unix_incoming);
+
+    let shared_server = shared_incoming.map(|incoming| {
+        tonic::transport::Server::builder()
+            .accept_http1(true)
+            .add_routes(build_tonic_routes(loader.clone(), operation_server.clone()))
+            .serve_with_incoming(incoming)
+    });
 
     // TCP listener for HTTP + gRPC-Web (local-only, no TLS).
     let bind_addr: SocketAddr = config.bind_addr.parse()?;
@@ -367,21 +405,65 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
         }
     });
 
-    let (unix_result, tcp_result, tls_result) = match tls_server_fut {
-        Some(tls) => {
-            let (u, t, tls) = tokio::join!(tonic_server, tcp_server, tls);
-            (u, t, Some(tls))
-        }
-        None => {
-            let (u, t) = tokio::join!(tonic_server, tcp_server);
-            (u, t, None)
+    // Drive all listeners concurrently. Absent optional servers are no-ops.
+    let shared_fut = async {
+        match shared_server {
+            Some(s) => s.await.map_err(|e| anyhow::anyhow!("Shared container.sock: {e}")),
+            None => Ok(()),
         }
     };
+    let tls_fut = async {
+        match tls_server_fut {
+            Some(s) => s.await.map_err(|e| anyhow::anyhow!("TLS server error: {e}")),
+            None => Ok(()),
+        }
+    };
+    let unix_fut = async {
+        tonic_server
+            .await
+            .map_err(|e| anyhow::anyhow!("Unix server error: {e}"))
+    };
+    let tcp_fut = async {
+        tcp_server
+            .await
+            .map_err(|e| anyhow::anyhow!("TCP server error: {e}"))
+    };
+
+    let (u, s, t, tls_r) = tokio::join!(unix_fut, shared_fut, tcp_fut, tls_fut);
+    u?;
+    s?;
+    t?;
+    tls_r?;
     let _ = rebind_task.await;
-    unix_result.map_err(|e| anyhow::anyhow!("Unix server error: {}", e))?;
-    tcp_result.map_err(|e| anyhow::anyhow!("TCP server error: {}", e))?;
-    if let Some(Err(e)) = tls_result {
-        return Err(anyhow::anyhow!("TLS server error: {}", e));
-    }
     Ok(())
 }
+
+/// Bind a Unix domain socket for tonic, creating parents and replacing stale files.
+async fn bind_unix_listener(
+    path: &std::path::Path,
+) -> anyhow::Result<tokio_stream::wrappers::UnixListenerStream> {
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+        // Containers mount this directory; world-executable so CT UIDs can traverse.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o755));
+        }
+    }
+    if let Err(e) = tokio::fs::remove_file(path).await {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            return Err(e.into());
+        }
+    }
+    let listener = tokio::net::UnixListener::bind(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        // World-writable: NIC-less containers (mapped UIDs) must connect.
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o666));
+    }
+    Ok(tokio_stream::wrappers::UnixListenerStream::new(listener))
+}
+
+

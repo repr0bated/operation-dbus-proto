@@ -41,7 +41,7 @@ pub struct RemoteEndpoint {
 impl Default for RemoteEndpoint {
     fn default() -> Self {
         Self {
-            address: "http://127.0.0.1:50051".to_string(),
+            address: "http://127.0.0.1:8090".to_string(),
             tls_enabled: false,
             connect_timeout: Duration::from_secs(5),
             request_timeout: Duration::from_secs(30),
