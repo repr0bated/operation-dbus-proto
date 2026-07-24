@@ -37,7 +37,7 @@ use crate::proto::zeroclaw::{
 const DEFAULT_UNIX_SOCKET: &str = "/run/opdbus/grpc.sock";
 /// Shared container socket — bind-mounted into NIC-less CTs as `/run/ghostbridge`.
 const DEFAULT_SHARED_SOCKET: &str = crate::shared_socket::DEFAULT_SOCKET_PATH;
-const DEFAULT_BIND_ADDR: &str = "0.0.0.0:50051,0.0.0.0:8090,0.0.0.0:50052";
+const DEFAULT_BIND_ADDR: &str = "0.0.0.0:8090,0.0.0.0:50051,0.0.0.0:50052";
 /// Default schema source: the sealed blob catalog dir. When `schema_path`
 /// is a directory the loader reads the plugin's own blob from it (a blob in
 /// the catalog IS the plugin); a file path is still accepted for tests and
@@ -364,7 +364,7 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
 
     // TCP listeners for HTTP + gRPC-Web
     let bind_addrs: Vec<&str> = config.bind_addr.split(',').collect();
-    let mut tcp_handles = Vec::new();
+    let mut tcp_tasks = Vec::new();
     for bind_addr_str in &bind_addrs {
         let bind_addr: SocketAddr = bind_addr_str.parse()?;
         let listener = std::net::TcpListener::bind(bind_addr)?;
@@ -375,7 +375,7 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
             .accept_http1(true)
             .add_routes(build_tonic_routes(loader.clone(), operation_server.clone()))
             .serve_with_incoming(incoming);
-        tcp_handles.push(tokio::spawn(server));
+        tcp_tasks.push(tokio::spawn(async move { server.await }));
     }
 
     // Optional TLS listener for gRPC-Web over TLS (GUI/public-facing).
@@ -432,10 +432,10 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
             .map_err(|e| anyhow::anyhow!("Unix server error: {e}"))
     };
     let tcp_fut = async {
-        if tcp_handles.is_empty() {
+        if tcp_tasks.is_empty() {
             Ok(())
         } else {
-            let (result, _idx, _rest) = futures::future::select_all(tcp_handles).await;
+            let (result, _idx, _rest) = futures::future::select_all(tcp_tasks).await;
             match result {
                 Ok(inner) => inner.map_err(|e| anyhow::anyhow!("TCP server error: {e}")),
                 Err(join_err) => Err(anyhow::anyhow!("TCP server task panicked: {join_err}")),

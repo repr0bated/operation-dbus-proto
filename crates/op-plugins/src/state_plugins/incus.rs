@@ -339,18 +339,23 @@ impl IncusPlugin {
                     "type": "container",
                 });
                 if no_profiles {
-                    body["profiles"] = simd_json::json!([]);
+                    body.insert("profiles", Value::Array(Vec::new()))?;
                 } else if !profiles.is_empty() {
-                    body["profiles"] = simd_json::json!(profiles);
+                    let profile_values: Vec<Value> =
+                        profiles.iter().map(|p| Value::from(p.as_str())).collect();
+                    body.insert("profiles", Value::Array(profile_values))?;
                 }
                 if let Some(pool) = storage_pool {
-                    body["devices"] = simd_json::json!({
-                        "root": {
-                            "type": "disk",
-                            "pool": pool,
-                            "path": "/"
-                        }
-                    });
+                    body.insert(
+                        "devices",
+                        simd_json::json!({
+                            "root": {
+                                "type": "disk",
+                                "pool": pool,
+                                "path": "/"
+                            }
+                        }),
+                    )?;
                 }
                 let body_str = simd_json::to_string(&body)?;
                 Self::incus_api_call("POST", "/1.0/instances", Some(&body_str)).await
