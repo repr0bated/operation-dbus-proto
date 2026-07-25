@@ -21,4 +21,5 @@ anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 zbus = { workspace = true }
+quick-xml = { workspace = true }
 hex = "0.4"

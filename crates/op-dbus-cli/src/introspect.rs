@@ -286,7 +286,8 @@ fn parse_interfaces(xml: &str) -> Vec<InterfaceInfo> {
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref e)) => {
-                let tag = std::str::from_utf8(e.name().as_ref()).unwrap_or("");
+                let name_bytes = e.name();
+                let tag = std::str::from_utf8(name_bytes.as_ref()).unwrap_or("");
                 match tag {
                     "node" => depth += 1,
                     "interface" if depth == 1 => {
@@ -381,7 +382,8 @@ fn parse_interfaces(xml: &str) -> Vec<InterfaceInfo> {
                 }
             }
             Ok(Event::Empty(ref e)) => {
-                let tag = std::str::from_utf8(e.name().as_ref()).unwrap_or("");
+                let name_bytes = e.name();
+                let tag = std::str::from_utf8(name_bytes.as_ref()).unwrap_or("");
                 match tag {
                     "property" if depth == 1 => {
                         let mut name = String::new();
@@ -442,7 +444,8 @@ fn parse_interfaces(xml: &str) -> Vec<InterfaceInfo> {
                 }
             }
             Ok(Event::End(ref e)) => {
-                let tag = std::str::from_utf8(e.name().as_ref()).unwrap_or("");
+                let name_bytes = e.name();
+                let tag = std::str::from_utf8(name_bytes.as_ref()).unwrap_or("");
                 match tag {
                     "node" => depth = depth.saturating_sub(1),
                     "interface" => {
