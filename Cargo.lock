@@ -5504,6 +5504,7 @@ dependencies = [
  "hex",
  "op-core",
  "op-introspection",
+ "quick-xml 0.36.2",
  "serde",
  "serde_json",
  "tokio",
