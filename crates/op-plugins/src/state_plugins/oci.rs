@@ -206,6 +206,7 @@ pub struct GetContainerStateInput {
 
 pub(crate) fn oci_schema() -> PluginSchema {
     PluginSchema::builder("oci")
+        .category("service")
         .version("1.0.0")
         .category("container")
         .description("OCI container lifecycle — schema-driven loopback bring-up, netns init, and port attach for incus-managed Docker/OCI containers")

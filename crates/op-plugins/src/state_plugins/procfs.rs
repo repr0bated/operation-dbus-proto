@@ -10,10 +10,8 @@ use op_state::{
     ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
 };
 use op_state_store::PluginSchema;
-#[cfg(test)]
-use op_state_store::{FieldSchema, FieldType};
 use serde::{Deserialize, Serialize};
-use simd_json::{json, OwnedValue as Value};
+use simd_json::OwnedValue as Value;
 use std::path::Path;
 use tokio::fs;
 
@@ -34,34 +32,32 @@ use tokio::fs;
         "/diskstats"
     ])
 )]
+#[schemars(extend("x-oscal-category" = "service"))]
 pub struct ProcfsState {
     /// Parsed /proc/meminfo values.
     #[serde(default)]
     #[schemars(
         description = "Parsed /proc/meminfo values.",
-        with = "serde_json::Value",
         extend("readOnly" = true),
         extend("x-oscal-subid" = "obs.service.procfs.memory.query@v1")
     )]
-    pub memory: Value,
+    pub memory: std::collections::BTreeMap<String, u64>,
     /// Parsed /proc/loadavg values.
     #[serde(default)]
     #[schemars(
         description = "Parsed /proc/loadavg values.",
-        with = "serde_json::Value",
         extend("readOnly" = true),
         extend("x-oscal-subid" = "obs.service.procfs.loadavg.query@v1")
     )]
-    pub loadavg: Value,
+    pub loadavg: LoadAvg,
     /// Parsed /proc/uptime values.
     #[serde(default)]
     #[schemars(
         description = "Parsed /proc/uptime values.",
-        with = "serde_json::Value",
         extend("readOnly" = true),
         extend("x-oscal-subid" = "obs.service.procfs.uptime.query@v1")
     )]
-    pub uptime: Value,
+    pub uptime: Uptime,
     /// Parsed CPU inventory from /proc/cpuinfo.
     #[serde(default)]
     #[schemars(
@@ -84,20 +80,18 @@ pub struct ProcfsState {
     #[serde(default)]
     #[schemars(
         description = "Parsed /proc/net/dev counters.",
-        with = "serde_json::Value",
         extend("readOnly" = true),
         extend("x-oscal-subid" = "obs.service.procfs.net-dev.query@v1")
     )]
-    pub net_dev: Value,
+    pub net_dev: NetDev,
     /// Parsed /proc/mounts entries.
     #[serde(default)]
     #[schemars(
         description = "Parsed /proc/mounts entries.",
-        with = "serde_json::Value",
         extend("readOnly" = true),
         extend("x-oscal-subid" = "obs.service.procfs.mounts.query@v1")
     )]
-    pub mounts: Value,
+    pub mounts: Vec<MountEntry>,
     /// Kernel version from /proc/version.
     #[serde(default)]
     #[schemars(
@@ -325,69 +319,6 @@ pub struct ProcessInfoInput {
     pub pid: i32,
 }
 
-/// Hand-rolled golden reference for the procfs schema. Kept test-only so the
-/// derived schema can be proven field-for-field equivalent to the original
-/// hand-rolled contract.
-#[cfg(test)]
-pub(crate) fn procfs_schema_golden() -> PluginSchema {
-    PluginSchema::builder("procfs")
-        .version("1.0.0")
-        .category("host")
-        .description("Read-only procfs host state projected through PluginSchema.")
-        .field("memory", readonly_any("Parsed /proc/meminfo values."))
-        .field("loadavg", readonly_any("Parsed /proc/loadavg values."))
-        .field("uptime", readonly_any("Parsed /proc/uptime values."))
-        .field(
-            "cpuinfo",
-            readonly_any("Parsed CPU inventory from /proc/cpuinfo."),
-        )
-        .field("stat", readonly_any("Parsed /proc/stat values."))
-        .field("net_dev", readonly_any("Parsed /proc/net/dev counters."))
-        .field("mounts", readonly_any("Parsed /proc/mounts entries."))
-        .field("kernel", readonly_any("Kernel version from /proc/version."))
-        .field("vmstat", readonly_any("Parsed /proc/vmstat values."))
-        .field("diskstats", readonly_any("Parsed /proc/diskstats rows."))
-        .immutable_paths(&[
-            "/memory",
-            "/loadavg",
-            "/uptime",
-            "/cpuinfo",
-            "/stat",
-            "/net_dev",
-            "/mounts",
-            "/kernel",
-            "/vmstat",
-            "/diskstats",
-        ])
-        .tag("read_only")
-        .subid("__schema__", "sch.software.plugin.procfs.schema@v1")
-        .subid("memory", "obs.service.procfs.memory.query@v1")
-        .subid("loadavg", "obs.service.procfs.loadavg.query@v1")
-        .subid("uptime", "obs.service.procfs.uptime.query@v1")
-        .subid("cpuinfo", "obs.service.procfs.cpuinfo.query@v1")
-        .subid("stat", "obs.service.procfs.stat.query@v1")
-        .subid("net_dev", "obs.service.procfs.net-dev.query@v1")
-        .subid("mounts", "obs.service.procfs.mounts.query@v1")
-        .subid("kernel", "obs.service.procfs.kernel.query@v1")
-        .subid("vmstat", "obs.service.procfs.vmstat.query@v1")
-        .subid("diskstats", "obs.service.procfs.diskstats.query@v1")
-        .build()
-}
-
-#[cfg(test)]
-fn readonly_any(description: &str) -> FieldSchema {
-    FieldSchema {
-        field_type: FieldType::Any,
-        required: false,
-        description: description.to_string(),
-        default: Some(json!(null)),
-        example: None,
-        constraints: Vec::new(),
-        read_only: true,
-        read_only_when: None,
-    }
-}
-
 async fn gather_procfs_state() -> ProcfsState {
     let (memory, loadavg, uptime, cpuinfo, stat, net_dev, mounts, kernel, vmstat, diskstats) = tokio::join!(
         gather_memory(),
@@ -422,6 +353,119 @@ async fn read_proc(path: &str) -> String {
         .unwrap_or_default()
 }
 
+/// Parsed `/proc/loadavg`. Sample: `7.02 4.40 3.68 16/2222 8032`.
+///
+/// Typed rather than a free-form map so the value is usable without a consumer
+/// re-parsing it: `num_or_str` would type `2` as an integer and `2.82` as a
+/// float for the same field depending on the instantaneous load.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct LoadAvg {
+    /// 1-minute load average.
+    pub load1: f64,
+    /// 5-minute load average.
+    pub load5: f64,
+    /// 15-minute load average.
+    pub load15: f64,
+    /// Runnable kernel entities — numerator of the `16/2222` field.
+    pub procs_running: u64,
+    /// Total kernel entities — denominator of the `16/2222` field.
+    pub procs_total: u64,
+}
+
+/// Parsed `/proc/uptime`. Sample: `210649.82 3136532.75`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Uptime {
+    /// Seconds since boot, centisecond resolution.
+    pub uptime_secs: f64,
+    /// Summed idle seconds across all cores. Exceeds `uptime_secs` on SMP —
+    /// this is correct, not a parsing error.
+    pub idle_secs: f64,
+}
+
+/// One interface row from `/proc/net/dev`. All counters are cumulative since boot.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct NetDevInterface {
+    /// Interface name, e.g. `eth0`, `ovsbr0`.
+    pub interface: String,
+    pub rx_bytes: u64,
+    pub rx_packets: u64,
+    pub rx_errs: u64,
+    pub rx_drop: u64,
+    pub rx_fifo: u64,
+    pub rx_frame: u64,
+    pub rx_compressed: u64,
+    pub rx_multicast: u64,
+    pub tx_bytes: u64,
+    pub tx_packets: u64,
+    pub tx_errs: u64,
+    pub tx_drop: u64,
+    pub tx_fifo: u64,
+    pub tx_colls: u64,
+    pub tx_carrier: u64,
+    pub tx_compressed: u64,
+}
+
+/// Parsed `/proc/net/dev`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct NetDev {
+    pub interfaces: Vec<NetDevInterface>,
+}
+
+/// One row from `/proc/mounts`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct MountEntry {
+    /// Backing device or pseudo-source, e.g. `/dev/sda4`, `proc`.
+    pub device: String,
+    /// Where it is mounted, e.g. `/home`.
+    pub mountpoint: String,
+    /// Filesystem type, e.g. `btrfs`, `tmpfs`.
+    pub fstype: String,
+    /// Comma-separated mount options exactly as the kernel reports them.
+    pub options: String,
+}
+
+/// Strip a trailing unit and parse the leading integer: `"32855784 kB"` → `32855784`.
+fn kb_value(raw: &str) -> Option<u64> {
+    raw.split_whitespace().next()?.parse::<u64>().ok()
+}
+
+/// Normalise a `/proc/meminfo` key to a snake_case field name, encoding the unit
+/// in the name so no consumer has to parse `" kB"` out of a value:
+/// `MemTotal` → `mem_total_kb`, `Active(anon)` → `active_anon_kb`.
+fn meminfo_key(key: &str, has_kb_unit: bool) -> String {
+    let mut out = String::with_capacity(key.len() + 4);
+    let mut prev_lower = false;
+    for ch in key.chars() {
+        match ch {
+            '(' | '-' | ' ' => {
+                out.push('_');
+                prev_lower = false;
+            }
+            ')' => prev_lower = false,
+            c if c.is_ascii_uppercase() => {
+                if prev_lower {
+                    out.push('_');
+                }
+                out.push(c.to_ascii_lowercase());
+                prev_lower = false;
+            }
+            c => {
+                out.push(c);
+                prev_lower = c.is_ascii_lowercase() || c.is_ascii_digit();
+            }
+        }
+    }
+    while out.contains("__") {
+        out = out.replace("__", "_");
+    }
+    let out = out.trim_matches('_').to_string();
+    if has_kb_unit {
+        format!("{out}_kb")
+    } else {
+        out
+    }
+}
+
 fn num_or_str(s: &str) -> Value {
     let t = s.trim();
     if let Ok(n) = t.parse::<i64>() {
@@ -446,43 +490,57 @@ fn kv_file(content: &str) -> Value {
     Value::Object(Box::new(map))
 }
 
-async fn gather_memory() -> Value {
-    kv_file(&read_proc("meminfo").await)
-}
-
-async fn gather_loadavg() -> Value {
-    let raw = read_proc("loadavg").await;
-    let parts: Vec<&str> = raw.split_whitespace().collect();
-    let mut map = simd_json::owned::Object::new();
-    if let Some(v) = parts.first() {
-        map.insert("load1".into(), num_or_str(v));
-    }
-    if let Some(v) = parts.get(1) {
-        map.insert("load5".into(), num_or_str(v));
-    }
-    if let Some(v) = parts.get(2) {
-        map.insert("load15".into(), num_or_str(v));
-    }
-    if let Some(v) = parts.get(3) {
-        if let Some((running, total)) = v.split_once('/') {
-            map.insert("procs_running".into(), num_or_str(running));
-            map.insert("procs_total".into(), num_or_str(total));
+/// Parsed `/proc/meminfo`, keyed by normalised field name with integer values.
+///
+/// A map rather than a fixed struct because the key set is kernel-config
+/// dependent (hugepages, ZSWAP, CMA and others appear conditionally) — but every
+/// value is a `u64`, so this is fully typed regardless of which keys a given
+/// kernel emits.
+async fn gather_memory() -> std::collections::BTreeMap<String, u64> {
+    let raw = read_proc("meminfo").await;
+    let mut map = std::collections::BTreeMap::new();
+    for line in raw.lines() {
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        let value = value.trim();
+        let has_kb = value.ends_with("kB");
+        if let Some(n) = kb_value(value) {
+            map.insert(meminfo_key(key.trim(), has_kb), n);
         }
     }
-    Value::Object(Box::new(map))
+    map
 }
 
-async fn gather_uptime() -> Value {
+async fn gather_loadavg() -> LoadAvg {
+    let raw = read_proc("loadavg").await;
+    let parts: Vec<&str> = raw.split_whitespace().collect();
+    let (procs_running, procs_total) = parts
+        .get(3)
+        .and_then(|v| v.split_once('/'))
+        .map(|(r, t)| {
+            (
+                r.parse::<u64>().unwrap_or_default(),
+                t.parse::<u64>().unwrap_or_default(),
+            )
+        })
+        .unwrap_or_default();
+    LoadAvg {
+        load1: parts.first().and_then(|v| v.parse().ok()).unwrap_or_default(),
+        load5: parts.get(1).and_then(|v| v.parse().ok()).unwrap_or_default(),
+        load15: parts.get(2).and_then(|v| v.parse().ok()).unwrap_or_default(),
+        procs_running,
+        procs_total,
+    }
+}
+
+async fn gather_uptime() -> Uptime {
     let raw = read_proc("uptime").await;
     let parts: Vec<&str> = raw.split_whitespace().collect();
-    let mut map = simd_json::owned::Object::new();
-    if let Some(v) = parts.first() {
-        map.insert("uptime_secs".into(), num_or_str(v));
+    Uptime {
+        uptime_secs: parts.first().and_then(|v| v.parse().ok()).unwrap_or_default(),
+        idle_secs: parts.get(1).and_then(|v| v.parse().ok()).unwrap_or_default(),
     }
-    if let Some(v) = parts.get(1) {
-        map.insert("idle_secs".into(), num_or_str(v));
-    }
-    Value::Object(Box::new(map))
 }
 
 async fn gather_cpuinfo() -> Value {
@@ -522,60 +580,54 @@ async fn gather_stat() -> Value {
     Value::Object(Box::new(map))
 }
 
-async fn gather_net_dev() -> Value {
+async fn gather_net_dev() -> NetDev {
     let raw = read_proc("net/dev").await;
     let mut interfaces = Vec::new();
     for line in raw.lines().skip(2) {
-        if let Some((iface, stats)) = line.split_once(':') {
-            let parts: Vec<&str> = stats.split_whitespace().collect();
-            let labels = [
-                "rx_bytes",
-                "rx_packets",
-                "rx_errs",
-                "rx_drop",
-                "rx_fifo",
-                "rx_frame",
-                "rx_compressed",
-                "rx_multicast",
-                "tx_bytes",
-                "tx_packets",
-                "tx_errs",
-                "tx_drop",
-                "tx_fifo",
-                "tx_colls",
-                "tx_carrier",
-                "tx_compressed",
-            ];
-            let mut map = simd_json::owned::Object::new();
-            map.insert("interface".into(), Value::from(iface.trim().to_string()));
-            for (idx, label) in labels.iter().enumerate() {
-                if let Some(value) = parts.get(idx) {
-                    map.insert((*label).into(), num_or_str(value));
-                }
-            }
-            interfaces.push(Value::Object(Box::new(map)));
-        }
+        let Some((iface, stats)) = line.split_once(':') else {
+            continue;
+        };
+        let n: Vec<u64> = stats
+            .split_whitespace()
+            .map(|v| v.parse::<u64>().unwrap_or_default())
+            .collect();
+        let at = |i: usize| n.get(i).copied().unwrap_or_default();
+        interfaces.push(NetDevInterface {
+            interface: iface.trim().to_string(),
+            rx_bytes: at(0),
+            rx_packets: at(1),
+            rx_errs: at(2),
+            rx_drop: at(3),
+            rx_fifo: at(4),
+            rx_frame: at(5),
+            rx_compressed: at(6),
+            rx_multicast: at(7),
+            tx_bytes: at(8),
+            tx_packets: at(9),
+            tx_errs: at(10),
+            tx_drop: at(11),
+            tx_fifo: at(12),
+            tx_colls: at(13),
+            tx_carrier: at(14),
+            tx_compressed: at(15),
+        });
     }
-    let mut map = simd_json::owned::Object::new();
-    map.insert("interfaces".into(), Value::Array(interfaces));
-    Value::Object(Box::new(map))
+    NetDev { interfaces }
 }
 
-async fn gather_mounts() -> Value {
+async fn gather_mounts() -> Vec<MountEntry> {
     let raw = read_proc("mounts").await;
-    let mut mounts = Vec::new();
-    for line in raw.lines() {
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() >= 4 {
-            let mut map = simd_json::owned::Object::new();
-            map.insert("device".into(), Value::from(parts[0].to_string()));
-            map.insert("mountpoint".into(), Value::from(parts[1].to_string()));
-            map.insert("fstype".into(), Value::from(parts[2].to_string()));
-            map.insert("options".into(), Value::from(parts[3].to_string()));
-            mounts.push(Value::Object(Box::new(map)));
-        }
-    }
-    Value::Array(mounts)
+    raw.lines()
+        .filter_map(|line| {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            (parts.len() >= 4).then(|| MountEntry {
+                device: parts[0].to_string(),
+                mountpoint: parts[1].to_string(),
+                fstype: parts[2].to_string(),
+                options: parts[3].to_string(),
+            })
+        })
+        .collect()
 }
 
 async fn gather_kernel() -> Value {
@@ -611,7 +663,6 @@ async fn gather_diskstats() -> Value {
 mod tests {
     use super::*;
     use crate::state_plugins::common::oscal::validate_subid;
-    use crate::state_plugins::schemars_adapter::schema_diffs;
     use serde_json::Value as JVal;
 
     fn collect_subids(value: &JVal, out: &mut Vec<String>) {
@@ -631,14 +682,6 @@ mod tests {
     }
 
     #[test]
-    fn derived_schema_matches_hand_rolled() {
-        let hand = procfs_schema_golden();
-        let derived = procfs_schema();
-        let diffs = schema_diffs(&hand, &derived);
-        assert!(diffs.is_empty(), "schema_diffs: {:#?}", diffs);
-    }
-
-    #[test]
     fn all_subids_are_valid() {
         let root = serde_json::to_value(schemars::schema_for!(ProcfsState))
             .expect("schemars schema serializes to JSON");
@@ -655,4 +698,103 @@ mod tests {
 // (single source of the catalog; no central dispatch list).
 inventory::submit! {
     crate::default_registry::PluginReg::new("procfs", |_ctx| std::sync::Arc::new(ProcfsPlugin::new()))
+}
+
+#[cfg(test)]
+mod typed_field_tests {
+    use super::procfs_schema;
+    use op_state_store::FieldType;
+
+    /// Untyped fields are why procfs rendered as `cpuinfo: any`, generated ten
+    /// `google.protobuf.Value`s, and materialised an all-null projection.
+    #[test]
+    fn retyped_fields_are_no_longer_any() {
+        let schema = procfs_schema();
+        for name in ["loadavg", "uptime", "memory", "net_dev", "mounts"] {
+            let f = schema.fields.get(name).expect("field present");
+            assert!(
+                !matches!(f.field_type, FieldType::Any),
+                "{name} is still FieldType::Any"
+            );
+        }
+    }
+
+    #[test]
+    fn loadavg_exposes_its_real_subfields() {
+        let schema = procfs_schema();
+        let FieldType::Object(fields) = &schema.fields["loadavg"].field_type else {
+            panic!("loadavg should be an object, got {:?}", schema.fields["loadavg"].field_type);
+        };
+        for (name, expected) in [
+            ("load1", FieldType::Float),
+            ("load5", FieldType::Float),
+            ("load15", FieldType::Float),
+            ("procs_running", FieldType::Integer),
+            ("procs_total", FieldType::Integer),
+        ] {
+            let got = &fields.get(name).unwrap_or_else(|| panic!("{name} missing")).field_type;
+            assert_eq!(*got, expected, "{name} typed as {got:?}");
+        }
+    }
+
+    #[test]
+    fn uptime_is_two_floats() {
+        let schema = procfs_schema();
+        let FieldType::Object(fields) = &schema.fields["uptime"].field_type else {
+            panic!("uptime should be an object");
+        };
+        assert_eq!(fields["uptime_secs"].field_type, FieldType::Float);
+        assert_eq!(fields["idle_secs"].field_type, FieldType::Float);
+    }
+
+    #[test]
+    fn meminfo_keys_normalise_and_carry_their_unit() {
+        assert_eq!(super::meminfo_key("MemTotal", true), "mem_total_kb");
+        assert_eq!(super::meminfo_key("Active(anon)", true), "active_anon_kb");
+        assert_eq!(super::meminfo_key("HugePages_Total", false), "huge_pages_total");
+        assert_eq!(super::meminfo_key("SwapCached", true), "swap_cached_kb");
+        // the unit is stripped from the value, not left for a consumer to parse
+        assert_eq!(super::kb_value("32855784 kB"), Some(32855784));
+        assert_eq!(super::kb_value("0"), Some(0));
+    }
+}
+
+#[cfg(test)]
+mod collection_field_tests {
+    use super::procfs_schema;
+    use op_state_store::FieldType;
+
+    #[test]
+    fn mounts_is_an_array_of_typed_rows() {
+        let schema = procfs_schema();
+        let FieldType::Array(item) = &schema.fields["mounts"].field_type else {
+            panic!("mounts should be an array, got {:?}", schema.fields["mounts"].field_type);
+        };
+        let FieldType::Object(cols) = item.as_ref() else {
+            panic!("mount rows should be objects, got {item:?}");
+        };
+        for c in ["device", "mountpoint", "fstype", "options"] {
+            assert_eq!(cols[c].field_type, FieldType::String, "{c}");
+        }
+    }
+
+    #[test]
+    fn net_dev_counters_are_integers_not_strings() {
+        // num_or_str typed these by whatever the value happened to look like;
+        // a counter that reads 0 must not be a different type from one at 10^9.
+        let schema = procfs_schema();
+        let FieldType::Object(top) = &schema.fields["net_dev"].field_type else {
+            panic!("net_dev should be an object");
+        };
+        let FieldType::Array(item) = &top["interfaces"].field_type else {
+            panic!("interfaces should be an array");
+        };
+        let FieldType::Object(cols) = item.as_ref() else {
+            panic!("interface rows should be objects");
+        };
+        assert_eq!(cols["interface"].field_type, FieldType::String);
+        for c in ["rx_bytes", "rx_packets", "rx_errs", "tx_bytes", "tx_packets", "tx_drop"] {
+            assert_eq!(cols[c].field_type, FieldType::Integer, "{c}");
+        }
+    }
 }

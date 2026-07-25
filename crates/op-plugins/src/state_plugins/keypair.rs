@@ -29,6 +29,7 @@ const PLUGIN_DISPLAY_NAME: &str = "GB.Keypair";
 /// Keypair declaration state.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "sch.software.plugin.keypair.schema@v1"))]
+#[schemars(extend("x-oscal-category" = "service"))]
 pub struct KeypairState {
     /// Managed keypairs.
     #[serde(default)]

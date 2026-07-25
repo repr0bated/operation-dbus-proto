@@ -38,6 +38,7 @@ const VOYAGE_MONGODB_URL: &str = "https://ai.mongodb.com/v1/embeddings";
 /// Top-level state for the generic embedding surface.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "sch.software.plugin.embedding-model.schema@v1"))]
+#[schemars(extend("x-oscal-category" = "llm"))]
 pub struct EmbeddingModelState {
     /// Embedding provider / runtime — the only provider-aware field
     /// ("voyage", "ollama", …).

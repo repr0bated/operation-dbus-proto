@@ -678,6 +678,7 @@ pub struct Endpoints {
 /// Top-level Antigravity state.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "sch.software.plugin.antigravity.schema@v1"))]
+#[schemars(extend("x-oscal-category" = "llm"))]
 pub struct AntigravityState {
     /// Operational status.
     #[serde(default)]

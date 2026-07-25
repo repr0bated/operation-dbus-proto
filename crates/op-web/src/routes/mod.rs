@@ -88,38 +88,41 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             "/zeroclaw/schema",
             get(handlers::zeroclaw::zeroclaw_schema_handler),
         )
-        // Plugin schema endpoint (serves sealed SHM blob PluginSchema)
+        // Plugin identity endpoints — model-agnostic, sealed SHM blob catalog
+        // (`/dev/shm/opdbus/`) is the single source of truth for both.
+        .route("/plugins", get(handlers::plugin_schema::plugin_list_handler))
         .route(
             "/plugin-schema/:plugin_id",
             get(handlers::plugin_schema::plugin_schema_handler),
         )
-        // Gemma / agent-GPU UI-spec gallery + catalog (render slices of the
-        // sealed blob PluginSchema; promote a winning lens into the catalog).
+        // UI-model spec gallery + catalog (render slices of the sealed blob
+        // PluginSchema; promote a winning lens into the catalog). Model-agnostic
+        // by name: whichever model generates the spec, the surface is the same.
         .route(
-            "/gemma/gallery",
-            get(handlers::gemma::gemma_gallery_handler),
+            "/ui-model/gallery",
+            get(handlers::ui_model::ui_model_gallery_handler),
         )
         .route(
-            "/gemma/gallery/:id",
-            delete(handlers::gemma::gemma_gallery_delete_handler),
+            "/ui-model/gallery/:id",
+            delete(handlers::ui_model::ui_model_gallery_delete_handler),
         )
         .route(
-            "/gemma/catalog",
-            get(handlers::gemma::gemma_catalog_handler),
+            "/ui-model/catalog",
+            get(handlers::ui_model::ui_model_catalog_handler),
         )
         .route(
-            "/gemma/catalog/promote/:id",
-            post(handlers::gemma::gemma_catalog_promote_handler),
+            "/ui-model/catalog/promote/:id",
+            post(handlers::ui_model::ui_model_catalog_promote_handler),
         )
         .route(
-            "/gemma/catalog/:id",
-            delete(handlers::gemma::gemma_catalog_delete_handler),
+            "/ui-model/catalog/:id",
+            delete(handlers::ui_model::ui_model_catalog_delete_handler),
         )
         .route(
-            "/gemma/plugin-schema/:plugin",
-            get(handlers::gemma::gemma_plugin_schema_handler),
+            "/ui-model/plugin-schema/:plugin",
+            get(handlers::ui_model::ui_model_plugin_schema_handler),
         )
-        .route("/gemma/plugins", get(handlers::gemma::gemma_list_plugins_handler))
+        .route("/ui-model/plugins", get(handlers::ui_model::ui_model_list_plugins_handler))
         .route("/chat/sessions", get(handlers::chat::list_sessions_handler))
         .route(
             "/chat/sessions",
@@ -319,6 +322,9 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .fallback_service(spa)
         .layer(Extension(state))
         .layer(axum::middleware::from_fn(security::ip_security_middleware))
+        .layer(axum::middleware::from_fn(
+            crate::middleware::access_log::access_log_middleware,
+        ))
         .layer(cors)
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())

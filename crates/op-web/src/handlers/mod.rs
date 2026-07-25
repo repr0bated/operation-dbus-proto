@@ -4,7 +4,7 @@ pub mod agents;
 pub mod analytics;
 pub mod chat;
 pub mod dashboard;
-pub mod gemma;
+pub mod ui_model;
 pub mod health;
 pub mod identity;
 pub mod llm;

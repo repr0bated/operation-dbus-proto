@@ -425,6 +425,7 @@ impl StatePlugin for ServicePlugin {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, JsonSchema)]
+#[schemars(extend("x-oscal-category" = "service"))]
 pub struct ServiceSchemaState {
     pub services: serde_json::Value,
 }

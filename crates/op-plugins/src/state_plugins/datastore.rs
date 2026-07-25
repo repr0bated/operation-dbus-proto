@@ -32,6 +32,7 @@ use std::collections::HashMap;
 /// Datastore plugin state schema.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "sch.software.plugin.datastore.schema@v1"))]
+#[schemars(extend("x-oscal-category" = "data"))]
 pub struct DataStoreState {
     /// Runtime status.
     #[serde(default)]

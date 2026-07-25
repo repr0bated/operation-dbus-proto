@@ -74,6 +74,7 @@ pub struct DeviceRemoveInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "sch.software.plugin.btrfs.schema@v1"))]
+#[schemars(extend("x-oscal-category" = "storage"))]
 pub struct BtrfsState {
     /// Runtime status.
     #[serde(default)]

@@ -9,6 +9,7 @@
 //! - GCloud CLI introspection (100+ command groups, all flags/args)
 
 pub mod gcloud;
+pub mod runit;
 mod introspective_gadget;
 
 // Re-export main types

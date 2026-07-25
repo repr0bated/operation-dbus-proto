@@ -68,8 +68,27 @@ pub fn plugin_schema_from_json(
     }
 
     // Root-level `#[schemars(extend("x-oscal-subid" = ...))]` → reserved key.
-    if let Some(subid) = root.get("x-oscal-subid").and_then(JVal::as_str) {
-        subids.insert("__schema__".to_string(), subid.to_string());
+    // When a plugin declares none, derive it from the field subids it does
+    // declare, so every plugin carries a schema subid without each one having
+    // to paste the attribute onto its state struct. An explicit declaration
+    // always wins.
+    // A struct-level `#[schemars(extend("x-oscal-category" = "network"))]` is the
+    // plugin stating what it is — the one fact about a schema subid that cannot
+    // be derived from anything else. When absent, fall back to inferring it from
+    // the field subids the plugin does declare.
+    let declared_category = root.get("x-oscal-category").and_then(JVal::as_str);
+    match root.get("x-oscal-subid").and_then(JVal::as_str) {
+        Some(subid) => {
+            subids.insert("__schema__".to_string(), subid.to_string());
+        }
+        None => {
+            let derived = super::plugin_scaffold_helpers::derive_schema_subid(
+                name,
+                declared_category,
+                &subids,
+            );
+            subids.insert("__schema__".to_string(), derived);
+        }
     }
 
     let mut schema = PluginSchema::builder(name)
@@ -85,6 +104,11 @@ pub fn plugin_schema_from_json(
             .filter_map(|v| v.as_str().map(String::from))
             .collect();
     }
+    // A `mut.*` subid obliges the schema to carry `actor_id`/`capability_id`,
+    // `src.*` obliges `source_system`/`source_locator`. Applying that here means
+    // declaring the subid is enough — the accountability fields it implies
+    // cannot be forgotten separately.
+    super::common::oscal::ensure_category_metadata_fields(&mut schema);
     schema
 }
 
@@ -502,14 +526,6 @@ mod tests {
             },
             other => panic!("expected array, got {other:?}"),
         }
-    }
-
-    #[test]
-    fn derived_schema_matches_hand_rolled_for_unix_socket() {
-        let hand = crate::state_plugins::unix_socket::unix_socket_schema();
-        let derived = crate::state_plugins::unix_socket::unix_socket_schema_derived();
-        let diffs = schema_diffs(&hand, &derived);
-        assert!(diffs.is_empty(), "schema_diffs: {:#?}", diffs);
     }
 
     #[test]

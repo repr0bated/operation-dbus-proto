@@ -33,6 +33,7 @@ use zbus::{Connection, Proxy};
 
 /// Full system state for disaster recovery
 #[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-category" = "system"))]
 pub struct FullSystemState {
     /// State schema version
     pub version: u32,

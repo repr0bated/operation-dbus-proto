@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Uptime",
+  "description": "Parsed /proc/uptime. Sample: `210649.82 3136532.75`.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "uptime_secs": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Seconds since boot, centisecond resolution."
+    },
+    "idle_secs": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Summed idle seconds across all cores; may exceed uptime_secs on SMP."
+    }
+  },
+  "required": [
+    "uptime_secs",
+    "idle_secs"
+  ]
+}

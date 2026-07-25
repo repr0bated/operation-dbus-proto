@@ -312,6 +312,7 @@ pub struct ConfigurableOptions {
 /// Top-level Zeroclaw state.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "sch.software.plugin.zeroclaw.schema@v1"))]
+#[schemars(extend("x-oscal-category" = "llm"))]
 pub struct ZeroclawState {
     /// Operational status.
     #[serde(default)]

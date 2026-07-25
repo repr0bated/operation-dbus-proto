@@ -412,6 +412,7 @@ pub(crate) fn rtnetlink_schema() -> PluginSchema {
     };
 
     let mut schema = PluginSchema::builder("rtnetlink")
+        .category("network")
         .version("1.0.0")
         .description("Native kernel rtnetlink interface management")
         .array_field(

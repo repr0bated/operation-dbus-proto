@@ -399,6 +399,7 @@ pub(crate) fn mail_server_schema() -> PluginSchema {
     };
 
     let mut schema = PluginSchema::builder("mail_server")
+        .category("service")
         .version("1.0.0")
         .description("Mail server container state and D-Bus registration for 3tched.com")
         .dependency("incus")

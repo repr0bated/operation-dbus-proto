@@ -1,0 +1,321 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MemInfo",
+  "description": "Parsed /proc/meminfo. Every value is an integer; the kernel's ' kB' suffix is stripped and encoded in the field name instead, so no consumer has to parse units out of a string. Only fields guaranteed across kernel configurations are listed as required; the remainder appear conditionally (hugepages, ZSWAP, CMA), which is why additionalProperties is typed rather than closed.",
+  "type": "object",
+  "additionalProperties": {
+    "type": "integer",
+    "minimum": 0
+  },
+  "properties": {
+    "mem_total_kb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `MemTotal`, in kibibytes (the ' kB' suffix is stripped at parse time)"
+    },
+    "mem_free_kb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `MemFree`, in kibibytes (the ' kB' suffix is stripped at parse time)"
+    },
+    "mem_available_kb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `MemAvailable`, in kibibytes (the ' kB' suffix is stripped at parse time)"
+    },
+    "buffers_kb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `Buffers`, in kibibytes (the ' kB' suffix is stripped at parse time)"
+    },
+    "cached_kb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `Cached`, in kibibytes (the ' kB' suffix is stripped at parse time)"
+    },
+    "swap_cached_kb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `SwapCached`, in kibibytes (the ' kB' suffix is stripped at parse time)"
+    },
+    "active_kb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `Active`, in kibibytes (the ' kB' suffix is stripped at parse time)"
+    },
+    "inactive_kb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `Inactive`, in kibibytes (the ' kB' suffix is stripped at parse time)"
+    },
+    "active_anon_kb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `Active(anon)`, in kibibytes (the ' kB' suffix is stripped at parse time)"
+    },
+    "inactive_anon_kb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `Inactive(anon)`, in kibibytes (the ' kB' suffix is stripped at parse time)"
+    },
+    "active_file_kb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `Active(file)`, in kibibytes (the ' kB' suffix is stripped at parse time)"
+    },
+    "inactive_file_kb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `Inactive(file)`, in kibibytes (the ' kB' suffix is stripped at parse time)"
+    },
+    "unevictable_kb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `Unevictable`, in kibibytes (the ' kB' suffix is stripped at parse time)"
+    },
+    "mlocked_kb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `Mlocked`, in kibibytes (the ' kB' suffix is stripped at parse time)"
+    },
+    "swap_total_kb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `SwapTotal`, in kibibytes (the ' kB' suffix is stripped at parse time)"
+    },
+    "swap_free_kb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `SwapFree`, in kibibytes (the ' kB' suffix is stripped at parse time)"
+    },
+    "zswap_kb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `Zswap`, in kibibytes (the ' kB' suffix is stripped at parse time)"
+    },
+    "zswapped_kb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `Zswapped`, in kibibytes (the ' kB' suffix is stripped at parse time)"
+    },
+    "dirty_kb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `Dirty`, in kibibytes (the ' kB' suffix is stripped at parse time)"
+    },
+    "writeback_kb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `Writeback`, in kibibytes (the ' kB' suffix is stripped at parse time)"
+    },
+    "anon_pages_kb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `AnonPages`, in kibibytes (the ' kB' suffix is stripped at parse time)"
+    },
+    "mapped_kb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `Mapped`, in kibibytes (the ' kB' suffix is stripped at parse time)"
+    },
+    "shmem_kb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `Shmem`, in kibibytes (the ' kB' suffix is stripped at parse time)"
+    },
+    "kreclaimable_kb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `KReclaimable`, in kibibytes (the ' kB' suffix is stripped at parse time)"
+    },
+    "slab_kb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `Slab`, in kibibytes (the ' kB' suffix is stripped at parse time)"
+    },
+    "sreclaimable_kb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `SReclaimable`, in kibibytes (the ' kB' suffix is stripped at parse time)"
+    },
+    "sunreclaim_kb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `SUnreclaim`, in kibibytes (the ' kB' suffix is stripped at parse time)"
+    },
+    "kernel_stack_kb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `KernelStack`, in kibibytes (the ' kB' suffix is stripped at parse time)"
+    },
+    "page_tables_kb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `PageTables`, in kibibytes (the ' kB' suffix is stripped at parse time)"
+    },
+    "sec_page_tables_kb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `SecPageTables`, in kibibytes (the ' kB' suffix is stripped at parse time)"
+    },
+    "nfs_unstable_kb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `NFS_Unstable`, in kibibytes (the ' kB' suffix is stripped at parse time)"
+    },
+    "bounce_kb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `Bounce`, in kibibytes (the ' kB' suffix is stripped at parse time)"
+    },
+    "writeback_tmp_kb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `WritebackTmp`, in kibibytes (the ' kB' suffix is stripped at parse time)"
+    },
+    "commit_limit_kb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `CommitLimit`, in kibibytes (the ' kB' suffix is stripped at parse time)"
+    },
+    "committed_as_kb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `Committed_AS`, in kibibytes (the ' kB' suffix is stripped at parse time)"
+    },
+    "vmalloc_total_kb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `VmallocTotal`, in kibibytes (the ' kB' suffix is stripped at parse time)"
+    },
+    "vmalloc_used_kb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `VmallocUsed`, in kibibytes (the ' kB' suffix is stripped at parse time)"
+    },
+    "vmalloc_chunk_kb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `VmallocChunk`, in kibibytes (the ' kB' suffix is stripped at parse time)"
+    },
+    "percpu_kb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `Percpu`, in kibibytes (the ' kB' suffix is stripped at parse time)"
+    },
+    "hardware_corrupted_kb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `HardwareCorrupted`, in kibibytes (the ' kB' suffix is stripped at parse time)"
+    },
+    "anon_huge_pages_kb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `AnonHugePages`, in kibibytes (the ' kB' suffix is stripped at parse time)"
+    },
+    "shmem_huge_pages_kb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `ShmemHugePages`, in kibibytes (the ' kB' suffix is stripped at parse time)"
+    },
+    "shmem_pmd_mapped_kb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `ShmemPmdMapped`, in kibibytes (the ' kB' suffix is stripped at parse time)"
+    },
+    "file_huge_pages_kb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `FileHugePages`, in kibibytes (the ' kB' suffix is stripped at parse time)"
+    },
+    "file_pmd_mapped_kb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `FilePmdMapped`, in kibibytes (the ' kB' suffix is stripped at parse time)"
+    },
+    "cma_total_kb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `CmaTotal`, in kibibytes (the ' kB' suffix is stripped at parse time)"
+    },
+    "cma_free_kb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `CmaFree`, in kibibytes (the ' kB' suffix is stripped at parse time)"
+    },
+    "unaccepted_kb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `Unaccepted`, in kibibytes (the ' kB' suffix is stripped at parse time)"
+    },
+    "balloon_kb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `Balloon`, in kibibytes (the ' kB' suffix is stripped at parse time)"
+    },
+    "gpuactive_kb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `GPUActive`, in kibibytes (the ' kB' suffix is stripped at parse time)"
+    },
+    "gpureclaim_kb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `GPUReclaim`, in kibibytes (the ' kB' suffix is stripped at parse time)"
+    },
+    "huge_pages_total": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `HugePages_Total`, a unitless count"
+    },
+    "huge_pages_free": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `HugePages_Free`, a unitless count"
+    },
+    "huge_pages_rsvd": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `HugePages_Rsvd`, a unitless count"
+    },
+    "huge_pages_surp": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `HugePages_Surp`, a unitless count"
+    },
+    "hugepagesize_kb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `Hugepagesize`, in kibibytes (the ' kB' suffix is stripped at parse time)"
+    },
+    "hugetlb_kb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `Hugetlb`, in kibibytes (the ' kB' suffix is stripped at parse time)"
+    },
+    "direct_map4k_kb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `DirectMap4k`, in kibibytes (the ' kB' suffix is stripped at parse time)"
+    },
+    "direct_map2_m_kb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `DirectMap2M`, in kibibytes (the ' kB' suffix is stripped at parse time)"
+    },
+    "direct_map1_g_kb": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "/proc/meminfo `DirectMap1G`, in kibibytes (the ' kB' suffix is stripped at parse time)"
+    }
+  },
+  "required": [
+    "mem_total_kb",
+    "mem_free_kb",
+    "mem_available_kb",
+    "buffers_kb",
+    "cached_kb",
+    "swap_total_kb",
+    "swap_free_kb"
+  ]
+}

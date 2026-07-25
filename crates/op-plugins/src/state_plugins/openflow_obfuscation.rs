@@ -22,6 +22,7 @@ use simd_json::{json, OwnedValue as Value};
 /// OpenFlow obfuscation configuration
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "sch.network.openflow-obfuscation.schema@v1"))]
+#[schemars(extend("x-oscal-category" = "network"))]
 pub struct OpenFlowObfuscationConfig {
     /// OVS bridge to apply flows to
     #[serde(default)]

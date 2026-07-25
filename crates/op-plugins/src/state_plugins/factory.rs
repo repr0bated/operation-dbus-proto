@@ -376,6 +376,7 @@ pub(crate) fn factory_schema() -> PluginSchema {
         .unwrap_or_else(|_| json!({}));
 
     let mut builder = PluginSchema::builder("factory")
+        .category("service")
         .version("1.0.0")
         .category("llm")
         .description("Factory Droid agent platform — computers, sessions, models, autonomy controls, BYOM discovery");

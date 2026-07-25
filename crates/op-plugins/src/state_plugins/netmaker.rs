@@ -45,6 +45,7 @@ pub struct NetmakerNetwork {
 
 /// Netmaker state.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-category" = "network"))]
 pub struct NetmakerState {
     /// Software name (netclient)
     pub software: String,

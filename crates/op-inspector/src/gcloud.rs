@@ -7,7 +7,14 @@
 //!
 //! # Usage
 //!
-//! ```rust,no_run
+//! ```ignore
+//! // NOTE: this example does not compile against the current code. It
+//! // documents the adapter API described in ADAPTER-WORKFLOW.md —
+//! // `register_parser`, a no-arg `IntrospectiveGadget::new()`, and an
+//! // `InspectionSource::GCloud` variant — none of which exist. The trait
+//! // `ObjectParser` is also private, so no adapter outside the gadget
+//! // module can implement it. Marked `ignore` rather than deleted so the
+//! // intended contract stays visible until the gadget is wired up.
 //! use op_inspector::{IntrospectiveGadget, InspectionInput, InspectionSource};
 //!
 //! let gadget = IntrospectiveGadget::new();

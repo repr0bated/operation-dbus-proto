@@ -123,6 +123,7 @@ pub struct CozoHnswIndex {
 /// Top-level CozoDB plugin state — the shape the projection tree exposes.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "sch.software.plugin.cozo.schema@v1"))]
+#[schemars(extend("x-oscal-category" = "data"))]
 pub struct CozoState {
     /// CozoDB engine type.
     #[schemars(extend("x-oscal-subid" = "src.software.plugin.cozo.engine@v1"))]

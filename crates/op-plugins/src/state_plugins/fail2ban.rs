@@ -10,6 +10,7 @@ use simd_json::OwnedValue as Value;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "sch.security.plugin.fail2ban.schema@v1"))]
+#[schemars(extend("x-oscal-category" = "security"))]
 pub struct Fail2banState {
     pub status: String,
     #[schemars(with = "serde_json::Value")]

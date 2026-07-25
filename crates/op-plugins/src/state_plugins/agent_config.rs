@@ -11,6 +11,7 @@ use std::collections::HashMap;
 /// Agent configuration plugin state schema.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "sch.software.plugin.agent-config.schema@v1"))]
+#[schemars(extend("x-oscal-category" = "agents"))]
 pub struct AgentConfigState {
     /// List of agent configurations.
     #[serde(default)]

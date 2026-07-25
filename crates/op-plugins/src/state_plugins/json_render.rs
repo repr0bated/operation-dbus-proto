@@ -25,6 +25,7 @@ const JSON_RENDER_SOURCE_COMMIT: &str = "e2d00faeaabe2871ca18a4594a9ec39a245f9b6
 /// Runtime projection for the json-render generative UI framework.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "sch.software.plugin.json-render.schema@v1"))]
+#[schemars(extend("x-oscal-category" = "software"))]
 pub struct JsonRenderState {
     /// Operational status of the catalog projection.
     #[serde(default)]

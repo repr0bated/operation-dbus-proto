@@ -127,6 +127,7 @@ pub struct QdrantOptimizersConfig {
 
 /// Top-level Qdrant plugin state.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(extend("x-oscal-category" = "data"))]
 pub struct QdrantState {
     pub version: String,
     pub title: String,

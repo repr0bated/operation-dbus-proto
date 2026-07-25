@@ -430,6 +430,7 @@ pub struct ResetServerFeaturesInput {}
 
 pub(crate) fn dnsresolver_schema() -> PluginSchema {
     let mut schema = PluginSchema::builder("dnsresolver")
+        .category("network")
         .version("1.0.0")
         .description("DNS resolver declaration state")
         .field(

@@ -40,6 +40,7 @@ pub struct GenerationParams {
 /// Top-level state for the generic large-language-model surface.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "sch.software.plugin.large-language-model.schema@v1"))]
+#[schemars(extend("x-oscal-category" = "llm"))]
 pub struct LargeLanguageModelState {
     /// Inference provider / runtime — the only Ollama-aware field.
     #[serde(default)]

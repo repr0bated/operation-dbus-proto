@@ -68,6 +68,7 @@ impl SharedRegistration {
 /// Runtime state: every service registered on the one shared socket.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "sch.software.plugin.shared-unix-socket.schema@v1"))]
+#[schemars(extend("x-oscal-category" = "service"))]
 pub struct SharedUnixSocketState {
     /// Path of the single shared socket. Always [`SHARED_UNIX_SOCKET`]; surfaced
     /// in state so consumers read the path from the catalog, not a hardcode.

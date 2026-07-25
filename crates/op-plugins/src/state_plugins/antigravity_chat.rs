@@ -84,6 +84,7 @@ pub struct ChatConfig {
 /// Top-level Antigravity Chat state.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "sch.software.plugin.antigravity-chat.schema@v1"))]
+#[schemars(extend("x-oscal-category" = "llm"))]
 pub struct AntigravityChatState {
     #[serde(default)]
     #[schemars(extend("x-oscal-subid" = "obs.software.antigravity-chat.status@v1"))]
