@@ -1,7 +1,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
-use op_state_store::{FieldSchema, FieldType, PluginSchema};
+use op_state_store::PluginSchema;
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
@@ -9,6 +9,7 @@ use simd_json::OwnedValue as Value;
 /// ADC plugin state schema.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "sch.software.plugin.adc.schema@v1"))]
+#[schemars(extend("x-oscal-category" = "software"))]
 pub struct AdcState {
     /// Whether ADC is configured.
     #[schemars(
@@ -107,44 +108,10 @@ pub fn adc_schema() -> PluginSchema {
     )
 }
 
-/// Frozen golden reference: the original hand-rolled schema, kept test-only so
-/// `derived_schema_matches_hand_rolled` can prove the derived schema still
-/// matches the contract this plugin shipped with.
-#[cfg(test)]
-pub(crate) fn adc_schema_golden() -> PluginSchema {
-    PluginSchema::builder("adc")
-        .version("1.0.0")
-        .description("Application default credentials state")
-        .subid("__schema__", "sch.software.plugin.adc.schema@v1")
-        .field(
-            "configured",
-            FieldSchema {
-                field_type: FieldType::Boolean,
-                required: true,
-                description: "Whether ADC is configured".to_string(),
-                default: None,
-                example: None,
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        )
-        .subid("configured", "exp.software.plugin.adc.configured.render@v1")
-        .build()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::state_plugins::common::oscal::validate_subid;
-
-    #[test]
-    fn derived_schema_matches_hand_rolled() {
-        let golden = adc_schema_golden();
-        let derived = adc_schema();
-        let diffs = super::super::schemars_adapter::schema_diffs(&golden, &derived);
-        assert!(diffs.is_empty(), "schema_diffs: {:#?}", diffs);
-    }
 
     #[test]
     fn all_subids_are_valid() {

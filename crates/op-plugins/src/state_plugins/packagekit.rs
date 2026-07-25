@@ -413,6 +413,7 @@ pub struct SearchNamesInput {
 
 pub(crate) fn packagekit_schema() -> PluginSchema {
     let mut schema = PluginSchema::builder("packagekit")
+        .category("service")
         .version("1.0.0")
         .description("PackageKit package declarations")
         .field(

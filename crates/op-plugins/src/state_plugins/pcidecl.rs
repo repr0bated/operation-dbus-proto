@@ -138,6 +138,7 @@ impl StatePlugin for PciDeclPlugin {
 
     fn schema(&self) -> Option<PluginSchema> {
         let mut schema = PluginSchema::builder("pcidecl")
+            .category("hardware")
             .version("1.0.0")
             .description("PCI device declaration state")
             .field(

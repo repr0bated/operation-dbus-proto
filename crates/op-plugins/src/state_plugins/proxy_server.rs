@@ -13,6 +13,7 @@ use simd_json::OwnedValue as Value;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "sch.network.proxy-server.schema@v1"))]
+#[schemars(extend("x-oscal-category" = "network"))]
 pub struct ProxyServerState {
     #[serde(default)]
     #[schemars(extend("x-oscal-subid" = "obs.network.proxy-server.enabled@v1"))]

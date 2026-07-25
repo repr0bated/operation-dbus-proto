@@ -65,6 +65,7 @@ pub struct SnapshotEntry {
 /// Blockchain plugin state schema.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "sch.software.plugin.blockchain.schema@v1"))]
+#[schemars(extend("x-oscal-category" = "service"))]
 pub struct BlockchainState {
     /// `active` once the chain exists on disk, `uninitialized` before first write.
     #[schemars(extend("x-oscal-subid" = "obs.software.blockchain.status@v1"))]

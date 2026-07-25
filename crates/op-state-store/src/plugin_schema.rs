@@ -216,6 +216,24 @@ pub struct PluginSchema {
     /// operational taxonomy key is declared; surfaced via `field_input_schema`.
     #[serde(default)]
     pub subids: HashMap<String, String>,
+    /// Organization/tenant this schema instance belongs to. Deliberately a
+    /// separate field from the subid taxonomy (subids stay a universal,
+    /// org-agnostic vocabulary shared across all tenants) — OSCAL/compliance
+    /// validation (`validate_subid`, the subid registry) never reads this
+    /// field. Its *value* follows the same dotted-hierarchy convention as a
+    /// subid, just with its own vocabulary instead of the seven OSCAL
+    /// categories:
+    ///
+    /// ```text
+    /// <tenant>.<org-unit>[.<sub-unit>]*[@vN]
+    /// ```
+    ///
+    /// e.g. `3tched.ops` or `3tched.customers.acme@v1`. No fixed category
+    /// list here (unlike subid's seven), since org structure is
+    /// deployment-specific, not an OSCAL vocabulary.
+    /// None = no org scoping (single-tenant / not yet assigned).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub org: Option<String>,
     /// Declared methods on the plugin's capability surface.
     #[serde(default)]
     pub methods: HashMap<String, MethodDecl>,
@@ -234,6 +252,9 @@ fn default_dialect() -> String {
 fn default_category() -> String {
     "uncategorized".to_string()
 }
+
+/// Key under which a plugin's schema-level OSCAL subid is stored in `subids`.
+pub const SCHEMA_SUBID_KEY: &str = "__schema__";
 
 impl PluginSchema {
     /// Check if the schema state is valid (for the identity sled)
@@ -720,6 +741,7 @@ pub struct PluginSchemaBuilder {
     tags: Vec<String>,
     dialect: String,
     subids: HashMap<String, String>,
+    org: Option<String>,
     methods: HashMap<String, MethodDecl>,
     signals: Vec<SignalDecl>,
     guarantees: PluginCapabilities,
@@ -740,6 +762,7 @@ impl PluginSchemaBuilder {
             tags: Vec::new(),
             dialect: DEFAULT_SCHEMA_DIALECT.to_string(),
             subids: HashMap::new(),
+            org: None,
             methods: HashMap::new(),
             signals: Vec::new(),
             guarantees: PluginCapabilities::default(),
@@ -764,6 +787,15 @@ impl PluginSchemaBuilder {
     /// Set the display name (e.g. "GB.Keypair"). Display-only.
     pub fn display_name(mut self, display_name: &str) -> Self {
         self.display_name = Some(display_name.to_string());
+        self
+    }
+
+    /// Set the org/tenant this schema instance belongs to. Separate field
+    /// from the subid taxonomy, but the value should follow the same
+    /// dotted-hierarchy format as a subid (`<tenant>.<org-unit>[.<sub-unit>]*[@vN]`)
+    /// — see `PluginSchema::org`'s doc comment.
+    pub fn org(mut self, org: &str) -> Self {
+        self.org = Some(org.to_string());
         self
     }
 
@@ -957,6 +989,7 @@ impl PluginSchemaBuilder {
             dialect: self.dialect,
             mutation_index: None,
             subids: self.subids,
+            org: self.org,
             methods: self.methods,
             signals: self.signals,
             guarantees: self.guarantees,

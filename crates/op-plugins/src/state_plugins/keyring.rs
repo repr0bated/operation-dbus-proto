@@ -25,6 +25,7 @@ use zbus::{
 
 /// Keyring state representation
 #[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-category" = "security"))]
 pub struct KeyringState {
     /// Available collections
     pub collections: Vec<CollectionInfo>,

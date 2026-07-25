@@ -223,6 +223,7 @@ pub struct SleepInput {
 
 pub(crate) fn login1_schema() -> PluginSchema {
     let mut schema = PluginSchema::builder("login1")
+        .category("service")
         .version("1.0.0")
         .description("Runtime login sessions")
         .field(

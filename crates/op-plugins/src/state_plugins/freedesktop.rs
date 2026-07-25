@@ -139,6 +139,7 @@ impl FreeDesktopPlugin {
         // For now, we define the schema programmatically following the canonical structure
         self.schema = Some(
             PluginSchema::builder("freedesktop")
+                .category("service")
                 .version("1.0.0")
                 .category("system")
                 .description("FreeDesktop D-Bus standards implementation")

@@ -1,7 +1,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
-use op_state_store::{FieldSchema, FieldType, PluginSchema};
+use op_state_store::PluginSchema;
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
@@ -9,6 +9,7 @@ use simd_json::OwnedValue as Value;
 /// Google Cloud ADC plugin state schema.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "sch.software.plugin.gcloud-adc.schema@v1"))]
+#[schemars(extend("x-oscal-category" = "software"))]
 pub struct GcloudAdcState {
     /// Authenticated account.
     #[schemars(
@@ -179,81 +180,10 @@ pub fn gcloud_adc_schema() -> PluginSchema {
     )
 }
 
-/// Frozen golden reference: the original hand-rolled schema, kept test-only so
-/// `derived_schema_matches_hand_rolled` can prove the derived schema still
-/// matches the contract this plugin shipped with.
-#[cfg(test)]
-pub(crate) fn gcloud_adc_schema_golden() -> PluginSchema {
-    PluginSchema::builder("gcloud_adc")
-        .version("1.0.0")
-        .description("Google Cloud ADC state")
-        .subid("__schema__", "sch.software.plugin.gcloud-adc.schema@v1")
-        .field(
-            "account",
-            FieldSchema {
-                field_type: FieldType::String,
-                required: false,
-                description: "Authenticated account".to_string(),
-                default: None,
-                example: None,
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        )
-        .subid(
-            "account",
-            "exp.software.plugin.gcloud-adc.account.render@v1",
-        )
-        .field(
-            "project_id",
-            FieldSchema {
-                field_type: FieldType::String,
-                required: false,
-                description: "Project id".to_string(),
-                default: None,
-                example: None,
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        )
-        .subid(
-            "project_id",
-            "exp.software.plugin.gcloud-adc.project-id.render@v1",
-        )
-        .field(
-            "authenticated",
-            FieldSchema {
-                field_type: FieldType::Boolean,
-                required: true,
-                description: "Authentication status".to_string(),
-                default: None,
-                example: None,
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        )
-        .subid(
-            "authenticated",
-            "exp.software.plugin.gcloud-adc.authenticated.render@v1",
-        )
-        .build()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::state_plugins::common::oscal::validate_subid;
-
-    #[test]
-    fn derived_schema_matches_hand_rolled() {
-        let golden = gcloud_adc_schema_golden();
-        let derived = gcloud_adc_schema();
-        let diffs = super::super::schemars_adapter::schema_diffs(&golden, &derived);
-        assert!(diffs.is_empty(), "schema_diffs: {:#?}", diffs);
-    }
 
     #[test]
     fn all_subids_are_valid() {

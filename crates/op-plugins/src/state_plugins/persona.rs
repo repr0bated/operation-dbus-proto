@@ -91,6 +91,7 @@ pub struct PersonaOperationSchema {
 /// Persona catalog live state.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "sch.agent.plugin.persona.schema@v1"))]
+#[schemars(extend("x-oscal-category" = "agents"))]
 pub struct PersonaState {
     /// Current status.
     #[schemars(

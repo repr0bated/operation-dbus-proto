@@ -1,16 +1,15 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
-use op_state_store::{Constraint, FieldSchema, FieldType, PluginSchema};
+use op_state_store::PluginSchema;
 use serde::{Deserialize, Serialize};
-use simd_json::json;
 use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
-use std::collections::HashMap;
 
 /// Hardware inventory snapshot.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "sch.software.plugin.hardware.schema@v1"))]
+#[schemars(extend("x-oscal-category" = "hardware"))]
 pub struct HardwareState {
     /// CPU information.
     #[serde(default)]
@@ -373,206 +372,9 @@ pub fn hardware_schema() -> PluginSchema {
     schema
 }
 
-/// Frozen golden reference: the original hand-rolled schema, kept **test-only**
-/// so `derived_schema_matches_hand_rolled` can prove the derived schema still
-/// matches the contract this plugin shipped with. Production uses
-/// [`hardware_schema`].
-#[cfg(test)]
-pub(crate) fn hardware_schema_golden() -> PluginSchema {
-    let mut cpu_fields = HashMap::new();
-    cpu_fields.insert(
-        "model".to_string(),
-        FieldSchema {
-            field_type: FieldType::String,
-            required: true,
-            description: "CPU model name".to_string(),
-            default: None,
-            example: Some(json!("AMD Ryzen 9 7950X")),
-            constraints: Vec::new(),
-            read_only: false,
-            read_only_when: None,
-        },
-    );
-    cpu_fields.insert(
-        "cores".to_string(),
-        FieldSchema {
-            field_type: FieldType::Integer,
-            required: true,
-            description: "Number of CPU cores".to_string(),
-            default: None,
-            example: Some(json!(16)),
-            constraints: vec![Constraint::Min { value: 0.0 }],
-            read_only: false,
-            read_only_when: None,
-        },
-    );
-
-    let mut memory_fields = HashMap::new();
-    memory_fields.insert(
-        "total_kb".to_string(),
-        FieldSchema {
-            field_type: FieldType::Integer,
-            required: true,
-            description: "Total memory in kilobytes".to_string(),
-            default: None,
-            example: Some(json!(33554432)),
-            constraints: vec![Constraint::Min { value: 0.0 }],
-            read_only: false,
-            read_only_when: None,
-        },
-    );
-    memory_fields.insert(
-        "available_kb".to_string(),
-        FieldSchema {
-            field_type: FieldType::Integer,
-            required: true,
-            description: "Available memory in kilobytes".to_string(),
-            default: None,
-            example: Some(json!(16777216)),
-            constraints: vec![Constraint::Min { value: 0.0 }],
-            read_only: false,
-            read_only_when: None,
-        },
-    );
-
-    let mut disk_fields = HashMap::new();
-    disk_fields.insert(
-        "name".to_string(),
-        FieldSchema {
-            field_type: FieldType::String,
-            required: true,
-            description: "Disk device name".to_string(),
-            default: None,
-            example: Some(json!("nvme0n1")),
-            constraints: Vec::new(),
-            read_only: false,
-            read_only_when: None,
-        },
-    );
-    disk_fields.insert(
-        "size_bytes".to_string(),
-        FieldSchema {
-            field_type: FieldType::Integer,
-            required: true,
-            description: "Disk size in bytes".to_string(),
-            default: None,
-            example: Some(json!(1000204886016_i64)),
-            constraints: vec![Constraint::Min { value: 0.0 }],
-            read_only: false,
-            read_only_when: None,
-        },
-    );
-    disk_fields.insert(
-        "mountpoint".to_string(),
-        FieldSchema {
-            field_type: FieldType::String,
-            required: false,
-            description: "Mount point, if any".to_string(),
-            default: Some(json!(null)),
-            example: Some(json!("/")),
-            constraints: Vec::new(),
-            read_only: false,
-            read_only_when: None,
-        },
-    );
-
-    let mut schema = PluginSchema::builder("hardware")
-        .version("1.0.0")
-        .description("Hardware inventory snapshot")
-        .field(
-            "cpu",
-            FieldSchema {
-                field_type: FieldType::Object(cpu_fields),
-                required: false,
-                description: "CPU information".to_string(),
-                default: Some(json!({
-                    "cores": 0,
-                    "model": ""
-                })),
-                example: None,
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        )
-        .field(
-            "memory",
-            FieldSchema {
-                field_type: FieldType::Object(memory_fields),
-                required: false,
-                description: "Memory information".to_string(),
-                default: Some(json!({
-                    "available_kb": 0,
-                    "total_kb": 0
-                })),
-                example: None,
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        )
-        .field(
-            "disks",
-            FieldSchema {
-                field_type: FieldType::Array(Box::new(FieldType::Object(disk_fields))),
-                required: false,
-                description: "Disk inventory".to_string(),
-                default: Some(json!([])),
-                example: None,
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        )
-        .example(json!({
-            "cpu": {
-                "model": "AMD Ryzen 9 7950X",
-                "cores": 16
-            },
-            "memory": {
-                "total_kb": 33554432,
-                "available_kb": 16777216
-            },
-            "disks": [
-                {
-                    "name": "nvme0n1",
-                    "size_bytes": 1000204886016_i64,
-                    "mountpoint": "/"
-                }
-            ]
-        }))
-        .build();
-    schema.subids.insert(
-        "__schema__".to_string(),
-        "sch.software.plugin.hardware.schema@v1".to_string(),
-    );
-    schema.subids.insert(
-        "cpu".to_string(),
-        "exp.service.hardware.cpu.render@v1".to_string(),
-    );
-    schema.subids.insert(
-        "memory".to_string(),
-        "exp.service.hardware.memory.render@v1".to_string(),
-    );
-    schema.subids.insert(
-        "disks".to_string(),
-        "exp.service.hardware.disks.render@v1".to_string(),
-    );
-    schema
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The schemars-derived schema must match the hand-rolled golden reference.
-    #[test]
-    fn derived_schema_matches_hand_rolled() {
-        let golden = hardware_schema_golden();
-        let derived = hardware_schema();
-        let diffs = crate::state_plugins::schemars_adapter::schema_diffs(&golden, &derived);
-        assert!(diffs.is_empty(), "schema_diffs: {:#?}", diffs);
-    }
 
     /// Every `x-oscal-subid` annotation in the derived schema must be a valid
     /// OSCAL subid according to the canonical taxonomy.

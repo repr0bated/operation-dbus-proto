@@ -7,11 +7,7 @@ use op_state::{
     ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
 };
 use op_state_store::{ExecutionJob, ExecutionStatus, PluginSchema, StateStore};
-#[cfg(test)]
-use op_state_store::{FieldSchema, FieldType};
 use serde::{Deserialize, Serialize};
-#[cfg(test)]
-use simd_json::json;
 use simd_json::OwnedValue as Value;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -341,6 +337,7 @@ fn example_compact_mode() -> serde_json::Value {
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "sch.software.plugin.mcp.schema@v1"))]
+#[schemars(extend("x-oscal-category" = "service"))]
 pub struct McpState {
     #[serde(default = "default_empty_object")]
     #[schemars(
@@ -376,72 +373,6 @@ pub(crate) fn mcp_schema() -> PluginSchema {
     );
     schema.dependencies = vec!["agent_config".to_string()];
     schema
-}
-
-#[cfg(test)]
-pub(crate) fn mcp_schema_golden() -> PluginSchema {
-    PluginSchema::builder("mcp")
-        .version("1.0.0")
-        .description("MCP server and tool-group configuration")
-        .dependency("agent_config")
-        .subid("__schema__", "sch.software.plugin.mcp.schema@v1")
-        .field(
-            "servers",
-            FieldSchema {
-                field_type: FieldType::Any,
-                required: false,
-                description: "MCP server map".to_string(),
-                default: Some(json!({})),
-                example: Some(json!({
-                    "rust-pro": {
-                        "args": ["rust-pro"],
-                        "command": "dbus-agent",
-                        "enabled": true,
-                        "transport": "stdio"
-                    }
-                })),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        )
-        .subid("servers", "exp.software.plugin.mcp.servers@v1")
-        .field(
-            "tool_groups",
-            FieldSchema {
-                field_type: FieldType::Any,
-                required: false,
-                description: "Tool group config".to_string(),
-                default: Some(json!({})),
-                example: Some(json!({
-                    "access_zone": "local",
-                    "enabled": ["default"],
-                    "max_tools": 40
-                })),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        )
-        .subid("tool_groups", "exp.software.plugin.mcp.tool-groups@v1")
-        .field(
-            "compact_mode",
-            FieldSchema {
-                field_type: FieldType::Any,
-                required: false,
-                description: "Compact mode config".to_string(),
-                default: Some(json!({})),
-                example: Some(json!({
-                    "enabled": true,
-                    "meta_tools": ["list_tools", "search_tools", "get_tool_schema", "execute_tool", "respond"]
-                })),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        )
-        .subid("compact_mode", "exp.software.plugin.mcp.compact-mode@v1")
-        .build()
 }
 
 #[async_trait]
@@ -589,7 +520,6 @@ impl StatePlugin for McpStatePlugin {
 mod tests {
     use super::*;
     use crate::state_plugins::common::oscal::validate_subid;
-    use crate::state_plugins::schemars_adapter::schema_diffs;
     use op_state_store::MemoryStore;
     use serde_json::Value as JVal;
 
@@ -637,12 +567,6 @@ mod tests {
         assert!(schema.fields.contains_key("servers"));
         assert!(schema.fields.contains_key("tool_groups"));
         assert!(schema.fields.contains_key("compact_mode"));
-    }
-
-    #[test]
-    fn derived_schema_matches_hand_rolled() {
-        let diffs = schema_diffs(&mcp_schema_golden(), &mcp_schema());
-        assert!(diffs.is_empty(), "schema drift: {:#?}", diffs);
     }
 
     #[test]

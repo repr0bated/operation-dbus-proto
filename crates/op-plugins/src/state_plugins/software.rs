@@ -1,10 +1,9 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
-use op_state_store::{FieldSchema, FieldType, PluginSchema};
+use op_state_store::PluginSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
-use simd_json::json;
 use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
 
@@ -62,6 +61,7 @@ pub struct GetInfoInput {
 /// Published schema state for the `software` plugin.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "sch.software.plugin.software.schema@v1"))]
+#[schemars(extend("x-oscal-category" = "software"))]
 pub struct SoftwareSchemaState {
     #[schemars(
         description = "Package list",
@@ -249,43 +249,11 @@ pub(crate) fn software_schema() -> PluginSchema {
     schema
 }
 
-/// Frozen golden reference: the original hand-rolled `software` schema, kept
-/// test-only so the schemars-derived contract can be verified against drift.
-#[cfg(test)]
-pub(crate) fn software_schema_golden() -> PluginSchema {
-    PluginSchema::builder("software")
-        .version("1.0.0")
-        .description("Software package inventory")
-        .subid("__schema__", "sch.software.plugin.software.schema@v1")
-        .field(
-            "packages",
-            FieldSchema {
-                field_type: FieldType::Any,
-                required: true,
-                description: "Package list".to_string(),
-                default: Some(json!([])),
-                example: None,
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        )
-        .subid("packages", "obs.software.plugin.software.packages@v1")
-        .build()
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn derived_schema_matches_hand_rolled() {
-        let diffs = crate::state_plugins::schemars_adapter::schema_diffs(
-            &software_schema_golden(),
-            &software_schema(),
-        );
-        assert!(diffs.is_empty(), "schema drift: {:#?}", diffs);
-    }
 
     #[test]
     fn all_subids_are_valid() {

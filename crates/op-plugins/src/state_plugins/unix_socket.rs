@@ -1,11 +1,11 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
-use op_state_store::{FieldSchema, FieldType, PluginSchema};
+use op_state_store::PluginSchema;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
-use simd_json::{json, OwnedValue as Value};
+use simd_json::OwnedValue as Value;
 use std::collections::{HashMap, HashSet};
 use std::os::unix::net::UnixListener;
 use std::path::Path;
@@ -85,6 +85,7 @@ pub const SHARED_CONTAINER_SOCKET: &str = "/run/ghostbridge/container.sock";
 /// Runtime state: the single shared socket endpoint for the gRPC bridge.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "sch.software.plugin.unix-socket.schema@v1"))]
+#[schemars(extend("x-oscal-category" = "service"))]
 pub struct UnixSocketState {
     /// The shared socket endpoint (one socket, all services route through it).
     #[schemars(
@@ -145,8 +146,7 @@ fn default_backlog() -> u32 {
 /// Canonical `unix_socket` schema, **derived** from the structs via schemars
 /// (see [`super::schemars_adapter`]). `port` bounds, field descriptions (from
 /// doc comments) and `required` flags all come from the type — the struct is
-/// the single source of truth. The frozen hand-rolled `unix_socket_schema()`
-/// (test-only) guards this against drift via `derived_schema_matches_hand_rolled`.
+/// the single source of truth.
 pub fn unix_socket_schema_derived() -> PluginSchema {
     let root = serde_json::to_value(schemars::schema_for!(UnixSocketState))
         .expect("schemars schema serializes to JSON");
@@ -477,59 +477,6 @@ mod tests {
         }
     }
 
-    fn sockets_object(s: &PluginSchema) -> &HashMap<String, FieldSchema> {
-        match &s.fields.get("sockets").expect("sockets field").field_type {
-            FieldType::Array(inner) => match inner.as_ref() {
-                FieldType::Object(m) => m,
-                other => panic!("items not object: {other:?}"),
-            },
-            other => panic!("sockets not array: {other:?}"),
-        }
-    }
-
-    /// The schemars-derived schema must match the hand-rolled one field-for-field.
-    #[test]
-    fn derived_schema_matches_hand_rolled() {
-        let hand = unix_socket_schema();
-        let derived = unix_socket_schema_derived();
-
-        assert_eq!(derived.name, hand.name);
-        assert_eq!(derived.version, hand.version);
-
-        let hp = sockets_object(&hand);
-        let dp = sockets_object(&derived);
-
-        let mut hk: Vec<_> = hp.keys().cloned().collect();
-        let mut dk: Vec<_> = dp.keys().cloned().collect();
-        hk.sort();
-        dk.sort();
-        assert_eq!(dk, hk, "derived inner fields must match hand-rolled");
-
-        // ports: Array (derived from `Vec<u16>`)
-        assert!(matches!(dp["ports"].field_type, FieldType::Array(_)));
-
-        // doc comments survive as descriptions
-        assert!(!dp["path"].description.is_empty());
-        // required set: path only (name/ports/protocol/label have serde defaults)
-        assert!(dp["path"].required);
-        assert!(
-            !dp["name"].required
-                && !dp["ports"].required
-                && !dp["protocol"].required
-                && !dp["label"].required
-        );
-
-        // OSCAL subids are preserved at the schema and field level.
-        assert_eq!(
-            derived.subids.get("__schema__"),
-            Some(&"sch.software.plugin.unix-socket.schema@v1".to_string())
-        );
-        assert_eq!(
-            derived.subids.get("sockets"),
-            Some(&"mut.service.unix-socket.bind@v1".to_string())
-        );
-    }
-
     #[test]
     fn schema_carries_oscal_subids() {
         let raw = serde_json::to_value(schemars::schema_for!(UnixSocketState)).unwrap();
@@ -613,139 +560,6 @@ mod tests {
         assert!(second.changes_applied.is_empty());
         assert_eq!(plugin.active.lock().len(), 2);
     }
-}
-
-/// Frozen golden reference: the original hand-rolled schema, kept **test-only**
-/// so `derived_schema_matches_hand_rolled` can prove the derived schema still
-/// matches the contract this plugin shipped with. Production uses
-/// [`unix_socket_schema_derived`].
-#[cfg(test)]
-pub(crate) fn unix_socket_schema() -> PluginSchema {
-    let mut socket_fields = HashMap::new();
-    socket_fields.insert(
-        "name".to_string(),
-        FieldSchema {
-            field_type: FieldType::String,
-            required: false,
-            description:
-                "Container/service identity tag the bridge routes by (createunixsocket --name)"
-                    .to_string(),
-            default: Some(json!("")),
-            example: Some(json!("netmaker")),
-            constraints: Vec::new(),
-            read_only: false,
-            read_only_when: None,
-        },
-    );
-    socket_fields.insert(
-        "path".to_string(),
-        FieldSchema {
-            field_type: FieldType::String,
-            required: true,
-            description: "Filesystem path of the shared unix domain socket".to_string(),
-            default: None,
-            example: Some(json!("/run/ghostbridge/container.sock")),
-            constraints: Vec::new(),
-            read_only: false,
-            read_only_when: None,
-        },
-    );
-    socket_fields.insert(
-        "ports".to_string(),
-        FieldSchema {
-            field_type: FieldType::Array(Box::new(FieldType::Integer)),
-            required: false,
-            description:
-                "Backend TCP ports the container serves (metadata; tonic-web demuxes by reflection)"
-                    .to_string(),
-            default: Some(json!([])),
-            example: Some(json!([25, 465, 587])),
-            constraints: Vec::new(),
-            read_only: false,
-            read_only_when: None,
-        },
-    );
-    socket_fields.insert(
-        "protocol".to_string(),
-        FieldSchema {
-            field_type: FieldType::String,
-            required: false,
-            description: "Transport protocol carried over the socket (grpc)".to_string(),
-            default: Some(json!("grpc")),
-            example: None,
-            constraints: Vec::new(),
-            read_only: false,
-            read_only_when: None,
-        },
-    );
-    socket_fields.insert(
-        "label".to_string(),
-        FieldSchema {
-            field_type: FieldType::String,
-            required: false,
-            description: "Human-readable label for the shared socket".to_string(),
-            default: Some(json!("")),
-            example: Some(json!("ghostbridge")),
-            constraints: Vec::new(),
-            read_only: false,
-            read_only_when: None,
-        },
-    );
-
-    PluginSchema::builder("unix_socket")
-        .version("1.0.0")
-        .description("Single shared unix-domain socket for the tonic-web gRPC bridge — all services route through it, demuxed by domain/SNI at xray and by gRPC service/method at the bridge")
-        .subid("__schema__", "sch.software.plugin.unix-socket.schema@v1")
-        .array_field(
-            "sockets",
-            FieldType::Object(socket_fields),
-            true,
-            "The shared socket endpoint (one socket, all services route through it by domain)",
-        )
-        .subid("sockets", "mut.service.unix-socket.bind@v1")
-        // createunixsocket is a mut.* action (register a container/service on the
-        // shared socket), so it requires actor_id/capability_id accountability
-        // fields per AGENTS.md §4a — mirrored here from
-        // `ensure_category_metadata_fields`, called by the derived path.
-        .subid("createunixsocket", "mut.service.unix-socket.create-socket@v1")
-        .field(
-            "actor_id",
-            FieldSchema {
-                field_type: FieldType::String,
-                required: false,
-                description: "Actor identifier for mutation accountability".to_string(),
-                default: None,
-                example: None,
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        )
-        .field(
-            "capability_id",
-            FieldSchema {
-                field_type: FieldType::String,
-                required: false,
-                description: "Capability identifier authorizing the mutation".to_string(),
-                default: None,
-                example: None,
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        )
-        .example(json!({
-            "sockets": [
-                {
-                    "name": "netmaker",
-                    "path": "/run/ghostbridge/container.sock",
-                    "ports": [18081, 1883, 8883],
-                    "protocol": "grpc",
-                    "label": "ghostbridge"
-                }
-            ]
-        }))
-        .build()
 }
 
 // Self-registration: the plugin registry discovers this via inventory

@@ -175,6 +175,7 @@ impl S6DbusClient {
 
 /// Plugin state for the s6_systemctl projection.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, PartialEq)]
+#[schemars(extend("x-oscal-category" = "service"))]
 pub struct S6SystemctlState {
     /// Whether the op-s6-systemctl D-Bus daemon is reachable.
     pub daemon_running: bool,

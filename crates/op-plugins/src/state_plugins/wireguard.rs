@@ -24,6 +24,7 @@ const PLUGIN_DISPLAY_NAME: &str = "GB.Wireguard";
 /// WireGuard interface state.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "sch.network.plugin.wireguard.schema@v1"))]
+#[schemars(extend("x-oscal-category" = "network"))]
 pub struct WireGuardState {
     /// Active WireGuard interfaces.
     #[serde(default)]

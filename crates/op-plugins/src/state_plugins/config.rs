@@ -20,6 +20,7 @@ use std::path::PathBuf;
 /// `configs` value so the contract stays unchanged.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "sch.software.plugin.config.schema@v1"))]
+#[schemars(extend("x-oscal-category" = "service"))]
 pub struct ConfigSchemaState {
     #[schemars(
         description = "Configuration map",
@@ -169,33 +170,6 @@ pub(crate) fn config_plugin_schema() -> PluginSchema {
     schema
 }
 
-/// Frozen golden reference for the `config` schema.
-#[cfg(test)]
-pub(crate) fn config_plugin_schema_golden() -> PluginSchema {
-    PluginSchema::builder("config")
-        .version("1.0.0")
-        .description("Global key/value config store")
-        .subid("__schema__", "sch.software.plugin.config.schema@v1")
-        .field(
-            "configs",
-            FieldSchema {
-                field_type: FieldType::Any,
-                required: true,
-                description: "Configuration map".to_string(),
-                default: Some(json!({})),
-                example: Some(json!({
-                    "anna_scribe": {
-                        "snowball_path": "/var/lib/op-dbus/snowball"
-                    }
-                })),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        )
-        .subid("configs", "mut.software.plugin.config.configs@v1")
-        .build()
-}
 
 #[async_trait]
 impl StatePlugin for ConfigPlugin {

@@ -136,6 +136,7 @@ pub struct SessionEvent {
 /// Runtime state: every container identity sled, host ("container zero") included.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "sch.service.plugin.identity-sled.schema@v1"))]
+#[schemars(extend("x-oscal-category" = "service"))]
 pub struct IdentitySledState {
     /// All known container identity sleds, keyed by `session_id`, sorted.
     #[schemars(extend("x-oscal-subid" = "obs.service.identity-sled.sleds@v1"))]

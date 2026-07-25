@@ -21,6 +21,7 @@ use super::incus_device::{Device, NamedDevice};
 
 /// Top-level state representing all Incus instances on the system.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(extend("x-oscal-category" = "service"))]
 pub struct IncusState {
     pub instances: Vec<IncusInstance>,
 }

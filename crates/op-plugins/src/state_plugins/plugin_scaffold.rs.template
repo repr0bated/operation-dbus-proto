@@ -43,6 +43,7 @@ impl ReplaceMePlugin {
 /// then let schema-output-processor turn it into PluginSchema output.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "sch.software.plugin.replace-me.schema@v1"))]
+#[schemars(extend("x-oscal-category" = "replace_me"))]
 pub struct ReplaceMeState {
     #[serde(default)]
     #[schemars(extend("x-oscal-subid" = "obs.software.plugin.replace-me.status@v1"))]

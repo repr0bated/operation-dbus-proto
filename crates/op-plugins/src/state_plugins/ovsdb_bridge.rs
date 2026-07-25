@@ -123,6 +123,7 @@ use std::sync::Arc;
 
 /// Full OVS state — 1:1 projection of what ovsdb-server reports.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-category" = "network"))]
 pub struct OvsBridgeState {
     pub bridges: Vec<BridgeConfig>,
 }

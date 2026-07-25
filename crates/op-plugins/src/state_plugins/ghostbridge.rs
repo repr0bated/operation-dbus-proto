@@ -110,6 +110,7 @@ pub struct BridgeEndpoint {
 /// Root state for the Ghostbridge plugin.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "sch.service.ghostbridge.state.schema@v1"))]
+#[schemars(extend("x-oscal-category" = "network"))]
 pub struct GhostbridgeState {
     /// Operational status: active, connecting, error.
     #[serde(default)]

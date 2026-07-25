@@ -37,6 +37,7 @@ trait OpenFlowController {
 
 /// OpenFlow controller configuration - Policy-based, not interface-based
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(extend("x-oscal-category" = "network"))]
 pub struct OpenFlowConfig {
     /// Bridges managed by this controller
     pub bridges: Vec<BridgeFlowConfig>,

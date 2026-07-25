@@ -271,6 +271,7 @@ pub(crate) fn rovs_commands_schema() -> PluginSchema {
     );
 
     PluginSchema::builder("rovs_commands")
+        .category("network")
         .version("1.0.0")
         .category("network")
         .description("Direct OVSDB command execution methods exposed via D-Bus by grpc-bridge")

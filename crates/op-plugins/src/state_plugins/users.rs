@@ -11,6 +11,7 @@ use super::plugin_scaffold_helpers::{method_decl_from_schemars_with_output, AckO
 use op_state_store::PluginSchema;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-category" = "service"))]
 pub struct UsersState {
     pub users: Vec<UserConfig>,
 }

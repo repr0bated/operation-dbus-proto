@@ -65,6 +65,7 @@ pub struct GemmaGallery {
 /// Top-level state for the Gemma brain.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "sch.software.plugin.gemma-brain.schema@v1"))]
+#[schemars(extend("x-oscal-category" = "llm"))]
 pub struct GemmaBrainState {
     /// Derived operational status (observed): `unavailable` (op-gemma binary
     /// missing), `empty`, `partial`, or `ready`.

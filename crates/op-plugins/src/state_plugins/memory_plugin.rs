@@ -12,6 +12,7 @@ use simd_json::OwnedValue as Value;
 /// Memory plugin state.
 /// See: https://github.com/memgraph/memgraph
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-category" = "data"))]
 pub struct MemoryState {
     /// Plugin status
     pub status: String,

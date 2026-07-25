@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LoadAvg",
+  "description": "Parsed /proc/loadavg. Sample: `7.02 4.40 3.68 16/2222 8032`.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "load1": {
+      "type": "number",
+      "minimum": 0,
+      "description": "1-minute load average."
+    },
+    "load5": {
+      "type": "number",
+      "minimum": 0,
+      "description": "5-minute load average."
+    },
+    "load15": {
+      "type": "number",
+      "minimum": 0,
+      "description": "15-minute load average."
+    },
+    "procs_running": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Runnable kernel entities; numerator of the `16/2222` field."
+    },
+    "procs_total": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Total kernel entities; denominator of the `16/2222` field."
+    }
+  },
+  "required": [
+    "load1",
+    "load5",
+    "load15",
+    "procs_running",
+    "procs_total"
+  ]
+}

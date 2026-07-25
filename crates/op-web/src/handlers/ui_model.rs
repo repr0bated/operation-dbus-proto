@@ -26,7 +26,7 @@ use std::sync::Arc;
 
 // Deliberately renamed off the old "gemma"-prefixed paths (were independently
 // hardcoded in THREE places with no shared constant: op-gemma/ui_gallery.rs
-// the producer, op-plugins/gemma_brain.rs a third undiscovered reader, and
+// the producer, op-plugins/ui_model_brain.rs a third undiscovered reader, and
 // here). Not synced to those other two on purpose — whatever silently keeps
 // assuming the old path was a hidden violator of "the blob/SHM path is the
 // single source of truth," and this will surface it instead of masking it.
@@ -120,14 +120,14 @@ fn err(status: StatusCode, msg: &str) -> Response {
 
 // ── Gallery ─────────────────────────────────────────────────────────────────
 
-/// GET /api/gemma/gallery
-pub async fn gemma_gallery_handler(Extension(_state): Extension<Arc<AppState>>) -> Response {
+/// GET /api/ui-model/gallery
+pub async fn ui_model_gallery_handler(Extension(_state): Extension<Arc<AppState>>) -> Response {
     let gallery: SpecGallery = read_json(GEMMA_SPECS_PATH).unwrap_or_else(empty_gallery);
     ok(json!({ "version": gallery.version, "specs": gallery.specs }))
 }
 
-/// DELETE /api/gemma/gallery/:id
-pub async fn gemma_gallery_delete_handler(
+/// DELETE /api/ui-model/gallery/:id
+pub async fn ui_model_gallery_delete_handler(
     Extension(_state): Extension<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Response {
@@ -147,15 +147,15 @@ pub async fn gemma_gallery_delete_handler(
 
 // ── Catalog (promoted) ──────────────────────────────────────────────────────
 
-/// GET /api/gemma/catalog
-pub async fn gemma_catalog_handler(Extension(_state): Extension<Arc<AppState>>) -> Response {
+/// GET /api/ui-model/catalog
+pub async fn ui_model_catalog_handler(Extension(_state): Extension<Arc<AppState>>) -> Response {
     let catalog: Catalog = read_json(GEMMA_CATALOG_PATH).unwrap_or_else(empty_catalog);
     ok(json!({ "version": catalog.version, "entries": catalog.entries }))
 }
 
-/// POST /api/gemma/catalog/promote/:id
+/// POST /api/ui-model/catalog/promote/:id
 /// Moves a spec from the gallery into the promoted catalog (seal the lens).
-pub async fn gemma_catalog_promote_handler(
+pub async fn ui_model_catalog_promote_handler(
     Extension(_state): Extension<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Response {
@@ -203,8 +203,8 @@ pub async fn gemma_catalog_promote_handler(
     }
 }
 
-/// DELETE /api/gemma/catalog/:id
-pub async fn gemma_catalog_delete_handler(
+/// DELETE /api/ui-model/catalog/:id
+pub async fn ui_model_catalog_delete_handler(
     Extension(_state): Extension<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Response {
@@ -224,12 +224,12 @@ pub async fn gemma_catalog_delete_handler(
 
 // ── Plugin schema (sealed blob catalog) ─────────────────────────────────────
 
-/// GET /api/gemma/plugins — every plugin actually in the sealed blob catalog.
+/// GET /api/ui-model/plugins — every plugin actually in the sealed blob catalog.
 /// A plugin exists iff its blob is sealed here; this is NOT the same list as
 /// "plugins with generated RPC methods" (some plugins, e.g. antigravity/
 /// antigravity_chat, are state-only with zero methods, so they're absent
 /// from the frontend's method-index but very much present as real blobs).
-pub async fn gemma_list_plugins_handler(Extension(_state): Extension<Arc<AppState>>) -> Response {
+pub async fn ui_model_list_plugins_handler(Extension(_state): Extension<Arc<AppState>>) -> Response {
     match op_blob::catalog::read_manifest_plugin_ids_shm() {
         Some(ids) => ok(json!({ "plugins": ids })),
         None => err(
@@ -239,10 +239,10 @@ pub async fn gemma_list_plugins_handler(Extension(_state): Extension<Arc<AppStat
     }
 }
 
-/// GET /api/gemma/plugin-schema/:plugin
+/// GET /api/ui-model/plugin-schema/:plugin
 /// The base schema is the render source: read straight from the sealed blob
 /// catalog. Resolve by exact id, then by manifest prefix/contains match.
-pub async fn gemma_plugin_schema_handler(
+pub async fn ui_model_plugin_schema_handler(
     Extension(_state): Extension<Arc<AppState>>,
     Path(plugin): Path<String>,
 ) -> Response {

@@ -10,6 +10,7 @@ use simd_json::OwnedValue as Value;
 /// Endpoint declaration state.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "sch.software.plugin.endpoint.schema@v1"))]
+#[schemars(extend("x-oscal-category" = "service"))]
 pub struct EndpointState {
     /// Declared endpoints.
     #[serde(default)]

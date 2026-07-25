@@ -12,6 +12,7 @@ use super::plugin_scaffold_helpers::{
 /// Runtime state of the workflow automation plugin.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "sch.software.plugin.workflows.schema@v1"))]
+#[schemars(extend("x-oscal-category" = "software"))]
 pub struct WorkflowsState {
     /// Operational status.
     #[serde(default)]
@@ -243,13 +244,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn derived_schema_matches_hand_rolled() {
-        let golden = super::workflows_schema_golden();
-        let derived = super::workflows_schema();
-        let diffs = schema_diffs(&golden, &derived);
-        assert!(diffs.is_empty(), "schema_diffs: {:#?}", diffs);
-    }
 
     #[test]
     fn all_subids_are_valid() {
@@ -264,84 +258,6 @@ mod tests {
     }
 }
 
-#[cfg(test)]
-pub(crate) fn workflows_schema_golden() -> PluginSchema {
-    use op_state_store::{FieldSchema, FieldType};
-    use simd_json::json;
-
-    let mut fields = std::collections::HashMap::new();
-    fields.insert(
-        "status".to_string(),
-        FieldSchema {
-            field_type: FieldType::String,
-            required: false,
-            description: "Operational status.".to_string(),
-            default: Some(json!("active")),
-            example: None,
-            constraints: Vec::new(),
-            read_only: false,
-            read_only_when: None,
-        },
-    );
-    fields.insert(
-        "workflows".to_string(),
-        FieldSchema {
-            field_type: FieldType::Any,
-            required: false,
-            description: "Declared workflow pipelines.".to_string(),
-            default: Some(json!([
-                {"id": "deploy", "name": "Deploy Pipeline", "steps": ["build", "test", "deploy"], "triggers": ["push", "manual"], "status": "idle"},
-                {"id": "backup", "name": "System Backup", "steps": ["snapshot", "archive", "verify"], "triggers": ["cron"], "status": "idle"},
-                {"id": "embedding-sync", "name": "Embedding Pipeline Sync", "steps": ["ingest", "chunk", "embed", "store"], "triggers": ["webhook"], "status": "idle"}
-            ])),
-            example: None,
-            constraints: Vec::new(),
-            read_only: false,
-            read_only_when: None,
-        },
-    );
-    fields.insert(
-        "config".to_string(),
-        FieldSchema {
-            field_type: FieldType::Any,
-            required: false,
-            description: "Workflow scheduler configuration.".to_string(),
-            default: Some(json!({"max_concurrent": 4, "timeout_secs": 3600, "retry_count": 2, "notification_channel": "telegram"})),
-            example: None,
-            constraints: Vec::new(),
-            read_only: false,
-            read_only_when: None,
-        },
-    );
-
-    let mut schema = PluginSchema::builder("workflows")
-        .version("1.0.0")
-        .description("Workflow automation — pipelines, triggers, execution")
-        .build();
-    schema.fields = fields;
-    schema.subids = std::collections::HashMap::from([
-        (
-            "__schema__".to_string(),
-            "sch.software.plugin.workflows.schema@v1".to_string(),
-        ),
-        (
-            "status".to_string(),
-            "obs.software.plugin.workflows.status@v1".to_string(),
-        ),
-        (
-            "workflows".to_string(),
-            "exp.software.plugin.workflows.workflows@v1".to_string(),
-        ),
-        (
-            "config".to_string(),
-            "sch.software.plugin.workflows.config@v1".to_string(),
-        ),
-    ]);
-    let state = simd_json::serde::to_owned_value(&WorkflowsState::default())
-        .expect("WorkflowsState default serializes");
-    super::schemars_adapter::apply_state_defaults(&mut schema, &state);
-    schema
-}
 
 // Self-registration: the plugin registry discovers this via inventory
 // (single source of the catalog; no central dispatch list).

@@ -241,6 +241,64 @@ pub(crate) fn cap_method(
     }
 }
 
+use super::common::oscal::is_component_type;
+use std::collections::HashMap;
+
+/// Category used when a plugin declares nothing to infer one from.
+const DEFAULT_CATEGORY: &str = "software";
+
+/// Build the schema-level subid for a plugin.
+///
+/// Declared in one place so every plugin gets one without copy-pasting a
+/// `#[schemars(extend("x-oscal-subid" = ...))]` attribute onto its state struct
+/// — that duplication is why 20 of 65 plugins ended up with no schema subid at
+/// all, while their methods (which route through the helpers here) always had
+/// theirs.
+///
+/// `declared_category` is the plugin stating what it is, and always wins — it is
+/// the one fact here that cannot be derived from anything else. Failing that,
+/// the category is inferred from the plugin's own field subids, so a plugin
+/// cannot contradict itself. Ties break lexicographically: this value feeds the
+/// schema hash, so it must not depend on `HashMap` iteration order.
+///
+/// The subject segment is kebab-cased — `SUBID_CATEGORIES`' grammar allows no
+/// underscores, so `agent_config` has to become `agent-config`.
+pub fn derive_schema_subid(
+    plugin_name: &str,
+    declared_category: Option<&str>,
+    declared: &HashMap<String, String>,
+) -> String {
+    let inferred = || {
+        let mut counts: HashMap<&str, usize> = HashMap::new();
+        for subid in declared.values() {
+            if let Some(category) = subid.split('.').nth(1) {
+                if is_component_type(category) {
+                    *counts.entry(category).or_default() += 1;
+                }
+            }
+        }
+
+        let mut ranked: Vec<(&str, usize)> = counts.into_iter().collect();
+        ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+        ranked
+            .first()
+            .map(|(c, _)| c.to_string())
+            .unwrap_or_else(|| DEFAULT_CATEGORY.to_string())
+    };
+
+    // An unusable declared category is ignored rather than trusted: emitting it
+    // would produce a subid that fails validation at the gate.
+    let category = declared_category
+        .filter(|c| is_component_type(c))
+        .map(str::to_string)
+        .unwrap_or_else(inferred);
+
+    format!(
+        "sch.{category}.plugin.{}.schema@v1",
+        plugin_name.replace('_', "-")
+    )
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct EmptyInput {}
 
@@ -394,5 +452,100 @@ mod tests {
         assert_eq!(state["mode"], json!("active"));
         assert_eq!(state["choice"], json!(0));
         assert_eq!(state["nested"]["count"], json!(0));
+    }
+}
+
+#[cfg(test)]
+mod derive_schema_subid_tests {
+    use super::derive_schema_subid;
+    use crate::state_plugins::common::oscal::validate_subid;
+    use std::collections::HashMap;
+
+    fn declared(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn takes_the_category_the_plugins_own_fields_use() {
+        // procfs declares `service` on every field but `software` on its struct;
+        // the fields are the plugin describing itself, so they win.
+        let subids = declared(&[
+            ("memory", "obs.service.procfs.memory.query@v1"),
+            ("cpuinfo", "obs.service.procfs.cpuinfo.query@v1"),
+        ]);
+        let got = derive_schema_subid("procfs", None, &subids);
+        assert_eq!(got, "sch.service.plugin.procfs.schema@v1");
+        assert!(validate_subid(&got).is_ok(), "derived subid must validate");
+    }
+
+    #[test]
+    fn kebab_cases_underscored_plugin_names() {
+        // The grammar allows no underscores, so `agent_config` must not appear
+        // verbatim or the result fails validation.
+        let got = derive_schema_subid("agent_config", None, &declared(&[]));
+        assert_eq!(got, "sch.software.plugin.agent-config.schema@v1");
+        assert!(validate_subid(&got).is_ok());
+    }
+
+    #[test]
+    fn accepts_internal_categories_not_just_oscal_ones() {
+        let subids = declared(&[("subvolumes", "obs.storage.btrfs.subvolume.list@v1")]);
+        let got = derive_schema_subid("btrfs", None, &subids);
+        assert_eq!(got, "sch.storage.plugin.btrfs.schema@v1");
+        assert!(validate_subid(&got).is_ok());
+    }
+
+    #[test]
+    fn is_deterministic_because_the_result_feeds_the_schema_hash() {
+        let subids = declared(&[
+            ("a", "obs.service.x.a.query@v1"),
+            ("b", "obs.network.x.b.query@v1"),
+            ("c", "obs.network.x.c.query@v1"),
+        ]);
+        let first = derive_schema_subid("x", None, &subids);
+        for _ in 0..50 {
+            assert_eq!(derive_schema_subid("x", None, &subids), first);
+        }
+        assert_eq!(first, "sch.network.plugin.x.schema@v1");
+    }
+}
+
+#[cfg(test)]
+mod declared_category_tests {
+    use super::derive_schema_subid;
+    use crate::state_plugins::common::oscal::validate_subid;
+    use std::collections::HashMap;
+
+    #[test]
+    fn a_declared_category_beats_inference() {
+        // openflow's fields say nothing, but the plugin knows it is network.
+        let got = derive_schema_subid("openflow", Some("network"), &HashMap::new());
+        assert_eq!(got, "sch.network.plugin.openflow.schema@v1");
+        assert!(validate_subid(&got).is_ok());
+    }
+
+    #[test]
+    fn an_unusable_declared_category_is_ignored_not_emitted() {
+        // Emitting an unknown category would fail the subid gate, so the
+        // derivation must fall back rather than trust the declaration.
+        for bogus in ["nonsense", "replace_me", ""] {
+            let got = derive_schema_subid("x", Some(bogus), &HashMap::new());
+            assert_eq!(got, "sch.software.plugin.x.schema@v1");
+            assert!(validate_subid(&got).is_ok(), "{bogus} produced {got}");
+        }
+    }
+
+    #[test]
+    fn the_domain_terms_real_plugins_declare_are_usable() {
+        // `llm` and `agents` are declared by live plugins. They are aliases, so
+        // they survive into the subid verbatim and resolve to OSCAL elsewhere.
+        for (category, plugin) in [("llm", "large-language-model"), ("agents", "agent-config")] {
+            let got = derive_schema_subid(plugin, Some(category), &HashMap::new());
+            assert_eq!(got, format!("sch.{category}.plugin.{plugin}.schema@v1"));
+            assert!(validate_subid(&got).is_ok(), "{category} produced {got}");
+        }
     }
 }

@@ -31,6 +31,7 @@ impl WgOpdbusPlugin {
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "sch.network.wg-opdbus.schema@v1"))]
+#[schemars(extend("x-oscal-category" = "network"))]
 pub struct WgOpdbusState {
     #[serde(default)]
     #[schemars(extend("x-oscal-subid" = "src.network.wg-opdbus.wireguard-plugin@v1"))]
