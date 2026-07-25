@@ -4,8 +4,7 @@
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use simd_json::OwnedValue;
-use std::collections::HashSet;
+use simd_json::OwnedValue as Value;
 
 use crate::security::SecurityProfile;
 
@@ -22,7 +21,7 @@ pub enum AgentCategory {
 }
 
 /// Specific capabilities an agent has
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentCapability {
     // Execution capabilities
@@ -95,7 +94,7 @@ impl AgentResponse {
     pub fn failure(message: impl Into<String>) -> Self {
         Self {
             success: false,
-            data: Value::Null,
+            data: simd_json::json!(null),
             message: message.into(),
             files_changed: vec![],
             suggestions: vec![],
@@ -135,7 +134,7 @@ pub trait UnifiedAgent: Send + Sync {
     fn category(&self) -> AgentCategory;
     
     /// Agent capabilities
-    fn capabilities(&self) -> HashSet<AgentCapability>;
+    fn capabilities(&self) -> Vec<AgentCapability>;
     
     // =========================================================================
     // PROMPTS (embedded, not separate markdown files)
@@ -221,4 +220,4 @@ pub trait AgentMetadata: UnifiedAgent {
     }
 }
 
-impl<T: UnifiedAgent> AgentMetadata for T {}
+impl<T: ?Sized + UnifiedAgent> AgentMetadata for T {}

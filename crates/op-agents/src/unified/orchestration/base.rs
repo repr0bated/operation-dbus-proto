@@ -1,6 +1,7 @@
 //! Base Orchestration Agent Implementation
 
 use async_trait::async_trait;
+use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -147,13 +148,13 @@ impl UnifiedAgent for OrchestrationAgent {
         AgentCategory::Orchestration
     }
 
-    fn capabilities(&self) -> HashSet<AgentCapability> {
-        let mut caps = HashSet::new();
-        caps.insert(AgentCapability::DelegateToAgents {
-            agents: self.allowed_agents.iter().cloned().collect(),
-        });
-        caps.insert(AgentCapability::WorkflowManagement);
-        caps
+    fn capabilities(&self) -> Vec<AgentCapability> {
+        vec![
+            AgentCapability::DelegateToAgents {
+                agents: self.allowed_agents.iter().cloned().collect(),
+            },
+            AgentCapability::WorkflowManagement,
+        ]
     }
 
     fn system_prompt(&self) -> &str {

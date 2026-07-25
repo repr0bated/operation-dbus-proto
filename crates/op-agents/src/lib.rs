@@ -5,20 +5,26 @@
 
 pub mod agent_catalog;
 pub mod agent_registry;
+pub mod agent_schema;
 pub mod agents;
 pub mod dbus_service;
 pub mod router;
 pub mod security;
+pub mod unified;
 
 // Re-export key types
 pub use agent_catalog::{builtin_agent_descriptors, AgentDescriptor};
-pub use agent_registry::{AgentRegistry, AgentStatus};
+pub use agent_registry::{load_default_specs, AgentRegistry, AgentStatus};
+pub use agent_schema::AgentOperationSchema;
 pub use agents::base::{AgentContext, AgentTask, AgentTrait, TaskResult};
 pub use router::{create_router, AgentsServiceRouter, AgentsState};
+pub use unified::{AgentCategory, UnifiedAgentRegistry, GLOBAL_REGISTRY};
 
 /// Create an agent by type name
 ///
-/// This is the factory function that agent tools and D-Bus services use.
+/// Primary path: concrete `AgentTrait` implementations (language, compliance, etc.).
+/// Fallback: `unified::GLOBAL_REGISTRY` + `UnifiedAgentAdapter` for types only present
+/// there (e.g. `python-executor`, `django-expert`).
 ///
 /// # Arguments
 /// * `agent_type` - The type of agent (e.g., "rust-pro", "memory", "sequential-thinking")
@@ -220,7 +226,7 @@ pub fn create_agent(
 
         // Compliance agents
         "oscal-auditor" | "oscal_auditor" => Box::new(OscalAuditorAgent::new(agent_id)),
-        "compliance-trestle" | "compliance_trestle" => {
+        "compliance-trestle" | "compliance_trestle" | "trestle" => {
             Box::new(ComplianceTrestleAgent::new(agent_id))
         }
         "fedramp" => Box::new(FedRampAgent::new(agent_id)),
@@ -237,7 +243,19 @@ pub fn create_agent(
             Box::new(TemporalPythonProAgent::new(agent_id))
         }
 
-        _ => return Err(format!("Unknown agent type: {}", agent_type)),
+        // Unified-registry fallback (execution / persona agents not in the static match)
+        other => {
+            let catalog_type = other.replace('_', "-");
+            let lookup = catalog_type.as_str();
+            let unified_agent = unified::GLOBAL_REGISTRY
+                .get_normalized(lookup)
+                .ok_or_else(|| format!("Unknown agent type: {agent_type}"))?;
+            return Ok(Box::new(unified::UnifiedAgentAdapter::new(
+                unified_agent,
+                lookup.to_string(),
+                agent_id,
+            )));
+        }
     };
 
     Ok(agent)
@@ -338,6 +356,15 @@ pub fn list_agent_types() -> Vec<&'static str> {
         "django-pro",
         "fastapi-pro",
         "temporal-python-pro",
+        // Compliance
+        "schema-as-code",
+        "oscal-auditor",
+        "fedramp",
+        "gdpr-counsel",
+        "opencontrol",
+        "trestle",
+        "stig-auditor",
+        "policy-enforcer",
     ]
 }
 
@@ -372,5 +399,12 @@ mod tests {
         assert!(types.contains(&"rust-pro"));
         assert!(types.contains(&"sequential-thinking"));
         assert!(types.len() > 50); // We have many agents
+    }
+
+    #[test]
+    fn test_create_agent_unified_fallback() {
+        let agent = create_agent("python-executor", "test-4".to_string());
+        assert!(agent.is_ok());
+        assert_eq!(agent.unwrap().agent_type(), "python-executor");
     }
 }

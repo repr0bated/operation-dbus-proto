@@ -150,7 +150,7 @@ tonic-health = "0.12"
 tonic-web = "0.12"
 
 # Databases
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
 lru = "0.12"
 
 # Additional

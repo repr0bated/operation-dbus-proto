@@ -341,16 +341,43 @@ impl AgentDbusService {
             .and_then(|v| v.as_str())
             .unwrap_or("execute");
 
-        // Placeholder execution - returns success with operation info
-        // Real implementation would dispatch to actual agent logic
-        json!({
-            "success": true,
-            "agent": self.agent_type,
-            "operation": operation,
-            "message": format!("Agent {} executed '{}'", self.agent_name, operation),
-            "data": task.get("args").cloned().unwrap_or(Value::null())
-        })
-        .to_string()
+        let mut agent_task = op_agents::AgentTask::new(&self.agent_type, operation);
+        if let Some(path) = task.get("path").and_then(|v| v.as_str()) {
+            agent_task = agent_task.with_path(path);
+        }
+        if let Some(args) = task.get("args") {
+            agent_task = agent_task.with_args(&args.to_string());
+        } else if let Some(query) = task.get("query").and_then(|v| v.as_str()) {
+            agent_task = agent_task.with_args(&serde_json::json!({ "query": query }).to_string());
+        }
+
+        match op_agents::create_agent(&self.agent_type, format!("{}-dbus", self.agent_name)) {
+            Ok(agent) => match agent.execute(agent_task).await {
+                Ok(result) => serde_json::to_string(&serde_json::json!({
+                    "success": result.success,
+                    "agent": self.agent_type,
+                    "operation": result.operation,
+                    "data": result.data,
+                    "metadata": result.metadata,
+                }))
+                .unwrap_or_else(|e| {
+                    json!({"success": false, "error": e.to_string()}).to_string()
+                }),
+                Err(e) => json!({
+                    "success": false,
+                    "agent": self.agent_type,
+                    "operation": operation,
+                    "error": e
+                })
+                .to_string(),
+            },
+            Err(e) => json!({
+                "success": false,
+                "agent": self.agent_type,
+                "error": e
+            })
+            .to_string(),
+        }
     }
 }
 

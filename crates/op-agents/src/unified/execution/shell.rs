@@ -4,6 +4,7 @@
 
 use async_trait::async_trait;
 use simd_json::json;
+use simd_json::prelude::*;
 use std::collections::HashSet;
 
 use super::base::ExecutionAgent;
@@ -52,7 +53,7 @@ impl UnifiedAgent for ShellExecutor {
     fn name(&self) -> &str { self.base.name() }
     fn description(&self) -> &str { self.base.description() }
     fn category(&self) -> AgentCategory { AgentCategory::Execution }
-    fn capabilities(&self) -> HashSet<AgentCapability> { self.base.capabilities() }
+    fn capabilities(&self) -> Vec<AgentCapability> { self.base.capabilities() }
     fn system_prompt(&self) -> &str { self.base.system_prompt() }
     fn knowledge_base(&self) -> Option<&str> { self.base.knowledge_base() }
     fn security_profile(&self) -> Option<&SecurityProfile> { self.base.security_profile() }

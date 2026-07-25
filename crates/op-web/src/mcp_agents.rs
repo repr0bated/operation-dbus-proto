@@ -293,12 +293,18 @@ impl CriticalAgentsState {
 
         for (agent_type, entry) in entries {
             for operation in &entry.descriptor.operations {
+                let input_schema = entry
+                    .descriptor
+                    .schema_for(operation)
+                    .map(|s| s.input_schema.clone())
+                    .unwrap_or_else(Self::operation_schema);
                 tools.push(json!({
                     "name": Self::tool_name(agent_type, operation),
                     "description": format!("{} ({})", entry.descriptor.description, operation),
-                    "inputSchema": Self::operation_schema(),
+                    "inputSchema": input_schema,
                     "agent": agent_type,
-                    "operation": operation
+                    "operation": operation,
+                    "category": format!("{:?}", entry.descriptor.category).to_lowercase()
                 }));
             }
         }

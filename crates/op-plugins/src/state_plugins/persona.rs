@@ -50,6 +50,13 @@ pub struct Persona {
     )]
     pub description: String,
 
+    /// Agent category: execution | persona | orchestration.
+    #[schemars(
+        description = "Agent category (execution, persona, orchestration)",
+        extend("x-oscal-subid" = "exp.agent.persona.category.render@v1")
+    )]
+    pub category: String,
+
     /// Supported operations.
     #[serde(default)]
     #[schemars(
@@ -57,6 +64,28 @@ pub struct Persona {
         extend("x-oscal-subid" = "exp.agent.persona.operations.render@v1")
     )]
     pub operations: Vec<String>,
+
+    /// Per-operation JSON Schemas (input + output).
+    #[serde(default)]
+    #[schemars(
+        description = "Per-operation JSON Schemas",
+        extend("x-oscal-subid" = "sch.agent.persona.operation-schemas.render@v1")
+    )]
+    pub operation_schemas: Vec<PersonaOperationSchema>,
+}
+
+/// JSON Schema contract for one agent operation.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "sch.agent.persona.operation.schema@v1"))]
+pub struct PersonaOperationSchema {
+    pub name: String,
+    pub description: String,
+    /// JSON Schema for operation arguments.
+    #[schemars(with = "serde_json::Value")]
+    pub input_schema: serde_json::Value,
+    /// JSON Schema for operation results.
+    #[schemars(with = "serde_json::Value")]
+    pub output_schema: serde_json::Value,
 }
 
 /// Persona catalog live state.
@@ -140,6 +169,42 @@ pub struct AuthenticateOutput {
     pub token: Option<String>,
 }
 
+/// Input for Execute — run a catalog agent operation.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "mut.agent.persona.execute.input@v1"))]
+pub struct ExecuteInput {
+    /// Agent type from the catalog (e.g. rust-pro, memory).
+    pub agent_type: String,
+    /// Operation name advertised by that agent.
+    pub operation: String,
+    /// Optional working path.
+    #[serde(default)]
+    pub path: Option<String>,
+    /// Free-form query (persona agents).
+    #[serde(default)]
+    pub query: Option<String>,
+    /// Operation arguments object.
+    #[serde(default)]
+    #[schemars(with = "serde_json::Value")]
+    pub args: Option<serde_json::Value>,
+}
+
+/// Output for Execute.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "obs.agent.persona.execute.output@v1"))]
+pub struct ExecuteOutput {
+    pub success: bool,
+    pub agent_type: String,
+    pub operation: String,
+    #[schemars(with = "serde_json::Value")]
+    pub data: serde_json::Value,
+    #[serde(default)]
+    pub message: Option<String>,
+    #[serde(default)]
+    #[schemars(with = "serde_json::Value")]
+    pub metadata: Option<serde_json::Value>,
+}
+
 // =============================================================================
 // PLUGIN BODY: D-Bus-backed behavior only
 // =============================================================================
@@ -161,11 +226,32 @@ impl PersonaPlugin {
     fn live() -> PersonaState {
         let personas: Vec<Persona> = builtin_agent_descriptors()
             .into_iter()
-            .map(|d| Persona {
-                agent_type: d.agent_type,
-                name: d.name,
-                description: d.description,
-                operations: d.operations,
+            .map(|d| {
+                let category = format!("{:?}", d.category).to_lowercase();
+                let operation_schemas = d
+                    .operation_schemas
+                    .iter()
+                    .map(|op| PersonaOperationSchema {
+                        name: op.name.clone(),
+                        description: op.description.clone(),
+                        input_schema: serde_json::from_str(
+                            &simd_json::to_string(&op.input_schema).unwrap_or_else(|_| "{}".into()),
+                        )
+                        .unwrap_or(serde_json::json!({})),
+                        output_schema: serde_json::from_str(
+                            &simd_json::to_string(&op.output_schema).unwrap_or_else(|_| "{}".into()),
+                        )
+                        .unwrap_or(serde_json::json!({})),
+                    })
+                    .collect();
+                Persona {
+                    agent_type: d.agent_type,
+                    name: d.name,
+                    description: d.description,
+                    category,
+                    operations: d.operations,
+                    operation_schemas,
+                }
             })
             .collect();
         PersonaState {
@@ -173,6 +259,87 @@ impl PersonaPlugin {
             persona_count: personas.len(),
             personas,
         }
+    }
+}
+
+/// Dispatch persona plugin methods (catalog + execute).
+pub async fn dispatch_persona_method(
+    method: &str,
+    args: &serde_json::Value,
+) -> anyhow::Result<serde_json::Value> {
+    match method {
+        "get_identity" | "GetIdentity" => {
+            let agent_type = args
+                .get("agent_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let persona = PersonaPlugin::live()
+                .personas
+                .into_iter()
+                .find(|p| p.agent_type == agent_type);
+            Ok(serde_json::to_value(GetIdentityOutput { persona })?)
+        }
+        "set_identity" | "SetIdentity" => {
+            anyhow::bail!("persona catalog is read-only (code-defined in op-agents)")
+        }
+        "authenticate" | "Authenticate" => Ok(serde_json::to_value(AuthenticateOutput {
+            authenticated: false,
+            token: None,
+        })?),
+        "execute" | "Execute" => {
+            let input: ExecuteInput = serde_json::from_value(args.clone())
+                .map_err(|e| anyhow::anyhow!("invalid execute args: {e}"))?;
+            let mut task = op_agents::AgentTask::new(&input.agent_type, &input.operation);
+            if let Some(path) = &input.path {
+                task = task.with_path(path);
+            }
+            let mut arg_obj = serde_json::Map::new();
+            if let Some(serde_json::Value::Object(map)) = input.args.clone() {
+                arg_obj.extend(map);
+            }
+            if let Some(query) = &input.query {
+                arg_obj.insert("query".into(), serde_json::Value::String(query.clone()));
+            }
+            if !arg_obj.is_empty() {
+                task = task.with_args(&serde_json::Value::Object(arg_obj).to_string());
+            }
+
+            let agent = op_agents::create_agent(
+                &input.agent_type,
+                format!("persona-{}", input.agent_type),
+            )
+            .map_err(anyhow::Error::msg)?;
+            match agent.execute(task).await {
+                Ok(result) => {
+                    let data: serde_json::Value =
+                        serde_json::from_str(&result.data).unwrap_or_else(|_| {
+                            serde_json::Value::String(result.data.clone())
+                        });
+                    let metadata = serde_json::to_value(&result.metadata).ok();
+                    Ok(serde_json::to_value(ExecuteOutput {
+                        success: result.success,
+                        agent_type: input.agent_type,
+                        operation: result.operation,
+                        data,
+                        message: metadata
+                            .as_ref()
+                            .and_then(|m| m.get("message"))
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string),
+                        metadata,
+                    })?)
+                }
+                Err(e) => Ok(serde_json::to_value(ExecuteOutput {
+                    success: false,
+                    agent_type: input.agent_type,
+                    operation: input.operation,
+                    data: serde_json::Value::Null,
+                    message: Some(e),
+                    metadata: None,
+                })?),
+            }
+        }
+        other => anyhow::bail!("unknown persona method: {other}"),
     }
 }
 
@@ -302,6 +469,18 @@ pub fn persona_schema() -> PluginSchema {
             false,
             "persona.write",
             "mut.agent.persona.authenticate@v1",
+        ),
+    );
+
+    // Execute — run a catalog agent operation (schema-validated entrypoint)
+    schema.methods.insert(
+        "execute".to_string(),
+        method_decl_from_schemars_with_output::<ExecuteInput, ExecuteOutput>(
+            "execute",
+            SideEffect::Mutation,
+            false,
+            "persona.execute",
+            "mut.agent.persona.execute@v1",
         ),
     );
 

@@ -3,6 +3,7 @@
 //! GDPR, EU AI Act, CCPA, and privacy-by-design guidance.
 //! Wraps the OliviaScal/PennyPrivacy/EugeneRisk compliance attorneys from op-compliance.
 
+use crate::agents::advise::{extract_query, is_advise_op, route_advise_to_op};
 use crate::agents::base::{AgentTask, AgentTrait, TaskResult};
 use crate::security::SecurityProfile;
 use async_trait::async_trait;
@@ -102,13 +103,30 @@ impl GdprCounselAgent {
                 "sensitive_pi": ["SSN", "financial", "health", "biometric", "geolocation", "race/ethnicity"],
                 "opt_out_signal": "Honor Global Privacy Control (GPC) as opt-out signal"
             }),
-            _ => json!({
-                "agent": "gdpr-counsel",
-                "description": "Privacy and EU AI Act compliance counsel",
-                "attorneys": ["Penny Privacy (GDPR)", "E.U.gene Risk (EU AI Act)", "Cal Privacy (CCPA)"],
-                "operations": ["privacy_review", "eu_ai_act", "dpia", "ccpa_review"],
-                "disclaimer": "General guidance only — consult qualified legal counsel for specifics"
-            }),
+            op if is_advise_op(op) => {
+                let query = extract_query(args);
+                let routed_op = route_advise_to_op(
+                    &query,
+                    &[
+                        ("dpia", "dpia"),
+                        ("ai act", "eu_ai_act"),
+                        ("eu ai", "eu_ai_act"),
+                        ("ccpa", "ccpa_review"),
+                        ("cpra", "ccpa_review"),
+                        ("privacy", "privacy_review"),
+                        ("gdpr", "privacy_review"),
+                        ("pii", "privacy_review"),
+                    ],
+                    "privacy_review",
+                );
+                return self.analyze(&routed_op, args);
+            }
+            other => {
+                return Err(format!(
+                    "unsupported operation '{}'; supported: [privacy_review, eu_ai_act, dpia, ccpa_review, advise]",
+                    other
+                ));
+            }
         };
         Ok(simd_json::to_string_pretty(&result).unwrap_or_default())
     }

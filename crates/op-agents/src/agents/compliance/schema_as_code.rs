@@ -3,6 +3,7 @@
 //! Designs and validates machine-readable schema contracts: JSON Schema, OpenAPI,
 //! AsyncAPI, Protocol Buffers, OSCAL extensions, OpenControl YAML.
 
+use crate::agents::advise::{extract_query, is_advise_op, route_advise_to_op};
 use crate::agents::base::{AgentTask, AgentTrait, TaskResult};
 use crate::security::SecurityProfile;
 use async_trait::async_trait;
@@ -98,12 +99,30 @@ impl SchemaAsCodeAgent {
                 "from_examples": "quicktype infers schema from JSON examples",
                 "input": args.unwrap_or("")
             }),
-            _ => json!({
-                "agent": "schema-as-code",
-                "description": "Schema-as-code design and validation expert",
-                "operations": ["design_schema", "validate", "opencontrol", "generate_schema"],
-                "formats": ["JSON Schema", "OpenAPI", "AsyncAPI", "Protobuf", "OSCAL", "OpenControl"]
-            }),
+            op if is_advise_op(op) => {
+                let query = extract_query(args);
+                let routed_op = route_advise_to_op(
+                    &query,
+                    &[
+                        ("oscal", "design_schema"),
+                        ("openapi", "design_schema"),
+                        ("proto", "design_schema"),
+                        ("opencontrol", "opencontrol"),
+                        ("valid", "validate"),
+                        ("generat", "generate_schema"),
+                        ("schemars", "generate_schema"),
+                        ("rust", "generate_schema"),
+                    ],
+                    "design_schema",
+                );
+                return self.analyze(&routed_op, args);
+            }
+            other => {
+                return Err(format!(
+                    "unsupported operation '{}'; supported: [design_schema, validate, opencontrol, generate_schema, advise]",
+                    other
+                ));
+            }
         };
         Ok(simd_json::to_string_pretty(&result).unwrap_or_default())
     }

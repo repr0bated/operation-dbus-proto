@@ -921,6 +921,10 @@ impl MutationEngine {
                 crate::identity_sled_dispatch::dispatch_identity_sled_method(self, method, &args)
                     .await?
             }
+            "persona" => {
+                let args = serde_json::to_value(&parsed_value)?;
+                op_plugins::state_plugins::persona::dispatch_persona_method(method, &args).await?
+            }
             "zeroclaw" => {
                 let state = op_plugins::state_plugins::zeroclaw::ZeroclawPlugin::current_state();
                 match op_plugins::state_plugins::zeroclaw::dispatch_zeroclaw_method(

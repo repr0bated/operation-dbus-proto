@@ -14,10 +14,12 @@ pub use architecture_experts::*;
 pub use operations_experts::*;
 
 use std::collections::HashMap;
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 
 /// All available persona agents
-pub static PERSONA_AGENTS: Lazy<HashMap<&'static str, fn() -> Box<dyn super::UnifiedAgent>>> = Lazy::new(|| {
+pub static PERSONA_AGENTS: LazyLock<
+    HashMap<&'static str, fn() -> Box<dyn super::UnifiedAgent>>,
+> = LazyLock::new(|| {
     let mut m: HashMap<&'static str, fn() -> Box<dyn super::UnifiedAgent>> = HashMap::new();
     
     // Framework experts
