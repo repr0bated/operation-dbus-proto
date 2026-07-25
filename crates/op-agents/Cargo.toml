@@ -30,6 +30,7 @@ simd-json = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 toml = { workspace = true }
+jsonschema = { workspace = true }
 
 # Error handling
 anyhow = { workspace = true }

@@ -4,13 +4,70 @@
       "type": "http",
       "url": "http://10.200.0.2:3003/mcp",
       "headers": {
-        "X-Ghostbridge-Footprint": "vscode",
-        "X-Ghostbridge-Trace-ID": "vscode-local"
+        "X-Ghostbridge-Footprint": "mcp-client",
+        "X-Ghostbridge-Trace-ID": "mcp-add-project"
       }
     },
     "op-web-compact": {
-      "type": "sse",
+      "type": "stdio",
+      "command": "/usr/local/bin/op-mcp-server",
+      "args": [
+        "--stdio",
+        "-m",
+        "compact"
+      ]
+    },
+    "filesystem": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/home/admin/git/odbus"
+      ]
+    },
+    "memory": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-memory"
+      ]
+    },
+    "sequential-thinking": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-sequential-thinking"
+      ]
+    },
+    "fetch": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": [
+        "mcp-server-fetch"
+      ]
+    },
+    "op-dbus-compact": {
+      "type": "http",
       "url": "http://127.0.0.1:8080/mcp/compact"
+    },
+    "op-dbus-agents": {
+      "type": "http",
+      "url": "http://127.0.0.1:8080/mcp/agents/message"
+    },
+    "op-cognitive-mcp": {
+      "type": "stdio",
+      "command": "/usr/local/bin/op-cognitive-mcp",
+      "args": [
+        "--stdio",
+        "--no-http",
+        "--no-grpc"
+      ],
+      "env": {
+        "COGNITIVE_MCP_DB_PATH": "/home/admin/.local/share/op-cognitive-mcp/memory.db"
+      }
     }
   }
 }

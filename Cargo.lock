@@ -5177,6 +5177,7 @@ dependencies = [
  "axum",
  "chrono",
  "futures",
+ "jsonschema 0.29.1",
  "op-core",
  "op-http",
  "parking_lot",
@@ -5362,6 +5363,7 @@ dependencies = [
  "op-mcp",
  "op-plugins",
  "op-state-store",
+ "op-waypipe-grpc",
  "parking_lot",
  "prost 0.13.5",
  "qdrant-client",
@@ -5490,6 +5492,23 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "zbus 5.18.0",
+]
+
+[[package]]
+name = "op-dbus-cli"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "hex",
+ "op-core",
+ "op-introspection",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
  "zbus 5.18.0",
 ]
 
@@ -5670,6 +5689,7 @@ dependencies = [
  "prost-types 0.13.5",
  "qdrant-client",
  "rcgen",
+ "rustls 0.23.42",
  "schemars 0.8.22",
  "serde",
  "serde_json",
@@ -6154,6 +6174,34 @@ dependencies = [
  "tracing",
  "uuid",
  "zbus 5.18.0",
+]
+
+[[package]]
+name = "op-waypipe-grpc"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "async-stream",
+ "bytes",
+ "clap",
+ "futures",
+ "hex",
+ "op-identity",
+ "prost 0.13.5",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-stream",
+ "tokio-test",
+ "tonic",
+ "tonic-build 0.12.3",
+ "tonic-health",
+ "tonic-reflection",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

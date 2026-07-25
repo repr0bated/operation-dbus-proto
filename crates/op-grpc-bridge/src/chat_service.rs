@@ -136,11 +136,12 @@ impl ChatService for ChatServiceImpl {
             };
 
             let text = match op_llm::SaladProvider::from_env() {
-                Ok(salad) => match op_llm::LlmProvider::chat(&salad, &salad_model, llm_messages).await
-                {
-                    Ok(resp) => resp.message.content,
-                    Err(e) => format!("Salad chat request failed: {e:#}"),
-                },
+                Ok(salad) => {
+                    match op_llm::LlmProvider::chat(&salad, &salad_model, llm_messages).await {
+                        Ok(resp) => resp.message.content,
+                        Err(e) => format!("Salad chat request failed: {e:#}"),
+                    }
+                }
                 Err(e) => format!("Salad provider unavailable: {e:#}"),
             };
 

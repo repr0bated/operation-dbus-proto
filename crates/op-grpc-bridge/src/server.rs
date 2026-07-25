@@ -221,7 +221,7 @@ fn inject_trace_metadata<T>(response: &mut TonicResponse<T>, context: &TraceCont
 /// device).
 fn build_routes(loader: Arc<SchemaLoader>, server: OperationGrpcServer) -> tonic::service::Routes {
     let zeroclaw_svc =
-        tonic_web::enable(ZeroclawServiceServer::new(ZeroclawGrpcService { loader }));
+        crate::grpc_web::enable(ZeroclawServiceServer::new(ZeroclawGrpcService { loader }));
     build_operation_routes(server).add_service(zeroclaw_svc)
 }
 
@@ -288,6 +288,89 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
     // The sealed SHM blob catalog IS the plugin set: hydrate reflection from
     // it so a bridge restart advertises every sealed plugin immediately.
     operation_server.hydrate_reflection_from_shm().await;
+
+    // ── D-Bus plugin object registration ──────────────────────────────────
+    // Register all plugin objects from the SHM blob catalog on the session bus
+    // so `busctl tree org.opdbus.v1.plugins` shows the full plugin tree.
+    // Reads plugin IDs from the blob manifest and registers a minimal
+    // introspectable object at each plugin's canonical path.
+    tokio::spawn(async move {
+        let addr = std::env::var("DBUS_SESSION_BUS_ADDRESS")
+            .unwrap_or_else(|_| op_core::config::SESSION_BUS_ADDRESS.to_string());
+        let conn = match zbus::connection::Builder::address(addr.as_str()) {
+            Ok(builder) => match builder.build().await {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to connect to session bus for D-Bus plugin objects");
+                    return;
+                }
+            },
+            Err(e) => {
+                tracing::error!(error = %e, "Invalid session bus address for D-Bus plugin objects");
+                return;
+            }
+        };
+
+        // Read the blob manifest to discover all plugins
+        let manifest_path = "/dev/shm/opdbus/plugin-blobs/.manifest.json";
+        let manifest_data = match std::fs::read_to_string(manifest_path) {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::warn!(error = %e, "Cannot read blob manifest — D-Bus objects not registered");
+                return;
+            }
+        };
+        let manifest: serde_json::Value = match serde_json::from_str(&manifest_data) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(error = %e, "Cannot parse blob manifest");
+                return;
+            }
+        };
+
+        let plugins = match manifest.get("plugins").and_then(|p| p.as_object()) {
+            Some(p) => p,
+            None => {
+                tracing::warn!("Blob manifest has no 'plugins' object");
+                return;
+            }
+        };
+
+        let mut registered = 0usize;
+        for plugin_id in plugins.keys() {
+            let path = format!("/org/opdbus/v1/plugins/{}", plugin_id);
+            // Register a minimal placeholder object (introspectable)
+            let iface = PluginPlaceholderInterface {
+                plugin_id: plugin_id.clone(),
+            };
+            match conn.object_server().at(path.as_str(), iface).await {
+                Ok(_) => registered += 1,
+                Err(e) => {
+                    tracing::debug!(plugin_id, error = %e, "D-Bus object registration skipped");
+                }
+            }
+        }
+
+        // Request the canonical bus name
+        match conn
+            .request_name(op_plugins::canonical::BASE_SERVICE_NAME)
+            .await
+        {
+            Ok(_) => {
+                tracing::info!(
+                    registered,
+                    "D-Bus plugin objects registered under org.opdbus.v1.plugins"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, registered, "D-Bus name request failed (objects still registered)");
+            }
+        }
+
+        // Keep connection alive (it's moved into the spawned task)
+        // The connection drops when the server shuts down.
+        std::future::pending::<()>().await;
+    });
     // Attach the semantic shuttle for parity with run_grpc_server so
     // SearchSemanticTrace behaves identically on both endpoints (best-effort:
     // if Qdrant is unavailable the method returns failed_precondition).
@@ -374,7 +457,9 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
         let bind_addr: SocketAddr = bind_addr_str.parse()?;
         let listener = std::net::TcpListener::bind(bind_addr)?;
         listener.set_nonblocking(true)?;
-        let incoming = tokio_stream::wrappers::TcpListenerStream::new(tokio::net::TcpListener::from_std(listener)?);
+        let incoming = tokio_stream::wrappers::TcpListenerStream::new(
+            tokio::net::TcpListener::from_std(listener)?,
+        );
         info!(addr = %bind_addr, "zeroclaw HTTP/gRPC-Web listening on TCP");
         let server = tonic::transport::Server::builder()
             .accept_http1(true)
@@ -421,13 +506,17 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
     // Drive all listeners concurrently. Absent optional servers are no-ops.
     let shared_fut = async {
         match shared_server {
-            Some(s) => s.await.map_err(|e| anyhow::anyhow!("Shared container.sock: {e}")),
+            Some(s) => s
+                .await
+                .map_err(|e| anyhow::anyhow!("Shared container.sock: {e}")),
             None => Ok(()),
         }
     };
     let tls_fut = async {
         match tls_server_fut {
-            Some(s) => s.await.map_err(|e| anyhow::anyhow!("TLS server error: {e}")),
+            Some(s) => s
+                .await
+                .map_err(|e| anyhow::anyhow!("TLS server error: {e}")),
             None => Ok(()),
         }
     };
@@ -479,10 +568,34 @@ async fn bind_unix_listener(
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        // World-writable: NIC-less containers (mapped UIDs) must connect.
-        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o666));
+        // World-readable+writable+executable: NIC-less containers (mapped UIDs) must connect.
+        // Auth is enforced by the GhostBridge footprint header, not socket ACLs.
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o777));
     }
     Ok(tokio_stream::wrappers::UnixListenerStream::new(listener))
 }
 
+// ── Minimal D-Bus interface for plugin object registration ────────────────
+// Each plugin gets a placeholder object at /org/opdbus/v1/plugins/<plugin_id>.
+// The interface exposes the plugin_id as a property and is introspectable.
+// Full method dispatch goes through gRPC (PluginService.CallMethod), not D-Bus.
 
+/// Placeholder D-Bus interface registered for each plugin in the blob catalog.
+struct PluginPlaceholderInterface {
+    plugin_id: String,
+}
+
+#[zbus::interface(name = "org.opdbus.v1.plugins.ProjectedObject")]
+impl PluginPlaceholderInterface {
+    /// The plugin identifier.
+    #[zbus(property)]
+    async fn plugin_id(&self) -> &str {
+        &self.plugin_id
+    }
+
+    /// Plugin state — always "projected" for blob-backed plugins.
+    #[zbus(property)]
+    async fn state(&self) -> &str {
+        "projected"
+    }
+}

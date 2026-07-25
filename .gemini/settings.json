@@ -1,10 +1,64 @@
 {
   "mcpServers": {
     "cognitive-mcp": {
-      "type": "stdio",
-      "command": "cognitive-mcp-server",
-      "args": ["--stdio"],
-      "trust": true
+      "httpUrl": "http://10.200.0.2:3003/mcp",
+      "headers": {
+        "X-Ghostbridge-Footprint": "mcp-client",
+        "X-Ghostbridge-Trace-ID": "mcp-add-project"
+      }
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/home/admin/git/odbus"
+      ]
+    },
+    "memory": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-memory"
+      ]
+    },
+    "sequential-thinking": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-sequential-thinking"
+      ]
+    },
+    "fetch": {
+      "command": "uvx",
+      "args": [
+        "mcp-server-fetch"
+      ]
+    },
+    "op-dbus-compact": {
+      "httpUrl": "http://127.0.0.1:8080/mcp/compact"
+    },
+    "op-dbus-agents": {
+      "httpUrl": "http://127.0.0.1:8080/mcp/agents/message"
+    },
+    "op-cognitive-mcp": {
+      "command": "/usr/local/bin/op-cognitive-mcp",
+      "args": [
+        "--stdio",
+        "--no-http",
+        "--no-grpc"
+      ],
+      "env": {
+        "COGNITIVE_MCP_DB_PATH": "/home/admin/.local/share/op-cognitive-mcp/memory.db"
+      }
+    },
+    "op-web-compact": {
+      "command": "/usr/local/bin/op-mcp-server",
+      "args": [
+        "--stdio",
+        "-m",
+        "compact"
+      ]
     }
   }
 }

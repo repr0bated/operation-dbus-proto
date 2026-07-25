@@ -33,7 +33,7 @@ npx vitest run src/test/<file>          # single test file
 
 Build gotchas:
 
-- `[patch.crates-io]` pins zbus to a **local checkout at `/home/jeremy/git/zbus`** — the workspace does not build without it.
+- `[patch.crates-io]` pins zbus to a **local checkout at `/home/admin/git/zbus`** — the workspace does not build without it.
 - `op-web` **release** builds panic unless `crates/op-web/ui/dist/index.html` exists (RustEmbed); build that UI first (`npx vite build` in `crates/op-web/ui`). Dev builds compile with an empty asset set, so the panic only bites on `--release`.
 - The root `op-dbus` package has no binary — real binaries live in member crates (`op-web` → `op-web-server`/`opdbus`, `op-grpc-bridge`, `op-cognitive-mcp`, `op-projection` → `projection_server`, `op-s6-systemctl` → `s6d`, etc.).
 - `op-ml` is commented out of the workspace (ort API breakage).

@@ -1428,6 +1428,7 @@ pub(crate) fn privacy_router_schema() -> PluginSchema {
     };
 
     let mut schema = PluginSchema::builder("privacy_router")
+        .category("network")
         .version("1.1.0")
         .description("System privacy fabric (WireGuard/XRay ingress, WARP bridge, XRay egress)")
         .dependency("incus")

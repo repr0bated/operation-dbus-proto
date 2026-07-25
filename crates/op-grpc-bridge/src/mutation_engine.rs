@@ -740,9 +740,10 @@ impl MutationEngine {
                         .cloned()
                         .unwrap_or_else(|| serde_json::Value::Object(Default::default()));
                 }
-                let result =
-                    op_plugins::state_plugins::netmaker::dispatch_netmaker_method(method, &args_json)
-                        .await?;
+                let result = op_plugins::state_plugins::netmaker::dispatch_netmaker_method(
+                    method, &args_json,
+                )
+                .await?;
                 caller_result = Some(simd_json::serde::to_owned_value(&result)?);
             }
         } else {

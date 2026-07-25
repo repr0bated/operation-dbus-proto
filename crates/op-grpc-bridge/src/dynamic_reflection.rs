@@ -6,6 +6,7 @@
 //! lifetime.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use prost::Message;
@@ -28,9 +29,16 @@ use tonic_reflection::pb::v1::{
 
 use crate::plugin_object_blob::PluginObjectBlob;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ActiveReflectionCatalog {
     inner: Arc<RwLock<ActiveReflectionInner>>,
+    shm_dir: PathBuf,
+}
+
+impl Default for ActiveReflectionCatalog {
+    fn default() -> Self {
+        Self::with_dir(PathBuf::from(op_blob::catalog::DEFAULT_SHM_DIR))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -38,6 +46,9 @@ struct ActiveReflectionInner {
     descriptor_sets: Vec<Vec<u8>>,
     blobs: BTreeMap<String, PluginObjectBlob>,
     index: ReflectionIndex,
+    /// Last seen `catalog_hash` from the sealed manifest — the change marker
+    /// for arrival-triggered resync (read, never re-hash).
+    catalog_hash: Option<String>,
 }
 
 impl Default for ActiveReflectionInner {
@@ -46,6 +57,7 @@ impl Default for ActiveReflectionInner {
             descriptor_sets: Vec::new(),
             blobs: BTreeMap::new(),
             index: ReflectionIndex::default(),
+            catalog_hash: None,
         };
         inner
             .descriptor_sets
@@ -63,6 +75,13 @@ impl ActiveReflectionCatalog {
         Self::default()
     }
 
+    pub fn with_dir(shm_dir: PathBuf) -> Self {
+        Self {
+            inner: Arc::new(RwLock::new(ActiveReflectionInner::default())),
+            shm_dir,
+        }
+    }
+
     pub async fn upsert_blob(&self, blob: PluginObjectBlob) {
         let mut inner = self.inner.write().await;
         inner.blobs.insert(blob.manifest.plugin_id.clone(), blob);
@@ -73,6 +92,52 @@ impl ActiveReflectionCatalog {
         let mut inner = self.inner.write().await;
         inner.blobs.remove(plugin_id);
         inner.rebuild_index();
+    }
+
+    /// Record the manifest hash observed at hydration so the first
+    /// [`sync_from_shm`](Self::sync_from_shm) doesn't reload what startup
+    /// already loaded.
+    pub async fn set_catalog_hash(&self, hash: Option<String>) {
+        self.inner.write().await.catalog_hash = hash;
+    }
+
+    /// Arrival-triggered resync: an incoming reflection request is the
+    /// arrival; the sealed manifest's `catalog_hash` (written LAST by the
+    /// sealer, the atomic commit point) is the staleness marker. No watcher,
+    /// no poll loop — when the op-blob sealer commits a new manifest, the
+    /// next reflection request picks the new blob set up from SHM.
+    pub async fn sync_from_shm(&self) {
+        let Some(hash) =
+            op_blob::catalog::ActiveReflectionCatalog::read_catalog_hash(&self.shm_dir)
+        else {
+            return;
+        };
+        {
+            let inner = self.inner.read().await;
+            if inner.catalog_hash.as_deref() == Some(hash.as_str()) {
+                return;
+            }
+        }
+        let blobs = match op_blob::BlobStore::open(&self.shm_dir) {
+            Ok(store) => store.plugin_object_blobs(),
+            Err(error) => {
+                tracing::warn!(%error, "reflection resync: cannot open SHM blob catalog");
+                return;
+            }
+        };
+        let mut inner = self.inner.write().await;
+        // Another request may have resynced while we loaded blobs.
+        if inner.catalog_hash.as_deref() == Some(hash.as_str()) {
+            return;
+        }
+        let count = blobs.len();
+        inner.blobs = blobs
+            .into_iter()
+            .map(|blob| (blob.manifest.plugin_id.clone(), blob))
+            .collect();
+        inner.catalog_hash = Some(hash);
+        inner.rebuild_index();
+        tracing::info!(count, "reflection resynced from SHM blob catalog");
     }
 
     pub async fn list_services(&self) -> Vec<String> {
@@ -93,11 +158,24 @@ impl ActiveReflectionInner {
         // Collect all service names from active blobs (including per-method services
         // like operation.method.*). These are the services that will be listed in
         // ListServices and available for discovery.
-        let active_services = self
+        let mut active_services = self
             .blobs
             .values()
             .flat_map(|blob| blob.manifest.grpc.services.clone())
             .collect::<BTreeSet<_>>();
+
+        // A blob manifest only carries the per-method `operation.method.*`
+        // services. The build-time aggregate `operation.plugin.v1.*PluginMethods`
+        // is mounted by the generated `add_routes`, so leaving it unadvertised
+        // makes a callable service undiscoverable. Both sides read the same
+        // generated table.
+        active_services.extend(
+            crate::grpc_server::LEGACY_PLUGIN_METHOD_SERVICES
+                .iter()
+                .filter(|(plugin_id, _)| self.blobs.contains_key(*plugin_id))
+                .map(|(_, service)| service.to_string()),
+        );
+
         let mut index = ReflectionIndex::new(active_services);
 
         for encoded in self
@@ -302,6 +380,10 @@ impl ServerReflection for DynamicReflectionService {
                     return;
                 };
 
+                // Arrival-triggered: pick up blobs sealed by the op-blob
+                // binary since startup (no-op when the manifest is unchanged).
+                catalog.sync_from_shm().await;
+
                 let response = match request.message_request.clone() {
                     None => Err(Status::invalid_argument("invalid MessageRequest")),
                     Some(MessageRequest::FileByFilename(filename)) => catalog
@@ -391,5 +473,51 @@ mod tests {
         assert!(!removed
             .iter()
             .any(|service| service == "operation.plugin.v1.ZeroclawPluginMethods"));
+    }
+
+    #[tokio::test]
+    async fn sync_from_shm_picks_up_blobs_sealed_by_external_writer() {
+        let dir = std::env::temp_dir().join(format!("op-reflection-sync-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let catalog = ActiveReflectionCatalog::with_dir(dir.clone());
+        let before = catalog.list_services().await;
+        assert_eq!(
+            before,
+            vec!["grpc.reflection.v1.ServerReflection".to_string()]
+        );
+
+        // External sealer (the op-blob binary's role): seals the blob and
+        // commits the manifest — no call into the bridge.
+        let blob = crate::zeroclaw_object_blob::from_plugin_schema();
+        let expected_services = blob.manifest.grpc.services.clone();
+        {
+            let mut store = op_blob::BlobStore::open(&dir).unwrap();
+            store.write(&blob).unwrap();
+        }
+
+        catalog.sync_from_shm().await;
+        let after = catalog.list_services().await;
+        for service in &expected_services {
+            assert!(
+                after.iter().any(|s| s == service),
+                "missing {service} after SHM resync"
+            );
+        }
+
+        // Removal by the external sealer propagates on the next arrival too.
+        {
+            let mut store = op_blob::BlobStore::open(&dir).unwrap();
+            store.remove_blob("zeroclaw").unwrap();
+        }
+        catalog.sync_from_shm().await;
+        let removed = catalog.list_services().await;
+        assert_eq!(
+            removed,
+            vec!["grpc.reflection.v1.ServerReflection".to_string()]
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

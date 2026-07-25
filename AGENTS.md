@@ -15,11 +15,11 @@ the `sudo service6 ...` rule above.
 # Xray configuration policy — mandatory
 
 **XRAY'S LIVE CONFIGURATION MUST EXIST ONLY AT
-`/dev/shm/xray_config.json`.** Never point Xray at `/etc/xray/config.json`,
+`/etc/xray/xray_config.json` inside the container.** Never point Xray at `/dev/shm/xray_config.json`,
 `/usr/local/etc/xray/config.json`, or another disk-backed live path.
 
 Until model-generated dynamic tag routing is implemented, the static bootstrap
-configuration is correct and must be materialized into the SHM path during
-boot. Later, the validated model/control-plane generator replaces that same SHM
-file atomically and reloads Xray through D-Bus. Models must not write or reload
+configuration is correct and must be materialized into the container path during
+boot. Later, the validated model/control-plane generator replaces that same file
+atomically and reloads Xray through D-Bus. Models must not write or reload
 Xray directly.

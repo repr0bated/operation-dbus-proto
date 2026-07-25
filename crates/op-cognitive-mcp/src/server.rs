@@ -184,43 +184,8 @@ impl CognitiveMcpServer {
             self.gemini_fallback.clone(),
         );
 
-        let reflection = tonic_reflection::server::Builder::configure()
-            .register_encoded_file_descriptor_set(crate::proto::FILE_DESCRIPTOR_SET)
-            .build_v1()
-            .expect("failed to build cognitive reflection service");
-
-        let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
-        health_reporter
-            .set_serving::<CognitiveToolServiceServer<CognitiveGrpcService>>()
-            .await;
-
         let socket_addr: std::net::SocketAddr = addr.parse()?;
-        tracing::info!(addr = %socket_addr, "Cognitive gRPC Server listening");
-
-        let cors = tower_http::cors::CorsLayer::new()
-            .allow_origin(tower_http::cors::Any)
-            .allow_methods(tower_http::cors::Any)
-            .allow_headers(tower_http::cors::Any)
-            .expose_headers([
-                "grpc-status".parse().unwrap(),
-                "grpc-message".parse().unwrap(),
-                "grpc-status-details-bin".parse().unwrap(),
-            ]);
-
-        tonic::transport::Server::builder()
-            .accept_http1(true)
-            .layer(cors)
-            .add_service(tonic_web::enable(
-                CognitiveToolServiceServer::with_interceptor(
-                    grpc_service,
-                    crate::interceptor::ghostbridge_interceptor,
-                ),
-            ))
-            .add_service(tonic_web::enable(reflection))
-            .add_service(tonic_web::enable(health_service))
-            .serve(socket_addr)
-            .await?;
-
+        serve_cognitive_grpc(socket_addr, grpc_service).await?;
         Ok(())
     }
 
@@ -240,42 +205,8 @@ impl CognitiveMcpServer {
         let grpc_handle = tokio::spawn(async move {
             let grpc_service =
                 CognitiveGrpcService::new(grpc_memory, grpc_session, grpc_quota, grpc_gemini);
-
-            let reflection = tonic_reflection::server::Builder::configure()
-                .register_encoded_file_descriptor_set(crate::proto::FILE_DESCRIPTOR_SET)
-                .build_v1()
-                .expect("failed to build cognitive reflection service");
-
-            let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
-            health_reporter
-                .set_serving::<CognitiveToolServiceServer<CognitiveGrpcService>>()
-                .await;
-
             let socket_addr: std::net::SocketAddr = grpc_addr.parse().expect("invalid gRPC addr");
-            tracing::info!(addr = %socket_addr, "Cognitive gRPC Server listening");
-
-            let cors = tower_http::cors::CorsLayer::new()
-                .allow_origin(tower_http::cors::Any)
-                .allow_methods(tower_http::cors::Any)
-                .allow_headers(tower_http::cors::Any)
-                .expose_headers([
-                    "grpc-status".parse().unwrap(),
-                    "grpc-message".parse().unwrap(),
-                    "grpc-status-details-bin".parse().unwrap(),
-                ]);
-
-            tonic::transport::Server::builder()
-                .accept_http1(true)
-                .layer(cors)
-                .add_service(tonic_web::enable(
-                    CognitiveToolServiceServer::with_interceptor(
-                        grpc_service,
-                        crate::interceptor::ghostbridge_interceptor,
-                    ),
-                ))
-                .add_service(tonic_web::enable(reflection))
-                .add_service(tonic_web::enable(health_service))
-                .serve(socket_addr)
+            serve_cognitive_grpc(socket_addr, grpc_service)
                 .await
                 .expect("gRPC server failed");
         });
@@ -316,4 +247,57 @@ impl CognitiveMcpServer {
     pub fn context_engine(&self) -> Arc<ContextAwarenessEngine> {
         self.context_engine.clone()
     }
+}
+
+/// Shared gRPC stack for :50052 — CognitiveToolService + WaypipeTunnel.
+async fn serve_cognitive_grpc(
+    socket_addr: std::net::SocketAddr,
+    grpc_service: CognitiveGrpcService,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let reflection = tonic_reflection::server::Builder::configure()
+        .register_encoded_file_descriptor_set(crate::proto::FILE_DESCRIPTOR_SET)
+        .register_encoded_file_descriptor_set(op_waypipe_grpc::proto::FILE_DESCRIPTOR_SET)
+        .build_v1()
+        .expect("failed to build cognitive+waypipe reflection service");
+
+    let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
+    health_reporter
+        .set_serving::<CognitiveToolServiceServer<CognitiveGrpcService>>()
+        .await;
+
+    let waypipe = op_waypipe_grpc::build_tunnel_service(op_waypipe_grpc::TunnelConfig::default())
+        .map_err(|e| format!("waypipe tunnel service: {e}"))?;
+
+    tracing::info!(
+        addr = %socket_addr,
+        "Cognitive gRPC Server listening (includes op.waypipe.v1.WaypipeTunnel)"
+    );
+
+    let cors = tower_http::cors::CorsLayer::new()
+        .allow_origin(tower_http::cors::Any)
+        .allow_methods(tower_http::cors::Any)
+        .allow_headers(tower_http::cors::Any)
+        .expose_headers([
+            "grpc-status".parse().unwrap(),
+            "grpc-message".parse().unwrap(),
+            "grpc-status-details-bin".parse().unwrap(),
+        ]);
+
+    // WaypipeTunnel is native h2 (no tonic-web) — laptop clients use tonic.
+    tonic::transport::Server::builder()
+        .accept_http1(true)
+        .layer(cors)
+        .add_service(tonic_web::enable(
+            CognitiveToolServiceServer::with_interceptor(
+                grpc_service,
+                crate::interceptor::ghostbridge_interceptor,
+            ),
+        ))
+        .add_service(waypipe)
+        .add_service(tonic_web::enable(reflection))
+        .add_service(tonic_web::enable(health_service))
+        .serve(socket_addr)
+        .await?;
+
+    Ok(())
 }

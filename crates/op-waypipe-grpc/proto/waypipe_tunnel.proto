@@ -1,0 +1,37 @@
+syntax = "proto3";
+
+package op.waypipe.v1;
+
+// Bidirectional byte tunnel that replaces `ssh -R` for waypipe sockets.
+service WaypipeTunnel {
+  rpc Tunnel(stream ClientMsg) returns (stream ServerMsg);
+}
+
+message TunnelOpen {
+  // Client-chosen session id (logging / socket naming).
+  string session_id = 1;
+  // Remote command argv, e.g. ["Hyprland"] or ["kitty"].
+  repeated string command = 2;
+  // waypipe --compress value: lz4 | zstd | none
+  string compress = 3;
+}
+
+message Chunk {
+  bytes data = 1;
+}
+
+message ClientMsg {
+  oneof msg {
+    TunnelOpen open = 1;
+    Chunk chunk = 2;
+  }
+}
+
+message ServerMsg {
+  oneof msg {
+    // Emitted once the remote waypipe server has connected to the tunnel socket.
+    bool ready = 1;
+    Chunk chunk = 2;
+    string error = 3;
+  }
+}

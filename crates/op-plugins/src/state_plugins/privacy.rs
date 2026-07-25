@@ -171,6 +171,7 @@ pub struct GetPolicyInput {
 /// Generate the privacy plugin schema
 pub(crate) fn privacy_schema() -> PluginSchema {
     let mut schema = PluginSchema::builder("privacy")
+        .category("privacy")
         .version("1.0.0")
         .description("Privacy configuration and data masking")
         .field(
