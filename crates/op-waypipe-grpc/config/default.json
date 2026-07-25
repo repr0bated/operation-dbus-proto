@@ -1,0 +1,14 @@
+{
+  "listen": "0.0.0.0:50052",
+  "allowed_commands": [
+    "Hyprland",
+    "hyprland",
+    "kitty",
+    "weston-terminal",
+    "foot",
+    "alacritty"
+  ],
+  "waypipe_bin": "waypipe",
+  "socket_dir": "/tmp/op-waypipe-grpc",
+  "default_compress": "lz4"
+}

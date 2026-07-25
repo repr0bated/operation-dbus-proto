@@ -906,6 +906,7 @@ mod tests {
             dialect: op_state_store::DEFAULT_SCHEMA_DIALECT.into(),
             mutation_index: Some(7),
             subids: std::collections::HashMap::new(),
+            org: None,
             methods: std::collections::HashMap::new(),
             signals: vec![],
             guarantees: op_state_store::PluginCapabilities::default(),

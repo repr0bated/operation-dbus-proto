@@ -57,11 +57,13 @@ fn verify_per_identity(
     // source, not a per-call read), so blocking briefly here is safe on the
     // multi-threaded runtime op-grpc-bridge runs under.
     let result = tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(crate::identity_sled_dispatch::dispatch_identity_sled_method(
-            engine.as_ref(),
-            "get_identity",
-            &args,
-        ))
+        tokio::runtime::Handle::current().block_on(
+            crate::identity_sled_dispatch::dispatch_identity_sled_method(
+                engine.as_ref(),
+                "get_identity",
+                &args,
+            ),
+        )
     });
 
     let identity = match result {
@@ -186,9 +188,9 @@ pub fn ghostbridge_interceptor(mut req: Request<()>) -> Result<Request<()>, Stat
         FootprintVerifyError::SledUnreachable => {
             Status::internal("MutationEngine Memory Unreachable")
         }
-        FootprintVerifyError::InvalidSled => Status::failed_precondition(
-            "A.N.N.A. Scribe: Invalid Schema State. Cease and Desist.",
-        ),
+        FootprintVerifyError::InvalidSled => {
+            Status::failed_precondition("A.N.N.A. Scribe: Invalid Schema State. Cease and Desist.")
+        }
         FootprintVerifyError::Mismatch => Status::permission_denied(
             "A.N.N.A. Scribe: Temporal Hash Mismatch. \
              Session footprint is out of sync with current Btrfs mutation.",

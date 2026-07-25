@@ -30,7 +30,48 @@ impl WireGuardIdentity {
             return Ok(pubkey);
         }
 
-        anyhow::bail!("WG_PUBKEY not set in environment. Identity decoupling requires explicit pre-assignment.");
+        // Fall back to live interface state (wg show <iface> public-key).
+        let output = Command::new("wg")
+            .args(["show", &self.interface, "public-key"])
+            .output()?;
+        if output.status.success() {
+            let pubkey = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !pubkey.is_empty() {
+                debug!(iface = %self.interface, "Using WireGuard pubkey from wg show");
+                return Ok(pubkey);
+            }
+        }
+
+        anyhow::bail!(
+            "WG_PUBKEY unset and `wg show {} public-key` failed; cannot resolve local identity",
+            self.interface
+        );
+    }
+
+    /// True when `pubkey` is a peer on this interface with a recent handshake.
+    pub fn is_recent_peer(&self, pubkey: &str, max_age_secs: u64) -> anyhow::Result<bool> {
+        let output = Command::new("wg")
+            .args(["show", &self.interface, "latest-handshakes"])
+            .output()?;
+        if !output.status.success() {
+            return Ok(false);
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        for line in stdout.lines() {
+            let mut parts = line.split('\t');
+            let Some(peer) = parts.next() else { continue };
+            let Some(ts) = parts.next() else { continue };
+            if peer != pubkey {
+                continue;
+            }
+            let timestamp: u64 = ts.parse().unwrap_or(0);
+            return Ok(timestamp > 0 && now.saturating_sub(timestamp) <= max_age_secs);
+        }
+        Ok(false)
     }
 
     /// Get peer's pubkey from their IP address

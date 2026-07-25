@@ -36,11 +36,13 @@ members = [
     "crates/op-compliance",
     "crates/op-projection",
     "crates/op-assistant-grpc",
+    "crates/op-waypipe-grpc",
     "crates/op-s6-systemctl",
     "crates/op-xray-daemon",
     "crates/op-mcp-shim",
     "crates/op-gemma",
     "crates/zeroclaw-gui",
+    "crates/op-dbus-cli",
 ]
 
 [workspace.package]

@@ -1,16 +1,73 @@
 {
   "mcpServers": {
     "cognitive-mcp": {
-      "type": "http",
       "url": "http://10.200.0.2:3003/mcp",
+      "type": "http",
       "headers": {
-        "X-Ghostbridge-Footprint": "droid",
-        "X-Ghostbridge-Trace-ID": "droid-factory"
+        "X-Ghostbridge-Footprint": "mcp-client",
+        "X-Ghostbridge-Trace-ID": "mcp-add-project"
       }
     },
     "op-web-compact": {
-      "type": "http",
-      "url": "http://127.0.0.1:8080/mcp/message"
+      "command": "/usr/local/bin/op-mcp-server",
+      "args": [
+        "--stdio",
+        "-m",
+        "compact"
+      ],
+      "type": "stdio"
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/home/admin/git/odbus"
+      ],
+      "type": "stdio"
+    },
+    "memory": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-memory"
+      ],
+      "type": "stdio"
+    },
+    "sequential-thinking": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-sequential-thinking"
+      ],
+      "type": "stdio"
+    },
+    "fetch": {
+      "command": "uvx",
+      "args": [
+        "mcp-server-fetch"
+      ],
+      "type": "stdio"
+    },
+    "op-dbus-compact": {
+      "url": "http://127.0.0.1:8080/mcp/compact",
+      "type": "http"
+    },
+    "op-dbus-agents": {
+      "url": "http://127.0.0.1:8080/mcp/agents/message",
+      "type": "http"
+    },
+    "op-cognitive-mcp": {
+      "command": "/usr/local/bin/op-cognitive-mcp",
+      "args": [
+        "--stdio",
+        "--no-http",
+        "--no-grpc"
+      ],
+      "env": {
+        "COGNITIVE_MCP_DB_PATH": "/home/admin/.local/share/op-cognitive-mcp/memory.db"
+      },
+      "type": "stdio"
     }
   }
 }

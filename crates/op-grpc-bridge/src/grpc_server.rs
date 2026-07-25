@@ -375,6 +375,12 @@ impl OperationGrpcServer {
         for blob in blobs {
             self.active_reflection.upsert_blob(blob).await;
         }
+        // Record the manifest hash so the arrival-triggered resync in the
+        // reflection service doesn't reload what startup just loaded.
+        let hash = op_blob::catalog::ActiveReflectionCatalog::read_catalog_hash(
+            std::path::Path::new(op_blob::catalog::DEFAULT_SHM_DIR),
+        );
+        self.active_reflection.set_catalog_hash(hash).await;
         tracing::info!(count, "hydrated reflection from SHM blob catalog");
         count
     }
@@ -633,11 +639,11 @@ pub fn build_operation_routes(server: OperationGrpcServer) -> tonic::service::Ro
     use crate::proto::runtime_mirror_server::RuntimeMirrorServer;
     use crate::proto::state_sync_server::StateSyncServer;
 
-    // Reflection — exposes the static FileDescriptorSet snapshot covering all
-    // domain protos plus any per-method descriptors frozen before route build.
-    // tonic-reflection cannot be mutated after the service is mounted, so D-Bus
-    // object creation must call `register_plugin_methods` before this point when
-    // per-method services should be visible to grpcurl/MCP clients.
+    // Reflection — DynamicReflectionService serves from the live
+    // ActiveReflectionCatalog, which resyncs from the sealed SHM blob catalog
+    // on each incoming reflection request (arrival-triggered via the
+    // manifest's catalog_hash; no watcher, no restart needed when the
+    // op-blob sealer commits new blobs).
     // Give the interceptor a handle to the engine so it can look up
     // per-identity sled records (Cozo-backed) instead of only the shared
     // host legacy sled. Called exactly once, before any interceptor runs.
@@ -647,46 +653,40 @@ pub fn build_operation_routes(server: OperationGrpcServer) -> tonic::service::Ro
 
     let intercept = interceptor::ghostbridge_interceptor;
 
-    let routes = tonic::service::Routes::new(tonic_web::enable(StateSyncServer::with_interceptor(
-        server.clone(),
-        intercept,
-    )))
-    .add_service(tonic_web::enable(PluginServiceServer::with_interceptor(
-        server.clone(),
-        intercept,
-    )))
-    .add_service(tonic_web::enable(
+    let routes = tonic::service::Routes::new(crate::grpc_web::enable(
+        StateSyncServer::with_interceptor(server.clone(), intercept),
+    ))
+    .add_service(crate::grpc_web::enable(
+        PluginServiceServer::with_interceptor(server.clone(), intercept),
+    ))
+    .add_service(crate::grpc_web::enable(
         EventChainServiceServer::with_interceptor(server.clone(), intercept),
     ))
-    .add_service(tonic_web::enable(OvsdbMirrorServer::with_interceptor(
-        server.clone(),
-        intercept,
-    )))
-    .add_service(tonic_web::enable(RuntimeMirrorServer::with_interceptor(
-        server.clone(),
-        intercept,
-    )))
-    .add_service(tonic_web::enable(
+    .add_service(crate::grpc_web::enable(
+        OvsdbMirrorServer::with_interceptor(server.clone(), intercept),
+    ))
+    .add_service(crate::grpc_web::enable(
+        RuntimeMirrorServer::with_interceptor(server.clone(), intercept),
+    ))
+    .add_service(crate::grpc_web::enable(
         ComponentRegistryServer::with_interceptor(server.clone(), intercept),
     ))
-    .add_service(tonic_web::enable(MailServiceServer::with_interceptor(
-        server.clone(),
-        intercept,
-    )))
-    .add_service(tonic_web::enable(
+    .add_service(crate::grpc_web::enable(
+        MailServiceServer::with_interceptor(server.clone(), intercept),
+    ))
+    .add_service(crate::grpc_web::enable(
         PrivacyNetworkServiceServer::with_interceptor(server.clone(), intercept),
     ))
-    .add_service(tonic_web::enable(
+    .add_service(crate::grpc_web::enable(
         RegistrationServiceServer::with_interceptor(
             server.clone(),
             interceptor::registration_interceptor,
         ),
     ))
-    .add_service(tonic_web::enable(DbusPassthroughServer::with_interceptor(
-        server.clone(),
-        intercept,
-    )))
-    .add_service(tonic_web::enable(
+    .add_service(crate::grpc_web::enable(
+        DbusPassthroughServer::with_interceptor(server.clone(), intercept),
+    ))
+    .add_service(crate::grpc_web::enable(
         crate::proto::chat::chat_service_server::ChatServiceServer::new(
             crate::chat_service::ChatServiceImpl::new(),
         ),
@@ -700,8 +700,7 @@ pub fn build_operation_routes(server: OperationGrpcServer) -> tonic::service::Ro
     );
 
     let routes = add_routes(routes, server.clone());
-    routes
-        .add_service(tonic_web::enable(reflection_v1))
+    routes.add_service(crate::grpc_web::enable(reflection_v1))
 }
 
 /// Run gRPC server for all Operation services.
@@ -812,7 +811,7 @@ pub async fn run_grpc_server(
     // the reflected descriptor).
     builder
         .add_routes(build_operation_routes(server))
-        .add_service(tonic_web::enable(health_service))
+        .add_service(crate::grpc_web::enable(health_service))
         .serve(addr)
         .await
 }

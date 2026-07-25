@@ -325,6 +325,9 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .layer(axum::middleware::from_fn(
             crate::middleware::access_log::access_log_middleware,
         ))
+        .layer(axum::middleware::from_fn(
+            crate::middleware::spa_cache::spa_cache_middleware,
+        ))
         .layer(cors)
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())

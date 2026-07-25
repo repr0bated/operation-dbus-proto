@@ -408,6 +408,7 @@ pub(crate) fn privacy_routes_schema() -> PluginSchema {
     };
 
     PluginSchema::builder("privacy_routes")
+        .category("network")
         .version("1.0.0")
         .description("Per-user privacy route objects keyed by WireGuard identity")
         .dependency("wireguard")

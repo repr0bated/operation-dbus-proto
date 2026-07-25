@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 op-core = { path = "../op-core" }
 op-identity = { path = "../op-identity" }
+op-waypipe-grpc = { path = "../op-waypipe-grpc" }
 op-blob = { workspace = true }
 op-mcp = { path = "../op-mcp" }
 op-agents = { path = "../op-agents" }

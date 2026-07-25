@@ -8,8 +8,12 @@ use tonic::Request;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let footprint = std::env::args().nth(1).expect("usage: test_vendor_identity <footprint_hex> <trace_id_hex>");
-    let trace_id = std::env::args().nth(2).expect("usage: test_vendor_identity <footprint_hex> <trace_id_hex>");
+    let footprint = std::env::args()
+        .nth(1)
+        .expect("usage: test_vendor_identity <footprint_hex> <trace_id_hex>");
+    let trace_id = std::env::args()
+        .nth(2)
+        .expect("usage: test_vendor_identity <footprint_hex> <trace_id_hex>");
 
     let mut client = PluginServiceClient::connect("http://127.0.0.1:8090").await?;
     let mut request = Request::new(());
@@ -17,10 +21,9 @@ async fn main() -> anyhow::Result<()> {
         "x-ghostbridge-footprint",
         MetadataValue::try_from(footprint)?,
     );
-    request.metadata_mut().insert(
-        "x-ghostbridge-trace-id",
-        MetadataValue::try_from(trace_id)?,
-    );
+    request
+        .metadata_mut()
+        .insert("x-ghostbridge-trace-id", MetadataValue::try_from(trace_id)?);
 
     match client.list_plugins(request).await {
         Ok(resp) => println!("ACCEPTED: {} plugins", resp.into_inner().plugins.len()),

@@ -7,10 +7,13 @@ use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let pubkey = std::env::args().nth(1).expect("usage: provision_container <wireguard_pubkey>");
+    let pubkey = std::env::args()
+        .nth(1)
+        .expect("usage: provision_container <wireguard_pubkey>");
 
     let pool = Arc::new(GrpcClientPool::new());
-    let client = RemoteOperationClient::new(pool, "http://127.0.0.1:8090", "provision-container-tool");
+    let client =
+        RemoteOperationClient::new(pool, "http://127.0.0.1:8090", "provision-container-tool");
 
     let args = simd_json::json!({
         "wireguard_pubkey": pubkey,

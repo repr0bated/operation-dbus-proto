@@ -7,7 +7,8 @@ use crate::agents::advise::{extract_query, is_advise_op, route_advise_to_op};
 use crate::agents::base::{AgentTask, AgentTrait, TaskResult};
 use crate::security::SecurityProfile;
 use async_trait::async_trait;
-use simd_json::json;
+use simd_json::prelude::*;
+use simd_json::{json, OwnedValue as Value};
 
 pub struct SchemaAsCodeAgent {
     agent_id: String,
@@ -20,6 +21,257 @@ impl SchemaAsCodeAgent {
             profile: SecurityProfile::content_generation("schema-as-code"),
             agent_id,
         }
+    }
+
+    fn parse_json_args(args: &str) -> Option<Value> {
+        let trimmed = args.trim();
+        if !trimmed.starts_with('{') && !trimmed.starts_with('[') {
+            return None;
+        }
+        let mut bytes = trimmed.as_bytes().to_vec();
+        simd_json::to_owned_value(&mut bytes).ok()
+    }
+
+    /// Validate schema against instance when both are present; otherwise lint the
+    /// supplied document. Always includes the caller input — never a static card.
+    fn validate_payload(args: Option<&str>) -> Result<Value, String> {
+        let raw = args.unwrap_or("").trim();
+        if raw.is_empty() {
+            return Err(
+                "validate requires args: JSON `{\"schema\":...,\"instance\":...}` \
+                 or a schema document / path description"
+                    .to_string(),
+            );
+        }
+
+        if let Some(v) = Self::parse_json_args(raw) {
+            if let Some(obj) = v.as_object() {
+                let schema_v = obj
+                    .get("schema")
+                    .or_else(|| obj.get("json_schema"))
+                    .cloned();
+                let instance_v = obj
+                    .get("instance")
+                    .or_else(|| obj.get("data"))
+                    .or_else(|| obj.get("document"))
+                    .cloned();
+
+                if let (Some(schema_v), Some(instance_v)) = (schema_v.clone(), instance_v) {
+                    return Self::run_jsonschema(&schema_v, &instance_v, raw);
+                }
+
+                // Treat the whole object as a schema document to lint.
+                if obj.contains_key("type")
+                    || obj.contains_key("$schema")
+                    || obj.contains_key("properties")
+                    || obj.contains_key("openapi")
+                {
+                    return Ok(Self::lint_schema_document(&v, raw));
+                }
+            }
+        }
+
+        // Free-form / non-JSON: produce input-specific guidance (not a cookbook card).
+        Ok(Self::validate_prose(raw))
+    }
+
+    fn run_jsonschema(schema_v: &Value, instance_v: &Value, raw_input: &str) -> Result<Value, String> {
+        let schema_sj: serde_json::Value = serde_json::from_str(
+            &simd_json::to_string(schema_v).map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| format!("schema not JSON-compatible: {e}"))?;
+        let instance_sj: serde_json::Value = serde_json::from_str(
+            &simd_json::to_string(instance_v).map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| format!("instance not JSON-compatible: {e}"))?;
+
+        let validator = jsonschema::validator_for(&schema_sj)
+            .map_err(|e| format!("schema compilation failed: {e}"))?;
+
+        let errors: Vec<Value> = validator
+            .iter_errors(&instance_sj)
+            .map(|e| {
+                json!({
+                    "path": e.instance_path.to_string(),
+                    "message": e.to_string(),
+                })
+            })
+            .collect();
+
+        let valid = errors.is_empty();
+        Ok(json!({
+            "operation": "validate",
+            "mode": "jsonschema",
+            "valid": valid,
+            "error_count": errors.len(),
+            "errors": errors,
+            "input": raw_input,
+            "schema_summary": Self::schema_summary(&schema_sj),
+        }))
+    }
+
+    fn schema_summary(schema: &serde_json::Value) -> Value {
+        json!({
+            "type": schema.get("type").cloned().unwrap_or(serde_json::Value::Null),
+            "has_properties": schema.get("properties").is_some(),
+            "required": schema.get("required").cloned().unwrap_or(serde_json::Value::Null),
+            "$schema": schema.get("$schema").cloned().unwrap_or(serde_json::Value::Null),
+        })
+    }
+
+    fn lint_schema_document(doc: &Value, raw_input: &str) -> Value {
+        let mut findings: Vec<Value> = Vec::new();
+        let obj = doc.as_object();
+
+        if let Some(o) = obj {
+            if o.get("$schema").and_then(|v| v.as_str()).is_none()
+                && o.get("openapi").is_none()
+            {
+                findings.push(json!({
+                    "severity": "warning",
+                    "message": "Missing $schema (JSON Schema) or openapi version field"
+                }));
+            }
+            if o.get("type").is_none()
+                && o.get("properties").is_none()
+                && o.get("openapi").is_none()
+                && o.get("$ref").is_none()
+            {
+                findings.push(json!({
+                    "severity": "error",
+                    "message": "Document has no type/properties/$ref/openapi — not a recognizable schema"
+                }));
+            }
+            if let Some(props) = o.get("properties").and_then(|p| p.as_object()) {
+                if props.is_empty() {
+                    findings.push(json!({
+                        "severity": "warning",
+                        "message": "properties object is empty"
+                    }));
+                }
+                for (name, prop) in props.iter() {
+                    if prop.as_object().map(|p| p.get("type").is_none()).unwrap_or(true)
+                        && prop.get("$ref").is_none()
+                    {
+                        findings.push(json!({
+                            "severity": "warning",
+                            "message": format!("property '{name}' lacks type or $ref")
+                        }));
+                    }
+                }
+            }
+            if let Some(required) = o.get("required").and_then(|r| r.as_array()) {
+                let props = o
+                    .get("properties")
+                    .and_then(|p| p.as_object())
+                    .map(|p| p.keys().cloned().collect::<Vec<_>>())
+                    .unwrap_or_default();
+                for req in required {
+                    if let Some(name) = req.as_str() {
+                        if !props.iter().any(|p| p == name) {
+                            findings.push(json!({
+                                "severity": "error",
+                                "message": format!(
+                                    "required field '{name}' is not declared in properties"
+                                )
+                            }));
+                        }
+                    }
+                }
+            }
+            if o.get("openapi").is_some() {
+                if o.get("paths").is_none() {
+                    findings.push(json!({
+                        "severity": "error",
+                        "message": "OpenAPI document missing paths"
+                    }));
+                }
+                if o.get("info").is_none() {
+                    findings.push(json!({
+                        "severity": "error",
+                        "message": "OpenAPI document missing info"
+                    }));
+                }
+            }
+        } else {
+            findings.push(json!({
+                "severity": "error",
+                "message": "Top-level schema must be a JSON object"
+            }));
+        }
+
+        let error_count = findings
+            .iter()
+            .filter(|f| f.get("severity").and_then(|s| s.as_str()) == Some("error"))
+            .count();
+
+        json!({
+            "operation": "validate",
+            "mode": "schema_lint",
+            "valid": error_count == 0,
+            "finding_count": findings.len(),
+            "findings": findings,
+            "input": raw_input,
+        })
+    }
+
+    fn validate_prose(raw: &str) -> Value {
+        let lower = raw.to_lowercase();
+        let detected = if lower.contains("openapi") || lower.ends_with(".yaml") || lower.ends_with(".yml")
+        {
+            "openapi"
+        } else if lower.contains("proto") || lower.ends_with(".proto") {
+            "protobuf"
+        } else if lower.contains("oscal") {
+            "oscal"
+        } else if lower.contains("asyncapi") {
+            "asyncapi"
+        } else {
+            "json_schema"
+        };
+
+        let mut findings = vec![json!({
+            "severity": "info",
+            "message": format!(
+                "No JSON schema+instance payload detected; treating input as {detected} validation request"
+            )
+        })];
+
+        // Quote distinctive tokens so two different prose inputs cannot collide.
+        let tokens: Vec<String> = raw
+            .split(|c: char| !c.is_alphanumeric() && c != '.' && c != '_' && c != '-')
+            .filter(|t| t.len() >= 4)
+            .take(12)
+            .map(|t| t.to_string())
+            .collect();
+
+        for t in &tokens {
+            if t.contains('.') {
+                findings.push(json!({
+                    "severity": "info",
+                    "message": format!("Referenced artifact: {t}")
+                }));
+            }
+        }
+
+        findings.push(json!({
+            "severity": "warning",
+            "message": format!(
+                "Pass JSON {{\"schema\":{{...}},\"instance\":{{...}}}} for executable validation of: {}",
+                if raw.len() > 120 { format!("{}…", &raw[..120]) } else { raw.to_string() }
+            )
+        }));
+
+        json!({
+            "operation": "validate",
+            "mode": "prose_request",
+            "detected_format": detected,
+            "valid": false,
+            "executable": false,
+            "findings": findings,
+            "input": raw,
+            "input_tokens": tokens,
+        })
     }
 
     fn analyze(&self, op: &str, args: Option<&str>) -> Result<String, String> {
@@ -59,23 +311,13 @@ impl SchemaAsCodeAgent {
                     "input": args.unwrap_or("")
                 })
             }
-            "validate" => json!({
-                "operation": "validate",
-                "tools": {
-                    "json_schema": "ajv validate --spec=draft2020 -s schema.json -d data.json",
-                    "openapi": "spectral lint openapi.yaml",
-                    "protobuf": "buf lint && buf breaking --against .git#branch=main",
-                    "oscal": "oscal-cli validate -f document.json"
-                },
-                "ci_integration": "Run validators in pre-commit hooks and CI pipelines",
-                "breaking_change_detection": "buf breaking, openapi-diff, json-schema-diff"
-            }),
+            "validate" => Self::validate_payload(args)?,
             "opencontrol" => json!({
                 "operation": "opencontrol",
                 "description": "OpenControl YAML schema for compliance-as-code (alternative to OSCAL)",
                 "schema_elements": {
                     "component": "system component declaration",
-                    "satisfies": "list of control satisfactions with narrative",
+                    "satisfies": "list of control satisfed with narrative",
                     "documentation_complete": "boolean flag per control"
                 },
                 "example": {
@@ -89,7 +331,8 @@ impl SchemaAsCodeAgent {
                     }]
                 },
                 "tools": ["compliance-masonry", "opencontrol/schemas", "fedramp-gocomply"],
-                "migration_to_oscal": "compliance-io converts OpenControl → OSCAL component-definition"
+                "migration_to_oscal": "compliance-io converts OpenControl → OSCAL component-definition",
+                "input": args.unwrap_or("")
             }),
             "generate_schema" => json!({
                 "operation": "generate_schema",
@@ -162,5 +405,57 @@ impl AgentTrait for SchemaAsCodeAgent {
             Ok(data) => Ok(TaskResult::success(&task.operation, data)),
             Err(e) => Ok(TaskResult::failure(&task.operation, e)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_empty_args_fails() {
+        let err = SchemaAsCodeAgent::validate_payload(None).unwrap_err();
+        assert!(err.contains("requires args"), "{err}");
+    }
+
+    #[test]
+    fn validate_rejects_invalid_instance() {
+        let args = r#"{"schema":{"type":"object","properties":{"n":{"type":"number"}},"required":["n"]},"instance":{"n":"nope"}}"#;
+        let v = SchemaAsCodeAgent::validate_payload(Some(args)).unwrap();
+        assert_eq!(v.get("valid").and_then(|x| x.as_bool()), Some(false));
+        assert_eq!(v.get("mode").and_then(|x| x.as_str()), Some("jsonschema"));
+        assert!(v.get("error_count").and_then(|x| x.as_u64()).unwrap_or(0) >= 1);
+        assert!(v.get("input").and_then(|x| x.as_str()).unwrap().contains("nope"));
+    }
+
+    #[test]
+    fn validate_accepts_valid_instance() {
+        let args = r#"{"schema":{"type":"object","properties":{"n":{"type":"number"}},"required":["n"]},"instance":{"n":3}}"#;
+        let v = SchemaAsCodeAgent::validate_payload(Some(args)).unwrap();
+        assert_eq!(v.get("valid").and_then(|x| x.as_bool()), Some(true));
+        assert_eq!(v.get("error_count").and_then(|x| x.as_u64()), Some(0));
+    }
+
+    #[test]
+    fn validate_prose_inputs_differ() {
+        let a = SchemaAsCodeAgent::validate_payload(Some("validate THIS_UNIQUE_AAA_schema.json")).unwrap();
+        let b = SchemaAsCodeAgent::validate_payload(Some(
+            "validate THAT_UNIQUE_BBB.yaml completely different",
+        ))
+        .unwrap();
+        assert_ne!(
+            simd_json::to_string(&a).unwrap(),
+            simd_json::to_string(&b).unwrap()
+        );
+        assert!(a.get("input").and_then(|x| x.as_str()).unwrap().contains("AAA"));
+        assert!(b.get("input").and_then(|x| x.as_str()).unwrap().contains("BBB"));
+    }
+
+    #[test]
+    fn validate_lints_schema_document() {
+        let args = r#"{"type":"object","properties":{"id":{}},"required":["missing"]}"#;
+        let v = SchemaAsCodeAgent::validate_payload(Some(args)).unwrap();
+        assert_eq!(v.get("mode").and_then(|x| x.as_str()), Some("schema_lint"));
+        assert_eq!(v.get("valid").and_then(|x| x.as_bool()), Some(false));
     }
 }

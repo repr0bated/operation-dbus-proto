@@ -1,0 +1,38 @@
+[package]
+name = "op-waypipe-grpc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "gRPC byte tunnel for waypipe (Hyprland/apps in a local Wayland window)"
+
+[dependencies]
+op-identity = { path = "../op-identity" }
+tonic = { workspace = true }
+tonic-reflection = { workspace = true }
+tonic-health = { workspace = true }
+prost = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+tokio-stream = { workspace = true, features = ["net"] }
+futures = { workspace = true }
+async-stream = "0.3"
+bytes = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+clap = { workspace = true }
+uuid = { workspace = true }
+hex = { workspace = true }
+
+[build-dependencies]
+tonic-build = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio-test = "0.4"
+
+[[bin]]
+name = "op-waypipe-grpc"
+path = "src/bin/op-waypipe-grpc.rs"

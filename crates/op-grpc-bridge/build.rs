@@ -243,10 +243,29 @@ fn generate_plugin_method_routes(sets: &[PluginMethodSet]) -> String {
     }
     writeln!(rust, "        routes").unwrap();
     writeln!(rust, "    }}").unwrap();
+    writeln!(rust).unwrap();
+
+    // Emitted from the same `sets` that produced `add_routes`, so the names
+    // reflection advertises can never drift from the ones actually mounted.
+    writeln!(
+        rust,
+        "    pub(crate) const LEGACY_PLUGIN_METHOD_SERVICES: &[(&str, &str)] = &["
+    )
+    .unwrap();
+    for set in sets {
+        writeln!(
+            rust,
+            "        ({:?}, {:?}),",
+            set.plugin_id,
+            format!("operation.plugin.v1.{}", set.service_name)
+        )
+        .unwrap();
+    }
+    writeln!(rust, "    ];").unwrap();
     writeln!(rust, "}}").unwrap();
     writeln!(
         rust,
-        "pub(crate) use generated_plugin_method_routes::add_routes;"
+        "pub(crate) use generated_plugin_method_routes::{{add_routes, LEGACY_PLUGIN_METHOD_SERVICES}};"
     )
     .unwrap();
     rust

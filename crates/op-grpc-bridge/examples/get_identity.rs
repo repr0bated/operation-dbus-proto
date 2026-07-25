@@ -6,7 +6,9 @@ use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let pubkey = std::env::args().nth(1).expect("usage: get_identity <wireguard_pubkey>");
+    let pubkey = std::env::args()
+        .nth(1)
+        .expect("usage: get_identity <wireguard_pubkey>");
     let session_id = op_identity::session::derive_session_id(&pubkey);
 
     let pool = Arc::new(GrpcClientPool::new());
