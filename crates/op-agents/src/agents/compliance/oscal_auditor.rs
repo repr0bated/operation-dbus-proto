@@ -3,6 +3,7 @@
 //! Navigates NIST OSCAL models: catalog, profile, component-definition, SSP, SAP, SAR, POA&M.
 //! Validates control implementations, maps to 800-53/800-171, generates machine-readable artifacts.
 
+use crate::agents::advise::{extract_query, is_advise_op, route_advise_to_op};
 use crate::agents::base::{AgentTask, AgentTrait, TaskResult};
 use crate::security::SecurityProfile;
 use async_trait::async_trait;
@@ -94,16 +95,28 @@ impl OscalAuditorAgent {
                 },
                 "input": args.unwrap_or("")
             }),
-            _ => json!({
-                "agent": "oscal-auditor",
-                "oscal_models": ["catalog", "profile", "component-definition", "ssp", "sap", "sar", "poam"],
-                "operations": ["validate_controls", "generate_ssp", "map_controls", "audit_findings"],
-                "references": [
-                    "https://pages.nist.gov/OSCAL",
-                    "https://github.com/usnistgov/OSCAL",
-                    "https://github.com/awslabs/mcp-server-for-oscal"
-                ]
-            }),
+            op if is_advise_op(op) => {
+                let query = extract_query(args);
+                let routed_op = route_advise_to_op(
+                    &query,
+                    &[
+                        ("ssp", "generate_ssp"),
+                        ("map", "map_controls"),
+                        ("finding", "audit_findings"),
+                        ("poam", "audit_findings"),
+                        ("valid", "validate_controls"),
+                        ("control", "validate_controls"),
+                    ],
+                    "validate_controls",
+                );
+                return self.analyze(&routed_op, args);
+            }
+            other => {
+                return Err(format!(
+                    "unsupported operation '{}'; supported: [validate_controls, generate_ssp, map_controls, audit_findings, advise]",
+                    other
+                ));
+            }
         };
 
         Ok(simd_json::to_string_pretty(&result).unwrap_or_default())

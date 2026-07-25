@@ -3,9 +3,9 @@
 //! Single registry for all agent types with lazy loading.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use simd_json::prelude::*;
+use std::sync::{Arc, LazyLock};
 use parking_lot::RwLock;
-use once_cell::sync::Lazy;
 
 use super::agent_trait::{UnifiedAgent, AgentCategory, AgentMetadata};
 use super::execution::EXECUTION_AGENTS;
@@ -40,10 +40,27 @@ impl UnifiedAgentRegistry {
             factories.insert(*id, *factory);
         }
 
+        // Migrated legacy catalog IDs (overrides only when key already present)
+        for (id, factory) in super::legacy_catalog::migrated_factories() {
+            factories.entry(id).or_insert(factory);
+        }
+
         Self {
             agents: RwLock::new(HashMap::new()),
             factories,
         }
+    }
+
+    /// Resolve an agent id, accepting underscore or hyphen forms.
+    pub fn get_normalized(&self, id: &str) -> Option<Arc<dyn UnifiedAgent>> {
+        self.get(id).or_else(|| {
+            let alt = if id.contains('_') {
+                id.replace('_', "-")
+            } else {
+                id.replace('-', "_")
+            };
+            self.get(&alt)
+        })
     }
 
     /// Get an agent by ID (lazy loading)
@@ -129,7 +146,8 @@ impl Default for UnifiedAgentRegistry {
 }
 
 /// Global registry instance
-pub static GLOBAL_REGISTRY: Lazy<UnifiedAgentRegistry> = Lazy::new(UnifiedAgentRegistry::new);
+pub static GLOBAL_REGISTRY: LazyLock<UnifiedAgentRegistry> =
+    LazyLock::new(UnifiedAgentRegistry::new);
 
 #[cfg(test)]
 mod tests {

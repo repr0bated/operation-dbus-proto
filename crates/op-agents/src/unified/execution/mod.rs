@@ -18,10 +18,12 @@ pub use golang::GoExecutor;
 pub use shell::ShellExecutor;
 
 use std::collections::HashMap;
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 
 /// All available execution agents
-pub static EXECUTION_AGENTS: Lazy<HashMap<&'static str, fn() -> Box<dyn super::UnifiedAgent>>> = Lazy::new(|| {
+pub static EXECUTION_AGENTS: LazyLock<
+    HashMap<&'static str, fn() -> Box<dyn super::UnifiedAgent>>,
+> = LazyLock::new(|| {
     let mut m: HashMap<&'static str, fn() -> Box<dyn super::UnifiedAgent>> = HashMap::new();
     m.insert("python-executor", || Box::new(PythonExecutor::new()));
     m.insert("rust-executor", || Box::new(RustExecutor::new()));

@@ -11,15 +11,18 @@
 //! - **Persona Agents**: LLM-only, provide expertise without code execution
 //! - **Orchestration Agents**: Coordinate other agents for complex workflows
 
+pub mod adapter;
 pub mod agent_trait;
 pub mod execution;
-pub mod persona;
+pub mod legacy_catalog;
 pub mod orchestration;
-pub mod registry;
+pub mod persona;
 pub mod prompts;
+pub mod registry;
 
-pub use agent_trait::{UnifiedAgent, AgentCapability, AgentCategory};
+pub use adapter::UnifiedAgentAdapter;
+pub use agent_trait::{AgentCapability, AgentCategory, UnifiedAgent};
 pub use execution::ExecutionAgent;
-pub use persona::PersonaAgent;
 pub use orchestration::OrchestrationAgent;
-pub use registry::UnifiedAgentRegistry;
+pub use persona::PersonaAgent;
+pub use registry::{UnifiedAgentRegistry, GLOBAL_REGISTRY};

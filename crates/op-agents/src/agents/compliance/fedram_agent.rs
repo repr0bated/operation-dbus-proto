@@ -3,6 +3,7 @@
 //! FedRAMP authorization package authoring: boundary definition, SSP generation,
 //! control baseline selection (Low/Moderate/High), ConMon requirements.
 
+use crate::agents::advise::{extract_query, is_advise_op, route_advise_to_op};
 use crate::agents::base::{AgentTask, AgentTrait, TaskResult};
 use crate::security::SecurityProfile;
 use async_trait::async_trait;
@@ -86,13 +87,27 @@ impl FedRampAgent {
                 ],
                 "input": args.unwrap_or("")
             }),
-            _ => json!({
-                "agent": "fedramp",
-                "description": "FedRAMP Rev5 authorization expert",
-                "baselines": ["Low", "Moderate", "High"],
-                "operations": ["select_baseline", "authorization_boundary", "conmon", "review_ssp"],
-                "reference": "https://github.com/GSA/fedramp-automation"
-            }),
+            op if is_advise_op(op) => {
+                let query = extract_query(args);
+                let routed_op = route_advise_to_op(
+                    &query,
+                    &[
+                        ("baseline", "select_baseline"),
+                        ("boundary", "authorization_boundary"),
+                        ("ssp", "review_ssp"),
+                        ("conmon", "conmon"),
+                        ("oscal", "review_ssp"),
+                    ],
+                    "review_ssp",
+                );
+                return self.analyze(&routed_op, args);
+            }
+            other => {
+                return Err(format!(
+                    "unsupported operation '{}'; supported: [select_baseline, authorization_boundary, conmon, review_ssp, advise]",
+                    other
+                ));
+            }
         };
         Ok(simd_json::to_string_pretty(&result).unwrap_or_default())
     }

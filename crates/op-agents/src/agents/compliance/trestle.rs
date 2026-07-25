@@ -3,6 +3,7 @@
 //! Manages compliance-as-code workflows using the OSCAL Compass / compliance-trestle pattern:
 //! Git-based OSCAL document management, CI/CD integration, automated validation.
 
+use crate::agents::advise::{extract_query, is_advise_op, route_advise_to_op};
 use crate::agents::base::{AgentTask, AgentTrait, TaskResult};
 use crate::security::SecurityProfile;
 use async_trait::async_trait;
@@ -76,13 +77,29 @@ impl ComplianceTrestleAgent {
                 ],
                 "automation": "GitHub Actions: on upstream catalog release, open PR with control diff"
             }),
-            _ => json!({
-                "agent": "compliance-trestle",
-                "description": "Git-native compliance-as-code using OSCAL Compass / compliance-trestle",
-                "key_concepts": ["OSCAL workspace", "markdown authoring", "CI validation", "upstream sync"],
-                "operations": ["init_workspace", "author_ssp", "validate", "sync_controls"],
-                "reference": "https://github.com/oscal-compass/compliance-trestle"
-            }),
+            op if is_advise_op(op) => {
+                let query = extract_query(args);
+                let routed_op = route_advise_to_op(
+                    &query,
+                    &[
+                        ("init", "init_workspace"),
+                        ("workspace", "init_workspace"),
+                        ("author", "author_ssp"),
+                        ("ssp", "author_ssp"),
+                        ("valid", "validate"),
+                        ("sync", "sync_controls"),
+                        ("ci", "validate"),
+                    ],
+                    "author_ssp",
+                );
+                return self.analyze(&routed_op, args);
+            }
+            other => {
+                return Err(format!(
+                    "unsupported operation '{}'; supported: [init_workspace, author_ssp, validate, sync_controls, advise]",
+                    other
+                ));
+            }
         };
         Ok(simd_json::to_string_pretty(&result).unwrap_or_default())
     }

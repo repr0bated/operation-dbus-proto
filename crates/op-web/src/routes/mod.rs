@@ -88,6 +88,11 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             "/zeroclaw/schema",
             get(handlers::zeroclaw::zeroclaw_schema_handler),
         )
+        // Plugin schema endpoint (serves sealed SHM blob PluginSchema)
+        .route(
+            "/plugin-schema/:plugin_id",
+            get(handlers::plugin_schema::plugin_schema_handler),
+        )
         // Gemma / agent-GPU UI-spec gallery + catalog (render slices of the
         // sealed blob PluginSchema; promote a winning lens into the catalog).
         .route(
@@ -162,6 +167,10 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             get(handlers::agents::list_agent_types_handler),
         )
         .route("/agents/:id", get(handlers::agents::get_agent_handler))
+        .route(
+            "/agents/:id/task",
+            post(handlers::agents::agent_task_handler),
+        )
         .route(
             "/agents/:id",
             axum::routing::delete(handlers::agents::kill_agent_handler),

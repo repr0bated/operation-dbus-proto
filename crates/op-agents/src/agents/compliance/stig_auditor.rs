@@ -3,6 +3,7 @@
 //! DISA STIG and SCAP compliance: XCCDF benchmark evaluation, CKL generation,
 //! automated remediation via Ansible/shell, SRG mapping.
 
+use crate::agents::advise::{extract_query, is_advise_op, route_advise_to_op};
 use crate::agents::base::{AgentTask, AgentTrait, TaskResult};
 use crate::security::SecurityProfile;
 use async_trait::async_trait;
@@ -88,13 +89,29 @@ impl StigAuditorAgent {
                 ],
                 "input": args.unwrap_or("")
             }),
-            _ => json!({
-                "agent": "stig-auditor",
-                "description": "DISA STIG and SCAP compliance expert",
-                "operations": ["evaluate", "remediate", "map_srg", "ckl_review"],
-                "tools": ["OpenSCAP", "STIG Viewer", "Ansible ComplianceAsCode"],
-                "reference": "https://public.cyber.mil/stigs/"
-            }),
+            op if is_advise_op(op) => {
+                let query = extract_query(args);
+                let routed_op = route_advise_to_op(
+                    &query,
+                    &[
+                        ("scan", "evaluate"),
+                        ("xccdf", "evaluate"),
+                        ("evaluat", "evaluate"),
+                        ("oscal", "map_srg"),
+                        ("srg", "map_srg"),
+                        ("fix", "remediate"),
+                        ("ckl", "ckl_review"),
+                    ],
+                    "evaluate",
+                );
+                return self.analyze(&routed_op, args);
+            }
+            other => {
+                return Err(format!(
+                    "unsupported operation '{}'; supported: [evaluate, remediate, map_srg, ckl_review, advise]",
+                    other
+                ));
+            }
         };
         Ok(simd_json::to_string_pretty(&result).unwrap_or_default())
     }

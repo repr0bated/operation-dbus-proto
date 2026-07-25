@@ -121,11 +121,57 @@ pub trait AgentFactory: Send + Sync {
     fn supports(&self, agent_type: &str) -> bool;
 }
 
-/// Handle to a running agent
+/// Handle to a running agent (process or in-process trait object)
+pub enum AgentBackend {
+    Process(tokio::process::Child),
+    InProcess(std::sync::Arc<dyn crate::AgentTrait + Send + Sync>),
+}
+
 pub struct AgentHandle {
     pub id: String,
-    pub process: tokio::process::Child,
+    pub backend: AgentBackend,
     pub spec: AgentSpec,
+}
+
+impl AgentHandle {
+    pub fn pid(&self) -> Option<u32> {
+        match &self.backend {
+            AgentBackend::Process(child) => child.id(),
+            AgentBackend::InProcess(_) => None,
+        }
+    }
+
+    pub async fn execute_task(&self, task: crate::AgentTask) -> Result<crate::TaskResult> {
+        match &self.backend {
+            AgentBackend::InProcess(agent) => agent
+                .execute(task)
+                .await
+                .map_err(|e| anyhow::anyhow!(e)),
+            AgentBackend::Process(_) => Err(anyhow::anyhow!(
+                "Process-backed agents do not support in-process task execution"
+            )),
+        }
+    }
+}
+
+/// In-process factory backed by `create_agent` / unified registry.
+pub struct InProcessAgentFactory;
+
+#[async_trait]
+impl AgentFactory for InProcessAgentFactory {
+    async fn create_agent(&self, spec: &AgentSpec, instance_id: &str) -> Result<AgentHandle> {
+        let agent = crate::create_agent(&spec.agent_type, instance_id.to_string())
+            .map_err(|e| anyhow::anyhow!(e))?;
+        Ok(AgentHandle {
+            id: instance_id.to_string(),
+            backend: AgentBackend::InProcess(std::sync::Arc::from(agent)),
+            spec: spec.clone(),
+        })
+    }
+
+    fn supports(&self, agent_type: &str) -> bool {
+        crate::create_agent(agent_type, "probe".to_string()).is_ok()
+    }
 }
 
 /// Default agent factory that spawns processes
@@ -160,13 +206,15 @@ impl AgentFactory for ProcessAgentFactory {
 
         Ok(AgentHandle {
             id: instance_id.to_string(),
-            process,
+            backend: AgentBackend::Process(process),
             spec: spec.clone(),
         })
     }
 
-    fn supports(&self, _agent_type: &str) -> bool {
-        true // Default factory supports all types
+    fn supports(&self, agent_type: &str) -> bool {
+        // Only for explicit external commands — in-process factory takes precedence.
+        let _ = agent_type;
+        false
     }
 }
 
@@ -193,24 +241,15 @@ impl Default for AgentRegistry {
 
 impl AgentRegistry {
     pub fn new() -> Self {
-        let registry = Self {
+        Self {
             specs: Arc::new(RwLock::new(HashMap::new())),
             instances: Arc::new(RwLock::new(HashMap::new())),
-            factories: Arc::new(RwLock::new(Vec::new())),
+            factories: Arc::new(RwLock::new(vec![
+                Box::new(InProcessAgentFactory),
+                Box::new(ProcessAgentFactory),
+            ])),
             handles: Arc::new(RwLock::new(HashMap::new())),
-        };
-
-        // Register default factory
-        let default_factory = Box::new(ProcessAgentFactory);
-
-        // We need to do this in a blocking context since new() is not async
-        let factories = registry.factories.clone();
-        tokio::spawn(async move {
-            let mut factories = factories.write().await;
-            factories.push(default_factory);
-        });
-
-        registry
+        }
     }
 
     /// Register an agent specification
@@ -313,7 +352,7 @@ impl AgentRegistry {
 
         // Create the agent
         let handle = factory.create_agent(&spec, &instance_id).await?;
-        let pid = handle.process.id();
+        let pid = handle.pid();
 
         // Store the handle
         let mut handles = self.handles.write().await;
@@ -344,12 +383,15 @@ impl AgentRegistry {
         let mut handles = self.handles.write().await;
 
         if let Some(mut handle) = handles.remove(instance_id) {
-            // Try graceful shutdown first
-            handle
-                .process
-                .kill()
-                .await
-                .context("Failed to kill agent process")?;
+            match &mut handle.backend {
+                AgentBackend::Process(process) => {
+                    process
+                        .kill()
+                        .await
+                        .context("Failed to kill agent process")?;
+                }
+                AgentBackend::InProcess(_) => {}
+            }
 
             // Update instance status
             let mut instances = self.instances.write().await;
@@ -364,6 +406,19 @@ impl AgentRegistry {
                 instance_id
             ))
         }
+    }
+
+    /// Execute a task on a running in-process agent instance
+    pub async fn execute_instance_task(
+        &self,
+        instance_id: &str,
+        task: crate::AgentTask,
+    ) -> Result<crate::TaskResult> {
+        let handles = self.handles.read().await;
+        let handle = handles
+            .get(instance_id)
+            .ok_or_else(|| anyhow::anyhow!("Agent instance '{}' not found", instance_id))?;
+        handle.execute_task(task).await
     }
 
     /// Get agent instance status
@@ -394,320 +449,29 @@ impl AgentRegistry {
     }
 }
 
-/// Load default agent specifications
+/// Load catalog agent specifications (in-process unified agents).
+///
+/// Idempotent: skips types already registered so spawn/reload paths are safe.
 pub async fn load_default_specs(registry: &AgentRegistry) -> Result<()> {
-    let specs = vec![
-        AgentSpec {
-            agent_type: "executor".to_string(),
-            name: "Command Executor".to_string(),
-            description: "Executes whitelisted shell commands".to_string(),
-            command: "dbus-agent-executor".to_string(),
+    for desc in crate::builtin_agent_descriptors() {
+        if registry.get_spec(&desc.agent_type).await.is_some() {
+            continue;
+        }
+        let spec = AgentSpec {
+            agent_type: desc.agent_type.clone(),
+            name: desc.name.clone(),
+            description: desc.description.clone(),
+            command: "in-process".to_string(),
             args: vec![],
             env: HashMap::new(),
             working_dir: None,
-            capabilities: vec!["execute".to_string()],
+            capabilities: desc.operations.clone(),
             requires_root: false,
-            max_instances: 3,
-            restart_policy: RestartPolicy::OnFailure { max_retries: 3 },
-            health_check: Some(HealthCheck {
-                method: "GetStatus".to_string(),
-                interval_secs: 30,
-                timeout_secs: 5,
-                unhealthy_threshold: 3,
-            }),
-        },
-        AgentSpec {
-            agent_type: "file".to_string(),
-            name: "File Manager".to_string(),
-            description: "Manages file operations".to_string(),
-            command: "dbus-agent-file".to_string(),
-            args: vec![],
-            env: HashMap::new(),
-            working_dir: None,
-            capabilities: vec![
-                "read".to_string(),
-                "write".to_string(),
-                "delete".to_string(),
-            ],
-            requires_root: false,
-            max_instances: 5,
-            restart_policy: RestartPolicy::OnFailure { max_retries: 3 },
-            health_check: Some(HealthCheck {
-                method: "GetStatus".to_string(),
-                interval_secs: 30,
-                timeout_secs: 5,
-                unhealthy_threshold: 3,
-            }),
-        },
-        AgentSpec {
-            agent_type: "network".to_string(),
-            name: "Network Manager".to_string(),
-            description: "Manages network configuration".to_string(),
-            command: "dbus-agent-network".to_string(),
-            args: vec![],
-            env: HashMap::new(),
-            working_dir: None,
-            capabilities: vec!["network".to_string()],
-            requires_root: true,
-            max_instances: 2,
-            restart_policy: RestartPolicy::Always,
-            health_check: Some(HealthCheck {
-                method: "GetStatus".to_string(),
-                interval_secs: 30,
-                timeout_secs: 5,
-                unhealthy_threshold: 3,
-            }),
-        },
-        AgentSpec {
-            agent_type: "systemd".to_string(),
-            name: "Systemd Controller".to_string(),
-            description: "Controls systemd services".to_string(),
-            command: "dbus-agent-systemd".to_string(),
-            args: vec![],
-            env: HashMap::new(),
-            working_dir: None,
-            capabilities: vec!["service".to_string()],
-            requires_root: true,
-            max_instances: 2,
-            restart_policy: RestartPolicy::Always,
-            health_check: Some(HealthCheck {
-                method: "GetStatus".to_string(),
-                interval_secs: 30,
-                timeout_secs: 5,
-                unhealthy_threshold: 3,
-            }),
-        },
-        AgentSpec {
-            agent_type: "monitor".to_string(),
-            name: "System Monitor".to_string(),
-            description: "Monitors system resources".to_string(),
-            command: "dbus-agent-monitor".to_string(),
-            args: vec![],
-            env: HashMap::new(),
-            working_dir: None,
-            capabilities: vec!["monitor".to_string()],
-            requires_root: false,
-            max_instances: 1,
-            restart_policy: RestartPolicy::Always,
-            health_check: Some(HealthCheck {
-                method: "GetStatus".to_string(),
-                interval_secs: 30,
-                timeout_secs: 5,
-                unhealthy_threshold: 3,
-            }),
-        },
-        AgentSpec {
-            agent_type: "packagekit".to_string(),
-            name: "Package Manager".to_string(),
-            description: "Manages system packages via PackageKit".to_string(),
-            command: "dbus-agent-packagekit".to_string(),
-            args: vec![],
-            env: HashMap::new(),
-            working_dir: None,
-            capabilities: vec![
-                "install".to_string(),
-                "remove".to_string(),
-                "update".to_string(),
-            ],
-            requires_root: true,
-            max_instances: 2,
-            restart_policy: RestartPolicy::OnFailure { max_retries: 3 },
-            health_check: Some(HealthCheck {
-                method: "GetStatus".to_string(),
-                interval_secs: 30,
-                timeout_secs: 5,
-                unhealthy_threshold: 3,
-            }),
-        },
-        AgentSpec {
-            agent_type: "python-pro".to_string(),
-            name: "Python Professional".to_string(),
-            description: "Python development and execution environment".to_string(),
-            command: "dbus-agent-python-pro".to_string(),
-            args: vec![],
-            env: HashMap::new(),
-            working_dir: None,
-            capabilities: vec![
-                "execute".to_string(),
-                "analyze".to_string(),
-                "format".to_string(),
-            ],
-            requires_root: false,
-            max_instances: 5,
-            restart_policy: RestartPolicy::OnFailure { max_retries: 3 },
-            health_check: Some(HealthCheck {
-                method: "GetStatus".to_string(),
-                interval_secs: 30,
-                timeout_secs: 5,
-                unhealthy_threshold: 3,
-            }),
-        },
-        AgentSpec {
-            agent_type: "rust-pro".to_string(),
-            name: "Rust Professional".to_string(),
-            description: "Rust development and compilation environment".to_string(),
-            command: "dbus-agent-rust-pro".to_string(),
-            args: vec![],
-            env: HashMap::new(),
-            working_dir: None,
-            capabilities: vec![
-                "compile".to_string(),
-                "check".to_string(),
-                "test".to_string(),
-            ],
-            requires_root: false,
-            max_instances: 5,
-            restart_policy: RestartPolicy::OnFailure { max_retries: 3 },
-            health_check: Some(HealthCheck {
-                method: "GetStatus".to_string(),
-                interval_secs: 30,
-                timeout_secs: 5,
-                unhealthy_threshold: 3,
-            }),
-        },
-        AgentSpec {
-            agent_type: "c-pro".to_string(),
-            name: "C Professional".to_string(),
-            description: "C development and compilation environment".to_string(),
-            command: "dbus-agent-c-pro".to_string(),
-            args: vec![],
-            env: HashMap::new(),
-            working_dir: None,
-            capabilities: vec![
-                "compile".to_string(),
-                "debug".to_string(),
-                "analyze".to_string(),
-            ],
-            requires_root: false,
-            max_instances: 5,
-            restart_policy: RestartPolicy::OnFailure { max_retries: 3 },
-            health_check: Some(HealthCheck {
-                method: "GetStatus".to_string(),
-                interval_secs: 30,
-                timeout_secs: 5,
-                unhealthy_threshold: 3,
-            }),
-        },
-        AgentSpec {
-            agent_type: "cpp-pro".to_string(),
-            name: "C++ Professional".to_string(),
-            description: "C++ development and compilation environment".to_string(),
-            command: "dbus-agent-cpp-pro".to_string(),
-            args: vec![],
-            env: HashMap::new(),
-            working_dir: None,
-            capabilities: vec![
-                "compile".to_string(),
-                "debug".to_string(),
-                "analyze".to_string(),
-            ],
-            requires_root: false,
-            max_instances: 5,
-            restart_policy: RestartPolicy::OnFailure { max_retries: 3 },
-            health_check: Some(HealthCheck {
-                method: "GetStatus".to_string(),
-                interval_secs: 30,
-                timeout_secs: 5,
-                unhealthy_threshold: 3,
-            }),
-        },
-        AgentSpec {
-            agent_type: "golang-pro".to_string(),
-            name: "Go Professional".to_string(),
-            description: "Go development and compilation environment".to_string(),
-            command: "dbus-agent-golang-pro".to_string(),
-            args: vec![],
-            env: HashMap::new(),
-            working_dir: None,
-            capabilities: vec![
-                "compile".to_string(),
-                "test".to_string(),
-                "build".to_string(),
-            ],
-            requires_root: false,
-            max_instances: 5,
-            restart_policy: RestartPolicy::OnFailure { max_retries: 3 },
-            health_check: Some(HealthCheck {
-                method: "GetStatus".to_string(),
-                interval_secs: 30,
-                timeout_secs: 5,
-                unhealthy_threshold: 3,
-            }),
-        },
-        AgentSpec {
-            agent_type: "javascript-pro".to_string(),
-            name: "JavaScript Professional".to_string(),
-            description: "JavaScript development and execution environment".to_string(),
-            command: "dbus-agent-javascript-pro".to_string(),
-            args: vec![],
-            env: HashMap::new(),
-            working_dir: None,
-            capabilities: vec![
-                "execute".to_string(),
-                "format".to_string(),
-                "lint".to_string(),
-            ],
-            requires_root: false,
-            max_instances: 5,
-            restart_policy: RestartPolicy::OnFailure { max_retries: 3 },
-            health_check: Some(HealthCheck {
-                method: "GetStatus".to_string(),
-                interval_secs: 30,
-                timeout_secs: 5,
-                unhealthy_threshold: 3,
-            }),
-        },
-        AgentSpec {
-            agent_type: "php-pro".to_string(),
-            name: "PHP Professional".to_string(),
-            description: "PHP development and execution environment".to_string(),
-            command: "dbus-agent-php-pro".to_string(),
-            args: vec![],
-            env: HashMap::new(),
-            working_dir: None,
-            capabilities: vec![
-                "execute".to_string(),
-                "lint".to_string(),
-                "analyze".to_string(),
-            ],
-            requires_root: false,
-            max_instances: 5,
-            restart_policy: RestartPolicy::OnFailure { max_retries: 3 },
-            health_check: Some(HealthCheck {
-                method: "GetStatus".to_string(),
-                interval_secs: 30,
-                timeout_secs: 5,
-                unhealthy_threshold: 3,
-            }),
-        },
-        AgentSpec {
-            agent_type: "sql-pro".to_string(),
-            name: "SQL Professional".to_string(),
-            description: "SQL development and query execution environment".to_string(),
-            command: "dbus-agent-sql-pro".to_string(),
-            args: vec![],
-            env: HashMap::new(),
-            working_dir: None,
-            capabilities: vec![
-                "execute".to_string(),
-                "optimize".to_string(),
-                "analyze".to_string(),
-            ],
-            requires_root: false,
-            max_instances: 5,
-            restart_policy: RestartPolicy::OnFailure { max_retries: 3 },
-            health_check: Some(HealthCheck {
-                method: "GetStatus".to_string(),
-                interval_secs: 30,
-                timeout_secs: 5,
-                unhealthy_threshold: 3,
-            }),
-        },
-    ];
-
-    for spec in specs {
+            max_instances: 8,
+            restart_policy: RestartPolicy::Never,
+            health_check: None,
+        };
         registry.register_spec(spec).await?;
     }
-
     Ok(())
 }

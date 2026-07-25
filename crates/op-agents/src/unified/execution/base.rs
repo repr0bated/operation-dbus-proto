@@ -1,16 +1,15 @@
 //! Base Execution Agent Implementation
 
 use async_trait::async_trait;
-use simd_json::{json, OwnedValue as Value};
-use std::collections::HashSet;
 use std::process::Stdio;
 use tokio::process::Command;
 use tokio::time::{timeout, Duration};
 
-use crate::security::{SecurityProfile, SecurityConfig, ProfileCategory};
+use crate::security::SecurityProfile;
 use super::super::agent_trait::{
     UnifiedAgent, AgentCategory, AgentCapability, AgentRequest, AgentResponse
 };
+use super::super::prompts::templates::EXECUTION_AGENT;
 
 /// Base implementation for execution agents
 pub struct ExecutionAgent {
@@ -34,14 +33,12 @@ impl ExecutionAgent {
         allowed_commands: Vec<&str>,
     ) -> Self {
         let security_profile = SecurityProfile::code_execution(id, allowed_commands.clone());
-        
-        let system_prompt = format!(
-            include_str!("../../prompts.rs"),
-            agent_name = name,
-            language = language,
-            allowed_commands = allowed_commands.join(", "),
-            file_access = "read: /home, /tmp; write: /tmp",
-        );
+
+        let system_prompt = EXECUTION_AGENT
+            .replace("{agent_name}", name)
+            .replace("{language}", language)
+            .replace("{allowed_commands}", &allowed_commands.join(", "))
+            .replace("{file_access}", "read: /home, /tmp; write: /tmp");
 
         Self {
             id: id.to_string(),
@@ -125,17 +122,22 @@ impl UnifiedAgent for ExecutionAgent {
         AgentCategory::Execution
     }
 
-    fn capabilities(&self) -> HashSet<AgentCapability> {
-        let mut caps = HashSet::new();
-        caps.insert(AgentCapability::RunCode {
-            language: self.language.clone(),
-        });
-        caps.insert(AgentCapability::RunCommand {
-            commands: self.security_profile.config.allowed_commands
-                .iter().cloned().collect(),
-        });
-        caps.insert(AgentCapability::ReadFiles);
-        caps
+    fn capabilities(&self) -> Vec<AgentCapability> {
+        vec![
+            AgentCapability::RunCode {
+                language: self.language.clone(),
+            },
+            AgentCapability::RunCommand {
+                commands: self
+                    .security_profile
+                    .config
+                    .allowed_commands
+                    .iter()
+                    .cloned()
+                    .collect(),
+            },
+            AgentCapability::ReadFiles,
+        ]
     }
 
     fn system_prompt(&self) -> &str {
@@ -159,10 +161,9 @@ impl UnifiedAgent for ExecutionAgent {
     }
 
     async fn execute(&self, request: AgentRequest) -> AgentResponse {
-        // Default implementation - subclasses override
-        AgentResponse::failure(format!(
-            "Operation '{}' not implemented for {}",
-            request.operation, self.id
-        ))
+        // Base has no default ops — subclasses that implement operations override this.
+        // Never return a soft success / stub payload for unimplemented work.
+        let _ = request;
+        AgentResponse::failure("unsupported operation")
     }
 }

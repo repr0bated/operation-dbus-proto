@@ -3,6 +3,7 @@
 //! OPA/Rego policy-as-code: writes admission policies, evaluates decisions,
 //! integrates with Kubernetes, CI/CD gates, and API authorization.
 
+use crate::agents::advise::{extract_query, is_advise_op, route_advise_to_op};
 use crate::agents::base::{AgentTask, AgentTrait, TaskResult};
 use crate::security::SecurityProfile;
 use async_trait::async_trait;
@@ -86,13 +87,31 @@ impl PolicyEnforcerAgent {
                 ],
                 "reference": "https://github.com/oscal-compass/compliance-to-policy"
             }),
-            _ => json!({
-                "agent": "policy-enforcer",
-                "description": "OPA/Rego policy-as-code and compliance-to-policy expert",
-                "operations": ["write_policy", "evaluate", "kubernetes_gatekeeper", "c2p_bridge"],
-                "frameworks": ["OPA/Rego", "Gatekeeper", "Kyverno", "Falco", "Cedar"],
-                "reference": "https://www.openpolicyagent.org"
-            }),
+            op if is_advise_op(op) => {
+                let query = extract_query(args);
+                let routed_op = route_advise_to_op(
+                    &query,
+                    &[
+                        ("opa", "write_policy"),
+                        ("rego", "write_policy"),
+                        ("kyverno", "write_policy"),
+                        ("gatekeeper", "kubernetes_gatekeeper"),
+                        ("kubernetes", "kubernetes_gatekeeper"),
+                        ("k8s", "kubernetes_gatekeeper"),
+                        ("evaluat", "evaluate"),
+                        ("oscal", "c2p_bridge"),
+                        ("c2p", "c2p_bridge"),
+                    ],
+                    "write_policy",
+                );
+                return self.analyze(&routed_op, args);
+            }
+            other => {
+                return Err(format!(
+                    "unsupported operation '{}'; supported: [write_policy, evaluate, kubernetes_gatekeeper, c2p_bridge, advise]",
+                    other
+                ));
+            }
         };
         Ok(simd_json::to_string_pretty(&result).unwrap_or_default())
     }

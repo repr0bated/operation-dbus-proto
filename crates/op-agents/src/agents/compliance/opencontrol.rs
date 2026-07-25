@@ -3,6 +3,7 @@
 //! OpenControl YAML schema, compliance-masonry, SSP generation,
 //! FedRAMP and NIST 800-53 control narratives.
 
+use crate::agents::advise::{extract_query, is_advise_op, route_advise_to_op};
 use crate::agents::base::{AgentTask, AgentTrait, TaskResult};
 use crate::security::SecurityProfile;
 use async_trait::async_trait;
@@ -80,12 +81,27 @@ impl OpenControlAgent {
                 "fedramp_command": "fedramp convert --source opencontrol.yaml --output fedramp-ssp.json",
                 "input": args.unwrap_or("")
             }),
-            _ => json!({
-                "agent": "opencontrol",
-                "description": "OpenControl YAML and compliance-masonry expert",
-                "operations": ["scaffold", "write_narrative", "convert_to_oscal", "generate_ssp"],
-                "reference": "https://github.com/opencontrol"
-            }),
+            op if is_advise_op(op) => {
+                let query = extract_query(args);
+                let routed_op = route_advise_to_op(
+                    &query,
+                    &[
+                        ("scaffold", "scaffold"),
+                        ("narrative", "write_narrative"),
+                        ("convert", "convert_to_oscal"),
+                        ("oscal", "convert_to_oscal"),
+                        ("ssp", "generate_ssp"),
+                    ],
+                    "convert_to_oscal",
+                );
+                return self.analyze(&routed_op, args);
+            }
+            other => {
+                return Err(format!(
+                    "unsupported operation '{}'; supported: [scaffold, write_narrative, convert_to_oscal, generate_ssp, advise]",
+                    other
+                ));
+            }
         };
         Ok(simd_json::to_string_pretty(&result).unwrap_or_default())
     }
