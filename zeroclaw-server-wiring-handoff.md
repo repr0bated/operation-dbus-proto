@@ -1,82 +1,86 @@
-# Zeroclaw Server Wiring — Handoff
+# ZeroClaw Bridge Wiring — Handoff
 
-_Saved 2026-07-29. Scope: wiring zeroclaw as the control plane on the **server (VPS)**._
-_Local node/provider integration deliberately excluded (deferred)._
+_Updated 2026-07-29._
 
-## Goal (unfinished)
+## Resolved architecture
 
-Get the server's `zeroclaw` from "installed but idle" to a **running, configured control plane**
-(providers set, daemon/gateway up). Scope of "wired" was **not** settled — see Open Questions.
+`op-grpc-bridge` is the ZeroClaw runtime. Do not configure or start the
+upstream `zeroclaw` daemon/gateway beside it. There is one routing authority:
+the schema-backed bridge.
 
-## Access
+The authoritative contracts are:
 
-- **VPS (mail server + zeroclaw):** `ssh mail-vps` → `admin@188.68.58.237` (key `~/.ssh/vps_key`, ED25519 `jeremy@3tched`).
-- **Oracle decoy:** `ssh oracle-decoy` → `ubuntu@129.153.134.63` (same key). Mailbox nearly empty; has `~/bash_secrets` trove.
-- Both SSH via port 22. IMAP 993/143 up on both; VPS also has SMTP 25/587.
-- Aliases + key already installed in `~/.ssh/config` on this machine.
+- `crates/op-plugins/src/state_plugins/zeroclaw.rs`
+- `crates/op-plugins/src/state_plugins/ghostbridge.rs`
 
-## Current server state (facts verified this session)
+Schemars-derived `PluginSchema` documents declare the provider catalog, model
+routes, selection methods, model-role assignments, Ghostbridge identity, and
+transport surfaces. Sealed plugin blobs and SHM projections carry those
+contracts into the running bridge.
 
-- `zeroclaw` **0.8.3** installed at `~/.cargo/bin/zeroclaw` on the VPS. Source repo at `~/zeroclaw`
-  (GitHub `zeroclaw-labs/zeroclaw`, branch `master`, VPS pinned `f75b36a27`, origin/master ahead at `04af7b8`,
-  working tree clean, submodule `docs/book/po`).
-- **No persisted config** — `zeroclaw config list` shows only built-in defaults (`schema_version=3`).
-  No `config.toml`; no `~/.config/zeroclaw` content. Config dir is overridable via `--config-dir` / `ZEROCLAW_CONFIG_DIR`.
-- **No zeroclaw daemon/gateway running.** The binary is idle.
-- **The live control plane is `op-grpc-bridge`** (PID seen: 1324) bound to `0.0.0.0:8090`. Per Jeremy: **"the bridge IS zeroclaw"** — this bridge (formerly *ghostbridge*, references since renamed to **`opdbus`**) is the zeroclaw runtime bridge.
-- Control-plane chatbot provider `op-llm/src/openclaw.rs` (`OpenClawProvider`) is a plain HTTP client to
-  `http://127.0.0.1:8090/v1/chat/completions` (models `openclaw:main`, `openclaw:gemini3-adc`). Default `OPENCLAW_BASE_URL=http://127.0.0.1:8090`.
-- nginx `openclaw.3tched.com` conf: **gateway removed** → `503 "OpenClaw gateway disabled ... until zero-trust gRPC bridge is wired."`
-- **Jeremy's conclusion (agreed):** the chatbot↔zeroclaw integration was **never actually wired in** — it's *greenfield*, not broken. `zeroclaw.rs` plugin only *publishes a schema*; no live dispatch path. Matches the old `AUDIT_REPORT` ("declared as router/enforcer, not implemented").
+## Runtime flow
 
-## Provider: Salad (the cloud provider)
+1. Ghostbridge authenticates the caller and attaches its identity.
+2. The caller invokes a declared ZeroClaw method.
+3. The mutation engine records the method call in the event chain.
+4. ZeroClaw resolves the selected/requested provider and model against its
+   projected schema catalog.
+5. `op-llm::ChatManager` performs only the resolved upstream provider call.
+6. The method result is returned through the original transport.
 
-- Jeremy: **Salad (SaladCloud, distributed-GPU inference) is already set up as the provider on the server.**
-- In zeroclaw's model, Salad = an **OpenAiCompatible** provider (custom `base_url` → Salad container-gateway endpoint).
-- **UNRESOLVED:** *where* Salad is actually configured. It is **NOT** in zeroclaw's config (which is empty).
-  Likely in the odbus system, an env var / API key in `~/.bash_secrets`, or a config-dir not yet found.
-  A recursive `grep salad ~/git/odbus` timed out (repo is 400 MB+) — narrow it next time
-  (`grep -ri salad ~/.bash_secrets ~/.config ~/git/odbus/crates/*/src` or check env).
-- There is a Salad one-time-login email in `jeremy@3tched.com` mailbox (account exists).
+`Chat`, `ListModels`, `SetProvider`, `SetModel`, and the role-specific model
+setters are schema methods. Selection mutations are persisted to the ZeroClaw
+projection. Ghostbridge's declared read methods have domain dispatchers rather
+than falling through to the generic JSON echo.
 
-## Schema (why zeroclaw was chosen — it's schema-driven)
+## Compatibility transports
 
-Canonical schema lives in the odbus plugin structs (schemars `JsonSchema`, `x-oscal-subid` annotations):
-`~/git/odbus/crates/op-plugins/src/state_plugins/`
-- `zeroclaw.rs` (97 KB) — `LlmTransport` (`dbus_object`, `grpc_target`, `incus_container`, `browser_surface`, `rest_aliases`, `policy_source`), `ModelAssignments` (`ovs_routing`, `obfuscation`, `vectorization`, `qdrant_retrieval`, `cozo_retrieval`). Plugin = "GB.Zeroclaw", "schema/RPC-native model router for Antigravity UI/CLI".
-- `ghostbridge.rs` (→opdbus) — `BridgeIdentity` (wireguard_pubkey, tls_subject/sans/expires), `GhostrunnerSurface` (port default **8091**, bind `127.0.0.1`, env `GHOSTBRIDGE_UI_PORT`), `BridgeEndpoint`, `GhostbridgeState`.
-- `ctl_plane_chatbot.rs` (29 KB) — the control-plane chatbot plugin (also references OVS bridges — don't confuse with the zeroclaw gRPC bridge).
-- `zeroclaw config schema` dumps the full JSON Schema; `zeroclaw config list` lists live keys.
+Compatibility endpoints are adapters to schema methods, not another routing
+authority:
 
-## Relevant zeroclaw CLI surface (0.8.3)
+- `POST /v1/chat/completions` → `zeroclaw.Chat`
+- `GET /v1/models` → `zeroclaw.ListModels`
+- `POST /api/zeroclaw/chat` → `zeroclaw.Chat`
+- `POST /api/llm/chat` → `zeroclaw.Chat`
+- `op_chat.chat.ChatService.Send` → `zeroclaw.Chat`
 
-Subcommands incl: `agent`, `gateway` (webhooks/websockets), `acp` (JSON-RPC/stdio), `daemon`, `service`
-(launchd/systemd user service), `status`, `providers`, `models`, `config`, `channel(s)`, `agents`, `plugin` (WASM), `migrate`.
-Config groups seen: `gateway.allow_remote_admin`, `nodes.*` (federation — deferred), `observability.*`, `providers.*`.
-Providers: 74 supported incl `ollama [local]`, `openrouter`, `anthropic`, `openai`, `gemini`, many OpenAiCompatible.
-(Confirm `salad` is in the list / how it's addressed.)
+All retain Ghostbridge identity/capability enforcement and use the same
+audited method dispatcher.
 
-## Incus containers on VPS (context)
+## Canonical D-Bus contract
 
-`sudo incus list`: `NetMaker`, `cozo`, `mail-3tched`, `qdrant`, `xray` (10.200.0.1, binds `10.200.0.1:8090`), + two uuid-named containers. Storage pool `3tched-storage`. Mail server = Postfix/Dovecot in `mail-3tched` (`/var/mail/vhosts/3tched.com/{jeremy,admin,noreply}/Maildir`).
+The only plugin service/tree is:
 
-## Open questions to settle before touching production
+- service: `org.opdbus.v1.plugins`
+- base path: `/org/opdbus/v1/plugins`
+- object path: `/org/opdbus/v1/plugins/<plugin>`
+- interface: `org.opdbus.v1.PluginV1`
+- compatibility members: `Call`, `GetProperty`, `GetAllProperties`,
+  `SetProperty`
 
-1. **What "wired" means:**
-   - (a) **Operational** — persist zeroclaw config (providers incl Salad), run it as a daemon/gateway service, verify. No new code.
-   - (b) **Integration build** — make the chatbot dispatch *through* zeroclaw (point `:8090` / op-grpc-bridge at zeroclaw's gateway). Real Rust dev.
-   - (c) **Config-only** — write config, leave running to Jeremy.
-2. **Where Salad is configured** (see above) — determines if zeroclaw can already reach it or if that link is also unbuilt.
+Schema method names are arguments to `PluginV1.Call`; they are not additional
+D-Bus services, object trees, or per-plugin interfaces.
 
-## Suggested next steps (server, operational reading)
+## Service supervision
 
-1. Narrow-grep for Salad config/key (env + `.bash_secrets` + odbus src) — reconcile "already set up."
-2. Decide scope (a/b/c) with Jeremy.
-3. If (a): `zeroclaw config init` → set `providers.<salad>` (OpenAiCompatible base_url + key) → persist to a chosen `--config-dir`; enable via `zeroclaw service` (systemd user unit); `zeroclaw status`/`doctor` to verify.
-4. Only after server is a real running control plane: revisit the (excluded) local node join.
+Host `op-*` services use runit. They were verified with `sudo sv status`; do
+not introduce s6 supervision. Container/application lifecycle operations must
+continue through the service-manager D-Bus API via `busctl`.
 
-## Cross-session notes / durable changes already made on THIS machine
+## Xray invariant
 
-- oo7-daemon replaced gnome-keyring as `org.freedesktop.secrets` (headless). Removed `gnome-keyring` + `cachyos-mangowc-dms` (settings pkg only; compositor intact). Stale keyrings at `~/.local/share/keyrings/*.gnome-bak`.
-- Mailspring installed + logged into `jeremy@3tched.com`; old local inbox unrecoverable (home subvol never sent; nvme1n1 TRIM-wiped).
-- Gnoppix AI config duplicated → `~/.config/gnoppix-ai/`, `~/.local/bin/gnoppix*`, desktop entries. `ollama` installed + active (no model pulled yet). Docker services deferred → `~/.config/gnoppix-ai/incus-deferred.md`.
+Xray's live configuration must exist only at
+`/etc/xray/xray_config.json` inside its container. The static bootstrap
+materializes that path until the validated bridge generator replaces the same
+file atomically and requests reload through D-Bus. Models must never write or
+reload Xray directly.
+
+## Remaining operational step
+
+After tests and review, deploy the rebuilt bridge using the existing D-Bus
+deployment path, then verify:
+
+- the canonical D-Bus tree and `PluginV1` introspection;
+- authenticated `ListModels` and `Chat` method calls;
+- OpenAI-compatible model/chat responses on port 8090;
+- persisted provider/model selection after a bridge restart.

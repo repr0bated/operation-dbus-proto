@@ -33,7 +33,6 @@ pub use plugin::{NetworkInterface, NetworkPlugin, OpenFlowConfig, OvsBridge, Ovs
 pub use proxmox::{
     ContainerStatus, CreateContainerRequest, LxcContainer, ProxmoxClient, ProxmoxToken,
 };
-pub use rovs_proxy::{jsonrpc_proxy, RovsJsonRpcProxy};
 
 /// Prelude for convenient imports
 pub mod prelude {

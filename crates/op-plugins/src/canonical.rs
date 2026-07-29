@@ -14,15 +14,12 @@
 //!
 //! ### D-Bus Interface Names
 //! ```text
-//! org.opdbus.v1.Plugin.Plugins
-//! org.opdbus.v1.Plugin.Plugins.{PluginName}
-//! org.opdbus.v1.Plugin.{PluginName}
+//! org.opdbus.v1.PluginV1
 //! ```
 //!
 //! ### D-Bus Service Names (Bus Names)
 //! ```text
-//! org.opdbus.v1
-//! org.opdbus.v1.Plugin.{PluginName}
+//! org.opdbus.v1.plugins
 //! ```
 //!
 //! ### Schema File Paths
@@ -49,7 +46,7 @@
 //! New (canonical): `/org/opdbus/v1/plugins/net`
 //!
 //! Old (deprecated): `org.opdbus.NetPlugin`
-//! New (canonical): `org.opdbus.v1.Plugin.Plugins.Net`
+//! New (canonical): `org.opdbus.v1.PluginV1`
 
 /// Root D-Bus object path for the op-dbus system
 pub const DBUS_ROOT_PATH: &str = "/org/opdbus/v1";
@@ -57,11 +54,14 @@ pub const DBUS_ROOT_PATH: &str = "/org/opdbus/v1";
 /// Canonical base path for all plugins
 pub const PLUGIN_BASE_PATH: &str = "/org/opdbus/v1/plugins";
 
-/// Base interface name for plugin-related interfaces
-pub const PLUGIN_BASE_INTERFACE: &str = "org.opdbus.v1.Plugin";
+/// Base interface name for plugin-related interfaces.
+pub const PLUGIN_BASE_INTERFACE: &str = "org.opdbus.v1.PluginV1";
 
-/// Interface for the plugins collection/manager
-pub const PLUGINS_INTERFACE: &str = "org.opdbus.v1.Plugin.Plugins";
+/// Interface shared by every object on the canonical plugin tree.
+pub const PLUGIN_INTERFACE: &str = "org.opdbus.v1.PluginV1";
+
+/// Compatibility alias for the one plugin interface.
+pub const PLUGINS_INTERFACE: &str = PLUGIN_INTERFACE;
 
 /// Canonical plugin-host service name (bus name)
 pub const BASE_SERVICE_NAME: &str = "org.opdbus.v1.plugins";
@@ -114,19 +114,17 @@ pub fn plugin_path(name: &str) -> String {
     format!("{}/{}", PLUGIN_BASE_PATH, sanitize_plugin_name(name))
 }
 
-/// Build the D-Bus interface name for a specific plugin
+/// Return the single legal D-Bus interface for a plugin object.
 ///
 /// # Example
 /// ```
 /// use op_plugins::canonical::plugin_interface;
 ///
 /// let iface = plugin_interface("incus");
-/// assert_eq!(iface, "org.opdbus.v1.Plugin.Plugins.Incus");
+/// assert_eq!(iface, "org.opdbus.v1.PluginV1");
 /// ```
-pub fn plugin_interface(name: &str) -> String {
-    let sanitized = sanitize_plugin_name(name);
-    let capitalized = capitalize_plugin_name(&sanitized);
-    format!("{}.{}", PLUGINS_INTERFACE, capitalized)
+pub fn plugin_interface(_name: &str) -> String {
+    PLUGIN_INTERFACE.to_string()
 }
 
 /// Build the schema file path for a plugin
@@ -299,14 +297,8 @@ mod tests {
 
     #[test]
     fn test_plugin_interface() {
-        assert_eq!(
-            plugin_interface("incus"),
-            "org.opdbus.v1.Plugin.Plugins.Incus"
-        );
-        assert_eq!(
-            plugin_interface("my-plugin"),
-            "org.opdbus.v1.Plugin.Plugins.MyPlugin"
-        );
+        assert_eq!(plugin_interface("incus"), "org.opdbus.v1.PluginV1");
+        assert_eq!(plugin_interface("my-plugin"), "org.opdbus.v1.PluginV1");
     }
 
     #[test]
@@ -384,7 +376,8 @@ mod tests {
     fn test_constants() {
         assert_eq!(DBUS_ROOT_PATH, "/org/opdbus/v1");
         assert_eq!(PLUGIN_BASE_PATH, "/org/opdbus/v1/plugins");
-        assert_eq!(PLUGINS_INTERFACE, "org.opdbus.v1.Plugin.Plugins");
+        assert_eq!(PLUGIN_BASE_INTERFACE, "org.opdbus.v1.PluginV1");
+        assert_eq!(PLUGINS_INTERFACE, "org.opdbus.v1.PluginV1");
         assert_eq!(BASE_SERVICE_NAME, "org.opdbus.v1.plugins");
     }
 }

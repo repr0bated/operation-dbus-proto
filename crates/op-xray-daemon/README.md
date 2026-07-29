@@ -8,9 +8,9 @@ This daemon provides a D-Bus interface (`org.opdbus.v1.Xray`) for controlling th
 
 ## D-Bus Interface
 
-**Bus Name:** `org.opdbus.v1`
+**Bus Name:** `org.opdbus.v1.plugins`
 
-**Object Path:** `/org/opdbus/v1/xray`
+**Object Path:** `/org/opdbus/v1/plugins/xray`
 
 **Interface:** `org.opdbus.v1.Xray`
 
@@ -31,7 +31,7 @@ This daemon provides a D-Bus interface (`org.opdbus.v1.Xray`) for controlling th
 {
   "running": true,
   "pid": 12345,
-  "config_path": "/dev/shm/xray_config.json",
+  "config_path": "/etc/xray/xray_config.json",
   "uptime_secs": 3600,
   "start_time": "2024-06-05T10:00:00"
 }
@@ -39,13 +39,15 @@ This daemon provides a D-Bus interface (`org.opdbus.v1.Xray`) for controlling th
 
 ## Configuration Path
 
-Per **AGENTS.md §4a (Zero-Btrfs)**, the xray config path must be:
+Xray's live configuration must exist only at this path inside the container:
 
 ```
-/dev/shm/xray_config.json
+/etc/xray/xray_config.json
 ```
 
-This ensures in-memory storage without Btrfs overhead, using tmpfs for zero-copy configuration management.
+The static bootstrap is materialized there during boot. A future validated
+control-plane generator replaces that same file atomically and asks the bridge
+to reload Xray; models do not write or reload Xray directly.
 
 ## Usage
 
@@ -56,7 +58,7 @@ This ensures in-memory storage without Btrfs overhead, using tmpfs for zero-copy
 op-xray-daemon
 
 # Run with explicit config path
-op-xray-daemon --config /dev/shm/xray_config.json
+op-xray-daemon --config /etc/xray/xray_config.json
 ```
 
 ### Using D-Bus Methods
@@ -64,30 +66,30 @@ op-xray-daemon --config /dev/shm/xray_config.json
 #### Start xray
 
 ```bash
-dbus-send --system --dest=org.opdbus.v1 --type=method_call \
-  /org/opdbus/v1/xray org.opdbus.v1.Xray.Start \
-  string:"/dev/shm/xray_config.json"
+dbus-send --system --dest=org.opdbus.v1.plugins --type=method_call \
+  /org/opdbus/v1/plugins/xray org.opdbus.v1.Xray.Start \
+  string:"/etc/xray/xray_config.json"
 ```
 
 #### Check Status
 
 ```bash
-dbus-send --system --dest=org.opdbus.v1 --type=method_call \
-  /org/opdbus/v1/xray org.opdbus.v1.Xray.Status
+dbus-send --system --dest=org.opdbus.v1.plugins --type=method_call \
+  /org/opdbus/v1/plugins/xray org.opdbus.v1.Xray.Status
 ```
 
 #### Reload Config
 
 ```bash
-dbus-send --system --dest=org.opdbus.v1 --type=method_call \
-  /org/opdbus/v1/xray org.opdbus.v1.Xray.Reload
+dbus-send --system --dest=org.opdbus.v1.plugins --type=method_call \
+  /org/opdbus/v1/plugins/xray org.opdbus.v1.Xray.Reload
 ```
 
 #### Stop xray
 
 ```bash
-dbus-send --system --dest=org.opdbus.v1 --type=method_call \
-  /org/opdbus/v1/xray org.opdbus.v1.Xray.Stop
+dbus-send --system --dest=org.opdbus.v1.plugins --type=method_call \
+  /org/opdbus/v1/plugins/xray org.opdbus.v1.Xray.Stop
 ```
 
 ## Replacing Direct Subprocess Spawning
@@ -98,7 +100,7 @@ Previously, code would spawn xray directly:
 // OLD: Direct subprocess spawn (FORBIDDEN per AGENTS.md)
 Command::new("xray")
     .arg("-c")
-    .arg("/dev/shm/xray_config.json")
+    .arg("/etc/xray/xray_config.json")
     .spawn()
 ```
 
@@ -110,11 +112,11 @@ use zbus::Connection;
 
 let conn = Connection::system().await?;
 let proxy = conn.call_method(
-    "org.opdbus.v1",
-    "/org/opdbus/v1/xray",
+    "org.opdbus.v1.plugins",
+    "/org/opdbus/v1/plugins/xray",
     "org.opdbus.v1.Xray",
     "Start",
-    &("/dev/shm/xray_config.json",)
+    &("/etc/xray/xray_config.json",)
 ).await?;
 ```
 
@@ -128,7 +130,7 @@ See `deploy/install-op-xray-daemon.sh` for D-Bus policy and service installation
 - **Process Lifecycle:** The daemon maintains a handle to the xray child process
 - **Signals:** Graceful shutdown on SIGTERM/SIGINT, properly terminating xray
 - **Logging:** Structured logging via `tracing`
-- **Config Location:** /dev/shm for zero-Btrfs overhead per AGENTS.md
+- **Config Location:** `/etc/xray/xray_config.json` inside the Xray container
 
 ## Dependencies
 
