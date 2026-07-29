@@ -5,7 +5,7 @@
       "args": [
         "--stdio",
         "-m",
-        "compact"
+        "cognitive"
       ],
       "type": "stdio"
     },
@@ -48,18 +48,6 @@
     "op-dbus-agents": {
       "url": "http://127.0.0.1:8080/mcp/agents/message",
       "type": "http"
-    },
-    "op-cognitive-mcp": {
-      "command": "/usr/local/bin/op-cognitive-mcp",
-      "args": [
-        "--stdio",
-        "--no-http",
-        "--no-grpc"
-      ],
-      "env": {
-        "COGNITIVE_MCP_DB_PATH": "/home/admin/.local/share/op-cognitive-mcp/memory.db"
-      },
-      "type": "stdio"
     }
   }
 }

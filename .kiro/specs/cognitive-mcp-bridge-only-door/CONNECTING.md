@@ -2,29 +2,26 @@
 
 ## How to connect (today)
 
-All cognitive MCP tools are available through **three equivalent paths**, each routed
-through `op-grpc-bridge` (the enforcement chain):
-
-### 1. Stdio — `op-mcp-server --stdio -m compact`
-
-The `.mcp.json` entry `op-web-compact` spawns this. It uses the D-Bus
-`org.opdbus.v1.PluginV1.Call` interface on the `cognitive_mcp` plugin object:
+**One entry, all tools.** Use `op-mcp-server --stdio -m cognitive`:
 
 ```json
 {
   "op-web-compact": {
     "command": "/usr/local/bin/op-mcp-server",
-    "args": ["--stdio", "-m", "compact"],
+    "args": ["--stdio", "-m", "cognitive"],
     "type": "stdio"
   }
 }
 ```
 
-This is the recommended path for **IDE / editor MCP clients** (Kiro, Cursor, etc).
+This serves **561 tools** from a single stdio socket:
+- 406 cognitive tools (memory, RAG, code search, agents, NotebookLM) → routed through the bridge enforcement chain
+- 155 system tools (dbus, ovs, file ops, service management) → executed locally
 
-### 2. HTTP/SSE — `http://127.0.0.1:8080/mcp/compact`
+The client sees 5 meta-tools (`list_tools`, `search_tools`, `get_tool_schema`,
+`execute_tool`, `respond`) which lazily discover the full set.
 
-The `.mcp.json` entry `op-dbus-compact` connects here:
+### Alternative: HTTP
 
 ```json
 {
@@ -35,85 +32,46 @@ The `.mcp.json` entry `op-dbus-compact` connects here:
 }
 ```
 
-`op-web-server` (PID on `:8080`) already routes through the bridge via D-Bus. This
-is the recommended path for **HTTP-capable MCP clients**.
+Note: the HTTP path currently serves only the op-tools builtins (155 tools), not the
+merged set. Use stdio `cognitive` mode for the full surface.
 
-### 3. D-Bus direct — `zcall` or `busctl`
-
-For scripts, automation, and debugging:
+### Alternative: D-Bus direct (scripts/automation)
 
 ```bash
-# List available tools
+# List available cognitive tools
 ./bin/zcall cognitive_mcp list_tools -a '{}'
 
-# Invoke a specific tool
-./bin/zcall cognitive_mcp invoke_tool -a '{"tool_name":"cognitive_memory","arguments":{"operation":"query","namespace":"project:op-dbus","key_pattern":"*","limit":5}}'
+# Invoke a specific tool through the bridge
+./bin/zcall cognitive_mcp invoke_tool -a '{"tool_name":"cognitive_memory","arguments":{"operation":"list_namespaces"}}'
 
 # Use a schema method directly
 ./bin/zcall cognitive_mcp memory_query -a '{"namespace":"project:op-dbus","key_pattern":"*","limit":5}'
-
-# Raw busctl
-busctl --address=unix:path=/run/opdbus/session-bus.sock call \
-  org.opdbus.v1.plugins /org/opdbus/v1/plugins/cognitive_mcp \
-  org.opdbus.v1.PluginV1 Call ss "invoke_tool" \
-  '{"tool_name":"memory_list_namespaces","arguments":{}}'
 ```
-
-### 4. Fan-in cognitive proxy (bridge-backed stdio)
-
-The `.mcp.json` entry `op-cognitive-mcp` uses `--stdio --no-http --no-grpc`:
-
-```json
-{
-  "op-cognitive-mcp": {
-    "command": "/usr/local/bin/op-cognitive-mcp",
-    "args": ["--stdio", "--no-http", "--no-grpc"],
-    "env": { "COGNITIVE_MCP_DB_PATH": "/home/admin/.local/share/op-cognitive-mcp/memory.db" },
-    "type": "stdio"
-  }
-}
-```
-
-> **Deprecation note**: This entry spawns a second `op-cognitive-mcp` process that
-> races for the CozoDB file lock with the supervised service. Prefer `op-web-compact`
-> (path 1) which routes through the single supervised instance via the bridge.
 
 ---
 
 ## Architecture (as implemented)
 
 ```
-MCP Client (IDE / HTTP / script)
+MCP Client (IDE / script)
     │
-    ├─ stdio ──► op-mcp-server --stdio -m compact
-    │                │  D-Bus PluginV1.Call("invoke_tool", ...)
-    │                ▼
-    ├─ HTTP ───► op-web-server :8080 /mcp/compact
-    │                │  D-Bus PluginV1.Call(...)
-    │                ▼
-    └─ direct ─► zcall / busctl
+    └─ stdio ──► op-mcp-server --stdio -m cognitive
                      │
-                     ▼
-    op-grpc-bridge (bus owner: org.opdbus.v1.plugins)
-         │  1. Method-existence gate
-         │  2. Arg validation (JSON schema)
-         │  3. Capability check (cognitive_mcp.invoke / .read)
-         │  4. Event-chain recording (event_id, event_hash)
-         │  5. dispatch_cognitive_mcp_method()
-         │        └─ map_schema_method_to_tool() → tool_name + args
-         │
-         ▼  HTTP loopback (Phase 1)
-    op-cognitive-mcp :3003/mcp (MCP JSON-RPC tools/call)
-         │  ToolRegistry::execute(tool_name, args)
-         ▼
-    Tool handler (CognitiveMemory, CodeSearch, AskQuestion, ...)
+                     ├─ cognitive tools ─► D-Bus PluginV1.Call("invoke_tool", ...)
+                     │                        │
+                     │                        ▼
+                     │   op-grpc-bridge (org.opdbus.v1.plugins)
+                     │        │  method gate → arg validation → capability check → event chain
+                     │        │  dispatch_cognitive_mcp_method() → HTTP loopback
+                     │        ▼
+                     │   op-cognitive-mcp :3003/mcp → ToolRegistry
+                     │
+                     └─ op-tools builtins ─► local execution (no bridge hop)
+                              (dbus, ovs, file ops, service mgmt)
 ```
 
-**Key detail**: The bridge dispatches to the supervised `op-cognitive-mcp` via HTTP
-loopback to `http://10.200.0.2:3003/mcp` (env-overridable via `COGNITIVE_MCP_MCP_URL`).
-This is the Phase 1 transport. The design.md proposed D-Bus IPC via a second bus name
-`org.opdbus.v1.executors.cognitive_mcp`, but that was **never implemented** — the actual
-code uses HTTP.
+561 total tools. One process. One socket. Cognitive tools get full enforcement;
+op-tools builtins run directly (they're system utilities that don't need event-chain).
 
 ---
 
