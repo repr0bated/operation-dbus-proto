@@ -279,14 +279,22 @@ impl IncusPlugin {
             let mut wait_raw = wait_response;
             let wait_val: simd_json::OwnedValue = simd_json::from_slice(&mut wait_raw)
                 .context("Failed to parse Incus operation-wait response")?;
-            let op_metadata = wait_val.get("metadata").cloned().unwrap_or(simd_json::json!({}));
+            let op_metadata = wait_val
+                .get("metadata")
+                .cloned()
+                .unwrap_or(simd_json::json!({}));
             let op_status = op_metadata
                 .get("status")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
             if op_status == "Success" {
-                Ok(simd_json::to_string(&op_metadata.get("metadata").cloned().unwrap_or(simd_json::json!({})))?
-                    .into_bytes())
+                Ok(simd_json::to_string(
+                    &op_metadata
+                        .get("metadata")
+                        .cloned()
+                        .unwrap_or(simd_json::json!({})),
+                )?
+                .into_bytes())
             } else {
                 let err = op_metadata
                     .get("err")

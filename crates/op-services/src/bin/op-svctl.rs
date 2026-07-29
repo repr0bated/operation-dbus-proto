@@ -1,4 +1,4 @@
-//! systemctl compatibility wrapper
+//! Runit service-manager gRPC client.
 
 use std::env;
 
@@ -76,7 +76,7 @@ async fn main() -> anyhow::Result<()> {
 }
 
 fn print_usage() {
-    eprintln!("Usage: systemctl <command> [service]");
+    eprintln!("Usage: op-svctl <command> [service]");
     eprintln!();
     eprintln!("Commands:");
     eprintln!("  start <service>    Start a service");

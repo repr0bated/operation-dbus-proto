@@ -90,7 +90,10 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         )
         // Plugin identity endpoints — model-agnostic, sealed SHM blob catalog
         // (`/dev/shm/opdbus/`) is the single source of truth for both.
-        .route("/plugins", get(handlers::plugin_schema::plugin_list_handler))
+        .route(
+            "/plugins",
+            get(handlers::plugin_schema::plugin_list_handler),
+        )
         .route(
             "/plugin-schema/:plugin_id",
             get(handlers::plugin_schema::plugin_schema_handler),
@@ -122,7 +125,10 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             "/ui-model/plugin-schema/:plugin",
             get(handlers::ui_model::ui_model_plugin_schema_handler),
         )
-        .route("/ui-model/plugins", get(handlers::ui_model::ui_model_list_plugins_handler))
+        .route(
+            "/ui-model/plugins",
+            get(handlers::ui_model::ui_model_list_plugins_handler),
+        )
         .route("/chat/sessions", get(handlers::chat::list_sessions_handler))
         .route(
             "/chat/sessions",
@@ -186,7 +192,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             "/llm/models/:provider",
             get(handlers::llm::list_models_for_provider_handler),
         )
-        .route("/llm/chat", post(handlers::chat::send_message_handler))
+        .route("/llm/chat", post(handlers::zeroclaw::zeroclaw_chat_handler))
         // OpenClaw endpoints (internal/base layer)
         .route(
             "/openclaw/status",
@@ -288,6 +294,13 @@ pub fn create_router(state: Arc<AppState>) -> Router {
     // Main router - agents_mcp_route FIRST so it takes precedence
     let router = Router::new()
         .nest("/api", api_routes)
+        // Ordinary HTTP compatibility lives on op-web :8080. Each handler is
+        // an adapter to a schema-declared bridge method on gRPC :8090.
+        .route("/v1/models", get(handlers::zeroclaw::openai_models_handler))
+        .route(
+            "/v1/chat/completions",
+            post(handlers::zeroclaw::zeroclaw_chat_handler),
+        )
         // Device pairing (egui / dashboard) — top-level paths match zeroclaw-gui AuthState
         .route("/pair", post(handlers::pair::pair_handler))
         // Human-facing privacy verification flow (magic-link target)

@@ -6067,8 +6067,6 @@ dependencies = [
  "anyhow",
  "chrono",
  "futures",
- "libc",
- "nix 0.29.0",
  "op-plugins",
  "prost 0.13.5",
  "prost-types 0.13.5",
@@ -6083,7 +6081,6 @@ dependencies = [
  "tonic-build 0.12.3",
  "tracing",
  "tracing-subscriber",
- "zbus 5.18.0",
 ]
 
 [[package]]

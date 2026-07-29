@@ -1,9 +1,9 @@
-//! Axum HTTP/gRPC-Web host for the zeroclaw plugin schema.
+//! Axum gRPC/gRPC-Web host for the zeroclaw plugin schema.
 //!
 //! Serves the plugin-owned schema JSON on:
 //!   - host native gRPC over Unix socket `/run/opdbus/grpc.sock`
 //!   - shared container UDS `/run/ghostbridge/container.sock` (same routes)
-//!   - HTTP/1.1 + gRPC-Web on TCP `0.0.0.0:8090` (configurable via D-Bus)
+//!   - gRPC + gRPC-Web on TCP `0.0.0.0:8090` (configurable by environment)
 //!
 //! The schema itself is never generated here; it is read from the plugin's
 //! sealed blob in the SHM catalog (`/dev/shm/opdbus/plugin-blobs`).
@@ -15,13 +15,11 @@ use std::sync::Arc;
 
 use async_stream::stream;
 use axum::Router;
-use tokio::sync::mpsc;
 use tonic::transport::{Identity, ServerTlsConfig};
 use tonic::{Request as TonicRequest, Response as TonicResponse, Status};
 use tower_http::cors::{Any, CorsLayer};
 use tracing::info;
 
-use crate::dbus_object::{register_zeroclaw_host_object, ZeroclawAxumHostObject};
 use crate::grpc_server::OperationGrpcServer;
 use crate::mutation_engine::MutationEngine;
 use crate::schema_loader::{SchemaLoader, SchemaReloadEvent};
@@ -226,7 +224,9 @@ fn build_routes(loader: Arc<SchemaLoader>, server: OperationGrpcServer) -> tonic
     build_operation_routes(server).add_service(zeroclaw_svc)
 }
 
-/// Build the axum `Router` that serves the gRPC service over HTTP/gRPC-Web.
+/// Build the axum `Router` that serves only gRPC and gRPC-Web.
+///
+/// Ordinary HTTP/REST compatibility routes belong to op-web on port 8080.
 pub fn build_axum_app(loader: Arc<SchemaLoader>, server: OperationGrpcServer) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(Any)
@@ -238,10 +238,8 @@ pub fn build_axum_app(loader: Arc<SchemaLoader>, server: OperationGrpcServer) ->
             "grpc-status-details-bin".parse().unwrap(),
         ]);
 
-    let mutation_engine = server.mutation_engine();
     build_routes(loader, server)
         .into_axum_router()
-        .merge(crate::chat_service::rest_router(mutation_engine))
         .layer(cors)
         .layer(GhostbridgeTraceLayer::new())
 }
@@ -263,15 +261,6 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
         &config.schema_path,
         config.plugin_id.clone(),
     )?);
-
-    // Channel for D-Bus-triggered rebind requests. Only `SchemaPath` changes are
-    // applied live; `BindAddr` changes are recorded and honored on the next
-    // restart.
-    let (rebind_tx, mut rebind_rx) = mpsc::channel::<String>(4);
-
-    // D-Bus object for runtime configuration.
-    let dbus_object = ZeroclawAxumHostObject::new(loader.clone(), rebind_tx)?;
-    let _dbus_connection = register_zeroclaw_host_object(dbus_object).await?;
 
     // SIGHUP reload watcher.
     let _sighup_handle = loader.clone().watch_sighup();
@@ -424,7 +413,7 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
             .serve_with_incoming(incoming)
     });
 
-    // TCP listeners for HTTP + gRPC-Web
+    // TCP listeners for gRPC + gRPC-Web. REST is served by op-web on :8080.
     let bind_addrs: Vec<&str> = config.bind_addr.split(',').collect();
     let mut tcp_tasks = Vec::new();
     for bind_addr_str in &bind_addrs {
@@ -432,7 +421,7 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
         let listener = std::net::TcpListener::bind(bind_addr)?;
         listener.set_nonblocking(true)?;
         let listener = tokio::net::TcpListener::from_std(listener)?;
-        info!(addr = %bind_addr, "zeroclaw HTTP/gRPC-Web listening on TCP");
+        info!(addr = %bind_addr, "zeroclaw gRPC/gRPC-Web listening on TCP");
         let app = build_axum_app(loader.clone(), operation_server.clone());
         let server = axum::serve(listener, app.into_make_service());
         tcp_tasks.push(tokio::spawn(async move { server.await }));
@@ -463,15 +452,6 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
         }
         _ => None,
     };
-
-    // Rebind task: when a new bind address is requested, restart the TCP server.
-    // The current implementation starts the initial TCP server; subsequent
-    // rebinds require a restart to keep the listener lifecycle simple andsafe.
-    let rebind_task = tokio::spawn(async move {
-        while let Some(new_bind) = rebind_rx.recv().await {
-            info!(new_bind = %new_bind, "D-Bus rebind request received; will be honored on next restart");
-        }
-    });
 
     // Drive all listeners concurrently. Absent optional servers are no-ops.
     let shared_fut = async {
@@ -512,7 +492,6 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
     s?;
     t?;
     tls_r?;
-    let _ = rebind_task.await;
     Ok(())
 }
 

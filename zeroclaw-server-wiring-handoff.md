@@ -36,7 +36,8 @@ than falling through to the generic JSON echo.
 ## Compatibility transports
 
 Compatibility endpoints are adapters to schema methods, not another routing
-authority:
+authority. Ordinary HTTP is served by `op-web` on port 8080; the bridge's
+port 8090 remains gRPC/gRPC-Web only:
 
 - `POST /v1/chat/completions` → `zeroclaw.Chat`
 - `GET /v1/models` → `zeroclaw.ListModels`
@@ -45,7 +46,9 @@ authority:
 - `op_chat.chat.ChatService.Send` → `zeroclaw.Chat`
 
 All retain Ghostbridge identity/capability enforcement and use the same
-audited method dispatcher.
+audited method dispatcher. The compatibility OpenAPI document is generated
+locally from the sealed `Chat` and `ListModels` Schemars contracts; there is no
+external Antigravity documentation or routing dependency.
 
 ## Canonical D-Bus contract
 
@@ -59,7 +62,11 @@ The only plugin service/tree is:
   `SetProperty`
 
 Schema method names are arguments to `PluginV1.Call`; they are not additional
-D-Bus services, object trees, or per-plugin interfaces.
+D-Bus services, object trees, or per-plugin interfaces. Provider/model
+selection data remains in the schema and projection returned by `PluginV1`;
+it is not published as route/provider child objects. Bridge listener
+configuration comes from its environment and SIGHUP reload path, not a second
+runtime-configuration D-Bus object.
 
 ## Service supervision
 
@@ -75,12 +82,28 @@ materializes that path until the validated bridge generator replaces the same
 file atomically and requests reload through D-Bus. Models must never write or
 reload Xray directly.
 
-## Remaining operational step
+## Deployment verification
 
-After tests and review, deploy the rebuilt bridge using the existing D-Bus
-deployment path, then verify:
+The release bridge and blob sealer were deployed and the bridge was restarted
+under runit on 2026-07-29. The live process checksum matches the installed
+release binary.
 
-- the canonical D-Bus tree and `PluginV1` introspection;
-- authenticated `ListModels` and `Chat` method calls;
-- OpenAI-compatible model/chat responses on port 8090;
-- persisted provider/model selection after a bridge restart.
+Verified live:
+
+- all host `op-*` services are up under runit;
+- `org.opdbus.v1.plugins` is owned by `op-grpc-bridge`;
+- the ZeroClaw object exposes only `org.opdbus.v1.PluginV1` with `Call`,
+  `GetProperty`, `GetAllProperties`, and `SetProperty`;
+- the sealed catalog contains `zeroclaw` and no `s6`/`s6_systemctl` plugin;
+- authenticated `zeroclaw.ListModels` returns an audited success envelope with
+  12 declared routes on consecutive calls;
+- authenticated `GET /v1/models` on port 8080 returns the schema-declared
+  catalog as 9 unique OpenAI-compatible models, while the same path on 8090 is
+  gRPC rather than ordinary HTTP;
+- `/api/plugin-schema/zeroclaw` serves Schemars field descriptions, and the
+  combined chat schema derives 13 provider options and 12 model-route options
+  from the same sealed plugin schema.
+
+An upstream paid chat request was deliberately not sent during deployment.
+Provider availability remains a live projection concern; routing authority
+remains the bridge regardless of which provider is selected.

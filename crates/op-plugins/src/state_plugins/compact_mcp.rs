@@ -13,11 +13,10 @@ use op_state::{
 use op_state_store::PluginSchema;
 use serde::{Deserialize, Serialize};
 use simd_json::{prelude::*, OwnedValue as Value};
-use zbus::{Connection, Proxy};
 
-const S6_SV_PATH: &str = "/run/service/op-mcp-compact";
-const ENV_DIR: &str = "/etc/s6/sv/op-mcp-compact/env";
-const RUNTIME_ENV_DIR: &str = "/run/service/op-mcp-compact/env";
+const RUNIT_SERVICE_PATH: &str = "/etc/runit/sv/op-mcp-compact";
+const RUNIT_ACTIVE_PATH: &str = "/etc/runit/runsvdir/default/op-mcp-compact";
+const ENV_DIR: &str = "/etc/runit/sv/op-mcp-compact/env";
 const DEFAULT_MODE: &str = "compact";
 const DEFAULT_HTTP: &str = "127.0.0.1:11436";
 const DEFAULT_WG: &str = "netmaker";
@@ -36,7 +35,7 @@ pub struct CompactMcpConfig {
     /// WireGuard interface for identity
     #[serde(default = "default_wg")]
     pub wg_interface: String,
-    /// Run stdio transport (not used for s6 daemon deployment)
+    /// Run stdio transport (not used for runit daemon deployment)
     #[serde(default = "default_false")]
     pub stdio: bool,
     /// Log level
@@ -83,11 +82,6 @@ impl CompactMcpPlugin {
         Self
     }
 
-    fn service_running() -> bool {
-        let sv = std::path::Path::new(S6_SV_PATH);
-        sv.exists() && !sv.join("down").exists()
-    }
-
     fn read_env(key: &str) -> Option<String> {
         std::fs::read_to_string(format!("{ENV_DIR}/{key}"))
             .ok()
@@ -115,44 +109,21 @@ impl CompactMcpPlugin {
         tokio::fs::write(format!("{ENV_DIR}/{key}"), value)
             .await
             .with_context(|| format!("write env {key}"))?;
-        // Also write to runtime dir so the value takes effect after s6-svc -r
-        // without requiring a DB recompile.
-        if let Ok(()) = tokio::fs::create_dir_all(RUNTIME_ENV_DIR).await {
-            let _ = tokio::fs::write(format!("{RUNTIME_ENV_DIR}/{key}"), value).await;
-        }
         Ok(())
     }
 
     async fn reload_service() -> Result<()> {
-        // D-Bus only per AGENTS.md §4 - no subprocess fallbacks
-        Self::reload_service_dbus().await
-    }
-
-    async fn reload_service_dbus() -> Result<()> {
-        let conn = Connection::system()
+        let status = tokio::process::Command::new("sv")
+            .arg("restart")
+            .arg(RUNIT_ACTIVE_PATH)
+            .status()
             .await
-            .context("Failed to connect to system D-Bus")?;
-
-        let proxy = Proxy::new(
-            &conn,
-            "opdbus.v1",
-            "/org/opdbus/v1/plugins/s6/systemctl",
-            "opdbus.v1.S6.Systemctl",
-        )
-        .await
-        .context("Failed to create s6-systemctl D-Bus proxy")?;
-
-        let (success, message): (bool, String) =
-            proxy
-                .call("reload", &("op-mcp-compact",))
-                .await
-                .context("Failed to call reload on s6-systemctl")?;
-
-        if success {
-            tracing::info!("Reloaded op-mcp-compact via D-Bus: {}", message);
+            .context("sv restart op-mcp-compact")?;
+        if status.success() {
+            tracing::info!("Restarted op-mcp-compact through runit");
             Ok(())
         } else {
-            anyhow::bail!("s6-systemctl reload failed: {}", message)
+            anyhow::bail!("sv restart op-mcp-compact exited with {status}")
         }
     }
 }
@@ -179,11 +150,11 @@ impl StatePlugin for CompactMcpPlugin {
     }
 
     fn is_available(&self) -> bool {
-        std::path::Path::new("/etc/s6/sv/op-mcp-compact").exists()
+        std::path::Path::new(RUNIT_SERVICE_PATH).exists()
     }
 
     fn unavailable_reason(&self) -> String {
-        "op-mcp-compact s6 service definition not found at /etc/s6/sv/op-mcp-compact".into()
+        format!("op-mcp-compact runit service definition not found at {RUNIT_SERVICE_PATH}")
     }
 
     async fn calculate_diff(&self, current: &Value, desired: &Value) -> Result<StateDiff> {
@@ -450,7 +421,7 @@ pub struct CompactMcpState {
     log_level: CompactMcpLogLevel,
     #[serde(default)]
     #[schemars(
-        description = "Whether the s6 service is currently running",
+        description = "Whether the runit service is currently running",
         extend("readOnly" = true),
         extend("x-oscal-subid" = "obs.software.plugin.compact-mcp.running@v1")
     )]

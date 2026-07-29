@@ -240,7 +240,8 @@ impl PersonaPlugin {
                         )
                         .unwrap_or(serde_json::json!({})),
                         output_schema: serde_json::from_str(
-                            &simd_json::to_string(&op.output_schema).unwrap_or_else(|_| "{}".into()),
+                            &simd_json::to_string(&op.output_schema)
+                                .unwrap_or_else(|_| "{}".into()),
                         )
                         .unwrap_or(serde_json::json!({})),
                     })
@@ -305,17 +306,13 @@ pub async fn dispatch_persona_method(
                 task = task.with_args(&serde_json::Value::Object(arg_obj).to_string());
             }
 
-            let agent = op_agents::create_agent(
-                &input.agent_type,
-                format!("persona-{}", input.agent_type),
-            )
-            .map_err(anyhow::Error::msg)?;
+            let agent =
+                op_agents::create_agent(&input.agent_type, format!("persona-{}", input.agent_type))
+                    .map_err(anyhow::Error::msg)?;
             match agent.execute(task).await {
                 Ok(result) => {
-                    let data: serde_json::Value =
-                        serde_json::from_str(&result.data).unwrap_or_else(|_| {
-                            serde_json::Value::String(result.data.clone())
-                        });
+                    let data: serde_json::Value = serde_json::from_str(&result.data)
+                        .unwrap_or_else(|_| serde_json::Value::String(result.data.clone()));
                     let metadata = serde_json::to_value(&result.metadata).ok();
                     Ok(serde_json::to_value(ExecuteOutput {
                         success: result.success,

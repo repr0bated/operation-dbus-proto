@@ -192,7 +192,7 @@ impl DefaultPluginRegistry {
 
         let canonical = match normalized.as_str() {
             "network" => "net",
-            "systemd" | "dinit" | "service_s6" => "s6",
+            "systemd" | "dinit" => "service",
             "web_ui" | "webui" => "web_ui",
             "mail" | "mailserver" => "mail_server",
             "ovsbridge" => "ovsdb_bridge",
@@ -374,7 +374,6 @@ mod tests {
         let plugin_names = vec![
             "mcp",
             "config",
-            "s6",
             "systemd",
             "dinit",
             "incus",
@@ -421,13 +420,13 @@ mod tests {
         let store = Arc::new(MemoryStore::new());
 
         let config = PluginRegistryConfig {
-            auto_load: vec!["s6".to_string()],
+            auto_load: vec!["service".to_string()],
             plugin_configs: std::collections::HashMap::new(),
         };
 
         let registry = DefaultPluginRegistry::with_config(store, config);
 
-        assert!(registry.is_auto_load("s6"));
+        assert!(registry.is_auto_load("service"));
         assert!(!registry.is_auto_load("mcp"));
         assert!(!registry.is_auto_load("config"));
 
@@ -453,7 +452,7 @@ mod tests {
         // Direct plugin name
         assert_eq!(
             DefaultPluginRegistry::resolve_requested_plugin_name("systemd").unwrap(),
-            "s6"
+            "service"
         );
         assert_eq!(
             DefaultPluginRegistry::resolve_requested_plugin_name("web-ui").unwrap(),

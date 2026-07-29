@@ -101,9 +101,9 @@ pub mod prelude {
         KeypairPlugin, KeyringPlugin, Login1Plugin, MailServerPlugin, McpStatePlugin, MemoryPlugin,
         NetStatePlugin, NetmakerConfig, NetmakerPlugin, OpenFlowObfuscationPlugin, OpenFlowPlugin,
         OvsBridgePlugin, PackageKitPlugin, PciDeclPlugin, ProcfsPlugin, ProxyServerPlugin,
-        RovsCommandsPlugin, RtnetlinkPlugin, S6SystemctlPlugin, SchemaRendererPlugin,
-        ServicePlugin, SessDeclPlugin, SoftwarePlugin, ToolDefinition, UnixSocketPlugin,
-        UsersPlugin, WebUiPlugin, WgOpdbusPlugin, WireGuardPlugin, WorkflowsPlugin, ZeroclawPlugin,
+        RovsCommandsPlugin, RtnetlinkPlugin, SchemaRendererPlugin, ServicePlugin, SessDeclPlugin,
+        SoftwarePlugin, ToolDefinition, UnixSocketPlugin, UsersPlugin, WebUiPlugin, WgOpdbusPlugin,
+        WireGuardPlugin, WorkflowsPlugin, ZeroclawPlugin,
     };
 }
 pub mod state_publisher;

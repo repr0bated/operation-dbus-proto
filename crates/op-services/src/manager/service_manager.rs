@@ -1,33 +1,44 @@
-//! Core service manager — uses s6-rc CLI for service control on Artix Linux.
+//! Core runit service manager.
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
 use tracing::{info, warn};
 
-use super::ProcessManager;
 use crate::schema::{ManagerState, ServiceDef, ServiceName, ServiceStatus};
 use crate::store::Store;
 
-/// Path to the s6-rc live database.
-const S6_RC_LIVE: &str = "/run/s6-rc";
+const RUNIT_SERVICE_DIR: &str = "/etc/runit/sv";
+const RUNIT_ACTIVE_DIR: &str = "/etc/runit/runsvdir/default";
 
-/// Run `s6-rc -l /run/s6-rc <args…>` and return the raw output.
-async fn s6rc(args: &[&str]) -> anyhow::Result<std::process::Output> {
-    tokio::process::Command::new("s6-rc")
-        .arg("-l")
-        .arg(S6_RC_LIVE)
-        .args(args)
+fn service_path(base: &str, name: &ServiceName) -> PathBuf {
+    Path::new(base).join(name.as_str())
+}
+
+async fn sv(action: &str, name: &ServiceName) -> anyhow::Result<std::process::Output> {
+    let active = service_path(RUNIT_ACTIVE_DIR, name);
+    if !active.exists() {
+        anyhow::bail!("runit service '{}' is not enabled", name);
+    }
+    tokio::process::Command::new("sv")
+        .arg(action)
+        .arg(&active)
         .output()
         .await
-        .map_err(|e| anyhow::anyhow!("failed to run s6-rc: {e}"))
+        .map_err(|e| anyhow::anyhow!("failed to run sv {action} {name}: {e}"))
+}
+
+fn parse_runit_pid(status: &str) -> Option<u32> {
+    status
+        .split("(pid ")
+        .nth(1)
+        .and_then(|tail| tail.split(')').next())
+        .and_then(|pid| pid.parse().ok())
 }
 
 pub struct ServiceManager {
     store: Arc<Store>,
-    /// True when the s6-rc live directory was present at construction time.
-    s6_available: bool,
-    process_mgr: ProcessManager,
     statuses: Arc<RwLock<HashMap<ServiceName, ServiceStatus>>>,
     events: broadcast::Sender<ServiceEvent>,
 }
@@ -41,47 +52,35 @@ pub struct ServiceEvent {
 
 impl ServiceManager {
     pub async fn new(store: Arc<Store>) -> anyhow::Result<Self> {
-        let s6_available = std::path::Path::new(S6_RC_LIVE).exists();
-        if s6_available {
-            info!("s6-rc live directory found at {S6_RC_LIVE}");
-        } else {
-            warn!("s6-rc live directory not found at {S6_RC_LIVE}, using process fallback");
+        if !Path::new(RUNIT_ACTIVE_DIR).is_dir() {
+            anyhow::bail!("runit active service directory not found at {RUNIT_ACTIVE_DIR}");
         }
+        info!("runit active service directory found at {RUNIT_ACTIVE_DIR}");
 
         let (events, _) = broadcast::channel(256);
 
         Ok(Self {
             store,
-            s6_available,
-            process_mgr: ProcessManager::new(),
             statuses: Arc::new(RwLock::new(HashMap::new())),
             events,
         })
     }
 
     pub async fn start(&self, name: &ServiceName) -> anyhow::Result<ServiceStatus> {
-        let service = self
-            .store
+        self.store
             .get_service(name)
             .await?
             .ok_or_else(|| anyhow::anyhow!("service not found: {}", name))?;
 
         self.set_state(name, ManagerState::Starting).await;
 
-        let result: anyhow::Result<u32> = if self.s6_available {
-            let out = s6rc(&["start", name.as_str()]).await?;
-            if out.status.success() {
-                Ok(0) // s6 doesn't hand us a PID directly
-            } else {
-                let stderr = String::from_utf8_lossy(&out.stderr);
-                if stderr.contains("already") {
-                    Ok(0)
-                } else {
-                    Err(anyhow::anyhow!("s6-rc start {} failed: {}", name, stderr))
-                }
-            }
+        let out = sv("start", name).await?;
+        let result: anyhow::Result<u32> = if out.status.success() {
+            let status = String::from_utf8_lossy(&out.stdout);
+            Ok(parse_runit_pid(&status).unwrap_or(0))
         } else {
-            self.process_mgr.start(&service).await
+            let error = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            Err(anyhow::anyhow!("sv start {} failed: {}", name, error))
         };
 
         match result {
@@ -101,20 +100,12 @@ impl ServiceManager {
     pub async fn stop(&self, name: &ServiceName) -> anyhow::Result<ServiceStatus> {
         self.set_state(name, ManagerState::Stopping).await;
 
-        let result: anyhow::Result<()> = if self.s6_available {
-            let out = s6rc(&["stop", name.as_str()]).await?;
-            if out.status.success() {
-                Ok(())
-            } else {
-                let stderr = String::from_utf8_lossy(&out.stderr);
-                if stderr.contains("already") {
-                    Ok(())
-                } else {
-                    Err(anyhow::anyhow!("s6-rc stop {} failed: {}", name, stderr))
-                }
-            }
+        let out = sv("stop", name).await?;
+        let result: anyhow::Result<()> = if out.status.success() {
+            Ok(())
         } else {
-            self.process_mgr.stop(name).await
+            let error = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            Err(anyhow::anyhow!("sv stop {} failed: {}", name, error))
         };
 
         match result {
@@ -129,22 +120,50 @@ impl ServiceManager {
     }
 
     pub async fn restart(&self, name: &ServiceName) -> anyhow::Result<ServiceStatus> {
-        self.stop(name).await?;
-        self.start(name).await
+        let out = sv("restart", name).await?;
+        if !out.status.success() {
+            let error = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            self.set_state_with_error(name, ManagerState::Failed, error.clone())
+                .await;
+            anyhow::bail!("sv restart {} failed: {}", name, error);
+        }
+        let status = String::from_utf8_lossy(&out.stdout);
+        self.set_state_with_pid(
+            name,
+            ManagerState::Running,
+            parse_runit_pid(&status).unwrap_or(0),
+        )
+        .await;
+        self.get_status(name).await
     }
 
     pub async fn get_status(&self, name: &ServiceName) -> anyhow::Result<ServiceStatus> {
-        let statuses = self.statuses.read().await;
-        Ok(statuses
-            .get(name)
-            .cloned()
-            .unwrap_or_else(|| ServiceStatus {
+        let active = service_path(RUNIT_ACTIVE_DIR, name);
+        if !active.exists() {
+            return Ok(ServiceStatus {
                 name: name.clone(),
                 state: ManagerState::Stopped,
                 pid: None,
-                error: None,
+                error: Some("service is not enabled in runit".to_string()),
                 started_at: None,
-            }))
+            });
+        }
+        let out = sv("status", name).await?;
+        let status = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        let state = if status.starts_with("run:") {
+            ManagerState::Running
+        } else if status.starts_with("down:") {
+            ManagerState::Stopped
+        } else {
+            ManagerState::Failed
+        };
+        Ok(ServiceStatus {
+            name: name.clone(),
+            state,
+            pid: parse_runit_pid(&status),
+            error: (!out.status.success()).then_some(status),
+            started_at: None,
+        })
     }
 
     pub async fn get(&self, name: &ServiceName) -> anyhow::Result<Option<ServiceDef>> {
@@ -152,11 +171,11 @@ impl ServiceManager {
     }
 
     pub async fn create(&self, service: &ServiceDef) -> anyhow::Result<()> {
-        // Persist to the store and install the s6 run script
+        // Persist to the store and install the runit run script.
         self.store.save_service(service).await?;
         if let Err(e) = service.install() {
             warn!(
-                "Failed to install s6 service files for {}: {}",
+                "Failed to install runit service files for {}: {}",
                 service.name, e
             );
         }
@@ -172,11 +191,20 @@ impl ServiceManager {
         // Remove from store
         self.store.delete_service(name).await?;
 
-        // Remove the s6 service directory if it exists
-        let path = format!("/etc/s6/sv/{}", name);
-        if let Err(e) = tokio::fs::remove_dir_all(&path).await {
+        let active = service_path(RUNIT_ACTIVE_DIR, name);
+        if let Err(e) = tokio::fs::remove_file(&active).await {
             if e.kind() != std::io::ErrorKind::NotFound {
-                warn!("Failed to remove s6 service directory {}: {}", path, e);
+                warn!("Failed to disable runit service {}: {}", name, e);
+            }
+        }
+        let definition = service_path(RUNIT_SERVICE_DIR, name);
+        if let Err(e) = tokio::fs::remove_dir_all(&definition).await {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                warn!(
+                    "Failed to remove runit service directory {}: {}",
+                    definition.display(),
+                    e
+                );
             }
         }
 
@@ -196,6 +224,17 @@ impl ServiceManager {
 
         service.enabled = enabled;
         self.store.save_service(&service).await?;
+        let active = service_path(RUNIT_ACTIVE_DIR, name);
+        if enabled {
+            service.install()?;
+        } else {
+            let _ = self.stop(name).await;
+            if let Err(e) = tokio::fs::remove_file(&active).await {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    return Err(e.into());
+                }
+            }
+        }
         Ok(())
     }
 
@@ -266,5 +305,22 @@ impl ServiceManager {
             });
         status.state = state;
         status.error = Some(error);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_runit_pid;
+
+    #[test]
+    fn parses_sv_status_pid() {
+        assert_eq!(
+            parse_runit_pid("run: /etc/runit/runsvdir/default/op-web: (pid 4242) 12s"),
+            Some(4242)
+        );
+        assert_eq!(
+            parse_runit_pid("down: /etc/runit/runsvdir/default/op-web: 2s"),
+            None
+        );
     }
 }

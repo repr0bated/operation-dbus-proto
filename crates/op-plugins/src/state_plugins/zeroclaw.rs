@@ -40,7 +40,7 @@ pub struct LlmTransport {
     pub grpc_target: String,
     /// Incus / WireGuard container target for xray routing. Kept as a
     /// published-schema field for backward compatibility, but zeroclaw's LLM
-    /// transport now runs on the host (xray via the `gbr-xray` s6 service and
+    /// transport now runs on the host (xray through its runit-managed service and
     /// the gRPC-bridge via `op-grpc-bridge-zeroclaw`); there is no per-service
     /// incus container. Defaults to the `"host"` sentinel.
     #[serde(default)]
@@ -359,7 +359,9 @@ pub struct ResolveRouteInput {
 /// A chat message carried by the schema-declared ZeroClaw method.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ZeroclawChatMessage {
+    /// OpenAI-compatible message role such as `system`, `user`, or `assistant`.
     pub role: String,
+    /// Text content carried by this conversation turn.
     pub content: String,
 }
 
@@ -384,6 +386,7 @@ pub struct ChatInput {
 /// Input for listing model routes, optionally filtered by provider.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ListModelsInput {
+    /// Optional provider id, route, or alias used to filter the model catalog.
     #[serde(default)]
     pub provider: String,
 }
@@ -481,10 +484,15 @@ pub struct ResolveRouteOutput {
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "exp.service.zeroclaw.chat.result@v1"))]
 pub struct ChatOutput {
+    /// Assistant response text.
     pub content: String,
+    /// Resolved upstream provider identifier.
     pub provider: String,
+    /// Resolved model identifier.
     pub model: String,
+    /// Provider finish reason, or an empty string when none was supplied.
     pub finish_reason: String,
+    /// Provider-specific token usage object.
     pub usage: JsonValue,
 }
 
@@ -492,6 +500,7 @@ pub struct ChatOutput {
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "obs.service.zeroclaw.models.result@v1"))]
 pub struct ListModelsOutput {
+    /// Schema-declared model routes, optionally filtered by provider.
     pub model_routes: Vec<ModelRoute>,
 }
 
@@ -2314,6 +2323,28 @@ mod tests {
         assert_eq!(schema.name, PLUGIN_NAME);
         assert_eq!(schema.version, PLUGIN_VERSION);
         assert_eq!(schema.display_name, Some(PLUGIN_DISPLAY_NAME.to_string()));
+    }
+
+    #[test]
+    fn generated_method_docs_include_input_and_output_field_descriptions() {
+        let schema = zeroclaw_plugin_schema();
+        let chat = schema.methods.get("Chat").unwrap();
+        let chat_returns = serde_json::to_value(chat.returns.as_ref().unwrap()).unwrap();
+        assert_eq!(
+            chat_returns
+                .pointer("/properties/content/description")
+                .and_then(JVal::as_str),
+            Some("Assistant response text.")
+        );
+
+        let list_models = schema.methods.get("ListModels").unwrap();
+        let list_args = serde_json::to_value(&list_models.args).unwrap();
+        assert_eq!(
+            list_args
+                .pointer("/properties/provider/description")
+                .and_then(JVal::as_str),
+            Some("Optional provider id, route, or alias used to filter the model catalog.")
+        );
     }
 
     #[test]
