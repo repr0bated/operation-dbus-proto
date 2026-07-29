@@ -10,7 +10,7 @@
 //!
 //! Per AGENTS.md D-Bus-first rules:
 //! - All xray control operations go through D-Bus methods
-//! - Config path is /dev/shm/xray_config.json per AGENTS.md §4a (Zero-Btrfs)
+//! - Xray's live config path is /etc/xray/xray_config.json inside the container
 //! - No direct Command::new("xray") spawning - use D-Bus service instead
 //!
 //! ## Methods
@@ -60,7 +60,9 @@ impl Args {
                     println!("Usage: op-xray-daemon [OPTIONS]");
                     println!();
                     println!("Options:");
-                    println!("  --config <path>    Initial config path (default: /dev/shm/xray_config.json)");
+                    println!(
+                        "  --config <path>    Initial config path (default: /etc/xray/xray_config.json)"
+                    );
                     println!("  -h, --help         Show this help message");
                     std::process::exit(0);
                 }
@@ -75,8 +77,8 @@ impl Args {
     }
 }
 
-/// Default config path per AGENTS.md §4a (Zero-Btrfs)
-const DEFAULT_CONFIG_PATH: &str = "/dev/shm/xray_config.json";
+/// Canonical live config path inside the Xray container.
+const DEFAULT_CONFIG_PATH: &str = "/etc/xray/xray_config.json";
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -113,7 +115,7 @@ async fn main() -> Result<()> {
         .context("Failed to register D-Bus object")?;
 
     // Request the bus name
-    conn.request_name("org.opdbus.v1")
+    conn.request_name("org.opdbus.v1.plugins")
         .await
         .context("Failed to request bus name")?;
 

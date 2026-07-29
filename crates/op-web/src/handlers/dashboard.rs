@@ -1,11 +1,11 @@
-//! Dashboard Metrics Handlers — reads schema-validated projections from D-Bus tree.
+//! Dashboard Metrics Handlers — reads schema-validated state from SHM state tree.
 
 use axum::{extract::Extension, response::Json};
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::ValueAsScalar;
 use std::sync::Arc;
 
-use crate::projection_client;
+use crate::state_tree;
 use crate::state::AppState;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -34,11 +34,10 @@ pub async fn dashboard_metrics_handler(
     // Get VPN connections
     let active_connections = get_vpn_peer_count();
 
-    // Try to read system stats from the D-Bus projection cache first.
-    // These are live procfs projections from org.opdbus.v1 /org/opdbus/v1/plugins/procfs/*.
-    let mem_proj =
-        projection_client::get_projection(&state.projection_cache, "system.memory").await;
-    let load_proj = projection_client::get_projection(&state.projection_cache, "system.load").await;
+    // Read system stats from the SHM state tree.
+    // These are live procfs projections written by the mutation engine.
+    let mem_proj = state_tree::read_key("system.memory", "state");
+    let load_proj = state_tree::read_key("system.load", "state");
 
     let (cpu, memory, source, schema_version) = if mem_proj.is_some() || load_proj.is_some() {
         let mut cpu = 0.0f32;
@@ -108,11 +107,11 @@ pub async fn dashboard_metrics_handler(
     })
 }
 
-/// GET /api/dashboard/projections — Return all cached schema-validated projections.
+/// GET /api/dashboard/projections — Return all plugin state from SHM state tree.
 pub async fn dashboard_projections_handler(
-    Extension(state): Extension<Arc<AppState>>,
+    Extension(_state): Extension<Arc<AppState>>,
 ) -> Json<std::collections::HashMap<String, simd_json::OwnedValue>> {
-    let projections = projection_client::get_all_projections(&state.projection_cache).await;
+    let projections = state_tree::read_all();
     Json(projections)
 }
 

@@ -40,7 +40,7 @@ pub struct LlmTransport {
     pub grpc_target: String,
     /// Incus / WireGuard container target for xray routing. Kept as a
     /// published-schema field for backward compatibility, but zeroclaw's LLM
-    /// transport now runs on the host (xray via the `gbr-xray` s6 service and
+    /// transport now runs on the host (xray through its runit-managed service and
     /// the gRPC-bridge via `op-grpc-bridge-zeroclaw`); there is no per-service
     /// incus container. Defaults to the `"host"` sentinel.
     #[serde(default)]
@@ -356,6 +356,41 @@ pub struct ResolveRouteInput {
     pub hint: String,
 }
 
+/// A chat message carried by the schema-declared ZeroClaw method.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ZeroclawChatMessage {
+    /// OpenAI-compatible message role such as `system`, `user`, or `assistant`.
+    pub role: String,
+    /// Text content carried by this conversation turn.
+    pub content: String,
+}
+
+/// Input for the bridge-owned ZeroClaw chat dispatcher.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ChatInput {
+    /// Compatibility form for callers sending a single user turn.
+    #[serde(default)]
+    pub message: String,
+    /// Full ordered conversation. When non-empty this takes precedence over
+    /// `message`.
+    #[serde(default)]
+    pub messages: Vec<ZeroclawChatMessage>,
+    /// Provider id, route, or alias. Empty uses `selected_provider`.
+    #[serde(default)]
+    pub provider: String,
+    /// Model id or route hint. Empty uses `selected_model`.
+    #[serde(default)]
+    pub model: String,
+}
+
+/// Input for listing model routes, optionally filtered by provider.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ListModelsInput {
+    /// Optional provider id, route, or alias used to filter the model catalog.
+    #[serde(default)]
+    pub provider: String,
+}
+
 /// Input for selecting a provider.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SetProviderInput {
@@ -443,6 +478,30 @@ pub struct GetStructuredOutputOutput {
 pub struct ResolveRouteOutput {
     /// Resolved route.
     pub route: ModelRoute,
+}
+
+/// Output from the bridge-owned ZeroClaw chat dispatcher.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "exp.service.zeroclaw.chat.result@v1"))]
+pub struct ChatOutput {
+    /// Assistant response text.
+    pub content: String,
+    /// Resolved upstream provider identifier.
+    pub provider: String,
+    /// Resolved model identifier.
+    pub model: String,
+    /// Provider finish reason, or an empty string when none was supplied.
+    pub finish_reason: String,
+    /// Provider-specific token usage object.
+    pub usage: JsonValue,
+}
+
+/// Schema-declared model listing output.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "obs.service.zeroclaw.models.result@v1"))]
+pub struct ListModelsOutput {
+    /// Schema-declared model routes, optionally filtered by provider.
+    pub model_routes: Vec<ModelRoute>,
 }
 
 /// Output for provider selection.
@@ -1874,6 +1933,26 @@ fn zeroclaw_schema_from_state(state: ZeroclawState) -> PluginSchema {
         ),
     );
     schema.methods.insert(
+        "Chat".to_string(),
+        method_decl_from_schemars_with_output::<ChatInput, ChatOutput>(
+            "Chat",
+            op_state_store::SideEffect::Read,
+            false,
+            "cap.software.zeroclaw.chat@v1",
+            "exp.service.zeroclaw.chat@v1",
+        ),
+    );
+    schema.methods.insert(
+        "ListModels".to_string(),
+        method_decl_from_schemars_with_output::<ListModelsInput, ListModelsOutput>(
+            "ListModels",
+            op_state_store::SideEffect::Read,
+            true,
+            "cap.software.zeroclaw.models.read@v1",
+            "obs.service.zeroclaw.models.list@v1",
+        ),
+    );
+    schema.methods.insert(
         "SetProvider".to_string(),
         method_decl_from_schemars_with_output::<SetProviderInput, SetProviderOutput>(
             "SetProvider",
@@ -2028,6 +2107,7 @@ pub fn dispatch_zeroclaw_method(
             serde_json::json!({ "structured_output": to_json(&state.projection.structured_output) }),
         )),
         "ResolveRoute" => resolve_route(json_args, state).map(DispatchOutcome::plain),
+        "ListModels" => list_models(json_args, state).map(DispatchOutcome::plain),
         "SetProvider" => set_provider_handler(json_args, state),
         "SetModel" => set_model_handler(json_args, state),
         "SetOvsRoutingModel" => set_role_model_handler(json_args, state, "ovs_routing"),
@@ -2039,6 +2119,29 @@ pub fn dispatch_zeroclaw_method(
             reason: format!("undeclared method: {other}"),
         }),
     }
+}
+
+fn list_models(
+    json_args: &str,
+    state: &ZeroclawState,
+) -> std::result::Result<JsonValue, ZeroclawError> {
+    let args = parse_args("ListModels", json_args)?;
+    let provider = args
+        .get("provider")
+        .and_then(JsonValue::as_str)
+        .unwrap_or_default();
+    let routes = state
+        .projection
+        .model_routes
+        .iter()
+        .filter(|route| {
+            provider.is_empty()
+                || route.provider.eq_ignore_ascii_case(provider)
+                || route.upstream_provider.eq_ignore_ascii_case(provider)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    Ok(serde_json::json!({ "model_routes": to_json(&routes) }))
 }
 
 fn to_json<T: Serialize>(value: &T) -> JsonValue {
@@ -2220,6 +2323,61 @@ mod tests {
         assert_eq!(schema.name, PLUGIN_NAME);
         assert_eq!(schema.version, PLUGIN_VERSION);
         assert_eq!(schema.display_name, Some(PLUGIN_DISPLAY_NAME.to_string()));
+    }
+
+    #[test]
+    fn generated_method_docs_include_input_and_output_field_descriptions() {
+        let schema = zeroclaw_plugin_schema();
+        let chat = schema.methods.get("Chat").unwrap();
+        let chat_returns = serde_json::to_value(chat.returns.as_ref().unwrap()).unwrap();
+        assert_eq!(
+            chat_returns
+                .pointer("/properties/content/description")
+                .and_then(JVal::as_str),
+            Some("Assistant response text.")
+        );
+
+        let list_models = schema.methods.get("ListModels").unwrap();
+        let list_args = serde_json::to_value(&list_models.args).unwrap();
+        assert_eq!(
+            list_args
+                .pointer("/properties/provider/description")
+                .and_then(JVal::as_str),
+            Some("Optional provider id, route, or alias used to filter the model catalog.")
+        );
+    }
+
+    #[test]
+    fn every_declared_method_has_a_domain_dispatcher() {
+        let schema = zeroclaw_plugin_schema();
+        let state = ZeroclawPlugin::current_state();
+
+        for method in schema.methods.keys() {
+            if method == "Chat" {
+                // Chat is declared here but executed by the bridge runtime,
+                // which owns provider credentials and the event chain.
+                continue;
+            }
+            let args = match method.as_str() {
+                "ResolveRoute" => serde_json::json!({ "hint": "balanced" }),
+                "ListModels" => serde_json::json!({ "provider": "salad" }),
+                "SetProvider" => serde_json::json!({ "provider_id": "salad" }),
+                "SetModel" => serde_json::json!({ "model_id": "qwen3.6-27b" }),
+                name if name.starts_with("Set") => {
+                    serde_json::json!({ "model_id": "qwen3.6-27b" })
+                }
+                _ => serde_json::json!({}),
+            };
+            dispatch_zeroclaw_method(method, &args.to_string(), &state)
+                .unwrap_or_else(|error| panic!("{method} is not executable: {error}"));
+        }
+    }
+
+    #[test]
+    fn undeclared_method_is_rejected() {
+        let error = dispatch_zeroclaw_method("NotDeclared", "{}", &ZeroclawPlugin::current_state())
+            .unwrap_err();
+        assert!(error.to_string().contains("undeclared method"));
     }
 }
 

@@ -22,7 +22,6 @@
 //! ```
 
 pub mod chat_service;
-pub mod dbus_object;
 pub mod dynamic_reflection;
 pub mod emqx_hook_provider;
 pub mod grpc_client;
@@ -36,13 +35,16 @@ pub mod plugin_grpc_gen;
 pub mod plugin_object_blob;
 pub mod proto_gen;
 pub mod schema_loader;
+pub mod schema_router;
 pub mod server;
 pub mod shared_socket;
 pub mod tracing;
 pub mod zeroclaw_object_blob;
 
 // Re-export main types
-pub use grpc_client::{GrpcClientPool, RemoteEndpoint, RemoteOperationClient};
+pub use grpc_client::{
+    GhostbridgeCallMetadata, GrpcClientPool, RemoteEndpoint, RemoteOperationClient,
+};
 pub use grpc_server::{run_grpc_server, OperationGrpcServer, PluginSchemaProvider};
 pub use interceptor::ghostbridge_interceptor;
 pub use mutation_engine::{ChangeSource, ChangeType, MutationEngine, StateChange};

@@ -15,6 +15,7 @@ use std::collections::HashSet;
 use std::env;
 use std::fs::{self, File};
 use std::io::{ErrorKind, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -313,6 +314,7 @@ fn write_sled_with_schema_blob(
         std::slice::from_raw_parts(sled as *const IdentitySled as *const u8, IdentitySled::SIZE)
     };
     let mut f = File::create(&tmp)?;
+    f.set_permissions(fs::Permissions::from_mode(0o600))?;
     f.write_all(bytes)?;
     if let Some(schema_blob) = schema_blob {
         write_schema_blob_tail(&mut f, schema_blob)?;
@@ -479,7 +481,9 @@ pub enum FootprintVerifyError {
 /// drift apart again (see SIGNALS.md: op-cognitive-mcp's interceptor had
 /// silently regressed to a presence-only check while op-grpc-bridge's stayed
 /// correct).
-pub fn verify_ghostbridge_footprint(request_footprint_hex: &str) -> Result<(), FootprintVerifyError> {
+pub fn verify_ghostbridge_footprint(
+    request_footprint_hex: &str,
+) -> Result<(), FootprintVerifyError> {
     let (sled_ptr, _mmap) = read_sled().map_err(|_| FootprintVerifyError::SledUnreachable)?;
     let sled = unsafe { &*sled_ptr };
 
@@ -517,10 +521,7 @@ mod ghostbridge_footprint_tests {
     #[test]
     fn verify_ghostbridge_footprint_covers_all_branches() {
         let dir = std::env::temp_dir();
-        let path = dir.join(format!(
-            "op-identity-test-sled-{}.dat",
-            std::process::id()
-        ));
+        let path = dir.join(format!("op-identity-test-sled-{}.dat", std::process::id()));
         let path_str = path.to_str().unwrap().to_string();
         // SAFETY: this test owns the env var for its whole body and runs as
         // a single test function, so there's no cross-thread interleaving.

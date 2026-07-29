@@ -12,6 +12,7 @@ use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
 use op_state_store::PluginSchema;
 use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
 use simd_json::OwnedValue as Value;
 
 // =============================================================================
@@ -367,6 +368,29 @@ pub fn ghostbridge_plugin_schema() -> PluginSchema {
     ghostbridge_schema()
 }
 
+/// Plugin-owned method dispatch for the Ghostbridge D-Bus/gRPC surface.
+///
+/// Keeping these handlers beside the schema makes the contract executable:
+/// every method declared by [`ghostbridge_schema`] has a domain result instead
+/// of falling through to the bridge's generic argument echo.
+pub fn dispatch_ghostbridge_method(method: &str, state: &GhostbridgeState) -> Result<JsonValue> {
+    match method {
+        "GetState" => Ok(serde_json::json!({ "state": state })),
+        "GetIdentity" => Ok(serde_json::json!({
+            "identity": &state.bridge_identity
+        })),
+        "ListEndpoints" => Ok(serde_json::json!({
+            "endpoints": &state.endpoints
+        })),
+        "GetGhostrunner" => Ok(serde_json::json!({
+            "ghostrunner": &state.ghostrunner
+        })),
+        other => Err(anyhow::anyhow!(
+            "ghostbridge method is not declared: {other}"
+        )),
+    }
+}
+
 // Self-registration: the plugin registry discovers this via inventory
 // (single source of the catalog; no central dispatch list).
 inventory::submit! {
@@ -427,5 +451,24 @@ mod tests {
         assert_eq!(state.status, "declared");
         assert_eq!(state.ghostrunner.port, 8091);
         assert_eq!(state.ghostrunner.path, "/ghostrunner");
+    }
+
+    #[test]
+    fn every_declared_method_has_a_domain_dispatcher() {
+        let schema = ghostbridge_plugin_schema();
+        let state = GhostbridgePlugin::current_state();
+
+        for method in schema.methods.keys() {
+            let result = dispatch_ghostbridge_method(method, &state)
+                .unwrap_or_else(|error| panic!("{method} is not executable: {error}"));
+            assert!(result.is_object(), "{method} must return an object");
+        }
+    }
+
+    #[test]
+    fn undeclared_method_is_rejected() {
+        let error = dispatch_ghostbridge_method("NotDeclared", &GhostbridgePlugin::current_state())
+            .unwrap_err();
+        assert!(error.to_string().contains("not declared"));
     }
 }

@@ -1,8 +1,8 @@
 //! OVSDB client via D-Bus (zbus)
 //!
 //! This module provides an OVSDB client for OVS bridge management.
-//! It uses D-Bus (zbus) to call the `org.opdbus.rovs.jsonrpc` interface
-//! at `/org/opdbus/rovs/jsonrpc` on the system bus (bus name `org.opdbus.v1`).
+//! It invokes the schema-declared `ovsdb_bridge` methods through the canonical
+//! `org.opdbus.v1.plugins` tree.
 //!
 //! Per AGENTS.md §4: D-Bus is the ONLY control plane.
 
@@ -15,9 +15,9 @@ use tokio::sync::OnceCell;
 use tokio::time::timeout;
 use tracing::{info, warn};
 
-const DBUS_BUS_NAME: &str = "org.opdbus.v1";
-const DBUS_OBJECT_PATH: &str = "/org/opdbus/rovs/jsonrpc";
-const DBUS_INTERFACE: &str = "org.opdbus.rovs.jsonrpc";
+const DBUS_BUS_NAME: &str = "org.opdbus.v1.plugins";
+const DBUS_OBJECT_PATH: &str = "/org/opdbus/v1/plugins/ovsdb_bridge";
+const DBUS_INTERFACE: &str = "org.opdbus.v1.PluginV1";
 
 /// OVSDB JSON-RPC client via D-Bus
 pub struct OvsdbClient {
@@ -44,9 +44,13 @@ impl OvsdbClient {
     async fn proxy(&self) -> Result<&zbus::Proxy<'static>> {
         self.proxy
             .get_or_try_init(|| async {
-                let conn = zbus::Connection::system()
+                let address = std::env::var("DBUS_SESSION_BUS_ADDRESS")
+                    .unwrap_or_else(|_| op_core::config::SESSION_BUS_ADDRESS.to_string());
+                let conn = zbus::connection::Builder::address(address.as_str())
+                    .map_err(|e| anyhow!("Invalid session D-Bus address: {}", e))?
+                    .build()
                     .await
-                    .map_err(|e| anyhow!("Failed to connect to system D-Bus: {}", e))?;
+                    .map_err(|e| anyhow!("Failed to connect to session D-Bus: {}", e))?;
 
                 zbus::proxy::Builder::new(&conn)
                     .destination(DBUS_BUS_NAME)?
@@ -69,6 +73,19 @@ impl OvsdbClient {
         Ok(value)
     }
 
+    fn parse_plugin_reply(raw: &str) -> Result<Value> {
+        let envelope: Value = serde_json::from_str(raw)
+            .map_err(|e| anyhow!("Failed to parse plugin reply: {}", e))?;
+        if envelope.get("success").and_then(Value::as_bool) != Some(true) {
+            return Err(anyhow!("OVSDB plugin call failed: {}", envelope));
+        }
+        let result = envelope
+            .get("result")
+            .cloned()
+            .ok_or_else(|| anyhow!("OVSDB plugin reply has no result payload"))?;
+        Self::parse_daemon_reply(&result.to_string())
+    }
+
     /// Execute a transaction via D-Bus.
     ///
     /// `operations` is the OVSDB operations array; the daemon's rovs client
@@ -76,12 +93,17 @@ impl OvsdbClient {
     async fn transact_dbus(&self, operations: Value) -> Result<Value> {
         let proxy = self.proxy().await?;
 
+        let args = json!({
+            "db_name": "Open_vSwitch",
+            "operations": operations,
+        })
+        .to_string();
         let result: String = proxy
-            .call("Transact", &("transact", operations.to_string().as_str()))
+            .call("Call", &("transact", args.as_str()))
             .await
             .map_err(|e| anyhow!("D-Bus transact call failed: {}", e))?;
 
-        Self::parse_daemon_reply(&result)
+        Self::parse_plugin_reply(&result)
     }
 
     /// Execute a transaction with timeout.
@@ -112,12 +134,13 @@ impl OvsdbClient {
     /// transact operation — so it goes through the daemon's `ListDbs`).
     pub async fn list_dbs(&self) -> Result<Vec<String>> {
         let proxy = self.proxy().await?;
-        let raw: String = timeout(self.timeout, proxy.call("ListDbs", &()))
+        let raw: String = timeout(self.timeout, proxy.call("Call", &("list_dbs", "{}")))
             .await
             .map_err(|_| anyhow!("list_dbs timed out"))?
             .map_err(|e| anyhow!("D-Bus list_dbs call failed: {}", e))?;
 
-        let value = Self::parse_daemon_reply(&raw)?;
+        let value = Self::parse_plugin_reply(&raw)?;
+        let value = value.get("databases").unwrap_or(&value);
         let dbs = value
             .as_array()
             .ok_or_else(|| anyhow!("list_dbs: expected array, got {}", value))?
@@ -128,14 +151,18 @@ impl OvsdbClient {
     }
 
     /// Get schema for a database (served from the daemon's cached schema).
-    pub async fn get_schema(&self, _db: &str) -> Result<Value> {
+    pub async fn get_schema(&self, db: &str) -> Result<Value> {
         let proxy = self.proxy().await?;
-        let raw: String = timeout(self.timeout, proxy.call("GetSchema", &()))
-            .await
-            .map_err(|_| anyhow!("get_schema timed out"))?
-            .map_err(|e| anyhow!("D-Bus get_schema call failed: {}", e))?;
+        let args = json!({ "db_name": db }).to_string();
+        let raw: String = timeout(
+            self.timeout,
+            proxy.call("Call", &("get_schema", args.as_str())),
+        )
+        .await
+        .map_err(|_| anyhow!("get_schema timed out"))?
+        .map_err(|e| anyhow!("D-Bus get_schema call failed: {}", e))?;
 
-        Self::parse_daemon_reply(&raw)
+        Self::parse_plugin_reply(&raw)
     }
 
     /// Create a bridge

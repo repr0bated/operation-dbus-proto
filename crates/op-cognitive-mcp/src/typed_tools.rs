@@ -25,6 +25,7 @@ use op_mcp::tool_registry::{BoxedTool, Tool, ToolRegistry};
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
 use std::sync::Arc;
+use crate::cognitive_tools::field;
 
 use crate::memory_store::CognitiveMemoryStore;
 use crate::quota::QuotaManager;
@@ -162,7 +163,7 @@ impl Tool for TypedQueryTool {
     }
 
     async fn execute(&self, input: Value) -> Result<Value> {
-        let query = input["query"]
+        let query = field(&input, "query")
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("missing query"))?;
 
@@ -176,7 +177,7 @@ impl Tool for TypedQueryTool {
             }));
         }
 
-        let conversation_id = input["conversation_id"].as_str().unwrap_or("");
+        let conversation_id = field(&input, "conversation_id").as_str().unwrap_or("");
 
         let session = self
             .sessions
@@ -309,17 +310,17 @@ impl Tool for TypedStoreTool {
     }
 
     async fn execute(&self, input: Value) -> Result<Value> {
-        let namespace = input["namespace"]
+        let namespace = field(&input, "namespace")
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("missing namespace"))?;
-        let key = input["key"]
+        let key = field(&input, "key")
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("missing key"))?;
-        let content = input["content"]
+        let content = field(&input, "content")
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("missing content"))?;
 
-        let tags: Vec<String> = input["tags"]
+        let tags: Vec<String> = field(&input, "tags")
             .as_array()
             .map(|a| {
                 a.iter()
@@ -418,7 +419,7 @@ impl Tool for TypedListNamespacesTool {
     }
 
     async fn execute(&self, input: Value) -> Result<Value> {
-        let kind = input["kind_filter"]
+        let kind = field(&input, "kind_filter")
             .as_str()
             .and_then(|s| s.parse::<crate::memory_store::NamespaceKind>().ok());
 

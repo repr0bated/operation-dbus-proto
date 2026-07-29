@@ -113,18 +113,6 @@ impl tonic::service::Interceptor for GhostbridgeInterceptor {
 
 #[allow(clippy::result_large_err)]
 pub fn ghostbridge_interceptor(mut req: Request<()>) -> Result<Request<()>, Status> {
-    // TEMPORARY TEST BYPASS — 2026-07-23, requested for a short (5-10 min)
-    // Lovable UI connectivity test. MUST be reverted (unset the env var or
-    // delete this block) once the test is done; this defeats the Absolute
-    // Base check for every service on this interceptor while set.
-    if std::env::var("GHOSTBRIDGE_BYPASS_FOR_TESTING").is_ok() {
-        req.extensions_mut().insert(GhostbridgeIdentity {
-            footprint: "bypass-for-testing".to_string(),
-            session_id: "bypass-for-testing".to_string(),
-        });
-        return Ok(req);
-    }
-
     // 1. Extract the Xray-injected Identity Headers (The Accountability Loop)
     //    Clone header values upfront to release the immutable borrow on `req`,
     //    allowing the mutable `extensions_mut()` call downstream.
@@ -341,4 +329,30 @@ mod tests {
     // verify_ghostbridge_footprint function itself, rather than duplicated
     // here against a local IdentitySled/is_sled_valid that no longer exist
     // in this crate.
+}
+
+/// Load the capabilities granted to one sled footprint.
+///
+/// The JSON document is keyed by lowercase footprint hex and each value owns a
+/// `capabilities` array. Missing, malformed, or unreadable grant state fails
+/// closed.
+pub fn load_capability_grants(footprint_hex: &str) -> std::collections::HashSet<String> {
+    let path = std::env::var("OP_GRANTS_PATH")
+        .unwrap_or_else(|_| "/dev/shm/opdbus/capability-grants.json".to_string());
+    let Ok(bytes) = std::fs::read(path) else {
+        return std::collections::HashSet::new();
+    };
+    let Ok(document) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return std::collections::HashSet::new();
+    };
+    document
+        .get(footprint_hex)
+        .or_else(|| document.get("*"))
+        .and_then(|entry| entry.get("capabilities"))
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(str::to_string)
+        .collect()
 }

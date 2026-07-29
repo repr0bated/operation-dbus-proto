@@ -137,8 +137,7 @@ pub async fn chat_handler(
 
     if requested_provider.is_none() {
         if let Err(e) =
-            crate::zeroclaw_routes::ensure_model_available(&state.projection_cache, &selected_model)
-                .await
+            crate::zeroclaw_routes::ensure_model_available(&selected_model)
         {
             return Json(ChatResponse {
                 success: false,
@@ -185,7 +184,7 @@ pub async fn chat_handler(
             Err(_) => Err(anyhow::anyhow!("Unknown provider: {}", provider)),
         },
         (None, Some(model)) => {
-            match crate::zeroclaw_routes::route_for_model(&state.projection_cache, model).await {
+            match crate::zeroclaw_routes::route_for_model(model) {
                 Some(route) => match ProviderType::from_str(&route.upstream_provider) {
                     Ok(provider_type) if state.chat_manager.has_provider(&provider_type) => {
                         state

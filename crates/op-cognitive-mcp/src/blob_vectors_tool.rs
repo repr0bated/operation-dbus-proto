@@ -13,6 +13,7 @@ use op_mcp::tool_registry::{BoxedTool, Tool, ToolRegistry};
 use simd_json::prelude::ValueAsScalar;
 use simd_json::{json, OwnedValue as Value};
 use std::sync::Arc;
+use crate::cognitive_tools::field;
 
 use crate::qdrant_shuttle::QdrantSemanticShuttle;
 
@@ -149,10 +150,10 @@ impl Tool for SearchBlobVectorsTool {
                 "search_blob_vectors unavailable: Qdrant Semantic Shuttle is not configured"
             )
         })?;
-        let query = input["query"]
+        let query = field(&input, "query")
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("missing required field: query"))?;
-        let limit = input["limit"].as_i64().unwrap_or(10).max(1) as u64;
+        let limit = field(&input, "limit").as_i64().unwrap_or(10).max(1) as u64;
 
         let results = shuttle
             .search_blob_vectors(query, limit)

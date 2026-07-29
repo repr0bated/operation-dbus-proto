@@ -202,10 +202,16 @@ impl XrayService {
 
         if errors.is_empty() {
             info!("Sent SIGHUP to xray {:?}", pids);
-            (true, format!("Reload signal sent to xray (PIDs: {:?})", pids))
+            (
+                true,
+                format!("Reload signal sent to xray (PIDs: {:?})", pids),
+            )
         } else {
             error!("Failed to send SIGHUP: {:?}", errors);
-            (false, format!("Failed to send reload signal: {}", errors.join(", ")))
+            (
+                false,
+                format!("Failed to send reload signal: {}", errors.join(", ")),
+            )
         }
     }
 
@@ -296,13 +302,13 @@ mod tests {
         let status = XrayStatus {
             running: true,
             pid: Some(1234),
-            config_path: Some("/dev/shm/xray_config.json".to_string()),
+            config_path: Some("/etc/xray/xray_config.json".to_string()),
         };
 
         let json = serde_json::to_string(&status).unwrap();
         assert!(json.contains("\"running\":true"));
         assert!(json.contains("\"pid\":1234"));
-        assert!(json.contains("\"config_path\":\"/dev/shm/xray_config.json\""));
+        assert!(json.contains("\"config_path\":\"/etc/xray/xray_config.json\""));
     }
 
     #[tokio::test]

@@ -14,16 +14,14 @@ if [ "$EUID" -ne 0 ]; then
     echo "Warning: Not running as root. May need sudo for some operations."
 fi
 
-# Detect init system
-if [ -d /run/systemd/system ] || [ -d /var/run/systemd/system ]; then
-    INIT_SYSTEM="systemd"
-elif [ -x /sbin/s6-rc ] || [ -x /usr/bin/s6-rc ]; then
-    INIT_SYSTEM="s6"
-else
-    INIT_SYSTEM="unknown"
+# This host uses runit; refuse to install a service definition for another
+# supervisor.
+if ! command -v sv >/dev/null 2>&1; then
+    echo "Error: runit sv command not found"
+    exit 1
 fi
 
-echo "Detected init system: ${INIT_SYSTEM}"
+echo "Detected runit: $(command -v sv)"
 
 # Create D-Bus policy file
 DBUS_POLICY_DIR="/etc/dbus-1/system.d"
@@ -40,25 +38,25 @@ cat > "${DBUS_POLICY_DIR}/org.opdbus.v1.Xray.conf" << 'EOF'
 
   <!-- Allow root to own the service -->
   <policy user="root">
-    <allow own="org.opdbus.v1"/>
-    <allow send_destination="org.opdbus.v1"/>
-    <allow receive_sender="org.opdbus.v1"/>
+    <allow own="org.opdbus.v1.plugins"/>
+    <allow send_destination="org.opdbus.v1.plugins"/>
+    <allow receive_sender="org.opdbus.v1.plugins"/>
   </policy>
 
   <!-- Allow anyone to call the Xray interface methods -->
   <policy context="default">
-    <allow send_destination="org.opdbus.v1"/>
-    <allow send_destination="org.opdbus.v1"
+    <allow send_destination="org.opdbus.v1.plugins"/>
+    <allow send_destination="org.opdbus.v1.plugins"
            send_interface="org.opdbus.v1.Xray"/>
-    <allow receive_sender="org.opdbus.v1"/>
+    <allow receive_sender="org.opdbus.v1.plugins"/>
   </policy>
 
   <!-- Allow specific group members full access -->
   <policy group="opdbus">
-    <allow own="org.opdbus.v1"/>
-    <allow send_destination="org.opdbus.v1"/>
+    <allow own="org.opdbus.v1.plugins"/>
+    <allow send_destination="org.opdbus.v1.plugins"/>
     <allow send_interface="org.opdbus.v1.Xray"/>
-    <allow receive_sender="org.opdbus.v1"/>
+    <allow receive_sender="org.opdbus.v1.plugins"/>
   </policy>
 </busconfig>
 EOF
@@ -82,51 +80,19 @@ fi
 install -m 755 "$BINARY_PATH" "${INSTALL_DIR}/op-xray-daemon"
 echo "Installed binary to: ${INSTALL_DIR}/op-xray-daemon"
 
-# Create service based on init system
-if [ "$INIT_SYSTEM" = "systemd" ]; then
-    cat > /etc/systemd/system/op-xray-daemon.service << EOF
-[Unit]
-Description=Xray D-Bus Daemon
-After=dbus.service network.target
-
-[Service]
-Type=dbus
-BusName=org.opdbus.v1
-ExecStart=${INSTALL_DIR}/op-xray-daemon
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-EOF
-    systemctl daemon-reload
-    echo "Created systemd service: /etc/systemd/system/op-xray-daemon.service"
-    echo "Enable with: systemctl enable op-xray-daemon.service"
-
-elif [ "$INIT_SYSTEM" = "s6" ]; then
-    # s6/s6-rc service setup (Artix/Chimera Linux)
-    S6_SERVICE_DIR="/etc/s6/sv/op-xray-daemon"
-    if [ -d /etc/s6/sv ]; then
-        mkdir -p "$S6_SERVICE_DIR"
-        cat > "${S6_SERVICE_DIR}/run" << EOF
-#!/bin/execlineb -P
-fdmove -c 2 1
-${INSTALL_DIR}/op-xray-daemon
-EOF
-        chmod +x "${S6_SERVICE_DIR}/run"
-        echo "Created s6 service: ${S6_SERVICE_DIR}"
-    elif [ -d /etc/sv ]; then
-        # runit-style directories
-        mkdir -p /etc/sv/op-xray-daemon
-        cat > /etc/sv/op-xray-daemon/run << EOF
+RUNIT_SERVICE_DIR="/etc/runit/sv/op-xray-daemon"
+RUNIT_RUNSVDIR="/etc/runit/runsvdir/default"
+mkdir -p "$RUNIT_SERVICE_DIR"
+cat > "${RUNIT_SERVICE_DIR}/run" << EOF
 #!/bin/sh
 exec 2>&1
 exec ${INSTALL_DIR}/op-xray-daemon
 EOF
-        chmod +x /etc/sv/op-xray-daemon/run
-        echo "Created runit service: /etc/sv/op-xray-daemon"
-    fi
+chmod +x "${RUNIT_SERVICE_DIR}/run"
+if [ ! -e "${RUNIT_RUNSVDIR}/op-xray-daemon" ]; then
+    ln -s "$RUNIT_SERVICE_DIR" "${RUNIT_RUNSVDIR}/op-xray-daemon"
 fi
+echo "Created runit service: ${RUNIT_SERVICE_DIR}"
 
 # Reload D-Bus configuration
 echo "Reloading D-Bus configuration..."
@@ -139,14 +105,8 @@ echo ""
 echo "Installation complete!"
 echo ""
 echo "Start the daemon with:"
-if [ "$INIT_SYSTEM" = "systemd" ]; then
-    echo "  systemctl start op-xray-daemon.service"
-elif [ "$INIT_SYSTEM" = "s6" ]; then
-    echo "  s6-rc -u change op-xray-daemon"
-else
-    echo "  ${INSTALL_DIR}/op-xray-daemon"
-fi
+echo "  sv up op-xray-daemon"
 echo ""
 echo "Test with:"
-echo "  dbus-send --system --dest=org.opdbus.v1 --type=method_call /org/opdbus/v1/xray org.opdbus.v1.Xray.Status"
+echo "  dbus-send --system --dest=org.opdbus.v1.plugins --type=method_call /org/opdbus/v1/plugins/xray org.opdbus.v1.Xray.Status"
 echo ""

@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::convert::TryFrom;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -83,6 +84,15 @@ fn read_plugin_schema_json(plugin_id: &str) -> Option<JsonValue> {
     let schema = op_blob::catalog::read_plugin_schema_shm(plugin_id)?;
     serde_json::to_value(&schema).ok()
 }
+
+/// Request metadata key by which a caller declares the capability it is exercising.
+///
+/// `enforce_bridge_capability` requires the declaration to match the method's
+/// `required_capability`; a mismatch or an absent header denies. This keeps the gRPC
+/// check two-factor — the caller states intent, and must also carry a Ghostbridge
+/// identity — which is stricter than the D-Bus path, where possession of the grant
+/// alone suffices.
+pub const DECLARED_CAPABILITY_HEADER: &str = "x-opdbus-capability";
 
 fn method_capability_from_schema(
     schema: &JsonValue,
@@ -176,6 +186,16 @@ fn enforce_bridge_capability(
     }
 }
 
+pub(crate) fn authorize_schema_method(
+    plugin_id: &str,
+    method_name: &str,
+    capability_id: Option<&str>,
+    identity: Option<&GhostbridgeIdentity>,
+) -> Result<(), Status> {
+    enforce_bridge_capability(plugin_id, method_name, capability_id, identity)
+        .map_err(|error| Status::permission_denied(error.message))
+}
+
 fn plugin_id_from_dbus_path(path: &str) -> Option<String> {
     let prefix = "/org/opdbus/v1/plugins/";
     path.strip_prefix(prefix)
@@ -257,7 +277,7 @@ fn plugin_info_from_schema(id: &str, schema: &JsonValue) -> PluginInfo {
         version,
         description,
         dbus_path: format!("/org/opdbus/v1/plugins/{}", id.replace('.', "/")),
-        interfaces: vec!["org.opdbus.v1.Plugin".to_string()],
+        interfaces: vec!["org.opdbus.v1.PluginV1".to_string()],
         tags,
     }
 }
@@ -513,9 +533,35 @@ impl OperationGrpcServer {
         Res: prost::Message + Default,
     {
         let identity = request.extensions().get::<GhostbridgeIdentity>().cloned();
-        if let Err(error) =
-            enforce_bridge_capability(plugin_id, method_name, None, identity.as_ref())
-        {
+
+        // The caller declares which capability it is exercising, and the bridge
+        // verifies that declaration against the method's `required_capability`.
+        //
+        // Passing `None` here (as this previously did) made `capability_matches` in
+        // `enforce_bridge_capability` compare `None == Some(required)`, which is
+        // always false — and since the decision is `capability_matches &&
+        // footprint_grants`, every capability-gated method was permanently denied
+        // over gRPC/gRPC-Web. All 16 cognitive_mcp methods are gated, so none were
+        // reachable despite the services being mounted.
+        //
+        // Declaration is deliberate rather than derived from the schema: it keeps the
+        // check two-factor (the caller must state its intent AND hold an identity)
+        // and makes the exercised capability visible in traces. An absent or
+        // malformed header still denies.
+        let declared_capability = request
+            .metadata()
+            .get(DECLARED_CAPABILITY_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+
+        if let Err(error) = enforce_bridge_capability(
+            plugin_id,
+            method_name,
+            declared_capability.as_deref(),
+            identity.as_ref(),
+        ) {
             return Err(Status::permission_denied(error.message));
         }
 
@@ -687,8 +733,9 @@ pub fn build_operation_routes(server: OperationGrpcServer) -> tonic::service::Ro
         DbusPassthroughServer::with_interceptor(server.clone(), intercept),
     ))
     .add_service(crate::grpc_web::enable(
-        crate::proto::chat::chat_service_server::ChatServiceServer::new(
-            crate::chat_service::ChatServiceImpl::new(),
+        crate::proto::chat::chat_service_server::ChatServiceServer::with_interceptor(
+            crate::chat_service::ChatServiceImpl::new(server.mutation_engine.clone()),
+            intercept,
         ),
     ))
     // EMQX is the gRPC client and does not carry Ghostbridge identity headers.
@@ -1057,32 +1104,50 @@ impl PluginService for OperationGrpcServer {
                 error: Some(error),
             }));
         }
-        let args: Vec<simd_json::OwnedValue> = req
+        let mut args: Vec<simd_json::OwnedValue> = req
             .arguments
             .into_iter()
             .map(|v| prost_value_to_simd(&v))
             .collect();
+        let args = match args.len() {
+            0 => simd_json::json!({}),
+            1 => args.pop().expect("one argument was counted"),
+            _ => simd_json::json!(args),
+        };
 
-        // New pipeline: Route through MutationEngine.mutate for authoritative recording.
+        let json_args = simd_json::to_string(&args)
+            .map_err(|error| Status::invalid_argument(error.to_string()))?;
+
+        // Route through the same schema dispatcher as PluginV1.Call. That
+        // dispatcher records the method event before returning its audited
+        // envelope; gRPC is a transport adapter, not a second implementation.
         let result = self
             .mutation_engine
-            .mutate(
-                req.plugin_id.clone(),
-                req.object_path.clone(),
-                ChangeType::MethodCall,
-                Some(req.method_name.clone()),
-                simd_json::json!(args),
-                req.actor_id.clone(),
-                capability_id,
+            .dispatch_method_call(
+                &req.plugin_id,
+                &req.method_name,
+                &json_args,
+                capability_id.as_deref(),
+                &req.actor_id,
             )
             .await;
 
         match result {
-            Ok(ok) => Ok(Response::new(CallMethodResponse {
-                success: ok.success,
-                result: ok.result.map(|v| simd_to_prost_value(&v)),
-                event_id: ok.event_id,
-                event_hash: ok.event_hash,
+            Ok(envelope) => Ok(Response::new(CallMethodResponse {
+                success: true,
+                result: Some(simd_to_prost_value(
+                    &simd_json::serde::to_owned_value(&envelope)
+                        .map_err(|error| Status::internal(error.to_string()))?,
+                )),
+                event_id: envelope
+                    .get("event_id")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or_default(),
+                event_hash: envelope
+                    .get("event_hash")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
                 error: None,
             })),
             Err(e) => Ok(Response::new(CallMethodResponse {
@@ -2169,6 +2234,50 @@ impl OperationGrpcServer {
 // RuntimeMirror Service — Live operational state
 // =============================================================================
 
+const RUNIT_ACTIVE_DIR: &str = "/etc/runit/runsvdir/default";
+
+fn valid_runit_service_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && !name.starts_with(['-', '.'])
+        && name
+            .chars()
+            .all(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | '@'))
+}
+
+fn parse_runit_pid(status: &str) -> u32 {
+    status
+        .split("(pid ")
+        .nth(1)
+        .and_then(|tail| tail.split(')').next())
+        .and_then(|pid| pid.parse().ok())
+        .unwrap_or(0)
+}
+
+async fn runit_service_info(
+    name: String,
+    path: PathBuf,
+) -> Result<ProtoRuntimeServiceInfo, Status> {
+    let output = tokio::process::Command::new("sv")
+        .arg("status")
+        .arg(&path)
+        .output()
+        .await
+        .map_err(|e| Status::internal(format!("sv status {} failed: {}", name, e)))?;
+    let description = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let running = description.starts_with("run:");
+
+    Ok(ProtoRuntimeServiceInfo {
+        name,
+        state: if running { "STARTED" } else { "STOPPED" }.to_string(),
+        pid: parse_runit_pid(&description),
+        enabled: path.exists(),
+        description,
+        dependencies: vec![],
+        started_at: None,
+    })
+}
+
 #[tonic::async_trait]
 impl RuntimeMirror for OperationGrpcServer {
     type StreamMetricsStream =
@@ -2211,11 +2320,8 @@ impl RuntimeMirror for OperationGrpcServer {
             .unwrap_or(1);
         let arch = std::env::consts::ARCH.to_string();
 
-        // Detect init system — prefer s6 (Artix/Chimera) over systemd
-        let init_system = if std::path::Path::new("/run/s6-rc").exists() {
-            "s6"
-        } else if std::path::Path::new("/run/systemd").exists() {
-            "systemd"
+        let init_system = if Path::new(RUNIT_ACTIVE_DIR).is_dir() {
+            "runit"
         } else {
             "unknown"
         }
@@ -2243,32 +2349,22 @@ impl RuntimeMirror for OperationGrpcServer {
         &self,
         _request: Request<RuntimeListServicesRequest>,
     ) -> Result<Response<RuntimeListServicesResponse>, Status> {
-        // Query s6 via s6-rc -a -l /run/s6-rc list
-        let output = tokio::process::Command::new("s6-rc")
-            .args(["-a", "-l", "/run/s6-rc", "list"])
-            .output()
+        let mut entries = tokio::fs::read_dir(RUNIT_ACTIVE_DIR)
             .await
-            .map_err(|e| Status::internal(format!("s6-rc list failed: {}", e)))?;
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
+            .map_err(|e| Status::internal(format!("cannot read runit service directory: {}", e)))?;
         let mut services = Vec::new();
-
-        for line in stdout.lines() {
-            let name = line.trim().to_string();
-            if name.is_empty() {
+        while let Some(entry) = entries
+            .next_entry()
+            .await
+            .map_err(|e| Status::internal(format!("cannot enumerate runit services: {}", e)))?
+        {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !valid_runit_service_name(&name) {
                 continue;
             }
-            // All entries returned by s6-rc -a list are currently running
-            services.push(ProtoRuntimeServiceInfo {
-                name,
-                state: "STARTED".to_string(),
-                pid: 0,
-                enabled: true,
-                description: String::new(),
-                dependencies: vec![],
-                started_at: None,
-            });
+            services.push(runit_service_info(name, entry.path()).await?);
         }
+        services.sort_by(|left, right| left.name.cmp(&right.name));
 
         Ok(Response::new(RuntimeListServicesResponse { services }))
     }
@@ -2277,27 +2373,18 @@ impl RuntimeMirror for OperationGrpcServer {
         &self,
         request: Request<RuntimeGetServiceRequest>,
     ) -> Result<Response<ProtoRuntimeServiceInfo>, Status> {
-        let name = &request.get_ref().service_name;
-        // Check running services via s6-rc -a list and look for this service
-        let output = tokio::process::Command::new("s6-rc")
-            .args(["-a", "-l", "/run/s6-rc", "list"])
-            .output()
-            .await
-            .map_err(|e| Status::internal(format!("s6-rc list failed: {}", e)))?;
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let is_running = stdout.lines().any(|l| l.trim() == name.as_str());
-        let state = if is_running { "STARTED" } else { "STOPPED" };
-
-        Ok(Response::new(ProtoRuntimeServiceInfo {
-            name: name.clone(),
-            state: state.to_string(),
-            pid: 0,
-            enabled: state == "STARTED",
-            description: stdout.trim().to_string(),
-            dependencies: vec![],
-            started_at: None,
-        }))
+        let name = request.into_inner().service_name;
+        if !valid_runit_service_name(&name) {
+            return Err(Status::invalid_argument("invalid runit service name"));
+        }
+        let path = Path::new(RUNIT_ACTIVE_DIR).join(&name);
+        if !path.exists() {
+            return Err(Status::not_found(format!(
+                "runit service '{}' is not enabled",
+                name
+            )));
+        }
+        Ok(Response::new(runit_service_info(name, path).await?))
     }
 
     async fn stream_metrics(
@@ -4063,7 +4150,7 @@ impl PrivacyNetworkService for OperationGrpcServer {
                     severity: "critical".to_string(),
                     message: "Privacy D-Bus service (org.opdbus.PrivacyV1) is not running"
                         .to_string(),
-                    suggested_fix: "Start the privacy-router s6 service".to_string(),
+                    suggested_fix: "Start the privacy-router runit service".to_string(),
                 }],
                 overall_status: "unhealthy".to_string(),
                 checked_at: Some(OperationGrpcServer::now_ts()),

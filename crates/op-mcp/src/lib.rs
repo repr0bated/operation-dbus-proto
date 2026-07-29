@@ -14,6 +14,7 @@
 //! - gRPC (high-performance RPC)
 
 pub mod agents_server;
+pub mod cognitive_bridge;
 pub mod compact;
 pub mod external_client;
 pub mod protocol;
@@ -60,6 +61,11 @@ pub enum ServerMode {
     Agents,
     /// All tools directly exposed
     Full,
+    /// Cognitive tools sourced from op-grpc-bridge (fan-in proxy).
+    ///
+    /// One authenticated caller fronting the bridge, so MCP clients need no
+    /// credential and the cognitive store keeps a single writer.
+    Cognitive,
 }
 
 impl std::fmt::Display for ServerMode {
@@ -68,6 +74,7 @@ impl std::fmt::Display for ServerMode {
             ServerMode::Compact => write!(f, "compact"),
             ServerMode::Agents => write!(f, "agents"),
             ServerMode::Full => write!(f, "full"),
+            ServerMode::Cognitive => write!(f, "cognitive"),
         }
     }
 }
@@ -80,6 +87,7 @@ impl std::str::FromStr for ServerMode {
             "compact" => Ok(ServerMode::Compact),
             "agents" => Ok(ServerMode::Agents),
             "full" | "standard" => Ok(ServerMode::Full),
+            "cognitive" | "bridge" => Ok(ServerMode::Cognitive),
             _ => Err(format!("Unknown server mode: {}", s)),
         }
     }

@@ -8,7 +8,7 @@
 //!
 //! This plugin follows the canonical path convention:
 //! - D-Bus Path: /org/opdbus/v1/plugins/freedesktop
-//! - Interface: org.opdbus.v1.Plugin.Plugins.FreeDesktop
+//! - Interface: org.opdbus.v1.PluginV1
 //! - Schema: schemas/plugin/freedesktop.json
 //!
 //! ## Architecture
@@ -21,7 +21,7 @@
 //!
 //! This plugin uses the canonical paths as defined in `crate::canonical`:
 //! - Object path prefix: `/org/opdbus/v1/plugins/`
-//! - Interface prefix: `org.opdbus.v1.Plugin.Plugins`
+//! - Interface: `org.opdbus.v1.PluginV1`
 //!
 //! Legacy paths like `/opdbus/v1/plugins/` or `/org/opdbus/v1/plugin/plugins/`
 //! are normalized to the canonical prefix by `crate::canonical::normalize_plugin_path`.
@@ -495,10 +495,7 @@ mod tests {
 
         // Verify canonical paths
         assert_eq!(plugin.dbus_path(), "/org/opdbus/v1/plugins/freedesktop");
-        assert_eq!(
-            plugin.dbus_interface(),
-            "org.opdbus.v1.Plugin.Plugins.Freedesktop"
-        );
+        assert_eq!(plugin.dbus_interface(), "org.opdbus.v1.PluginV1");
     }
 
     #[test]

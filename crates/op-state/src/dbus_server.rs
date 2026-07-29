@@ -19,7 +19,7 @@ pub struct PluginDbusHost {
     pub schema_registry: Arc<RwLock<SchemaRegistry>>,
 }
 
-#[zbus::interface(name = "org.opdbus.PluginV1")]
+#[zbus::interface(name = "org.opdbus.v1.PluginV1")]
 impl PluginDbusHost {
     #[zbus(property)]
     async fn name(&self) -> String {

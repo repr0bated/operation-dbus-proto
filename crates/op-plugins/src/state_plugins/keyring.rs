@@ -60,7 +60,7 @@ impl KeyringPlugin {
             &conn,
             op_core::config::OPDBUS_BUS_NAME,
             crate::canonical::plugin_path("freedesktop"),
-            "org.opdbus.v1.Plugin.Plugins.FreeDesktop",
+            crate::canonical::PLUGIN_INTERFACE,
         )
         .await?;
         Ok(proxy)

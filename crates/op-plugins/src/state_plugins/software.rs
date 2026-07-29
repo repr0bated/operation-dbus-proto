@@ -249,11 +249,9 @@ pub(crate) fn software_schema() -> PluginSchema {
     schema
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
 
     #[test]
     fn all_subids_are_valid() {

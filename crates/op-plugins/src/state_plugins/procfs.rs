@@ -526,9 +526,18 @@ async fn gather_loadavg() -> LoadAvg {
         })
         .unwrap_or_default();
     LoadAvg {
-        load1: parts.first().and_then(|v| v.parse().ok()).unwrap_or_default(),
-        load5: parts.get(1).and_then(|v| v.parse().ok()).unwrap_or_default(),
-        load15: parts.get(2).and_then(|v| v.parse().ok()).unwrap_or_default(),
+        load1: parts
+            .first()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or_default(),
+        load5: parts
+            .get(1)
+            .and_then(|v| v.parse().ok())
+            .unwrap_or_default(),
+        load15: parts
+            .get(2)
+            .and_then(|v| v.parse().ok())
+            .unwrap_or_default(),
         procs_running,
         procs_total,
     }
@@ -538,8 +547,14 @@ async fn gather_uptime() -> Uptime {
     let raw = read_proc("uptime").await;
     let parts: Vec<&str> = raw.split_whitespace().collect();
     Uptime {
-        uptime_secs: parts.first().and_then(|v| v.parse().ok()).unwrap_or_default(),
-        idle_secs: parts.get(1).and_then(|v| v.parse().ok()).unwrap_or_default(),
+        uptime_secs: parts
+            .first()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or_default(),
+        idle_secs: parts
+            .get(1)
+            .and_then(|v| v.parse().ok())
+            .unwrap_or_default(),
     }
 }
 
@@ -723,7 +738,10 @@ mod typed_field_tests {
     fn loadavg_exposes_its_real_subfields() {
         let schema = procfs_schema();
         let FieldType::Object(fields) = &schema.fields["loadavg"].field_type else {
-            panic!("loadavg should be an object, got {:?}", schema.fields["loadavg"].field_type);
+            panic!(
+                "loadavg should be an object, got {:?}",
+                schema.fields["loadavg"].field_type
+            );
         };
         for (name, expected) in [
             ("load1", FieldType::Float),
@@ -732,7 +750,10 @@ mod typed_field_tests {
             ("procs_running", FieldType::Integer),
             ("procs_total", FieldType::Integer),
         ] {
-            let got = &fields.get(name).unwrap_or_else(|| panic!("{name} missing")).field_type;
+            let got = &fields
+                .get(name)
+                .unwrap_or_else(|| panic!("{name} missing"))
+                .field_type;
             assert_eq!(*got, expected, "{name} typed as {got:?}");
         }
     }
@@ -751,7 +772,10 @@ mod typed_field_tests {
     fn meminfo_keys_normalise_and_carry_their_unit() {
         assert_eq!(super::meminfo_key("MemTotal", true), "mem_total_kb");
         assert_eq!(super::meminfo_key("Active(anon)", true), "active_anon_kb");
-        assert_eq!(super::meminfo_key("HugePages_Total", false), "huge_pages_total");
+        assert_eq!(
+            super::meminfo_key("HugePages_Total", false),
+            "huge_pages_total"
+        );
         assert_eq!(super::meminfo_key("SwapCached", true), "swap_cached_kb");
         // the unit is stripped from the value, not left for a consumer to parse
         assert_eq!(super::kb_value("32855784 kB"), Some(32855784));
@@ -768,7 +792,10 @@ mod collection_field_tests {
     fn mounts_is_an_array_of_typed_rows() {
         let schema = procfs_schema();
         let FieldType::Array(item) = &schema.fields["mounts"].field_type else {
-            panic!("mounts should be an array, got {:?}", schema.fields["mounts"].field_type);
+            panic!(
+                "mounts should be an array, got {:?}",
+                schema.fields["mounts"].field_type
+            );
         };
         let FieldType::Object(cols) = item.as_ref() else {
             panic!("mount rows should be objects, got {item:?}");
@@ -793,7 +820,14 @@ mod collection_field_tests {
             panic!("interface rows should be objects");
         };
         assert_eq!(cols["interface"].field_type, FieldType::String);
-        for c in ["rx_bytes", "rx_packets", "rx_errs", "tx_bytes", "tx_packets", "tx_drop"] {
+        for c in [
+            "rx_bytes",
+            "rx_packets",
+            "rx_errs",
+            "tx_bytes",
+            "tx_packets",
+            "tx_drop",
+        ] {
             assert_eq!(cols[c].field_type, FieldType::Integer, "{c}");
         }
     }
