@@ -85,6 +85,15 @@ fn read_plugin_schema_json(plugin_id: &str) -> Option<JsonValue> {
     serde_json::to_value(&schema).ok()
 }
 
+/// Request metadata key by which a caller declares the capability it is exercising.
+///
+/// `enforce_bridge_capability` requires the declaration to match the method's
+/// `required_capability`; a mismatch or an absent header denies. This keeps the gRPC
+/// check two-factor — the caller states intent, and must also carry a Ghostbridge
+/// identity — which is stricter than the D-Bus path, where possession of the grant
+/// alone suffices.
+pub const DECLARED_CAPABILITY_HEADER: &str = "x-opdbus-capability";
+
 fn method_capability_from_schema(
     schema: &JsonValue,
     method_name: &str,
@@ -524,9 +533,35 @@ impl OperationGrpcServer {
         Res: prost::Message + Default,
     {
         let identity = request.extensions().get::<GhostbridgeIdentity>().cloned();
-        if let Err(error) =
-            enforce_bridge_capability(plugin_id, method_name, None, identity.as_ref())
-        {
+
+        // The caller declares which capability it is exercising, and the bridge
+        // verifies that declaration against the method's `required_capability`.
+        //
+        // Passing `None` here (as this previously did) made `capability_matches` in
+        // `enforce_bridge_capability` compare `None == Some(required)`, which is
+        // always false — and since the decision is `capability_matches &&
+        // footprint_grants`, every capability-gated method was permanently denied
+        // over gRPC/gRPC-Web. All 16 cognitive_mcp methods are gated, so none were
+        // reachable despite the services being mounted.
+        //
+        // Declaration is deliberate rather than derived from the schema: it keeps the
+        // check two-factor (the caller must state its intent AND hold an identity)
+        // and makes the exercised capability visible in traces. An absent or
+        // malformed header still denies.
+        let declared_capability = request
+            .metadata()
+            .get(DECLARED_CAPABILITY_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+
+        if let Err(error) = enforce_bridge_capability(
+            plugin_id,
+            method_name,
+            declared_capability.as_deref(),
+            identity.as_ref(),
+        ) {
             return Err(Status::permission_denied(error.message));
         }
 
