@@ -78,8 +78,7 @@ impl ServiceManagerTrait for GrpcServer {
         let name = ServiceName::new(&req.get_ref().name)
             .map_err(|e| Status::invalid_argument(e.to_string()))?;
 
-        // Reload by performing a stop + start cycle, since neither s6-rc
-        // nor the process manager exposes a dedicated reload operation.
+        // Runit has no generic application reload verb, so use restart.
         let status = self
             .manager
             .restart(&name)

@@ -1,9 +1,9 @@
-//! Axum HTTP/gRPC-Web host for the zeroclaw plugin schema.
+//! Axum gRPC/gRPC-Web host for the zeroclaw plugin schema.
 //!
 //! Serves the plugin-owned schema JSON on:
 //!   - host native gRPC over Unix socket `/run/opdbus/grpc.sock`
 //!   - shared container UDS `/run/ghostbridge/container.sock` (same routes)
-//!   - HTTP/1.1 + gRPC-Web on TCP `0.0.0.0:8090` (configurable via D-Bus)
+//!   - gRPC + gRPC-Web on TCP `0.0.0.0:8090` (configurable by environment)
 //!
 //! The schema itself is never generated here; it is read from the plugin's
 //! sealed blob in the SHM catalog (`/dev/shm/opdbus/plugin-blobs`).
@@ -15,16 +15,15 @@ use std::sync::Arc;
 
 use async_stream::stream;
 use axum::Router;
-use tokio::sync::mpsc;
 use tonic::transport::{Identity, ServerTlsConfig};
 use tonic::{Request as TonicRequest, Response as TonicResponse, Status};
 use tower_http::cors::{Any, CorsLayer};
 use tracing::info;
 
-use crate::dbus_object::{register_zeroclaw_host_object, ZeroclawAxumHostObject};
 use crate::grpc_server::OperationGrpcServer;
 use crate::mutation_engine::MutationEngine;
 use crate::schema_loader::{SchemaLoader, SchemaReloadEvent};
+use crate::schema_router::SchemaRouter;
 use crate::tracing::{GhostbridgeTraceLayer, TraceContext};
 
 use crate::grpc_server::build_operation_routes;
@@ -225,7 +224,9 @@ fn build_routes(loader: Arc<SchemaLoader>, server: OperationGrpcServer) -> tonic
     build_operation_routes(server).add_service(zeroclaw_svc)
 }
 
-/// Build the axum `Router` that serves the gRPC service over HTTP/gRPC-Web.
+/// Build the axum `Router` that serves only gRPC and gRPC-Web.
+///
+/// Ordinary HTTP/REST compatibility routes belong to op-web on port 8080.
 pub fn build_axum_app(loader: Arc<SchemaLoader>, server: OperationGrpcServer) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(Any)
@@ -261,15 +262,6 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
         config.plugin_id.clone(),
     )?);
 
-    // Channel for D-Bus-triggered rebind requests. Only `SchemaPath` changes are
-    // applied live; `BindAddr` changes are recorded and honored on the next
-    // restart.
-    let (rebind_tx, mut rebind_rx) = mpsc::channel::<String>(4);
-
-    // D-Bus object for runtime configuration.
-    let dbus_object = ZeroclawAxumHostObject::new(loader.clone(), rebind_tx)?;
-    let _dbus_connection = register_zeroclaw_host_object(dbus_object).await?;
-
     // SIGHUP reload watcher.
     let _sighup_handle = loader.clone().watch_sighup();
 
@@ -284,16 +276,33 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
     let ovsdb = Arc::new(op_network::rovs_proxy::OvsdbDbusClient::new());
     let mutation_engine = Arc::new(MutationEngine::new(event_chain, ovsdb));
     mutation_engine.seed_missing_plugin_projections().await?;
+    let mutation_engine_for_dbus = mutation_engine.clone();
     let operation_server = OperationGrpcServer::new(mutation_engine);
     // The sealed SHM blob catalog IS the plugin set: hydrate reflection from
     // it so a bridge restart advertises every sealed plugin immediately.
     operation_server.hydrate_reflection_from_shm().await;
 
+    // Activate the frozen per-method descriptors.
+    //
+    // Hydrating the catalog above only makes the sealed blobs *discoverable*; it
+    // does not mount them. This turns each method's frozen descriptor into a live
+    // typed gRPC service (one service per method, e.g.
+    // `operation.method.cognitive_mcp.invoke_tool.InvokeToolService`) and registers
+    // it with the per-method reflection registry.
+    //
+    // Must run before `build_axum_app` below: tonic-reflection is immutable once
+    // mounted, so a service activated after route construction can never be served.
+    // `run_grpc_server` (op-dbus :50051) already did this; omitting it here meant the
+    // zeroclaw bridge advertised sealed plugins while serving none of their typed
+    // per-method services.
+    operation_server.freeze_plugin_method_reflection().await;
+
     // ── D-Bus plugin object registration ──────────────────────────────────
     // Register all plugin objects from the SHM blob catalog on the session bus
     // so `busctl tree org.opdbus.v1.plugins` shows the full plugin tree.
-    // Reads plugin IDs from the blob manifest and registers a minimal
-    // introspectable object at each plugin's canonical path.
+    // SchemaRouter reads sealed blobs and creates SchemaBackedInterface objects
+    // with real methods/properties matching each plugin's schema, dispatching
+    // calls through the same MutationEngine as the gRPC path.
     tokio::spawn(async move {
         let addr = std::env::var("DBUS_SESSION_BUS_ADDRESS")
             .unwrap_or_else(|_| op_core::config::SESSION_BUS_ADDRESS.to_string());
@@ -311,59 +320,31 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
             }
         };
 
-        // Read the blob manifest to discover all plugins
-        let manifest_path = "/dev/shm/opdbus/plugin-blobs/.manifest.json";
-        let manifest_data = match std::fs::read_to_string(manifest_path) {
-            Ok(d) => d,
-            Err(e) => {
-                tracing::warn!(error = %e, "Cannot read blob manifest — D-Bus objects not registered");
-                return;
-            }
-        };
-        let manifest: serde_json::Value = match serde_json::from_str(&manifest_data) {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::warn!(error = %e, "Cannot parse blob manifest");
-                return;
-            }
-        };
+        let dbus_conn = Arc::new(tokio::sync::OnceCell::new());
+        let _ = dbus_conn.set(conn.clone());
+        let engine_for_signal = mutation_engine_for_dbus.clone();
+        let router = SchemaRouter::with_engine(dbus_conn, mutation_engine_for_dbus);
 
-        let plugins = match manifest.get("plugins").and_then(|p| p.as_object()) {
-            Some(p) => p,
-            None => {
-                tracing::warn!("Blob manifest has no 'plugins' object");
-                return;
-            }
-        };
-
-        let mut registered = 0usize;
-        for plugin_id in plugins.keys() {
-            let path = format!("/org/opdbus/v1/plugins/{}", plugin_id);
-            // Register a minimal placeholder object (introspectable)
-            let iface = PluginPlaceholderInterface {
-                plugin_id: plugin_id.clone(),
-            };
-            match conn.object_server().at(path.as_str(), iface).await {
-                Ok(_) => registered += 1,
-                Err(e) => {
-                    tracing::debug!(plugin_id, error = %e, "D-Bus object registration skipped");
+        if let Err(e) = router.register_objects().await {
+            tracing::error!(error = %e, "Failed to register authoritative D-Bus plugin objects");
+        } else {
+            // Store the signal bus on the MutationEngine so emit_updated_signal works.
+            engine_for_signal.set_signal_bus(conn.clone());
+            // Request the canonical bus name
+            match conn
+                .request_name(op_plugins::canonical::BASE_SERVICE_NAME)
+                .await
+            {
+                Ok(_) => {
+                    let count = router.list_plugin_ids().await.len();
+                    tracing::info!(
+                        count,
+                        "D-Bus plugin objects registered under org.opdbus.v1.plugins"
+                    );
                 }
-            }
-        }
-
-        // Request the canonical bus name
-        match conn
-            .request_name(op_plugins::canonical::BASE_SERVICE_NAME)
-            .await
-        {
-            Ok(_) => {
-                tracing::info!(
-                    registered,
-                    "D-Bus plugin objects registered under org.opdbus.v1.plugins"
-                );
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, registered, "D-Bus name request failed (objects still registered)");
+                Err(e) => {
+                    tracing::warn!(error = %e, "D-Bus name request failed");
+                }
             }
         }
 
@@ -450,21 +431,17 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
             .serve_with_incoming(incoming)
     });
 
-    // TCP listeners for HTTP + gRPC-Web
+    // TCP listeners for gRPC + gRPC-Web. REST is served by op-web on :8080.
     let bind_addrs: Vec<&str> = config.bind_addr.split(',').collect();
     let mut tcp_tasks = Vec::new();
     for bind_addr_str in &bind_addrs {
         let bind_addr: SocketAddr = bind_addr_str.parse()?;
         let listener = std::net::TcpListener::bind(bind_addr)?;
         listener.set_nonblocking(true)?;
-        let incoming = tokio_stream::wrappers::TcpListenerStream::new(
-            tokio::net::TcpListener::from_std(listener)?,
-        );
-        info!(addr = %bind_addr, "zeroclaw HTTP/gRPC-Web listening on TCP");
-        let server = tonic::transport::Server::builder()
-            .accept_http1(true)
-            .add_routes(build_tonic_routes(loader.clone(), operation_server.clone()))
-            .serve_with_incoming(incoming);
+        let listener = tokio::net::TcpListener::from_std(listener)?;
+        info!(addr = %bind_addr, "zeroclaw gRPC/gRPC-Web listening on TCP");
+        let app = build_axum_app(loader.clone(), operation_server.clone());
+        let server = axum::serve(listener, app.into_make_service());
         tcp_tasks.push(tokio::spawn(async move { server.await }));
     }
 
@@ -493,15 +470,6 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
         }
         _ => None,
     };
-
-    // Rebind task: when a new bind address is requested, restart the TCP server.
-    // The current implementation starts the initial TCP server; subsequent
-    // rebinds require a restart to keep the listener lifecycle simple andsafe.
-    let rebind_task = tokio::spawn(async move {
-        while let Some(new_bind) = rebind_rx.recv().await {
-            info!(new_bind = %new_bind, "D-Bus rebind request received; will be honored on next restart");
-        }
-    });
 
     // Drive all listeners concurrently. Absent optional servers are no-ops.
     let shared_fut = async {
@@ -542,7 +510,6 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
     s?;
     t?;
     tls_r?;
-    let _ = rebind_task.await;
     Ok(())
 }
 
@@ -573,29 +540,4 @@ async fn bind_unix_listener(
         let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o777));
     }
     Ok(tokio_stream::wrappers::UnixListenerStream::new(listener))
-}
-
-// ── Minimal D-Bus interface for plugin object registration ────────────────
-// Each plugin gets a placeholder object at /org/opdbus/v1/plugins/<plugin_id>.
-// The interface exposes the plugin_id as a property and is introspectable.
-// Full method dispatch goes through gRPC (PluginService.CallMethod), not D-Bus.
-
-/// Placeholder D-Bus interface registered for each plugin in the blob catalog.
-struct PluginPlaceholderInterface {
-    plugin_id: String,
-}
-
-#[zbus::interface(name = "org.opdbus.v1.plugins.ProjectedObject")]
-impl PluginPlaceholderInterface {
-    /// The plugin identifier.
-    #[zbus(property)]
-    async fn plugin_id(&self) -> &str {
-        &self.plugin_id
-    }
-
-    /// Plugin state — always "projected" for blob-backed plugins.
-    #[zbus(property)]
-    async fn state(&self) -> &str {
-        "projected"
-    }
 }

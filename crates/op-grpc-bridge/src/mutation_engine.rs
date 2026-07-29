@@ -18,6 +18,7 @@ use zbus::{Connection, Proxy};
 
 use base64::Engine;
 use op_identity::{read_sled, write_sled_full};
+use op_llm::chat::ChatManager;
 use op_network::rovs_proxy::OvsdbDbusClient;
 use op_state_store::{ChainEvent, Decision, EventChain, MemoryStore, OperationType, StateStore};
 
@@ -68,6 +69,9 @@ pub struct MutationEngine {
     pub dbus_connection: Arc<OnceCell<Connection>>,
     /// Session bus connection for projection tree introspection
     session_bus: Arc<OnceCell<Connection>>,
+    /// Session bus connection with registered PluginV1 interfaces for signal emission.
+    /// Set after SchemaRouter registers objects (server.rs spawned task).
+    signal_bus: Arc<OnceCell<Connection>>,
     /// Resource limiter for D-Bus operations
     #[allow(dead_code)]
     dbus_call_limiter: Arc<Semaphore>,
@@ -76,6 +80,8 @@ pub struct MutationEngine {
     pub ovsdb: Arc<OvsdbDbusClient>,
     /// In-process plugin handles for MethodCall dispatch (e.g. createunixsocket).
     pub unix_socket: Arc<op_plugins::state_plugins::UnixSocketPlugin>,
+    /// Provider runtime used only after ZeroClaw resolves a schema-declared route.
+    chat_manager: Arc<ChatManager>,
 }
 
 impl std::fmt::Debug for MutationEngine {
@@ -131,20 +137,63 @@ impl MutationEngine {
             state_cache: Arc::new(RwLock::new(HashMap::new())),
             dbus_connection: Arc::new(OnceCell::new()),
             session_bus: Arc::new(OnceCell::new()),
+            signal_bus: Arc::new(OnceCell::new()),
             dbus_call_limiter: Arc::new(Semaphore::new(32)),
             ovsdb,
             unix_socket: Arc::new(op_plugins::state_plugins::UnixSocketPlugin::new()),
+            chat_manager: Arc::new(ChatManager::new()),
         }
     }
 
-    /// Seed missing plugin projection files AND missing sealed blobs from the
-    /// canonical PluginSchema catalog. This runs once during bridge startup;
-    /// existing projection files and blobs are left untouched so real mutation
-    /// state (and the sealer's artifacts) always win.
+    /// Store the session bus connection used for `Updated` signal emission.
+    /// Called from server.rs after SchemaRouter registers its interfaces.
+    pub fn set_signal_bus(&self, conn: Connection) {
+        let _ = self.signal_bus.set(conn);
+    }
+
+    /// Emit the `Updated` signal on `org.opdbus.v1.PluginV1` for a given plugin.
     ///
-    /// A plugin missing from the SHM blob catalog is automatically blobified
-    /// and sealed here — the blob IS the plugin, so a loaded plugin without a
-    /// blob doesn't exist yet and is brought into existence on the spot.
+    /// Best-effort: if the signal bus is not yet available (early boot) or the
+    /// interface is not registered for this plugin, the write still succeeds.
+    /// The signal is for reactivity; SHM is the source of truth.
+    async fn emit_updated_signal(&self, plugin_id: &str) {
+        let conn = match self.signal_bus.get() {
+            Some(c) => c,
+            None => {
+                tracing::debug!(plugin_id, "signal_bus not yet available; skipping Updated signal");
+                return;
+            }
+        };
+        let path = format!("/org/opdbus/v1/plugins/{plugin_id}");
+        let iface_ref = match conn
+            .object_server()
+            .interface::<_, crate::schema_router::SchemaBackedInterface>(&*path)
+            .await
+        {
+            Ok(r) => r,
+            Err(_) => {
+                tracing::debug!(plugin_id, "PluginV1 interface not registered at path; skipping signal");
+                return;
+            }
+        };
+        let payload = serde_json::json!({"plugin": plugin_id, "key": plugin_id}).to_string();
+        if let Err(e) = crate::schema_router::SchemaBackedInterface::updated(
+            iface_ref.signal_emitter(),
+            &payload,
+        )
+        .await
+        {
+            tracing::debug!(plugin_id, error = %e, "Failed to emit Updated signal");
+        }
+    }
+
+    /// Seed missing plugin projection files and seal current schemas from the
+    /// canonical PluginSchema catalog. This runs once during bridge startup.
+    /// Existing state projections are preserved; stale schema blobs are
+    /// replaced because their hash no longer describes the running code.
+    ///
+    /// A missing or schema-stale plugin in the SHM blob catalog is blobified
+    /// and sealed here. The blob IS the reflected plugin contract.
     pub async fn seed_missing_plugin_projections(&self) -> anyhow::Result<usize> {
         let state_store: Arc<dyn StateStore> = Arc::new(MemoryStore::new());
         let registry = op_plugins::DefaultPluginRegistry::new(state_store);
@@ -179,35 +228,53 @@ impl MutationEngine {
                 continue;
             }
 
-            // Auto-generate the sealed blob for any plugin missing from the
-            // SHM catalog (registration by existence).
+            // Auto-generate or refresh the sealed blob when the running
+            // schema hash differs from the active SHM catalog.
             if let Some(store) = blob_store.as_mut() {
                 let canonical_id = op_blob::canonical_plugin_id(&plugin_id);
-                if store.manifest(&canonical_id).is_none() {
-                    let blob = op_blob::blobify_plugin_schema(&plugin_id, schema.clone());
+                let blob = op_blob::blobify_plugin_schema(&plugin_id, schema.clone());
+                let schema_changed = store
+                    .manifest(&canonical_id)
+                    .map(|manifest| manifest.schema_hash.as_str())
+                    != Some(blob.manifest.schema_hash.as_str());
+                if schema_changed {
                     match store.write(&blob) {
                         Ok(_) => {
                             tracing::info!(
                                 plugin_id = %canonical_id,
                                 schema_hash = %blob.manifest.schema_hash,
-                                "auto-sealed missing plugin blob into SHM catalog"
+                                "sealed current plugin schema into SHM catalog"
                             );
                             sealed += 1;
                         }
                         Err(error) => {
-                            tracing::warn!(plugin_id = %canonical_id, %error, "failed to auto-seal missing plugin blob");
+                            tracing::warn!(plugin_id = %canonical_id, %error, "failed to seal current plugin schema");
                         }
                     }
                 }
             }
 
-            if op_core::projection_shm::read_projection_bytes(&plugin_id).is_some() {
+            if let Some(mut bytes) = op_core::projection_shm::read_projection_bytes(&plugin_id) {
+                match simd_json::to_owned_value(&mut bytes) {
+                    Ok(projected_state) => {
+                        self.update_state_cache(plugin_id.clone(), projected_state)
+                            .await;
+                    }
+                    Err(error) => {
+                        tracing::warn!(
+                            plugin_id = %plugin_id,
+                            %error,
+                            "existing plugin projection is invalid JSON; leaving it authoritative but uncached"
+                        );
+                    }
+                }
                 continue;
             }
 
             let seed_state = op_plugins::projection_seed_state_from_schema(&schema);
             let json = simd_json::to_string(&seed_state)?;
             op_core::projection_shm::write_projection(&plugin_id, json.as_bytes())?;
+            self.emit_updated_signal(&plugin_id).await;
             self.update_state_cache(plugin_id.clone(), seed_state).await;
             seeded += 1;
         }
@@ -215,7 +282,7 @@ impl MutationEngine {
         tracing::info!(
             projections = seeded,
             blobs = sealed,
-            "Seeded missing plugin projections and sealed missing plugin blobs"
+            "Seeded missing plugin projections and sealed current plugin schemas"
         );
         Ok(seeded)
     }
@@ -500,6 +567,8 @@ impl MutationEngine {
                         op_core::projection_shm::write_projection(&plugin_id, json.as_bytes())
                     {
                         tracing::warn!(plugin_id = %plugin_id, error = %e, "Failed to write shm projection");
+                    } else {
+                        self.emit_updated_signal(&plugin_id).await;
                     }
                 }
                 Err(e) => {
@@ -913,6 +982,9 @@ impl MutationEngine {
             "rovs_commands" => {
                 dispatch_rovs_commands_method(&self.ovsdb, method, &parsed_value).await?
             }
+            "ovsdb_bridge" => {
+                dispatch_ovsdb_bridge_method(&self.ovsdb, method, &parsed_value).await?
+            }
             "xray" => {
                 let args = serde_json::to_value(&parsed_value)?;
                 dispatch_xray_method(method, &args).await?
@@ -927,30 +999,65 @@ impl MutationEngine {
                 op_plugins::state_plugins::persona::dispatch_persona_method(method, &args).await?
             }
             "zeroclaw" => {
-                let state = op_plugins::state_plugins::zeroclaw::ZeroclawPlugin::current_state();
-                match op_plugins::state_plugins::zeroclaw::dispatch_zeroclaw_method(
-                    method, json_args, &state,
-                ) {
-                    Ok(outcome) => {
-                        // Persist effective Set* changes to the authoritative state
-                        // cache so the new selection is observable to readers.
-                        if method == "SetProvider" || method == "SetModel" {
-                            self.merge_into_state_cache("zeroclaw", &outcome.result)
-                                .await;
+                let state = self
+                    .projected_state::<op_plugins::state_plugins::zeroclaw::ZeroclawState>(
+                        "zeroclaw",
+                    )
+                    .await
+                    .unwrap_or_else(
+                        op_plugins::state_plugins::zeroclaw::ZeroclawPlugin::current_state,
+                    );
+                if method == "Chat" {
+                    let args = serde_json::from_value::<
+                        op_plugins::state_plugins::zeroclaw::ChatInput,
+                    >(serde_json::to_value(&parsed_value)?)
+                    .context("invalid zeroclaw.Chat arguments")?;
+                    serde_json::to_value(
+                        crate::chat_service::dispatch_schema_chat(
+                            self.chat_manager.as_ref(),
+                            &state,
+                            args,
+                        )
+                        .await?,
+                    )?
+                } else {
+                    match op_plugins::state_plugins::zeroclaw::dispatch_zeroclaw_method(
+                        method, json_args, &state,
+                    ) {
+                        Ok(outcome) => {
+                            if method.starts_with("Set") {
+                                self.persist_zeroclaw_mutation(method, &outcome.result)
+                                    .await?;
+                            }
+                            if let Some(sig) = &outcome.signal {
+                                self.broadcast_method_signal(&change, &sig.name, &sig.payload);
+                            }
+                            outcome.result
                         }
-                        if let Some(sig) = &outcome.signal {
-                            tracing::debug!(plugin_id, method, signal = %sig.name, "zeroclaw dispatch signal");
+                        Err(e) => {
+                            return Err(anyhow::anyhow!(
+                                "zeroclaw dispatch error for '{}': {}",
+                                method,
+                                e
+                            ))
                         }
-                        outcome.result
-                    }
-                    Err(e) => {
-                        return Err(anyhow::anyhow!(
-                            "zeroclaw dispatch error for '{}': {}",
-                            method,
-                            e
-                        ))
                     }
                 }
+            }
+            "ghostbridge" => {
+                let state = self
+                    .projected_state::<op_plugins::state_plugins::ghostbridge::GhostbridgeState>(
+                        "ghostbridge",
+                    )
+                    .await
+                    .unwrap_or_else(
+                        op_plugins::state_plugins::ghostbridge::GhostbridgePlugin::current_state,
+                    );
+                op_plugins::state_plugins::ghostbridge::dispatch_ghostbridge_method(method, &state)?
+            }
+            "cognitive_mcp" => {
+                let args = serde_json::to_value(&parsed_value)?;
+                dispatch_cognitive_mcp_method(method, &args).await?
             }
             _ => serde_json::to_value(&parsed_value).unwrap_or(serde_json::Value::Null),
         };
@@ -967,6 +1074,77 @@ impl MutationEngine {
             "result": method_result,
         });
         Ok(result)
+    }
+
+    async fn projected_state<T>(&self, plugin_id: &str) -> Option<T>
+    where
+        T: serde::de::DeserializeOwned,
+    {
+        if let Some(value) = self.get_state(plugin_id).await {
+            if let Ok(json) = serde_json::to_value(value) {
+                if let Ok(state) = serde_json::from_value(json) {
+                    return Some(state);
+                }
+            }
+        }
+
+        let mut bytes = op_core::projection_shm::read_projection_bytes(plugin_id)?;
+        let value = simd_json::to_owned_value(&mut bytes).ok()?;
+        let json = serde_json::to_value(&value).ok()?;
+        let state = serde_json::from_value(json).ok()?;
+        self.update_state_cache(plugin_id.to_string(), value).await;
+        Some(state)
+    }
+
+    fn broadcast_method_signal(
+        &self,
+        method_change: &StateChange,
+        signal_name: &str,
+        payload: &serde_json::Value,
+    ) {
+        let mut bytes = serde_json::to_vec(payload).unwrap_or_default();
+        let payload =
+            simd_json::to_owned_value(&mut bytes).unwrap_or_else(|_| simd_json::json!(null));
+        let signal = StateChange {
+            change_id: uuid::Uuid::new_v4().to_string(),
+            event_id: method_change.event_id,
+            plugin_id: method_change.plugin_id.clone(),
+            object_path: method_change.object_path.clone(),
+            change_type: ChangeType::Signal,
+            member_name: Some(signal_name.to_string()),
+            old_value: None,
+            new_value: payload,
+            tags_touched: method_change.tags_touched.clone(),
+            event_hash: method_change.event_hash.clone(),
+            timestamp: method_change.timestamp,
+            actor_id: method_change.actor_id.clone(),
+            source: method_change.source,
+        };
+        let _ = self.change_tx.send(signal);
+    }
+
+    async fn persist_zeroclaw_mutation(
+        &self,
+        method: &str,
+        result: &serde_json::Value,
+    ) -> anyhow::Result<()> {
+        match method {
+            "SetProvider" | "SetModel" => {
+                self.merge_into_state_cache("zeroclaw", result).await;
+            }
+            "SetOvsRoutingModel"
+            | "SetObfuscationModel"
+            | "SetVectorizationModel"
+            | "SetQdrantRetrievalModel"
+            | "SetCozoRetrievalModel" => {
+                self.merge_nested_into_state_cache("zeroclaw", "model_assignments", result)
+                    .await;
+            }
+            _ => {}
+        }
+
+        self.publish_plugin_projection_from_cache("zeroclaw", ChangeType::PropertySet)
+            .await
     }
 
     /// Merge a flat JSON object of changed fields into the authoritative
@@ -987,6 +1165,40 @@ impl MutationEngine {
                 cur_obj.insert(k.clone(), v.clone());
             }
         }
+        let mut bytes = serde_json::to_vec(&current).unwrap_or_default();
+        if let Ok(owned) = simd_json::to_owned_value(&mut bytes) {
+            self.update_state_cache(plugin_id.to_string(), owned).await;
+        }
+    }
+
+    async fn merge_nested_into_state_cache(
+        &self,
+        plugin_id: &str,
+        field: &str,
+        changes: &serde_json::Value,
+    ) {
+        let Some(changes_obj) = changes.as_object() else {
+            return;
+        };
+        let mut current = self
+            .get_state(plugin_id)
+            .await
+            .and_then(|value| serde_json::to_value(value).ok())
+            .unwrap_or_else(|| serde_json::json!({}));
+
+        let Some(current_obj) = current.as_object_mut() else {
+            return;
+        };
+        let nested = current_obj
+            .entry(field.to_string())
+            .or_insert_with(|| serde_json::json!({}));
+        let Some(nested_obj) = nested.as_object_mut() else {
+            return;
+        };
+        for (key, value) in changes_obj {
+            nested_obj.insert(key.clone(), value.clone());
+        }
+
         let mut bytes = serde_json::to_vec(&current).unwrap_or_default();
         if let Ok(owned) = simd_json::to_owned_value(&mut bytes) {
             self.update_state_cache(plugin_id.to_string(), owned).await;
@@ -1038,6 +1250,7 @@ impl MutationEngine {
         };
         let json = simd_json::to_string(&projection)?;
         op_core::projection_shm::write_projection(plugin_id, json.as_bytes())?;
+        self.emit_updated_signal(plugin_id).await;
         let change = StateChange {
             change_id: uuid::Uuid::new_v4().to_string(),
             event_id: 0,
@@ -1297,6 +1510,29 @@ async fn dispatch_rovs_commands_method(
     }
 }
 
+/// Execute the schema-declared OVSDB bridge methods used by canonical
+/// `org.opdbus.v1.plugins` compatibility clients.
+async fn dispatch_ovsdb_bridge_method(
+    ovsdb: &op_network::rovs_proxy::OvsdbDbusClient,
+    method: &str,
+    args: &simd_json::OwnedValue,
+) -> anyhow::Result<serde_json::Value> {
+    match method {
+        "list_dbs" => Ok(serde_json::json!(ovsdb.list_dbs().await?)),
+        "get_schema" => Ok(ovsdb.get_schema().await?),
+        "transact" => {
+            let operations = args
+                .get("operations")
+                .ok_or_else(|| anyhow::anyhow!("operations required"))?
+                .clone();
+            Ok(ovsdb.transact_simd(operations).await?)
+        }
+        _ => Err(anyhow::anyhow!(
+            "ovsdb_bridge.{method} is schema-declared but has no runtime dispatcher"
+        )),
+    }
+}
+
 /// Dispatch for the `xray` plugin's schema-declared methods. Only `get_stats`
 /// is backed by real behavior so far — it calls xray-core's own StatsService
 /// over the commander UDS (see `op_xray_daemon::commander_client`). The
@@ -1334,8 +1570,8 @@ async fn dispatch_xray_method(
         }
         "restart" => {
             // Reload (SIGHUP), not a hard kill+respawn: the `xray` container's
-            // own systemd already supervises the process; a config reload is
-            // the safe, sanctioned action here (see op-plugins::xray's
+            // own service manager already supervises the process; a config
+            // reload is the safe, sanctioned action here (see op-plugins::xray's
             // apply_state, which uses the same pattern). No Command::new
             // subprocess — signals the real PID directly via /proc + nix.
             let pids = find_xray_pids();
@@ -1378,6 +1614,330 @@ fn find_xray_pids() -> Vec<nix::unistd::Pid> {
         }
     }
     pids
+}
+
+/// Dispatch a `cognitive_mcp` schema method to the cognitive tool registry.
+///
+/// OSCAL subid: mut.service.cognitive-mcp.dispatch@v1
+///
+/// Phase 1 transport is an HTTP loopback to `op-cognitive-mcp`'s MCP endpoint. The
+/// bridge remains the only authorization door: the method-existence gate, arg
+/// validation, capability check and event-chain append have all already happened in
+/// `dispatch_method_call` before this function is reached.
+///
+/// Phase 2 replaces the loopback with an in-process `ToolRegistry::execute` call and
+/// retires the `:3003` listener. See
+/// `.kiro/specs/cognitive-mcp-only-door-phase2/`.
+async fn dispatch_cognitive_mcp_method(
+    method: &str,
+    args: &serde_json::Value,
+) -> anyhow::Result<serde_json::Value> {
+    // Plugin-local methods answer from published state; no executor hop needed.
+    match method {
+        "get_config" | "get_health" => {
+            let mut bytes = op_core::projection_shm::read_projection_bytes("cognitive_mcp")
+                .ok_or_else(|| anyhow::anyhow!("cognitive_mcp projection not available"))?;
+            let value = simd_json::to_owned_value(&mut bytes)
+                .map_err(|e| anyhow::anyhow!("cognitive_mcp projection is not valid JSON: {e}"))?;
+            return Ok(serde_json::to_value(&value)?);
+        }
+        "set_config" | "restart_service" => {
+            // These belong to the plugin's own apply_state path, which is reached
+            // through StatePlugin rather than the tool registry. Acknowledge without
+            // fabricating a result so callers can distinguish "accepted" from "done".
+            return Ok(serde_json::json!({
+                "acknowledged": true,
+                "method": method,
+                "note": "handled by cognitive_mcp apply_state; not a tool-registry call",
+            }));
+        }
+        _ => {}
+    }
+
+    // `list_tools` is an MCP *protocol* method (`tools/list`), not an entry in the
+    // tool registry, so it cannot go through `tools/call`.
+    if method == "list_tools" {
+        return cognitive_tools_list().await;
+    }
+
+    let (tool_name, tool_args) = map_schema_method_to_tool(method, args)?;
+    let result = call_cognitive_tool(&tool_name, &tool_args).await?;
+    Ok(result)
+}
+
+/// Translate a `cognitive_mcp` schema method name into a live tool-registry call.
+///
+/// The schema method names do not map one-to-one onto registry tool names: the
+/// registry exposes a single `cognitive_memory` tool selected by an `operation`
+/// field, so the memory methods inject that field rather than existing as separate
+/// tools. `invoke_tool` bypasses the table entirely and names its tool directly.
+fn map_schema_method_to_tool(
+    method: &str,
+    args: &serde_json::Value,
+) -> anyhow::Result<(String, serde_json::Value)> {
+    let base = if args.is_object() {
+        args.clone()
+    } else {
+        serde_json::json!({})
+    };
+
+    let with_field = |key: &str, value: &str| -> serde_json::Value {
+        let mut v = base.clone();
+        if let Some(obj) = v.as_object_mut() {
+            obj.insert(key.to_string(), serde_json::Value::String(value.to_string()));
+        }
+        v
+    };
+
+    match method {
+        // Memory methods all resolve to the one `cognitive_memory` tool.
+        "memory_store" => Ok(("cognitive_memory".into(), with_field("operation", "store"))),
+        "memory_query" => Ok(("cognitive_memory".into(), with_field("operation", "query"))),
+        "memory_retrieve" => Ok((
+            "cognitive_memory".into(),
+            with_field("operation", "retrieve"),
+        )),
+        "memory_delete" => Ok((
+            "cognitive_memory".into(),
+            with_field("operation", "delete"),
+        )),
+        "memory_list_namespaces" => Ok((
+            "cognitive_memory".into(),
+            with_field("operation", "list_namespaces"),
+        )),
+        // Code retrieval / indexing.
+        "code_search" => Ok(("search_blob_vectors".into(), base)),
+        "code_index" => Ok(("refresh_blob_vectors".into(), base)),
+        "code_context" => Ok((
+            "search_blob_vectors".into(),
+            with_field("activity_type", "query"),
+        )),
+        // Gemini question answering: the tool names the field `question`.
+        "gemini_query" => {
+            let mut v = base.clone();
+            if let Some(obj) = v.as_object_mut() {
+                if let Some(q) = obj.remove("query") {
+                    obj.insert("question".to_string(), q);
+                }
+            }
+            Ok(("ask_question".into(), v))
+        }
+        "register_tool" => Ok(("register_tool".into(), base)),
+        // Generic door: the caller names the tool.
+        "invoke_tool" => {
+            let tool_name = args
+                .get("tool_name")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("invoke_tool: missing required field 'tool_name'"))?
+                .to_string();
+            if tool_name.is_empty() {
+                return Err(anyhow::anyhow!("invoke_tool: 'tool_name' must not be empty"));
+            }
+            let tool_args = args
+                .get("arguments")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({}));
+            Ok((tool_name, tool_args))
+        }
+        other => Err(anyhow::anyhow!(
+            "cognitive_mcp method '{other}' has no tool-registry mapping"
+        )),
+    }
+}
+
+/// Shared HTTP client for the cognitive MCP loopback.
+///
+/// Built once: a fresh `Client` per call would leak a connection pool and defeat
+/// keep-alive on what is a hot path.
+static COGNITIVE_MCP_HTTP: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+
+fn cognitive_mcp_http() -> &'static reqwest::Client {
+    COGNITIVE_MCP_HTTP.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(120))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new())
+    })
+}
+
+/// MCP endpoint of the local cognitive service.
+///
+/// Overridable so the bridge can follow a relocated listener without a rebuild.
+fn cognitive_mcp_endpoint() -> String {
+    std::env::var("COGNITIVE_MCP_MCP_URL")
+        .unwrap_or_else(|_| "http://10.200.0.2:3003/mcp".to_string())
+}
+
+/// Send the MCP `initialize` handshake.
+///
+/// The cognitive MCP server rejects `tools/call` with "Server not initialized" until
+/// this has been sent. Initialization is server-side state, so it survives across
+/// requests but is lost whenever `op-cognitive-mcp` restarts — which is why callers
+/// treat it as a recoverable condition rather than doing it once at startup.
+async fn cognitive_mcp_initialize() -> anyhow::Result<()> {
+    let endpoint = cognitive_mcp_endpoint();
+    let request = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 0,
+        "method": "initialize",
+        "params": {},
+    });
+
+    let response = cognitive_mcp_http()
+        .post(&endpoint)
+        .header("Content-Type", "application/json")
+        .header("X-Ghostbridge-Footprint", "op-grpc-bridge")
+        .header("X-Ghostbridge-Trace-ID", "bridge-dispatch")
+        .json(&request)
+        .send()
+        .await
+        .with_context(|| format!("cognitive_mcp initialize POST {endpoint}"))?;
+
+    if !response.status().is_success() {
+        return Err(anyhow::anyhow!(
+            "cognitive_mcp initialize returned HTTP {}",
+            response.status()
+        ));
+    }
+    Ok(())
+}
+
+/// Issue one `tools/call` and return the raw JSON-RPC envelope.
+async fn cognitive_tools_call_raw(
+    tool_name: &str,
+    tool_args: &serde_json::Value,
+) -> anyhow::Result<serde_json::Value> {
+    let endpoint = cognitive_mcp_endpoint();
+    let request = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": { "name": tool_name, "arguments": tool_args },
+    });
+
+    let response = cognitive_mcp_http()
+        .post(&endpoint)
+        .header("Content-Type", "application/json")
+        // The interceptor on the direct listener expects these; the authoritative
+        // authorization decision was already made by the bridge before dispatch.
+        .header("X-Ghostbridge-Footprint", "op-grpc-bridge")
+        .header("X-Ghostbridge-Trace-ID", "bridge-dispatch")
+        .json(&request)
+        .send()
+        .await
+        .with_context(|| format!("cognitive_mcp loopback POST {endpoint}"))?;
+
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .context("reading cognitive_mcp loopback response body")?;
+
+    if !status.is_success() {
+        return Err(anyhow::anyhow!(
+            "cognitive_mcp loopback returned HTTP {status}: {body}"
+        ));
+    }
+
+    serde_json::from_str(&body)
+        .with_context(|| format!("cognitive_mcp returned non-JSON body: {body}"))
+}
+
+/// Invoke one tool over the MCP `tools/call` JSON-RPC method and unwrap the result.
+///
+/// Performs the `initialize` handshake lazily: rather than initializing once at bridge
+/// startup (which would break the first call after any `op-cognitive-mcp` restart), a
+/// "not initialized" error triggers one initialize and a single retry.
+async fn call_cognitive_tool(
+    tool_name: &str,
+    tool_args: &serde_json::Value,
+) -> anyhow::Result<serde_json::Value> {
+    let mut envelope = cognitive_tools_call_raw(tool_name, tool_args).await?;
+
+    if mcp_needs_initialize(&envelope) {
+        cognitive_mcp_initialize().await?;
+        envelope = cognitive_tools_call_raw(tool_name, tool_args).await?;
+    }
+
+    if let Some(error) = envelope.get("error") {
+        let message = error
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or("unknown MCP error");
+        return Err(anyhow::anyhow!("tool '{tool_name}' failed: {message}"));
+    }
+
+    envelope.get("result").cloned().ok_or_else(|| {
+        anyhow::anyhow!("cognitive_mcp response had neither 'result' nor 'error': {envelope}")
+    })
+}
+
+/// Enumerate the live tool registry via the MCP `tools/list` protocol method.
+///
+/// Distinct from `call_cognitive_tool`: `tools/list` is a protocol method rather than a
+/// registry entry, so routing the `list_tools` schema method through `tools/call` would
+/// (and did) fail with "Tool not found: list_tools".
+async fn cognitive_tools_list() -> anyhow::Result<serde_json::Value> {
+    let endpoint = cognitive_mcp_endpoint();
+    let request = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/list",
+        "params": {},
+    });
+
+    let post = || async {
+        let response = cognitive_mcp_http()
+            .post(&endpoint)
+            .header("Content-Type", "application/json")
+            .header("X-Ghostbridge-Footprint", "op-grpc-bridge")
+            .header("X-Ghostbridge-Trace-ID", "bridge-dispatch")
+            .json(&request)
+            .send()
+            .await
+            .with_context(|| format!("cognitive_mcp tools/list POST {endpoint}"))?;
+
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .context("reading cognitive_mcp tools/list response body")?;
+        if !status.is_success() {
+            return Err(anyhow::anyhow!(
+                "cognitive_mcp tools/list returned HTTP {status}: {body}"
+            ));
+        }
+        serde_json::from_str::<serde_json::Value>(&body)
+            .with_context(|| format!("cognitive_mcp tools/list returned non-JSON body: {body}"))
+    };
+
+    let mut envelope = post().await?;
+    if mcp_needs_initialize(&envelope) {
+        cognitive_mcp_initialize().await?;
+        envelope = post().await?;
+    }
+
+    if let Some(error) = envelope.get("error") {
+        let message = error
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or("unknown MCP error");
+        return Err(anyhow::anyhow!("tools/list failed: {message}"));
+    }
+
+    envelope
+        .get("result")
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("cognitive_mcp tools/list response had no 'result'"))
+}
+
+/// True when the envelope is the server's "call initialize first" rejection.
+fn mcp_needs_initialize(envelope: &serde_json::Value) -> bool {
+    envelope
+        .get("error")
+        .and_then(|e| e.get("message"))
+        .and_then(|m| m.as_str())
+        .is_some_and(|m| m.contains("not initialized"))
 }
 
 /// Parse createunixsocket arguments. Accepts either a JSON array

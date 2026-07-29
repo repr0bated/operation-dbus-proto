@@ -1,9 +1,9 @@
-//! Zeroclaw route helpers backed by the D-Bus projection cache.
+//! Zeroclaw route helpers backed by the SHM state tree.
 
 use anyhow::{bail, Result};
 use simd_json::prelude::*;
 
-use crate::projection_client::ProjectionCache;
+use crate::state_tree;
 
 #[derive(Debug, Clone)]
 pub struct ZeroclawRoute {
@@ -72,8 +72,8 @@ impl ZeroclawRoute {
     }
 }
 
-pub async fn routes(cache: &ProjectionCache) -> Option<Vec<ZeroclawRoute>> {
-    let zeroclaw = crate::projection_client::get_projection(cache, "zeroclaw").await?;
+pub fn routes() -> Option<Vec<ZeroclawRoute>> {
+    let zeroclaw = state_tree::read_key("zeroclaw", "model_routes")?;
     let route_values = zeroclaw.get("model_routes")?.as_array()?;
     Some(
         route_values
@@ -83,15 +83,14 @@ pub async fn routes(cache: &ProjectionCache) -> Option<Vec<ZeroclawRoute>> {
     )
 }
 
-pub async fn route_for_model(cache: &ProjectionCache, model: &str) -> Option<ZeroclawRoute> {
-    routes(cache)
-        .await?
+pub fn route_for_model(model: &str) -> Option<ZeroclawRoute> {
+    routes()?
         .into_iter()
         .find(|route| route.model == model)
 }
 
-pub async fn ensure_model_available(cache: &ProjectionCache, model: &str) -> Result<()> {
-    if let Some(route) = route_for_model(cache, model).await {
+pub fn ensure_model_available(model: &str) -> Result<()> {
+    if let Some(route) = route_for_model(model) {
         if !route.available {
             let reason = route
                 .status_reason

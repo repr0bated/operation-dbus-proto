@@ -1210,7 +1210,7 @@ impl CozoGraphShuttle {
             p,
         )
         .map_err(|e| CozoError::Other(format!("get wg session: {e}")))?;
-        Ok(r.rows.first().map(row_to_wg_session))
+        Ok(r.rows.first().map(|r| row_to_wg_session(r)))
     }
 
     /// List every persisted WireGuard gateway session (used to warm the in-memory
@@ -1225,7 +1225,7 @@ impl CozoGraphShuttle {
             BTreeMap::new(),
         )
         .map_err(|e| CozoError::Other(format!("list wg sessions: {e}")))?;
-        Ok(r.rows.iter().map(row_to_wg_session).collect())
+        Ok(r.rows.iter().map(|r| row_to_wg_session(r)).collect())
     }
 
     /// Resolve a peer_pubkey to its current session_id, if any.
@@ -1374,7 +1374,7 @@ impl CozoGraphShuttle {
             p,
         )
         .map_err(|e| CozoError::Other(format!("get identity sled: {e}")))?;
-        Ok(r.rows.first().map(row_to_identity_sled))
+        Ok(r.rows.first().map(|r| row_to_identity_sled(r)))
     }
 
     /// List every persisted identity sled (used to warm the dispatch cache on
@@ -1393,7 +1393,7 @@ impl CozoGraphShuttle {
             BTreeMap::new(),
         )
         .map_err(|e| CozoError::Other(format!("list identity sleds: {e}")))?;
-        Ok(r.rows.iter().map(row_to_identity_sled).collect())
+        Ok(r.rows.iter().map(|r| row_to_identity_sled(r)).collect())
     }
 
     /// Atomically bump only `last_seen_at`/`active` on an identity sled — an
@@ -1550,7 +1550,7 @@ fn dv_as_bool(dv: &DataValue) -> bool {
     matches!(dv, DataValue::Bool(true))
 }
 
-fn row_to_wg_session(row: &Vec<DataValue>) -> WgSessionRecord {
+fn row_to_wg_session(row: &[DataValue]) -> WgSessionRecord {
     let s = |i: usize| dv_as_str(&row[i]).unwrap_or("").to_string();
     let opt = |i: usize| {
         let v = s(i);
@@ -1583,7 +1583,7 @@ fn row_to_wg_session(row: &Vec<DataValue>) -> WgSessionRecord {
     }
 }
 
-fn row_to_identity_sled(row: &Vec<DataValue>) -> IdentitySledRecord {
+fn row_to_identity_sled(row: &[DataValue]) -> IdentitySledRecord {
     let s = |i: usize| dv_as_str(&row[i]).unwrap_or("").to_string();
     IdentitySledRecord {
         session_id: s(0),

@@ -42,6 +42,7 @@ backup.tar.gz
 wgcf-profile.conf
 client_secret*.json
 .env*
+/odbus.env
 
 # Operation Dashboard UI submodule (if excluded)
 operation-dashboard-ui/

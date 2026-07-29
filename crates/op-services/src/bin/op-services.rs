@@ -5,7 +5,6 @@ use tonic::transport::Server;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
-use op_services::dbus::interface::run_dbus_server;
 use op_services::grpc::proto::service_manager_server::ServiceManagerServer;
 use op_services::grpc::server::GrpcServer;
 use op_services::manager::ServiceManager;
@@ -25,15 +24,9 @@ async fn main() -> anyhow::Result<()> {
     // Initialize service manager
     let manager = Arc::new(ServiceManager::new(store).await?);
 
-    // Start D-Bus interface in background
-    let dbus_manager = manager.clone();
-    tokio::spawn(async move {
-        if let Err(e) = run_dbus_server(dbus_manager).await {
-            tracing::error!("D-Bus server error: {}", e);
-        }
-    });
-
-    // Start gRPC server
+    // D-Bus projection is owned exclusively by op-grpc-bridge at
+    // org.opdbus.v1.plugins. This daemon exposes only its gRPC compatibility
+    // transport.
     let grpc_server = GrpcServer::new(manager);
     let addr = std::env::var("OP_SERVICES_GRPC_ADDR")
         .unwrap_or_else(|_| "[::]:50053".to_string())

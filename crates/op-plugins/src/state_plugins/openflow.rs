@@ -195,17 +195,15 @@ impl OpenFlowPlugin {
 
     /// Get OpenFlow port number for a port name
     async fn get_port_ofport(&self, port_name: &str) -> Result<u16> {
-        let jsonrpc = Self::get_jsonrpc_proxy().await?;
-
-        let req = simd_json::json!(["Open_vSwitch", {
+        let operations = simd_json::json!([{
             "op": "select",
             "table": "Interface",
             "where": [["name", "==", port_name]],
             "columns": ["ofport"]
         }]);
-
-        let resp = jsonrpc.transact("transact", &req.to_string()).await?;
-        let res: Value = simd_json::to_owned_value(&mut resp.into_bytes())?;
+        let response = self.ovsdb_client.transact_simd(operations).await?;
+        let mut response = serde_json::to_vec(&response)?;
+        let res: Value = simd_json::to_owned_value(&mut response)?;
 
         if let Some(rows) = res
             .as_array()
@@ -221,15 +219,6 @@ impl OpenFlowPlugin {
         }
 
         Err(anyhow!("Could not find ofport for {}", port_name))
-    }
-
-    async fn get_jsonrpc_proxy<'a>() -> Result<op_network::rovs_proxy::RovsJsonRpcProxy<'a>> {
-        let conn = zbus::Connection::system()
-            .await
-            .context("Failed to connect to system bus")?;
-        op_network::rovs_proxy::RovsJsonRpcProxy::new(&conn)
-            .await
-            .context("Failed to create RovsJsonRpcProxy")
     }
 
     async fn get_controller_proxy<'a>() -> Result<OpenFlowControllerProxy<'a>> {

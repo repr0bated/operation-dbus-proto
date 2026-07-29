@@ -7,7 +7,7 @@
 //! no StateManager, no drift.
 
 use anyhow::{Context, Result};
-use op_grpc_bridge::{GrpcClientPool, RemoteOperationClient};
+use op_grpc_bridge::{GhostbridgeCallMetadata, GrpcClientPool, RemoteOperationClient};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::sync::{Arc, OnceLock};
@@ -50,4 +50,28 @@ where
         .await
         .map_err(|e| anyhow::anyhow!("apply {} state via gRPC: {}", plugin_id, e))?;
     Ok(())
+}
+
+/// Dispatch a schema-declared plugin method through the bridge while
+/// preserving the identity supplied by the outer HTTP request.
+pub async fn call_plugin_method(
+    plugin_id: &str,
+    method: &str,
+    arguments: simd_json::OwnedValue,
+    capability_id: &str,
+    identity: &GhostbridgeCallMetadata,
+) -> Result<simd_json::OwnedValue> {
+    client()
+        .call_method_with_metadata(
+            plugin_id,
+            &format!("/org/opdbus/v1/plugins/{plugin_id}"),
+            "org.opdbus.v1.PluginV1",
+            method,
+            vec![arguments],
+            "op-web",
+            capability_id,
+            identity,
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("call {plugin_id}.{method} through bridge: {e}"))
 }

@@ -170,7 +170,6 @@ pub(crate) fn config_plugin_schema() -> PluginSchema {
     schema
 }
 
-
 #[async_trait]
 impl StatePlugin for ConfigPlugin {
     fn name(&self) -> &str {

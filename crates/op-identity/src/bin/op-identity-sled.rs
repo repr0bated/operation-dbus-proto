@@ -1,7 +1,5 @@
 use anyhow::{bail, Context, Result};
-use op_identity::schema_bridge::{
-    read_schema_blob, write_sled_from_wg, IdentitySled, SHM_SLED_PATH,
-};
+use op_identity::schema_bridge::{write_sled_from_wg, IdentitySled, SHM_SLED_PATH};
 use serde::Serialize;
 use std::env;
 use std::fs::File;

@@ -14,9 +14,16 @@
     {
       "name": "88629c76-33f4-8ae8-f682-b3fd2d432092",
       "role": "user",
-      "depends_on": ["artifact:rust-network-mgr", "service:rust-network-mgr.service"],
-      "services": ["rust-network-mgr.service"],
-      "unix_sockets": ["/run/rust-network-manager/rust-network-manager.sock"],
+      "depends_on": [
+        "artifact:rust-network-mgr",
+        "service:rust-network-mgr.service"
+      ],
+      "services": [
+        "rust-network-mgr.service"
+      ],
+      "unix_sockets": [
+        "/run/rust-network-manager/rust-network-manager.sock"
+      ],
       "tcp_ports": []
     },
     {
@@ -48,13 +55,18 @@
         "mount:controlplane-runtime",
         "service:controlplane-ui.service"
       ],
-      "services": ["rust-network-mgr.service", "controlplane-ui.service"],
+      "services": [
+        "rust-network-mgr.service",
+        "controlplane-ui.service"
+      ],
       "unix_sockets": [
         "/run/rust-network-manager/rust-network-manager.sock",
         "/run/assistant-controlplane/http.sock",
         "/run/assistant-controlplane/http1.sock"
       ],
-      "tcp_ports": [3003]
+      "tcp_ports": [
+        3003
+      ]
     },
     {
       "name": "netmaker",
@@ -64,12 +76,19 @@
         "service:rust-network-mgr.service",
         "mount:netmaker-runtime"
       ],
-      "services": ["rust-network-mgr.service", "netmaker.service", "netmaker-exporter.service"],
+      "services": [
+        "rust-network-mgr.service",
+        "netmaker.service",
+        "netmaker-exporter.service"
+      ],
       "unix_sockets": [
         "/run/rust-network-manager/rust-network-manager.sock",
         "/var/lib/netmaker-runtime/netmaker.sock"
       ],
-      "tcp_ports": [8081, 50051]
+      "tcp_ports": [
+        8081,
+        50051
+      ]
     },
     {
       "name": "qdrant",
@@ -80,12 +99,19 @@
         "service:qdrant.service",
         "service:qdrant-socat-grpc.service"
       ],
-      "services": ["rust-network-mgr.service", "qdrant.service", "qdrant-socat-grpc.service"],
+      "services": [
+        "rust-network-mgr.service",
+        "qdrant.service",
+        "qdrant-socat-grpc.service"
+      ],
       "unix_sockets": [
         "/run/rust-network-manager/rust-network-manager.sock",
         "/var/lib/opdbus-runtime/qdrant/qdrant-grpc.sock"
       ],
-      "tcp_ports": [6333, 6334]
+      "tcp_ports": [
+        6333,
+        6334
+      ]
     },
     {
       "name": "mail-3tched",
@@ -96,9 +122,20 @@
         "process:postfix",
         "process:dovecot"
       ],
-      "services": ["rust-network-mgr.service"],
-      "unix_sockets": ["/run/rust-network-manager/rust-network-manager.sock"],
-      "tcp_ports": [25, 143, 465, 587, 993]
+      "services": [
+        "rust-network-mgr.service"
+      ],
+      "unix_sockets": [
+        "/run/rust-network-manager/rust-network-manager.sock"
+      ],
+      "tcp_ports": [
+        25,
+        143,
+        443,
+        465,
+        587,
+        993
+      ]
     },
     {
       "name": "cozo",
@@ -108,8 +145,12 @@
         "service:rust-network-mgr.service",
         "workload:cozo"
       ],
-      "services": ["rust-network-mgr.service"],
-      "unix_sockets": ["/run/rust-network-manager/rust-network-manager.sock"],
+      "services": [
+        "rust-network-mgr.service"
+      ],
+      "unix_sockets": [
+        "/run/rust-network-manager/rust-network-manager.sock"
+      ],
       "tcp_ports": [],
       "require_endpoint": true
     }
@@ -144,7 +185,9 @@
     },
     {
       "name": "control-plane-grpc",
-      "depends_on": ["service:op-grpc-bridge-zeroclaw"],
+      "depends_on": [
+        "service:op-grpc-bridge-zeroclaw"
+      ],
       "address": "10.200.0.2",
       "port": 8090
     }

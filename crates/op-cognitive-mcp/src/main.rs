@@ -1,8 +1,26 @@
 //! Cognitive MCP Server Binary
 //!
+//! ## DEPRECATED TRANSPORTS
+//!
+//! The HTTP/SSE (`:3003`) and gRPC (`:50052`) listeners are deprecated. The
+//! authoritative path for every cognitive tool invocation is the bridge:
+//!
+//! ```text
+//! org.opdbus.v1.PluginV1.Call on /org/opdbus/v1/plugins/cognitive_mcp
+//! ```
+//!
+//! Only the bridge performs the method-existence gate, argument validation,
+//! capability check and event-chain append. Calls arriving directly on `:3003`
+//! or `:50052` bypass that accountability chain.
+//!
+//! `--no-http` / `--no-grpc` are retained for Phase 1 and will be removed once
+//! consumers are migrated. `--stdio` remains for local debugging/attach.
+//! See `.kiro/specs/cognitive-mcp-bridge-only-door/` and the Phase 2 spec
+//! `.kiro/specs/cognitive-mcp-only-door-phase2/`.
+//!
 //! Transports started in parallel:
-//! - HTTP/SSE  (MCP protocol, port 3003)
-//! - gRPC      (CognitiveToolService, port 50052)
+//! - HTTP/SSE  (MCP protocol, port 3003) — deprecated
+//! - gRPC      (CognitiveToolService, port 50052) — deprecated
 //! - D-Bus state is owned by the canonical plugin projection at
 //!   org.opdbus.v1.plugins / /org/opdbus/v1/plugins/cognitive_mcp
 //!
@@ -10,6 +28,13 @@
 //! interface named by $WG_INTERFACE, defaulting to "netmaker") and writes the
 //! canonical IdentitySled to /dev/shm/plugin_schema.dat so the Ghostbridge
 //! interceptor and Qdrant shuttle can authenticate outbound gRPC calls.
+//!
+//! NOTE: on the current host no `netmaker` interface exists — netmaker is the
+//! mesh (100.69.0.0/16), not an identity source, and WireGuard is terminated on
+//! the upstream decoy server rather than here. The identity-sled write therefore
+//! warns and no-ops. Bind addresses come from `COGNITIVE_MCP_BIND` /
+//! `COGNITIVE_MCP_GRPC_BIND` in the runit run script, which point at svc0
+//! (`10.200.0.2`), so no WG address promotion occurs.
 //!
 //! Bind address resolution order (highest priority first):
 //!   1. COGNITIVE_MCP_BIND / COGNITIVE_MCP_GRPC_BIND env vars
@@ -80,30 +105,6 @@ fn resolve_bind(addr: &str, wg_ip: Option<&str>) -> String {
     addr.to_string()
 }
 
-/// Resolve bind config (http/grpc addresses, wg_interface) from the
-/// `cognitive_mcp` plugin's live `/dev/shm` projection when present. Falls
-/// back to the already-parsed CLI/env values unchanged, so a cold start
-/// (before the projection is first seeded by op-grpc-bridge) behaves exactly
-/// as it did before this wiring existed.
-///
-/// OSCAL subid: obs.service.cognitive-mcp.bind-config.resolve@v1
-fn cognitive_mcp_bind_config(
-    cli: &Cli,
-) -> op_plugins::state_plugins::cognitive_mcp::CognitiveMcpConfig {
-    use op_plugins::state_plugins::cognitive_mcp::CognitiveMcpConfig;
-
-    op_core::projection_shm::read_projection_bytes("cognitive_mcp")
-        .and_then(|bytes| serde_json::from_slice::<CognitiveMcpConfig>(&bytes).ok())
-        .unwrap_or_else(|| CognitiveMcpConfig {
-            http: cli.http.clone(),
-            grpc: cli.grpc.clone(),
-            wg_interface: cli.wg_interface.clone(),
-            http_enabled: !cli.no_http,
-            grpc_enabled: !cli.no_grpc,
-            dbus_enabled: true,
-        })
-}
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
@@ -122,21 +123,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .finish();
     tracing::subscriber::set_global_default(subscriber)?;
 
-    // Resolve bind config from the cognitive_mcp plugin's live projection when
-    // present (op-grpc-bridge seeds/updates it); falls back to the CLI/env
-    // values above, unchanged, when the projection is absent (cold start).
-    let bind_config = cognitive_mcp_bind_config(&cli);
+    // Bind configuration comes from the CLI/env only. The `/dev/shm` projection is
+    // published state — what this service currently looks like to consumers — and is
+    // never read back as configuration input. Reading it here previously meant a
+    // stale projection could override an explicit `--no-http`/`--no-grpc`.
+    // See .kiro/specs/cognitive-mcp-bridge-only-door design.md DQ-3.
+    let http_enabled = !cli.no_http;
+    let grpc_enabled = !cli.no_grpc;
 
     // ── WireGuard identity ────────────────────────────────────────────────────
     // 1. Detect local WG IP for bind address resolution.
     // 2. Write canonical IdentitySled to /dev/shm for Ghostbridge auth.
-    let wg_id = WireGuardIdentity::with_interface(&bind_config.wg_interface);
+    let wg_id = WireGuardIdentity::with_interface(&cli.wg_interface);
     let wg_ip = wg_id.get_local_ip();
 
     match wg_id.get_local_pubkey() {
         Ok(pubkey) => {
             info!(
-                interface = %bind_config.wg_interface,
+                interface = %cli.wg_interface,
                 pubkey = %pubkey,
                 wg_ip = ?wg_ip,
                 "Writing WireGuard identity sled to /dev/shm/plugin_schema.dat"
@@ -150,7 +154,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Err(e) => {
             warn!(
-                interface = %bind_config.wg_interface,
+                interface = %cli.wg_interface,
                 error = %e,
                 "Could not read WireGuard public key — identity sled not written; \
                  set WG_PUBKEY env var to override"
@@ -159,14 +163,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Resolve bind addresses: promote 0.0.0.0 defaults to WG interface IP.
-    let http_addr = resolve_bind(&bind_config.http, wg_ip.as_deref());
-    let grpc_addr = resolve_bind(&bind_config.grpc, wg_ip.as_deref());
+    let http_addr = resolve_bind(&cli.http, wg_ip.as_deref());
+    let grpc_addr = resolve_bind(&cli.grpc, wg_ip.as_deref());
 
     info!(
         http = %http_addr,
         grpc = %grpc_addr,
         db = %cli.db,
-        wg_interface = %bind_config.wg_interface,
+        wg_interface = %cli.wg_interface,
         "Starting Cognitive MCP Server"
     );
 
@@ -178,7 +182,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    match (!bind_config.grpc_enabled, !bind_config.http_enabled) {
+    // Phase 1 still starts the deprecated direct listeners so existing consumers keep
+    // working while they migrate to the bridge path. The `#[deprecated]` markers exist
+    // to stop NEW callers being added; these call sites are the sanctioned ones and are
+    // deleted wholesale in Phase 2.
+    #[allow(deprecated)]
+    match (!grpc_enabled, !http_enabled) {
         (true, true) => {
             eprintln!("Error: both gRPC and HTTP transports are disabled. Nothing to run.");
             std::process::exit(1);

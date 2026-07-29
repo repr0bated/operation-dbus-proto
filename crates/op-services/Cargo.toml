@@ -2,19 +2,15 @@
 name = "op-services"
 version = "0.1.0"
 edition = "2021"
-description = "System-wide service manager - systemd replacement with dinit backend"
+description = "System-wide runit service manager"
 
 [[bin]]
 name = "op-services"
 path = "src/bin/op-services.rs"
 
 [[bin]]
-name = "systemctl"
-path = "src/bin/systemctl.rs"
-
-[[bin]]
-name = "systemctl-native"
-path = "src/bin/systemctl-native.rs"
+name = "op-svctl"
+path = "src/bin/op-svctl.rs"
 
 [dependencies]
 # Schema source of truth
@@ -25,9 +21,6 @@ tonic = "0.12"
 prost = "0.13"
 prost-types = "0.13"
 
-# D-Bus
-zbus = { workspace = true }
-
 # Async
 tokio = { version = "1", features = ["full", "signal"] }
 tokio-stream = "0.1"
@@ -37,10 +30,6 @@ futures = "0.3"
 serde = { version = "1", features = ["derive"] }
 simd-json = "0.13"
 serde_json = "1"
-
-# Process management
-nix = { version = "0.29", features = ["signal", "process"] }
-libc = "0.2"
 
 # Error handling
 thiserror = "1"

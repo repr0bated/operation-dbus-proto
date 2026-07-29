@@ -1,405 +1,100 @@
 #!/bin/sh
-# opdbus-rundirs: runtime dirs + sealed-blob SHM catalog + xray SHM bootstrap.
+# opdbus-rundirs: runtime dirs, sealed-blob catalog, and Ghostbridge identity.
 set -eu
+umask 022
+
 install -d -m 0755 /run/opdbus
 # Shared container UDS parent (bind-mounted into assistant/qdrant as /run/ghostbridge)
 install -d -m 0755 /run/ghostbridge
 install -d -m 0755 /run/op-dbus
 install -d -m 0755 /run/opdbus/runit-ready
 install -d -m 0755 /dev/shm/opdbus/plugin-blobs
-# socket rendezvous parents shared into NIC-less containers (socket contracts)
+# Socket rendezvous parents shared into NIC-less containers (socket contracts).
 install -d -m 0755 /var/lib/opdbus-runtime /var/lib/netmaker-runtime
 install -d -m 0755 -o svlog -g svlog /var/log/op-dbus
-# Seal the plugin blobs BEFORE op-grpc-bridge starts: the bridge hydrates its
-# gRPC reflection from this catalog and retry-loops against an empty tmpfs.
+
+# Seal plugin blobs before op-grpc-bridge starts: the bridge hydrates its gRPC
+# reflection from this catalog and retry-loops against an empty tmpfs.
 if [ -x /usr/local/bin/opblob ]; then
     /usr/local/bin/opblob seal-shm >/dev/null
+    find /dev/shm/opdbus/plugin-blobs -maxdepth 1 -type f \
+        \( -name '*.blob' -o -name '.manifest.json' \) \
+        -exec chmod 0644 {} +
 else
     echo "warning: /usr/local/bin/opblob missing — blob catalog not sealed"
 fi
-# Host Identity Sled — required by op-web's gRPC client (attach_ghostbridge_metadata)
-# and by GhostbridgeInterceptor on StateSync/EventChain. Lives in tmpfs; re-seed every boot.
+
+# Host Ghostbridge identity sled. It lives in tmpfs and must be re-seeded every
+# boot. Prefer the host WireGuard identity, then fall back to the trusted
+# chatbot identity used by the shared Ghostbridge socket.
+umask 077
 if [ -x /usr/local/bin/op-identity-sled ]; then
     WG_IFACE="${OP_IDENTITY_WG_IFACE:-3tched}"
     PUBKEY=""
+    TRACE_ID=""
+    IDENTITY_SOURCE=""
     if command -v wg >/dev/null 2>&1; then
         PUBKEY=$(wg show "$WG_IFACE" public-key 2>/dev/null || true)
     fi
     if [ -n "$PUBKEY" ]; then
-        /usr/local/bin/op-identity-sled --refresh --pubkey "$PUBKEY" >/dev/null 2>&1 \
-            && echo "identity sled seeded from $WG_IFACE" \
-            || echo "warning: op-identity-sled --refresh failed"
-    else
-        echo "warning: no WG pubkey for $WG_IFACE — identity sled not seeded"
+        IDENTITY_SOURCE="WireGuard interface $WG_IFACE"
+    elif command -v jq >/dev/null 2>&1 \
+        && [ -r /var/lib/opdbus-runtime/identities/chatbot/identity.json ] \
+        && [ "$(jq -r '.role == "chatbot" and .ghostbridge == true' /var/lib/opdbus-runtime/identities/chatbot/identity.json 2>/dev/null)" = "true" ]; then
+        PUBKEY=$(jq -er '.pubkey | select(type == "string" and length > 0)' \
+            /var/lib/opdbus-runtime/identities/chatbot/identity.json 2>/dev/null || true)
+        TRACE_ID=$(jq -er '.session_id | select(type == "string" and length > 0)' \
+            /var/lib/opdbus-runtime/identities/chatbot/identity.json 2>/dev/null || true)
+        IDENTITY_SOURCE="trusted chatbot identity"
     fi
-else
-    echo "warning: /usr/local/bin/op-identity-sled missing — identity sled not seeded"
-fi
-# Static xray bootstrap lives ONLY in SHM (hard invariant). Listens on
-# 10.0.0.2 (netmaker egress path) — never the public uplink. The model's
-# dynamic tag routing replaces this file atomically later; XHTTP shape
-# arrives with it (not speced yet).
-cat > /dev/shm/xray_config.json <<'XRAY'
-{
-  "log": {
-    "loglevel": "warning"
-  },
-  "inbounds": [
-    {
-      "tag": "egress-proxy",
-      "listen": "0.0.0.0",
-      "port": 10809,
-      "protocol": "http",
-      "settings": {}
-    },
-    {
-      "tag": "grpc-uplink",
-      "listen": "10.200.0.1",
-      "port": 8443,
-      "protocol": "dokodemo-door",
-      "settings": {
-        "address": "10.200.0.2",
-        "port": 8443,
-        "network": "tcp"
-      }
-    },
-    {
-      "tag": "netmaker-api-uplink",
-      "listen": "10.200.0.1",
-      "port": 8081,
-      "protocol": "dokodemo-door",
-      "settings": {
-        "address": "10.200.0.2",
-        "port": 8081,
-        "network": "tcp"
-      }
-    },
-    {
-      "tag": "qdrant",
-      "listen": "10.200.0.1",
-      "port": 6334,
-      "protocol": "dokodemo-door",
-      "settings": {
-        "address": "10.200.0.2",
-        "port": 6334,
-        "network": "tcp"
-      }
-    },
-    {
-      "tag": "assistant",
-      "listen": "10.200.0.1",
-      "port": 8090,
-      "protocol": "dokodemo-door",
-      "settings": {
-        "address": "10.200.0.2",
-        "port": 8090,
-        "network": "tcp"
-      }
-    },
-    {
-      "tag": "fa2f0210-926a-7cf4-4044-16186cb8085a",
-      "listen": "10.200.0.1",
-      "port": 3003,
-      "protocol": "dokodemo-door",
-      "settings": {
-        "address": "10.200.0.2",
-        "port": 3003,
-        "network": "tcp"
-      }
-    },
-    {
-      "tag": "qdrant-http",
-      "listen": "10.200.0.1",
-      "port": 6333,
-      "protocol": "dokodemo-door",
-      "settings": {
-        "address": "10.200.0.2",
-        "port": 6333,
-        "network": "tcp"
-      }
-    },
-    {
-      "tag": "assistant-ui",
-      "listen": "10.200.0.1",
-      "port": 8091,
-      "protocol": "dokodemo-door",
-      "settings": {
-        "address": "10.200.0.2",
-        "port": 8091,
-        "network": "tcp"
-      }
-    },
-    {
-      "tag": "xhttp-in",
-      "listen": "10.200.0.1",
-      "port": 8444,
-      "protocol": "vless",
-      "settings": {
-        "clients": [
-          {
-            "id": "5567b57e-e95c-462c-8fc2-61414eddc02b",
-            "level": 0
-          }
-        ],
-        "decryption": "none"
-      },
-      "streamSettings": {
-        "network": "xhttp",
-        "security": "none",
-        "xhttpSettings": {
-          "path": "/xhttp",
-          "mode": "auto"
-        }
-      },
-      "sniffing": {
-        "enabled": true,
-        "destOverride": [
-          "http",
-          "tls"
-        ],
-        "routeOnly": true
-      }
-    }
-  ],
-  "outbounds": [
-    {
-      "tag": "direct",
-      "protocol": "freedom",
-      "settings": {}
-    },
-    {
-      "tag": "warp",
-      "protocol": "freedom",
-      "settings": {},
-      "streamSettings": {
-        "sockopt": {
-          "mark": 334881
-        }
-      }
-    },
-    {
-      "tag": "to-api",
-      "protocol": "freedom",
-      "settings": {
-        "redirect": "10.200.0.2:8081"
-      }
-    },
-    {
-      "tag": "to-dashboard",
-      "protocol": "freedom",
-      "settings": {
-        "redirect": "10.200.0.2:8080"
-      }
-    },
-    {
-      "tag": "to-qdrant",
-      "protocol": "freedom",
-      "settings": {
-        "redirect": "10.200.0.2:6333"
-      }
-    },
-    {
-      "tag": "to-assistant-ui",
-      "protocol": "freedom",
-      "settings": {
-        "redirect": "10.200.0.2:8080"
-      }
-    },
-    {
-      "tag": "to-assistant-grpc",
-      "protocol": "freedom",
-      "settings": {
-        "redirect": "10.200.0.2:8090"
-      }
-    },
-    {
-      "tag": "to-broker",
-      "protocol": "freedom",
-      "settings": {
-        "redirect": "10.200.0.2:8083"
-      }
-    },
-    {
-      "tag": "block",
-      "protocol": "blackhole",
-      "settings": {}
-    }
-  ],
-  "dns": {
-    "servers": [
-      "https://dns.nextdns.io/689ec7/Ghostbridge-Incus"
-    ],
-    "tag": "nextdns-in"
-  },
-  "routing": {
-    "domainStrategy": "AsIs",
-    "rules": [
-      {
-        "type": "field",
-        "inboundTag": ["egress-proxy"],
-        "outboundTag": "direct"
-      },
-      {
-        "type": "field",
-        "inboundTag": [
-          "xhttp-in"
-        ],
-        "domain": [
-          "api.ghostbridge.tech"
-        ],
-        "outboundTag": "to-api"
-      },
-      {
-        "type": "field",
-        "inboundTag": [
-          "xhttp-in"
-        ],
-        "domain": [
-          "api.3tched.com"
-        ],
-        "outboundTag": "to-api"
-      },
-      {
-        "type": "field",
-        "inboundTag": [
-          "xhttp-in"
-        ],
-        "domain": [
-          "dashboard.ghostbridge.tech"
-        ],
-        "outboundTag": "to-dashboard"
-      },
-      {
-        "type": "field",
-        "inboundTag": [
-          "xhttp-in"
-        ],
-        "domain": [
-          "dashboard.3tched.com"
-        ],
-        "outboundTag": "to-dashboard"
-      },
-      {
-        "type": "field",
-        "inboundTag": [
-          "xhttp-in"
-        ],
-        "domain": [
-          "registration.ghostbridge.tech"
-        ],
-        "outboundTag": "to-dashboard"
-      },
-      {
-        "type": "field",
-        "inboundTag": [
-          "xhttp-in"
-        ],
-        "domain": [
-          "registration.3tched.com"
-        ],
-        "outboundTag": "to-dashboard"
-      },
-      {
-        "type": "field",
-        "inboundTag": [
-          "xhttp-in"
-        ],
-        "domain": [
-          "qdrant.ghostbridge.tech"
-        ],
-        "outboundTag": "to-qdrant"
-      },
-      {
-        "type": "field",
-        "inboundTag": [
-          "xhttp-in"
-        ],
-        "domain": [
-          "qdrant.3tched.com"
-        ],
-        "outboundTag": "to-qdrant"
-      },
-      {
-        "type": "field",
-        "inboundTag": [
-          "xhttp-in"
-        ],
-        "domain": [
-          "assistant.ghostbridge.tech"
-        ],
-        "outboundTag": "to-assistant-ui"
-      },
-      {
-        "type": "field",
-        "inboundTag": [
-          "xhttp-in"
-        ],
-        "domain": [
-          "assistant.3tched.com"
-        ],
-        "outboundTag": "to-assistant-ui"
-      },
-      {
-        "type": "field",
-        "inboundTag": [
-          "xhttp-in"
-        ],
-        "domain": [
-          "assistant-grpc.ghostbridge.tech"
-        ],
-        "outboundTag": "to-assistant-grpc"
-      },
-      {
-        "type": "field",
-        "inboundTag": [
-          "xhttp-in"
-        ],
-        "domain": [
-          "assistant-grpc.3tched.com"
-        ],
-        "outboundTag": "to-assistant-grpc"
-      },
-      {
-        "type": "field",
-        "inboundTag": [
-          "xhttp-in"
-        ],
-        "domain": [
-          "broker.ghostbridge.tech"
-        ],
-        "outboundTag": "to-broker"
-      },
-      {
-        "type": "field",
-        "inboundTag": [
-          "xhttp-in"
-        ],
-        "domain": [
-          "broker.3tched.com"
-        ],
-        "outboundTag": "to-broker"
-      },
-      {
-        "type": "field",
-        "inboundTag": [
-          "xhttp-in"
-        ],
-        "outboundTag": "block"
-      }
-    ]
-  }
-}
 
-XRAY
-if id xray >/dev/null 2>&1; then
-    chown root:xray /dev/shm/xray_config.json
-    chmod 0640 /dev/shm/xray_config.json
+    SLED_VIEW=$(mktemp /run/opdbus/identity-sled.XXXXXX)
+    if [ -n "$PUBKEY" ] && {
+        if [ -n "$TRACE_ID" ]; then
+            /usr/local/bin/op-identity-sled --refresh --pubkey "$PUBKEY" \
+                --trace-id "$TRACE_ID" >"$SLED_VIEW" 2>/dev/null
+        else
+            /usr/local/bin/op-identity-sled --refresh --pubkey "$PUBKEY" \
+                >"$SLED_VIEW" 2>/dev/null
+        fi
+    }; then
+        FOOTPRINT=$(jq -er '.hashed_footprint | ascii_downcase | select(length == 64)' \
+            "$SLED_VIEW" 2>/dev/null || true)
+        case "$FOOTPRINT" in
+            *[!0-9a-f]*|"")
+                echo "warning: identity sled returned an invalid footprint"
+                ;;
+            *)
+                GRANTS_PATH=/dev/shm/opdbus/capability-grants.json
+                GRANTS_TMP=$(mktemp /dev/shm/opdbus/capability-grants.XXXXXX)
+                # The sled footprint changes after every audited mutation, so
+                # grants are capability-scoped rather than footprint-pinned.
+                # Ghostbridge authentication is still required before lookup.
+                jq -n '{
+                    "*": {
+                        capabilities: [
+                            "cap.software.zeroclaw.chat@v1",
+                            "cap.software.zeroclaw.models.read@v1",
+                            "cognitive_mcp.read",
+                            "cognitive_mcp.invoke"
+                        ]
+                    }
+                }' >"$GRANTS_TMP"
+                chmod 0600 "$GRANTS_TMP"
+                mv -f "$GRANTS_TMP" "$GRANTS_PATH"
+                echo "Ghostbridge identity seeded from $IDENTITY_SOURCE with least-privilege ZeroClaw + cognitive_mcp read/invoke grants"
+                ;;
+        esac
+    else
+        echo "warning: no trusted Ghostbridge identity available — identity sled not seeded"
+    fi
+    rm -f "$SLED_VIEW"
 else
-    chmod 0644 /dev/shm/xray_config.json
+    echo "warning: /usr/local/bin/op-identity-sled missing — Ghostbridge identity not seeded"
 fi
-# Also publish into the disk mount shared with the xray CT. /dev/shm file binds
-# are hidden when systemd remounts /dev/shm as tmpfs inside the container.
-install -d -m 0755 /var/lib/opdbus-runtime
-cp -a /dev/shm/xray_config.json /var/lib/opdbus-runtime/xray_config.json
-chmod 0644 /var/lib/opdbus-runtime/xray_config.json
-echo "rundirs ready: /run/opdbus, SHM catalog, xray bootstrap (10.0.0.2 + 10.200.0.1)"
+
+# Xray owns its single live configuration inside the container at
+# /etc/xray/xray_config.json. Host bootstrap must not create a shadow live
+# path in /dev/shm or /var/lib; container materialization/reload belongs to
+# the validated D-Bus deployment path.
+echo "rundirs ready: /run/opdbus, sealed catalog, Ghostbridge identity"

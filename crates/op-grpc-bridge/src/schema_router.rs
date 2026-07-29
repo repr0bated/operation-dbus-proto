@@ -14,20 +14,20 @@
 //!
 //! The manifest hash is read, never re-computed. Consumers trust the manifest.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use jsonschema::Validator;
 use serde_json::Value as JsonValue;
 use tokio::sync::RwLock;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 // Import capability grants loader for bridge-layer enforcement (VAL-ENFORCE-002).
 use crate::interceptor::load_capability_grants;
 use zbus::{Connection, Proxy};
 
-use crate::schema_engine::SchemaEngine;
+use crate::mutation_engine::MutationEngine;
 
 use op_plugins::canonical::{self, BASE_SERVICE_NAME};
 
@@ -49,9 +49,9 @@ pub struct PluginRoute {
     pub plugin_id: String,
     /// Canonical D-Bus object path: `/org/opdbus/v1/plugins/<plugin_id>`.
     pub dbus_path: String,
-    /// Canonical D-Bus destination (bus name): `org.opdbus.v1`.
+    /// Canonical D-Bus destination (bus name): `org.opdbus.v1.plugins`.
     pub dbus_destination: String,
-    /// Canonical D-Bus interface: `org.opdbus.v1.Plugin.<PluginName>`.
+    /// Canonical D-Bus interface: `org.opdbus.v1.PluginV1`.
     pub dbus_interface: String,
     /// Methods declared in the schema (name → `MethodDecl` JSON).
     pub methods: HashMap<String, JsonValue>,
@@ -65,27 +65,19 @@ pub struct PluginRoute {
 pub struct SchemaRouter {
     /// Plugin routes keyed by plugin_id.
     routes: Arc<RwLock<HashMap<String, PluginRoute>>>,
-    /// D-Bus system connection (shared with SchemaEngine).
+    /// D-Bus system connection (shared with MutationEngine).
     dbus_connection: Arc<tokio::sync::OnceCell<Connection>>,
     /// Catalog path: blob-catalog dir in production (default [`BLOB_CATALOG_DIR`]), or a monolith file in tests.
     monolith_path: PathBuf,
-    /// Present-state directory used to derive read-only child objects.
-    state_dir: PathBuf,
     /// Producer manifest path (default [`MANIFEST_PATH`]).
     manifest_path: PathBuf,
     /// Last-seen `catalog_hash` read from the manifest. Compared on each
     /// inbound connection; a change triggers a reload. `None` when no manifest
     /// has been observed yet.
     cached_hash: Arc<RwLock<Option<String>>>,
-    /// The SchemaEngine used for real method dispatch (Requirement 5).
+    /// The MutationEngine used for real method dispatch (Requirement 5).
     /// `None` in unit tests that do not exercise the dispatch path.
-    engine: Option<Arc<SchemaEngine>>,
-    /// Optional projection hook invoked after object registration to publish
-    /// the read-only Zeroclaw route/provider sub-object tree (Phase 1b). Push
-    /// only — invoked from the registration cycle, never on a timer.
-    projection_hook: Option<Arc<dyn crate::zeroclaw_projection::SchemaProjectionHook>>,
-    /// Child object paths currently registered by this router.
-    child_objects: Arc<RwLock<HashSet<String>>>,
+    engine: Option<Arc<MutationEngine>>,
 }
 
 impl SchemaRouter {
@@ -106,15 +98,15 @@ impl SchemaRouter {
         )
     }
 
-    /// Create a new SchemaRouter wired to a SchemaEngine for real dispatch.
+    /// Create a new SchemaRouter wired to a MutationEngine for real dispatch.
     ///
     /// This is the production constructor: the bridge passes its
-    /// `Arc<SchemaEngine>` so every registered `SchemaBackedInterface` can
-    /// dispatch method calls through `SchemaEngine::dispatch_method_call`
+    /// `Arc<MutationEngine>` so every registered `SchemaBackedInterface` can
+    /// dispatch method calls through `MutationEngine::dispatch_method_call`
     /// (Requirement 5 / VAL-DISPATCH-001).
     pub fn with_engine(
         dbus_connection: Arc<tokio::sync::OnceCell<Connection>>,
-        engine: Arc<SchemaEngine>,
+        engine: Arc<MutationEngine>,
     ) -> Self {
         let mut router = Self::new(dbus_connection);
         router.engine = Some(engine);
@@ -129,7 +121,7 @@ impl SchemaRouter {
     pub fn with_paths(
         dbus_connection: Arc<tokio::sync::OnceCell<Connection>>,
         monolith_path: PathBuf,
-        state_dir: PathBuf,
+        _state_dir: PathBuf,
         manifest_path: PathBuf,
     ) -> Self {
         let routes = Self::load_routes_from(&monolith_path);
@@ -142,22 +134,10 @@ impl SchemaRouter {
             routes: Arc::new(RwLock::new(routes)),
             dbus_connection,
             monolith_path,
-            state_dir,
             manifest_path,
             cached_hash: Arc::new(RwLock::new(cached_hash)),
             engine: None,
-            projection_hook: None,
-            child_objects: Arc::new(RwLock::new(HashSet::new())),
         }
-    }
-
-    /// Register a projection hook that publishes the read-only Zeroclaw
-    /// route/provider sub-object tree after each object-registration cycle.
-    pub fn set_projection_hook(
-        &mut self,
-        hook: Arc<dyn crate::zeroclaw_projection::SchemaProjectionHook>,
-    ) {
-        self.projection_hook = Some(hook);
     }
 
     /// Register D-Bus objects for all plugins in the catalog.
@@ -184,73 +164,6 @@ impl SchemaRouter {
                 debug!(plugin_id, path, error = %e, "Failed to register D-Bus object (likely already registered)");
             }
         }
-        drop(routes);
-
-        self.sync_child_objects().await?;
-        Ok(())
-    }
-
-    /// Register read-only child objects for every plugin from present-state.
-    ///
-    /// Child paths are derived from nested objects/arrays in
-    /// `/dev/shm/opdbus/state/<plugin>.json`. The router stores only mounted
-    /// paths for lifecycle; every child property read re-reads SHM directly.
-    async fn sync_child_objects(&self) -> anyhow::Result<()> {
-        let conn = self
-            .dbus_connection
-            .get()
-            .ok_or_else(|| anyhow::anyhow!("D-Bus connection not initialized"))?;
-
-        let routes = self.routes.read().await;
-        let desired = routes
-            .iter()
-            .flat_map(|(plugin_id, route)| {
-                derive_child_paths(plugin_id, &self.state_dir, &route.properties)
-                    .into_iter()
-                    .map(|segments| {
-                        (
-                            build_child_path(plugin_id, &segments),
-                            plugin_id.clone(),
-                            segments,
-                        )
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
-        drop(routes);
-
-        let desired_paths = desired
-            .iter()
-            .map(|(path, _, _)| path.clone())
-            .collect::<HashSet<_>>();
-
-        let mut current = self.child_objects.write().await;
-        for stale in current
-            .iter()
-            .filter(|path| !desired_paths.contains(*path))
-            .cloned()
-            .collect::<Vec<_>>()
-        {
-            conn.object_server()
-                .remove::<SchemaChildInterface, _>(stale.as_str())
-                .await?;
-            current.remove(&stale);
-            debug!(
-                path = stale,
-                "unregistered stale schema-derived child object"
-            );
-        }
-
-        for (path, plugin_id, segments) in desired {
-            if current.contains(&path) {
-                continue;
-            }
-            let child = SchemaChildInterface::new(plugin_id, segments, self.state_dir.clone());
-            conn.object_server().at(path.as_str(), child).await?;
-            current.insert(path.clone());
-            debug!(path, "registered schema-derived child object");
-        }
-
         Ok(())
     }
 
@@ -374,7 +287,7 @@ impl SchemaRouter {
         .map_err(|e| SchemaRouterError::ProxyBuildFailed(e.to_string()))?;
 
         let result: String = proxy
-            .call(method_name, &(json_args.to_string(),))
+            .call("Call", &(method_name.to_string(), json_args.to_string()))
             .await
             .map_err(|e| SchemaRouterError::DbusCallFailed {
                 method: method_name.to_string(),
@@ -408,28 +321,22 @@ impl SchemaRouter {
             .get()
             .ok_or(SchemaRouterError::DbusUnavailable)?;
 
-        let props = zbus::fdo::PropertiesProxy::builder(conn)
-            .destination(route.dbus_destination.as_str())
-            .map_err(|e| SchemaRouterError::ProxyBuildFailed(e.to_string()))?
-            .path(route.dbus_path.as_str())
-            .map_err(|e| SchemaRouterError::ProxyBuildFailed(e.to_string()))?
-            .build()
+        let proxy = Proxy::new(
+            conn,
+            route.dbus_destination.as_str(),
+            route.dbus_path.as_str(),
+            route.dbus_interface.as_str(),
+        )
+        .await
+        .map_err(|e| SchemaRouterError::ProxyBuildFailed(e.to_string()))?;
+
+        proxy
+            .call("GetProperty", &(property_name.to_string(),))
             .await
-            .map_err(|e| SchemaRouterError::ProxyBuildFailed(e.to_string()))?;
-
-        let iface = zbus::names::InterfaceName::try_from(route.dbus_interface.as_str())
-            .map_err(|e| SchemaRouterError::ProxyBuildFailed(e.to_string()))?;
-
-        let val: zbus::zvariant::OwnedValue =
-            props.get(iface, property_name).await.map_err(|e| {
-                SchemaRouterError::DbusCallFailed {
-                    method: format!("Get({})", property_name),
-                    error: e.to_string(),
-                }
-            })?;
-
-        serde_json::to_string(&val)
-            .map_err(|e| SchemaRouterError::SerializationFailed(e.to_string()))
+            .map_err(|e| SchemaRouterError::DbusCallFailed {
+                method: format!("GetProperty({property_name})"),
+                error: e.to_string(),
+            })
     }
 
     /// Set a property on a plugin via its schema-derived D-Bus route.
@@ -457,29 +364,25 @@ impl SchemaRouter {
             .get()
             .ok_or(SchemaRouterError::DbusUnavailable)?;
 
-        let props = zbus::fdo::PropertiesProxy::builder(conn)
-            .destination(route.dbus_destination.as_str())
-            .map_err(|e| SchemaRouterError::ProxyBuildFailed(e.to_string()))?
-            .path(route.dbus_path.as_str())
-            .map_err(|e| SchemaRouterError::ProxyBuildFailed(e.to_string()))?
-            .build()
+        let proxy = Proxy::new(
+            conn,
+            route.dbus_destination.as_str(),
+            route.dbus_path.as_str(),
+            route.dbus_interface.as_str(),
+        )
+        .await
+        .map_err(|e| SchemaRouterError::ProxyBuildFailed(e.to_string()))?;
+
+        proxy
+            .call::<_, _, ()>(
+                "SetProperty",
+                &(property_name.to_string(), json_value.to_string()),
+            )
             .await
-            .map_err(|e| SchemaRouterError::ProxyBuildFailed(e.to_string()))?;
-
-        let iface = zbus::names::InterfaceName::try_from(route.dbus_interface.as_str())
-            .map_err(|e| SchemaRouterError::ProxyBuildFailed(e.to_string()))?;
-
-        let value: serde_json::Value = serde_json::from_str(json_value)
-            .map_err(|e| SchemaRouterError::SerializationFailed(e.to_string()))?;
-
-        let zval = json_to_zvariant_value(&value)?;
-
-        props.set(iface, property_name, zval).await.map_err(|e| {
-            SchemaRouterError::DbusCallFailed {
-                method: format!("Set({})", property_name),
+            .map_err(|e| SchemaRouterError::DbusCallFailed {
+                method: format!("SetProperty({property_name})"),
                 error: e.to_string(),
-            }
-        })?;
+            })?;
 
         Ok(())
     }
@@ -608,207 +511,6 @@ impl SchemaRouter {
 /// Default SHM state directory: `/dev/shm/opdbus/state`.
 const DEFAULT_SHM_STATE_DIR: &str = "/dev/shm/opdbus/state";
 
-fn derive_child_paths(
-    plugin_id: &str,
-    state_dir: &Path,
-    schema_fields: &HashMap<String, JsonValue>,
-) -> Vec<Vec<String>> {
-    let state = read_plugin_state(plugin_id, state_dir);
-    let root = state.get("data").unwrap_or(&state);
-    let mut paths = Vec::new();
-    derive_child_paths_recursive(root, schema_fields, &mut Vec::new(), &mut paths);
-    paths
-}
-
-fn derive_child_paths_recursive(
-    state: &JsonValue,
-    schema_fields: &HashMap<String, JsonValue>,
-    current: &mut Vec<String>,
-    paths: &mut Vec<Vec<String>>,
-) {
-    let Some(state_obj) = state.as_object() else {
-        return;
-    };
-
-    for (field_name, field_schema) in schema_fields {
-        if field_name.starts_with('_') {
-            continue;
-        }
-        let Some(child) = state_obj.get(field_name) else {
-            continue;
-        };
-
-        if let Some(nested_fields) = schema_object_fields(field_schema) {
-            if child.is_object() {
-                current.push(path_element(field_name));
-                paths.push(current.clone());
-                derive_child_paths_recursive(child, &nested_fields, current, paths);
-                current.pop();
-            }
-            continue;
-        }
-
-        if let Some(item_fields) = schema_array_item_fields(field_schema) {
-            let Some(items) = child.as_array() else {
-                continue;
-            };
-            current.push(path_element(field_name));
-            paths.push(current.clone());
-            for (index, item) in items.iter().enumerate() {
-                if item.is_object() {
-                    let segment = ["id", "name", "label", "key", "path", "domain", "host"]
-                        .iter()
-                        .find_map(|field| item.get(*field).and_then(JsonValue::as_str))
-                        .map(path_element)
-                        .unwrap_or_else(|| index.to_string());
-                    current.push(segment);
-                    paths.push(current.clone());
-                    derive_child_paths_recursive(item, &item_fields, current, paths);
-                    current.pop();
-                }
-            }
-            current.pop();
-        }
-    }
-}
-
-fn schema_object_fields(field_schema: &JsonValue) -> Option<HashMap<String, JsonValue>> {
-    field_schema
-        .get("field_type")?
-        .get("object")?
-        .as_object()
-        .map(|fields| {
-            fields
-                .iter()
-                .map(|(name, schema)| (name.clone(), schema.clone()))
-                .collect()
-        })
-}
-
-fn schema_array_item_fields(field_schema: &JsonValue) -> Option<HashMap<String, JsonValue>> {
-    field_schema
-        .get("field_type")?
-        .get("array")?
-        .get("object")?
-        .as_object()
-        .map(|fields| {
-            fields
-                .iter()
-                .map(|(name, schema)| (name.clone(), schema.clone()))
-                .collect()
-        })
-}
-
-fn build_child_path(plugin_id: &str, segments: &[String]) -> String {
-    let mut path = canonical::plugin_path(plugin_id);
-    for segment in segments {
-        path.push('/');
-        path.push_str(&path_element(segment));
-    }
-    path
-}
-
-fn path_element(value: &str) -> String {
-    let mut out = value
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>();
-    if out.is_empty() {
-        out.push('_');
-    }
-    if out
-        .chars()
-        .next()
-        .map(|c| c.is_ascii_digit())
-        .unwrap_or(false)
-    {
-        out.insert(0, '_');
-    }
-    out
-}
-
-fn read_plugin_state(plugin_id: &str, state_dir: &Path) -> JsonValue {
-    let path = state_dir.join(format!("{plugin_id}.json"));
-    match std::fs::read_to_string(path) {
-        Ok(text) => {
-            serde_json::from_str(&text).unwrap_or(JsonValue::Object(serde_json::Map::new()))
-        }
-        Err(_) => JsonValue::Object(serde_json::Map::new()),
-    }
-}
-
-fn value_at_segments<'a>(value: &'a JsonValue, segments: &[String]) -> Option<&'a JsonValue> {
-    let mut current = value.get("data").unwrap_or(value);
-    for segment in segments {
-        current = match current {
-            JsonValue::Object(map) => map.get(segment).or_else(|| {
-                map.iter()
-                    .find(|(key, _)| path_element(key) == *segment)
-                    .map(|(_, value)| value)
-            })?,
-            JsonValue::Array(items) => items
-                .iter()
-                .find(|item| {
-                    ["id", "name", "label", "key", "path", "domain", "host"]
-                        .iter()
-                        .find_map(|field| item.get(*field).and_then(JsonValue::as_str))
-                        .map(path_element)
-                        .as_deref()
-                        == Some(segment.as_str())
-                })
-                .or_else(|| segment.parse::<usize>().ok().and_then(|idx| items.get(idx)))?,
-            _ => return None,
-        };
-    }
-    Some(current)
-}
-
-/// Read-only D-Bus object for a schema-derived child path.
-pub struct SchemaChildInterface {
-    plugin_id: String,
-    path_segments: Vec<String>,
-    shm_state_dir: PathBuf,
-}
-
-impl SchemaChildInterface {
-    fn new(plugin_id: String, path_segments: Vec<String>, shm_state_dir: PathBuf) -> Self {
-        Self {
-            plugin_id,
-            path_segments,
-            shm_state_dir,
-        }
-    }
-
-    fn read_child_state(&self) -> JsonValue {
-        let state = read_plugin_state(&self.plugin_id, &self.shm_state_dir);
-        value_at_segments(&state, &self.path_segments)
-            .cloned()
-            .unwrap_or(JsonValue::Object(serde_json::Map::new()))
-    }
-}
-
-#[zbus::interface(name = "org.opdbus.v1.PluginChildV1")]
-impl SchemaChildInterface {
-    /// Get a property from this child object's current SHM state.
-    async fn get_property(&self, name: String) -> zbus::fdo::Result<String> {
-        let state = self.read_child_state();
-        let value = state.get(&name).unwrap_or(&JsonValue::Null);
-        serde_json::to_string(value).map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
-    }
-
-    /// Get all properties for this child object from current SHM state.
-    async fn get_all_properties(&self) -> zbus::fdo::Result<String> {
-        let state = self.read_child_state();
-        serde_json::to_string(&state).map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
-    }
-}
-
 /// A generic D-Bus interface backed by a plugin schema.
 ///
 /// This struct is registered on the bus for every plugin, making the bridge
@@ -824,10 +526,10 @@ pub struct SchemaBackedInterface {
     route: PluginRoute,
     /// Directory containing per-plugin present-state JSON files.
     shm_state_dir: PathBuf,
-    /// The SchemaEngine for real method dispatch (Requirement 5).
+    /// The MutationEngine for real method dispatch (Requirement 5).
     /// `None` when no engine is wired (unit tests that only exercise
     /// method-existence / property-read paths).
-    engine: Option<Arc<SchemaEngine>>,
+    engine: Option<Arc<MutationEngine>>,
 }
 
 impl SchemaBackedInterface {
@@ -835,21 +537,21 @@ impl SchemaBackedInterface {
     /// directory (`/dev/shm/opdbus/state`) and no engine.
     ///
     /// Prefer [`with_engine`](Self::with_engine) in production so the
-    /// interface can dispatch method calls through `SchemaEngine`.
+    /// interface can dispatch method calls through `MutationEngine`.
     pub fn new(plugin_id: String, route: PluginRoute) -> Self {
         Self::with_shm_state_dir(plugin_id, route, DEFAULT_SHM_STATE_DIR)
     }
 
-    /// Creates a new `SchemaBackedInterface` wired to a SchemaEngine for
+    /// Creates a new `SchemaBackedInterface` wired to a MutationEngine for
     /// real method dispatch.
     ///
     /// The engine is used by [`call`](Self::call) to dispatch method
-    /// invocations through `SchemaEngine::dispatch_method_call`
+    /// invocations through `MutationEngine::dispatch_method_call`
     /// (Requirement 5 / VAL-DISPATCH-001).
     pub fn with_engine(
         plugin_id: String,
         route: PluginRoute,
-        engine: Option<Arc<SchemaEngine>>,
+        engine: Option<Arc<MutationEngine>>,
     ) -> Self {
         let mut iface = Self::with_shm_state_dir(plugin_id, route, DEFAULT_SHM_STATE_DIR);
         iface.engine = engine;
@@ -896,7 +598,7 @@ impl SchemaBackedInterface {
     }
 
     /// The canonical D-Bus interface name for this plugin
-    /// (`org.opdbus.v1.Plugin.<PluginName>`).
+    /// (`org.opdbus.v1.PluginV1`).
     pub fn dbus_interface(&self) -> &str {
         &self.route.dbus_interface
     }
@@ -1004,7 +706,7 @@ impl SchemaBackedInterface {
     ///   1. Method lookup → reject if not declared (UnknownMethod)
     ///   2. Arg validation → reject if invalid (InvalidArgs)
     ///   3. Capability check → reject if required_capability not granted (AccessDenied)
-    ///   4. SchemaEngine.mutate → record in event chain (Requirement 5)
+    ///   4. MutationEngine.mutate → record in event chain (Requirement 5)
     async fn call(&self, method: String, json_args: String) -> zbus::fdo::Result<String> {
         // 1. Method-existence gate: reject undeclared methods (Requirement 6).
         // If the methods map is empty, ALL invocations are rejected as UnknownMethod.
@@ -1054,12 +756,12 @@ impl SchemaBackedInterface {
             }
         }
 
-        // 4. Real dispatch through SchemaEngine (Requirement 5).
+        // 4. Real dispatch through MutationEngine (Requirement 5).
         //    json_args is passed verbatim — no default, no placeholder
         //    (Requirement 5.4 / VAL-DISPATCH-004).
         let engine = self.engine.as_ref().ok_or_else(|| {
             zbus::fdo::Error::Failed(
-                "SchemaEngine not wired to this interface — dispatch unavailable".to_string(),
+                "MutationEngine not wired to this interface — dispatch unavailable".to_string(),
             )
         })?;
 
@@ -1109,17 +811,28 @@ impl SchemaBackedInterface {
 
     /// Set a property value.
     ///
-    /// Present-state is managed by the producer (`op-projection`) via SHM.
+    /// Present-state is managed by the mutation engine via SHM.
     /// The bridge is a reader, not a writer, of present-state. This method
     /// returns an error indicating that property writes must go through the
     /// producer's mutation pipeline.
     async fn set_property(&self, _name: String, _json_value: String) -> zbus::fdo::Result<()> {
         Err(zbus::fdo::Error::Failed(
-            "Present-state is managed by op-projection via SHM; \
+            "Present-state is managed via SHM; \
              use the mutation pipeline to change properties"
                 .to_string(),
         ))
     }
+
+    /// Push signal emitted after every `write_projection()` in the mutation engine.
+    ///
+    /// `data_json` is a JSON object identifying what changed:
+    /// `{"plugin": "<name>", "key": "<key>"}` (single) or
+    /// `{"plugin": "<name>", "keys": ["k1","k2"]}` (batch).
+    ///
+    /// Subscribers can act on the signal payload alone without an additional
+    /// query — this is the no-polling guarantee (REQ-1.5, REQ-7).
+    #[zbus(signal)]
+    pub async fn updated(signal_emitter: &zbus::object_server::SignalEmitter<'_>, data_json: &str) -> zbus::Result<()>;
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -1186,41 +899,6 @@ impl From<SchemaRouterError> for tonic::Status {
     }
 }
 
-fn json_to_zvariant_value(
-    value: &serde_json::Value,
-) -> Result<zbus::zvariant::Value<'static>, SchemaRouterError> {
-    use zbus::zvariant::Value as ZValue;
-    match value {
-        serde_json::Value::Null => Ok(ZValue::from("")),
-        serde_json::Value::Bool(b) => Ok(ZValue::from(*b)),
-        serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                Ok(ZValue::from(i))
-            } else if let Some(f) = n.as_f64() {
-                Ok(ZValue::from(f))
-            } else {
-                Ok(ZValue::from(n.to_string()))
-            }
-        }
-        serde_json::Value::String(s) => Ok(ZValue::from(s.clone())),
-        serde_json::Value::Array(arr) => {
-            let items: Vec<String> = arr
-                .iter()
-                .map(|v| match v {
-                    serde_json::Value::String(s) => s.clone(),
-                    other => other.to_string(),
-                })
-                .collect();
-            Ok(ZValue::from(items))
-        }
-        serde_json::Value::Object(_) => {
-            let s = serde_json::to_string(value)
-                .map_err(|e| SchemaRouterError::SerializationFailed(e.to_string()))?;
-            Ok(ZValue::from(s))
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1246,8 +924,8 @@ mod tests {
         PluginRoute {
             plugin_id: "test_plugin".to_string(),
             dbus_path: "/org/opdbus/v1/plugins/test_plugin".to_string(),
-            dbus_destination: "org.opdbus.v1".to_string(),
-            dbus_interface: "org.opdbus.v1.Plugin.TestPlugin".to_string(),
+            dbus_destination: "org.opdbus.v1.plugins".to_string(),
+            dbus_interface: "org.opdbus.v1.PluginV1".to_string(),
             methods,
             signals,
             properties,
@@ -1463,102 +1141,6 @@ mod tests {
         cleanup(&state_dir);
     }
 
-    #[test]
-    fn should_derive_child_paths_from_schemars_schema_and_present_state() {
-        #[derive(serde::Serialize, schemars::JsonSchema)]
-        struct GeneratedChild {
-            id: String,
-            enabled: bool,
-        }
-
-        #[derive(serde::Serialize, schemars::JsonSchema)]
-        struct GeneratedGroup {
-            label: String,
-            children: Vec<GeneratedChild>,
-        }
-
-        #[derive(serde::Serialize, schemars::JsonSchema)]
-        struct GeneratedState {
-            status: String,
-            group: GeneratedGroup,
-            providers: Vec<GeneratedChild>,
-        }
-
-        let state_dir = test_state_dir();
-        let root = serde_json::to_value(schemars::schema_for!(GeneratedState)).unwrap();
-        let schema = op_plugins::state_plugins::schemars_adapter::plugin_schema_from_json(
-            "generated",
-            "1.0.0",
-            "test generated schema",
-            &root,
-        );
-        let schema_json = serde_json::to_value(&schema).unwrap();
-        let live_schema_path = state_dir.join("live-schema.json");
-        fs::write(
-            &live_schema_path,
-            serde_json::to_vec_pretty(&json!({ "generated": [schema_json] })).unwrap(),
-        )
-        .expect("write live schema catalog");
-        let routes = SchemaRouter::load_routes_from(&live_schema_path);
-        let route = routes
-            .get("generated")
-            .expect("route generated from live schema catalog");
-        let state_json = serde_json::to_value(GeneratedState {
-            status: "active".to_string(),
-            group: GeneratedGroup {
-                label: "primary".to_string(),
-                children: vec![GeneratedChild {
-                    id: "nested child".to_string(),
-                    enabled: true,
-                }],
-            },
-            providers: vec![GeneratedChild {
-                id: "openrouter".to_string(),
-                enabled: true,
-            }],
-        })
-        .unwrap();
-        fs::write(
-            state_dir.join("generated.json"),
-            serde_json::to_vec_pretty(&state_json).unwrap(),
-        )
-        .expect("write state file");
-
-        let paths = derive_child_paths("generated", &state_dir, &route.properties);
-
-        for (field_name, field_schema) in &route.properties {
-            let Some(state_value) = state_json.get(field_name) else {
-                continue;
-            };
-            if schema_object_fields(field_schema).is_some() && state_value.is_object() {
-                assert!(
-                    paths.contains(&vec![path_element(field_name)]),
-                    "object field '{field_name}' should produce a child path"
-                );
-            }
-            if schema_array_item_fields(field_schema).is_some() && state_value.is_array() {
-                let field_segment = path_element(field_name);
-                assert!(
-                    paths.contains(&vec![field_segment.clone()]),
-                    "array field '{field_name}' should produce a collection child path"
-                );
-                if let Some(first_item) = state_value.as_array().and_then(|items| items.first()) {
-                    let segment = ["id", "name", "label", "key", "path", "domain", "host"]
-                        .iter()
-                        .find_map(|field| first_item.get(*field).and_then(JsonValue::as_str))
-                        .map(path_element)
-                        .unwrap_or_else(|| "0".to_string());
-                    assert!(
-                        paths.contains(&vec![field_segment, segment]),
-                        "array field '{field_name}' should produce item child paths"
-                    );
-                }
-            }
-        }
-
-        cleanup(&state_dir);
-    }
-
     // ── R9.4 / NFR1.1: No timer-based polling constructs ────────────────
     //
     // This is a structural test: it verifies that SchemaBackedInterface does
@@ -1718,7 +1300,7 @@ mod tests {
         let alpha = &routes["alpha"];
         assert_eq!(alpha.dbus_path, canonical::plugin_path("alpha"));
         assert_eq!(alpha.dbus_path, "/org/opdbus/v1/plugins/alpha");
-        assert_eq!(alpha.dbus_destination, "org.opdbus.v1");
+        assert_eq!(alpha.dbus_destination, "org.opdbus.v1.plugins");
         assert_eq!(alpha.dbus_interface, canonical::plugin_interface("alpha"));
 
         // One SchemaBackedInterface is constructed per plugin route, mounted at
@@ -2056,17 +1638,17 @@ mod tests {
         cleanup(&base);
     }
 
-    // ── R5.1 / VAL-DISPATCH-001: Bridge dispatches to SchemaEngine.mutate ──
+    // ── R5.1 / VAL-DISPATCH-001: Bridge dispatches to MutationEngine.mutate ──
 
-    /// Builds a test `SchemaEngine` with a real `EventChain` so dispatch
+    /// Builds a test `MutationEngine` with a real `EventChain` so dispatch
     /// tests can verify the event chain record.
-    fn test_engine() -> Arc<SchemaEngine> {
+    fn test_engine() -> Arc<MutationEngine> {
         use op_network::rovs_proxy::OvsdbDbusClient;
         use op_state_store::{ChainConfig, EventChain};
 
         let event_chain = Arc::new(RwLock::new(EventChain::new(ChainConfig::default())));
         let ovsdb = Arc::new(OvsdbDbusClient::new());
-        Arc::new(SchemaEngine::new(event_chain, ovsdb))
+        Arc::new(MutationEngine::new(event_chain, ovsdb))
     }
 
     /// Builds a `PluginRoute` with a method that has a `required_capability`.
@@ -2114,8 +1696,8 @@ mod tests {
         PluginRoute {
             plugin_id: "beta".to_string(),
             dbus_path: "/org/opdbus/v1/plugins/beta".to_string(),
-            dbus_destination: "org.opdbus.v1".to_string(),
-            dbus_interface: "org.opdbus.v1.Plugin.Beta".to_string(),
+            dbus_destination: "org.opdbus.v1.plugins".to_string(),
+            dbus_interface: "org.opdbus.v1.PluginV1".to_string(),
             methods,
             signals: vec![],
             properties: HashMap::new(),
@@ -2124,7 +1706,7 @@ mod tests {
 
     #[tokio::test]
     async fn bridge_dispatches_to_schema_engine_mutate() {
-        // VAL-DISPATCH-001: call() dispatches to SchemaEngine, not a stub.
+        // VAL-DISPATCH-001: call() dispatches to MutationEngine, not a stub.
         let engine = test_engine();
         let route = dispatch_test_route();
         let iface =
@@ -2190,7 +1772,7 @@ mod tests {
 
     #[tokio::test]
     async fn mutate_error_propagated_to_caller() {
-        // VAL-DISPATCH-003: if SchemaEngine returns an error, the bridge
+        // VAL-DISPATCH-003: if MutationEngine returns an error, the bridge
         // propagates it as zbus::fdo::Error::Failed.
         // Uses ForceDispatchError method with valid JSON args to trigger dispatch error
         // (without using malformed JSON, which would be rejected by arg-validation gate).
@@ -2225,8 +1807,8 @@ mod tests {
         let route = PluginRoute {
             plugin_id: "beta".to_string(),
             dbus_path: "/org/opdbus/v1/plugins/beta".to_string(),
-            dbus_destination: "org.opdbus.v1".to_string(),
-            dbus_interface: "org.opdbus.v1.Plugin.Beta".to_string(),
+            dbus_destination: "org.opdbus.v1.plugins".to_string(),
+            dbus_interface: "org.opdbus.v1.PluginV1".to_string(),
             methods: {
                 let mut m = HashMap::new();
                 m.insert(
@@ -2276,8 +1858,8 @@ mod tests {
         let route = PluginRoute {
             plugin_id: "beta".to_string(),
             dbus_path: "/org/opdbus/v1/plugins/beta".to_string(),
-            dbus_destination: "org.opdbus.v1".to_string(),
-            dbus_interface: "org.opdbus.v1.Plugin.Beta".to_string(),
+            dbus_destination: "org.opdbus.v1.plugins".to_string(),
+            dbus_interface: "org.opdbus.v1.PluginV1".to_string(),
             methods: {
                 let mut m = HashMap::new();
                 m.insert(
@@ -2383,7 +1965,7 @@ mod tests {
     #[tokio::test]
     async fn unknown_method_rejected_without_dispatch() {
         // VAL-VALIDATE-002: unknown method is rejected as UnknownMethod
-        // without calling SchemaEngine (no event recorded).
+        // without calling MutationEngine (no event recorded).
         let engine = test_engine();
         let route = dispatch_test_route();
         let iface =
@@ -2409,7 +1991,7 @@ mod tests {
     #[tokio::test]
     async fn bridge_looks_up_method_decl_before_dispatch() {
         // VAL-VALIDATE-001: the bridge must look up the MethodDecl in
-        // PluginSchema.methods before dispatching to SchemaEngine.
+        // PluginSchema.methods before dispatching to MutationEngine.
         let base = test_base_dir();
         let monolith_path = write_test_monolith(&base);
         let routes = SchemaRouter::load_routes_from(&monolith_path);
@@ -2459,7 +2041,7 @@ mod tests {
             "missing required key should be rejected as InvalidArgs"
         );
 
-        // SchemaEngine.mutate should NOT have been called
+        // MutationEngine.mutate should NOT have been called
         let chain = engine.event_chain.read().await;
         assert!(
             chain.events().is_empty(),
@@ -2475,8 +2057,8 @@ mod tests {
         let route = PluginRoute {
             plugin_id: "beta".to_string(),
             dbus_path: "/org/opdbus/v1/plugins/beta".to_string(),
-            dbus_destination: "org.opdbus.v1".to_string(),
-            dbus_interface: "org.opdbus.v1.Plugin.Beta".to_string(),
+            dbus_destination: "org.opdbus.v1.plugins".to_string(),
+            dbus_interface: "org.opdbus.v1.PluginV1".to_string(),
             methods: {
                 let mut m = HashMap::new();
                 m.insert(
@@ -2977,8 +2559,8 @@ mod tests {
         let route_no_cap = PluginRoute {
             plugin_id: "beta".to_string(),
             dbus_path: "/org/opdbus/v1/plugins/beta".to_string(),
-            dbus_destination: "org.opdbus.v1".to_string(),
-            dbus_interface: "org.opdbus.v1.Plugin.Beta".to_string(),
+            dbus_destination: "org.opdbus.v1.plugins".to_string(),
+            dbus_interface: "org.opdbus.v1.PluginV1".to_string(),
             methods: {
                 let mut m = HashMap::new();
                 m.insert(

@@ -244,7 +244,6 @@ mod tests {
         }
     }
 
-
     #[test]
     fn all_subids_are_valid() {
         let root = serde_json::to_value(schemars::schema_for!(WorkflowsState))
@@ -257,7 +256,6 @@ mod tests {
         }
     }
 }
-
 
 // Self-registration: the plugin registry discovers this via inventory
 // (single source of the catalog; no central dispatch list).

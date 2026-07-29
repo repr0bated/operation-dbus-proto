@@ -385,7 +385,11 @@ impl NetmakerPlugin {
     }
 
     /// PUT /api/nodes/{network}/{node_id}
-    async fn update_node_api(network: &str, node_id: &str, payload: &JsonValue) -> Result<JsonValue> {
+    async fn update_node_api(
+        network: &str,
+        node_id: &str,
+        payload: &JsonValue,
+    ) -> Result<JsonValue> {
         let master_key = Self::netmaker_master_key()?;
         let resp = reqwest::Client::new()
             .put(format!(
@@ -443,7 +447,7 @@ impl NetmakerPlugin {
         NetmakerState {
             software: "netclient".to_string(),
             version: "1.0.0".to_string(),
-            dependencies: vec!["net".to_string(), "s6".to_string()],
+            dependencies: vec!["net".to_string(), "service".to_string()],
             installed: false,
             daemon_running: false,
             control_socket: Some("/var/run/netclient/netclient.sock".to_string()),
@@ -782,10 +786,7 @@ pub(crate) fn netmaker_schema() -> PluginSchema {
 /// Real dispatch for every method declared in `netmaker_schema()`. Mirrors
 /// `zeroclaw::dispatch_zeroclaw_method`'s role — the plugin crate owns its
 /// own dispatch, the gRPC bridge just calls this one function.
-pub async fn dispatch_netmaker_method(
-    method: &str,
-    args: &JsonValue,
-) -> Result<JsonValue> {
+pub async fn dispatch_netmaker_method(method: &str, args: &JsonValue) -> Result<JsonValue> {
     let plugin = NetmakerPlugin::new(NetmakerConfig::default());
     match method {
         "join_network" => {
