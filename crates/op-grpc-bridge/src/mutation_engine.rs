@@ -1516,8 +1516,8 @@ async fn dispatch_xray_method(
         }
         "restart" => {
             // Reload (SIGHUP), not a hard kill+respawn: the `xray` container's
-            // own systemd already supervises the process; a config reload is
-            // the safe, sanctioned action here (see op-plugins::xray's
+            // own service manager already supervises the process; a config
+            // reload is the safe, sanctioned action here (see op-plugins::xray's
             // apply_state, which uses the same pattern). No Command::new
             // subprocess — signals the real PID directly via /proc + nix.
             let pids = find_xray_pids();

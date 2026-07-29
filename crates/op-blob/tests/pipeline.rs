@@ -43,7 +43,7 @@ fn blob_dbus_and_grpc_identity_match_plugin() {
         blob.manifest.dbus.object_path,
         "/org/opdbus/v1/plugins/unix_socket"
     );
-    assert_eq!(blob.manifest.dbus.interface_name, "org.opdbus.v1.Plugin");
+    assert_eq!(blob.manifest.dbus.interface_name, "org.opdbus.v1.PluginV1");
     assert!(blob
         .manifest
         .grpc

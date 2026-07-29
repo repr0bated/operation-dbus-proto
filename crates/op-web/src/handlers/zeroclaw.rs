@@ -1,10 +1,16 @@
-//! Zeroclaw / Antigravity proxy handlers
+//! ZeroClaw HTTP compatibility handlers and schema-driven UI surface.
 //!
-//! Proxies chat requests to the antigravity Python SDK bot running on
-//! 127.0.0.1:8081, and serves the combined schema (OpenAPI + zeroclaw
-//! projection) for schema-driven UI rendering.
+//! Port 8080 owns ordinary HTTP. Every model/provider request is adapted into
+//! the bridge's schema-declared gRPC method pipeline on port 8090.
 
-use axum::{body::Body, extract::Extension, http::StatusCode, response::Response, Json};
+use axum::{
+    body::Body,
+    extract::Extension,
+    http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
+    Json,
+};
+use op_grpc_bridge::GhostbridgeCallMetadata;
 use serde::Deserialize;
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
@@ -13,215 +19,257 @@ use tracing::{error, info, warn};
 
 use crate::state::AppState;
 
-/// Antigravity bridge base URL - defaults to standard Antigravity IDE bridge port
-/// Can be overridden with ANTIGRAVITY_BRIDGE_URL env var
-fn antigravity_base() -> String {
-    std::env::var("ANTIGRAVITY_BRIDGE_URL").unwrap_or_else(|_| "http://127.0.0.1:3333".to_string())
-}
-
-/// Get WireGuard identity for auth headers
-fn wireguard_identity_headers() -> Vec<(&'static str, String)> {
-    let mut headers = Vec::new();
-
-    // X-WireGuard-Pubkey from environment (set by the host WireGuard
-    // interface; the deprecated wg-xray container is no longer involved)
-    if let Ok(pubkey) = std::env::var("WG_PUBKEY") {
-        headers.push(("X-WireGuard-Pubkey", pubkey));
-    }
-
-    // X-Ghostbridge-Trace-ID for accountability loop
-    if let Ok(trace_id) = std::env::var("GHOSTBRIDGE_TRACE_ID") {
-        headers.push(("X-Ghostbridge-Trace-ID", trace_id));
-    }
-
-    // Host-scoped identity (was container-scoped for the deprecated wg-xray
-    // container; xray + gRPC-bridge now run on the host)
-    if let Ok(container_id) = std::env::var("CONTAINER_ID") {
-        headers.push(("X-Container-ID", container_id));
-    }
-
+fn identity_header(headers: &HeaderMap, name: &'static str) -> Result<Option<String>, Response> {
     headers
+        .get(name)
+        .map(|value| {
+            value.to_str().map(str::to_string).map_err(|_| {
+                json_error_response(
+                    StatusCode::BAD_REQUEST,
+                    &format!("invalid {name} header encoding"),
+                )
+            })
+        })
+        .transpose()
 }
 
-/// Schema-driven chat request — shape matches the antigravity bot's
-/// `ChatRequest` so we can forward verbatim.
+fn ghostbridge_metadata(headers: &HeaderMap) -> Result<GhostbridgeCallMetadata, Response> {
+    let footprint = identity_header(headers, "x-ghostbridge-footprint")?.ok_or_else(|| {
+        json_error_response(StatusCode::UNAUTHORIZED, "missing x-ghostbridge-footprint")
+    })?;
+    let trace_id = identity_header(headers, "x-ghostbridge-trace-id")?;
+    let wireguard_pubkey = identity_header(headers, "x-wireguard-pubkey")?;
+    if trace_id.is_none() && wireguard_pubkey.is_none() {
+        return Err(json_error_response(
+            StatusCode::UNAUTHORIZED,
+            "missing Ghostbridge trace or WireGuard identity",
+        ));
+    }
+    Ok(GhostbridgeCallMetadata {
+        footprint,
+        trace_id,
+        wireguard_pubkey,
+    })
+}
+
+async fn call_zeroclaw_method(
+    headers: &HeaderMap,
+    method: &str,
+    capability: &str,
+    arguments: serde_json::Value,
+) -> Result<serde_json::Value, Response> {
+    let identity = ghostbridge_metadata(headers)?;
+    let mut bytes = serde_json::to_vec(&arguments)
+        .map_err(|error| json_error_response(StatusCode::BAD_REQUEST, &error.to_string()))?;
+    let arguments = simd_json::to_owned_value(&mut bytes)
+        .map_err(|error| json_error_response(StatusCode::BAD_REQUEST, &error.to_string()))?;
+    let envelope = crate::state_manager_client::call_plugin_method(
+        "zeroclaw", method, arguments, capability, &identity,
+    )
+    .await
+    .map_err(|error| {
+        let message = error.to_string();
+        let status = if message.contains("Unauthenticated") {
+            StatusCode::UNAUTHORIZED
+        } else if message.contains("Access denied") || message.contains("PermissionDenied") {
+            StatusCode::FORBIDDEN
+        } else {
+            StatusCode::BAD_GATEWAY
+        };
+        json_error_response(status, &message)
+    })?;
+    let payload = envelope.get("result").cloned().ok_or_else(|| {
+        json_error_response(
+            StatusCode::BAD_GATEWAY,
+            "ZeroClaw method response is missing its result payload",
+        )
+    })?;
+    let json = simd_json::to_string(&payload)
+        .map_err(|error| json_error_response(StatusCode::BAD_GATEWAY, &error.to_string()))?;
+    serde_json::from_str(&json)
+        .map_err(|error| json_error_response(StatusCode::BAD_GATEWAY, &error.to_string()))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct OpenAiChatMessage {
+    pub role: String,
+    #[serde(default)]
+    pub content: String,
+}
+
+/// Accept both OpenAI `messages` and the legacy single `message` form.
 #[derive(Debug, Deserialize)]
 pub struct ZeroclawChatRequest {
+    #[serde(default)]
     pub message: String,
+    #[serde(default)]
+    pub messages: Vec<OpenAiChatMessage>,
     #[serde(default)]
     pub session_id: Option<String>,
     #[serde(default)]
     pub provider: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
+    #[serde(default)]
+    pub stream: bool,
 }
 
-/// Proxy chat request to the antigravity bot.
-/// POST /api/zeroclaw/chat
+/// OpenAI-compatible chat adapter. The bridge remains the sole router.
 pub async fn zeroclaw_chat_handler(
+    headers: HeaderMap,
     Extension(_state): Extension<Arc<AppState>>,
     Json(req): Json<ZeroclawChatRequest>,
 ) -> Response {
-    let client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(120))
-        .build()
-    {
-        Ok(c) => c,
-        Err(e) => {
-            error!("Failed to build HTTP client: {}", e);
-            return json_error_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Failed to build HTTP client",
-            );
+    if req.stream {
+        return json_error_response(
+            StatusCode::BAD_REQUEST,
+            "use op_chat.chat.ChatService.Send on the gRPC bridge for streaming",
+        );
+    }
+    let messages = if req.messages.is_empty() {
+        if req.message.is_empty() {
+            return json_error_response(StatusCode::BAD_REQUEST, "messages must not be empty");
         }
+        vec![serde_json::json!({"role": "user", "content": req.message})]
+    } else {
+        req.messages
+            .into_iter()
+            .map(|message| {
+                serde_json::json!({
+                    "role": message.role,
+                    "content": message.content,
+                })
+            })
+            .collect()
+    };
+    let result = match call_zeroclaw_method(
+        &headers,
+        "Chat",
+        "cap.software.zeroclaw.chat@v1",
+        serde_json::json!({
+            "messages": messages,
+            "provider": req.provider.unwrap_or_default(),
+            "model": req.model.unwrap_or_default(),
+        }),
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(response) => return response,
     };
 
-    let url = format!("{}/api/chat", antigravity_base());
+    let content = result
+        .get("content")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    let model = result
+        .get("model")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    let provider = result
+        .get("provider")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    let finish_reason = result
+        .get("finish_reason")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("stop");
+    let usage = result
+        .get("usage")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
 
-    let body = json!({
-        "message": req.message,
-        "session_id": req.session_id,
-        "provider": req.provider,
-        "model": req.model,
-    });
-
-    info!(
-        "Proxying zeroclaw chat to antigravity bot: {} chars",
-        req.message.len()
-    );
-
-    let mut request_builder = client.post(&url).header("Content-Type", "application/json");
-
-    // Add WireGuard identity headers for auth
-    for (key, value) in wireguard_identity_headers() {
-        request_builder = request_builder.header(key, value);
-    }
-
-    match request_builder
-        .body(simd_json::to_string(&body).unwrap_or_default())
-        .send()
-        .await
-    {
-        Ok(resp) => {
-            let status = resp.status();
-            let body_bytes = match resp.bytes().await {
-                Ok(b) => b,
-                Err(e) => {
-                    error!("Failed to read antigravity response body: {}", e);
-                    return json_error_response(
-                        StatusCode::BAD_GATEWAY,
-                        "Failed to read antigravity response",
-                    );
-                }
-            };
-
-            let axum_status =
-                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
-            Response::builder()
-                .status(axum_status)
-                .header("Content-Type", "application/json")
-                .body(Body::from(body_bytes))
-                .unwrap_or_else(|_| {
-                    json_error_response(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "Failed to build response",
-                    )
-                })
-        }
-        Err(e) => {
-            error!("Antigravity bot unreachable: {}", e);
-            json_error_response(
-                StatusCode::BAD_GATEWAY,
-                &format!("Antigravity bot unreachable: {}", e),
-            )
-        }
-    }
+    Json(serde_json::json!({
+        "id": format!("chatcmpl-{}", uuid::Uuid::new_v4()),
+        "object": "chat.completion",
+        "created": chrono::Utc::now().timestamp(),
+        "model": model,
+        "provider": provider,
+        "choices": [{
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": content,
+            },
+            "finish_reason": finish_reason,
+        }],
+        "usage": usage,
+    }))
+    .into_response()
 }
 
-/// Proxy streaming chat request to the antigravity bot SSE endpoint.
-/// POST /api/zeroclaw/chat/stream
+/// Streaming belongs to the bridge's gRPC ChatService, not a second HTTP
+/// provider path.
 pub async fn zeroclaw_chat_stream_handler(
     Extension(_state): Extension<Arc<AppState>>,
-    Json(req): Json<ZeroclawChatRequest>,
+    Json(_req): Json<ZeroclawChatRequest>,
 ) -> Response {
-    let client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(300))
-        .build()
+    json_error_response(
+        StatusCode::BAD_REQUEST,
+        "use op_chat.chat.ChatService.Send on port 8090 for streaming",
+    )
+}
+
+/// OpenAI-compatible model catalog backed by `zeroclaw.ListModels`.
+pub async fn openai_models_handler(
+    headers: HeaderMap,
+    Extension(_state): Extension<Arc<AppState>>,
+) -> Response {
+    let result = match call_zeroclaw_method(
+        &headers,
+        "ListModels",
+        "cap.software.zeroclaw.models.read@v1",
+        serde_json::json!({}),
+    )
+    .await
     {
-        Ok(c) => c,
-        Err(e) => {
-            error!("Failed to build HTTP client: {}", e);
-            return json_error_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Failed to build HTTP client",
-            );
-        }
+        Ok(result) => result,
+        Err(response) => return response,
     };
+    let Some(routes) = result
+        .get("model_routes")
+        .and_then(serde_json::Value::as_array)
+    else {
+        return json_error_response(
+            StatusCode::BAD_GATEWAY,
+            "ZeroClaw ListModels returned no model_routes",
+        );
+    };
+    let mut seen = std::collections::HashSet::new();
+    let data = routes
+        .iter()
+        .filter_map(|route| {
+            let model = route.get("model")?.as_str()?;
+            if !seen.insert(model.to_string()) {
+                return None;
+            }
+            let provider = route
+                .get("upstream_provider")
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| !value.is_empty())
+                .or_else(|| route.get("provider").and_then(serde_json::Value::as_str))
+                .unwrap_or_default();
+            Some(serde_json::json!({
+                "id": model,
+                "object": "model",
+                "owned_by": provider,
+                "available": route
+                    .get("available")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false),
+                "route_hint": route
+                    .get("hint")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default(),
+            }))
+        })
+        .collect::<Vec<_>>();
 
-    let url = format!("{}/api/chat/stream", antigravity_base());
-
-    let body = json!({
-        "message": req.message,
-        "session_id": req.session_id,
-        "provider": req.provider,
-        "model": req.model,
-    });
-
-    info!(
-        "Proxying zeroclaw chat stream to antigravity bot: {} chars",
-        req.message.len()
-    );
-
-    let mut request_builder = client
-        .post(&url)
-        .header("Content-Type", "application/json")
-        .header("Accept", "text/event-stream");
-
-    // Add WireGuard identity headers for auth
-    for (key, value) in wireguard_identity_headers() {
-        request_builder = request_builder.header(key, value);
-    }
-
-    match request_builder
-        .body(simd_json::to_string(&body).unwrap_or_default())
-        .send()
-        .await
-    {
-        Ok(resp) => {
-            let status = resp.status();
-            let body_bytes = match resp.bytes().await {
-                Ok(b) => b,
-                Err(e) => {
-                    error!("Failed to read antigravity stream body: {}", e);
-                    return json_error_response(
-                        StatusCode::BAD_GATEWAY,
-                        "Failed to read antigravity stream",
-                    );
-                }
-            };
-
-            let axum_status =
-                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
-            Response::builder()
-                .status(axum_status)
-                .header("Content-Type", "text/event-stream")
-                .header("Cache-Control", "no-cache")
-                .body(Body::from(body_bytes))
-                .unwrap_or_else(|_| {
-                    json_error_response(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "Failed to build stream response",
-                    )
-                })
-        }
-        Err(e) => {
-            error!("Antigravity bot unreachable: {}", e);
-            json_error_response(
-                StatusCode::BAD_GATEWAY,
-                &format!("Antigravity bot unreachable: {}", e),
-            )
-        }
-    }
+    Json(serde_json::json!({
+        "object": "list",
+        "data": data,
+    }))
+    .into_response()
 }
 
 /// Helper to build a JSON error response.
@@ -241,9 +289,8 @@ fn json_error_response(status: StatusCode, message: &str) -> Response {
 
 /// Read the zeroclaw `PluginSchema` directly from the sealed blob catalog
 /// (Absolute Base). Per AGENTS.md the sealed blob IS the plugin; the monolithic
-/// `/dev/shm/live-schema.json` is gone. The live provider/model catalog lives
-/// in the D-Bus projection (see `zeroclaw_schema_handler`), not in the blob —
-/// this returns the schema contract only.
+/// `/dev/shm/live-schema.json` is gone. Live projection values take precedence,
+/// while schema field defaults provide the boot-safe provider/model catalog.
 fn read_zeroclaw_schema_shm() -> Option<Value> {
     let schema = op_blob::catalog::read_plugin_schema_shm("zeroclaw")?;
     // `PluginSchema` serializes to { name, version, fields, methods, … }.
@@ -261,46 +308,93 @@ fn read_zeroclaw_schema_shm() -> Option<Value> {
     Some(v)
 }
 
+fn schema_field_default<'a>(schema: &'a Value, field: &str) -> Option<&'a Value> {
+    schema.get("fields")?.get(field)?.get("default")
+}
+
+fn method_contract(schema: Option<&Value>, method: &str) -> Value {
+    schema
+        .and_then(|schema| schema.get("methods"))
+        .and_then(|methods| methods.get(method))
+        .cloned()
+        .unwrap_or_else(|| json!({}))
+}
+
+/// Build the HTTP compatibility document from the same sealed Schemars method
+/// contracts used by D-Bus and gRPC. No external documentation server exists.
+fn compatibility_openapi(schema: Option<&Value>) -> Value {
+    let chat = method_contract(schema, "Chat");
+    let list_models = method_contract(schema, "ListModels");
+    let chat_args = chat.get("args").cloned().unwrap_or_else(|| json!({}));
+
+    json!({
+        "openapi": "3.1.0",
+        "info": {
+            "title": "ZeroClaw HTTP compatibility",
+            "version": "1.0.0"
+        },
+        "paths": {
+            "/v1/models": {
+                "get": {
+                    "operationId": "zeroclaw.ListModels",
+                    "x-opdbus-method-contract": list_models,
+                    "responses": {
+                        "200": {
+                            "description": "OpenAI-compatible model catalog"
+                        }
+                    }
+                }
+            },
+            "/v1/chat/completions": {
+                "post": {
+                    "operationId": "zeroclaw.Chat",
+                    "x-opdbus-method-contract": chat,
+                    "requestBody": {
+                        "required": true,
+                        "content": {
+                            "application/json": {
+                                "schema": chat_args
+                            }
+                        }
+                    },
+                    "responses": {
+                        "200": {
+                            "description": "OpenAI-compatible chat completion"
+                        }
+                    }
+                }
+            },
+            "/api/zeroclaw/chat": {
+                "post": {
+                    "operationId": "zeroclaw.Chat",
+                    "responses": {
+                        "200": {
+                            "description": "ZeroClaw chat completion"
+                        }
+                    }
+                }
+            },
+            "/api/llm/chat": {
+                "post": {
+                    "operationId": "zeroclaw.Chat",
+                    "responses": {
+                        "200": {
+                            "description": "ZeroClaw chat completion"
+                        }
+                    }
+                }
+            }
+        }
+    })
+}
+
 /// Serve the combined schema for schema-driven UI rendering.
 ///
-/// Merges the antigravity bot's OpenAPI schema with the zeroclaw plugin
+/// Combines the locally-derived HTTP adapter document with the ZeroClaw plugin
 /// projection (providers, model_routes, tools, structured_output) so the
 /// frontend can render the entire chat interface from a single schema.
 /// GET /api/zeroclaw/schema
 pub async fn zeroclaw_schema_handler(Extension(state): Extension<Arc<AppState>>) -> Response {
-    // Fetch antigravity OpenAPI schema
-    let client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-    {
-        Ok(c) => c,
-        Err(e) => {
-            error!("Failed to build HTTP client: {}", e);
-            return json_error_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Failed to build HTTP client",
-            );
-        }
-    };
-
-    let openapi = match client
-        .get(format!("{}/openapi.json", antigravity_base()))
-        .send()
-        .await
-    {
-        Ok(resp) => match resp.json::<Value>().await {
-            Ok(v) => v,
-            Err(e) => {
-                error!("Failed to parse antigravity OpenAPI: {}", e);
-                json!({})
-            }
-        },
-        Err(e) => {
-            error!("Failed to fetch antigravity OpenAPI: {}", e);
-            json!({})
-        }
-    };
-
     // Prefer the D-Bus projection (live provider/model catalog), since the
     // sealed blob only carries the PluginSchema contract, not the live
     // `projection.providers` / `projection.model_routes`. Fall back to the SHM
@@ -334,6 +428,13 @@ pub async fn zeroclaw_schema_handler(Extension(state): Extension<Arc<AppState>>)
         .and_then(|p| p.get("providers"))
         .and_then(|v| v.as_array())
         .or_else(|| zeroclaw.get("providers").and_then(|v| v.as_array()))
+        .or_else(|| schema_field_default(&zeroclaw, "providers").and_then(|v| v.as_array()))
+        .or_else(|| {
+            zeroclaw_schema
+                .as_ref()
+                .and_then(|schema| schema_field_default(schema, "providers"))
+                .and_then(|v| v.as_array())
+        })
         .map(|arr| {
             arr.iter()
                 .filter_map(|p| p.get("id").and_then(|v| v.as_str()).map(String::from))
@@ -345,6 +446,13 @@ pub async fn zeroclaw_schema_handler(Extension(state): Extension<Arc<AppState>>)
         .and_then(|p| p.get("model_routes"))
         .and_then(|v| v.as_array())
         .or_else(|| zeroclaw.get("model_routes").and_then(|v| v.as_array()))
+        .or_else(|| schema_field_default(&zeroclaw, "model_routes").and_then(|v| v.as_array()))
+        .or_else(|| {
+            zeroclaw_schema
+                .as_ref()
+                .and_then(|schema| schema_field_default(schema, "model_routes"))
+                .and_then(|v| v.as_array())
+        })
         .map(|arr| {
             arr.iter()
                 .filter_map(|r| {
@@ -398,22 +506,40 @@ pub async fn zeroclaw_schema_handler(Extension(state): Extension<Arc<AppState>>)
         "required": ["message"]
     });
 
+    let structured_output = projection
+        .and_then(|p| p.get("structured_output"))
+        .cloned()
+        .or_else(|| zeroclaw.get("structured_output").cloned())
+        .or_else(|| schema_field_default(&zeroclaw, "structured_output").cloned())
+        .or_else(|| {
+            zeroclaw_schema
+                .as_ref()
+                .and_then(|schema| schema_field_default(schema, "structured_output"))
+                .cloned()
+        })
+        .unwrap_or(json!({}));
+    let tools = projection
+        .and_then(|p| p.get("tools"))
+        .cloned()
+        .or_else(|| zeroclaw.get("tools").cloned())
+        .or_else(|| schema_field_default(&zeroclaw, "tools").cloned())
+        .or_else(|| {
+            zeroclaw_schema
+                .as_ref()
+                .and_then(|schema| schema_field_default(schema, "tools"))
+                .cloned()
+        })
+        .unwrap_or(json!([]));
+
+    let openapi = compatibility_openapi(zeroclaw_schema.as_ref());
     let schema = json!({
         "openapi": openapi,
         "zeroclaw": {
             "plugin_state": zeroclaw,
             "schema": zeroclaw_schema,
             "chat_form_schema": chat_schema,
-            "structured_output": projection
-                .and_then(|p| p.get("structured_output"))
-                .cloned()
-                .or_else(|| zeroclaw.get("structured_output").cloned())
-                .unwrap_or(json!({})),
-            "tools": projection
-                .and_then(|p| p.get("tools"))
-                .cloned()
-                .or_else(|| zeroclaw.get("tools").cloned())
-                .unwrap_or(json!([])),
+            "structured_output": structured_output,
+            "tools": tools,
         }
     });
 
@@ -428,4 +554,36 @@ pub async fn zeroclaw_schema_handler(Extension(state): Extension<Arc<AppState>>)
                 "Failed to build schema response",
             )
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn schema_field_defaults_supply_boot_catalogs() {
+        let schema = json!({
+            "fields": {
+                "providers": {
+                    "default": [{"id": "factory"}]
+                },
+                "model_routes": {
+                    "default": [{"model": "auto"}]
+                }
+            }
+        });
+
+        assert_eq!(
+            schema_field_default(&schema, "providers")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(
+            schema_field_default(&schema, "model_routes")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+    }
 }

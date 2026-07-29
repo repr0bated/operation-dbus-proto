@@ -1,13 +1,15 @@
-//! Systemd plugin for service management
+//! Runit service definitions and lifecycle management.
 //!
 //! Schema-as-code: These types ARE the schema. Validation happens at parse time.
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tracing::info;
-use zbus::{Connection, Proxy};
+
+const RUNIT_SERVICE_DIR: &str = "/etc/runit/sv";
+const RUNIT_ACTIVE_DIR: &str = "/etc/runit/runsvdir/default";
 
 /// Service name - validated on construction
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -168,7 +170,7 @@ pub enum RestartCondition {
     OnFailure,
 }
 
-/// Log type for dinit
+/// Log type for a service.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum LogType {
@@ -249,15 +251,15 @@ pub struct ServiceDef {
 }
 
 impl ServiceDef {
-    /// Generate an s6 `run` script from the service definition.
+    /// Generate a runit `run` script from the service definition.
     ///
-    /// The resulting script follows the s6 convention:
+    /// The resulting script follows the runit convention:
     /// ```sh
     /// #!/bin/sh
     /// exec <command>
     /// ```
     /// Environment variables and working directory are set up before the exec.
-    pub fn to_s6_run(&self) -> String {
+    pub fn to_runit_run(&self) -> String {
         let mut out = String::new();
         out.push_str("#!/bin/sh\n");
 
@@ -266,7 +268,7 @@ impl ServiceDef {
             out.push_str(&format!("cd {} || exit 1\n", dir.display()));
         }
 
-        // User/group — s6 uses s6-setuidgid for privilege dropping
+        // Runit uses chpst for privilege dropping.
         if let Some(ref user) = self.user {
             let group_suffix = self
                 .group
@@ -274,7 +276,7 @@ impl ServiceDef {
                 .map(|g| format!(":{g}"))
                 .unwrap_or_default();
             out.push_str(&format!(
-                "exec s6-setuidgid {user}{group_suffix} {}\n",
+                "exec chpst -u {user}{group_suffix} {}\n",
                 self.exec_start.to_command_line()
             ));
         } else {
@@ -284,16 +286,16 @@ impl ServiceDef {
         out
     }
 
-    /// Write the s6 service definition to `/etc/s6/sv/<name>/run`.
+    /// Write and enable the runit definition at `/etc/runit/sv/<name>/run`.
     ///
     /// Creates the service directory if it does not exist and makes the run
     /// script executable (mode 0o755).
     pub fn install(&self) -> std::io::Result<()> {
-        let svc_dir = format!("/etc/s6/sv/{}", self.name);
+        let svc_dir = format!("{RUNIT_SERVICE_DIR}/{}", self.name);
         std::fs::create_dir_all(&svc_dir)?;
 
         let run_path = format!("{svc_dir}/run");
-        let content = self.to_s6_run();
+        let content = self.to_runit_run();
         std::fs::write(&run_path, &content)?;
 
         // Make the run script executable
@@ -303,11 +305,18 @@ impl ServiceDef {
             std::fs::set_permissions(&run_path, std::fs::Permissions::from_mode(0o755))?;
         }
 
+        let active_path = format!("{RUNIT_ACTIVE_DIR}/{}", self.name);
+        std::fs::create_dir_all(RUNIT_ACTIVE_DIR)?;
+        if !Path::new(&active_path).exists() {
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(&svc_dir, &active_path)?;
+        }
+
         Ok(())
     }
 }
 
-/// Current service state (from systemctl)
+/// Current runit service state.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceState {
     pub name: ServiceName,
@@ -346,24 +355,44 @@ pub struct DesiredState {
     pub enabled: Option<bool>,
 }
 
-/// Systemd plugin
+/// Runit lifecycle manager.
 #[derive(Debug, Clone, Default)]
-pub struct SystemdPlugin {
+pub struct RunitPlugin {
     pub services: Vec<ServiceName>,
 }
 
-impl SystemdPlugin {
+impl RunitPlugin {
     pub fn new() -> Self {
         Self::default()
     }
 
     pub async fn get_state(&self) -> Result<Vec<ServiceState>> {
         let names: Vec<&str> = if self.services.is_empty() {
-            vec!["dbus", "sshd"]
+            let mut names = Vec::new();
+            for entry in std::fs::read_dir(RUNIT_ACTIVE_DIR)
+                .with_context(|| format!("read {RUNIT_ACTIVE_DIR}"))?
+            {
+                let entry = entry?;
+                if let Some(name) = entry.file_name().to_str() {
+                    names.push(name.to_string());
+                }
+            }
+            names.sort();
+            return self.get_named_state(&names).await;
         } else {
             self.services.iter().map(|s| s.as_str()).collect()
         };
 
+        let mut states = Vec::new();
+        for name in names {
+            if let Ok(state) = self.get_service_status(name).await {
+                states.push(state);
+            }
+        }
+        Ok(states)
+    }
+
+    async fn get_named_state(&self, names: &[String]) -> Result<Vec<ServiceState>> {
         let mut states = Vec::new();
         for name in names {
             if let Ok(state) = self.get_service_status(name).await {
@@ -410,114 +439,114 @@ impl SystemdPlugin {
     }
 
     pub async fn get_service_status(&self, name: &str) -> Result<ServiceState> {
-        let conn = Connection::system()
+        let service = ServiceName::new(name)?;
+        let path = Path::new(RUNIT_ACTIVE_DIR).join(service.as_str());
+        if !path.exists() {
+            anyhow::bail!("runit service '{}' is not enabled", service);
+        }
+        let output = tokio::process::Command::new("sv")
+            .arg("status")
+            .arg(&path)
+            .output()
             .await
-            .context("Failed to connect to system D-Bus")?;
-        let proxy = Proxy::new(
-            &conn,
-            "org.freedesktop.systemd1",
-            "/org/freedesktop/systemd1",
-            "org.freedesktop.systemd1.Manager",
-        )
-        .await
-        .context("Failed to create systemd D-Bus proxy")?;
-
-        let unit_name = format!("{}.service", name);
-        let path: zbus::zvariant::OwnedObjectPath = proxy
-            .call("GetUnit", &(unit_name,))
-            .await
-            .context(format!("Failed to get unit path for {}", name))?;
-
-        let unit_proxy = Proxy::new(
-            &conn,
-            "org.freedesktop.systemd1",
-            path.as_str(),
-            "org.freedesktop.systemd1.Unit",
-        )
-        .await
-        .context("Failed to create unit D-Bus proxy")?;
-
-        let active: String = unit_proxy
-            .get_property("ActiveState")
-            .await
-            .unwrap_or_else(|_| "unknown".to_string());
-        let sub: String = unit_proxy
-            .get_property("SubState")
-            .await
-            .unwrap_or_else(|_| "unknown".to_string());
-        let load: String = unit_proxy
-            .get_property("LoadState")
-            .await
-            .unwrap_or_else(|_| "unknown".to_string());
-
-        let active_state = match active.as_str() {
-            "active" => ActiveState::Active,
-            "inactive" => ActiveState::Inactive,
-            "activating" => ActiveState::Activating,
-            "deactivating" => ActiveState::Deactivating,
-            "failed" => ActiveState::Failed,
-            "reloading" => ActiveState::Reloading,
-            _ => ActiveState::Inactive,
+            .with_context(|| format!("sv status {service}"))?;
+        let status = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let active_state = if status.starts_with("run:") {
+            ActiveState::Active
+        } else if status.starts_with("down:") {
+            ActiveState::Inactive
+        } else {
+            ActiveState::Failed
         };
 
         Ok(ServiceState {
-            name: ServiceName::new(name)?,
+            name: service,
             active_state,
-            sub_state: sub,
-            load_state: load,
+            sub_state: status,
+            load_state: "loaded".to_string(),
         })
     }
 
     async fn ctl(&self, name: &str, action: &str) -> Result<()> {
-        info!("systemd D-Bus {} {}", action, name);
-        let conn = Connection::system()
-            .await
-            .context("Failed to connect to system D-Bus")?;
-        let proxy = Proxy::new(
-            &conn,
-            "org.freedesktop.systemd1",
-            "/org/freedesktop/systemd1",
-            "org.freedesktop.systemd1.Manager",
-        )
-        .await
-        .context("Failed to create systemd D-Bus proxy")?;
+        let service = ServiceName::new(name)?;
+        let definition = Path::new(RUNIT_SERVICE_DIR).join(service.as_str());
+        let active = Path::new(RUNIT_ACTIVE_DIR).join(service.as_str());
 
-        let unit_name = format!("{}.service", name);
-
-        match action {
-            "start" => {
-                let _: zbus::zvariant::OwnedObjectPath = proxy
-                    .call("StartUnit", &(unit_name, "replace"))
-                    .await
-                    .context(format!("Failed to start {}", name))?;
+        if action == "enable" {
+            if !definition.exists() {
+                anyhow::bail!("runit service definition '{}' does not exist", service);
             }
-            "stop" => {
-                let _: zbus::zvariant::OwnedObjectPath = proxy
-                    .call("StopUnit", &(unit_name, "replace"))
-                    .await
-                    .context(format!("Failed to stop {}", name))?;
+            std::fs::create_dir_all(RUNIT_ACTIVE_DIR)?;
+            if !active.exists() {
+                #[cfg(unix)]
+                std::os::unix::fs::symlink(&definition, &active)?;
             }
-            "restart" => {
-                let _: zbus::zvariant::OwnedObjectPath = proxy
-                    .call("ReloadOrRestartUnit", &(unit_name, "replace"))
-                    .await
-                    .context(format!("Failed to restart {}", name))?;
-            }
-            "enable" => {
-                let _: (bool, Vec<(String, String, String)>) = proxy
-                    .call("EnableUnitFiles", &(vec![unit_name], false, true))
-                    .await
-                    .context(format!("Failed to enable {}", name))?;
-            }
-            "disable" => {
-                let _: (bool, Vec<(String, String)>) = proxy
-                    .call("DisableUnitFiles", &(vec![unit_name], false))
-                    .await
-                    .context(format!("Failed to disable {}", name))?;
-            }
-            other => anyhow::bail!("Unsupported systemd action: {}", other),
+            return Ok(());
         }
+        if action == "disable" {
+            if active.exists() {
+                std::fs::remove_file(&active)?;
+            }
+            return Ok(());
+        }
+        if !active.exists() {
+            anyhow::bail!("runit service '{}' is not enabled", service);
+        }
+        let sv_action = match action {
+            "start" => "start",
+            "stop" => "stop",
+            "restart" => "restart",
+            other => anyhow::bail!("unsupported runit action: {other}"),
+        };
 
+        info!("runit {} {}", sv_action, service);
+        let status = tokio::process::Command::new("sv")
+            .arg(sv_action)
+            .arg(&active)
+            .status()
+            .await
+            .with_context(|| format!("sv {sv_action} {service}"))?;
+        if !status.success() {
+            anyhow::bail!("sv {sv_action} {service} exited with {status}");
+        }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn service_with_user() -> ServiceDef {
+        ServiceDef {
+            name: ServiceName::new("op-example").unwrap(),
+            service_type: ServiceType::Simple,
+            exec_start: ExecCommand::new("/usr/local/bin/op-example", vec!["serve".to_string()])
+                .unwrap(),
+            exec_stop: None,
+            working_dir: Some(PathBuf::from("/var/lib/op-example")),
+            user: Some("op-example".to_string()),
+            group: Some("op-example".to_string()),
+            depends_on: vec![],
+            waits_for: vec![],
+            restart: RestartPolicy::default(),
+            environment: HashMap::new(),
+            env_file: None,
+            resources: None,
+            log_type: LogType::None,
+            ready_notification: ReadyNotification::None,
+            chain_to: None,
+            smooth_recovery: false,
+            enabled: true,
+        }
+    }
+
+    #[test]
+    fn generates_runit_run_script_with_chpst() {
+        let run = service_with_user().to_runit_run();
+        assert!(run.starts_with("#!/bin/sh\n"));
+        assert!(run.contains("cd /var/lib/op-example || exit 1"));
+        assert!(run.contains("exec chpst -u op-example:op-example /usr/local/bin/op-example serve"));
+        assert!(!run.contains("s6"));
     }
 }

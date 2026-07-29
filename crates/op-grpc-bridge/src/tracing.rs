@@ -1,6 +1,6 @@
 // 🟢 🛡️ Ghostbridge Trace Middleware
 // Stamps X-Ghostbridge-Footprint and X-Ghostbridge-Trace-ID on every HTTP/gRPC
-// response. Operates inside the zeroclaw Axum host (the HTTP/gRPC-Web side of
+// response. Operates inside the zeroclaw Axum host (the gRPC/gRPC-Web side of
 // The Shuttle). Mirrors the accountability loop enforced by the tonic
 // interceptor on the native-gRPC side.
 

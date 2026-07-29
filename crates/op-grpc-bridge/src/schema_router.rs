@@ -14,7 +14,7 @@
 //!
 //! The manifest hash is read, never re-computed. Consumers trust the manifest.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -49,7 +49,7 @@ pub struct PluginRoute {
     pub plugin_id: String,
     /// Canonical D-Bus object path: `/org/opdbus/v1/plugins/<plugin_id>`.
     pub dbus_path: String,
-    /// Canonical D-Bus destination (bus name): `org.opdbus.v1`.
+    /// Canonical D-Bus destination (bus name): `org.opdbus.v1.plugins`.
     pub dbus_destination: String,
     /// Canonical D-Bus interface: `org.opdbus.v1.PluginV1`.
     pub dbus_interface: String,
@@ -69,8 +69,6 @@ pub struct SchemaRouter {
     dbus_connection: Arc<tokio::sync::OnceCell<Connection>>,
     /// Catalog path: blob-catalog dir in production (default [`BLOB_CATALOG_DIR`]), or a monolith file in tests.
     monolith_path: PathBuf,
-    /// Present-state directory used to derive read-only child objects.
-    state_dir: PathBuf,
     /// Producer manifest path (default [`MANIFEST_PATH`]).
     manifest_path: PathBuf,
     /// Last-seen `catalog_hash` read from the manifest. Compared on each
@@ -80,13 +78,6 @@ pub struct SchemaRouter {
     /// The MutationEngine used for real method dispatch (Requirement 5).
     /// `None` in unit tests that do not exercise the dispatch path.
     engine: Option<Arc<MutationEngine>>,
-    /// Optional projection hook invoked after object registration to publish
-    /// the read-only Zeroclaw route/provider sub-object tree (Phase 1b). Push
-    /// only — invoked from the registration cycle, never on a timer.
-    // projection_hook disabled until schemars version mismatch is resolved
-    projection_hook: Option<Arc<dyn std::any::Any + Send + Sync>>,
-    /// Child object paths currently registered by this router.
-    child_objects: Arc<RwLock<HashSet<String>>>,
 }
 
 impl SchemaRouter {
@@ -130,7 +121,7 @@ impl SchemaRouter {
     pub fn with_paths(
         dbus_connection: Arc<tokio::sync::OnceCell<Connection>>,
         monolith_path: PathBuf,
-        state_dir: PathBuf,
+        _state_dir: PathBuf,
         manifest_path: PathBuf,
     ) -> Self {
         let routes = Self::load_routes_from(&monolith_path);
@@ -143,19 +134,10 @@ impl SchemaRouter {
             routes: Arc::new(RwLock::new(routes)),
             dbus_connection,
             monolith_path,
-            state_dir,
             manifest_path,
             cached_hash: Arc::new(RwLock::new(cached_hash)),
             engine: None,
-            projection_hook: None,
-            child_objects: Arc::new(RwLock::new(HashSet::new())),
         }
-    }
-
-    /// Register a projection hook that publishes the read-only Zeroclaw
-    /// route/provider sub-object tree after each object-registration cycle.
-    pub fn set_projection_hook(&mut self, hook: Arc<dyn std::any::Any + Send + Sync>) {
-        self.projection_hook = Some(hook);
     }
 
     /// Register D-Bus objects for all plugins in the catalog.
@@ -182,73 +164,6 @@ impl SchemaRouter {
                 debug!(plugin_id, path, error = %e, "Failed to register D-Bus object (likely already registered)");
             }
         }
-        drop(routes);
-
-        self.sync_child_objects().await?;
-        Ok(())
-    }
-
-    /// Register read-only child objects for every plugin from present-state.
-    ///
-    /// Child paths are derived from nested objects/arrays in
-    /// `/dev/shm/opdbus/state/<plugin>.json`. The router stores only mounted
-    /// paths for lifecycle; every child property read re-reads SHM directly.
-    async fn sync_child_objects(&self) -> anyhow::Result<()> {
-        let conn = self
-            .dbus_connection
-            .get()
-            .ok_or_else(|| anyhow::anyhow!("D-Bus connection not initialized"))?;
-
-        let routes = self.routes.read().await;
-        let desired = routes
-            .iter()
-            .flat_map(|(plugin_id, route)| {
-                derive_child_paths(plugin_id, &self.state_dir, &route.properties)
-                    .into_iter()
-                    .map(|segments| {
-                        (
-                            build_child_path(plugin_id, &segments),
-                            plugin_id.clone(),
-                            segments,
-                        )
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
-        drop(routes);
-
-        let desired_paths = desired
-            .iter()
-            .map(|(path, _, _)| path.clone())
-            .collect::<HashSet<_>>();
-
-        let mut current = self.child_objects.write().await;
-        for stale in current
-            .iter()
-            .filter(|path| !desired_paths.contains(*path))
-            .cloned()
-            .collect::<Vec<_>>()
-        {
-            conn.object_server()
-                .remove::<SchemaChildInterface, _>(stale.as_str())
-                .await?;
-            current.remove(&stale);
-            debug!(
-                path = stale,
-                "unregistered stale schema-derived child object"
-            );
-        }
-
-        for (path, plugin_id, segments) in desired {
-            if current.contains(&path) {
-                continue;
-            }
-            let child = SchemaChildInterface::new(plugin_id, segments, self.state_dir.clone());
-            conn.object_server().at(path.as_str(), child).await?;
-            current.insert(path.clone());
-            debug!(path, "registered schema-derived child object");
-        }
-
         Ok(())
     }
 
@@ -595,207 +510,6 @@ impl SchemaRouter {
 
 /// Default SHM state directory: `/dev/shm/opdbus/state`.
 const DEFAULT_SHM_STATE_DIR: &str = "/dev/shm/opdbus/state";
-
-fn derive_child_paths(
-    plugin_id: &str,
-    state_dir: &Path,
-    schema_fields: &HashMap<String, JsonValue>,
-) -> Vec<Vec<String>> {
-    let state = read_plugin_state(plugin_id, state_dir);
-    let root = state.get("data").unwrap_or(&state);
-    let mut paths = Vec::new();
-    derive_child_paths_recursive(root, schema_fields, &mut Vec::new(), &mut paths);
-    paths
-}
-
-fn derive_child_paths_recursive(
-    state: &JsonValue,
-    schema_fields: &HashMap<String, JsonValue>,
-    current: &mut Vec<String>,
-    paths: &mut Vec<Vec<String>>,
-) {
-    let Some(state_obj) = state.as_object() else {
-        return;
-    };
-
-    for (field_name, field_schema) in schema_fields {
-        if field_name.starts_with('_') {
-            continue;
-        }
-        let Some(child) = state_obj.get(field_name) else {
-            continue;
-        };
-
-        if let Some(nested_fields) = schema_object_fields(field_schema) {
-            if child.is_object() {
-                current.push(path_element(field_name));
-                paths.push(current.clone());
-                derive_child_paths_recursive(child, &nested_fields, current, paths);
-                current.pop();
-            }
-            continue;
-        }
-
-        if let Some(item_fields) = schema_array_item_fields(field_schema) {
-            let Some(items) = child.as_array() else {
-                continue;
-            };
-            current.push(path_element(field_name));
-            paths.push(current.clone());
-            for (index, item) in items.iter().enumerate() {
-                if item.is_object() {
-                    let segment = ["id", "name", "label", "key", "path", "domain", "host"]
-                        .iter()
-                        .find_map(|field| item.get(*field).and_then(JsonValue::as_str))
-                        .map(path_element)
-                        .unwrap_or_else(|| index.to_string());
-                    current.push(segment);
-                    paths.push(current.clone());
-                    derive_child_paths_recursive(item, &item_fields, current, paths);
-                    current.pop();
-                }
-            }
-            current.pop();
-        }
-    }
-}
-
-fn schema_object_fields(field_schema: &JsonValue) -> Option<HashMap<String, JsonValue>> {
-    field_schema
-        .get("field_type")?
-        .get("object")?
-        .as_object()
-        .map(|fields| {
-            fields
-                .iter()
-                .map(|(name, schema)| (name.clone(), schema.clone()))
-                .collect()
-        })
-}
-
-fn schema_array_item_fields(field_schema: &JsonValue) -> Option<HashMap<String, JsonValue>> {
-    field_schema
-        .get("field_type")?
-        .get("array")?
-        .get("object")?
-        .as_object()
-        .map(|fields| {
-            fields
-                .iter()
-                .map(|(name, schema)| (name.clone(), schema.clone()))
-                .collect()
-        })
-}
-
-fn build_child_path(plugin_id: &str, segments: &[String]) -> String {
-    let mut path = canonical::plugin_path(plugin_id);
-    for segment in segments {
-        path.push('/');
-        path.push_str(&path_element(segment));
-    }
-    path
-}
-
-fn path_element(value: &str) -> String {
-    let mut out = value
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>();
-    if out.is_empty() {
-        out.push('_');
-    }
-    if out
-        .chars()
-        .next()
-        .map(|c| c.is_ascii_digit())
-        .unwrap_or(false)
-    {
-        out.insert(0, '_');
-    }
-    out
-}
-
-fn read_plugin_state(plugin_id: &str, state_dir: &Path) -> JsonValue {
-    let path = state_dir.join(format!("{plugin_id}.json"));
-    match std::fs::read_to_string(path) {
-        Ok(text) => {
-            serde_json::from_str(&text).unwrap_or(JsonValue::Object(serde_json::Map::new()))
-        }
-        Err(_) => JsonValue::Object(serde_json::Map::new()),
-    }
-}
-
-fn value_at_segments<'a>(value: &'a JsonValue, segments: &[String]) -> Option<&'a JsonValue> {
-    let mut current = value.get("data").unwrap_or(value);
-    for segment in segments {
-        current = match current {
-            JsonValue::Object(map) => map.get(segment).or_else(|| {
-                map.iter()
-                    .find(|(key, _)| path_element(key) == *segment)
-                    .map(|(_, value)| value)
-            })?,
-            JsonValue::Array(items) => items
-                .iter()
-                .find(|item| {
-                    ["id", "name", "label", "key", "path", "domain", "host"]
-                        .iter()
-                        .find_map(|field| item.get(*field).and_then(JsonValue::as_str))
-                        .map(path_element)
-                        .as_deref()
-                        == Some(segment.as_str())
-                })
-                .or_else(|| segment.parse::<usize>().ok().and_then(|idx| items.get(idx)))?,
-            _ => return None,
-        };
-    }
-    Some(current)
-}
-
-/// Read-only D-Bus object for a schema-derived child path.
-pub struct SchemaChildInterface {
-    plugin_id: String,
-    path_segments: Vec<String>,
-    shm_state_dir: PathBuf,
-}
-
-impl SchemaChildInterface {
-    fn new(plugin_id: String, path_segments: Vec<String>, shm_state_dir: PathBuf) -> Self {
-        Self {
-            plugin_id,
-            path_segments,
-            shm_state_dir,
-        }
-    }
-
-    fn read_child_state(&self) -> JsonValue {
-        let state = read_plugin_state(&self.plugin_id, &self.shm_state_dir);
-        value_at_segments(&state, &self.path_segments)
-            .cloned()
-            .unwrap_or(JsonValue::Object(serde_json::Map::new()))
-    }
-}
-
-#[zbus::interface(name = "org.opdbus.v1.PluginChildV1")]
-impl SchemaChildInterface {
-    /// Get a property from this child object's current SHM state.
-    async fn get_property(&self, name: String) -> zbus::fdo::Result<String> {
-        let state = self.read_child_state();
-        let value = state.get(&name).unwrap_or(&JsonValue::Null);
-        serde_json::to_string(value).map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
-    }
-
-    /// Get all properties for this child object from current SHM state.
-    async fn get_all_properties(&self) -> zbus::fdo::Result<String> {
-        let state = self.read_child_state();
-        serde_json::to_string(&state).map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
-    }
-}
 
 /// A generic D-Bus interface backed by a plugin schema.
 ///
@@ -1412,102 +1126,6 @@ mod tests {
             result.is_err(),
             "set_property should be rejected — present-state is managed by producer via SHM"
         );
-
-        cleanup(&state_dir);
-    }
-
-    #[test]
-    fn should_derive_child_paths_from_schemars_schema_and_present_state() {
-        #[derive(serde::Serialize, schemars::JsonSchema)]
-        struct GeneratedChild {
-            id: String,
-            enabled: bool,
-        }
-
-        #[derive(serde::Serialize, schemars::JsonSchema)]
-        struct GeneratedGroup {
-            label: String,
-            children: Vec<GeneratedChild>,
-        }
-
-        #[derive(serde::Serialize, schemars::JsonSchema)]
-        struct GeneratedState {
-            status: String,
-            group: GeneratedGroup,
-            providers: Vec<GeneratedChild>,
-        }
-
-        let state_dir = test_state_dir();
-        let root = serde_json::to_value(schemars::schema_for!(GeneratedState)).unwrap();
-        let schema = op_plugins::state_plugins::schemars_adapter::plugin_schema_from_json(
-            "generated",
-            "1.0.0",
-            "test generated schema",
-            &root,
-        );
-        let schema_json = serde_json::to_value(&schema).unwrap();
-        let live_schema_path = state_dir.join("live-schema.json");
-        fs::write(
-            &live_schema_path,
-            serde_json::to_vec_pretty(&json!({ "generated": [schema_json] })).unwrap(),
-        )
-        .expect("write live schema catalog");
-        let routes = SchemaRouter::load_routes_from(&live_schema_path);
-        let route = routes
-            .get("generated")
-            .expect("route generated from live schema catalog");
-        let state_json = serde_json::to_value(GeneratedState {
-            status: "active".to_string(),
-            group: GeneratedGroup {
-                label: "primary".to_string(),
-                children: vec![GeneratedChild {
-                    id: "nested child".to_string(),
-                    enabled: true,
-                }],
-            },
-            providers: vec![GeneratedChild {
-                id: "openrouter".to_string(),
-                enabled: true,
-            }],
-        })
-        .unwrap();
-        fs::write(
-            state_dir.join("generated.json"),
-            serde_json::to_vec_pretty(&state_json).unwrap(),
-        )
-        .expect("write state file");
-
-        let paths = derive_child_paths("generated", &state_dir, &route.properties);
-
-        for (field_name, field_schema) in &route.properties {
-            let Some(state_value) = state_json.get(field_name) else {
-                continue;
-            };
-            if schema_object_fields(field_schema).is_some() && state_value.is_object() {
-                assert!(
-                    paths.contains(&vec![path_element(field_name)]),
-                    "object field '{field_name}' should produce a child path"
-                );
-            }
-            if schema_array_item_fields(field_schema).is_some() && state_value.is_array() {
-                let field_segment = path_element(field_name);
-                assert!(
-                    paths.contains(&vec![field_segment.clone()]),
-                    "array field '{field_name}' should produce a collection child path"
-                );
-                if let Some(first_item) = state_value.as_array().and_then(|items| items.first()) {
-                    let segment = ["id", "name", "label", "key", "path", "domain", "host"]
-                        .iter()
-                        .find_map(|field| first_item.get(*field).and_then(JsonValue::as_str))
-                        .map(path_element)
-                        .unwrap_or_else(|| "0".to_string());
-                    assert!(
-                        paths.contains(&vec![field_segment, segment]),
-                        "array field '{field_name}' should produce item child paths"
-                    );
-                }
-            }
-        }
 
         cleanup(&state_dir);
     }

@@ -38,6 +38,15 @@ pub struct RemoteEndpoint {
     pub request_timeout: Duration,
 }
 
+/// Caller-supplied Ghostbridge identity forwarded by an HTTP compatibility
+/// adapter into the canonical gRPC method call.
+#[derive(Debug, Clone)]
+pub struct GhostbridgeCallMetadata {
+    pub footprint: String,
+    pub trace_id: Option<String>,
+    pub wireguard_pubkey: Option<String>,
+}
+
 impl Default for RemoteEndpoint {
     fn default() -> Self {
         Self {
@@ -323,6 +332,68 @@ impl RemoteOperationClient {
         }
     }
 
+    /// Call a method while preserving the Ghostbridge identity supplied by an
+    /// outer transport adapter. This keeps HTTP on op-web while capability
+    /// enforcement remains in the bridge's canonical gRPC method pipeline.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn call_method_with_metadata(
+        &self,
+        plugin_id: &str,
+        object_path: &str,
+        interface_name: &str,
+        method_name: &str,
+        arguments: Vec<simd_json::OwnedValue>,
+        actor_id: &str,
+        capability_id: &str,
+        identity: &GhostbridgeCallMetadata,
+    ) -> Result<simd_json::OwnedValue, GrpcClientError> {
+        let mut client = self
+            .pool
+            .plugin_service_client(&self.default_address)
+            .await?;
+
+        let arguments = arguments
+            .iter()
+            .map(simd_to_prost_value)
+            .collect::<Vec<_>>();
+
+        let mut request = Request::new(CallMethodRequest {
+            plugin_id: plugin_id.to_string(),
+            object_path: object_path.to_string(),
+            interface_name: interface_name.to_string(),
+            method_name: method_name.to_string(),
+            arguments,
+            actor_id: actor_id.to_string(),
+            capability_id: capability_id.to_string(),
+        });
+        attach_supplied_ghostbridge_metadata(&mut request, identity)?;
+
+        let response = client
+            .call_method(request)
+            .await
+            .map_err(|e| GrpcClientError::RequestFailed(e.to_string()))?;
+
+        let resp = response.into_inner();
+        if !resp.success {
+            if let Some(err) = resp.error {
+                return Err(GrpcClientError::RemoteError {
+                    code: format!("{}", err.code),
+                    message: err.message,
+                });
+            }
+            return Err(GrpcClientError::RemoteError {
+                code: "UNKNOWN".to_string(),
+                message: "call failed".to_string(),
+            });
+        }
+
+        if let Some(result) = resp.result {
+            Ok(prost_value_to_simd(&result))
+        } else {
+            Ok(simd_json::json!(null))
+        }
+    }
+
     /// Subscribe to state updates from a remote endpoint
     pub async fn subscribe(
         &self,
@@ -494,6 +565,36 @@ fn attach_ghostbridge_metadata<T>(request: &mut Request<T>) -> Result<(), GrpcCl
             .map_err(|e| GrpcClientError::RequestFailed(format!("Invalid trace metadata: {e}")))?,
     );
 
+    Ok(())
+}
+
+fn attach_supplied_ghostbridge_metadata<T>(
+    request: &mut Request<T>,
+    identity: &GhostbridgeCallMetadata,
+) -> Result<(), GrpcClientError> {
+    let metadata = request.metadata_mut();
+    metadata.insert(
+        "x-ghostbridge-footprint",
+        MetadataValue::try_from(identity.footprint.as_str()).map_err(|e| {
+            GrpcClientError::RequestFailed(format!("Invalid footprint metadata: {e}"))
+        })?,
+    );
+    if let Some(trace_id) = identity.trace_id.as_deref() {
+        metadata.insert(
+            "x-ghostbridge-trace-id",
+            MetadataValue::try_from(trace_id).map_err(|e| {
+                GrpcClientError::RequestFailed(format!("Invalid trace metadata: {e}"))
+            })?,
+        );
+    }
+    if let Some(pubkey) = identity.wireguard_pubkey.as_deref() {
+        metadata.insert(
+            "x-wireguard-pubkey",
+            MetadataValue::try_from(pubkey).map_err(|e| {
+                GrpcClientError::RequestFailed(format!("Invalid WireGuard metadata: {e}"))
+            })?,
+        );
+    }
     Ok(())
 }
 

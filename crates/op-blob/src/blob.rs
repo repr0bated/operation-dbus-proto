@@ -202,7 +202,7 @@ pub fn blobify_canonical(
         dbus: DbusIdentity {
             bus_name: "org.opdbus.v1.plugins".to_string(),
             object_path: format!("/org/opdbus/v1/plugins/{plugin_id}"),
-            interface_name: "org.opdbus.v1.Plugin".to_string(),
+            interface_name: "org.opdbus.v1.PluginV1".to_string(),
         },
         grpc: GrpcIdentity { services, files },
         identity,

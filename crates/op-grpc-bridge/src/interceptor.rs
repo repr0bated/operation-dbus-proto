@@ -113,18 +113,6 @@ impl tonic::service::Interceptor for GhostbridgeInterceptor {
 
 #[allow(clippy::result_large_err)]
 pub fn ghostbridge_interceptor(mut req: Request<()>) -> Result<Request<()>, Status> {
-    // TEMPORARY TEST BYPASS — 2026-07-23, requested for a short (5-10 min)
-    // Lovable UI connectivity test. MUST be reverted (unset the env var or
-    // delete this block) once the test is done; this defeats the Absolute
-    // Base check for every service on this interceptor while set.
-    if std::env::var("GHOSTBRIDGE_BYPASS_FOR_TESTING").is_ok() {
-        req.extensions_mut().insert(GhostbridgeIdentity {
-            footprint: "bypass-for-testing".to_string(),
-            session_id: "bypass-for-testing".to_string(),
-        });
-        return Ok(req);
-    }
-
     // 1. Extract the Xray-injected Identity Headers (The Accountability Loop)
     //    Clone header values upfront to release the immutable borrow on `req`,
     //    allowing the mutable `extensions_mut()` call downstream.
