@@ -223,17 +223,22 @@ async fn main() -> Result<()> {
         }
 
         ServerMode::Cognitive => {
-            // Fan-in proxy: one authenticated caller fronting op-grpc-bridge,
-            // merged with local op-tools builtins. This is the "one socket, all
-            // tools" mode — cognitive tools go through the bridge enforcement chain,
+            // One socket, all tools, no indirection. Tools are exposed directly via
+            // MCP tools/list and tools/call — no meta-tool wrapper, no extra round
+            // trips. Cognitive tools go through the bridge enforcement chain;
             // op-tools builtins execute locally.
             let executor: Arc<dyn ToolExecutor> =
                 Arc::new(op_mcp::cognitive_bridge::MergedToolExecutor::connect().await?);
             let tool_count = executor.list_tools().await.map(|t| t.len()).unwrap_or(0);
-            let server = Arc::new(CompactServer::new(executor));
+            let config = McpServerConfig {
+                name: cli.name.or(Some("op-cognitive-merged".to_string())),
+                compact_mode: false,
+                ..Default::default()
+            };
+            let server = Arc::new(McpServer::with_executor(config, executor));
             info!(
                 tools = tool_count,
-                "Merged MCP server initialized (cognitive via bridge + op-tools local)"
+                "Merged MCP server initialized — direct tool exposure (cognitive + op-tools)"
             );
 
             run_transports(
