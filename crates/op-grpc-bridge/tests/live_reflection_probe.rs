@@ -1,4 +1,4 @@
-//! Live reflection probe: assert frozen per-method descriptors are *activated*.
+//! Live probe: distinguish frozen per-method descriptors being *advertised* from *served*.
 //!
 //! Sealing a plugin's descriptors into the SHM blob and hydrating the reflection
 //! catalog only makes them **discoverable**. Mounting them as callable typed gRPC
@@ -17,7 +17,7 @@
 
 #[tokio::test]
 #[ignore = "requires a running bridge on 127.0.0.1:50051"]
-async fn cognitive_mcp_per_method_services_are_mounted() {
+async fn cognitive_mcp_per_method_services_are_advertised() {
     use tonic_reflection::pb::v1::{
         server_reflection_client::ServerReflectionClient,
         server_reflection_request::MessageRequest,
@@ -77,6 +77,48 @@ async fn cognitive_mcp_per_method_services_are_mounted() {
         names
             .iter()
             .any(|n| n == "operation.method.cognitive_mcp.invoke_tool.InvokeToolService"),
-        "invoke_tool's typed service is not mounted; found: {cognitive:?}"
+        "invoke_tool's typed service is not advertised; found: {cognitive:?}"
+    );
+}
+
+/// The per-method services are advertised but **not served**.
+///
+/// `freeze_plugin_method_reflection` generates each method's frozen descriptor and
+/// registers it with the reflection registry, which is what the test above checks.
+/// It does not mount a handler: `build_operation_routes` mounts a fixed set of 12
+/// services, and `plugin_grpc_gen` only produces descriptors — there is no dynamic
+/// tonic service matching `/operation.method.<plugin>.<method>.<Svc>/<Rpc>`.
+///
+/// Measured: a call to `InvokeToolService/InvokeTool` returns `grpc-status: 12`
+/// (UNIMPLEMENTED) on both `:50051` and tonic-web `:8090` — identical to a service
+/// name that does not exist at all.
+///
+/// Until a dynamic dispatch handler exists, gRPC/gRPC-Web clients cannot reach the
+/// cognitive surface; only the D-Bus path (`PluginV1.Call` with `invoke_tool`) works.
+/// Un-ignore this test when that handler lands.
+#[tokio::test]
+#[ignore = "known gap: per-method services are advertised in reflection but no handler is mounted"]
+async fn cognitive_mcp_per_method_services_are_callable() {
+    let body: &[u8] = &[0u8, 0, 0, 0, 0]; // empty gRPC-Web frame
+    let client = reqwest::Client::new();
+    let resp = client
+        .post("http://127.0.0.1:8090/operation.method.cognitive_mcp.invoke_tool.InvokeToolService/InvokeTool")
+        .header("Content-Type", "application/grpc-web+proto")
+        .body(body.to_vec())
+        .send()
+        .await
+        .expect("post to tonic-web :8090");
+
+    let status = resp
+        .headers()
+        .get("grpc-status")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("<absent>")
+        .to_string();
+
+    assert_ne!(
+        status, "12",
+        "InvokeToolService returned UNIMPLEMENTED — advertised in reflection but no \
+         handler is mounted to serve it"
     );
 }
