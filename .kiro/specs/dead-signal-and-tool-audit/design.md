@@ -121,18 +121,41 @@ blockchain/voyage pipeline.
 
 ---
 
+## Critical Gap — Btrfs Seed Volume
+
+**The seed volume at `/var/lib/opdbus/snapshots/latest` does not exist on the live host.**
+
+The projection-removal spec (Task 0.4, "Verify Snapshot Code Reachability") claimed to
+have proven this path survives mutation_engine deletion. But no actual evidence was
+presented — only an assumption that "op-blockchain is called, so the snapshot must be
+working."
+
+**Why this matters**: REQ-3 of the projection spec requires cold-start hydration from a
+single Btrfs snapshot. If this volume is never written, cold-start initializes as empty
+forever — a silent regression that violates REQ-3.1.
+
+**What's missing**: Investigation of whether:
+1. The snapshot rotation code in op-blockchain ever fires
+2. `StreamingBlockchain` is called with the right base path (`/var/lib/opdbus/snapshots/`)
+3. The rotation is happening but the path is different than expected
+4. The code is there but the conditions to trigger it are never met
+
+**Action**: This must be investigated and either **fixed** (wire up the snapshot rotation)
+or **removed** (delete the cold-start hydration code from the spec, accept that cold-start
+is always empty). Do NOT leave it hanging as "probably working" after the deployment.
+
+---
+
 ## Open Questions (Not in Scope of This Audit)
 
 1. **Should the `Updated` signal have a real subscriber?** (No — using it would duplicate
    the already-working gRPC reactivity path. It's correct as infrastructure waiting for a
-   D-Bus-native consumer.)
+   D-Bus-native consumer.) ✅ **Resolved: signal is correct, no change needed.**
 
 2. **Should the dead `ProjectionEngine` branch and `PluginProjectionTool` code be removed?**
-   (Tentatively yes, but only if no other tool-discovery mechanism depends on them. Requires
-   verification of MCP tool exposure in `compact_mcp.rs` and `cognitive_mcp.rs` first.)
+   ✅ **Resolved: yes, deleted in commit 900e7e66. No dependencies found.**
 
-3. **What is `/var/lib/opdbus/snapshots/latest` and when is it written?** (Out of scope for
-   this audit. Related to blockchain/voyage, not state-tree reactivity.)
+3. **Is the Btrfs seed volume actually being written?** ⚠️ **OPEN — critical, time-sensitive.**
 
 ---
 
