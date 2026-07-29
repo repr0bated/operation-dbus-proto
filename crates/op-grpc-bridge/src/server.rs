@@ -238,8 +238,10 @@ pub fn build_axum_app(loader: Arc<SchemaLoader>, server: OperationGrpcServer) ->
             "grpc-status-details-bin".parse().unwrap(),
         ]);
 
+    let mutation_engine = server.mutation_engine();
     build_routes(loader, server)
         .into_axum_router()
+        .merge(crate::chat_service::rest_router(mutation_engine))
         .layer(cors)
         .layer(GhostbridgeTraceLayer::new())
 }
@@ -429,14 +431,10 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
         let bind_addr: SocketAddr = bind_addr_str.parse()?;
         let listener = std::net::TcpListener::bind(bind_addr)?;
         listener.set_nonblocking(true)?;
-        let incoming = tokio_stream::wrappers::TcpListenerStream::new(
-            tokio::net::TcpListener::from_std(listener)?,
-        );
+        let listener = tokio::net::TcpListener::from_std(listener)?;
         info!(addr = %bind_addr, "zeroclaw HTTP/gRPC-Web listening on TCP");
-        let server = tonic::transport::Server::builder()
-            .accept_http1(true)
-            .add_routes(build_tonic_routes(loader.clone(), operation_server.clone()))
-            .serve_with_incoming(incoming);
+        let app = build_axum_app(loader.clone(), operation_server.clone());
+        let server = axum::serve(listener, app.into_make_service());
         tcp_tasks.push(tokio::spawn(async move { server.await }));
     }
 

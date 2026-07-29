@@ -11,6 +11,7 @@
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use op_identity::{read_sled, IdentitySled};
 use reqwest::Client;
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
@@ -70,8 +71,28 @@ impl OpenClawProvider {
         }
     }
 
+    fn ghostbridge_identity_headers(sled: &IdentitySled) -> Option<(String, String)> {
+        sled.is_sled_valid()
+            .then(|| (hex::encode(sled.hashed_footprint), sled.trace_id_hex()))
+    }
+
     fn api_request(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-        builder.header("Content-Type", "application/json")
+        let builder = builder.header("Content-Type", "application/json");
+        let Ok((sled_ptr, sled_mmap)) = read_sled() else {
+            return builder;
+        };
+
+        // The mmap remains alive while the fixed-size identity fields are copied.
+        let sled = unsafe { &*sled_ptr };
+        let headers = Self::ghostbridge_identity_headers(sled);
+        drop(sled_mmap);
+
+        match headers {
+            Some((footprint, trace_id)) => builder
+                .header("x-ghostbridge-footprint", footprint)
+                .header("x-ghostbridge-trace-id", trace_id),
+            None => builder,
+        }
     }
 
     fn fallback_model_info(&self) -> ModelInfo {
@@ -483,6 +504,22 @@ mod tests {
         assert_eq!(models.len(), 1);
         assert_eq!(models[0].id, "openclaw:main");
         assert!(models[0].tags.iter().any(|tag| tag == "openclaw"));
+    }
+
+    #[test]
+    fn derives_ghostbridge_headers_only_from_a_valid_identity_sled() {
+        assert!(OpenClawProvider::ghostbridge_identity_headers(&IdentitySled::default()).is_none());
+
+        let sled = IdentitySled {
+            hashed_footprint: [0xab; 32],
+            trace_id: [0xcd; 16],
+            ..IdentitySled::default()
+        };
+        let (footprint, trace_id) =
+            OpenClawProvider::ghostbridge_identity_headers(&sled).expect("sled should be valid");
+
+        assert_eq!(footprint, "ab".repeat(32));
+        assert_eq!(trace_id, "cd".repeat(16));
     }
 
     #[tokio::test]

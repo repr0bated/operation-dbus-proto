@@ -13,7 +13,7 @@
 //!
 //! All plugins must use canonical D-Bus paths:
 //! - Path: `/org/opdbus/v1/plugins/{name}`
-//! - Interface: `org.opdbus.v1.Plugin.Plugins.{Name}`
+//! - Interface: `org.opdbus.v1.PluginV1`
 //!
 //! Legacy paths are deprecated and will be rejected.
 
@@ -585,5 +585,4 @@ mod tests {
             errors.join("\n")
         );
     }
-
 }

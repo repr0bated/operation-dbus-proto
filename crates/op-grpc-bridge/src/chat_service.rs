@@ -13,18 +13,42 @@
 //! - The agent loop is bounded (≥50 steps) and cancellable.
 
 use std::pin::Pin;
+use std::str::FromStr;
 use std::sync::Arc;
 
+use anyhow::{anyhow, Context};
+use axum::extract::State;
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::{IntoResponse, Response as AxumResponse};
+use axum::routing::{get, post};
+use axum::{Json, Router};
+use op_llm::chat::ChatManager;
+use op_llm::ProviderType;
+use op_plugins::state_plugins::zeroclaw::{
+    ChatInput, ChatOutput, ListModelsOutput, ZeroclawChatMessage, ZeroclawState,
+};
+use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status};
 use tracing::{info, warn};
 
+use crate::interceptor::GhostbridgeIdentity;
+use crate::mutation_engine::MutationEngine;
 use crate::proto::chat::{
     chat_frame, chat_service_server::ChatService, ApproveRequest, ApproveResponse, CancelRequest,
-    CancelResponse, ChatFrame, Heartbeat, SendRequest, StreamDone, UiMessagePart,
+    CancelResponse, ChatFrame, Heartbeat, SendRequest, StreamDone, StreamError, UiMessagePart,
 };
+
+#[derive(Clone, Debug)]
+struct ResolvedExecutionRoute {
+    provider: ProviderType,
+    provider_id: String,
+    model: String,
+    declared_available: bool,
+    status_reason: String,
+}
 
 /// Shared state for the ChatService.
 pub struct ChatServiceImpl {
@@ -32,24 +56,504 @@ pub struct ChatServiceImpl {
     cancellations: Arc<Mutex<std::collections::HashMap<String, tokio::sync::watch::Sender<bool>>>>,
     /// Pending approvals: tool_call_id -> oneshot sender.
     approvals: Arc<Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<bool>>>>,
+    /// The sole schema method/event-chain authority.
+    engine: Arc<MutationEngine>,
 }
 
 impl ChatServiceImpl {
-    pub fn new() -> Self {
+    pub fn new(engine: Arc<MutationEngine>) -> Self {
         Self {
             cancellations: Arc::new(Mutex::new(Default::default())),
             approvals: Arc::new(Mutex::new(Default::default())),
+            engine,
         }
     }
 }
 
-impl Default for ChatServiceImpl {
-    fn default() -> Self {
-        Self::new()
+type ChatStream = Pin<Box<dyn Stream<Item = Result<ChatFrame, Status>> + Send + 'static>>;
+
+fn provider_names(state: &ZeroclawState, requested: &str) -> Option<Vec<String>> {
+    let requested = requested.trim();
+    state
+        .projection
+        .providers
+        .iter()
+        .find(|provider| {
+            provider.id.eq_ignore_ascii_case(requested)
+                || provider.route.eq_ignore_ascii_case(requested)
+                || provider
+                    .aliases
+                    .iter()
+                    .any(|alias| alias.eq_ignore_ascii_case(requested))
+        })
+        .map(|provider| {
+            let mut names = vec![provider.id.clone(), provider.route.clone()];
+            names.extend(provider.aliases.clone());
+            names
+        })
+}
+
+fn names_contain(names: &[String], candidate: &str) -> bool {
+    names
+        .iter()
+        .any(|name| name.eq_ignore_ascii_case(candidate))
+}
+
+fn provider_type_for(state: &ZeroclawState, provider_id: &str) -> anyhow::Result<ProviderType> {
+    let names = provider_names(state, provider_id)
+        .ok_or_else(|| anyhow!("provider '{provider_id}' is not declared by ZeroClaw"))?;
+    names
+        .iter()
+        .find_map(|name| ProviderType::from_str(name).ok())
+        .ok_or_else(|| {
+            anyhow!(
+                "provider '{}' is declared but has no op-llm runtime adapter",
+                names.first().map(String::as_str).unwrap_or(provider_id)
+            )
+        })
+}
+
+fn resolve_declared_route(
+    state: &ZeroclawState,
+    requested_provider: &str,
+    requested_model: &str,
+) -> anyhow::Result<ResolvedExecutionRoute> {
+    let provider_request = (!requested_provider.trim().is_empty())
+        .then_some(requested_provider.trim())
+        .unwrap_or_else(|| state.selected_provider.as_str());
+    let model_request = (!requested_model.trim().is_empty())
+        .then_some(requested_model.trim())
+        .unwrap_or_else(|| state.selected_model.as_str());
+
+    let provider_aliases = provider_names(state, provider_request)
+        .ok_or_else(|| anyhow!("provider '{provider_request}' is not declared by ZeroClaw"))?;
+
+    let provider_matches =
+        |route: &&op_plugins::state_plugins::common::llm_projection::ModelRoute| {
+            names_contain(&provider_aliases, &route.provider)
+                || names_contain(&provider_aliases, &route.upstream_provider)
+        };
+    let exact_model = |route: &&op_plugins::state_plugins::common::llm_projection::ModelRoute| {
+        route.model.eq_ignore_ascii_case(model_request)
+    };
+    let hint = |route: &&op_plugins::state_plugins::common::llm_projection::ModelRoute| {
+        route.hint.eq_ignore_ascii_case(model_request)
+    };
+
+    let route = state
+        .projection
+        .model_routes
+        .iter()
+        .filter(provider_matches)
+        .find(exact_model)
+        .or_else(|| {
+            state
+                .projection
+                .model_routes
+                .iter()
+                .filter(provider_matches)
+                .find(hint)
+        })
+        .ok_or_else(|| {
+            anyhow!(
+                "model or route hint '{model_request}' is not declared for provider '{provider_request}'"
+            )
+        })?;
+
+    if !matches!(route.kind.as_str(), "chat" | "orchestrator") {
+        return Err(anyhow!(
+            "route '{}' is kind '{}' and cannot serve chat",
+            route.model,
+            route.kind
+        ));
+    }
+
+    let execution_provider = if route.upstream_provider.is_empty() {
+        route.provider.as_str()
+    } else {
+        route.upstream_provider.as_str()
+    };
+
+    Ok(ResolvedExecutionRoute {
+        provider: provider_type_for(state, execution_provider)?,
+        provider_id: execution_provider.to_string(),
+        model: route.model.clone(),
+        declared_available: route.available,
+        status_reason: route.status_reason.clone(),
+    })
+}
+
+async fn execute_chat(
+    chat_manager: &ChatManager,
+    state: &ZeroclawState,
+    requested_provider: &str,
+    requested_model: &str,
+    messages: Vec<op_llm::ChatMessage>,
+) -> anyhow::Result<(ResolvedExecutionRoute, op_llm::ChatResponse)> {
+    let route = resolve_declared_route(state, requested_provider, requested_model)?;
+    if !chat_manager.has_provider(&route.provider) {
+        return Err(anyhow!(
+            "provider '{}' is declared but not configured in the bridge runtime",
+            route.provider_id
+        ));
+    }
+
+    if !route.declared_available {
+        let models = chat_manager
+            .list_models_for_provider(&route.provider)
+            .await
+            .with_context(|| {
+                format!(
+                    "route '{}' is unavailable: {}",
+                    route.model, route.status_reason
+                )
+            })?;
+        if route.model != "auto" && !models.iter().any(|model| model.id == route.model) {
+            return Err(anyhow!(
+                "route '{}' is unavailable: {}",
+                route.model,
+                route.status_reason
+            ));
+        }
+    }
+
+    let response = chat_manager
+        .chat_with(&route.provider, &route.model, messages)
+        .await
+        .with_context(|| {
+            format!(
+                "provider '{}' failed model '{}'",
+                route.provider_id, route.model
+            )
+        })?;
+    Ok((route, response))
+}
+
+/// Execute the schema-declared `zeroclaw.Chat` method after the mutation
+/// engine has recorded the call. Provider/model selection remains owned by
+/// the projected ZeroClaw schema; `ChatManager` only performs the resolved
+/// upstream call.
+pub(crate) async fn dispatch_schema_chat(
+    chat_manager: &ChatManager,
+    state: &ZeroclawState,
+    input: ChatInput,
+) -> anyhow::Result<ChatOutput> {
+    let messages = if input.messages.is_empty() {
+        if input.message.trim().is_empty() {
+            return Err(anyhow!("zeroclaw.Chat requires message or messages"));
+        }
+        vec![op_llm::ChatMessage {
+            role: "user".to_string(),
+            content: input.message,
+            tool_calls: None,
+            tool_call_id: None,
+        }]
+    } else {
+        input
+            .messages
+            .into_iter()
+            .map(|message| op_llm::ChatMessage {
+                role: message.role,
+                content: message.content,
+                tool_calls: None,
+                tool_call_id: None,
+            })
+            .collect()
+    };
+
+    let (route, response) =
+        execute_chat(chat_manager, state, &input.provider, &input.model, messages).await?;
+
+    Ok(ChatOutput {
+        content: response.message.content,
+        provider: route.provider_id,
+        model: route.model,
+        finish_reason: response.finish_reason.unwrap_or_else(|| "stop".to_string()),
+        usage: serde_json::to_value(response.usage).unwrap_or(serde_json::Value::Null),
+    })
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiChatRequest {
+    #[serde(default)]
+    model: String,
+    #[serde(default)]
+    provider: String,
+    messages: Vec<OpenAiChatMessage>,
+    #[serde(default)]
+    stream: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiChatMessage {
+    role: String,
+    #[serde(default)]
+    content: String,
+}
+
+#[derive(Debug, Serialize)]
+struct OpenAiModel {
+    id: String,
+    object: &'static str,
+    owned_by: String,
+    available: bool,
+    route_hint: String,
+}
+
+fn rest_error(status: StatusCode, code: &str, message: impl Into<String>) -> AxumResponse {
+    (
+        status,
+        Json(serde_json::json!({
+            "error": {
+                "code": code,
+                "message": message.into(),
+                "type": "zeroclaw_error",
+            }
+        })),
+    )
+        .into_response()
+}
+
+fn status_response(status: Status) -> AxumResponse {
+    let http_status = match status.code() {
+        tonic::Code::Unauthenticated => StatusCode::UNAUTHORIZED,
+        tonic::Code::PermissionDenied => StatusCode::FORBIDDEN,
+        tonic::Code::InvalidArgument => StatusCode::BAD_REQUEST,
+        tonic::Code::FailedPrecondition => StatusCode::PRECONDITION_FAILED,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    rest_error(http_status, "ghostbridge_identity", status.message())
+}
+
+fn authorize_rest(headers: &HeaderMap) -> Result<GhostbridgeIdentity, AxumResponse> {
+    let mut request = tonic::Request::new(());
+    for key in [
+        "x-ghostbridge-footprint",
+        "x-ghostbridge-trace-id",
+        "x-wireguard-pubkey",
+    ] {
+        let Some(value) = headers.get(key) else {
+            continue;
+        };
+        let value = value
+            .to_str()
+            .map_err(|_| rest_error(StatusCode::BAD_REQUEST, "invalid_identity", key))?;
+        let metadata = value
+            .parse()
+            .map_err(|_| rest_error(StatusCode::BAD_REQUEST, "invalid_identity", key))?;
+        request.metadata_mut().insert(key, metadata);
+    }
+
+    let request = crate::interceptor::ghostbridge_interceptor(request).map_err(status_response)?;
+    request
+        .extensions()
+        .get::<GhostbridgeIdentity>()
+        .cloned()
+        .ok_or_else(|| {
+            rest_error(
+                StatusCode::UNAUTHORIZED,
+                "ghostbridge_identity",
+                "Ghostbridge identity was not attached",
+            )
+        })
+}
+
+async fn dispatch_zeroclaw_compat(
+    engine: &MutationEngine,
+    identity: &GhostbridgeIdentity,
+    method: &str,
+    capability: &str,
+    args: serde_json::Value,
+) -> Result<serde_json::Value, AxumResponse> {
+    crate::grpc_server::authorize_schema_method(
+        "zeroclaw",
+        method,
+        Some(capability),
+        Some(identity),
+    )
+    .map_err(status_response)?;
+    let args = serde_json::to_string(&args).map_err(|error| {
+        rest_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            error.to_string(),
+        )
+    })?;
+    engine
+        .dispatch_method_call(
+            "zeroclaw",
+            method,
+            &args,
+            Some(capability),
+            &identity.session_id,
+        )
+        .await
+        .map_err(|error| {
+            rest_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "route_unavailable",
+                error.to_string(),
+            )
+        })
+}
+
+fn method_payload(result: serde_json::Value) -> Result<serde_json::Value, AxumResponse> {
+    result.get("result").cloned().ok_or_else(|| {
+        rest_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "invalid_method_result",
+            "schema method result is missing its payload",
+        )
+    })
+}
+
+async fn openai_models(
+    State(engine): State<Arc<MutationEngine>>,
+    headers: HeaderMap,
+) -> AxumResponse {
+    let identity = match authorize_rest(&headers) {
+        Ok(identity) => identity,
+        Err(response) => return response,
+    };
+    let result = match dispatch_zeroclaw_compat(
+        engine.as_ref(),
+        &identity,
+        "ListModels",
+        "cap.software.zeroclaw.models.read@v1",
+        serde_json::json!({}),
+    )
+    .await
+    .and_then(method_payload)
+    {
+        Ok(result) => result,
+        Err(response) => return response,
+    };
+    let models: ListModelsOutput = match serde_json::from_value(result) {
+        Ok(models) => models,
+        Err(error) => {
+            return rest_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "invalid_method_result",
+                error.to_string(),
+            )
+        }
+    };
+    let mut seen = std::collections::HashSet::new();
+    let data = models
+        .model_routes
+        .iter()
+        .filter(|route| seen.insert(route.model.clone()))
+        .map(|route| OpenAiModel {
+            id: route.model.clone(),
+            object: "model",
+            owned_by: if route.upstream_provider.is_empty() {
+                route.provider.clone()
+            } else {
+                route.upstream_provider.clone()
+            },
+            available: route.available,
+            route_hint: route.hint.clone(),
+        })
+        .collect::<Vec<_>>();
+
+    Json(serde_json::json!({
+        "object": "list",
+        "data": data,
+    }))
+    .into_response()
+}
+
+async fn openai_chat_completions(
+    State(engine): State<Arc<MutationEngine>>,
+    headers: HeaderMap,
+    Json(request): Json<OpenAiChatRequest>,
+) -> AxumResponse {
+    let identity = match authorize_rest(&headers) {
+        Ok(identity) => identity,
+        Err(response) => return response,
+    };
+    if request.stream {
+        return rest_error(
+            StatusCode::BAD_REQUEST,
+            "streaming_not_supported",
+            "use op_chat.chat.ChatService.Send for streaming completions",
+        );
+    }
+    if request.messages.is_empty() {
+        return rest_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "messages must not be empty",
+        );
+    }
+
+    let messages = request
+        .messages
+        .into_iter()
+        .map(|message| ZeroclawChatMessage {
+            role: message.role,
+            content: message.content,
+        })
+        .collect::<Vec<_>>();
+    let args = serde_json::json!({
+        "messages": messages,
+        "provider": request.provider,
+        "model": request.model,
+    });
+    let completion = dispatch_zeroclaw_compat(
+        engine.as_ref(),
+        &identity,
+        "Chat",
+        "cap.software.zeroclaw.chat@v1",
+        args,
+    )
+    .await
+    .and_then(method_payload);
+
+    match completion {
+        Ok(result) => {
+            let response: ChatOutput = match serde_json::from_value(result) {
+                Ok(response) => response,
+                Err(error) => {
+                    return rest_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "invalid_method_result",
+                        error.to_string(),
+                    )
+                }
+            };
+            let created = chrono::Utc::now().timestamp();
+            Json(serde_json::json!({
+                "id": format!("chatcmpl-{}", uuid::Uuid::now_v7()),
+                "object": "chat.completion",
+                "created": created,
+                "model": response.model,
+                "provider": response.provider,
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": response.content,
+                    },
+                    "finish_reason": response.finish_reason,
+                }],
+                "usage": response.usage,
+            }))
+            .into_response()
+        }
+        Err(response) => response,
     }
 }
 
-type ChatStream = Pin<Box<dyn Stream<Item = Result<ChatFrame, Status>> + Send + 'static>>;
+/// OpenAI-compatible and schema-declared REST aliases served by the bridge.
+pub fn rest_router(engine: Arc<MutationEngine>) -> Router {
+    Router::new()
+        .route("/v1/models", get(openai_models))
+        .route("/v1/chat/completions", post(openai_chat_completions))
+        .route("/api/zeroclaw/chat", post(openai_chat_completions))
+        .route("/api/llm/chat", post(openai_chat_completions))
+        .with_state(engine)
+}
 
 #[async_trait::async_trait]
 impl ChatService for ChatServiceImpl {
@@ -59,6 +563,17 @@ impl ChatService for ChatServiceImpl {
         &self,
         request: Request<SendRequest>,
     ) -> Result<Response<Self::SendStream>, Status> {
+        let identity = request
+            .extensions()
+            .get::<GhostbridgeIdentity>()
+            .cloned()
+            .ok_or_else(|| Status::unauthenticated("Ghostbridge identity is required"))?;
+        crate::grpc_server::authorize_schema_method(
+            "zeroclaw",
+            "Chat",
+            Some("cap.software.zeroclaw.chat@v1"),
+            Some(&identity),
+        )?;
         let req = request.into_inner();
         let conversation_id = req.conversation_id.clone();
         let provider = req.provider.clone();
@@ -74,9 +589,31 @@ impl ChatService for ChatServiceImpl {
         // Parse ui_messages from JSON bytes.
         let ui_messages: Vec<serde_json::Value> = serde_json::from_slice(&req.ui_messages)
             .map_err(|e| Status::invalid_argument(format!("Invalid ui_messages JSON: {e}")))?;
+        let chat_args = ChatInput {
+            message: String::new(),
+            messages: ui_messages
+                .iter()
+                .map(|message| ZeroclawChatMessage {
+                    role: message
+                        .get("role")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("user")
+                        .to_string(),
+                    content: message
+                        .get("content")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("")
+                        .to_string(),
+                })
+                .collect(),
+            provider,
+            model,
+        };
+        let chat_args = serde_json::to_string(&chat_args)
+            .map_err(|error| Status::invalid_argument(error.to_string()))?;
 
         // Set up cancellation channel.
-        let (cancel_tx, mut _cancel_rx) = tokio::sync::watch::channel(false);
+        let (cancel_tx, mut cancel_rx) = tokio::sync::watch::channel(false);
         {
             let mut cancellations = self.cancellations.lock().await;
             cancellations.insert(conversation_id.clone(), cancel_tx);
@@ -88,6 +625,8 @@ impl ChatService for ChatServiceImpl {
         let (tx, rx) = tokio::sync::mpsc::channel::<Result<ChatFrame, Status>>(64);
 
         let cancellations = self.cancellations.clone();
+        let engine = self.engine.clone();
+        let actor_id = identity.session_id;
         let conv_id = conversation_id.clone();
 
         tokio::spawn(async move {
@@ -102,61 +641,71 @@ impl ChatService for ChatServiceImpl {
                 }))
                 .await;
 
-            // TODO: full gemma_brain routing + ForcedToolPipeline (tool calls,
-            // approvals, MemoryLoop persistence, bounded agent loop) is not
-            // wired yet. For now, delegate straight to the Salad AI Gateway
-            // (SaladCloud-hosted, OpenAI-compatible) so real replies flow —
-            // no antigravity dependency, no forced tool-call pipeline.
-            let llm_messages: Vec<op_llm::ChatMessage> = ui_messages
-                .iter()
-                .map(|m| {
-                    let role = m
-                        .get("role")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("user")
-                        .to_string();
-                    let content = m
-                        .get("content")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    op_llm::ChatMessage {
-                        role,
-                        content,
-                        tool_calls: None,
-                        tool_call_id: None,
-                    }
-                })
-                .collect();
-
-            let salad_model = if model.is_empty() {
-                std::env::var("SALAD_DEFAULT_MODEL").unwrap_or_else(|_| "qwen3.6-27b".to_string())
-            } else {
-                model.clone()
-            };
-
-            let text = match op_llm::SaladProvider::from_env() {
-                Ok(salad) => {
-                    match op_llm::LlmProvider::chat(&salad, &salad_model, llm_messages).await {
-                        Ok(resp) => resp.message.content,
-                        Err(e) => format!("Salad chat request failed: {e:#}"),
+            let completion = tokio::select! {
+                result = engine.dispatch_method_call(
+                    "zeroclaw",
+                    "Chat",
+                    &chat_args,
+                    Some("cap.software.zeroclaw.chat@v1"),
+                    &actor_id,
+                ) => result.and_then(|result| {
+                    let payload = result
+                        .get("result")
+                        .cloned()
+                        .ok_or_else(|| anyhow!("zeroclaw.Chat returned no result payload"))?;
+                    serde_json::from_value::<ChatOutput>(payload)
+                        .context("invalid zeroclaw.Chat result")
+                }),
+                changed = cancel_rx.changed() => {
+                    match changed {
+                        Ok(()) if *cancel_rx.borrow() => Err(anyhow!("chat cancelled")),
+                        Ok(()) => Err(anyhow!("chat cancellation channel changed unexpectedly")),
+                        Err(_) => Err(anyhow!("chat cancellation channel closed")),
                     }
                 }
-                Err(e) => format!("Salad provider unavailable: {e:#}"),
             };
 
-            let payload = serde_json::json!({ "type": "text", "text": text });
-            let _ = tx
-                .send(Ok(ChatFrame {
-                    cursor: bump(),
-                    body: Some(chat_frame::Body::Part(UiMessagePart {
-                        message_id: uuid::Uuid::new_v4().to_string(),
-                        role: "assistant".to_string(),
-                        kind: "text".to_string(),
-                        payload: serde_json::to_vec(&payload).unwrap_or_default(),
-                    })),
-                }))
-                .await;
+            let total_parts = match completion {
+                Ok(response) => {
+                    let payload = serde_json::json!({
+                        "type": "text",
+                        "text": response.content,
+                        "provider": response.provider,
+                        "model": response.model,
+                    });
+                    let _ = tx
+                        .send(Ok(ChatFrame {
+                            cursor: bump(),
+                            body: Some(chat_frame::Body::Part(UiMessagePart {
+                                message_id: uuid::Uuid::new_v4().to_string(),
+                                role: "assistant".to_string(),
+                                kind: "text".to_string(),
+                                payload: serde_json::to_vec(&payload).unwrap_or_default(),
+                            })),
+                        }))
+                        .await;
+                    1
+                }
+                Err(error) => {
+                    let cancelled = error.to_string().contains("cancelled");
+                    let _ = tx
+                        .send(Ok(ChatFrame {
+                            cursor: bump(),
+                            body: Some(chat_frame::Body::Error(StreamError {
+                                code: if cancelled {
+                                    "cancelled".to_string()
+                                } else {
+                                    "route_unavailable".to_string()
+                                },
+                                message: error.to_string(),
+                                retryable: false,
+                                retry_after_ms: None,
+                            })),
+                        }))
+                        .await;
+                    0
+                }
+            };
 
             // Stream done.
             let _ = tx
@@ -164,7 +713,7 @@ impl ChatService for ChatServiceImpl {
                     cursor: bump(),
                     body: Some(chat_frame::Body::Done(StreamDone {
                         conversation_id: conv_id.clone(),
-                        total_parts: 1,
+                        total_parts,
                     })),
                 }))
                 .await;
@@ -246,5 +795,88 @@ impl ChatService for ChatServiceImpl {
                 }))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use op_plugins::state_plugins::zeroclaw::ZeroclawPlugin;
+    use tower::ServiceExt;
+
+    fn test_engine() -> Arc<MutationEngine> {
+        let event_chain = Arc::new(tokio::sync::RwLock::new(op_state_store::EventChain::new(
+            op_state_store::ChainConfig::default(),
+        )));
+        let ovsdb = Arc::new(op_network::rovs_proxy::OvsdbDbusClient::new());
+        Arc::new(MutationEngine::new(event_chain, ovsdb))
+    }
+
+    #[test]
+    fn explicit_provider_and_model_resolve_through_schema_catalog() {
+        let mut state = ZeroclawPlugin::current_state();
+        let route = state
+            .projection
+            .model_routes
+            .iter_mut()
+            .find(|route| route.provider == "salad" && route.hint == "balanced")
+            .expect("balanced Salad route");
+        route.available = true;
+
+        let resolved =
+            resolve_declared_route(&state, "salad", "qwen3.6-27b").expect("route resolves");
+        assert_eq!(resolved.provider, ProviderType::Salad);
+        assert_eq!(resolved.provider_id, "salad");
+        assert_eq!(resolved.model, "qwen3.6-27b");
+        assert!(resolved.declared_available);
+    }
+
+    #[test]
+    fn provider_alias_and_route_hint_resolve() {
+        let state = ZeroclawPlugin::current_state();
+        let resolved =
+            resolve_declared_route(&state, "salad-ai", "fast").expect("alias and hint resolve");
+        assert_eq!(resolved.provider, ProviderType::Salad);
+        assert_eq!(resolved.model, "qwen3.5-9b");
+    }
+
+    #[test]
+    fn selected_provider_and_model_are_the_default_route() {
+        let mut state = ZeroclawPlugin::current_state();
+        state.selected_provider = "salad".to_string();
+        state.selected_model = "qwen3.6-35b-a3b".to_string();
+
+        let resolved = resolve_declared_route(&state, "", "").expect("selected route resolves");
+        assert_eq!(resolved.provider, ProviderType::Salad);
+        assert_eq!(resolved.model, "qwen3.6-35b-a3b");
+    }
+
+    #[test]
+    fn undeclared_model_fails_closed() {
+        let state = ZeroclawPlugin::current_state();
+        let error = resolve_declared_route(&state, "salad", "not-a-model").unwrap_err();
+        assert!(error.to_string().contains("not declared"));
+    }
+
+    #[test]
+    fn non_chat_routes_fail_closed() {
+        let state = ZeroclawPlugin::current_state();
+        let error = resolve_declared_route(&state, "oscal", "compliance").unwrap_err();
+        assert!(error.to_string().contains("cannot serve chat"));
+    }
+
+    #[tokio::test]
+    async fn rest_model_catalog_requires_ghostbridge_identity() {
+        let response = rest_router(test_engine())
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/v1/models")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 }

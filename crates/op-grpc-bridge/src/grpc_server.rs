@@ -176,6 +176,16 @@ fn enforce_bridge_capability(
     }
 }
 
+pub(crate) fn authorize_schema_method(
+    plugin_id: &str,
+    method_name: &str,
+    capability_id: Option<&str>,
+    identity: Option<&GhostbridgeIdentity>,
+) -> Result<(), Status> {
+    enforce_bridge_capability(plugin_id, method_name, capability_id, identity)
+        .map_err(|error| Status::permission_denied(error.message))
+}
+
 fn plugin_id_from_dbus_path(path: &str) -> Option<String> {
     let prefix = "/org/opdbus/v1/plugins/";
     path.strip_prefix(prefix)
@@ -332,6 +342,10 @@ impl OperationGrpcServer {
             per_method_reflection: Arc::new(PerMethodReflectionRegistry::new()),
             active_reflection: ActiveReflectionCatalog::new(),
         }
+    }
+
+    pub(crate) fn mutation_engine(&self) -> Arc<MutationEngine> {
+        self.mutation_engine.clone()
     }
 
     pub fn with_plugin_provider(
@@ -687,8 +701,9 @@ pub fn build_operation_routes(server: OperationGrpcServer) -> tonic::service::Ro
         DbusPassthroughServer::with_interceptor(server.clone(), intercept),
     ))
     .add_service(crate::grpc_web::enable(
-        crate::proto::chat::chat_service_server::ChatServiceServer::new(
-            crate::chat_service::ChatServiceImpl::new(),
+        crate::proto::chat::chat_service_server::ChatServiceServer::with_interceptor(
+            crate::chat_service::ChatServiceImpl::new(server.mutation_engine.clone()),
+            intercept,
         ),
     ))
     // EMQX is the gRPC client and does not carry Ghostbridge identity headers.

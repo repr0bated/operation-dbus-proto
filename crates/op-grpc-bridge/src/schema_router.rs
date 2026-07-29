@@ -51,7 +51,7 @@ pub struct PluginRoute {
     pub dbus_path: String,
     /// Canonical D-Bus destination (bus name): `org.opdbus.v1`.
     pub dbus_destination: String,
-    /// Canonical D-Bus interface: `org.opdbus.v1.Plugin.<PluginName>`.
+    /// Canonical D-Bus interface: `org.opdbus.v1.PluginV1`.
     pub dbus_interface: String,
     /// Methods declared in the schema (name → `MethodDecl` JSON).
     pub methods: HashMap<String, JsonValue>,
@@ -154,10 +154,7 @@ impl SchemaRouter {
 
     /// Register a projection hook that publishes the read-only Zeroclaw
     /// route/provider sub-object tree after each object-registration cycle.
-    pub fn set_projection_hook(
-        &mut self,
-        hook: Arc<dyn std::any::Any + Send + Sync>,
-    ) {
+    pub fn set_projection_hook(&mut self, hook: Arc<dyn std::any::Any + Send + Sync>) {
         self.projection_hook = Some(hook);
     }
 
@@ -375,7 +372,7 @@ impl SchemaRouter {
         .map_err(|e| SchemaRouterError::ProxyBuildFailed(e.to_string()))?;
 
         let result: String = proxy
-            .call(method_name, &(json_args.to_string(),))
+            .call("Call", &(method_name.to_string(), json_args.to_string()))
             .await
             .map_err(|e| SchemaRouterError::DbusCallFailed {
                 method: method_name.to_string(),
@@ -409,28 +406,22 @@ impl SchemaRouter {
             .get()
             .ok_or(SchemaRouterError::DbusUnavailable)?;
 
-        let props = zbus::fdo::PropertiesProxy::builder(conn)
-            .destination(route.dbus_destination.as_str())
-            .map_err(|e| SchemaRouterError::ProxyBuildFailed(e.to_string()))?
-            .path(route.dbus_path.as_str())
-            .map_err(|e| SchemaRouterError::ProxyBuildFailed(e.to_string()))?
-            .build()
+        let proxy = Proxy::new(
+            conn,
+            route.dbus_destination.as_str(),
+            route.dbus_path.as_str(),
+            route.dbus_interface.as_str(),
+        )
+        .await
+        .map_err(|e| SchemaRouterError::ProxyBuildFailed(e.to_string()))?;
+
+        proxy
+            .call("GetProperty", &(property_name.to_string(),))
             .await
-            .map_err(|e| SchemaRouterError::ProxyBuildFailed(e.to_string()))?;
-
-        let iface = zbus::names::InterfaceName::try_from(route.dbus_interface.as_str())
-            .map_err(|e| SchemaRouterError::ProxyBuildFailed(e.to_string()))?;
-
-        let val: zbus::zvariant::OwnedValue =
-            props.get(iface, property_name).await.map_err(|e| {
-                SchemaRouterError::DbusCallFailed {
-                    method: format!("Get({})", property_name),
-                    error: e.to_string(),
-                }
-            })?;
-
-        serde_json::to_string(&val)
-            .map_err(|e| SchemaRouterError::SerializationFailed(e.to_string()))
+            .map_err(|e| SchemaRouterError::DbusCallFailed {
+                method: format!("GetProperty({property_name})"),
+                error: e.to_string(),
+            })
     }
 
     /// Set a property on a plugin via its schema-derived D-Bus route.
@@ -458,29 +449,25 @@ impl SchemaRouter {
             .get()
             .ok_or(SchemaRouterError::DbusUnavailable)?;
 
-        let props = zbus::fdo::PropertiesProxy::builder(conn)
-            .destination(route.dbus_destination.as_str())
-            .map_err(|e| SchemaRouterError::ProxyBuildFailed(e.to_string()))?
-            .path(route.dbus_path.as_str())
-            .map_err(|e| SchemaRouterError::ProxyBuildFailed(e.to_string()))?
-            .build()
+        let proxy = Proxy::new(
+            conn,
+            route.dbus_destination.as_str(),
+            route.dbus_path.as_str(),
+            route.dbus_interface.as_str(),
+        )
+        .await
+        .map_err(|e| SchemaRouterError::ProxyBuildFailed(e.to_string()))?;
+
+        proxy
+            .call::<_, _, ()>(
+                "SetProperty",
+                &(property_name.to_string(), json_value.to_string()),
+            )
             .await
-            .map_err(|e| SchemaRouterError::ProxyBuildFailed(e.to_string()))?;
-
-        let iface = zbus::names::InterfaceName::try_from(route.dbus_interface.as_str())
-            .map_err(|e| SchemaRouterError::ProxyBuildFailed(e.to_string()))?;
-
-        let value: serde_json::Value = serde_json::from_str(json_value)
-            .map_err(|e| SchemaRouterError::SerializationFailed(e.to_string()))?;
-
-        let zval = json_to_zvariant_value(&value)?;
-
-        props.set(iface, property_name, zval).await.map_err(|e| {
-            SchemaRouterError::DbusCallFailed {
-                method: format!("Set({})", property_name),
+            .map_err(|e| SchemaRouterError::DbusCallFailed {
+                method: format!("SetProperty({property_name})"),
                 error: e.to_string(),
-            }
-        })?;
+            })?;
 
         Ok(())
     }
@@ -897,7 +884,7 @@ impl SchemaBackedInterface {
     }
 
     /// The canonical D-Bus interface name for this plugin
-    /// (`org.opdbus.v1.Plugin.<PluginName>`).
+    /// (`org.opdbus.v1.PluginV1`).
     pub fn dbus_interface(&self) -> &str {
         &self.route.dbus_interface
     }
@@ -1187,41 +1174,6 @@ impl From<SchemaRouterError> for tonic::Status {
     }
 }
 
-fn json_to_zvariant_value(
-    value: &serde_json::Value,
-) -> Result<zbus::zvariant::Value<'static>, SchemaRouterError> {
-    use zbus::zvariant::Value as ZValue;
-    match value {
-        serde_json::Value::Null => Ok(ZValue::from("")),
-        serde_json::Value::Bool(b) => Ok(ZValue::from(*b)),
-        serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                Ok(ZValue::from(i))
-            } else if let Some(f) = n.as_f64() {
-                Ok(ZValue::from(f))
-            } else {
-                Ok(ZValue::from(n.to_string()))
-            }
-        }
-        serde_json::Value::String(s) => Ok(ZValue::from(s.clone())),
-        serde_json::Value::Array(arr) => {
-            let items: Vec<String> = arr
-                .iter()
-                .map(|v| match v {
-                    serde_json::Value::String(s) => s.clone(),
-                    other => other.to_string(),
-                })
-                .collect();
-            Ok(ZValue::from(items))
-        }
-        serde_json::Value::Object(_) => {
-            let s = serde_json::to_string(value)
-                .map_err(|e| SchemaRouterError::SerializationFailed(e.to_string()))?;
-            Ok(ZValue::from(s))
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1247,8 +1199,8 @@ mod tests {
         PluginRoute {
             plugin_id: "test_plugin".to_string(),
             dbus_path: "/org/opdbus/v1/plugins/test_plugin".to_string(),
-            dbus_destination: "org.opdbus.v1".to_string(),
-            dbus_interface: "org.opdbus.v1.Plugin.TestPlugin".to_string(),
+            dbus_destination: "org.opdbus.v1.plugins".to_string(),
+            dbus_interface: "org.opdbus.v1.PluginV1".to_string(),
             methods,
             signals,
             properties,
@@ -1719,7 +1671,7 @@ mod tests {
         let alpha = &routes["alpha"];
         assert_eq!(alpha.dbus_path, canonical::plugin_path("alpha"));
         assert_eq!(alpha.dbus_path, "/org/opdbus/v1/plugins/alpha");
-        assert_eq!(alpha.dbus_destination, "org.opdbus.v1");
+        assert_eq!(alpha.dbus_destination, "org.opdbus.v1.plugins");
         assert_eq!(alpha.dbus_interface, canonical::plugin_interface("alpha"));
 
         // One SchemaBackedInterface is constructed per plugin route, mounted at
@@ -2115,8 +2067,8 @@ mod tests {
         PluginRoute {
             plugin_id: "beta".to_string(),
             dbus_path: "/org/opdbus/v1/plugins/beta".to_string(),
-            dbus_destination: "org.opdbus.v1".to_string(),
-            dbus_interface: "org.opdbus.v1.Plugin.Beta".to_string(),
+            dbus_destination: "org.opdbus.v1.plugins".to_string(),
+            dbus_interface: "org.opdbus.v1.PluginV1".to_string(),
             methods,
             signals: vec![],
             properties: HashMap::new(),
@@ -2226,8 +2178,8 @@ mod tests {
         let route = PluginRoute {
             plugin_id: "beta".to_string(),
             dbus_path: "/org/opdbus/v1/plugins/beta".to_string(),
-            dbus_destination: "org.opdbus.v1".to_string(),
-            dbus_interface: "org.opdbus.v1.Plugin.Beta".to_string(),
+            dbus_destination: "org.opdbus.v1.plugins".to_string(),
+            dbus_interface: "org.opdbus.v1.PluginV1".to_string(),
             methods: {
                 let mut m = HashMap::new();
                 m.insert(
@@ -2277,8 +2229,8 @@ mod tests {
         let route = PluginRoute {
             plugin_id: "beta".to_string(),
             dbus_path: "/org/opdbus/v1/plugins/beta".to_string(),
-            dbus_destination: "org.opdbus.v1".to_string(),
-            dbus_interface: "org.opdbus.v1.Plugin.Beta".to_string(),
+            dbus_destination: "org.opdbus.v1.plugins".to_string(),
+            dbus_interface: "org.opdbus.v1.PluginV1".to_string(),
             methods: {
                 let mut m = HashMap::new();
                 m.insert(
@@ -2476,8 +2428,8 @@ mod tests {
         let route = PluginRoute {
             plugin_id: "beta".to_string(),
             dbus_path: "/org/opdbus/v1/plugins/beta".to_string(),
-            dbus_destination: "org.opdbus.v1".to_string(),
-            dbus_interface: "org.opdbus.v1.Plugin.Beta".to_string(),
+            dbus_destination: "org.opdbus.v1.plugins".to_string(),
+            dbus_interface: "org.opdbus.v1.PluginV1".to_string(),
             methods: {
                 let mut m = HashMap::new();
                 m.insert(
@@ -2978,8 +2930,8 @@ mod tests {
         let route_no_cap = PluginRoute {
             plugin_id: "beta".to_string(),
             dbus_path: "/org/opdbus/v1/plugins/beta".to_string(),
-            dbus_destination: "org.opdbus.v1".to_string(),
-            dbus_interface: "org.opdbus.v1.Plugin.Beta".to_string(),
+            dbus_destination: "org.opdbus.v1.plugins".to_string(),
+            dbus_interface: "org.opdbus.v1.PluginV1".to_string(),
             methods: {
                 let mut m = HashMap::new();
                 m.insert(

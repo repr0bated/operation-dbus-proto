@@ -140,3 +140,43 @@ async fn should_stream_reload_on_sighup() {
     let parsed: serde_json::Value = serde_json::from_str(&event.schema_json).unwrap();
     assert_eq!(parsed["version"], "2.0.0");
 }
+
+#[tokio::test]
+async fn list_models_uses_the_audited_zeroclaw_method_dispatcher() {
+    let event_chain = Arc::new(tokio::sync::RwLock::new(op_state_store::EventChain::new(
+        op_state_store::ChainConfig::default(),
+    )));
+    let ovsdb = Arc::new(op_network::rovs_proxy::OvsdbDbusClient::new());
+    let engine = op_grpc_bridge::MutationEngine::new(event_chain.clone(), ovsdb);
+
+    let result = engine
+        .dispatch_method_call(
+            "zeroclaw",
+            "ListModels",
+            r#"{"provider":"salad"}"#,
+            Some("cap.software.zeroclaw.models.read@v1"),
+            "integration-test-actor",
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(result["success"], true);
+    assert_eq!(result["plugin_id"], "zeroclaw");
+    assert_eq!(result["method"], "ListModels");
+    let routes = result["result"]["model_routes"].as_array().unwrap();
+    assert!(!routes.is_empty());
+    assert!(routes
+        .iter()
+        .all(|route| { route["provider"] == "salad" || route["upstream_provider"] == "salad" }));
+
+    let chain = event_chain.read().await;
+    let event = chain.events().last().unwrap();
+    assert_eq!(event.plugin_id, "zeroclaw");
+    assert_eq!(event.method_name.as_deref(), Some("ListModels"));
+    assert_eq!(
+        event.capability_id.as_deref(),
+        Some("cap.software.zeroclaw.models.read@v1")
+    );
+    assert_eq!(event.actor_id, "integration-test-actor");
+    assert!(event.json_args_footprint.is_some());
+}

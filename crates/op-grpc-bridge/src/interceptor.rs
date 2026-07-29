@@ -343,13 +343,28 @@ mod tests {
     // in this crate.
 }
 
-/// Load capability grants for a footprint hash.
-/// Currently grants all capabilities — real enforcement is at the gRPC interceptor layer.
-/// TODO: restore Cozo-backed capability lookup when SchemaRouter is fully re-integrated.
-pub fn load_capability_grants(_footprint_hex: &str) -> std::collections::HashSet<String> {
-    // Grant all — the GhostBridge interceptor already validated the footprint.
-    // Per-method capability checks are done at the gRPC PluginService.CallMethod level.
-    let mut grants = std::collections::HashSet::new();
-    grants.insert("*".to_string());
-    grants
+/// Load the capabilities granted to one sled footprint.
+///
+/// The JSON document is keyed by lowercase footprint hex and each value owns a
+/// `capabilities` array. Missing, malformed, or unreadable grant state fails
+/// closed.
+pub fn load_capability_grants(footprint_hex: &str) -> std::collections::HashSet<String> {
+    let path = std::env::var("OP_GRANTS_PATH")
+        .unwrap_or_else(|_| "/dev/shm/opdbus/capability-grants.json".to_string());
+    let Ok(bytes) = std::fs::read(path) else {
+        return std::collections::HashSet::new();
+    };
+    let Ok(document) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return std::collections::HashSet::new();
+    };
+    document
+        .get(footprint_hex)
+        .or_else(|| document.get("*"))
+        .and_then(|entry| entry.get("capabilities"))
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(str::to_string)
+        .collect()
 }

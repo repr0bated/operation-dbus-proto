@@ -2,11 +2,9 @@
 //!
 //! `OvsdbDbusClient` (name kept for call-site compatibility) talks to
 //! `ovsdb-server` natively via the vendor `rovs_ovsdb::Client` — no D-Bus hop.
-//! There never was a real D-Bus daemon serving OVSDB JSON-RPC passthrough on
-//! this host; the `RovsJsonRpcProxy` below (still used directly by
-//! `op-plugins::state_plugins::openflow`) targets a service that doesn't
-//! exist for OVSDB either. Business logic (bridge/port CRUD as OVSDB
-//! `transact` operations) stays in this module, matching the original design.
+//! The dead raw JSON-RPC D-Bus proxy was removed; compatibility callers enter
+//! through the schema-declared `ovsdb_bridge` object on the canonical plugin
+//! tree, while the audited bridge backend uses this native client.
 //!
 //! NOTE: the OpenFlow passthrough half of this module (`RovsOpenFlow`,
 //! `openflow_proxy`, `ensure_proxies`) was removed along with
@@ -17,66 +15,6 @@
 
 use anyhow::{Context, Result};
 use std::sync::Arc;
-use zbus::{proxy, Connection};
-
-// ── RovsJsonRpcProxy ──────────────────────────────────────────────────────────
-
-/// Proxy for the OVSDB JSON-RPC passthrough interface.
-///
-/// D-Bus destination: `org.opdbus.v1.plugins.ovsdb`
-/// Object path: `/org/opdbus/rovs/jsonrpc`
-/// Interface: `org.opdbus.rovs.jsonrpc`
-#[proxy(
-    default_service = "org.opdbus.v1.plugins.ovsdb",
-    default_path = "/org/opdbus/rovs/jsonrpc",
-    interface = "org.opdbus.rovs.jsonrpc"
-)]
-pub trait RovsJsonRpc {
-    /// Execute a raw OVSDB JSON-RPC `transact`.
-    ///
-    /// `method` is the JSON-RPC method name (e.g. `"transact"`).
-    /// `params_json` is the JSON-encoded parameter array.
-    /// Returns the JSON-encoded result.
-    async fn transact(&self, method: &str, params_json: &str) -> zbus::Result<String>;
-
-    /// Execute a one-way OVSDB JSON-RPC `notify`.
-    async fn notify(&self, method: &str, params_json: &str) -> zbus::Result<()>;
-
-    /// Return the next JSON-RPC request id.
-    async fn next_id(&self) -> zbus::Result<u64>;
-
-    /// Send a raw JSON-RPC message string and return the response string.
-    async fn send_message(&self, msg: &str) -> zbus::Result<String>;
-
-    /// Receive a raw JSON-RPC message string.
-    async fn recv_message(&self) -> zbus::Result<String>;
-
-    /// Poll whether notification queue has pending items.
-    async fn has_pending_notifications(&self) -> zbus::Result<bool>;
-
-    /// Return the count of pending notifications.
-    async fn pending_notification_count(&self) -> zbus::Result<u64>;
-
-    /// Pop one notification from the queue as a JSON string.
-    async fn pop_notification(&self) -> zbus::Result<String>;
-
-    /// Drain all pending notifications as a JSON array string.
-    async fn drain_notifications(&self) -> zbus::Result<String>;
-
-    /// Open a new named stream / monitor.
-    async fn new_stream(&self, stream: &str) -> zbus::Result<String>;
-
-    /// Daemon status JSON.
-    async fn status(&self) -> zbus::Result<String>;
-}
-
-/// Convenience constructor: build a `RovsJsonRpcProxy` on the system bus.
-pub async fn jsonrpc_proxy() -> Result<RovsJsonRpcProxy<'static>> {
-    let conn = Connection::system()
-        .await
-        .context("connect to system D-Bus for RovsJsonRpcProxy")?;
-    Ok(RovsJsonRpcProxy::new(&conn).await?)
-}
 
 // ── OvsdbDbusClient ─────────────────────────────────────────────────────────
 
@@ -184,9 +122,24 @@ impl OvsdbDbusClient {
     /// Return `true` if the daemon (and OVSDB) is reachable.
     pub async fn list_dbs(&self) -> Result<Vec<String>> {
         let val = self
-            .with_client(|client| Box::pin(async move { client.list_dbs().await.context("OVSDB list_dbs failed") }))
+            .with_client(|client| {
+                Box::pin(async move { client.list_dbs().await.context("OVSDB list_dbs failed") })
+            })
             .await?;
         Ok(val)
+    }
+
+    /// Return the schema cached by the connected vendor client.
+    pub async fn get_schema(&self) -> Result<serde_json::Value> {
+        self.with_client(|client| {
+            Box::pin(async move {
+                let schema = client
+                    .schema()
+                    .ok_or_else(|| anyhow::anyhow!("OVSDB schema is not loaded"))?;
+                serde_json::to_value(schema).context("serialize OVSDB schema")
+            })
+        })
+        .await
     }
 
     /// Return `true` if a bridge with the given name exists.

@@ -18,6 +18,7 @@ use zbus::{Connection, Proxy};
 
 use base64::Engine;
 use op_identity::{read_sled, write_sled_full};
+use op_llm::chat::ChatManager;
 use op_network::rovs_proxy::OvsdbDbusClient;
 use op_state_store::{ChainEvent, Decision, EventChain, MemoryStore, OperationType, StateStore};
 
@@ -76,6 +77,8 @@ pub struct MutationEngine {
     pub ovsdb: Arc<OvsdbDbusClient>,
     /// In-process plugin handles for MethodCall dispatch (e.g. createunixsocket).
     pub unix_socket: Arc<op_plugins::state_plugins::UnixSocketPlugin>,
+    /// Provider runtime used only after ZeroClaw resolves a schema-declared route.
+    chat_manager: Arc<ChatManager>,
 }
 
 impl std::fmt::Debug for MutationEngine {
@@ -134,17 +137,17 @@ impl MutationEngine {
             dbus_call_limiter: Arc::new(Semaphore::new(32)),
             ovsdb,
             unix_socket: Arc::new(op_plugins::state_plugins::UnixSocketPlugin::new()),
+            chat_manager: Arc::new(ChatManager::new()),
         }
     }
 
-    /// Seed missing plugin projection files AND missing sealed blobs from the
-    /// canonical PluginSchema catalog. This runs once during bridge startup;
-    /// existing projection files and blobs are left untouched so real mutation
-    /// state (and the sealer's artifacts) always win.
+    /// Seed missing plugin projection files and seal current schemas from the
+    /// canonical PluginSchema catalog. This runs once during bridge startup.
+    /// Existing state projections are preserved; stale schema blobs are
+    /// replaced because their hash no longer describes the running code.
     ///
-    /// A plugin missing from the SHM blob catalog is automatically blobified
-    /// and sealed here — the blob IS the plugin, so a loaded plugin without a
-    /// blob doesn't exist yet and is brought into existence on the spot.
+    /// A missing or schema-stale plugin in the SHM blob catalog is blobified
+    /// and sealed here. The blob IS the reflected plugin contract.
     pub async fn seed_missing_plugin_projections(&self) -> anyhow::Result<usize> {
         let state_store: Arc<dyn StateStore> = Arc::new(MemoryStore::new());
         let registry = op_plugins::DefaultPluginRegistry::new(state_store);
@@ -179,29 +182,46 @@ impl MutationEngine {
                 continue;
             }
 
-            // Auto-generate the sealed blob for any plugin missing from the
-            // SHM catalog (registration by existence).
+            // Auto-generate or refresh the sealed blob when the running
+            // schema hash differs from the active SHM catalog.
             if let Some(store) = blob_store.as_mut() {
                 let canonical_id = op_blob::canonical_plugin_id(&plugin_id);
-                if store.manifest(&canonical_id).is_none() {
-                    let blob = op_blob::blobify_plugin_schema(&plugin_id, schema.clone());
+                let blob = op_blob::blobify_plugin_schema(&plugin_id, schema.clone());
+                let schema_changed = store
+                    .manifest(&canonical_id)
+                    .map(|manifest| manifest.schema_hash.as_str())
+                    != Some(blob.manifest.schema_hash.as_str());
+                if schema_changed {
                     match store.write(&blob) {
                         Ok(_) => {
                             tracing::info!(
                                 plugin_id = %canonical_id,
                                 schema_hash = %blob.manifest.schema_hash,
-                                "auto-sealed missing plugin blob into SHM catalog"
+                                "sealed current plugin schema into SHM catalog"
                             );
                             sealed += 1;
                         }
                         Err(error) => {
-                            tracing::warn!(plugin_id = %canonical_id, %error, "failed to auto-seal missing plugin blob");
+                            tracing::warn!(plugin_id = %canonical_id, %error, "failed to seal current plugin schema");
                         }
                     }
                 }
             }
 
-            if op_core::projection_shm::read_projection_bytes(&plugin_id).is_some() {
+            if let Some(mut bytes) = op_core::projection_shm::read_projection_bytes(&plugin_id) {
+                match simd_json::to_owned_value(&mut bytes) {
+                    Ok(projected_state) => {
+                        self.update_state_cache(plugin_id.clone(), projected_state)
+                            .await;
+                    }
+                    Err(error) => {
+                        tracing::warn!(
+                            plugin_id = %plugin_id,
+                            %error,
+                            "existing plugin projection is invalid JSON; leaving it authoritative but uncached"
+                        );
+                    }
+                }
                 continue;
             }
 
@@ -215,7 +235,7 @@ impl MutationEngine {
         tracing::info!(
             projections = seeded,
             blobs = sealed,
-            "Seeded missing plugin projections and sealed missing plugin blobs"
+            "Seeded missing plugin projections and sealed current plugin schemas"
         );
         Ok(seeded)
     }
@@ -913,6 +933,9 @@ impl MutationEngine {
             "rovs_commands" => {
                 dispatch_rovs_commands_method(&self.ovsdb, method, &parsed_value).await?
             }
+            "ovsdb_bridge" => {
+                dispatch_ovsdb_bridge_method(&self.ovsdb, method, &parsed_value).await?
+            }
             "xray" => {
                 let args = serde_json::to_value(&parsed_value)?;
                 dispatch_xray_method(method, &args).await?
@@ -927,30 +950,61 @@ impl MutationEngine {
                 op_plugins::state_plugins::persona::dispatch_persona_method(method, &args).await?
             }
             "zeroclaw" => {
-                let state = op_plugins::state_plugins::zeroclaw::ZeroclawPlugin::current_state();
-                match op_plugins::state_plugins::zeroclaw::dispatch_zeroclaw_method(
-                    method, json_args, &state,
-                ) {
-                    Ok(outcome) => {
-                        // Persist effective Set* changes to the authoritative state
-                        // cache so the new selection is observable to readers.
-                        if method == "SetProvider" || method == "SetModel" {
-                            self.merge_into_state_cache("zeroclaw", &outcome.result)
-                                .await;
+                let state = self
+                    .projected_state::<op_plugins::state_plugins::zeroclaw::ZeroclawState>(
+                        "zeroclaw",
+                    )
+                    .await
+                    .unwrap_or_else(
+                        op_plugins::state_plugins::zeroclaw::ZeroclawPlugin::current_state,
+                    );
+                if method == "Chat" {
+                    let args = serde_json::from_value::<
+                        op_plugins::state_plugins::zeroclaw::ChatInput,
+                    >(serde_json::to_value(&parsed_value)?)
+                    .context("invalid zeroclaw.Chat arguments")?;
+                    serde_json::to_value(
+                        crate::chat_service::dispatch_schema_chat(
+                            self.chat_manager.as_ref(),
+                            &state,
+                            args,
+                        )
+                        .await?,
+                    )?
+                } else {
+                    match op_plugins::state_plugins::zeroclaw::dispatch_zeroclaw_method(
+                        method, json_args, &state,
+                    ) {
+                        Ok(outcome) => {
+                            if method.starts_with("Set") {
+                                self.persist_zeroclaw_mutation(method, &outcome.result)
+                                    .await?;
+                            }
+                            if let Some(sig) = &outcome.signal {
+                                self.broadcast_method_signal(&change, &sig.name, &sig.payload);
+                            }
+                            outcome.result
                         }
-                        if let Some(sig) = &outcome.signal {
-                            tracing::debug!(plugin_id, method, signal = %sig.name, "zeroclaw dispatch signal");
+                        Err(e) => {
+                            return Err(anyhow::anyhow!(
+                                "zeroclaw dispatch error for '{}': {}",
+                                method,
+                                e
+                            ))
                         }
-                        outcome.result
-                    }
-                    Err(e) => {
-                        return Err(anyhow::anyhow!(
-                            "zeroclaw dispatch error for '{}': {}",
-                            method,
-                            e
-                        ))
                     }
                 }
+            }
+            "ghostbridge" => {
+                let state = self
+                    .projected_state::<op_plugins::state_plugins::ghostbridge::GhostbridgeState>(
+                        "ghostbridge",
+                    )
+                    .await
+                    .unwrap_or_else(
+                        op_plugins::state_plugins::ghostbridge::GhostbridgePlugin::current_state,
+                    );
+                op_plugins::state_plugins::ghostbridge::dispatch_ghostbridge_method(method, &state)?
             }
             _ => serde_json::to_value(&parsed_value).unwrap_or(serde_json::Value::Null),
         };
@@ -967,6 +1021,77 @@ impl MutationEngine {
             "result": method_result,
         });
         Ok(result)
+    }
+
+    async fn projected_state<T>(&self, plugin_id: &str) -> Option<T>
+    where
+        T: serde::de::DeserializeOwned,
+    {
+        if let Some(value) = self.get_state(plugin_id).await {
+            if let Ok(json) = serde_json::to_value(value) {
+                if let Ok(state) = serde_json::from_value(json) {
+                    return Some(state);
+                }
+            }
+        }
+
+        let mut bytes = op_core::projection_shm::read_projection_bytes(plugin_id)?;
+        let value = simd_json::to_owned_value(&mut bytes).ok()?;
+        let json = serde_json::to_value(&value).ok()?;
+        let state = serde_json::from_value(json).ok()?;
+        self.update_state_cache(plugin_id.to_string(), value).await;
+        Some(state)
+    }
+
+    fn broadcast_method_signal(
+        &self,
+        method_change: &StateChange,
+        signal_name: &str,
+        payload: &serde_json::Value,
+    ) {
+        let mut bytes = serde_json::to_vec(payload).unwrap_or_default();
+        let payload =
+            simd_json::to_owned_value(&mut bytes).unwrap_or_else(|_| simd_json::json!(null));
+        let signal = StateChange {
+            change_id: uuid::Uuid::new_v4().to_string(),
+            event_id: method_change.event_id,
+            plugin_id: method_change.plugin_id.clone(),
+            object_path: method_change.object_path.clone(),
+            change_type: ChangeType::Signal,
+            member_name: Some(signal_name.to_string()),
+            old_value: None,
+            new_value: payload,
+            tags_touched: method_change.tags_touched.clone(),
+            event_hash: method_change.event_hash.clone(),
+            timestamp: method_change.timestamp,
+            actor_id: method_change.actor_id.clone(),
+            source: method_change.source,
+        };
+        let _ = self.change_tx.send(signal);
+    }
+
+    async fn persist_zeroclaw_mutation(
+        &self,
+        method: &str,
+        result: &serde_json::Value,
+    ) -> anyhow::Result<()> {
+        match method {
+            "SetProvider" | "SetModel" => {
+                self.merge_into_state_cache("zeroclaw", result).await;
+            }
+            "SetOvsRoutingModel"
+            | "SetObfuscationModel"
+            | "SetVectorizationModel"
+            | "SetQdrantRetrievalModel"
+            | "SetCozoRetrievalModel" => {
+                self.merge_nested_into_state_cache("zeroclaw", "model_assignments", result)
+                    .await;
+            }
+            _ => {}
+        }
+
+        self.publish_plugin_projection_from_cache("zeroclaw", ChangeType::PropertySet)
+            .await
     }
 
     /// Merge a flat JSON object of changed fields into the authoritative
@@ -987,6 +1112,40 @@ impl MutationEngine {
                 cur_obj.insert(k.clone(), v.clone());
             }
         }
+        let mut bytes = serde_json::to_vec(&current).unwrap_or_default();
+        if let Ok(owned) = simd_json::to_owned_value(&mut bytes) {
+            self.update_state_cache(plugin_id.to_string(), owned).await;
+        }
+    }
+
+    async fn merge_nested_into_state_cache(
+        &self,
+        plugin_id: &str,
+        field: &str,
+        changes: &serde_json::Value,
+    ) {
+        let Some(changes_obj) = changes.as_object() else {
+            return;
+        };
+        let mut current = self
+            .get_state(plugin_id)
+            .await
+            .and_then(|value| serde_json::to_value(value).ok())
+            .unwrap_or_else(|| serde_json::json!({}));
+
+        let Some(current_obj) = current.as_object_mut() else {
+            return;
+        };
+        let nested = current_obj
+            .entry(field.to_string())
+            .or_insert_with(|| serde_json::json!({}));
+        let Some(nested_obj) = nested.as_object_mut() else {
+            return;
+        };
+        for (key, value) in changes_obj {
+            nested_obj.insert(key.clone(), value.clone());
+        }
+
         let mut bytes = serde_json::to_vec(&current).unwrap_or_default();
         if let Ok(owned) = simd_json::to_owned_value(&mut bytes) {
             self.update_state_cache(plugin_id.to_string(), owned).await;
@@ -1294,6 +1453,29 @@ async fn dispatch_rovs_commands_method(
             Ok(serde_json::json!(dbs))
         }
         _ => Err(anyhow::anyhow!("unknown rovs_commands method: {}", method)),
+    }
+}
+
+/// Execute the schema-declared OVSDB bridge methods used by canonical
+/// `org.opdbus.v1.plugins` compatibility clients.
+async fn dispatch_ovsdb_bridge_method(
+    ovsdb: &op_network::rovs_proxy::OvsdbDbusClient,
+    method: &str,
+    args: &simd_json::OwnedValue,
+) -> anyhow::Result<serde_json::Value> {
+    match method {
+        "list_dbs" => Ok(serde_json::json!(ovsdb.list_dbs().await?)),
+        "get_schema" => Ok(ovsdb.get_schema().await?),
+        "transact" => {
+            let operations = args
+                .get("operations")
+                .ok_or_else(|| anyhow::anyhow!("operations required"))?
+                .clone();
+            Ok(ovsdb.transact_simd(operations).await?)
+        }
+        _ => Err(anyhow::anyhow!(
+            "ovsdb_bridge.{method} is schema-declared but has no runtime dispatcher"
+        )),
     }
 }
 

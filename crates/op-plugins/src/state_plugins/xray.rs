@@ -10,7 +10,7 @@ use super::plugin_scaffold_helpers::{
 };
 
 use super::xray_config_types::{
-    DNSConfig, PolicyConfig, XrayInboundProtocolCatalog, XrayOutboundProtocolCatalog, APIConfig,
+    APIConfig, DNSConfig, PolicyConfig, XrayInboundProtocolCatalog, XrayOutboundProtocolCatalog,
 };
 
 /// Xray proxy configuration.
@@ -56,7 +56,7 @@ impl Default for XrayConfig {
         Self {
             enabled: true,
             socket_port: "gbr_xray".to_string(),
-            config_path: "/dev/shm/xray_config.json".to_string(),
+            config_path: "/etc/xray/xray_config.json".to_string(),
             api: None,
             dns: None,
             policy: None,
@@ -326,7 +326,6 @@ mod tests {
         }
     }
 
-
     #[test]
     fn all_subids_are_valid() {
         let root = serde_json::to_value(schemars::schema_for!(XrayState))
@@ -339,7 +338,6 @@ mod tests {
         }
     }
 }
-
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct UserInput {
