@@ -222,6 +222,35 @@ async fn main() -> Result<()> {
             run_transports(server, run_stdio, http_addr, ws_addr, grpc_addr, None).await
         }
 
+        ServerMode::Cognitive => {
+            // Fan-in proxy: one authenticated caller fronting op-grpc-bridge.
+            //
+            // Every MCP client that instead spawns `op-cognitive-mcp --stdio` opens
+            // the persistent CozoDB directly, and the second one dies on the file
+            // lock. Routing through the bridge leaves a single writer, puts every
+            // call through the method gate / arg validation / capability check /
+            // event chain, and keeps identity in this process so clients carry no
+            // credential material.
+            let executor: Arc<dyn ToolExecutor> =
+                Arc::new(op_mcp::cognitive_bridge::BridgeToolExecutor::connect().await?);
+            let tool_count = executor.list_tools().await.map(|t| t.len()).unwrap_or(0);
+            let server = Arc::new(CompactServer::new(executor));
+            info!(
+                tools = tool_count,
+                "Cognitive fan-in MCP server initialized (sourced from op-grpc-bridge)"
+            );
+
+            run_transports(
+                server,
+                run_stdio,
+                http_addr,
+                ws_addr,
+                grpc_addr,
+                Some("/mcp/cognitive"),
+            )
+            .await
+        }
+
         ServerMode::Agents => {
             let bus_type = if std::env::var("DBUS_AGENT_SESSION").is_ok() {
                 BusType::Session
