@@ -69,6 +69,9 @@ pub struct MutationEngine {
     pub dbus_connection: Arc<OnceCell<Connection>>,
     /// Session bus connection for projection tree introspection
     session_bus: Arc<OnceCell<Connection>>,
+    /// Session bus connection with registered PluginV1 interfaces for signal emission.
+    /// Set after SchemaRouter registers objects (server.rs spawned task).
+    signal_bus: Arc<OnceCell<Connection>>,
     /// Resource limiter for D-Bus operations
     #[allow(dead_code)]
     dbus_call_limiter: Arc<Semaphore>,
@@ -134,10 +137,53 @@ impl MutationEngine {
             state_cache: Arc::new(RwLock::new(HashMap::new())),
             dbus_connection: Arc::new(OnceCell::new()),
             session_bus: Arc::new(OnceCell::new()),
+            signal_bus: Arc::new(OnceCell::new()),
             dbus_call_limiter: Arc::new(Semaphore::new(32)),
             ovsdb,
             unix_socket: Arc::new(op_plugins::state_plugins::UnixSocketPlugin::new()),
             chat_manager: Arc::new(ChatManager::new()),
+        }
+    }
+
+    /// Store the session bus connection used for `Updated` signal emission.
+    /// Called from server.rs after SchemaRouter registers its interfaces.
+    pub fn set_signal_bus(&self, conn: Connection) {
+        let _ = self.signal_bus.set(conn);
+    }
+
+    /// Emit the `Updated` signal on `org.opdbus.v1.PluginV1` for a given plugin.
+    ///
+    /// Best-effort: if the signal bus is not yet available (early boot) or the
+    /// interface is not registered for this plugin, the write still succeeds.
+    /// The signal is for reactivity; SHM is the source of truth.
+    async fn emit_updated_signal(&self, plugin_id: &str) {
+        let conn = match self.signal_bus.get() {
+            Some(c) => c,
+            None => {
+                tracing::debug!(plugin_id, "signal_bus not yet available; skipping Updated signal");
+                return;
+            }
+        };
+        let path = format!("/org/opdbus/v1/plugins/{plugin_id}");
+        let iface_ref = match conn
+            .object_server()
+            .interface::<_, crate::schema_router::SchemaBackedInterface>(&*path)
+            .await
+        {
+            Ok(r) => r,
+            Err(_) => {
+                tracing::debug!(plugin_id, "PluginV1 interface not registered at path; skipping signal");
+                return;
+            }
+        };
+        let payload = serde_json::json!({"plugin": plugin_id, "key": plugin_id}).to_string();
+        if let Err(e) = crate::schema_router::SchemaBackedInterface::updated(
+            iface_ref.signal_emitter(),
+            &payload,
+        )
+        .await
+        {
+            tracing::debug!(plugin_id, error = %e, "Failed to emit Updated signal");
         }
     }
 
@@ -228,6 +274,7 @@ impl MutationEngine {
             let seed_state = op_plugins::projection_seed_state_from_schema(&schema);
             let json = simd_json::to_string(&seed_state)?;
             op_core::projection_shm::write_projection(&plugin_id, json.as_bytes())?;
+            self.emit_updated_signal(&plugin_id).await;
             self.update_state_cache(plugin_id.clone(), seed_state).await;
             seeded += 1;
         }
@@ -520,6 +567,8 @@ impl MutationEngine {
                         op_core::projection_shm::write_projection(&plugin_id, json.as_bytes())
                     {
                         tracing::warn!(plugin_id = %plugin_id, error = %e, "Failed to write shm projection");
+                    } else {
+                        self.emit_updated_signal(&plugin_id).await;
                     }
                 }
                 Err(e) => {
@@ -1201,6 +1250,7 @@ impl MutationEngine {
         };
         let json = simd_json::to_string(&projection)?;
         op_core::projection_shm::write_projection(plugin_id, json.as_bytes())?;
+        self.emit_updated_signal(plugin_id).await;
         let change = StateChange {
             change_id: uuid::Uuid::new_v4().to_string(),
             event_id: 0,

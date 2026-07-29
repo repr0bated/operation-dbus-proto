@@ -322,11 +322,14 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
 
         let dbus_conn = Arc::new(tokio::sync::OnceCell::new());
         let _ = dbus_conn.set(conn.clone());
+        let engine_for_signal = mutation_engine_for_dbus.clone();
         let router = SchemaRouter::with_engine(dbus_conn, mutation_engine_for_dbus);
 
         if let Err(e) = router.register_objects().await {
             tracing::error!(error = %e, "Failed to register authoritative D-Bus plugin objects");
         } else {
+            // Store the signal bus on the MutationEngine so emit_updated_signal works.
+            engine_for_signal.set_signal_bus(conn.clone());
             // Request the canonical bus name
             match conn
                 .request_name(op_plugins::canonical::BASE_SERVICE_NAME)

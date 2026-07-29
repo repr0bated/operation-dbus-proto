@@ -364,21 +364,18 @@ build_project() {
       build_as env PROTOC="$(command -v protoc || true)" \
         cargo build --release \
             -p op-web \
-            -p op-projection \
             -p op-grpc-bridge \
             -p op-cognitive-mcp \
             -p op-mcp \
             -p op-s6-systemctl \
             -p op-xray-daemon \
             -p op-network \
-            -p op-plugins \
-            -p op-dbus-mirror
+            -p op-plugins
     ) || die "cargo build failed (check the zbus checkout at ${OP_HOME}/git/zbus matches the fork the workspace expects; override with ZBUS_GIT_URL=...)"
 
     log "Installing binaries to ${BIN_DIR}..."
     local bins=(
         op-web-server opdbus
-        projection_server
         op-grpc-bridge
         op-cognitive-mcp rag-ingest op-cog-admin
         op-mcp-compact op-mcp-server op-mcp-agents
@@ -411,9 +408,6 @@ write_environment() {
 
 # SESSION bus — the WG-identity-gated plugin surface (busd)
 DBUS_SESSION_BUS_ADDRESS=${SESSION_BUS_ADDRESS}
-
-# projection_server bus selection: "session" or "system"
-OP_DBUS_PROJECTION_BUS=session
 
 # State + memory
 OP_DBUS_STATE_DIR=${STATE_DIR}
@@ -1047,18 +1041,8 @@ export RUST_LOG="\${RUST_LOG:-info}"
 exec ${BIN_DIR}/opdbus
 EOF
 
-    # ---- op-projection: SchemaEngine / plugin projection -------------------
-    mk_longrun op-projection "op-session-bus" <<EOF
-#!/bin/sh
-exec 2>&1
-set -a; [ -r ${ENV_FILE} ] && . ${ENV_FILE}; set +a
-: "\${DBUS_SESSION_BUS_ADDRESS:?must be set in ${ENV_FILE}}"
-export RUST_LOG="\${RUST_LOG:-op_projection=info,info}"
-exec ${BIN_DIR}/projection_server
-EOF
-
     # ---- op-web: HTTP API + embedded UI ------------------------------------
-    mk_longrun op-web "op-projection opdbus" <<EOF
+    mk_longrun op-web "opdbus" <<EOF
 #!/bin/sh
 exec 2>&1
 set -a; [ -r ${ENV_FILE} ] && . ${ENV_FILE}; set +a
@@ -1501,7 +1485,7 @@ verify() {
     log "Verifying installation..."
     local bad=0
 
-    for b in op-web-server opdbus projection_server op-grpc-bridge s6d; do
+    for b in op-web-server opdbus op-grpc-bridge s6d; do
         if [[ -x ${BIN_DIR}/$b ]]; then ok "binary: $b"; else warn "missing binary: $b"; bad=1; fi
     done
 
