@@ -81,30 +81,46 @@ async fn cognitive_mcp_per_method_services_are_advertised() {
     );
 }
 
-/// The per-method services are advertised but **not served**.
+/// The generated plugin-level service **is** served over tonic-web.
 ///
-/// `freeze_plugin_method_reflection` generates each method's frozen descriptor and
-/// registers it with the reflection registry, which is what the test above checks.
-/// It does not mount a handler: `build_operation_routes` mounts a fixed set of 12
-/// services, and `plugin_grpc_gen` only produces descriptors — there is no dynamic
-/// tonic service matching `/operation.method.<plugin>.<method>.<Svc>/<Rpc>`.
+/// Two distinct naming schemes coexist, and conflating them is easy:
 ///
-/// Measured: a call to `InvokeToolService/InvokeTool` returns `grpc-status: 12`
-/// (UNIMPLEMENTED) on both `:50051` and tonic-web `:8090` — identical to a service
-/// name that does not exist at all.
+///   served    `operation.plugin.v1.{Plugin}PluginMethods/{Rpc}`
+///             generated at compile time by build.rs from the plugin schemas,
+///             dispatching through `call_generated_plugin_method_typed` which
+///             decodes the request with prost-reflect, hands JSON to
+///             MutationEngine, and re-encodes the response.
 ///
-/// Until a dynamic dispatch handler exists, gRPC/gRPC-Web clients cannot reach the
-/// cognitive surface; only the D-Bus path (`PluginV1.Call` with `invoke_tool`) works.
-/// Un-ignore this test when that handler lands.
+///   reflection-only  `operation.method.{plugin}.{method}.{Svc}/{Rpc}`
+///             the per-method frozen descriptors from the sealed blob. Registered
+///             with the reflection registry so they are discoverable, but no
+///             handler is mounted for these names.
+///
+/// So the cognitive surface *is* reachable from gRPC and gRPC-Web clients — under
+/// the first scheme. Asserting against the second yields a misleading UNIMPLEMENTED.
+///
+/// This probe sends a valid `tool_name` and expects the call to reach the
+/// capability gate (status 7), proving routing + protobuf decode + dispatch all
+/// work. Status 12 would mean the service is not mounted at all.
 #[tokio::test]
-#[ignore = "known gap: per-method services are advertised in reflection but no handler is mounted"]
-async fn cognitive_mcp_per_method_services_are_callable() {
-    let body: &[u8] = &[0u8, 0, 0, 0, 0]; // empty gRPC-Web frame
-    let client = reqwest::Client::new();
-    let resp = client
-        .post("http://127.0.0.1:8090/operation.method.cognitive_mcp.invoke_tool.InvokeToolService/InvokeTool")
+#[ignore = "requires a running bridge on 127.0.0.1:8090"]
+async fn cognitive_mcp_plugin_service_is_served_over_tonic_web() {
+    // CognitiveMcpInvokeToolRequest { string tool_name = 322087922; }
+    // varint tag for field 322087922, wire type 2 -> 92 BF D5 CC 09
+    let mut msg: Vec<u8> = vec![0x92, 0xBF, 0xD5, 0xCC, 0x09];
+    let tool = b"get_health";
+    msg.push(tool.len() as u8);
+    msg.extend_from_slice(tool);
+
+    // gRPC-Web frame: 1 flag byte + 4-byte big-endian length + payload
+    let mut body: Vec<u8> = vec![0x00];
+    body.extend_from_slice(&(msg.len() as u32).to_be_bytes());
+    body.extend_from_slice(&msg);
+
+    let resp = reqwest::Client::new()
+        .post("http://127.0.0.1:8090/operation.plugin.v1.CognitiveMcpPluginMethods/InvokeTool")
         .header("Content-Type", "application/grpc-web+proto")
-        .body(body.to_vec())
+        .body(body)
         .send()
         .await
         .expect("post to tonic-web :8090");
@@ -115,10 +131,24 @@ async fn cognitive_mcp_per_method_services_are_callable() {
         .and_then(|v| v.to_str().ok())
         .unwrap_or("<absent>")
         .to_string();
+    let message = resp
+        .headers()
+        .get("grpc-message")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
 
     assert_ne!(
         status, "12",
-        "InvokeToolService returned UNIMPLEMENTED — advertised in reflection but no \
-         handler is mounted to serve it"
+        "CognitiveMcpPluginMethods/InvokeTool returned UNIMPLEMENTED — the generated \
+         plugin service is not mounted (grpc-message: {message})"
+    );
+
+    // Reaching the capability gate proves routing, protobuf decode and dispatch ran.
+    // The gRPC path requires the caller to *declare* capability_id, not merely hold
+    // the grant, so an undeclared call is expected to be denied here.
+    assert!(
+        status == "7" || status == "0",
+        "unexpected grpc-status {status} (grpc-message: {message})"
     );
 }
