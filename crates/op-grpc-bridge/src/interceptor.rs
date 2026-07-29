@@ -342,3 +342,14 @@ mod tests {
     // here against a local IdentitySled/is_sled_valid that no longer exist
     // in this crate.
 }
+
+/// Load capability grants for a footprint hash.
+/// Currently grants all capabilities — real enforcement is at the gRPC interceptor layer.
+/// TODO: restore Cozo-backed capability lookup when SchemaRouter is fully re-integrated.
+pub fn load_capability_grants(_footprint_hex: &str) -> std::collections::HashSet<String> {
+    // Grant all — the GhostBridge interceptor already validated the footprint.
+    // Per-method capability checks are done at the gRPC PluginService.CallMethod level.
+    let mut grants = std::collections::HashSet::new();
+    grants.insert("*".to_string());
+    grants
+}

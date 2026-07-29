@@ -25,6 +25,7 @@ use crate::dbus_object::{register_zeroclaw_host_object, ZeroclawAxumHostObject};
 use crate::grpc_server::OperationGrpcServer;
 use crate::mutation_engine::MutationEngine;
 use crate::schema_loader::{SchemaLoader, SchemaReloadEvent};
+use crate::schema_router::SchemaRouter;
 use crate::tracing::{GhostbridgeTraceLayer, TraceContext};
 
 use crate::grpc_server::build_operation_routes;
@@ -284,6 +285,7 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
     let ovsdb = Arc::new(op_network::rovs_proxy::OvsdbDbusClient::new());
     let mutation_engine = Arc::new(MutationEngine::new(event_chain, ovsdb));
     mutation_engine.seed_missing_plugin_projections().await?;
+    let mutation_engine_for_dbus = mutation_engine.clone();
     let operation_server = OperationGrpcServer::new(mutation_engine);
     // The sealed SHM blob catalog IS the plugin set: hydrate reflection from
     // it so a bridge restart advertises every sealed plugin immediately.
@@ -292,8 +294,9 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
     // ── D-Bus plugin object registration ──────────────────────────────────
     // Register all plugin objects from the SHM blob catalog on the session bus
     // so `busctl tree org.opdbus.v1.plugins` shows the full plugin tree.
-    // Reads plugin IDs from the blob manifest and registers a minimal
-    // introspectable object at each plugin's canonical path.
+    // SchemaRouter reads sealed blobs and creates SchemaBackedInterface objects
+    // with real methods/properties matching each plugin's schema, dispatching
+    // calls through the same MutationEngine as the gRPC path.
     tokio::spawn(async move {
         let addr = std::env::var("DBUS_SESSION_BUS_ADDRESS")
             .unwrap_or_else(|_| op_core::config::SESSION_BUS_ADDRESS.to_string());
@@ -311,59 +314,28 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
             }
         };
 
-        // Read the blob manifest to discover all plugins
-        let manifest_path = "/dev/shm/opdbus/plugin-blobs/.manifest.json";
-        let manifest_data = match std::fs::read_to_string(manifest_path) {
-            Ok(d) => d,
-            Err(e) => {
-                tracing::warn!(error = %e, "Cannot read blob manifest — D-Bus objects not registered");
-                return;
-            }
-        };
-        let manifest: serde_json::Value = match serde_json::from_str(&manifest_data) {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::warn!(error = %e, "Cannot parse blob manifest");
-                return;
-            }
-        };
+        let dbus_conn = Arc::new(tokio::sync::OnceCell::new());
+        let _ = dbus_conn.set(conn.clone());
+        let router = SchemaRouter::with_engine(dbus_conn, mutation_engine_for_dbus);
 
-        let plugins = match manifest.get("plugins").and_then(|p| p.as_object()) {
-            Some(p) => p,
-            None => {
-                tracing::warn!("Blob manifest has no 'plugins' object");
-                return;
-            }
-        };
-
-        let mut registered = 0usize;
-        for plugin_id in plugins.keys() {
-            let path = format!("/org/opdbus/v1/plugins/{}", plugin_id);
-            // Register a minimal placeholder object (introspectable)
-            let iface = PluginPlaceholderInterface {
-                plugin_id: plugin_id.clone(),
-            };
-            match conn.object_server().at(path.as_str(), iface).await {
-                Ok(_) => registered += 1,
-                Err(e) => {
-                    tracing::debug!(plugin_id, error = %e, "D-Bus object registration skipped");
+        if let Err(e) = router.register_objects().await {
+            tracing::error!(error = %e, "Failed to register authoritative D-Bus plugin objects");
+        } else {
+            // Request the canonical bus name
+            match conn
+                .request_name(op_plugins::canonical::BASE_SERVICE_NAME)
+                .await
+            {
+                Ok(_) => {
+                    let count = router.list_plugin_ids().await.len();
+                    tracing::info!(
+                        count,
+                        "D-Bus plugin objects registered under org.opdbus.v1.plugins"
+                    );
                 }
-            }
-        }
-
-        // Request the canonical bus name
-        match conn
-            .request_name(op_plugins::canonical::BASE_SERVICE_NAME)
-            .await
-        {
-            Ok(_) => {
-                tracing::info!(
-                    registered,
-                    "D-Bus plugin objects registered under org.opdbus.v1.plugins"
-                );
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, registered, "D-Bus name request failed (objects still registered)");
+                Err(e) => {
+                    tracing::warn!(error = %e, "D-Bus name request failed");
+                }
             }
         }
 
@@ -573,29 +545,4 @@ async fn bind_unix_listener(
         let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o777));
     }
     Ok(tokio_stream::wrappers::UnixListenerStream::new(listener))
-}
-
-// ── Minimal D-Bus interface for plugin object registration ────────────────
-// Each plugin gets a placeholder object at /org/opdbus/v1/plugins/<plugin_id>.
-// The interface exposes the plugin_id as a property and is introspectable.
-// Full method dispatch goes through gRPC (PluginService.CallMethod), not D-Bus.
-
-/// Placeholder D-Bus interface registered for each plugin in the blob catalog.
-struct PluginPlaceholderInterface {
-    plugin_id: String,
-}
-
-#[zbus::interface(name = "org.opdbus.v1.plugins.ProjectedObject")]
-impl PluginPlaceholderInterface {
-    /// The plugin identifier.
-    #[zbus(property)]
-    async fn plugin_id(&self) -> &str {
-        &self.plugin_id
-    }
-
-    /// Plugin state — always "projected" for blob-backed plugins.
-    #[zbus(property)]
-    async fn state(&self) -> &str {
-        "projected"
-    }
 }

@@ -36,6 +36,7 @@ pub mod plugin_grpc_gen;
 pub mod plugin_object_blob;
 pub mod proto_gen;
 pub mod schema_loader;
+pub mod schema_router;
 pub mod server;
 pub mod shared_socket;
 pub mod tracing;

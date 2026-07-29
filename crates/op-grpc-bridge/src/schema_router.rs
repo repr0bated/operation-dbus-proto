@@ -21,13 +21,13 @@ use std::sync::Arc;
 use jsonschema::Validator;
 use serde_json::Value as JsonValue;
 use tokio::sync::RwLock;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 // Import capability grants loader for bridge-layer enforcement (VAL-ENFORCE-002).
 use crate::interceptor::load_capability_grants;
 use zbus::{Connection, Proxy};
 
-use crate::schema_engine::SchemaEngine;
+use crate::mutation_engine::MutationEngine;
 
 use op_plugins::canonical::{self, BASE_SERVICE_NAME};
 
@@ -65,7 +65,7 @@ pub struct PluginRoute {
 pub struct SchemaRouter {
     /// Plugin routes keyed by plugin_id.
     routes: Arc<RwLock<HashMap<String, PluginRoute>>>,
-    /// D-Bus system connection (shared with SchemaEngine).
+    /// D-Bus system connection (shared with MutationEngine).
     dbus_connection: Arc<tokio::sync::OnceCell<Connection>>,
     /// Catalog path: blob-catalog dir in production (default [`BLOB_CATALOG_DIR`]), or a monolith file in tests.
     monolith_path: PathBuf,
@@ -77,13 +77,14 @@ pub struct SchemaRouter {
     /// inbound connection; a change triggers a reload. `None` when no manifest
     /// has been observed yet.
     cached_hash: Arc<RwLock<Option<String>>>,
-    /// The SchemaEngine used for real method dispatch (Requirement 5).
+    /// The MutationEngine used for real method dispatch (Requirement 5).
     /// `None` in unit tests that do not exercise the dispatch path.
-    engine: Option<Arc<SchemaEngine>>,
+    engine: Option<Arc<MutationEngine>>,
     /// Optional projection hook invoked after object registration to publish
     /// the read-only Zeroclaw route/provider sub-object tree (Phase 1b). Push
     /// only — invoked from the registration cycle, never on a timer.
-    projection_hook: Option<Arc<dyn crate::zeroclaw_projection::SchemaProjectionHook>>,
+    // projection_hook disabled until schemars version mismatch is resolved
+    projection_hook: Option<Arc<dyn std::any::Any + Send + Sync>>,
     /// Child object paths currently registered by this router.
     child_objects: Arc<RwLock<HashSet<String>>>,
 }
@@ -106,15 +107,15 @@ impl SchemaRouter {
         )
     }
 
-    /// Create a new SchemaRouter wired to a SchemaEngine for real dispatch.
+    /// Create a new SchemaRouter wired to a MutationEngine for real dispatch.
     ///
     /// This is the production constructor: the bridge passes its
-    /// `Arc<SchemaEngine>` so every registered `SchemaBackedInterface` can
-    /// dispatch method calls through `SchemaEngine::dispatch_method_call`
+    /// `Arc<MutationEngine>` so every registered `SchemaBackedInterface` can
+    /// dispatch method calls through `MutationEngine::dispatch_method_call`
     /// (Requirement 5 / VAL-DISPATCH-001).
     pub fn with_engine(
         dbus_connection: Arc<tokio::sync::OnceCell<Connection>>,
-        engine: Arc<SchemaEngine>,
+        engine: Arc<MutationEngine>,
     ) -> Self {
         let mut router = Self::new(dbus_connection);
         router.engine = Some(engine);
@@ -155,7 +156,7 @@ impl SchemaRouter {
     /// route/provider sub-object tree after each object-registration cycle.
     pub fn set_projection_hook(
         &mut self,
-        hook: Arc<dyn crate::zeroclaw_projection::SchemaProjectionHook>,
+        hook: Arc<dyn std::any::Any + Send + Sync>,
     ) {
         self.projection_hook = Some(hook);
     }
@@ -824,10 +825,10 @@ pub struct SchemaBackedInterface {
     route: PluginRoute,
     /// Directory containing per-plugin present-state JSON files.
     shm_state_dir: PathBuf,
-    /// The SchemaEngine for real method dispatch (Requirement 5).
+    /// The MutationEngine for real method dispatch (Requirement 5).
     /// `None` when no engine is wired (unit tests that only exercise
     /// method-existence / property-read paths).
-    engine: Option<Arc<SchemaEngine>>,
+    engine: Option<Arc<MutationEngine>>,
 }
 
 impl SchemaBackedInterface {
@@ -835,21 +836,21 @@ impl SchemaBackedInterface {
     /// directory (`/dev/shm/opdbus/state`) and no engine.
     ///
     /// Prefer [`with_engine`](Self::with_engine) in production so the
-    /// interface can dispatch method calls through `SchemaEngine`.
+    /// interface can dispatch method calls through `MutationEngine`.
     pub fn new(plugin_id: String, route: PluginRoute) -> Self {
         Self::with_shm_state_dir(plugin_id, route, DEFAULT_SHM_STATE_DIR)
     }
 
-    /// Creates a new `SchemaBackedInterface` wired to a SchemaEngine for
+    /// Creates a new `SchemaBackedInterface` wired to a MutationEngine for
     /// real method dispatch.
     ///
     /// The engine is used by [`call`](Self::call) to dispatch method
-    /// invocations through `SchemaEngine::dispatch_method_call`
+    /// invocations through `MutationEngine::dispatch_method_call`
     /// (Requirement 5 / VAL-DISPATCH-001).
     pub fn with_engine(
         plugin_id: String,
         route: PluginRoute,
-        engine: Option<Arc<SchemaEngine>>,
+        engine: Option<Arc<MutationEngine>>,
     ) -> Self {
         let mut iface = Self::with_shm_state_dir(plugin_id, route, DEFAULT_SHM_STATE_DIR);
         iface.engine = engine;
@@ -1004,7 +1005,7 @@ impl SchemaBackedInterface {
     ///   1. Method lookup → reject if not declared (UnknownMethod)
     ///   2. Arg validation → reject if invalid (InvalidArgs)
     ///   3. Capability check → reject if required_capability not granted (AccessDenied)
-    ///   4. SchemaEngine.mutate → record in event chain (Requirement 5)
+    ///   4. MutationEngine.mutate → record in event chain (Requirement 5)
     async fn call(&self, method: String, json_args: String) -> zbus::fdo::Result<String> {
         // 1. Method-existence gate: reject undeclared methods (Requirement 6).
         // If the methods map is empty, ALL invocations are rejected as UnknownMethod.
@@ -1054,12 +1055,12 @@ impl SchemaBackedInterface {
             }
         }
 
-        // 4. Real dispatch through SchemaEngine (Requirement 5).
+        // 4. Real dispatch through MutationEngine (Requirement 5).
         //    json_args is passed verbatim — no default, no placeholder
         //    (Requirement 5.4 / VAL-DISPATCH-004).
         let engine = self.engine.as_ref().ok_or_else(|| {
             zbus::fdo::Error::Failed(
-                "SchemaEngine not wired to this interface — dispatch unavailable".to_string(),
+                "MutationEngine not wired to this interface — dispatch unavailable".to_string(),
             )
         })?;
 
@@ -2056,17 +2057,17 @@ mod tests {
         cleanup(&base);
     }
 
-    // ── R5.1 / VAL-DISPATCH-001: Bridge dispatches to SchemaEngine.mutate ──
+    // ── R5.1 / VAL-DISPATCH-001: Bridge dispatches to MutationEngine.mutate ──
 
-    /// Builds a test `SchemaEngine` with a real `EventChain` so dispatch
+    /// Builds a test `MutationEngine` with a real `EventChain` so dispatch
     /// tests can verify the event chain record.
-    fn test_engine() -> Arc<SchemaEngine> {
+    fn test_engine() -> Arc<MutationEngine> {
         use op_network::rovs_proxy::OvsdbDbusClient;
         use op_state_store::{ChainConfig, EventChain};
 
         let event_chain = Arc::new(RwLock::new(EventChain::new(ChainConfig::default())));
         let ovsdb = Arc::new(OvsdbDbusClient::new());
-        Arc::new(SchemaEngine::new(event_chain, ovsdb))
+        Arc::new(MutationEngine::new(event_chain, ovsdb))
     }
 
     /// Builds a `PluginRoute` with a method that has a `required_capability`.
@@ -2124,7 +2125,7 @@ mod tests {
 
     #[tokio::test]
     async fn bridge_dispatches_to_schema_engine_mutate() {
-        // VAL-DISPATCH-001: call() dispatches to SchemaEngine, not a stub.
+        // VAL-DISPATCH-001: call() dispatches to MutationEngine, not a stub.
         let engine = test_engine();
         let route = dispatch_test_route();
         let iface =
@@ -2190,7 +2191,7 @@ mod tests {
 
     #[tokio::test]
     async fn mutate_error_propagated_to_caller() {
-        // VAL-DISPATCH-003: if SchemaEngine returns an error, the bridge
+        // VAL-DISPATCH-003: if MutationEngine returns an error, the bridge
         // propagates it as zbus::fdo::Error::Failed.
         // Uses ForceDispatchError method with valid JSON args to trigger dispatch error
         // (without using malformed JSON, which would be rejected by arg-validation gate).
@@ -2383,7 +2384,7 @@ mod tests {
     #[tokio::test]
     async fn unknown_method_rejected_without_dispatch() {
         // VAL-VALIDATE-002: unknown method is rejected as UnknownMethod
-        // without calling SchemaEngine (no event recorded).
+        // without calling MutationEngine (no event recorded).
         let engine = test_engine();
         let route = dispatch_test_route();
         let iface =
@@ -2409,7 +2410,7 @@ mod tests {
     #[tokio::test]
     async fn bridge_looks_up_method_decl_before_dispatch() {
         // VAL-VALIDATE-001: the bridge must look up the MethodDecl in
-        // PluginSchema.methods before dispatching to SchemaEngine.
+        // PluginSchema.methods before dispatching to MutationEngine.
         let base = test_base_dir();
         let monolith_path = write_test_monolith(&base);
         let routes = SchemaRouter::load_routes_from(&monolith_path);
@@ -2459,7 +2460,7 @@ mod tests {
             "missing required key should be rejected as InvalidArgs"
         );
 
-        // SchemaEngine.mutate should NOT have been called
+        // MutationEngine.mutate should NOT have been called
         let chain = engine.event_chain.read().await;
         assert!(
             chain.events().is_empty(),
