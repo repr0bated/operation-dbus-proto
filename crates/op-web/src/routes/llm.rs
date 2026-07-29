@@ -75,9 +75,9 @@ pub async fn get_llm_status(Extension(state): Extension<Arc<AppState>>) -> impl 
 ///
 /// The zeroclaw plugin is the single source of truth: its live state
 /// is projected verbatim at `/org/opdbus/v1/plugins/zeroclaw`. We read it from
-/// the projection cache and surface each route as a selectable model.
+/// the SHM state tree and surface each route as a selectable model.
 async fn models_from_zeroclaw(state: &AppState) -> Option<Vec<ModelInfo>> {
-    let routes = crate::zeroclaw_routes::routes(&state.projection_cache).await?;
+    let routes = crate::zeroclaw_routes::routes()?;
 
     let models: Vec<ModelInfo> = routes
         .iter()

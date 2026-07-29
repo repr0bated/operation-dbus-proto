@@ -103,8 +103,6 @@ pub struct AppState {
     pub system_stats: Arc<RwLock<simd_json::OwnedValue>>,
     /// Recent activity feed from projection/D-Bus events
     pub activity_log: Arc<RwLock<Vec<simd_json::OwnedValue>>>,
-    /// Cached projection data from D-Bus tree (schema-validated procfs, etc.)
-    pub projection_cache: crate::projection_client::ProjectionCache,
 }
 
 impl AppState {
@@ -252,14 +250,6 @@ impl AppState {
         let pool = Arc::new(GrpcClientPool::new());
         let grpc_client = Arc::new(RemoteOperationClient::new(pool, &grpc_addr, "op-web"));
 
-        let projection_cache = Arc::new(RwLock::new(HashMap::new()));
-
-        // Start D-Bus projection monitor in background
-        let cache_clone = projection_cache.clone();
-        tokio::spawn(async move {
-            crate::projection_client::start_projection_monitor(cache_clone).await;
-        });
-
         Ok(Self {
             orchestrator,
             tool_registry,
@@ -280,7 +270,6 @@ impl AppState {
             grpc_client,
             system_stats: Arc::new(RwLock::new(simd_json::json!(null))),
             activity_log: Arc::new(RwLock::new(Vec::new())),
-            projection_cache,
         })
     }
 

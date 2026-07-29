@@ -34,7 +34,6 @@ members = [
     "crates/op-grpc-bridge",
     "crates/op-grpc-adapters",
     "crates/op-compliance",
-    "crates/op-projection",
     "crates/op-assistant-grpc",
     "crates/op-waypipe-grpc",
     "crates/op-s6-systemctl",
@@ -76,7 +75,6 @@ op-web = { path = "crates/op-web" }
 op-grpc-bridge = { path = "crates/op-grpc-bridge" }
 op-identity = { path = "crates/op-identity" }
 op-jsonrpc = { path = "crates/op-jsonrpc" }
-op-projection = { path = "crates/op-projection" }
 op-cozo-store = { path = "crates/op-cozo-store" }
 op-s6-systemctl = { path = "crates/op-s6-systemctl" }
 op-xray-daemon = { path = "crates/op-xray-daemon" }

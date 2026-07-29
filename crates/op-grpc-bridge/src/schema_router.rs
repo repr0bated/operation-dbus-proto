@@ -811,17 +811,28 @@ impl SchemaBackedInterface {
 
     /// Set a property value.
     ///
-    /// Present-state is managed by the producer (`op-projection`) via SHM.
+    /// Present-state is managed by the mutation engine via SHM.
     /// The bridge is a reader, not a writer, of present-state. This method
     /// returns an error indicating that property writes must go through the
     /// producer's mutation pipeline.
     async fn set_property(&self, _name: String, _json_value: String) -> zbus::fdo::Result<()> {
         Err(zbus::fdo::Error::Failed(
-            "Present-state is managed by op-projection via SHM; \
+            "Present-state is managed via SHM; \
              use the mutation pipeline to change properties"
                 .to_string(),
         ))
     }
+
+    /// Push signal emitted after every `write_projection()` in the mutation engine.
+    ///
+    /// `data_json` is a JSON object identifying what changed:
+    /// `{"plugin": "<name>", "key": "<key>"}` (single) or
+    /// `{"plugin": "<name>", "keys": ["k1","k2"]}` (batch).
+    ///
+    /// Subscribers can act on the signal payload alone without an additional
+    /// query — this is the no-polling guarantee (REQ-1.5, REQ-7).
+    #[zbus(signal)]
+    pub async fn updated(signal_emitter: &zbus::object_server::SignalEmitter<'_>, data_json: &str) -> zbus::Result<()>;
 }
 
 #[derive(Debug, thiserror::Error)]

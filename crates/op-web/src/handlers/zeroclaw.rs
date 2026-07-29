@@ -395,23 +395,22 @@ fn compatibility_openapi(schema: Option<&Value>) -> Value {
 /// frontend can render the entire chat interface from a single schema.
 /// GET /api/zeroclaw/schema
 pub async fn zeroclaw_schema_handler(Extension(state): Extension<Arc<AppState>>) -> Response {
-    // Prefer the D-Bus projection (live provider/model catalog), since the
-    // sealed blob only carries the PluginSchema contract, not the live
-    // `projection.providers` / `projection.model_routes`. Fall back to the SHM
-    // PluginSchema so the schema surface still renders when D-Bus is down.
+    // Read zeroclaw state directly from the SHM state tree. Fall back to the
+    // sealed PluginSchema blob so the schema surface still renders when no
+    // mutation has populated SHM yet.
     let (zeroclaw, zeroclaw_schema) =
-        match crate::projection_client::get_projection(&state.projection_cache, "zeroclaw").await {
+        match crate::state_tree::read_key("zeroclaw", "state") {
             Some(v) => {
-                info!("Using zeroclaw from D-Bus projection (live provider/model catalog)");
+                info!("Using zeroclaw from SHM state tree (live provider/model catalog)");
                 (v, read_zeroclaw_schema_shm())
             }
             None => match read_zeroclaw_schema_shm() {
                 Some(schema) => {
-                    warn!("Zeroclaw D-Bus projection unavailable; using SHM PluginSchema only");
+                    warn!("Zeroclaw SHM state unavailable; using PluginSchema only");
                     (schema.clone(), Some(schema))
                 }
                 None => {
-                    error!("Zeroclaw not available from D-Bus or SHM");
+                    error!("Zeroclaw not available from SHM state tree or PluginSchema");
                     return json_error_response(
                         StatusCode::SERVICE_UNAVAILABLE,
                         "Zeroclaw projection not available",
