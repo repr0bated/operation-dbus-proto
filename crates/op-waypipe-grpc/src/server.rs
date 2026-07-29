@@ -89,22 +89,23 @@ impl WaypipeTunnel for WaypipeTunnelService {
             .unwrap_or_else(|| authorize_on_connection(request.metadata()))?;
 
         let mut inbound = request.into_inner();
-        let open = loop {
-            match inbound.next().await {
-                Some(Ok(msg)) => match msg.msg {
-                    Some(client_msg::Msg::Open(o)) => break o,
-                    Some(client_msg::Msg::Chunk(_)) => {
-                        return Err(Status::invalid_argument(
-                            "first ClientMsg must be TunnelOpen",
-                        ));
-                    }
-                    None => {
-                        return Err(Status::invalid_argument("empty ClientMsg"));
-                    }
-                },
-                Some(Err(e)) => return Err(e),
-                None => return Err(Status::cancelled("client closed before TunnelOpen")),
-            }
+        // The first ClientMsg must be TunnelOpen. This reads exactly one message: the
+        // previous `loop` never reached a second iteration because every arm either
+        // broke or returned, which `clippy::never_loop` (deny-by-default) rejected.
+        let open = match inbound.next().await {
+            Some(Ok(msg)) => match msg.msg {
+                Some(client_msg::Msg::Open(o)) => o,
+                Some(client_msg::Msg::Chunk(_)) => {
+                    return Err(Status::invalid_argument(
+                        "first ClientMsg must be TunnelOpen",
+                    ));
+                }
+                None => {
+                    return Err(Status::invalid_argument("empty ClientMsg"));
+                }
+            },
+            Some(Err(e)) => return Err(e),
+            None => return Err(Status::cancelled("client closed before TunnelOpen")),
         };
 
         if open.command.is_empty() {

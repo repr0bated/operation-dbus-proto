@@ -34,6 +34,10 @@ serde_json = { workspace = true }
 simd-json = { workspace = true }
 schemars = { workspace = true }
 jsonschema = { workspace = true }
+# HTTP client for the Phase 1 cognitive_mcp MCP loopback (design.md DQ-2 in
+# .kiro/specs/cognitive-mcp-bridge-only-door). Phase 2 replaces this with an
+# in-process ToolRegistry call, at which point this dependency is removed.
+reqwest = { workspace = true }
 
 # Internal crates
 op-state-store = { path = "../op-state-store" }

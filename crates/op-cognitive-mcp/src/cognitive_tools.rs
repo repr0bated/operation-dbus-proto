@@ -16,6 +16,22 @@ use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
 use std::sync::Arc;
 
+/// Safe field access for simd_json values.
+///
+/// simd_json's `Index` impl **panics** when the key is absent, unlike `serde_json`
+/// which yields `Null`. Every optional-field read must therefore go through `get`.
+/// This wrapper keeps the ergonomic `field(input, "k").as_str()` shape while
+/// returning a Null sentinel rather than unwinding the worker task.
+///
+/// Reading an absent optional argument used to panic the tokio worker and reset the
+/// client connection, which surfaced as an empty HTTP response rather than an error.
+pub(crate) fn field<'a>(input: &'a Value, key: &str) -> &'a Value {
+    static NULL: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
+    input
+        .get(key)
+        .unwrap_or_else(|| NULL.get_or_init(|| json!(null)))
+}
+
 pub struct CognitiveToolRegistry;
 
 impl CognitiveToolRegistry {
@@ -143,7 +159,7 @@ impl Tool for MemoryTool {
     }
 
     async fn execute(&self, input: Value) -> Result<Value> {
-        let op = input["operation"]
+        let op = field(&input, "operation")
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("missing operation"))?;
 
@@ -199,8 +215,8 @@ impl Tool for RegisterToolTool {
 
 impl MemoryTool {
     async fn op_ensure_soul(&self, input: &Value) -> Result<Value> {
-        let owner = input["owner"].as_str().unwrap_or("user_container");
-        let container_id = input["container_id"].as_str();
+        let owner = field(input, "owner").as_str().unwrap_or("user_container");
+        let container_id = field(input, "container_id").as_str();
         let identity = soul_identity(owner, input)?;
         let namespace = soul_namespace(owner, container_id)?;
         let kind = if owner == "chatbot" {
@@ -221,16 +237,16 @@ impl MemoryTool {
             )
             .await?;
 
-        let value = if input["value"].is_null() {
+        let value = if field(input, "value").is_null() {
             serde_json::json!({
                 "owner": owner,
                 "container_id": container_id,
                 "identity_id": identity,
-                "wireguard_pubkey": input["wireguard_pubkey"].as_str(),
+                "wireguard_pubkey": field(input, "wireguard_pubkey").as_str(),
                 "purpose": "soul"
             })
         } else {
-            simd_json_to_serde(&input["value"])
+            simd_json_to_serde(field(input, "value"))
         };
         let entry = self
             .store
@@ -297,11 +313,11 @@ impl MemoryTool {
 
     async fn op_store(&self, input: &Value) -> Result<Value> {
         let namespace = memory_namespace(input)?;
-        let key = input["key"]
+        let key = field(input, "key")
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("missing key"))?;
-        let value = simd_json_to_serde(&input["value"]);
-        let tags: Vec<String> = input["tags"]
+        let value = simd_json_to_serde(field(input, "value"));
+        let tags: Vec<String> = field(input, "tags")
             .as_array()
             .map(|a| {
                 a.iter()
@@ -309,12 +325,12 @@ impl MemoryTool {
                     .collect()
             })
             .unwrap_or_default();
-        let tags = scoped_tags(tags, input["container_id"].as_str());
+        let tags = scoped_tags(tags, field(input, "container_id").as_str());
 
-        self.ensure_namespace(&namespace, input["namespace_kind"].as_str())
+        self.ensure_namespace(&namespace, field(input, "namespace_kind").as_str())
             .await?;
 
-        if input["container_id"].as_str().is_some()
+        if field(input, "container_id").as_str().is_some()
             && self
                 .store
                 .retrieve_entry(&namespace, "_identity")
@@ -327,7 +343,7 @@ impl MemoryTool {
                     &namespace,
                     "_identity",
                     identity_link_value(input, identity.as_deref()),
-                    scoped_tags(vec!["identity".to_string()], input["container_id"].as_str()),
+                    scoped_tags(vec!["identity".to_string()], field(input, "container_id").as_str()),
                     None,
                 )
                 .await?;
@@ -352,7 +368,7 @@ impl MemoryTool {
 
     async fn op_retrieve(&self, input: &Value) -> Result<Value> {
         let namespace = memory_namespace(input)?;
-        let key = input["key"]
+        let key = field(input, "key")
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("missing key"))?;
 
@@ -377,13 +393,13 @@ impl MemoryTool {
     async fn op_query(&self, input: &Value) -> Result<Value> {
         let q = EntryQuery {
             namespace_id: optional_memory_namespace(input)?,
-            key_pattern: input["key_pattern"].as_str().map(String::from),
-            tags: input["tags"].as_array().map(|a| {
+            key_pattern: field(input, "key_pattern").as_str().map(String::from),
+            tags: field(input, "tags").as_array().map(|a| {
                 a.iter()
                     .filter_map(|v| v.as_str().map(String::from))
                     .collect()
             }),
-            limit: input["limit"].as_i64(),
+            limit: field(input, "limit").as_i64(),
             offset: None,
         };
 
@@ -412,14 +428,14 @@ impl MemoryTool {
                 "semantic memory unavailable: Qdrant Semantic Shuttle is not configured"
             )
         })?;
-        let container_id = input["container_id"]
+        let container_id = field(input, "container_id")
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("missing container_id"))?;
-        let query = input["query"]
+        let query = field(input, "query")
             .as_str()
-            .or_else(|| input["key_pattern"].as_str())
+            .or_else(|| field(input, "key_pattern").as_str())
             .ok_or_else(|| anyhow::anyhow!("missing query"))?;
-        let limit = input["limit"].as_i64().unwrap_or(10).max(1) as u64;
+        let limit = field(input, "limit").as_i64().unwrap_or(10).max(1) as u64;
 
         let embedding = qdrant.embed_query_text(query).await?;
         let results = qdrant
@@ -446,7 +462,7 @@ impl MemoryTool {
 
     async fn op_delete(&self, input: &Value) -> Result<Value> {
         let namespace = memory_namespace(input)?;
-        let key = input["key"]
+        let key = field(input, "key")
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("missing key"))?;
 
@@ -455,8 +471,13 @@ impl MemoryTool {
     }
 
     async fn op_list_namespaces(&self, input: &Value) -> Result<Value> {
-        let kind = input["namespace_kind"]
-            .as_str()
+        // `namespace_kind` is optional. `input[key]` on simd_json's OwnedValue panics
+        // when the key is absent (unlike serde_json, which yields Null), so this must
+        // go through `get`. Calling list_namespaces without a kind filter is the
+        // common case and previously panicked the worker task.
+        let kind = input
+            .get("namespace_kind")
+            .and_then(|v| v.as_str())
             .and_then(|s| s.parse::<NamespaceKind>().ok());
 
         let namespaces = self.store.list_namespaces(kind).await?;
@@ -494,7 +515,7 @@ impl MemoryTool {
         key: &str,
         value: &serde_json::Value,
     ) -> Result<bool> {
-        if !input["semantic"].as_bool().unwrap_or(false) {
+        if !field(input, "semantic").as_bool().unwrap_or(false) {
             return Ok(false);
         }
 
@@ -507,7 +528,7 @@ impl MemoryTool {
             return Ok(false);
         };
 
-        let Some(container_id) = input["container_id"].as_str() else {
+        let Some(container_id) = field(input, "container_id").as_str() else {
             tracing::warn!(
                 namespace = namespace,
                 key = key,
@@ -552,10 +573,10 @@ fn memory_namespace(input: &Value) -> Result<String> {
 }
 
 fn optional_memory_namespace(input: &Value) -> Result<Option<String>> {
-    if let Some(namespace) = input["namespace"].as_str() {
+    if let Some(namespace) = field(input, "namespace").as_str() {
         return Ok(Some(namespace.to_string()));
     }
-    Ok(input["container_id"].as_str().map(container_namespace))
+    Ok(field(input, "container_id").as_str().map(container_namespace))
 }
 
 fn container_namespace(container_id: &str) -> String {
@@ -584,7 +605,7 @@ fn soul_metadata(
         "owner": owner,
         "container_id": container_id,
         "identity_id": identity_id,
-        "wireguard_pubkey": input["wireguard_pubkey"].as_str(),
+        "wireguard_pubkey": field(input, "wireguard_pubkey").as_str(),
         "subid": if owner == "chatbot" {
             "src.software.chatbot-soul.persist@v1"
         } else {
@@ -622,7 +643,7 @@ fn memory_content(value: &serde_json::Value) -> String {
 }
 
 fn soul_identity(owner: &str, input: &Value) -> Result<Option<String>> {
-    let identity = input["identity_id"].as_str().map(ToOwned::to_owned);
+    let identity = field(input, "identity_id").as_str().map(ToOwned::to_owned);
     if owner == "user_container" && identity.is_none() {
         return Err(anyhow::anyhow!(
             "missing identity_id for user_container soul"
@@ -634,9 +655,9 @@ fn soul_identity(owner: &str, input: &Value) -> Result<Option<String>> {
 fn identity_link_value(input: &Value, identity_id: Option<&str>) -> serde_json::Value {
     serde_json::json!({
         "identity_id": identity_id,
-        "container_id": input["container_id"].as_str(),
-        "wireguard_pubkey": input["wireguard_pubkey"].as_str(),
-        "soul_namespace": input["container_id"]
+        "container_id": field(input, "container_id").as_str(),
+        "wireguard_pubkey": field(input, "wireguard_pubkey").as_str(),
+        "soul_namespace": field(input, "container_id")
             .as_str()
             .map(|container_id| format!("soul:user-container:{container_id}")),
         "subid": "src.software.user-container-memory.identity-link@v1"

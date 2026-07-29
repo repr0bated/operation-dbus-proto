@@ -735,6 +735,45 @@ pub struct CodeIndexInput {
     pub collection: Option<String>,
 }
 
+/// Typed empty argument set for methods that take no parameters.
+///
+/// Distinct from `()`, which schemars renders as `{"type":"null"}` and therefore
+/// rejects the `{}` that D-Bus/gRPC callers send for a no-argument method. This
+/// renders as an object schema, so both a bare `{}` and an absent body validate.
+///
+/// OSCAL subid: sch.software.cognitive-mcp.no-args@v1
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct NoArgs {}
+
+/// Input for the generic `invoke_tool` method.
+///
+/// OSCAL subid: sch.software.cognitive-mcp.invoke-tool-input@v1
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct InvokeToolInput {
+    #[schemars(
+        description = "Name of the tool to invoke; must exist in the cognitive_mcp ToolRegistry (e.g. cognitive_memory, search_blob_vectors)"
+    )]
+    pub tool_name: String,
+    #[serde(default)]
+    #[schemars(
+        description = "Tool-specific arguments, passed verbatim to the tool executor. Shape is validated by the tool, not by the bridge arg gate."
+    )]
+    pub arguments: serde_json::Value,
+}
+
+/// Output for the generic `invoke_tool` method.
+///
+/// OSCAL subid: sch.software.cognitive-mcp.invoke-tool-output@v1
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct InvokeToolOutput {
+    pub success: bool,
+    pub tool_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 /// Output for GetConfig method
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct GetConfigOutput {
@@ -940,7 +979,7 @@ pub(crate) fn cognitive_mcp_schema() -> PluginSchema {
 
     schema.methods.insert(
         "get_config".to_string(),
-        method_decl_from_schemars_with_output::<(), GetConfigOutput>(
+        method_decl_from_schemars_with_output::<NoArgs, GetConfigOutput>(
             "get_config",
             SideEffect::Read,
             true,
@@ -960,7 +999,7 @@ pub(crate) fn cognitive_mcp_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "get_health".to_string(),
-        method_decl_from_schemars_with_output::<(), GetHealthOutput>(
+        method_decl_from_schemars_with_output::<NoArgs, GetHealthOutput>(
             "get_health",
             SideEffect::Read,
             true,
@@ -970,7 +1009,7 @@ pub(crate) fn cognitive_mcp_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "list_tools".to_string(),
-        method_decl_from_schemars_with_output::<(), ListToolsOutput>(
+        method_decl_from_schemars_with_output::<NoArgs, ListToolsOutput>(
             "list_tools",
             SideEffect::Read,
             true,
@@ -1086,6 +1125,21 @@ pub(crate) fn cognitive_mcp_schema() -> PluginSchema {
             true,
             "cognitive_mcp.invoke",
             "mut.service.cognitive-mcp.restart@v1",
+        ),
+    );
+    // Generic tool invocation. The 15 methods above are fixed at blob-seal time, but
+    // the ToolRegistry is populated at runtime (406 tools today), so a per-tool method
+    // is impossible without re-sealing on every registration. `invoke_tool` is the one
+    // typed door to the whole registry: `tool_name` selects the tool and `arguments` is
+    // passed verbatim for the tool itself to validate.
+    schema.methods.insert(
+        "invoke_tool".to_string(),
+        method_decl_from_schemars_with_output::<InvokeToolInput, InvokeToolOutput>(
+            "invoke_tool",
+            SideEffect::Mutation,
+            false,
+            "cognitive_mcp.invoke",
+            "mut.service.cognitive-mcp.tool.invoke@v1",
         ),
     );
 

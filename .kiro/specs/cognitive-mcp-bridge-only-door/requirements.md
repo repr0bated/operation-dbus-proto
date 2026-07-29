@@ -129,24 +129,63 @@ A new method `invoke_tool` is added to the `cognitive_mcp` plugin schema
 
 **Acceptance criteria**: `./bin/zcall methods cognitive_mcp` includes `invoke_tool` with
 effect=mutation, capability=`cognitive_mcp.invoke`,
-subid=`mut.service.cognitive-mcp.tool.invoke@v1`. A `./bin/zcall call cognitive_mcp invoke_tool '{"tool_name":"memory_store","arguments":{}}'`
+subid=`mut.service.cognitive-mcp.tool.invoke@v1`. A `./bin/zcall cognitive_mcp invoke_tool -a '{"tool_name":"cognitive_memory","arguments":{"operation":"list_namespaces"}}'`
 returns a JSON envelope (success or error), never an `UnknownMethod` error.
+
+`cognitive_memory` is used here because it is a real registry tool name; schema method
+names such as `memory_store` are **not** valid `tool_name` values (see FR-2).
 
 ### FR-2: MutationEngine dispatch arm for cognitive_mcp
 
-A new match arm in `crates/op-grpc-bridge/src/mutation_engine.rs` for `"cognitive_mcp"` that:
+A new match arm in `crates/op-grpc-bridge/src/mutation_engine.rs` for `"cognitive_mcp"`.
+The current `_ =>` catch-all echoes `parsed_value` back unchanged; that is replaced with
+real execution.
 
-1. For `invoke_tool`: forwards to the `op-cognitive-mcp` process's tool registry via the
-   existing `CognitiveMcpInterface.call_tool` D-Bus path (on `org.opdbus.v1.plugins.CognitiveMcp`)
-   OR via a new internal RPC mechanism. Returns the tool result wrapped in the response envelope.
-2. For the existing 15 methods (`get_config`, `set_config`, `memory_store`, etc.): dispatches
-   to the same tool registry using the method name as the tool name, OR dispatches to the
-   plugin's `apply_state` for config methods. The current "echo args back" behavior is replaced
-   with real execution.
+**Transport**: HTTP loopback to `http://10.200.0.2:3003/mcp` (MCP `tools/call`) in Phase 1.
+No new D-Bus name is created and `op-cognitive-mcp` gains no session-bus registration —
+see design.md DQ-2. All external calls continue to enter through
+`org.opdbus.v1.PluginV1.Call` on `/org/opdbus/v1/plugins/cognitive_mcp`.
 
-**Acceptance criteria**: `./bin/zcall call cognitive_mcp memory_store '{"namespace":"test","key":"k","value":"v"}'`
+**Per-method dispatch mapping** (resolves the earlier unresolved fork). The schema method
+names do **not** map 1:1 to tool-registry names: the registry exposes `cognitive_memory`
+with an `operation` argument, not `memory_store` / `memory_query` as separate tools.
+Verified against the live registry (406 tools).
+
+| Schema method | Dispatch target | Tool name | Arg translation |
+|---|---|---|---|
+| `memory_store` | tool registry | `cognitive_memory` | inject `operation: "store"` |
+| `memory_query` | tool registry | `cognitive_memory` | inject `operation: "query"` |
+| `memory_retrieve` | tool registry | `cognitive_memory` | inject `operation: "retrieve"` |
+| `memory_delete` | tool registry | `cognitive_memory` | inject `operation: "delete"` |
+| `memory_list_namespaces` | tool registry | `cognitive_memory` | inject `operation: "list_namespaces"` |
+| `code_search` | tool registry | `search_blob_vectors` | pass-through |
+| `code_index` | tool registry | `refresh_blob_vectors` | pass-through |
+| `code_context` | tool registry | `search_blob_vectors` | inject `activity_type: "query"` |
+| `gemini_query` | tool registry | `ask_question` | map `query` → `question` |
+| `list_tools` | MCP `tools/list` | — | no args |
+| `register_tool` | tool registry | `register_tool` | pass-through |
+| `get_health` | **in-process** | — | read projection |
+| `get_config` | **in-process** | — | read projection |
+| `set_config` | **in-process** | — | `apply_state` path |
+| `restart_service` | **in-process** | — | `sv restart` |
+| `invoke_tool` (new) | tool registry | from `tool_name` arg | pass `arguments` verbatim |
+
+The four `in-process` methods never cross to the executor. `invoke_tool` bypasses the
+mapping entirely and is the recommended path for new consumers; the 15 existing methods
+are retained for backward compatibility as sugar over it.
+
+**Known schema defect to fix in the same change**: `list_tools`, `get_health` and
+`get_config` declare their args as type `"null"`, so `zcall` sending `{}` fails with
+`InvalidArgs: {} is not of type "null"`. They must accept `null` or `{}`.
+
+**Acceptance criteria**: `./bin/zcall cognitive_mcp invoke_tool -a '{"tool_name":"cognitive_memory","arguments":{"operation":"list_namespaces"}}'`
 returns a result from the actual `CognitiveMemoryStore`, not an echo of the input args.
-Event chain records the call (visible in `./bin/zcall events --last 1`).
+`./bin/zcall cognitive_mcp get_health` returns projection data rather than an
+`InvalidArgs` error. Event-chain recording is asserted from the response envelope itself,
+which `MutationEngine::dispatch_method_call` builds at
+`crates/op-grpc-bridge/src/mutation_engine.rs:1015-1021` (`success`, `event_id`, `event_hash`,
+`plugin_id`, `method`): the returned JSON must carry a non-zero `event_id` and a non-empty
+`event_hash`. There is no `zcall events` subcommand; do not invent one.
 
 ### FR-3: Projection stops acting as bind directive
 
@@ -154,11 +193,21 @@ The `cognitive_mcp_bind_config()` function (`crates/op-cognitive-mcp/src/main.rs
 is removed or refactored so that `/dev/shm/opdbus/projections/cognitive_mcp.json` is NEVER
 read as a bind-address source. Bind configuration precedence becomes:
 
-1. `COGNITIVE_MCP_BIND` / `COGNITIVE_MCP_GRPC_BIND` env vars (from s6 env-dir, written by
-   the plugin's `apply_state`).
+1. `COGNITIVE_MCP_BIND` / `COGNITIVE_MCP_GRPC_BIND` env vars, exported **inline in the
+   runit run script** at `/etc/runit/sv/op-cognitive-mcp/run`.
 2. `--http` / `--grpc` CLI flags.
 3. WireGuard interface IP detection.
 4. `0.0.0.0` fallback.
+
+**Correction to an earlier draft**: this section previously claimed the env vars come from
+an "s6 env-dir written by the plugin's `apply_state`". That was wrong on three counts,
+verified 2026-07-29:
+- The host runs **runit**, not s6 (`runsv op-cognitive-mcp` PID 1108;
+  `/etc/runit/sv/op-cognitive-mcp/run` exists).
+- There is **no env-dir** — `/etc/runit/sv/op-cognitive-mcp/env/` does not exist. The two
+  variables are `export`ed directly in the run script.
+- `apply_state` does **not** write them today. Changing bind addresses would require
+  rewriting the run script and `sv restart op-cognitive-mcp`.
 
 The projection remains published state (consumers read it for status); it is no longer
 config input.
@@ -177,7 +226,7 @@ Phase 2 (follow-up, explicitly deferred): listeners are deleted, `--no-http`/`--
 flags removed, `start_http_server`/`start_grpc_server`/`start_dual` methods deleted.
 
 **Acceptance criteria (Phase 1)**: MCP clients reconfigured to use the bridge path
-(`./bin/zcall call cognitive_mcp invoke_tool ...`) reach all tools. The `:3003`/`:50052`
+(`./bin/zcall cognitive_mcp invoke_tool ...`) reach all tools. The `:3003`/`:50052`
 listeners still function but are documented as deprecated.
 
 ### FR-5: Client transport is a client-side concern
@@ -190,7 +239,11 @@ The bridge (op-grpc-bridge) already serves gRPC on the session bus socket and HT
   `./bin/zcall` as a JSON-RPC forwarder.
 - **Host-side HTTP clients** (e.g. `.mcp.json` `cognitive-mcp` entry at `http://10.200.0.2:3003/mcp`):
   switch to `http://127.0.0.1:8080/mcp/compact` (op-web's existing MCP endpoint, which
-  already routes through the D-Bus plugin tree).
+  already routes through the D-Bus plugin tree). Verified: `crates/op-web/src/mcp.rs:111`
+  `create_mcp_router()` declares `/compact` (GET `mcp_compact_sse_handler`, POST
+  `mcp_compact_message_handler`) and `/compact/message`; `crates/op-web/src/routes/mod.rs:271`
+  binds that router and `:303` nests it with `.nest("/mcp", mcp_route)`, yielding
+  `/mcp/compact`.
 - **Container gateways**: use the session bus socket directly via `busctl` or a thin
   forwarding process.
 
@@ -199,9 +252,20 @@ What replaces `--no-http`/`--no-grpc`/`--stdio`:
   the tool-registry executor speaking MCP JSON-RPC, useful for debugging).
 - `--no-http`/`--no-grpc` become no-ops once the bridge is the door, then are deleted.
 
+**Tool-surface caveat**: `op-web`'s `/mcp/compact` exposes **4 meta-tools** —
+`list_tools`, `search_tools`, `get_tool_schema`, `execute_tool` — which wrap the registry,
+not a flat list of the 406 tools that `:3003` exposes directly. Verified live. Clients that
+enumerated tools directly must switch to `search_tools` + `execute_tool`. This is an
+intentional surface change, not a regression.
+
 **Acceptance criteria**: `.mcp.json` and `~/.factory/mcp.json` `cognitive-mcp` entries are
-reconfigured. `./bin/zcall call cognitive_mcp invoke_tool '{"tool_name":"memory_query",...}'`
+reconfigured. `./bin/zcall cognitive_mcp invoke_tool -a '{"tool_name":"cognitive_memory","arguments":{"operation":"query","namespace":"project:op-dbus"}}'`
 returns the same result as the old `http://10.200.0.2:3003/mcp` path.
+
+Note the tool name: the registry exposes `cognitive_memory` with an `operation` argument.
+There is no `memory_query` *tool* — `memory_query` is a schema *method* that maps onto
+`cognitive_memory` (see FR-2's mapping table). Do not pass schema method names as
+`tool_name`.
 
 ### FR-6: Cutover sequencing with rollback
 
@@ -210,7 +274,7 @@ The migration is sequenced so no consumer is stranded:
 1. **Add `invoke_tool` to schema + dispatch arm** — additive, no breakage.
 2. **Wire `op-cognitive-mcp` to register on the session bus** (expose its `CognitiveMcpInterface`
    or a UDS IPC channel) so the bridge dispatch arm can reach the tool registry.
-3. **Prove equivalence** — run `./bin/zcall call cognitive_mcp invoke_tool ...` for every tool
+3. **Prove equivalence** — run `./bin/zcall cognitive_mcp invoke_tool ...` for every tool
    in `list_tools` output and compare with the direct HTTP result.
 4. **Migrate client configs** — update `.mcp.json`, `~/.factory/mcp.json`, container gateway.
 5. **Deprecate listeners** — document that `:3003`/`:50052` are deprecated.
@@ -227,11 +291,34 @@ identical JSON shapes. At step 4, no MCP client entry points at `:3003` or `:500
 The context-awareness SSE endpoints (currently mounted on the `:3003` HTTP server via
 `build_context_router` in `crates/op-cognitive-mcp/src/server.rs:167-174`) must be
 accessible after `:3003` is deprecated. They are relocated to `op-web`'s `:8080` server
-under a `/cognitive/context` prefix, proxying to the `context_engine` via D-Bus or an
-internal channel.
+under a `/cognitive/context` prefix.
+
+**How `op-web` reaches the context engine** (resolves the earlier "via D-Bus or an internal
+channel" ambiguity):
+
+`build_context_router` (`context_server.rs:75`) mounts five routes —
+`GET /stream/:session_id` (SSE), `GET /status/:session_id`, `POST /record`,
+`POST /request_push`, `GET /health` — and takes the engine, memory store and session
+manager as arguments.
+
+- **Phase 1**: no relocation happens. `:3003` stays up and the routes remain where they
+  are. This requirement is stated here for continuity but is satisfied by Phase 2.
+- **Phase 2**: `op-web` does **not** construct its own `ContextAwarenessEngine`. Doing so
+  would open a second writer against the same persistent CozoDB that
+  `CognitiveMcpServer::new` opens (`server.rs:41`), which is single-writer. Instead
+  `op-web` implements the five routes as **translation shims that call the bridge**,
+  consistent with its existing role as the HTTP→gRPC translator for `/mcp/compact`.
+  `op-web` already depends on `op-cognitive-mcp` (`op-web/Cargo.toml:30`), so the types
+  are nameable without a new dependency.
+
+**Open risk**: the SSE stream is the one genuinely unvalidated piece — streaming through
+the bridge without buffering the full response has not been prototyped. It must be proven
+before the Phase 2 cutover is scheduled; if it proves impractical, the design is revisited
+rather than falling back to a second engine instance. Tracked in the Phase 2 spec.
 
 **Acceptance criteria**: After `:3003` is removed, the SSE endpoints are reachable at
-`http://127.0.0.1:8080/cognitive/context/...` with equivalent functionality.
+`http://127.0.0.1:8080/cognitive/context/...` with equivalent functionality, and
+`op-web` holds no second CozoDB handle.
 
 ---
 

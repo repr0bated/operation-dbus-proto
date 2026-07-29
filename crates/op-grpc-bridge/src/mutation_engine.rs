@@ -1006,6 +1006,10 @@ impl MutationEngine {
                     );
                 op_plugins::state_plugins::ghostbridge::dispatch_ghostbridge_method(method, &state)?
             }
+            "cognitive_mcp" => {
+                let args = serde_json::to_value(&parsed_value)?;
+                dispatch_cognitive_mcp_method(method, &args).await?
+            }
             _ => serde_json::to_value(&parsed_value).unwrap_or(serde_json::Value::Null),
         };
 
@@ -1560,6 +1564,330 @@ fn find_xray_pids() -> Vec<nix::unistd::Pid> {
         }
     }
     pids
+}
+
+/// Dispatch a `cognitive_mcp` schema method to the cognitive tool registry.
+///
+/// OSCAL subid: mut.service.cognitive-mcp.dispatch@v1
+///
+/// Phase 1 transport is an HTTP loopback to `op-cognitive-mcp`'s MCP endpoint. The
+/// bridge remains the only authorization door: the method-existence gate, arg
+/// validation, capability check and event-chain append have all already happened in
+/// `dispatch_method_call` before this function is reached.
+///
+/// Phase 2 replaces the loopback with an in-process `ToolRegistry::execute` call and
+/// retires the `:3003` listener. See
+/// `.kiro/specs/cognitive-mcp-only-door-phase2/`.
+async fn dispatch_cognitive_mcp_method(
+    method: &str,
+    args: &serde_json::Value,
+) -> anyhow::Result<serde_json::Value> {
+    // Plugin-local methods answer from published state; no executor hop needed.
+    match method {
+        "get_config" | "get_health" => {
+            let mut bytes = op_core::projection_shm::read_projection_bytes("cognitive_mcp")
+                .ok_or_else(|| anyhow::anyhow!("cognitive_mcp projection not available"))?;
+            let value = simd_json::to_owned_value(&mut bytes)
+                .map_err(|e| anyhow::anyhow!("cognitive_mcp projection is not valid JSON: {e}"))?;
+            return Ok(serde_json::to_value(&value)?);
+        }
+        "set_config" | "restart_service" => {
+            // These belong to the plugin's own apply_state path, which is reached
+            // through StatePlugin rather than the tool registry. Acknowledge without
+            // fabricating a result so callers can distinguish "accepted" from "done".
+            return Ok(serde_json::json!({
+                "acknowledged": true,
+                "method": method,
+                "note": "handled by cognitive_mcp apply_state; not a tool-registry call",
+            }));
+        }
+        _ => {}
+    }
+
+    // `list_tools` is an MCP *protocol* method (`tools/list`), not an entry in the
+    // tool registry, so it cannot go through `tools/call`.
+    if method == "list_tools" {
+        return cognitive_tools_list().await;
+    }
+
+    let (tool_name, tool_args) = map_schema_method_to_tool(method, args)?;
+    let result = call_cognitive_tool(&tool_name, &tool_args).await?;
+    Ok(result)
+}
+
+/// Translate a `cognitive_mcp` schema method name into a live tool-registry call.
+///
+/// The schema method names do not map one-to-one onto registry tool names: the
+/// registry exposes a single `cognitive_memory` tool selected by an `operation`
+/// field, so the memory methods inject that field rather than existing as separate
+/// tools. `invoke_tool` bypasses the table entirely and names its tool directly.
+fn map_schema_method_to_tool(
+    method: &str,
+    args: &serde_json::Value,
+) -> anyhow::Result<(String, serde_json::Value)> {
+    let base = if args.is_object() {
+        args.clone()
+    } else {
+        serde_json::json!({})
+    };
+
+    let with_field = |key: &str, value: &str| -> serde_json::Value {
+        let mut v = base.clone();
+        if let Some(obj) = v.as_object_mut() {
+            obj.insert(key.to_string(), serde_json::Value::String(value.to_string()));
+        }
+        v
+    };
+
+    match method {
+        // Memory methods all resolve to the one `cognitive_memory` tool.
+        "memory_store" => Ok(("cognitive_memory".into(), with_field("operation", "store"))),
+        "memory_query" => Ok(("cognitive_memory".into(), with_field("operation", "query"))),
+        "memory_retrieve" => Ok((
+            "cognitive_memory".into(),
+            with_field("operation", "retrieve"),
+        )),
+        "memory_delete" => Ok((
+            "cognitive_memory".into(),
+            with_field("operation", "delete"),
+        )),
+        "memory_list_namespaces" => Ok((
+            "cognitive_memory".into(),
+            with_field("operation", "list_namespaces"),
+        )),
+        // Code retrieval / indexing.
+        "code_search" => Ok(("search_blob_vectors".into(), base)),
+        "code_index" => Ok(("refresh_blob_vectors".into(), base)),
+        "code_context" => Ok((
+            "search_blob_vectors".into(),
+            with_field("activity_type", "query"),
+        )),
+        // Gemini question answering: the tool names the field `question`.
+        "gemini_query" => {
+            let mut v = base.clone();
+            if let Some(obj) = v.as_object_mut() {
+                if let Some(q) = obj.remove("query") {
+                    obj.insert("question".to_string(), q);
+                }
+            }
+            Ok(("ask_question".into(), v))
+        }
+        "register_tool" => Ok(("register_tool".into(), base)),
+        // Generic door: the caller names the tool.
+        "invoke_tool" => {
+            let tool_name = args
+                .get("tool_name")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("invoke_tool: missing required field 'tool_name'"))?
+                .to_string();
+            if tool_name.is_empty() {
+                return Err(anyhow::anyhow!("invoke_tool: 'tool_name' must not be empty"));
+            }
+            let tool_args = args
+                .get("arguments")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({}));
+            Ok((tool_name, tool_args))
+        }
+        other => Err(anyhow::anyhow!(
+            "cognitive_mcp method '{other}' has no tool-registry mapping"
+        )),
+    }
+}
+
+/// Shared HTTP client for the cognitive MCP loopback.
+///
+/// Built once: a fresh `Client` per call would leak a connection pool and defeat
+/// keep-alive on what is a hot path.
+static COGNITIVE_MCP_HTTP: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+
+fn cognitive_mcp_http() -> &'static reqwest::Client {
+    COGNITIVE_MCP_HTTP.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(120))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new())
+    })
+}
+
+/// MCP endpoint of the local cognitive service.
+///
+/// Overridable so the bridge can follow a relocated listener without a rebuild.
+fn cognitive_mcp_endpoint() -> String {
+    std::env::var("COGNITIVE_MCP_MCP_URL")
+        .unwrap_or_else(|_| "http://10.200.0.2:3003/mcp".to_string())
+}
+
+/// Send the MCP `initialize` handshake.
+///
+/// The cognitive MCP server rejects `tools/call` with "Server not initialized" until
+/// this has been sent. Initialization is server-side state, so it survives across
+/// requests but is lost whenever `op-cognitive-mcp` restarts — which is why callers
+/// treat it as a recoverable condition rather than doing it once at startup.
+async fn cognitive_mcp_initialize() -> anyhow::Result<()> {
+    let endpoint = cognitive_mcp_endpoint();
+    let request = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 0,
+        "method": "initialize",
+        "params": {},
+    });
+
+    let response = cognitive_mcp_http()
+        .post(&endpoint)
+        .header("Content-Type", "application/json")
+        .header("X-Ghostbridge-Footprint", "op-grpc-bridge")
+        .header("X-Ghostbridge-Trace-ID", "bridge-dispatch")
+        .json(&request)
+        .send()
+        .await
+        .with_context(|| format!("cognitive_mcp initialize POST {endpoint}"))?;
+
+    if !response.status().is_success() {
+        return Err(anyhow::anyhow!(
+            "cognitive_mcp initialize returned HTTP {}",
+            response.status()
+        ));
+    }
+    Ok(())
+}
+
+/// Issue one `tools/call` and return the raw JSON-RPC envelope.
+async fn cognitive_tools_call_raw(
+    tool_name: &str,
+    tool_args: &serde_json::Value,
+) -> anyhow::Result<serde_json::Value> {
+    let endpoint = cognitive_mcp_endpoint();
+    let request = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": { "name": tool_name, "arguments": tool_args },
+    });
+
+    let response = cognitive_mcp_http()
+        .post(&endpoint)
+        .header("Content-Type", "application/json")
+        // The interceptor on the direct listener expects these; the authoritative
+        // authorization decision was already made by the bridge before dispatch.
+        .header("X-Ghostbridge-Footprint", "op-grpc-bridge")
+        .header("X-Ghostbridge-Trace-ID", "bridge-dispatch")
+        .json(&request)
+        .send()
+        .await
+        .with_context(|| format!("cognitive_mcp loopback POST {endpoint}"))?;
+
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .context("reading cognitive_mcp loopback response body")?;
+
+    if !status.is_success() {
+        return Err(anyhow::anyhow!(
+            "cognitive_mcp loopback returned HTTP {status}: {body}"
+        ));
+    }
+
+    serde_json::from_str(&body)
+        .with_context(|| format!("cognitive_mcp returned non-JSON body: {body}"))
+}
+
+/// Invoke one tool over the MCP `tools/call` JSON-RPC method and unwrap the result.
+///
+/// Performs the `initialize` handshake lazily: rather than initializing once at bridge
+/// startup (which would break the first call after any `op-cognitive-mcp` restart), a
+/// "not initialized" error triggers one initialize and a single retry.
+async fn call_cognitive_tool(
+    tool_name: &str,
+    tool_args: &serde_json::Value,
+) -> anyhow::Result<serde_json::Value> {
+    let mut envelope = cognitive_tools_call_raw(tool_name, tool_args).await?;
+
+    if mcp_needs_initialize(&envelope) {
+        cognitive_mcp_initialize().await?;
+        envelope = cognitive_tools_call_raw(tool_name, tool_args).await?;
+    }
+
+    if let Some(error) = envelope.get("error") {
+        let message = error
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or("unknown MCP error");
+        return Err(anyhow::anyhow!("tool '{tool_name}' failed: {message}"));
+    }
+
+    envelope.get("result").cloned().ok_or_else(|| {
+        anyhow::anyhow!("cognitive_mcp response had neither 'result' nor 'error': {envelope}")
+    })
+}
+
+/// Enumerate the live tool registry via the MCP `tools/list` protocol method.
+///
+/// Distinct from `call_cognitive_tool`: `tools/list` is a protocol method rather than a
+/// registry entry, so routing the `list_tools` schema method through `tools/call` would
+/// (and did) fail with "Tool not found: list_tools".
+async fn cognitive_tools_list() -> anyhow::Result<serde_json::Value> {
+    let endpoint = cognitive_mcp_endpoint();
+    let request = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/list",
+        "params": {},
+    });
+
+    let post = || async {
+        let response = cognitive_mcp_http()
+            .post(&endpoint)
+            .header("Content-Type", "application/json")
+            .header("X-Ghostbridge-Footprint", "op-grpc-bridge")
+            .header("X-Ghostbridge-Trace-ID", "bridge-dispatch")
+            .json(&request)
+            .send()
+            .await
+            .with_context(|| format!("cognitive_mcp tools/list POST {endpoint}"))?;
+
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .context("reading cognitive_mcp tools/list response body")?;
+        if !status.is_success() {
+            return Err(anyhow::anyhow!(
+                "cognitive_mcp tools/list returned HTTP {status}: {body}"
+            ));
+        }
+        serde_json::from_str::<serde_json::Value>(&body)
+            .with_context(|| format!("cognitive_mcp tools/list returned non-JSON body: {body}"))
+    };
+
+    let mut envelope = post().await?;
+    if mcp_needs_initialize(&envelope) {
+        cognitive_mcp_initialize().await?;
+        envelope = post().await?;
+    }
+
+    if let Some(error) = envelope.get("error") {
+        let message = error
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or("unknown MCP error");
+        return Err(anyhow::anyhow!("tools/list failed: {message}"));
+    }
+
+    envelope
+        .get("result")
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("cognitive_mcp tools/list response had no 'result'"))
+}
+
+/// True when the envelope is the server's "call initialize first" rejection.
+fn mcp_needs_initialize(envelope: &serde_json::Value) -> bool {
+    envelope
+        .get("error")
+        .and_then(|e| e.get("message"))
+        .and_then(|m| m.as_str())
+        .is_some_and(|m| m.contains("not initialized"))
 }
 
 /// Parse createunixsocket arguments. Accepts either a JSON array
