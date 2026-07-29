@@ -154,44 +154,6 @@ impl ProjectionEngine {
                             }
                         }
 
-                        // Register tools for properties (ProjectedObjectV1)
-                        if iface.name == "org.opdbus.ProjectedObjectV1" {
-                            let tool = crate::builtin::plugin_projection::PluginProjectionTool::new_generic(
-                                &service,
-                                path.clone(),
-                            );
-
-                            let definition = crate::registry::ToolDefinition {
-                                name: tool.name().to_string(),
-                                description: format!(
-                                    "Read projected object at {} on {}",
-                                    path, service
-                                ),
-                                input_schema: tool.input_schema(),
-                                schema_version: "https://json-schema.org/draft/next/schema"
-                                    .to_string(),
-                                category: "plugin-projection".to_string(),
-                                namespace: "mirrored.v1".to_string(),
-                                tags: vec![
-                                    "dbus".to_string(),
-                                    "projected".to_string(),
-                                    "mirrored".to_string(),
-                                    service.clone(),
-                                ],
-                            };
-
-                            if registry
-                                .register(
-                                    tool.name().to_string().into(),
-                                    Arc::new(tool),
-                                    definition,
-                                )
-                                .await
-                                .is_ok()
-                            {
-                                service_tools += 1;
-                            }
-                        }
                     }
                 }
             }

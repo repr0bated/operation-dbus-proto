@@ -2,8 +2,7 @@
 //!
 //! Tracks and manages the op-mcp-server: mode, transport bind addresses,
 //! WireGuard identity, and tool registry.  Publishes live state to D-Bus
-//! under `/opdbus/v1/plugins/compact_mcp` so that
-//! `register_plugin_projection_tools` can expose it as MCP tools.
+//! under `/opdbus/v1/plugins/compact_mcp` for introspection by clients.
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;

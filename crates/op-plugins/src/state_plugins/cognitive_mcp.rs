@@ -2,8 +2,7 @@
 //!
 //! Tracks and manages the op-cognitive-mcp server: bind addresses, WireGuard
 //! identity, tool registrations, and gRPC/HTTP health.  Publishes live state
-//! to D-Bus under `/opdbus/v1/plugins/cognitive_mcp` so that
-//! `register_plugin_projection_tools` can expose it as MCP tools.
+//! to D-Bus under `/opdbus/v1/plugins/cognitive_mcp` for introspection by clients.
 //!
 //! The canonical schema (every gRPC method, every MCP tool, every
 //! request/response field) lives in the `cognitive_mcp_schema()` function below.
