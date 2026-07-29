@@ -180,3 +180,109 @@ impl ToolExecutor for BridgeToolExecutor {
             .collect())
     }
 }
+
+// ---------------------------------------------------------------------------
+// MergedToolExecutor: one socket, all tools
+// ---------------------------------------------------------------------------
+
+/// Combines cognitive tools (via bridge) with op-tools builtins into a single
+/// executor. This is the "one socket to serve all" — clients see one flat tool
+/// list containing both the 400+ cognitive/agent tools and the 155 system tools.
+///
+/// Dispatch priority: cognitive (bridge) tools win on name collision because they
+/// go through the enforcement chain. op-tools builtins run locally (no bridge hop).
+pub struct MergedToolExecutor {
+    bridge: BridgeToolExecutor,
+    local_registry: std::sync::Arc<op_tools::ToolRegistry>,
+}
+
+impl MergedToolExecutor {
+    pub async fn connect() -> Result<Self> {
+        let bridge = BridgeToolExecutor::connect().await?;
+        let local_registry = std::sync::Arc::new(op_tools::ToolRegistry::new());
+        op_tools::register_builtin_tools(&local_registry)
+            .await
+            .map_err(|e| anyhow!("failed to register op-tools builtins: {e}"))?;
+        Ok(Self {
+            bridge,
+            local_registry,
+        })
+    }
+
+    /// Names of tools served by the bridge (cognitive side).
+    async fn bridge_tool_names(&self) -> std::collections::HashSet<String> {
+        self.bridge
+            .list_tools()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|t| t.name)
+            .collect()
+    }
+}
+
+#[async_trait::async_trait]
+impl ToolExecutor for MergedToolExecutor {
+    async fn list_tools(&self) -> Result<Vec<ToolInfo>> {
+        let mut tools = self.bridge.list_tools().await?;
+        let bridge_names: std::collections::HashSet<String> =
+            tools.iter().map(|t| t.name.clone()).collect();
+
+        // Append local op-tools that don't collide with bridge tools.
+        let local_defs = self.local_registry.list().await;
+        for def in local_defs {
+            if !bridge_names.contains(&def.name) {
+                tools.push(ToolInfo {
+                    name: def.name,
+                    description: def.description,
+                    input_schema: def.input_schema,
+                    annotations: None,
+                });
+            }
+        }
+        Ok(tools)
+    }
+
+    async fn execute_tool(&self, name: &str, arguments: Value) -> Result<Value> {
+        // Bridge tools take priority (enforced path).
+        let bridge_names = self.bridge_tool_names().await;
+        if bridge_names.contains(name) {
+            return self.bridge.execute_tool(name, arguments).await;
+        }
+
+        // Fall through to local op-tools registry.
+        let tool = self
+            .local_registry
+            .get(name)
+            .await
+            .ok_or_else(|| anyhow!("tool not found: {name}"))?;
+        tool.execute(arguments).await
+    }
+
+    async fn get_tool_schema(&self, name: &str) -> Result<Option<Value>> {
+        // Check bridge first.
+        if let Some(schema) = self.bridge.get_tool_schema(name).await? {
+            return Ok(Some(schema));
+        }
+        // Then local.
+        Ok(self
+            .local_registry
+            .get_definition(name)
+            .await
+            .map(|d| d.input_schema))
+    }
+
+    async fn search_tools(&self, query: &str, limit: usize) -> Result<Vec<ToolInfo>> {
+        let needle = query.to_lowercase();
+        Ok(self
+            .list_tools()
+            .await?
+            .into_iter()
+            .filter(|tool| {
+                tool.name.to_lowercase().contains(&needle)
+                    || tool.description.to_lowercase().contains(&needle)
+            })
+            .take(limit)
+            .collect())
+    }
+}
