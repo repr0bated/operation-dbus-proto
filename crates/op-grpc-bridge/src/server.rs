@@ -282,6 +282,21 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
     // it so a bridge restart advertises every sealed plugin immediately.
     operation_server.hydrate_reflection_from_shm().await;
 
+    // Activate the frozen per-method descriptors.
+    //
+    // Hydrating the catalog above only makes the sealed blobs *discoverable*; it
+    // does not mount them. This turns each method's frozen descriptor into a live
+    // typed gRPC service (one service per method, e.g.
+    // `operation.method.cognitive_mcp.invoke_tool.InvokeToolService`) and registers
+    // it with the per-method reflection registry.
+    //
+    // Must run before `build_axum_app` below: tonic-reflection is immutable once
+    // mounted, so a service activated after route construction can never be served.
+    // `run_grpc_server` (op-dbus :50051) already did this; omitting it here meant the
+    // zeroclaw bridge advertised sealed plugins while serving none of their typed
+    // per-method services.
+    operation_server.freeze_plugin_method_reflection().await;
+
     // ── D-Bus plugin object registration ──────────────────────────────────
     // Register all plugin objects from the SHM blob catalog on the session bus
     // so `busctl tree org.opdbus.v1.plugins` shows the full plugin tree.

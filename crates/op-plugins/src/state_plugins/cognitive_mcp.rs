@@ -188,12 +188,30 @@ impl StatePlugin for CognitiveMcpPlugin {
         Some(schema)
     }
 
+    /// Whether the supervised service definition exists on this host.
+    ///
+    /// Availability gates more than reporting: `freeze_plugin_method_reflection`
+    /// skips unavailable plugins, so a false negative here means none of this
+    /// plugin's frozen per-method gRPC services get activated — the sealed blob is
+    /// advertised in the reflection catalog but nothing is mounted to serve it.
+    ///
+    /// Checks runit and s6 layouts. This host runs runit
+    /// (`/etc/runit/sv/op-cognitive-mcp`); checking only the s6 path reported the
+    /// plugin unavailable and silently suppressed its gRPC surface.
     fn is_available(&self) -> bool {
-        std::path::Path::new("/etc/s6/sv/op-cognitive-mcp").exists()
+        [
+            "/etc/runit/sv/op-cognitive-mcp",
+            "/etc/s6/sv/op-cognitive-mcp",
+            "/run/service/op-cognitive-mcp",
+        ]
+        .iter()
+        .any(|p| std::path::Path::new(p).exists())
     }
 
     fn unavailable_reason(&self) -> String {
-        "op-cognitive-mcp s6 service definition not found at /etc/s6/sv/op-cognitive-mcp".into()
+        "op-cognitive-mcp supervised service definition not found under \
+         /etc/runit/sv, /etc/s6/sv, or /run/service"
+            .into()
     }
 
     async fn calculate_diff(&self, current: &Value, desired: &Value) -> Result<StateDiff> {
