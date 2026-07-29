@@ -118,6 +118,9 @@ is needed.
 - **`op-web` on `:8080`**: already provides `/mcp/compact` (4 meta-tools:
   `list_tools`, `search_tools`, `get_tool_schema`, `execute_tool`), verified at
   `crates/op-web/src/mcp.rs:111` and `crates/op-web/src/routes/mod.rs:271,303`.
+  **Important**: these meta-tools wrap op-web's **own** 345-tool registry
+  (op-web/op-tools builtins + D-Bus-projected methods), **not** the cognitive
+  registry. `cognitive_memory` and `get_health` are absent from it. See FR-2.
 
 - **`cognitive_mcp_bind_config()`** (`crates/op-cognitive-mcp/src/main.rs:90-105`):
   reads projection as bind directive. Phase 1 removes this; Phase 2 assumes it
@@ -288,11 +291,41 @@ this host**; these routes are recorded here for accuracy but should not be treat
 as the forward-looking name. Prefer the direct `:8080` route for new client
 configuration.
 
-Mesh clients speak HTTP/MCP JSON-RPC while the bridge door is tonic/gRPC; `op-web`
-supplies the HTTP→gRPC translation on `:8080`. Clients expecting 406 flat tools
-must adapt to the 4-meta-tool surface (`list_tools`, `search_tools`,
-`get_tool_schema`, `execute_tool`) — an intentional surface change, since the
-bridge path is the only authorized path.
+Mesh clients speak HTTP/MCP JSON-RPC while the bridge door is tonic/gRPC.
+
+**Correction (verified 2026-07-29, post-implementation)**: an earlier draft of this
+section assumed `:8080/mcp/compact` wraps the *cognitive* registry, so that clients
+could migrate from `:3003` by switching URL and adapting to the meta-tool surface.
+**That is wrong.** `op-web`'s compact endpoint exposes its **own, different**
+registry — 345 tools of op-web/op-tools builtins and D-Bus-projected methods
+(`agent_memory`, `login1.*`, `file_stat`, `ovs_*`, …). The cognitive registry's 406
+tools are **not** in it:
+
+```
+execute_tool{tool_name:"cognitive_memory"} → "Tool not found: cognitive_memory"
+execute_tool{tool_name:"get_health"}       → "Tool not found: get_health"
+search_tools{query:"cognitive_memory"}     → no matches
+```
+
+So `:8080/mcp/compact` is **not** a migration target for cognitive-tool consumers.
+The bridge-backed paths that actually reach the cognitive registry are:
+
+1. **D-Bus** — `org.opdbus.v1.PluginV1.Call` on
+   `/org/opdbus/v1/plugins/cognitive_mcp` with `invoke_tool`. Verified returning all
+   406 tools via `list_tools` and executing tools via `invoke_tool`.
+2. **gRPC socket** — the sealed per-method descriptors are served hot from the blob
+   catalog over `:50051` / `:8090`. `opblob inspect` confirms
+   `operation.method.cognitive_mcp.invoke_tool.InvokeToolService` with typed
+   `InvokeToolInput`/`InvokeToolOutput`, and the bridge logs
+   `hydrated reflection from SHM blob catalog count=64` at startup. This is the
+   mechanism that makes the descriptors live.
+3. **`op-cognitive-mcp --stdio`** — direct local attach, retained for debugging.
+
+**Consequence for this spec**: FR-2's migration path must be re-planned. Mesh clients
+that call cognitive tools need either an HTTP→gRPC front-end that targets the
+*cognitive* plugin (not op-web's compact registry), or op-web must gain a route that
+proxies to `cognitive_mcp` through the bridge. This is an open design question, not a
+solved one, and it gates deleting `:3003` for mesh consumers.
 
 **Acceptance criteria**: `fwd-3003` service directory is deleted and no `tcpfwd.py`
 process listens on `100.69.0.254:3003`. No xray dokodemo-door for 3003 is added.
