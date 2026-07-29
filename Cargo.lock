@@ -5690,6 +5690,7 @@ dependencies = [
  "prost-types 0.13.5",
  "qdrant-client",
  "rcgen",
+ "reqwest 0.11.27",
  "rustls 0.23.42",
  "schemars 0.8.22",
  "serde",

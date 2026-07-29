@@ -74,13 +74,15 @@ if [ -x /usr/local/bin/op-identity-sled ]; then
                     "*": {
                         capabilities: [
                             "cap.software.zeroclaw.chat@v1",
-                            "cap.software.zeroclaw.models.read@v1"
+                            "cap.software.zeroclaw.models.read@v1",
+                            "cognitive_mcp.read",
+                            "cognitive_mcp.invoke"
                         ]
                     }
                 }' >"$GRANTS_TMP"
                 chmod 0600 "$GRANTS_TMP"
                 mv -f "$GRANTS_TMP" "$GRANTS_PATH"
-                echo "Ghostbridge identity seeded from $IDENTITY_SOURCE with least-privilege ZeroClaw grants"
+                echo "Ghostbridge identity seeded from $IDENTITY_SOURCE with least-privilege ZeroClaw + cognitive_mcp read/invoke grants"
                 ;;
         esac
     else

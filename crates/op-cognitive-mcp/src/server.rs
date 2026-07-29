@@ -143,6 +143,15 @@ impl CognitiveMcpServer {
         Ok(())
     }
 
+    /// Serve the MCP protocol over HTTP/SSE on `addr`.
+    ///
+    /// # Deprecated
+    ///
+    /// This is a direct listener that bypasses the bridge's accountability chain
+    /// (method gate, arg validation, capability check, event-chain append).
+    /// Use `org.opdbus.v1.PluginV1.Call` on `/org/opdbus/v1/plugins/cognitive_mcp`.
+    /// Removed in Phase 2 (`.kiro/specs/cognitive-mcp-only-door-phase2/`).
+    #[deprecated(note = "Use bridge path: PluginV1.Call on cognitive_mcp plugin")]
     pub async fn start_http_server(self, addr: &str) -> Result<(), Box<dyn std::error::Error>> {
         use crate::context_server::build_context_router;
         use op_mcp::{HttpSseTransport, McpServer, McpServerConfig, Transport};
@@ -176,6 +185,14 @@ impl CognitiveMcpServer {
         Ok(())
     }
 
+    /// Serve `CognitiveToolService` over gRPC on `addr`.
+    ///
+    /// # Deprecated
+    ///
+    /// Direct listener that bypasses the bridge's accountability chain. Use
+    /// `org.opdbus.v1.PluginV1.Call` on `/org/opdbus/v1/plugins/cognitive_mcp`.
+    /// Phase 2 relocates this service onto the bridge's own tonic server.
+    #[deprecated(note = "Use bridge path: PluginV1.Call on cognitive_mcp plugin")]
     pub async fn start_grpc_server(&self, addr: &str) -> Result<(), Box<dyn std::error::Error>> {
         let grpc_service = CognitiveGrpcService::new(
             self.memory_store.clone(),
@@ -189,6 +206,14 @@ impl CognitiveMcpServer {
         Ok(())
     }
 
+    /// Serve HTTP/SSE and gRPC concurrently.
+    ///
+    /// # Deprecated
+    ///
+    /// Starts both direct listeners, each bypassing the bridge's accountability
+    /// chain. Use `org.opdbus.v1.PluginV1.Call` on
+    /// `/org/opdbus/v1/plugins/cognitive_mcp`. Removed in Phase 2.
+    #[deprecated(note = "Use bridge path: PluginV1.Call on cognitive_mcp plugin")]
     pub async fn start_dual(
         self,
         http_addr: &str,
@@ -211,7 +236,11 @@ impl CognitiveMcpServer {
                 .expect("gRPC server failed");
         });
 
-        self.start_http_server(&http_addr).await?;
+        // start_dual is itself deprecated; delegating to the deprecated HTTP listener
+        // is intentional and both disappear together in Phase 2.
+        #[allow(deprecated)]
+        let http_result = self.start_http_server(&http_addr).await;
+        http_result?;
         grpc_handle.await?;
         Ok(())
     }
