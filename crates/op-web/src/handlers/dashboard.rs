@@ -36,8 +36,8 @@ pub async fn dashboard_metrics_handler(
 
     // Read system stats from the SHM state tree.
     // These are live procfs projections written by the mutation engine.
-    let mem_proj = state_tree::read_key("system.memory", "state");
-    let load_proj = state_tree::read_key("system.load", "state");
+    let mem_proj = state_tree::read_plugin("system.memory");
+    let load_proj = state_tree::read_plugin("system.load");
 
     let (cpu, memory, source, schema_version) = if mem_proj.is_some() || load_proj.is_some() {
         let mut cpu = 0.0f32;

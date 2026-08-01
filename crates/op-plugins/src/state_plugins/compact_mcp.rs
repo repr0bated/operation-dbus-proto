@@ -21,7 +21,7 @@ const DEFAULT_MODE: &str = "compact";
 const DEFAULT_HTTP: &str = "127.0.0.1:11436";
 const DEFAULT_WG: &str = "netmaker";
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 pub struct CompactMcpConfig {
     /// Server mode: compact | full | agents
     #[serde(default = "default_mode")]
@@ -431,12 +431,64 @@ pub struct CompactMcpState {
 pub(crate) fn compact_mcp_schema() -> PluginSchema {
     let root = serde_json::to_value(schemars::schema_for!(CompactMcpState))
         .expect("schemars schema serializes to JSON");
-    super::schemars_adapter::plugin_schema_from_json(
+    let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "compact_mcp",
         "1.0.0",
         "op-mcp-server — multi-mode MCP server (compact/full/agents) with stdio, HTTP, and WebSocket transports",
         &root,
-    )
+    );
+
+    use super::plugin_scaffold_helpers::{
+        method_decl_from_schemars_with_output, AckOutput, EmptyInput,
+    };
+    use op_state_store::SideEffect;
+
+    // Backed by a real dispatcher (dispatch_compact_mcp_method): reads live env
+    // files directly, matching current_config()'s existing (previously unused)
+    // logic. Config *writes* already go through the generic PropertySet/
+    // apply_state path (SetProperty), which is why there's no set_config method
+    // here — only the two actions apply_state doesn't cover.
+    schema.methods.insert(
+        "get_current_config".to_string(),
+        method_decl_from_schemars_with_output::<EmptyInput, CompactMcpConfig>(
+            "get_current_config",
+            SideEffect::Read,
+            true,
+            "compact_mcp.read",
+            "obs.software.plugin.compact-mcp.config.get@v1",
+        ),
+    );
+    schema.methods.insert(
+        "restart".to_string(),
+        method_decl_from_schemars_with_output::<EmptyInput, AckOutput>(
+            "restart",
+            SideEffect::Mutation,
+            false,
+            "compact_mcp.write",
+            "mut.software.plugin.compact-mcp.service.restart@v1",
+        ),
+    );
+
+    schema
+}
+
+/// Dispatch a `compact_mcp` schema method. Called from `op-grpc-bridge`'s
+/// `MutationEngine::dispatch_method_call`.
+pub async fn dispatch_compact_mcp_method(
+    method: &str,
+    _args: &serde_json::Value,
+) -> Result<serde_json::Value> {
+    match method {
+        "get_current_config" => {
+            let config = CompactMcpPlugin::current_config();
+            Ok(serde_json::to_value(config)?)
+        }
+        "restart" => {
+            CompactMcpPlugin::reload_service().await?;
+            Ok(serde_json::json!({ "success": true }))
+        }
+        other => Err(anyhow::anyhow!("unknown compact_mcp method: {}", other)),
+    }
 }
 
 #[cfg(test)]

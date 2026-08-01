@@ -205,7 +205,65 @@ pub(crate) fn keyring_schema() -> PluginSchema {
         &mut schema,
         &simd_json::serde::to_owned_value(&KeyringState::default()).unwrap(),
     );
+
+    use super::plugin_scaffold_helpers::{method_decl_from_schemars_with_output, EmptyInput};
+    use op_state_store::SideEffect;
+
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct ListCollectionsOutput {
+        pub collections: Vec<CollectionInfo>,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct GetDefaultCollectionOutput {
+        pub default_collection: Option<String>,
+    }
+
+    // Backed by real (if currently minimal) dispatchers: no external
+    // org.freedesktop.secrets provider is registered yet, so these honestly
+    // return empty/None rather than fabricating collections. `get_collection_info`
+    // is deliberately NOT exposed as a method — it unconditionally errors today.
+    schema.methods.insert(
+        "list_collections".to_string(),
+        method_decl_from_schemars_with_output::<EmptyInput, ListCollectionsOutput>(
+            "list_collections",
+            SideEffect::Read,
+            true,
+            "keyring.read",
+            "obs.security.plugin.keyring.collections.list@v1",
+        ),
+    );
+    schema.methods.insert(
+        "get_default_collection".to_string(),
+        method_decl_from_schemars_with_output::<EmptyInput, GetDefaultCollectionOutput>(
+            "get_default_collection",
+            SideEffect::Read,
+            true,
+            "keyring.read",
+            "obs.security.plugin.keyring.default-collection.get@v1",
+        ),
+    );
+
     schema
+}
+
+/// Dispatch a `keyring` schema method. Called from `op-grpc-bridge`'s
+/// `MutationEngine::dispatch_method_call`.
+pub async fn dispatch_keyring_method(
+    method: &str,
+    _args: &serde_json::Value,
+) -> Result<serde_json::Value> {
+    let plugin = KeyringPlugin::new();
+    match method {
+        "list_collections" => {
+            let collections = plugin.get_collections().await?;
+            Ok(serde_json::json!({ "collections": collections }))
+        }
+        "get_default_collection" => {
+            let default_collection = plugin.get_default_collection().await?;
+            Ok(serde_json::json!({ "default_collection": default_collection }))
+        }
+        other => Err(anyhow::anyhow!("unknown keyring method: {}", other)),
+    }
 }
 
 #[cfg(test)]

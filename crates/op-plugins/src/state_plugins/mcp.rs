@@ -14,7 +14,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 /// MCP configuration schema - mirrors the state JSON structure
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 pub struct McpConfig {
     /// External MCP servers indexed by name
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -29,7 +29,7 @@ pub struct McpConfig {
     pub compact_mode: Option<CompactModeConfig>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 pub struct McpServerConfig {
     /// Server command to execute
     pub command: String,
@@ -51,7 +51,7 @@ pub struct McpServerConfig {
     pub transport: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 pub struct ToolGroupsConfig {
     /// Enabled group IDs
     pub enabled: Vec<String>,
@@ -69,7 +69,7 @@ pub struct ToolGroupsConfig {
     pub trusted_networks: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 pub struct CompactModeConfig {
     /// Whether compact mode is enabled
     #[serde(default = "default_true")]
@@ -372,6 +372,54 @@ pub(crate) fn mcp_schema() -> PluginSchema {
         &root,
     );
     schema.dependencies = vec!["agent_config".to_string()];
+
+    use super::plugin_scaffold_helpers::{method_decl_from_schemars_with_output, EmptyInput};
+    use op_state_store::SideEffect;
+
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct ConfigureServerInput {
+        pub server_name: String,
+        pub config: McpServerConfig,
+    }
+
+    // Method dispatch is not wired yet: apply_server_config/apply_tool_groups_config
+    // need this plugin instance's state_store + config_path (constructor
+    // dependencies not available to the free dispatch-function pattern used
+    // elsewhere in this file). Declared so the UI can render/discover the real
+    // config surface; mutations already work via the generic SetProperty/
+    // apply_state path (calculate_diff already detects server/tool_groups/
+    // compact_mode changes and routes them through apply_server_config etc.).
+    schema.methods.insert(
+        "get_config".to_string(),
+        method_decl_from_schemars_with_output::<EmptyInput, McpConfig>(
+            "get_config",
+            SideEffect::Read,
+            true,
+            "mcp.read",
+            "obs.software.plugin.mcp.config.get@v1",
+        ),
+    );
+    schema.methods.insert(
+        "configure_server".to_string(),
+        method_decl_from_schemars_with_output::<ConfigureServerInput, McpConfig>(
+            "configure_server",
+            SideEffect::Mutation,
+            true,
+            "mcp.write",
+            "mut.software.plugin.mcp.server.configure@v1",
+        ),
+    );
+    schema.methods.insert(
+        "configure_tool_groups".to_string(),
+        method_decl_from_schemars_with_output::<ToolGroupsConfig, McpConfig>(
+            "configure_tool_groups",
+            SideEffect::Mutation,
+            true,
+            "mcp.write",
+            "mut.software.plugin.mcp.tool-groups.configure@v1",
+        ),
+    );
+
     schema
 }
 

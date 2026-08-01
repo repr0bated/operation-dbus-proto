@@ -1689,6 +1689,104 @@ pub(crate) fn antigravity_schema() -> PluginSchema {
         super::schemars_adapter::apply_state_defaults(&mut schema, &state);
         schema.example = Some(state);
     }
+
+    use super::plugin_scaffold_helpers::method_decl_from_schemars_with_output;
+    use op_state_store::SideEffect;
+
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct ListModelsInput {
+        /// Filter by model family (gemini, gemma, embedding). Empty = all.
+        #[serde(default)]
+        pub family: String,
+        /// Filter by required capability tags (e.g. "vision", "tools"). Empty = no filter.
+        #[serde(default)]
+        pub capabilities: Vec<String>,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct ListModelsOutput {
+        pub models: Vec<ModelEntry>,
+        pub default_model: String,
+        pub default_fast_model: String,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct GetAuthStatusOutput {
+        pub auth: Auth,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct GetUsageReportInput {
+        /// Restrict quota lookup to this project. Empty = the plugin's configured project.
+        #[serde(default)]
+        pub project_id: String,
+        /// Restrict quota lookup to this model. Empty = all tracked models.
+        #[serde(default)]
+        pub model: String,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct GetUsageReportOutput {
+        pub usage: Usage,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct ConfigureSafetyInput {
+        #[serde(default)]
+        pub harassment: Option<String>,
+        #[serde(default)]
+        pub hate_speech: Option<String>,
+        #[serde(default)]
+        pub sexually_explicit: Option<String>,
+        #[serde(default)]
+        pub dangerous: Option<String>,
+        #[serde(default)]
+        pub civic_integrity: Option<String>,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct ConfigureSafetyOutput {
+        pub safety_settings: Vec<SafetySetting>,
+    }
+
+    // NOTE: no `chat` method here by design — `zeroclaw.Chat` is the sole chat
+    // entrypoint (one routing authority); a provider-specific chat method here
+    // would hardcode callers to Gemini/Vertex AI and bypass zeroclaw's routing.
+    schema.methods.insert(
+        "list_models".to_string(),
+        method_decl_from_schemars_with_output::<ListModelsInput, ListModelsOutput>(
+            "list_models",
+            SideEffect::Read,
+            true,
+            "antigravity.read",
+            "obs.software.antigravity.models.list@v1",
+        ),
+    );
+    schema.methods.insert(
+        "get_auth_status".to_string(),
+        method_decl_from_schemars_with_output::<super::plugin_scaffold_helpers::EmptyInput, GetAuthStatusOutput>(
+            "get_auth_status",
+            SideEffect::Read,
+            true,
+            "antigravity.read",
+            "obs.software.antigravity.auth.status@v1",
+        ),
+    );
+    schema.methods.insert(
+        "get_usage_report".to_string(),
+        method_decl_from_schemars_with_output::<GetUsageReportInput, GetUsageReportOutput>(
+            "get_usage_report",
+            SideEffect::Read,
+            true,
+            "antigravity.read",
+            "obs.software.antigravity.usage.report@v1",
+        ),
+    );
+    schema.methods.insert(
+        "configure_safety".to_string(),
+        method_decl_from_schemars_with_output::<ConfigureSafetyInput, ConfigureSafetyOutput>(
+            "configure_safety",
+            SideEffect::Mutation,
+            false,
+            "antigravity.write",
+            "mut.software.antigravity.safety.configure@v1",
+        ),
+    );
+
     schema
 }
 

@@ -2,6 +2,9 @@
 //!
 //! This module provides the capability to automatically discover system services
 //! and create corresponding state plugins.
+//!
+//! **Proto Generation:** Automatically generates gRPC proto method definitions
+//! from plugin schemas, following gRPC best practices (typed enums, Structs, no success fields).
 
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
@@ -13,6 +16,7 @@ use simd_json::{json, OwnedValue as Value};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use std::path::Path;
 
 /// Auto-creator for systemd-based plugins
 pub struct SystemdAutoCreator;
