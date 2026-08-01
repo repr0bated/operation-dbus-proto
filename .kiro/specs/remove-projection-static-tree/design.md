@@ -13,10 +13,11 @@ intermediate, a 5-second polling loop, a system-bus binding on the wrong bus, an
 ## Before (Current Architecture)
 
 ```
-mutation_engine.rs
+op-grpc-bridge/mutation_engine.rs
     │
-    ├──► write_projection()  → /dev/shm/opdbus/state/<plugin>/<key>  (ATOMIC FILE WRITE)
-    │
+    ├──► write_projection()  → /dev/shm/opdbus/projections/<plugin_id>.json  (ATOMIC FILE WRITE)
+    │                          (NOTE: previously the projections/ dir; readers
+    │                           were pointed at state/ — the two never met)
     └──► (no signal emitted)
                                               ╔══════════════════════════╗
                                               ║   op-projection daemon   ║
@@ -40,18 +41,23 @@ Problems:
 ## After (Target Architecture)
 
 ```
-mutation_engine.rs
+op-grpc-bridge/mutation_engine.rs
     │
-    ├──► write_projection()  → /dev/shm/opdbus/state/<plugin>/<key>  (unchanged)
+    ├──► write_projection()  → /dev/shm/opdbus/state/<plugin_id>.json
+    │                          (one file per plugin, whole present-state object,
+    │                           atomic temp+rename)
     │
     └──► emit Updated signal on org.opdbus.v1.PluginV1 (SESSION bus)
+              at object path /org/opdbus/v1/plugins/<plugin_id>
+              payload: {"plugin","key"} or {"plugin","keys":[...]}
               │
               ├──► op-web: re-reads shm path on signal receipt (SSE/reactive)
               ├──► op-web: reads shm path directly on HTTP request (non-reactive)
               └──► any future consumer: subscribes to signal, reads shm
 
 Cold start:
-    consumer ──► read /var/lib/opdbus/snapshots/latest (ONE Btrfs volume)
+    consumer ──► read /var/lib/opdbus/snapshots/latest (ONE Btrfs volume,
+                 produced externally at deploy time — see §4)
              ──► then subscribe to Updated signal (push only from here)
 ```
 
@@ -67,56 +73,52 @@ Cold start:
 
 `crates/op-grpc-bridge/src/schema_router.rs` — this file already owns the
 `org.opdbus.v1.PluginV1` interface on the session bus. The signal is added to the
-existing zbus interface impl.
+existing zbus interface impl (`SchemaBackedInterface::updated`).
 
 #### Signal Definition
 
 ```rust
-// In the #[interface(name = "org.opdbus.v1.PluginV1")] impl block:
+// In the #[zbus::interface(name = "org.opdbus.v1.PluginV1")] impl block:
 
 #[zbus(signal)]
-async fn updated(&self, data_json: &str) -> zbus::Result<()>;
+pub async fn updated(signal_emitter: &zbus::object_server::SignalEmitter<'_>, data_json: &str) -> zbus::Result<()>;
 ```
 
-The `data_json` payload is:
+The `data_json` payload identifies what changed — a single mutated member:
 ```json
 {"plugin": "zeroclaw", "key": "selected_model"}
 ```
 
-Or for batch mutations:
+Or the top-level subtrees affected by a whole-state write:
 ```json
 {"plugin": "zeroclaw", "keys": ["selected_model", "model_routes"]}
 ```
 
 #### Emission Site
 
-The signal is emitted from `mutation_engine.rs` after `write_projection()` succeeds.
-The mutation engine already holds a D-Bus connection handle (used for other operations).
-The signal emission call is:
+The signal is emitted from `crates/op-grpc-bridge/src/mutation_engine.rs` (the
+mutation engine lives in op-grpc-bridge, NOT op-core) after each
+`write_projection()` succeeds, via the engine's `emit_updated_signal(plugin_id,
+key, keys)` helper. The engine receives the session-bus connection from server
+startup (`set_signal_bus`), and the signal is emitted on the per-plugin object
+path:
 
 ```rust
-// After write_projection(plugin, key, &value) at :230, :520, :1203
-if let Some(iface_ref) = connection
-    .object_server()
-    .interface::<_, PluginV1Interface>("/org/opdbus/v1/plugins")
-    .await
-    .ok()
-{
-    let _ = PluginV1Interface::updated(
-        iface_ref.signal_emitter(),
-        &serde_json::to_string(&json!({"plugin": plugin, "key": key})).unwrap(),
-    ).await;
-}
+// After write_projection(plugin_id, json) at the three write sites:
+self.emit_updated_signal(&plugin_id, member_name.as_deref(), keys).await;
+// payload: {"plugin": plugin_id, "key": member}        (single-member mutation)
+//       or {"plugin": plugin_id, "keys": [...]}        (whole-state write)
 ```
 
-If the connection is unavailable (early boot before grpc-bridge starts), the write
-still succeeds — the signal is best-effort for reactivity, shm is the source of truth.
+If the connection is unavailable (early boot before the bridge registers
+interfaces), the write still succeeds — the signal is best-effort for
+reactivity, shm is the source of truth.
 
 #### Bus Topology
 
 - **Bus**: Session bus at `unix:path=/run/opdbus/session-bus.sock`
 - **Well-known name**: `org.opdbus.v1.plugins` (owned by op-grpc-bridge)
-- **Object path**: `/org/opdbus/v1/plugins`
+- **Object path**: `/org/opdbus/v1/plugins/<plugin_id>` (one object per plugin)
 - **Interface**: `org.opdbus.v1.PluginV1`
 - **Signal**: `Updated(s)` where `s` is JSON string
 
@@ -131,48 +133,29 @@ New: `crates/op-web/src/state_tree.rs`
 This is a thin file-read utility. It does NOT maintain a cache, does NOT poll, and does
 NOT hold a D-Bus connection.
 
-#### API
+#### API (as implemented)
+
+`write_projection()` stores ONE file per plugin
+(`/dev/shm/opdbus/state/<plugin_id>.json`) containing the plugin's whole
+present-state object — the per-key directory layout originally sketched here
+does not match the writer. The reader API mirrors that:
 
 ```rust
-/// Read a single key from the static tree.
-/// Returns None if the file does not exist (not yet mutated).
-pub fn read_key(plugin: &str, key: &str) -> Option<serde_json::Value> {
-    let path = format!("/dev/shm/opdbus/state/{plugin}/{key}");
-    let bytes = std::fs::read(&path).ok()?;
-    serde_json::from_slice(&bytes).ok()
-}
+/// Read a plugin's full present-state. None if not yet mutated (REQ-3.4).
+pub fn read_plugin(plugin: &str) -> Option<simd_json::OwnedValue>
 
-/// Read all keys for a plugin.
-pub fn read_plugin(plugin: &str) -> serde_json::Value {
-    let dir = format!("/dev/shm/opdbus/state/{plugin}");
-    let mut map = serde_json::Map::new();
-    if let Ok(entries) = std::fs::read_dir(&dir) {
-        for entry in entries.flatten() {
-            if let Ok(bytes) = std::fs::read(entry.path()) {
-                if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&bytes) {
-                    let key = entry.file_name().to_string_lossy().into_owned();
-                    map.insert(key, val);
-                }
-            }
-        }
-    }
-    serde_json::Value::Object(map)
-}
+/// Walk the state dir; map keyed by plugin_id (".json" stripped, dotfiles skipped).
+pub fn read_all() -> HashMap<String, simd_json::OwnedValue>
 
-/// Walk the entire state tree (for dashboard dump).
-pub fn read_all() -> serde_json::Value {
-    let mut tree = serde_json::Map::new();
-    if let Ok(plugins) = std::fs::read_dir("/dev/shm/opdbus/state") {
-        for plugin_dir in plugins.flatten() {
-            if plugin_dir.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-                let name = plugin_dir.file_name().to_string_lossy().into_owned();
-                tree.insert(name.clone(), read_plugin(&name));
-            }
-        }
-    }
-    serde_json::Value::Object(tree)
-}
+/// Shared directory-walk used by read_all and read_seed_volume.
+pub fn read_all_from_path(base: &str) -> HashMap<String, simd_json::OwnedValue>
+
+/// One-time cold-start read of the seed volume; empty map if missing.
+pub fn read_seed_volume() -> HashMap<String, simd_json::OwnedValue>
 ```
+
+Consumers navigate the returned state object for the subkeys they need
+(e.g. `state.get("model_routes")`). Uses `simd_json` per workspace convention.
 
 No D-Bus. No network. Pure filesystem reads of files that `write_projection()` already
 maintains atomically (write-to-tmp + rename).
@@ -181,50 +164,38 @@ maintains atomically (write-to-tmp + rename).
 
 ### 3. Call Site Rewrites (op-web)
 
-#### Zeroclaw Subtree
+#### Zeroclaw Subtree (actual call sites)
 
-**Before** (all 6 call sites):
+**Before**:
 ```rust
 let proj = projection_client.get_projection("zeroclaw").await?;
-let selected = proj.get("selected_model")...;
 ```
 
 **After**:
 ```rust
-let selected = state_tree::read_key("zeroclaw", "selected_model");
+let zeroclaw = state_tree::read_plugin("zeroclaw")?;   // whole state object
 ```
 
-Specific files:
-- `zeroclaw_routes.rs:76` — reads model routes
-- `routes/llm.rs:80` — reads selected model
-- `handlers/chat.rs:140`, `:188` — reads selected model for chat dispatch
-- `routes/chat.rs:74`, `:109` — reads selected model
-- `handlers/zeroclaw.rs:403` — reads model config
+Actual files (the originally listed `routes/llm.rs`, `handlers/chat.rs`,
+`routes/chat.rs` had no projection_client usages — verified by grep):
+- `zeroclaw_routes.rs:76` — reads `model_routes` from the state object
+- `handlers/zeroclaw.rs:402` — reads `projection` (providers, model_routes, tools)
 
 #### System Metrics
 
-**Before**:
-```rust
-let mem = projection_client.get_projection("system").await?.get("memory");
-let load = projection_client.get_projection("system").await?.get("load");
-```
-
 **After**:
 ```rust
-let mem = state_tree::read_key("system", "memory");
-let load = state_tree::read_key("system", "load");
+let mem = state_tree::read_plugin("system.memory");   // /dev/shm/opdbus/state/system.memory.json
+let load = state_tree::read_plugin("system.load");    // /dev/shm/opdbus/state/system.load.json
 ```
+
+(`system.memory` / `system.load` are plugin ids, not plugin+key pairs.)
 
 #### Whole-Tree Dump
 
-**Before**:
+**After** (`handlers/dashboard.rs:114`):
 ```rust
-let all = projection_client.get_all_projections().await?;
-```
-
-**After**:
-```rust
-let all = state_tree::read_all();
+let projections = state_tree::read_all();
 ```
 
 ---
@@ -248,12 +219,17 @@ For op-web (stateless HTTP handlers), step 1 is optional — each request reads 
 directly. The seed volume matters for consumers that maintain an in-memory aggregate
 (e.g., a future SSE stream that needs to send a full initial frame).
 
-#### Snapshot Production
+#### Snapshot Production — EXTERNAL to op-blockchain
 
-Already exists in `op-blockchain`. The mutation engine calls snapshot rotation on a
-cadence (configurable, default: every 100 mutations or 5 minutes, whichever comes first).
-This spec does not modify the snapshot cadence — it only requires the consumer can read
-the result.
+The seed volume has **no relationship to `op-blockchain`**. The blockchain is the
+per-mutation durability chain; the seed volume is a deploy-time artifact. It is
+produced outside the runtime code in this workspace (Btrfs snapshot/send of the
+state tree at install/deploy time — the install path itself is `btrfs send`,
+the legacy shell install scripts being deprecated). This spec only requires the
+consumer read path (`state_tree::read_seed_volume()`), which treats a missing
+volume as first boot (empty tree, REQ-3.4). No snapshot cadence is defined or
+modified by this spec, and no op-blockchain code is reachable from, or required
+by, the mutation engine for seed production.
 
 ---
 
@@ -262,14 +238,14 @@ the result.
 #### `crates/op-projection` — DELETE
 
 19 files. Remove from:
-- `Cargo.toml` workspace members (line 37)
-- `Cargo.toml` workspace dependencies (line 79, if present)
-- `install/3tched-artix-s6-install.sh` (service setup for op-projection)
-- `install/3tched-artix-runit-install.sh` (runit sv dir for op-projection)
+- `Cargo.toml` workspace members
+- `Cargo.toml` workspace dependencies (if present)
 
-The Btrfs snapshot code referenced from op-projection (lives in op-blockchain) is NOT
-deleted — only the call path through op-projection's binary is removed. The mutation
-engine retains its own path to the same code.
+(Install scripts are deprecated — see the note at the end of this section.)
+
+`op-blockchain` is entirely untouched by this spec — the seed volume is external
+to it (see §4). Nothing needs rehoming because nothing in the runtime depended
+on the projection binary for snapshot production.
 
 #### `crates/op-dbus-mirror` — DELETE
 
@@ -284,8 +260,15 @@ without requiring a mirror daemon.
 
 #### `crates/op-web/src/projection_client.rs` — DELETE
 
-Entire file. All imports and usages rewritten to `state_tree::read_key` /
+Entire file. All imports and usages rewritten to `state_tree::read_plugin` /
 `state_tree::read_all`.
+
+#### Install scripts — NO ACTION (deprecated)
+
+The shell install scripts (`3tched-artix-*-install.sh`, `install/`) are
+deprecated: installation is a `btrfs send` of a prepared image. Their stale
+op-projection / op-dbus-mirror references die with the scripts and are out of
+scope for this spec.
 
 ---
 
@@ -341,15 +324,17 @@ Cold start:
 
 ## What Is NOT Changing
 
-- `op_core::projection_shm::write_projection` — KEPT. This is the write half. Already
-  correct. Already called from mutation_engine at all three sites.
-- `/dev/shm/opdbus/state/` file layout — KEPT. Consumers that read this today continue
-  to work.
-- `op-blockchain` Btrfs snapshot code — KEPT. Only the call path from op-projection is
-  removed; the mutation_engine's path is retained.
+- `op_core::projection_shm::write_projection` — KEPT as the single write door.
+  RETARGETED: it now writes `/dev/shm/opdbus/state/<plugin_id>.json` (where
+  schema_router and state_tree read) instead of the orphaned `projections/` dir.
+- One-file-per-plugin layout (`<plugin_id>.json`, whole state object) — KEPT.
+- `op-blockchain` — UNTOUCHED. It is the per-mutation durability chain and has no
+  relationship to the cold-start seed volume (§4).
 - `op-grpc-bridge` schema_router.rs — MODIFIED (gains `Updated` signal), not deleted.
-- Runit service dirs for other services — UNCHANGED. Only the op-projection service
-  dir is removed.
+- The broadcast `StateChange` payload on the gRPC event stream — UNCHANGED (the
+  `{"data","_introspection"}` composite is retained there; only the shm file holds
+  raw present state).
+- Install scripts — UNCHANGED (deprecated; install is `btrfs send`).
 
 ---
 
@@ -360,7 +345,7 @@ Cold start:
 | Signal lost during burst mutations | Shm is source of truth. Consumer re-reads on next request. Signal is for reactivity, not correctness. |
 | Shm file read races with write | `write_projection` uses atomic rename (write tmp, rename). Readers see complete files or previous version. |
 | Cold start with empty snapshot | Consumer proceeds with empty state. First mutations populate via signals. Present-state today is already empty — no regression. |
-| Btrfs snapshot code becomes unreachable after deletion | Proven reachable in Phase 0 (Task 0.4) BEFORE deletion proceeds. Phase 2 is gated on this proof. |
+| Seed volume never produced | Acceptable: it is an external deploy-time artifact (§4). Missing volume = first boot, handled by REQ-3.4. No runtime code depends on it. |
 | Signal payload reduced to bare notification | REQ-1.5 mandates data payload. Task 0.3 verifies payload content. Regression would void REQ-7 by reintroducing polling through the side door. |
 
 ---
@@ -374,13 +359,13 @@ Cold start:
 | `crates/op-web/src/projection_client.rs` | DELETE | Polling client on wrong bus |
 | `crates/op-web/src/state_tree.rs` | CREATE | Direct shm reader (replacement) |
 | `crates/op-grpc-bridge/src/schema_router.rs` | MODIFY | Add `Updated` signal to PluginV1 |
-| `crates/op-core/src/mutation_engine.rs` | MODIFY | Emit signal after write_projection |
-| `crates/op-web/src/zeroclaw_routes.rs` | MODIFY | Use state_tree::read_key |
-| `crates/op-web/src/routes/llm.rs` | MODIFY | Use state_tree::read_key |
-| `crates/op-web/src/handlers/chat.rs` | MODIFY | Use state_tree::read_key |
-| `crates/op-web/src/routes/chat.rs` | MODIFY | Use state_tree::read_key |
-| `crates/op-web/src/handlers/zeroclaw.rs` | MODIFY | Use state_tree::read_key |
-| `crates/op-web/src/handlers/dashboard.rs` | MODIFY | Use state_tree::read_key + read_all |
+| `crates/op-grpc-bridge/src/mutation_engine.rs` | MODIFY | Emit signal after write_projection; write raw present state |
+| `crates/op-core/src/projection_shm.rs` | MODIFY | Retarget write path to `/dev/shm/opdbus/state/` |
+| `crates/op-web/src/zeroclaw_routes.rs` | MODIFY | Use state_tree::read_plugin |
+| `crates/op-web/src/handlers/zeroclaw.rs` | MODIFY | Use state_tree::read_plugin |
+| `crates/op-web/src/handlers/dashboard.rs` | MODIFY | Use state_tree::read_plugin + read_all |
 | `Cargo.toml` (workspace root) | MODIFY | Remove op-projection, op-dbus-mirror members |
-| `install/3tched-artix-runit-install.sh` | MODIFY | Remove op-projection service setup |
-| `install/3tched-artix-s6-install.sh` | MODIFY | Remove op-projection service setup |
+
+(`routes/llm.rs`, `handlers/chat.rs`, `routes/chat.rs` were listed in an earlier
+draft; they contain no projection_client usages. Install scripts are deprecated —
+install is `btrfs send` — and are intentionally untouched.)

@@ -18,11 +18,12 @@ has multiple fatal flaws:
    sole dependent is itself).
 
 The correct architecture already exists in embryonic form:
-`op_core::projection_shm::write_projection` is called at mutation sites
-(`mutation_engine.rs:230`, `:520`, `:1203`). The mutation engine already pushes state
-into `/dev/shm/opdbus/state/<plugin>/<key>` atomically. What is missing is a D-Bus
-**signal** that tells consumers "this subtree changed" so they can read the new value
-from shm without polling.
+`op_core::projection_shm::write_projection` is called at mutation sites in
+`crates/op-grpc-bridge/src/mutation_engine.rs` (the mutation engine lives in
+op-grpc-bridge, NOT op-core). The mutation engine pushes each plugin's whole
+present-state object into shm atomically (one `<plugin_id>.json` file per
+plugin). What is missing is a D-Bus **signal** that tells consumers "this
+subtree changed" so they can read the new value from shm without polling.
 
 This spec removes the projection layer entirely and replaces the consumer path with a
 push-notified static tree.
@@ -31,13 +32,15 @@ push-notified static tree.
 
 ## Blast Radius
 
-7 call sites in 6 `op-web` files collapse to 3 distinct reads:
+4 call sites in 3 `op-web` files collapse to 2 distinct reads (verified by grep;
+`routes/llm.rs`, `handlers/chat.rs`, `routes/chat.rs` had no projection_client
+usages despite earlier drafts listing them):
 
 | Read pattern | Files | Shm path |
 |---|---|---|
-| Zeroclaw subtree (model routes, selected model) | `zeroclaw_routes.rs:76`, `routes/llm.rs:80`, `handlers/chat.rs:140+188`, `routes/chat.rs:74+109`, `handlers/zeroclaw.rs:403` | `/dev/shm/opdbus/state/zeroclaw/*` |
-| `system.memory` + `system.load` | `handlers/dashboard.rs:40`, `:41` | `/dev/shm/opdbus/state/system/{memory,load}` |
-| Whole-tree dump | `handlers/dashboard.rs:115` | `/dev/shm/opdbus/state/` (directory walk) |
+| Zeroclaw state (model routes, providers, tools) | `zeroclaw_routes.rs:76`, `handlers/zeroclaw.rs:402` | `/dev/shm/opdbus/state/zeroclaw.json` |
+| `system.memory` + `system.load` plugin states | `handlers/dashboard.rs:39-40` | `/dev/shm/opdbus/state/system.memory.json`, `system.load.json` |
+| Whole-tree dump | `handlers/dashboard.rs:114` | `/dev/shm/opdbus/state/` (directory walk of `*.json`) |
 
 All other `get_projection` / `get_all_projections` calls are internal to `op-projection`
 and die with the crate.
@@ -54,8 +57,9 @@ the session bus `unix:path=/run/opdbus/session-bus.sock`) MUST emit a signal
 payload is a JSON object: `{"plugin": "<name>", "key": "<key>"}`.
 
 **REQ-1.2** The signal MUST be emitted from the same codepath that calls
-`write_projection()` in `mutation_engine.rs`. It MUST NOT be emitted from a polling
-loop, a timer, or a deferred queue.
+`write_projection()` in `crates/op-grpc-bridge/src/mutation_engine.rs`. It MUST
+NOT be emitted from a polling loop, a timer, or a deferred queue. It is emitted
+on the per-plugin object path `/org/opdbus/v1/plugins/<plugin_id>`.
 
 **REQ-1.3** If multiple keys are written atomically in one mutation batch, the signal
 MAY be emitted once with an array payload: `{"plugin": "<name>", "keys": ["k1","k2"]}`.
@@ -79,14 +83,15 @@ the signal payload alone without an additional query.
 ### REQ-2 — Static Tree Read (Consumer Side)
 
 **REQ-2.1** Consumers (op-web route handlers) MUST read plugin state directly from the
-shm static tree at `/dev/shm/opdbus/state/<plugin>/<key>`. They MUST NOT call a D-Bus
-method to retrieve state.
+shm static tree at `/dev/shm/opdbus/state/<plugin_id>.json` (one file per plugin,
+whole present-state object). They MUST NOT call a D-Bus method to retrieve state.
 
 **REQ-2.2** Consumers that need reactivity (e.g., SSE push to frontend) MUST subscribe
 to the `Updated` signal and re-read the relevant shm path on receipt.
 
-**REQ-2.3** The whole-tree dump (`handlers/dashboard.rs:115`) MUST walk
-`/dev/shm/opdbus/state/` and aggregate all key files. No D-Bus call required.
+**REQ-2.3** The whole-tree dump (`handlers/dashboard.rs:114`) MUST walk
+`/dev/shm/opdbus/state/` and aggregate all per-plugin `.json` files (skipping
+dotfiles such as `.manifest.json`). No D-Bus call required.
 
 **REQ-2.4** Consumers MUST NOT cache shm state in-process beyond the lifetime of a
 single HTTP request handler invocation unless they are subscribed to `Updated` and
@@ -103,9 +108,10 @@ D-Bus fan-out or iterative query.
 **REQ-3.2** After the initial volume read, the consumer transitions to push-only mode —
 no further volume reads, no polling.
 
-**REQ-3.3** The Btrfs seed volume is produced by the mutation engine at a cadence
-independent of this spec (existing snapshot logic in `op-blockchain`). This spec requires
-only that the consumer can read it at startup.
+**REQ-3.3** The Btrfs seed volume is produced EXTERNALLY to this workspace's runtime
+code — it is a deploy-time artifact (Btrfs snapshot/send of the state tree; the
+install path is itself `btrfs send`). It has NO relationship to `op-blockchain`
+(see REQ-6). This spec requires only that the consumer can read it at startup.
 
 **REQ-3.4** If the seed volume is empty or missing (first boot), the consumer MUST
 proceed with an empty state tree and hydrate solely from subsequent `Updated` signals.
@@ -128,8 +134,10 @@ deletion. Its tasks are NOT to be completed.
 **REQ-4.4** All call sites in op-web that reference `projection_client` MUST be rewritten
 to read directly from the shm static tree per REQ-2.
 
-**REQ-4.5** References in install scripts (`install/3tched-artix-s6-install.sh`,
-`install/3tched-artix-runit-install.sh`) to op-projection or its binary MUST be removed.
+**REQ-4.5** Install scripts are DEPRECATED — installation is a `btrfs send` of a
+prepared image, and the shell scripts (`3tched-artix-s6-install.sh`,
+`3tched-artix-runit-install.sh`, `install/`) will not be used. Their stale
+op-projection / op-dbus-mirror references require NO action under this spec.
 
 ---
 
@@ -146,25 +154,24 @@ this claim dies with the crate. No action beyond deletion.
 
 ---
 
-### REQ-6 — Btrfs Snapshot Rehoming
+### REQ-6 — Seed Volume Independence from op-blockchain
 
-**REQ-6.1** The Btrfs subvolume/snapshot code currently in `op-blockchain` (reachable
-only via the `op-projection` binary path) MUST be preserved. It is NOT deleted.
+**REQ-6.1** `op-blockchain` MUST remain untouched by this spec. It is the per-mutation
+durability chain; it is not the seed-volume producer, and nothing needs "rehoming"
+from it.
 
-**REQ-6.2** The snapshot code MUST remain callable from the mutation engine for seed
-volume rotation. Its current location in `op-blockchain` is acceptable; if it is
-unreachable after op-projection deletion, it must be re-exported or moved.
+**REQ-6.2** The cold-start seed volume is completely separate from the blockchain.
+It is produced externally at deploy time (Btrfs snapshot/send of the state tree —
+the install path is itself `btrfs send`). No runtime code in this workspace is
+required to produce it.
 
-**REQ-6.3** The seed volume path is `/var/lib/opdbus/snapshots/latest`. The mutation
-engine writes to it; consumers read from it at cold start only.
+**REQ-6.3** The seed volume path is `/var/lib/opdbus/snapshots/latest`. Consumers
+read from it at cold start only (`state_tree::read_seed_volume()`). A missing
+volume is first boot (REQ-3.4), not an error.
 
-**REQ-6.4** Snapshot reachability MUST be proven BEFORE `crates/op-projection` is
-deleted. The Btrfs subvolume/snapshot path currently fires only via the projection binary
-(`Created BTRFS subvolume: "/var/lib/opdbus/blockchain/state"`, `Streaming blockchain
-initialized ... every 15 minutes interval`, `Created snapshot: SNP-state-000001`). If
-Phase 2 proceeds without this proof, seed-volume production stops silently and cold start
-degrades permanently to the REQ-3.4 empty-tree path — an invisible regression. This
-verification is a hard gate on Phase 2.
+**REQ-6.4** The earlier "snapshot reachability hard gate" (proving op-blockchain
+snapshot code callable from the mutation engine before Phase 2) is VOID: it was
+predicated on the seed volume being an op-blockchain product, which it is not.
 
 ---
 
