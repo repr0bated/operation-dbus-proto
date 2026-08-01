@@ -739,6 +739,43 @@ impl StatePlugin for FullSystemPlugin {
             &mut schema,
             &simd_json::serde::to_owned_value(&FullSystemState::default()).unwrap(),
         );
+
+        use super::plugin_scaffold_helpers::{
+            method_decl_from_schemars_with_output, AckOutput, EmptyInput,
+        };
+        use op_state_store::SideEffect;
+
+        #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+        pub struct SetHostnameInput {
+            pub hostname: String,
+        }
+
+        // Backed by real dispatchers (dispatch_full_system_method):
+        // capture_state calls the plugin's own capture_full_state(), and
+        // set_hostname reproduces apply_state's existing "hostname" action so
+        // it's reachable directly, not only via a full StateDiff/apply_state
+        // round trip.
+        schema.methods.insert(
+            "capture_state".to_string(),
+            method_decl_from_schemars_with_output::<EmptyInput, FullSystemState>(
+                "capture_state",
+                SideEffect::Read,
+                true,
+                "full_system.read",
+                "obs.system.plugin.full-system.state.capture@v1",
+            ),
+        );
+        schema.methods.insert(
+            "set_hostname".to_string(),
+            method_decl_from_schemars_with_output::<SetHostnameInput, AckOutput>(
+                "set_hostname",
+                SideEffect::Mutation,
+                true,
+                "full_system.write",
+                "mut.system.plugin.full-system.hostname.set@v1",
+            ),
+        );
+
         Some(schema)
     }
 
@@ -858,6 +895,40 @@ impl StatePlugin for FullSystemPlugin {
             supports_verification: true,
             atomic_operations: false,
         }
+    }
+}
+
+/// Dispatch a `full_system` schema method. Called from `op-grpc-bridge`'s
+/// `MutationEngine::dispatch_method_call`.
+pub async fn dispatch_full_system_method(
+    method: &str,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value> {
+    match method {
+        "capture_state" => {
+            let plugin = FullSystemPlugin::new();
+            let state = plugin.capture_full_state().await?;
+            Ok(serde_json::to_value(state)?)
+        }
+        "set_hostname" => {
+            let hostname = args
+                .get("hostname")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("hostname is required"))?;
+            let output = Command::new("hostnamectl")
+                .args(["set-hostname", hostname])
+                .output()
+                .await
+                .context("running hostnamectl")?;
+            if !output.status.success() {
+                anyhow::bail!(
+                    "hostnamectl set-hostname failed: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            Ok(serde_json::json!({ "success": true }))
+        }
+        other => Err(anyhow::anyhow!("unknown full_system method: {}", other)),
     }
 }
 

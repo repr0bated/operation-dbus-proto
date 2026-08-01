@@ -300,6 +300,98 @@ pub(crate) fn xray_schema() -> PluginSchema {
     let state = simd_json::serde::to_owned_value(&XrayState::default())
         .expect("XrayState default serializes");
     super::schemars_adapter::apply_state_defaults(&mut schema, &state);
+
+    use super::plugin_scaffold_helpers::EmptyInput;
+    use op_state_store::SideEffect;
+
+    // Backed by a real dispatcher (op-grpc-bridge's dispatch_xray_method):
+    // xray-core StatsService.GetStats over the commander API socket.
+    schema.methods.insert(
+        "get_stats".to_string(),
+        method_decl_from_schemars_with_output::<StatsInput, GetStatsOutput>(
+            "get_stats",
+            SideEffect::Read,
+            true,
+            "xray.read",
+            "obs.software.plugin.xray.stats.get@v1",
+        ),
+    );
+    // Backed by a real dispatcher: SIGHUP reload of the running xray process
+    // (never a hard kill+respawn; the container's own supervisor owns that).
+    schema.methods.insert(
+        "restart".to_string(),
+        method_decl_from_schemars_with_output::<EmptyInput, RestartOutput>(
+            "restart",
+            SideEffect::Mutation,
+            false,
+            "xray.write",
+            "mut.software.plugin.xray.daemon.restart@v1",
+        ),
+    );
+    // Declared for UI/gRPC discovery; dispatch_xray_method currently answers
+    // these with "schema-declared but not yet implemented" until the
+    // xray-core UsersService / routing-config write path is wired up.
+    schema.methods.insert(
+        "add_user".to_string(),
+        method_decl_from_schemars::<UserInput>(
+            "add_user",
+            SideEffect::Mutation,
+            false,
+            "xray.write",
+            "mut.software.plugin.xray.user.add@v1",
+        ),
+    );
+    schema.methods.insert(
+        "remove_user".to_string(),
+        method_decl_from_schemars::<UserInput>(
+            "remove_user",
+            SideEffect::Mutation,
+            false,
+            "xray.write",
+            "mut.software.plugin.xray.user.remove@v1",
+        ),
+    );
+    schema.methods.insert(
+        "add_inbound".to_string(),
+        method_decl_from_schemars::<InboundInput>(
+            "add_inbound",
+            SideEffect::Mutation,
+            false,
+            "xray.write",
+            "mut.software.plugin.xray.inbound.add@v1",
+        ),
+    );
+    schema.methods.insert(
+        "start_trace".to_string(),
+        method_decl_from_schemars::<StartTraceInput>(
+            "start_trace",
+            SideEffect::Mutation,
+            false,
+            "xray.write",
+            "mut.software.plugin.xray.trace.start@v1",
+        ),
+    );
+    schema.methods.insert(
+        "end_trace".to_string(),
+        method_decl_from_schemars::<EndTraceInput>(
+            "end_trace",
+            SideEffect::Mutation,
+            false,
+            "xray.write",
+            "mut.software.plugin.xray.trace.end@v1",
+        ),
+    );
+    schema.methods.insert(
+        "record_span".to_string(),
+        method_decl_from_schemars::<RecordSpanInput>(
+            "record_span",
+            SideEffect::Mutation,
+            false,
+            "xray.write",
+            "mut.software.plugin.xray.span.record@v1",
+        ),
+    );
+
     schema
 }
 
@@ -337,6 +429,19 @@ mod tests {
             assert!(validate_subid(&subid).is_ok(), "invalid subid: {subid}");
         }
     }
+}
+
+/// Output for `get_stats`: a single xray-core StatsService counter.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct GetStatsOutput {
+    pub name: String,
+    pub value: i64,
+}
+
+/// Output for `restart`: PIDs that received the reload signal.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct RestartOutput {
+    pub reloaded_pids: Vec<i32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]

@@ -3,6 +3,13 @@
 //! Replaces `projection_client.rs`. No D-Bus, no caching, no network.
 //! Each function reads the atomic files that `write_projection()` maintains.
 //!
+//! # Layout
+//! `write_projection()` stores one file per plugin:
+//!   `/dev/shm/opdbus/state/<plugin_id>.json`
+//! The file contains the plugin's full present-state JSON object. Consumers
+//! navigate the returned object for the subkeys they need (e.g.
+//! `state.get("model_routes")`).
+//!
 //! # No Polling
 //! This module is a pure reader. It does NOT poll, cache, or hold a connection.
 //! Consumers that need reactivity subscribe to the `Updated` signal on
@@ -15,29 +22,19 @@ use std::path::Path;
 /// Base path for the SHM state tree written by `write_projection()`.
 const SHM_STATE_DIR: &str = "/dev/shm/opdbus/state";
 
-/// Read a single plugin's entire state from the static tree.
+/// Read a plugin's full present-state from the static tree.
 ///
 /// Returns `None` if the file does not exist (state not yet mutated — correct per REQ-3.4).
-pub fn read_key(plugin: &str, _key: &str) -> Option<Value> {
-    // write_projection stores one file per plugin_id (not per key):
-    //   /dev/shm/opdbus/state/<plugin_id>
-    // The file contains the full plugin state JSON.
-    let path = format!("{SHM_STATE_DIR}/{plugin}");
-    read_json_file(&path)
-}
-
-/// Read a plugin's full projection from the static tree.
-///
-/// Returns empty object if no state file exists.
 pub fn read_plugin(plugin: &str) -> Option<Value> {
-    let path = format!("{SHM_STATE_DIR}/{plugin}");
+    let path = format!("{SHM_STATE_DIR}/{plugin}.json");
     read_json_file(&path)
 }
 
 /// Walk the entire state tree and aggregate all plugin state files.
 ///
 /// Used by the dashboard whole-tree dump endpoint.
-/// Returns an object keyed by plugin_id with the plugin's state as value.
+/// Returns a map keyed by plugin_id (`.json` suffix stripped) with the
+/// plugin's state as value. Dotfiles (e.g. `.manifest.json`) are skipped.
 pub fn read_all() -> HashMap<String, Value> {
     read_all_from_path(SHM_STATE_DIR)
 }
@@ -55,11 +52,19 @@ pub fn read_all_from_path(base: &str) -> HashMap<String, Value> {
     if let Ok(entries) = std::fs::read_dir(base_path) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_file() {
-                if let Some(val) = read_json_file_path(&path) {
-                    let name = entry.file_name().to_string_lossy().into_owned();
-                    tree.insert(name, val);
-                }
+            if !path.is_file() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            // Skip dotfiles (`.manifest.json`) and non-state files.
+            if name.starts_with('.') {
+                continue;
+            }
+            let Some(plugin) = name.strip_suffix(".json") else {
+                continue;
+            };
+            if let Some(val) = read_json_file_path(&path) {
+                tree.insert(plugin.to_string(), val);
             }
         }
     }
@@ -68,6 +73,8 @@ pub fn read_all_from_path(base: &str) -> HashMap<String, Value> {
 
 /// Read initial state from Btrfs seed volume (cold start).
 ///
+/// The seed volume is produced externally at deploy time (Btrfs snapshot of
+/// the state tree) — it has no relationship to `op-blockchain`.
 /// Returns empty map if snapshot is missing (first boot — correct per REQ-3.4).
 /// Called once at startup, then push-only via Updated signal.
 pub fn read_seed_volume() -> HashMap<String, Value> {

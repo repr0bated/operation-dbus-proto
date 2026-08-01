@@ -113,12 +113,47 @@ impl StatePlugin for SessDeclPlugin {
 pub(crate) fn sess_decl_schema() -> PluginSchema {
     let root = serde_json::to_value(schemars::schema_for!(SessDeclSchemaState))
         .expect("schemars schema serializes to JSON");
-    super::schemars_adapter::plugin_schema_from_json(
+    let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "sess_decl",
         "1.0.0",
         "Session declaration state",
         &root,
-    )
+    );
+
+    use super::plugin_scaffold_helpers::{method_decl_from_schemars_with_output, EmptyInput};
+    use op_state_store::SideEffect;
+
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct ListSessionsOutput {
+        pub sessions: Vec<SessionConfig>,
+    }
+
+    // No dispatch wired yet: calculate_diff/apply_state are both no-ops today
+    // (nothing durably stores session declarations), so there is no real
+    // backend to call into. Declared for UI/gRPC discovery, matching the xray
+    // precedent for schema-declared-but-not-yet-implemented methods.
+    schema.methods.insert(
+        "list_sessions".to_string(),
+        method_decl_from_schemars_with_output::<EmptyInput, ListSessionsOutput>(
+            "list_sessions",
+            SideEffect::Read,
+            true,
+            "sess_decl.read",
+            "obs.software.plugin.sessdecl.sessions.list@v1",
+        ),
+    );
+    schema.methods.insert(
+        "declare_session".to_string(),
+        method_decl_from_schemars_with_output::<SessionConfig, ListSessionsOutput>(
+            "declare_session",
+            SideEffect::Mutation,
+            false,
+            "sess_decl.write",
+            "mut.software.plugin.sessdecl.session.declare@v1",
+        ),
+    );
+
+    schema
 }
 
 #[cfg(test)]

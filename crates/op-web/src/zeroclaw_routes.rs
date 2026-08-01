@@ -73,7 +73,7 @@ impl ZeroclawRoute {
 }
 
 pub fn routes() -> Option<Vec<ZeroclawRoute>> {
-    let zeroclaw = state_tree::read_key("zeroclaw", "model_routes")?;
+    let zeroclaw = state_tree::read_plugin("zeroclaw")?;
     let route_values = zeroclaw.get("model_routes")?.as_array()?;
     Some(
         route_values

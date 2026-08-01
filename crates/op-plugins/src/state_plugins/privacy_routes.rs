@@ -18,7 +18,7 @@ pub struct PrivacyRoutesState {
     pub routes: Vec<PrivacyRoute>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct PrivacyRoute {
     pub name: String,
     pub route_id: String,
@@ -407,6 +407,43 @@ pub(crate) fn privacy_routes_schema() -> PluginSchema {
         fields
     };
 
+    use super::plugin_scaffold_helpers::{method_decl_from_schemars_with_output, EmptyInput};
+    use op_state_store::SideEffect;
+
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct ListRoutesOutput {
+        pub routes: Vec<PrivacyRoute>,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct DeleteRouteInput {
+        pub route_id: String,
+    }
+
+    let methods = {
+        let mut methods = HashMap::new();
+        methods.insert(
+            "list_routes".to_string(),
+            method_decl_from_schemars_with_output::<EmptyInput, ListRoutesOutput>(
+                "list_routes",
+                SideEffect::Read,
+                true,
+                "privacy_routes.read",
+                "obs.network.plugin.privacy-routes.routes.list@v1",
+            ),
+        );
+        methods.insert(
+            "delete_route".to_string(),
+            method_decl_from_schemars_with_output::<DeleteRouteInput, ListRoutesOutput>(
+                "delete_route",
+                SideEffect::Mutation,
+                true,
+                "privacy_routes.write",
+                "mut.network.plugin.privacy-routes.route.delete@v1",
+            ),
+        );
+        methods
+    };
+
     PluginSchema::builder("privacy_routes")
         .category("network")
         .version("1.0.0")
@@ -419,6 +456,7 @@ pub(crate) fn privacy_routes_schema() -> PluginSchema {
             true,
             "Published privacy route objects",
         )
+        .methods(methods)
         .example(json!({
             "routes": [
                 {
@@ -439,6 +477,32 @@ pub(crate) fn privacy_routes_schema() -> PluginSchema {
             ]
         }))
         .build()
+}
+
+/// Dispatch a `privacy_routes` schema method. Called from `op-grpc-bridge`'s
+/// `MutationEngine::dispatch_method_call`.
+pub async fn dispatch_privacy_routes_method(
+    method: &str,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value> {
+    let plugin = PrivacyRoutesPlugin::default();
+    match method {
+        "list_routes" => {
+            let state = plugin.load_store().await?;
+            Ok(serde_json::json!({ "routes": state.routes }))
+        }
+        "delete_route" => {
+            let route_id = args
+                .get("route_id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("route_id is required"))?;
+            let mut state = plugin.load_store().await?;
+            state.routes.retain(|r| r.route_id != route_id);
+            plugin.save_store(&state).await?;
+            Ok(serde_json::json!({ "routes": state.routes }))
+        }
+        other => Err(anyhow::anyhow!("unknown privacy_routes method: {}", other)),
+    }
 }
 
 // Self-registration: the plugin registry discovers this via inventory

@@ -172,12 +172,47 @@ impl StatePlugin for GcloudAdcPlugin {
 pub fn gcloud_adc_schema() -> PluginSchema {
     let root = serde_json::to_value(schemars::schema_for!(GcloudAdcState))
         .expect("schemars schema serializes to JSON");
-    super::schemars_adapter::plugin_schema_from_json(
+    let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "gcloud_adc",
         "1.0.0",
         "Google Cloud ADC state",
         &root,
-    )
+    );
+
+    use super::plugin_scaffold_helpers::{method_decl_from_schemars_with_output, EmptyInput};
+    use op_state_store::SideEffect;
+
+    // Backed by a real dispatcher (dispatch_gcloud_adc_method in op-grpc-bridge),
+    // which calls GcloudAdcPlugin::check_auth_status() directly — real file reads
+    // of ~/.config/gcloud/{application_default_credentials.json,active_config,
+    // configurations/*}, no subprocess.
+    schema.methods.insert(
+        "check_auth_status".to_string(),
+        method_decl_from_schemars_with_output::<EmptyInput, GcloudAdcState>(
+            "check_auth_status",
+            SideEffect::Read,
+            true,
+            "gcloud_adc.read",
+            "obs.software.plugin.gcloud-adc.auth-status.check@v1",
+        ),
+    );
+
+    schema
+}
+
+/// Dispatch a `gcloud_adc` schema method. Called from `op-grpc-bridge`'s
+/// `MutationEngine::dispatch_method_call`.
+pub async fn dispatch_gcloud_adc_method(
+    method: &str,
+    _args: &serde_json::Value,
+) -> Result<serde_json::Value> {
+    match method {
+        "check_auth_status" => {
+            let state = GcloudAdcPlugin::check_auth_status().await?;
+            Ok(serde_json::to_value(state)?)
+        }
+        other => Err(anyhow::anyhow!("unknown gcloud_adc method: {}", other)),
+    }
 }
 
 #[cfg(test)]

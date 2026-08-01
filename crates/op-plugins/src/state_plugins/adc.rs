@@ -100,12 +100,33 @@ impl StatePlugin for AdcPlugin {
 pub fn adc_schema() -> PluginSchema {
     let root = serde_json::to_value(schemars::schema_for!(AdcState))
         .expect("schemars schema serializes to JSON");
-    super::schemars_adapter::plugin_schema_from_json(
+    let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "adc",
         "1.0.0",
         "Application default credentials state",
         &root,
-    )
+    );
+
+    use super::plugin_scaffold_helpers::{method_decl_from_schemars_with_output, EmptyInput};
+    use op_state_store::SideEffect;
+
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct GetStatusOutput {
+        pub configured: bool,
+    }
+
+    schema.methods.insert(
+        "get_status".to_string(),
+        method_decl_from_schemars_with_output::<EmptyInput, GetStatusOutput>(
+            "get_status",
+            SideEffect::Read,
+            true,
+            "adc.read",
+            "obs.software.plugin.adc.status.get@v1",
+        ),
+    );
+
+    schema
 }
 
 #[cfg(test)]

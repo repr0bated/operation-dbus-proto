@@ -81,7 +81,7 @@ use simd_json::{json, OwnedValue as Value};
 /// queries a plugin backend and never invents data outside the contract:
 /// field defaults win, then examples, then an empty value matching the field
 /// type. The MutationEngine writes this once when no projection exists yet;
-/// later mutations replace it through the normal `/dev/shm/opdbus/projections`
+/// later mutations replace it through the normal `/dev/shm/opdbus/state`
 /// write door.
 pub(crate) fn materialize_state_from_schema(schema: &PluginSchema) -> Value {
     if let Some(example) = &schema.example {

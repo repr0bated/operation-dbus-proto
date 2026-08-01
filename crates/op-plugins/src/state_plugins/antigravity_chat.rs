@@ -220,12 +220,92 @@ impl StatePlugin for AntigravityChatPlugin {
 pub(crate) fn antigravity_chat_schema() -> PluginSchema {
     let root = serde_json::to_value(schemars::schema_for!(AntigravityChatState))
         .expect("schemars schema serializes to JSON");
-    super::schemars_adapter::plugin_schema_from_json(
+    let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "antigravity_chat",
         "1.0.0",
         "Antigravity Chat — OAuth bridge, Gemini models, headless IDE",
         &root,
-    )
+    );
+
+    use super::plugin_scaffold_helpers::{method_decl_from_schemars_with_output, EmptyInput};
+    use op_state_store::SideEffect;
+
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct GetBridgeStatusOutput {
+        pub bridge: Bridge,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct ListModelsOutput {
+        pub models: Vec<Model>,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct RefreshTokenOutput {
+        pub auth: Auth,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct ConfigureInput {
+        #[serde(default)]
+        pub headless: Option<bool>,
+        #[serde(default)]
+        pub display_service: Option<String>,
+        #[serde(default)]
+        pub vnc_port: Option<u16>,
+        #[serde(default)]
+        pub code_assist: Option<bool>,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct ConfigureOutput {
+        pub config: ChatConfig,
+    }
+
+    // Backend note: this plugin's headless-IDE bridge has no live implementation
+    // yet (bridge.status stays "offline", models stay unavailable by default —
+    // see current_state()). Methods are declared so the UI can render controls
+    // and callers get a real "unknown method" vs "not implemented" distinction
+    // once dispatch is wired, matching the xray precedent for undispatched
+    // schema-declared methods.
+    schema.methods.insert(
+        "get_bridge_status".to_string(),
+        method_decl_from_schemars_with_output::<EmptyInput, GetBridgeStatusOutput>(
+            "get_bridge_status",
+            SideEffect::Read,
+            true,
+            "antigravity_chat.read",
+            "obs.software.antigravity-chat.bridge.status.get@v1",
+        ),
+    );
+    schema.methods.insert(
+        "list_models".to_string(),
+        method_decl_from_schemars_with_output::<EmptyInput, ListModelsOutput>(
+            "list_models",
+            SideEffect::Read,
+            true,
+            "antigravity_chat.read",
+            "obs.software.antigravity-chat.models.list@v1",
+        ),
+    );
+    schema.methods.insert(
+        "refresh_token".to_string(),
+        method_decl_from_schemars_with_output::<EmptyInput, RefreshTokenOutput>(
+            "refresh_token",
+            SideEffect::Mutation,
+            false,
+            "antigravity_chat.write",
+            "mut.software.antigravity-chat.auth.token.refresh@v1",
+        ),
+    );
+    schema.methods.insert(
+        "configure".to_string(),
+        method_decl_from_schemars_with_output::<ConfigureInput, ConfigureOutput>(
+            "configure",
+            SideEffect::Mutation,
+            false,
+            "antigravity_chat.write",
+            "mut.software.antigravity-chat.config.set@v1",
+        ),
+    );
+
+    schema
 }
 
 #[cfg(test)]

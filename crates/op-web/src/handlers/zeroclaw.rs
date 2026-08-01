@@ -394,12 +394,12 @@ fn compatibility_openapi(schema: Option<&Value>) -> Value {
 /// projection (providers, model_routes, tools, structured_output) so the
 /// frontend can render the entire chat interface from a single schema.
 /// GET /api/zeroclaw/schema
-pub async fn zeroclaw_schema_handler(Extension(state): Extension<Arc<AppState>>) -> Response {
+pub async fn zeroclaw_schema_handler(Extension(_state): Extension<Arc<AppState>>) -> Response {
     // Read zeroclaw state directly from the SHM state tree. Fall back to the
     // sealed PluginSchema blob so the schema surface still renders when no
     // mutation has populated SHM yet.
     let (zeroclaw, zeroclaw_schema) =
-        match crate::state_tree::read_key("zeroclaw", "state") {
+        match crate::state_tree::read_plugin("zeroclaw") {
             Some(v) => {
                 info!("Using zeroclaw from SHM state tree (live provider/model catalog)");
                 (v, read_zeroclaw_schema_shm())
