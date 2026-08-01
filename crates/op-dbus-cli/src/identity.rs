@@ -1,12 +1,14 @@
-//! Identity integration — reads identity from the projection JSON
-//! at /dev/shm/opdbus/projections/identity_sled.json and provides
+//! Identity integration — reads identity from the state-tree JSON
+//! at /dev/shm/opdbus/state/identity_sled.json and provides
 //! the GhostBridge footprint + trace_id for authenticated gRPC calls.
 
-use anyhow::{Context, Result};
 use serde::Deserialize;
 use tracing::{debug, warn};
 
-const PROJECTION_PATH: &str = "/dev/shm/opdbus/projections/identity_sled.json";
+/// Canonical location written by `write_projection()` (post projection-removal).
+const STATE_PATH: &str = "/dev/shm/opdbus/state/identity_sled.json";
+/// Pre-removal location under `projections/`. Read fallback only, one deploy cycle.
+const LEGACY_PROJECTION_PATH: &str = "/dev/shm/opdbus/projections/identity_sled.json";
 
 /// A single sled entry from the identity projection
 #[derive(Debug, Clone, Deserialize)]
@@ -47,13 +49,15 @@ pub struct CliIdentity {
 }
 
 impl CliIdentity {
-    /// Read the active identity from the projection JSON.
+    /// Read the active identity from the state-tree JSON.
     /// Returns the first active sled with a non-empty footprint.
     pub fn read() -> Option<Self> {
-        let data = match std::fs::read_to_string(PROJECTION_PATH) {
+        let data = match std::fs::read_to_string(STATE_PATH)
+            .or_else(|_| std::fs::read_to_string(LEGACY_PROJECTION_PATH))
+        {
             Ok(d) => d,
             Err(e) => {
-                debug!("Could not read identity projection: {}", e);
+                debug!("Could not read identity state: {}", e);
                 return None;
             }
         };
@@ -89,7 +93,7 @@ impl CliIdentity {
 
     /// Print identity info for `dbus-plugin-cli identity` command.
     pub fn display(&self) {
-        println!("Identity (from {}):", PROJECTION_PATH);
+        println!("Identity (from {}):", STATE_PATH);
         println!("  Session ID:      {}", self.session_id);
         println!("  Footprint:       {}", self.footprint);
         println!("  Trace ID:        {}", self.trace_id);

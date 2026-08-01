@@ -4,7 +4,7 @@ Native, deterministic control plane for Artix Linux infrastructure.
 
 ## Architecture
 
-- **Host**: Artix Linux + s6 service supervision (NOT systemd)
+- **Host**: Artix Linux + runit service supervision, controlled with `sv` (NOT systemd, NOT s6)
 - **Network**: OVS switching fabric via `rovs` crate suite — native OVSDB JSON-RPC, no CLI subprocess
 - **Containers**: Incus — privacy services (Xray, mail) run inside containers with Unix sockets + OpenFlow routing
 - **Storage**: CozoDB (graph-relational-vector) + Btrfs vectorized footprint transport
@@ -50,7 +50,7 @@ cargo run --release -p op-web
 
 - `CLAUDE.md` — agent guidance + project coding standards
 - `docs/` — architecture docs
-- `deploy/` — s6 service definitions + deployment scripts
+- `deploy/runit/` — runit service definitions + `recompile-and-update.sh`
 
 ## License
 
