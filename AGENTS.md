@@ -24,10 +24,17 @@ the layout in `deploy/btrfs-layout.sh` defines base/modules/snapshots/staging
 subvolumes, and a release is a snapshot that is sent to the target. Do not
 hand-copy binaries onto a running host as a deployment step.
 
-For local build-and-restart iteration on this machine only,
-`deploy/runit/recompile-and-update.sh` builds, installs to `/usr/local/bin`, and
-restarts the enabled services that reference it. That is a development
-convenience, not the deployment path.
+One script publishes a release both ways from a single build:
+
+```sh
+CXXFLAGS="-include cstdint" cargo build --workspace --release
+sudo deploy/runit/build-golden.sh          # golden subvolume + live install
+sudo deploy/runit/build-golden.sh --dry-run   # review first
+```
+
+`--golden-only` skips the running host; `--live-only` skips the subvolume.
+Network-critical services (OVS, uplink, DHCP, session bus) are never
+auto-restarted — the script reports them for deliberate console action.
 
 s6 is legacy on this host. `service6`, `s6-rc`, `s6-*` and the `/run/service`
 tree no longer apply; treat any doc or script that still assumes them as stale.
