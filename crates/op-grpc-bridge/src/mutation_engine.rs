@@ -17,10 +17,19 @@ use zbus::zvariant::OwnedValue as ZOwnedValue;
 use zbus::{Connection, Proxy};
 
 use base64::Engine;
+use op_blockchain::{PluginFootprint, StreamingBlockchain};
 use op_identity::{read_sled, write_sled_full};
 use op_llm::chat::ChatManager;
 use op_network::rovs_proxy::OvsdbDbusClient;
+use op_plugins::state_plugins::blockchain_plugin::{
+    AuditEventRecord, QueryEventsInput, QueryEventsOutput, VerifyChainInput, VerifyChainOutput,
+};
 use op_state_store::{ChainEvent, Decision, EventChain, MemoryStore, OperationType, StateStore};
+
+/// Default on-disk location of the streaming blockchain that backs the durable
+/// audit trail, when `$OPDBUS_BLOCKCHAIN_PATH` is unset. Matches
+/// `blockchain_plugin::DEFAULT_BASE_PATH` so both read the same chain.
+const DEFAULT_BLOCKCHAIN_PATH: &str = "/var/lib/opdbus/blockchain";
 
 /// A state change projected from the authoritative system bus
 #[derive(Debug, Clone)]
@@ -75,6 +84,12 @@ pub struct MutationEngine {
     /// Resource limiter for D-Bus operations
     #[allow(dead_code)]
     dbus_call_limiter: Arc<Semaphore>,
+
+    /// Durable audit sink: the streaming blockchain's `timing_subvol` holds one
+    /// JSON record per event chain event, so the trail survives a restart.
+    /// Empty until [`MutationEngine::init_audit_durability`] runs; a missing
+    /// sink degrades to RAM-only recording rather than failing dispatches.
+    audit_sink: Arc<OnceCell<Arc<StreamingBlockchain>>>,
 
     /// Authoritative RCP stores
     pub ovsdb: Arc<OvsdbDbusClient>,
@@ -139,9 +154,168 @@ impl MutationEngine {
             session_bus: Arc::new(OnceCell::new()),
             signal_bus: Arc::new(OnceCell::new()),
             dbus_call_limiter: Arc::new(Semaphore::new(32)),
+            audit_sink: Arc::new(OnceCell::new()),
             ovsdb,
             unix_socket: Arc::new(op_plugins::state_plugins::UnixSocketPlugin::new()),
             chat_manager: Arc::new(ChatManager::new()),
+        }
+    }
+
+    /// Open the durable audit sink and rebuild the in-memory event chain from it.
+    ///
+    /// Called once at startup (before the gRPC/D-Bus surfaces accept traffic) so
+    /// that a query issued immediately after a restart sees the pre-restart
+    /// history. Idempotent: the sink is behind a `OnceCell`, and the rebuild is
+    /// skipped when the chain already holds events.
+    ///
+    /// Returns the number of events replayed from disk. A sink that cannot be
+    /// opened (no Btrfs, no permission, path absent) is not an error: the engine
+    /// keeps recording to RAM and logs at `warn!`.
+    ///
+    /// OSCAL subid: `src.service.event-chain.rebuild@v1`
+    pub async fn init_audit_durability(&self) -> usize {
+        let base_path = std::env::var("OPDBUS_BLOCKCHAIN_PATH")
+            .unwrap_or_else(|_| DEFAULT_BLOCKCHAIN_PATH.to_string());
+        self.init_audit_durability_at(&base_path).await
+    }
+
+    /// [`init_audit_durability`](Self::init_audit_durability) against an explicit
+    /// chain path, bypassing `$OPDBUS_BLOCKCHAIN_PATH`.
+    pub async fn init_audit_durability_at(&self, base_path: &str) -> usize {
+        if self.audit_sink.get().is_some() {
+            return 0;
+        }
+
+        let chain_store = match StreamingBlockchain::new(base_path).await {
+            Ok(chain) => Arc::new(chain),
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    path = %base_path,
+                    "durable audit sink unavailable; event chain stays in memory only"
+                );
+                return 0;
+            }
+        };
+
+        let timing_dir = std::path::Path::new(base_path).join("timing");
+        let replayed = self.rebuild_chain_from_disk(&timing_dir).await;
+        let _ = self.audit_sink.set(chain_store);
+        replayed
+    }
+
+    /// Replay persisted audit events from the `timing_subvol` into the chain.
+    ///
+    /// Records are sorted by their persisted `event_id` so hash linkage is
+    /// restored in the original order. Malformed or non-audit files (the
+    /// timing directory also holds footprints written by other producers) are
+    /// skipped with a `warn!` rather than aborting the rebuild.
+    async fn rebuild_chain_from_disk(&self, timing_dir: &std::path::Path) -> usize {
+        {
+            let chain = self.event_chain.read().await;
+            if !chain.events().is_empty() {
+                tracing::warn!(
+                    events = chain.events().len(),
+                    "event chain already populated; skipping disk rebuild"
+                );
+                return 0;
+            }
+        }
+
+        let mut dir = match tokio::fs::read_dir(timing_dir).await {
+            Ok(dir) => dir,
+            Err(error) => {
+                tracing::info!(
+                    %error,
+                    path = %timing_dir.display(),
+                    "no audit trail on disk yet; starting with an empty chain"
+                );
+                return 0;
+            }
+        };
+
+        // (event_id, event_json) — sorted before replay so linkage is exact.
+        let mut records: Vec<(u64, serde_json::Value)> = Vec::new();
+        let mut skipped = 0usize;
+
+        while let Ok(Some(entry)) = dir.next_entry().await {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            let bytes = match tokio::fs::read(&path).await {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    tracing::warn!(%error, path = %path.display(), "unreadable audit record");
+                    skipped += 1;
+                    continue;
+                }
+            };
+            let value: serde_json::Value = match serde_json::from_slice(&bytes) {
+                Ok(value) => value,
+                Err(error) => {
+                    tracing::warn!(%error, path = %path.display(), "malformed audit record");
+                    skipped += 1;
+                    continue;
+                }
+            };
+            // Only records carrying an embedded ChainEvent are replayable;
+            // other footprints in the timing directory are ignored.
+            let Some(event) = value
+                .get("data")
+                .and_then(|d| d.get("metadata"))
+                .and_then(|m| m.get("audit_event"))
+            else {
+                continue;
+            };
+            let Some(event_id) = event.get("event_id").and_then(|v| v.as_u64()) else {
+                tracing::warn!(path = %path.display(), "audit record has no event_id");
+                skipped += 1;
+                continue;
+            };
+            records.push((event_id, value));
+        }
+
+        records.sort_by_key(|(event_id, _)| *event_id);
+
+        let mut replayed = 0usize;
+        {
+            let mut chain = self.event_chain.write().await;
+            for (event_id, value) in &records {
+                match chain.replay_from_footprint(value) {
+                    Ok(_) => replayed += 1,
+                    Err(error) => {
+                        tracing::warn!(%error, event_id, "audit record rejected during replay");
+                        skipped += 1;
+                    }
+                }
+            }
+        }
+
+        if replayed > 0 || skipped > 0 {
+            tracing::info!(replayed, skipped, "event chain rebuilt from durable audit trail");
+        }
+        replayed
+    }
+
+    /// Persist one chain event to the durable audit sink.
+    ///
+    /// Runs inline on the dispatch path (NFR-4: not deferred to a background
+    /// task). A write failure is logged and swallowed — the event is already in
+    /// the in-memory chain, and losing durability must not fail the caller's
+    /// method call.
+    ///
+    /// OSCAL subid: `evt.service.event-chain.persist@v1`
+    async fn persist_audit_event(&self, event: &ChainEvent) {
+        let Some(sink) = self.audit_sink.get() else {
+            return;
+        };
+        if let Err(error) = sink.add_footprint(event_to_footprint(event)).await {
+            tracing::warn!(
+                %error,
+                event_id = event.event_id,
+                "audit durability write failed; event retained in memory only"
+            );
         }
     }
 
@@ -151,12 +325,34 @@ impl MutationEngine {
         let _ = self.signal_bus.set(conn);
     }
 
+    /// Top-level keys of a whole-state value, for batch `Updated` payloads.
+    fn state_keys_owned(value: &simd_json::OwnedValue) -> Option<Vec<String>> {
+        value
+            .as_object()
+            .map(|obj| obj.keys().map(|k| k.to_string()).collect())
+    }
+
+    /// Top-level keys of a serde_json whole-state value.
+    fn state_keys_serde(value: &serde_json::Value) -> Option<Vec<String>> {
+        value.as_object().map(|obj| obj.keys().cloned().collect())
+    }
+
     /// Emit the `Updated` signal on `org.opdbus.v1.PluginV1` for a given plugin.
+    ///
+    /// `key` is the mutated member when a single key changed; `keys` lists the
+    /// top-level subtrees affected by a whole-state write. The payload always
+    /// identifies what changed (`{"plugin","key"}` or `{"plugin","keys"}`) so
+    /// subscribers can act on it without a follow-up query (REQ-1.5).
     ///
     /// Best-effort: if the signal bus is not yet available (early boot) or the
     /// interface is not registered for this plugin, the write still succeeds.
     /// The signal is for reactivity; SHM is the source of truth.
-    async fn emit_updated_signal(&self, plugin_id: &str) {
+    async fn emit_updated_signal(
+        &self,
+        plugin_id: &str,
+        key: Option<&str>,
+        keys: Option<Vec<String>>,
+    ) {
         let conn = match self.signal_bus.get() {
             Some(c) => c,
             None => {
@@ -176,7 +372,12 @@ impl MutationEngine {
                 return;
             }
         };
-        let payload = serde_json::json!({"plugin": plugin_id, "key": plugin_id}).to_string();
+        let payload = match (key, keys) {
+            (Some(k), _) => serde_json::json!({"plugin": plugin_id, "key": k}),
+            (None, Some(ks)) => serde_json::json!({"plugin": plugin_id, "keys": ks}),
+            (None, None) => serde_json::json!({"plugin": plugin_id}),
+        }
+        .to_string();
         if let Err(e) = crate::schema_router::SchemaBackedInterface::updated(
             iface_ref.signal_emitter(),
             &payload,
@@ -274,7 +475,8 @@ impl MutationEngine {
             let seed_state = op_plugins::projection_seed_state_from_schema(&schema);
             let json = simd_json::to_string(&seed_state)?;
             op_core::projection_shm::write_projection(&plugin_id, json.as_bytes())?;
-            self.emit_updated_signal(&plugin_id).await;
+            self.emit_updated_signal(&plugin_id, None, Self::state_keys_owned(&seed_state))
+                .await;
             self.update_state_cache(plugin_id.clone(), seed_state).await;
             seeded += 1;
         }
@@ -530,6 +732,10 @@ impl MutationEngine {
             }
         };
 
+        // Durability: mirror the event into the timing_subvol so it survives a
+        // restart. Inline with the change, never deferred.
+        self.persist_audit_event(&event).await;
+
         self.update_cached_plugin_state(
             &plugin_id,
             &object_path,
@@ -539,36 +745,28 @@ impl MutationEngine {
         )
         .await;
 
-        // Write the plugin's state to the shm projection layer.
+        // Write the plugin's present state verbatim to the shm static tree.
         //
-        // The projection IS the state — `/dev/shm/opdbus/projections/<plugin>.json`
-        // is the single source of truth that the D-Bus tree derives from.
-        // We write a composite object: `data` holds the mutation value, and
-        // `_introspection` holds the D-Bus tree crawl result. The projection
-        // server reads `data` for the `ProjectedObject.Data` property and
-        // derives child paths from it. The `_introspection` field (underscore-
-        // prefixed) is skipped by path derivation so it doesn't create child
-        // objects (no recursive echo).
+        // The projection IS the state — `/dev/shm/opdbus/state/<plugin>.json`
+        // is the single source of truth that the D-Bus tree (schema_router)
+        // and op-web's state_tree read from. The `{"data","_introspection"}`
+        // composite existed only for the deleted projection server's child-path
+        // derivation; readers expect the raw state object.
         if change_type != ChangeType::ObjectRemoved {
-            let crawl_result = self.crawl_plugin_dbus_tree(&plugin_id).await;
-
-            let projection_value = if let Some(crawl) = crawl_result {
-                simd_json::json!({
-                    "data": new_value,
-                    "_introspection": crawl,
-                })
-            } else {
-                new_value.clone()
-            };
-
-            match simd_json::to_string(&projection_value) {
+            match simd_json::to_string(&new_value) {
                 Ok(json) => {
                     if let Err(e) =
                         op_core::projection_shm::write_projection(&plugin_id, json.as_bytes())
                     {
                         tracing::warn!(plugin_id = %plugin_id, error = %e, "Failed to write shm projection");
                     } else {
-                        self.emit_updated_signal(&plugin_id).await;
+                        let keys = if member_name.is_some() {
+                            None
+                        } else {
+                            Self::state_keys_owned(&new_value)
+                        };
+                        self.emit_updated_signal(&plugin_id, member_name.as_deref(), keys)
+                            .await;
                     }
                 }
                 Err(e) => {
@@ -956,8 +1154,18 @@ impl MutationEngine {
                 capability_id.map(|s| s.to_string()),
                 json_args, // verbatim string for Blake3 footprint
             );
-            (event.event_id, event.event_hash.clone(), event.timestamp)
+            (
+                event.event_id,
+                event.event_hash.clone(),
+                event.timestamp,
+                event.clone(),
+            )
         };
+
+        // Durability: write the event to the timing_subvol before returning, so
+        // the audit trail survives a restart (FR-6). A failure here is logged
+        // and does not fail the dispatch (NFR-4).
+        self.persist_audit_event(&event_summary.3).await;
 
         // Broadcast the method-call change to gRPC subscribers.
         let change = StateChange {
@@ -997,6 +1205,34 @@ impl MutationEngine {
             "persona" => {
                 let args = serde_json::to_value(&parsed_value)?;
                 op_plugins::state_plugins::persona::dispatch_persona_method(method, &args).await?
+            }
+            "gcloud_adc" => {
+                let args = serde_json::to_value(&parsed_value)?;
+                op_plugins::state_plugins::gcloud_adc::dispatch_gcloud_adc_method(method, &args)
+                    .await?
+            }
+            "compact_mcp" => {
+                let args = serde_json::to_value(&parsed_value)?;
+                op_plugins::state_plugins::compact_mcp::dispatch_compact_mcp_method(method, &args)
+                    .await?
+            }
+            "full_system" => {
+                let args = serde_json::to_value(&parsed_value)?;
+                op_plugins::state_plugins::full_system::dispatch_full_system_method(
+                    method, &args,
+                )
+                .await?
+            }
+            "keyring" => {
+                let args = serde_json::to_value(&parsed_value)?;
+                op_plugins::state_plugins::keyring::dispatch_keyring_method(method, &args).await?
+            }
+            "privacy_routes" => {
+                let args = serde_json::to_value(&parsed_value)?;
+                op_plugins::state_plugins::privacy_routes::dispatch_privacy_routes_method(
+                    method, &args,
+                )
+                .await?
             }
             "zeroclaw" => {
                 let state = self
@@ -1059,6 +1295,19 @@ impl MutationEngine {
                 let args = serde_json::to_value(&parsed_value)?;
                 dispatch_cognitive_mcp_method(method, &args).await?
             }
+            // Audit-trail query surface. Deliberately scoped: only the two
+            // audit methods are wired. The plugin's seven pre-existing methods
+            // (snapshots, retention, rollback) fall through to the echo below,
+            // exactly as before, until the schema-methods sweep wires them.
+            "blockchain" => match method {
+                "query_events" => {
+                    dispatch_blockchain_query_events(&self.event_chain, &parsed_value).await?
+                }
+                "verify_chain" => {
+                    dispatch_blockchain_verify_chain(&self.event_chain, &parsed_value).await?
+                }
+                _ => serde_json::to_value(&parsed_value).unwrap_or(serde_json::Value::Null),
+            },
             _ => serde_json::to_value(&parsed_value).unwrap_or(serde_json::Value::Null),
         };
 
@@ -1243,14 +1492,18 @@ impl MutationEngine {
                 None
             }
         };
+        // The shm state file holds present state verbatim; the composite is
+        // only carried on the broadcast `StateChange` for event-stream consumers.
+        let state_owned = simd_json::serde::to_owned_value(&new_value)?;
+        let json = simd_json::to_string(&state_owned)?;
+        op_core::projection_shm::write_projection(plugin_id, json.as_bytes())?;
+        self.emit_updated_signal(plugin_id, None, Self::state_keys_serde(&new_value))
+            .await;
         let projection = if let Some(crawl) = crawl {
             simd_json::json!({ "data": new_value, "_introspection": crawl })
         } else {
-            simd_json::serde::to_owned_value(&new_value)?
+            state_owned
         };
-        let json = simd_json::to_string(&projection)?;
-        op_core::projection_shm::write_projection(plugin_id, json.as_bytes())?;
-        self.emit_updated_signal(plugin_id).await;
         let change = StateChange {
             change_id: uuid::Uuid::new_v4().to_string(),
             event_id: 0,
@@ -1441,6 +1694,169 @@ fn existing_unix_socket_sockets() -> Vec<simd_json::OwnedValue> {
         })
         .cloned()
         .collect()
+}
+
+// ── Audit trail: durable persistence + query dispatch ────────────────────────
+
+/// Convert a chain event into a durable footprint for the `timing_subvol`.
+///
+/// The full event is embedded under `metadata.audit_event` so the startup
+/// rebuild can restore it losslessly, including the stored `event_hash` and
+/// `prev_hash` that make the chain tamper-evident. The flat metadata keys
+/// beside it exist for operators and tools grepping the timing directory
+/// directly.
+///
+/// OSCAL subid: `evt.service.event-chain.persist@v1`
+fn event_to_footprint(event: &ChainEvent) -> PluginFootprint {
+    let mut metadata: HashMap<String, simd_json::OwnedValue> = HashMap::new();
+    metadata.insert(
+        "actor_id".to_string(),
+        simd_json::OwnedValue::from(event.actor_id.as_str()),
+    );
+    metadata.insert(
+        "capability_id".to_string(),
+        simd_json::OwnedValue::from(event.capability_id.clone().unwrap_or_default()),
+    );
+    metadata.insert(
+        "method_name".to_string(),
+        simd_json::OwnedValue::from(event.method_name.clone().unwrap_or_default()),
+    );
+    metadata.insert(
+        "event_id".to_string(),
+        simd_json::OwnedValue::from(event.event_id),
+    );
+    metadata.insert(
+        "event_hash".to_string(),
+        simd_json::OwnedValue::from(event.event_hash.as_str()),
+    );
+    metadata.insert(
+        "decision".to_string(),
+        simd_json::OwnedValue::from(format!("{:?}", event.decision)),
+    );
+    // Lossless copy for replay. Serialized through serde_json (ChainEvent's
+    // derive target) and re-parsed into simd_json for the footprint map.
+    match serde_json::to_vec(event) {
+        Ok(mut bytes) => match simd_json::to_owned_value(&mut bytes) {
+            Ok(value) => {
+                metadata.insert("audit_event".to_string(), value);
+            }
+            Err(error) => {
+                tracing::warn!(%error, event_id = event.event_id, "audit event not replayable");
+            }
+        },
+        Err(error) => {
+            tracing::warn!(%error, event_id = event.event_id, "audit event not serializable");
+        }
+    }
+
+    PluginFootprint {
+        plugin_id: event.plugin_id.clone(),
+        operation: event
+            .method_name
+            .clone()
+            .unwrap_or_else(|| format!("{:?}", event.op)),
+        timestamp: event.timestamp.timestamp_millis() as u64,
+        data_hash: event.input_patch_hash.clone(),
+        // The event hash is the timing file name, so one file per event.
+        content_hash: event.event_hash.clone(),
+        metadata,
+        vector_features: vec![],
+    }
+}
+
+/// Flatten a chain event into the plugin-surface record shape.
+fn chain_event_to_record(event: &ChainEvent) -> AuditEventRecord {
+    AuditEventRecord {
+        event_id: event.event_id,
+        event_hash: event.event_hash.clone(),
+        prev_hash: event.prev_hash.clone(),
+        timestamp: event.timestamp.to_rfc3339(),
+        actor_id: event.actor_id.clone(),
+        capability_id: event.capability_id.clone().unwrap_or_default(),
+        plugin_id: event.plugin_id.clone(),
+        method_name: event.method_name.clone().unwrap_or_default(),
+        operation_type: format!("{:?}", event.op),
+        target: event.target.clone(),
+        tags_touched: event.tags_touched.clone(),
+        decision: format!("{:?}", event.decision),
+        input_patch_hash: event.input_patch_hash.clone(),
+        result_effective_hash: event.result_effective_hash.clone().unwrap_or_default(),
+    }
+}
+
+/// `blockchain.query_events` — paginated, filtered read of the audit trail.
+///
+/// Reads the same `EventChain` the gRPC `EventChainService.GetEvents` serves, so
+/// the D-Bus/MCP path and the GUI path can never disagree.
+///
+/// OSCAL subid: `obs.service.blockchain.events.query@v1`
+async fn dispatch_blockchain_query_events(
+    event_chain: &Arc<RwLock<EventChain>>,
+    args: &simd_json::OwnedValue,
+) -> anyhow::Result<serde_json::Value> {
+    let input: QueryEventsInput =
+        serde_json::from_value(serde_json::to_value(args)?).unwrap_or_default();
+
+    // Default 50, hard ceiling 100 — clamped silently, never unbounded (FR-4).
+    let limit = input.limit.unwrap_or(50).clamp(1, 100) as usize;
+
+    let chain = event_chain.read().await;
+    let total_in_chain = chain.events().len() as u64;
+
+    let decision_filter = input.decision.as_deref().map(str::to_ascii_lowercase);
+
+    let mut matched: Vec<AuditEventRecord> = chain
+        .events()
+        .iter()
+        .filter(|e| input.from_event_id.is_none_or(|id| e.event_id >= id))
+        .filter(|e| input.to_event_id.is_none_or(|id| e.event_id <= id))
+        .filter(|e| {
+            input
+                .plugin_id
+                .as_ref()
+                .is_none_or(|p| p.is_empty() || e.plugin_id == *p)
+        })
+        .filter(|e| match decision_filter.as_deref() {
+            Some("allow") => e.decision == Decision::Allow,
+            Some("deny") => e.decision == Decision::Deny,
+            _ => true,
+        })
+        // One extra row reveals whether another page exists.
+        .take(limit + 1)
+        .map(chain_event_to_record)
+        .collect();
+
+    let has_more = matched.len() > limit;
+    matched.truncate(limit);
+
+    Ok(serde_json::to_value(QueryEventsOutput {
+        events: matched,
+        has_more,
+        total_in_chain,
+    })?)
+}
+
+/// `blockchain.verify_chain` — hash-chain integrity check over a range.
+///
+/// OSCAL subid: `obs.service.blockchain.chain.verify@v1`
+async fn dispatch_blockchain_verify_chain(
+    event_chain: &Arc<RwLock<EventChain>>,
+    args: &simd_json::OwnedValue,
+) -> anyhow::Result<serde_json::Value> {
+    let input: VerifyChainInput =
+        serde_json::from_value(serde_json::to_value(args)?).unwrap_or_default();
+
+    let chain = event_chain.read().await;
+    let result = chain.verify_range(
+        input.from_event_id.unwrap_or(0),
+        input.to_event_id.unwrap_or(0),
+    );
+
+    Ok(serde_json::to_value(VerifyChainOutput {
+        valid: result.valid,
+        events_verified: result.events_verified as u64,
+        errors: result.errors,
+    })?)
 }
 
 /// Execute rovs_commands methods via OVSDB proxy

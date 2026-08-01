@@ -34,7 +34,7 @@ impl Tool for DbusSystemdRestartTool {
             "properties": {
                 "unit": {
                     "type": "string",
-                    "description": "Unit name (e.g., nginx.service)"
+                    "description": "Service name (e.g., gbr-xray, op-web)"
                 },
                 "mode": {
                     "type": "string",
@@ -110,7 +110,7 @@ impl Tool for DbusSystemdStartTool {
             "properties": {
                 "unit": {
                     "type": "string",
-                    "description": "Unit name (e.g., nginx.service)"
+                    "description": "Service name (e.g., gbr-xray, op-web)"
                 },
                 "mode": {
                     "type": "string",
@@ -186,7 +186,7 @@ impl Tool for DbusSystemdStopTool {
             "properties": {
                 "unit": {
                     "type": "string",
-                    "description": "Unit name (e.g., nginx.service)"
+                    "description": "Service name (e.g., gbr-xray, op-web)"
                 },
                 "mode": {
                     "type": "string",
@@ -262,7 +262,7 @@ impl Tool for DbusSystemdStatusTool {
             "properties": {
                 "unit": {
                     "type": "string",
-                    "description": "Unit name (e.g., nginx.service)"
+                    "description": "Service name (e.g., gbr-xray, op-web)"
                 }
             },
             "required": ["unit"]

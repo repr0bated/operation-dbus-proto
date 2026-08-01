@@ -58,6 +58,25 @@ install_control_scripts() {
     install -Dm755 "$SCRIPT_PATH" "$INSTALL_SBIN/op-runit-recompile-and-update"
     # Keep the historical s6d reload path working on runit hosts.
     install -Dm755 "$SCRIPT_PATH" "$INSTALL_SBIN/op-s6-recompile-and-update"
+
+    # systemd compatibility layer. Third-party installers assume systemd and
+    # call `systemctl enable --now X`; without these they fail and leave a
+    # half-installed service. The shim goes in $INSTALL_BIN because
+    # sudo's secure_path searches /usr/local/bin before /usr/bin, so it wins
+    # for installers that shell out to `systemctl`.
+    if [ -f "$SCRIPT_DIR/systemd-unit-to-runit" ]; then
+        echo "Installing systemd->runit compatibility layer..."
+        install -Dm755 "$SCRIPT_DIR/systemd-unit-to-runit" \
+            "$INSTALL_SBIN/systemd-unit-to-runit"
+        install -Dm755 "$SCRIPT_DIR/op-convert-systemd-units" \
+            "$INSTALL_SBIN/op-convert-systemd-units"
+        install -Dm755 "$SCRIPT_DIR/systemctl-shim" "$INSTALL_BIN/systemctl"
+        # Pacman hook: convert units that packages drop, without enabling them.
+        if [ -d /etc/pacman.d/hooks ] || mkdir -p /etc/pacman.d/hooks 2>/dev/null; then
+            install -Dm644 "$SCRIPT_DIR/99-systemd-unit-to-runit.hook" \
+                /etc/pacman.d/hooks/99-systemd-unit-to-runit.hook
+        fi
+    fi
 }
 
 sync_repo_service_defs() {

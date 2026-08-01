@@ -4,9 +4,10 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "D-Bus service for systemctl-to-s6 command mapping on Artix Linux"
+description = "D-Bus service for systemctl-to-runit command mapping on Artix Linux"
 
 [dependencies]
+op-core = { path = "../op-core" }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

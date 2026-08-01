@@ -376,11 +376,11 @@ impl NetmakerService for NetmakerAdapter {
                         restart.service
                     )));
                 }
-                let output = Command::new("s6d")
+                let output = Command::new(op_core::runit::SV_BIN)
                     .args(["restart", "netclient"])
                     .output()
                     .await
-                    .map_err(|e| Status::internal(format!("failed to execute s6d: {}", e)))?;
+                    .map_err(|e| Status::internal(format!("failed to execute sv: {}", e)))?;
                 Ok(Response::new(ExecuteCommandResponse {
                     success: output.status.success(),
                     exit_code: output.status.code().unwrap_or(-1),

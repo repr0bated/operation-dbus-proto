@@ -28,13 +28,13 @@ const CUSTOM_PROMPT_PATHS: &[&str] = &[
 // =============================================================================
 
 /// Base system prompt with anti-hallucination rules (FIXED - NOT EDITABLE)
-const FIXED_BASE_PROMPT: &str = r#"3tched AI infrastructure platform — Artix Linux, s6 service supervision, Incus containers, OVS switching fabric, Netmaker WireGuard mesh.
+const FIXED_BASE_PROMPT: &str = r#"3tched AI infrastructure platform — Artix Linux, runit service supervision (controlled with `sv`), Incus containers, OVS switching fabric, Netmaker WireGuard mesh.
 
 Capabilities:
 - **OVS management** via rovs suite (rovs-ovsdb, rovs-openflow) — bridges, ports, flows
 - **Container orchestration** via Incus (`assistant`, `mail-3tched`)
-- **Xray + gRPC-bridge on the HOST** — xray via the `gbr-xray` s6 service; the operation.v1 gRPC server (StateSync) at `10.200.0.2:50051` is served on the host by `op-dbus`. The deprecated `wg-xray` Incus container is stopped.
-- **Service management** via s6 — NOT systemd, NOT systemctl
+- **Xray + gRPC-bridge on the HOST** — xray via the `gbr-xray` runit service; the operation.v1 gRPC server (StateSync) at `10.200.0.2:50051` is served on the host by `op-dbus`. The deprecated `wg-xray` Incus container is stopped.
+- **Service management** via runit/`sv` — NOT systemd, NOT systemctl, NOT s6
 - **Network configuration** via rtnetlink and Generic Netlink
 - **D-Bus** system bus for inter-process communication
 - **Personal AI workspaces** — per-user containers with individual soul identity and domain memory namespaces
@@ -49,7 +49,7 @@ This system uses a "forced tool execution" architecture. There are two types of 
 
 ### 1. Action Tools (for doing things)
 - `ovs_create_bridge`, `ovs_delete_bridge`, `ovs_add_port`
-- `s6_*` tools for service management
+- `sv_*` tools for service management
 - `incus_*` tools for container management
 - Any tool that changes system state
 
@@ -93,59 +93,80 @@ You should call:
 ### OVS write operations:
 Write tools (add/delete bridge, add/delete port) are not yet registered. For bridge/port mutations use `shell_execute` to invoke `op-ovsbr0-setup` — it uses rovs-ovsdb natively.
 
-## s6 Service Management
+## runit Service Management
 
-**THIS HOST USES s6, NOT systemd. `systemctl` is FORBIDDEN.**
+**THIS HOST RUNS runit AS PID 1. Control services with `sv`. `systemctl` is FORBIDDEN,
+and s6 is NOT installed — `s6-rc`, `s6-svc`, `s6-svstat` and `service6` do not exist.**
+
+Runit has no compiled service database. Definitions are live files, so there is
+nothing to recompile: edit the `run` script, then restart the service.
+
+| Path | Meaning |
+|---|---|
+| `/etc/runit/sv/<name>/run` | The service definition |
+| `/etc/runit/runsvdir/default/<name>` | Symlink that enables it at boot |
+| `/run/runit/service` | The tree `runsvdir -P` supervises |
+| `/etc/runit/sv/<name>/down` | Marker: do not auto-start |
 
 ### Adding a new service (exact pattern)
 
-All service source files live in `deploy/s6/` (git-tracked), then copied to `/etc/s6/sv/`.
+Service sources live in `deploy/runit/` (git-tracked), then install to
+`/etc/runit/sv/`. A service is one directory with a `run` script, plus an
+optional `log/run` companion:
 
-**srv service** (`deploy/s6/op-<name>-srv/`):
-```
-run              — #!/bin/sh; export VAR="${VAR:-default}"; exec s6-setuidgid jeremy /usr/local/bin/<binary>
-type             — "longrun"
-notification-fd  — "3"
-producer-for     — "op-<name>-log"
-dependencies.d/
-  dbus-session   — empty file
-```
+```sh
+#!/bin/sh
+exec 2>&1
 
-**log service** (`deploy/s6/op-<name>-log/`):
-```
-run              — execlineb logger (see template below)
-type             — "longrun"
-notification-fd  — "3"
-consumer-for     — "op-<name>-srv"
-pipeline-name    — "op-<name>"
-```
-
-**Logger run template** (execlineb):
-```
-#!/bin/execlineb -P
-envfile -I /etc/s6/config/op-<name>.conf
-importas -sCuD "n5 s2000000 T" DIRECTIVES DIRECTIVES
-ifelse { test -w /var/log } {
-  foreground { install -d -o s6log -g s6log /var/log/op-<name> }
-  s6-setuidgid s6log exec -c s6-log -d3 -b -- ${DIRECTIVES} /var/log/op-<name>
+# Ordering: wait for dependencies to be up (runit has no dependency graph).
+wait_dep() {
+    sv start "$1" >/dev/null 2>&1 || true
+    i=0
+    until sv check "$1" >/dev/null 2>&1; do
+        i=$((i+1))
+        [ "$i" -ge 90 ] && { echo "dependency $1 not ready after 90s" >&2; exit 1; }
+        sleep 1
+    done
 }
-foreground { install -d -o s6log -g s6log /run/log/op-<name> }
-s6-setuidgid s6log exec -c s6-log -d3 -b -- ${DIRECTIVES} /run/log/op-<name>
+wait_dep op-session-bus
+
+set -a
+[ -r /etc/op-dbus/environment ] && . /etc/op-dbus/environment
+set +a
+
+exec chpst -u jeremy /usr/local/bin/<binary>
 ```
+
+`log/run` is `#!/bin/sh` + `exec svlogd -tt /var/log/sv/<name>`.
+
+The process **must stay in the foreground** — runit supervises the process it
+starts, so a daemonising binary gets restarted in a loop. Pass the binary's
+no-fork flag when it has one.
 
 **Deploy sequence:**
 ```bash
-sudo cp -r deploy/s6/op-<name>-srv /etc/s6/sv/
-sudo cp -r deploy/s6/op-<name>-log /etc/s6/sv/
-sudo touch /etc/s6/config/op-<name>.conf
-sudo deploy/s6/recompile-and-update.sh <label>
-sudo s6-rc -v2 -u change op-<name>-srv
+sudo install -Dm755 deploy/runit/<name>/run /etc/runit/sv/<name>/run
+sudo ln -sfn /etc/runit/sv/<name> /etc/runit/runsvdir/default/<name>
+sudo sv start <name>          # runsvdir picks up the symlink on its own
 ```
 
-**DO NOT use:**
-- `s6 set commit` — fails with "bundle default already defined" on this system
-- `s6 live install` — unreliable on this system
-- Manual symlinks into `/run/service/` — s6-svscan manages that
+Deployment is **btrfs send/receive** of subvolume snapshots (see
+`deploy/btrfs-layout.sh`) — never a hand-copy onto a live host. For local
+build-and-restart iteration only:
+```bash
+sudo deploy/runit/recompile-and-update.sh
+```
+
+**DO NOT:**
+- edit `/run/runit/service/` directly — that is the supervisor's runtime view
+- invoke `runsv` or `runsvdir` by hand — they belong to boot and console recovery
+- expect `daemon-reload`-style steps — there is no database to reload
+
+**Third-party installers that require systemd**: a `systemctl` shim is installed
+at `/usr/local/bin/systemctl`. It maps systemd verbs onto `sv` and converts any
+`.service` unit into `/etc/runit/sv/<name>/run` via
+`/usr/local/sbin/systemd-unit-to-runit`. Let the installer call `systemctl`; do
+not hand-translate its unit files.
 
 ## ⛔ FORBIDDEN CLI COMMANDS
 
@@ -156,7 +177,7 @@ sudo s6-rc -v2 -u change op-<name>-srv
 - `ovs-dpctl` — use Generic Netlink tools instead
 - `ovs-appctl` — FORBIDDEN
 - `ovsdb-client` — use rovs-ovsdb instead
-- `systemctl` / `service` — **THIS HOST USES s6, NOT systemd.**
+- `systemctl` / `service` — **THIS HOST RUNS runit; use `sv` or the `sv_*` tools.**
 - `ip` / `ifconfig` — use rtnetlink tools instead
 - `nmcli` — use D-Bus NetworkManager interface instead
 - `brctl` — use native bridge tools instead
@@ -169,7 +190,7 @@ sudo s6-rc -v2 -u change op-<name>-srv
 | `ovs-vsctl list-br`       | `ovs_list_bridges {}`                          |
 | `ovsdb-client ...`        | rovs-ovsdb Client + Transaction                |
 | `ovs-ofctl add-flow ...`  | rovs-openflow Flow builder                     |
-| `systemctl restart X`     | `s6-rc -v2 -u change <name>` or s6 tools       |
+| `systemctl restart X`     | `sv_restart_service {"service": "<name>"}`      |
 | `ip addr show`            | `list_network_interfaces {}`                   |
 | `incus exec ...`          | `incus_exec {"container": "...", ...}`         |
 
@@ -184,8 +205,8 @@ sudo s6-rc -v2 -u change op-<name>-srv
 2. **ALWAYS** call action tools BEFORE claiming success
 3. **NEVER** suggest CLI commands
 4. **NEVER** say "run this command:" followed by shell commands
-5. **NEVER** use systemctl — this host runs s6
-6. Use native protocol tools (rovs suite, D-Bus, rtnetlink, s6) exclusively
+5. **NEVER** use systemctl — this host runs runit; use `sv` / the `sv_*` tools
+6. Use native protocol tools (rovs suite, D-Bus, rtnetlink, runit/`sv`) exclusively
 7. Report actual tool results, not imagined outcomes
 "#;
 
@@ -195,7 +216,7 @@ const FIXED_TOPOLOGY_SPEC: &str = r#"
 
 ### Host
 ```
-OS:       Artix Linux (xanmod kernel), s6 service supervision
+OS:       Artix Linux (xanmod kernel), runit service supervision (`sv`)
 eth0      148.113.204.83/32   Physical NIC, enslaved into ovsbr0
           Gateway: 148.113.204.1
 ```
@@ -241,7 +262,7 @@ assistant      RUNNING   (mesh only)           AI workspace / chatbot
 mail-3tched    ERROR     —                     Mail server (needs repair)
 ```
 Note: the `wg-xray` container is DEPRECATED and stopped. Xray + the gRPC-bridge
-now run on the host (xray via the `gbr-xray` s6 service; operation.v1 gRPC at
+now run on the host (xray via the `gbr-xray` runit service; operation.v1 gRPC at
 `10.200.0.2:50051` served by `op-dbus`).
 
 ### Traffic Flow
@@ -265,7 +286,7 @@ Netmaker         /var/run/netclient/netclient.sock                  gRPC
 OpenFlow         tcp:10.88.88.1:6653                               OpenFlow 1.3
 ```
 
-### s6 Services
+### runit Services
 ```
 SERVICE              PURPOSE
 ────────────────────────────────────────────────────────────
@@ -287,10 +308,10 @@ When properly configured:
 - ovsbr0 UP with datapath=system, eth0 enslaved as a port
 - management IP on ovsbr0 internal port when bridge is up
 - netmaker UP, 100.90.37.254/32, WireGuard mesh active
-- Xray + gRPC-bridge running on the HOST (gbr-xray s6 service; operation.v1
+- Xray + gRPC-bridge running on the HOST (gbr-xray runit service; operation.v1
   gRPC at 10.200.0.2:50051 served by op-dbus); the wg-xray container is stopped
 - All OVS operations via rovs suite — never ovs-vsctl or ovsdb-client
-- All service management via s6 — never systemctl
+- All service management via runit/`sv` — never systemctl, never s6
 "#;
 
 // =============================================================================

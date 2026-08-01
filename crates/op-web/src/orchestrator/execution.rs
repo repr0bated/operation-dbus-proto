@@ -109,7 +109,7 @@ impl UnifiedOrchestrator {
                     "systemd" => {
                         t.name.starts_with("dbus_systemd_")
                             || t.name.starts_with("dbus_dinit_")
-                            || t.name.starts_with("s6_")
+                            || t.name.starts_with("sv_")
                     }
                     "dbus" => t.name.starts_with("dbus_"),
                     "file" => t.name.starts_with("file_"),
@@ -241,7 +241,7 @@ impl UnifiedOrchestrator {
 **Natural Language:**
 Just describe what you want:
 - "Create an OVS bridge called ovsbr0"
-- "Restart nginx"
+- "Restart gbr-xray"
 - "List all network interfaces"
 - "Show systemd unit status for sshd"
 

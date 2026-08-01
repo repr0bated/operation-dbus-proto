@@ -12,6 +12,7 @@ pub mod config;
 pub mod error;
 pub mod execution;
 pub mod projection_shm;
+pub mod runit;
 pub mod security;
 pub mod self_identity;
 pub mod state_publisher;

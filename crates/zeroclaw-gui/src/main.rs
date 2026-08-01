@@ -1,4 +1,5 @@
 //! Entry point — native eframe shell + background tokio runtime for tonic.
+mod accountability;
 mod app;
 mod auth;
 mod catalog;

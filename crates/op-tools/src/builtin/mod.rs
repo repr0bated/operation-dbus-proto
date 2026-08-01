@@ -16,7 +16,7 @@ pub mod gcloud_tools;
 pub mod ovs_tools;
 pub mod plugin_projection;
 pub mod rtnetlink_tools;
-pub mod s6;
+pub mod sv;
 pub mod shell;
 // pub mod self_tools;
 // pub mod self_tools;
@@ -54,9 +54,9 @@ pub async fn register_all_builtin_tools(registry: &ToolRegistry) -> Result<()> {
     tracing::info!("Registering shell tools...");
     shell::register_shell_tools(registry).await?;
 
-    // Register s6 service tools
-    tracing::info!("Registering s6 tools...");
-    s6::register_s6_tools(registry).await?;
+    // Register runit service tools
+    tracing::info!("Registering runit (sv) tools...");
+    sv::register_sv_tools(registry).await?;
 
     // Register D-Bus introspection tools
     tracing::info!("Registering D-Bus introspection tools...");

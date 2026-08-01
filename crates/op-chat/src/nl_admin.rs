@@ -347,9 +347,9 @@ impl NLAdminOrchestrator {
 **You:** I'll create the OVS bridge for you.
 <tool_call>ovs_create_bridge({"name": "ovsbr0"})</tool_call>
 
-**User:** "Restart nginx"
-**You:** I'll restart the nginx service.
-<tool_call>dbus_systemd_restart_unit({"unit": "nginx.service"})</tool_call>
+**User:** "Restart the xray reverse proxy"
+**You:** I'll restart the gbr-xray service.
+<tool_call>sv_restart_service({"service": "gbr-xray"})</tool_call>
 
 **User:** "List all OVS bridges"
 **You:** Let me list the OVS bridges.

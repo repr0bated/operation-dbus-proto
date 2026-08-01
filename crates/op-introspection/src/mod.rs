@@ -611,7 +611,7 @@ impl SystemIntrospector {
         let mut candidates = Vec::new();
 
         // Get all systemd units
-        let units = self.get_systemd_units()?;
+        let units = self.get_runit_services()?;
         println!("    ✓ Found {} systemd units", units.len());
 
         // Analyze each unit for conversion potential
@@ -626,37 +626,24 @@ impl SystemIntrospector {
         Ok(candidates)
     }
 
-    /// Get all systemd units
-    fn get_systemd_units(&self) -> Result<Vec<String>> {
-        let output = Command::new("systemctl")
-            .args([
-                "list-units",
-                "--type=service",
-                "--all",
-                "--no-pager",
-                "--no-legend",
-            ])
-            .output()
-            .context("Failed to execute systemctl")?;
+    /// List the host's runit services.
+    ///
+    /// This host boots runit as PID 1; there is no systemd and no `systemctl`.
+    /// Definitions are directories under `/etc/runit/sv`, so the list is a
+    /// directory read rather than a subprocess.
+    fn get_runit_services(&self) -> Result<Vec<String>> {
+        let entries = match std::fs::read_dir(op_core::runit::SV_DIR) {
+            Ok(entries) => entries,
+            Err(_) => return Ok(Vec::new()),
+        };
 
-        if !output.status.success() {
-            return Ok(Vec::new());
-        }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let units: Vec<String> = stdout
-            .lines()
-            .filter_map(|line| {
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if !parts.is_empty() {
-                    Some(parts[0].to_string())
-                } else {
-                    None
-                }
-            })
+        let mut services: Vec<String> = entries
+            .flatten()
+            .filter(|entry| entry.path().is_dir())
+            .map(|entry| entry.file_name().to_string_lossy().to_string())
             .collect();
-
-        Ok(units)
+        services.sort();
+        Ok(services)
     }
 
     /// Analyze a systemd unit for D-Bus conversion potential

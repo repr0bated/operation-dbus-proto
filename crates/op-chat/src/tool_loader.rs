@@ -901,7 +901,7 @@ impl Tool for SystemdUnitStatusTool {
             "properties": {
                 "unit": {
                     "type": "string",
-                    "description": "Unit name (e.g., 'nginx.service', 'sshd.service')"
+                    "description": "Service name (e.g., 'gbr-xray', 'op-web')"
                 }
             },
             "required": ["unit"]

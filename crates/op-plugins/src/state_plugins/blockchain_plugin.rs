@@ -62,6 +62,92 @@ pub struct SnapshotEntry {
     pub created: String,
 }
 
+// ── Audit-trail query surface (accountability-audit-trail spec) ──────────────
+//
+// These types are declared at module scope (not inside `blockchain_schema()`
+// like the older output structs) because `op-grpc-bridge`'s MutationEngine
+// imports them to implement the `query_events` / `verify_chain` dispatch arm.
+// The same `EventChain` that the gRPC `EventChainService` serves is read here,
+// so the D-Bus/MCP path and the gRPC path never disagree.
+
+/// Input for `query_events` — paginated audit-trail query.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, Default)]
+#[schemars(extend("x-oscal-subid" = "sch.service.blockchain.query-events-input@v1"))]
+pub struct QueryEventsInput {
+    /// Filter by plugin_id. Absent or empty means all plugins.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_id: Option<String>,
+    /// Return events with `event_id >= from_event_id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_event_id: Option<u64>,
+    /// Return events with `event_id <= to_event_id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to_event_id: Option<u64>,
+    /// Max events to return. Default 50, clamped to 100.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+    /// Filter by decision: `allow`, `deny`, or absent for all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision: Option<String>,
+}
+
+/// One audit event, flattened for transport across the plugin surface.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "sch.service.blockchain.audit-event-record@v1"))]
+pub struct AuditEventRecord {
+    pub event_id: u64,
+    pub event_hash: String,
+    pub prev_hash: String,
+    /// ISO 8601 / RFC 3339 timestamp.
+    pub timestamp: String,
+    pub actor_id: String,
+    pub capability_id: String,
+    pub plugin_id: String,
+    pub method_name: String,
+    pub operation_type: String,
+    pub target: String,
+    pub tags_touched: Vec<String>,
+    pub decision: String,
+    pub input_patch_hash: String,
+    pub result_effective_hash: String,
+}
+
+/// Output for `query_events`.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "sch.service.blockchain.query-events-output@v1"))]
+pub struct QueryEventsOutput {
+    /// The page of events, oldest-first within the requested range.
+    pub events: Vec<AuditEventRecord>,
+    /// True when more events match the filter beyond this page.
+    pub has_more: bool,
+    /// Total number of events currently in the chain.
+    pub total_in_chain: u64,
+}
+
+/// Input for `verify_chain` — hash-chain integrity check.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, Default)]
+#[schemars(extend("x-oscal-subid" = "sch.service.blockchain.verify-chain-input@v1"))]
+pub struct VerifyChainInput {
+    /// Verify from this event_id. Absent or 0 means from genesis.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_event_id: Option<u64>,
+    /// Verify to this event_id. Absent or 0 means to the latest event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to_event_id: Option<u64>,
+}
+
+/// Output for `verify_chain`.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "sch.service.blockchain.verify-chain-output@v1"))]
+pub struct VerifyChainOutput {
+    /// True when every event in range hashes correctly and links to its predecessor.
+    pub valid: bool,
+    /// Number of events checked.
+    pub events_verified: u64,
+    /// One entry per detected integrity violation. Empty when `valid` is true.
+    pub errors: Vec<String>,
+}
+
 /// Blockchain plugin state schema.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "sch.software.plugin.blockchain.schema@v1"))]
@@ -408,6 +494,30 @@ pub(crate) fn blockchain_schema() -> PluginSchema {
             true,
             "blockchain.read",
             "obs.service.blockchain.stats@v1",
+        ),
+    );
+
+    // Audit-trail query surface. Dispatched by MutationEngine's "blockchain"
+    // arm — these two are wired; the seven above are not (see the spec's
+    // scope boundary in .kiro/specs/accountability-audit-trail).
+    schema.methods.insert(
+        "query_events".to_string(),
+        method_decl_from_schemars_with_output::<QueryEventsInput, QueryEventsOutput>(
+            "query_events",
+            SideEffect::Read,
+            true,
+            "blockchain.read",
+            "obs.service.blockchain.events.query@v1",
+        ),
+    );
+    schema.methods.insert(
+        "verify_chain".to_string(),
+        method_decl_from_schemars_with_output::<VerifyChainInput, VerifyChainOutput>(
+            "verify_chain",
+            SideEffect::Read,
+            true,
+            "blockchain.read",
+            "obs.service.blockchain.chain.verify@v1",
         ),
     );
 

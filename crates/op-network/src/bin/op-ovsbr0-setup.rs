@@ -242,22 +242,19 @@ async fn vswitchd_send_exit(ctl_path: &str) -> Result<()> {
 
 /// Stop vswitchd:
 ///   1. `service6 stop <name>` — the only sanctioned host service-manager
-///      entry point (raw s6-svc/s6-svstat are policy violations outside boot
+///      entry point (raw `runsv`/`runsvdir` are policy violations outside boot
 ///      supervisors and human console recovery)
 ///   2. Fall back to a graceful `exit` via unixctl if the wrapper failed
 ///   3. Wait for the unixctl socket to vanish (vswitchd removes it on exit)
 ///      and for kernel OVS interfaces to disappear
 async fn stop_vswitchd(svc: &str, bridge: &str) -> Result<()> {
-    let stopped = Command::new("service6")
+    let stopped = Command::new(op_core::runit::SV_BIN)
         .args(["stop", svc])
         .status()
         .map(|s| s.success())
         .unwrap_or(false);
     if !stopped {
-        warn!(
-            "service6 stop {} failed — falling back to unixctl exit",
-            svc
-        );
+        warn!("sv stop {} failed — falling back to unixctl exit", svc);
         if let Some(ctl) = find_vswitchd_ctl() {
             let _ = vswitchd_send_exit(&ctl).await;
         }
@@ -316,10 +313,12 @@ fn clear_kernel_datapath(bridge: &str) {
     let _ = Command::new("ip").args(["link", "del", bridge]).status();
 }
 
-/// Start vswitchd through the sanctioned `service6` wrapper.
+/// Start vswitchd through the sanctioned `sv` wrapper.
 fn start_vswitchd(svc: &str) {
-    info!("starting vswitchd via service6: {}", svc);
-    let _ = Command::new("service6").args(["start", svc]).status();
+    info!("starting vswitchd via sv: {}", svc);
+    let _ = Command::new(op_core::runit::SV_BIN)
+        .args(["start", svc])
+        .status();
 }
 
 /// Wait for vswitchd to fully start: poll OVSDB until bridge row appears AND

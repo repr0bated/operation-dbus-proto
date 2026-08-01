@@ -1,6 +1,13 @@
 # Database and State
 OP_DBUS_STATE_DIR=/var/lib/op-dbus
 
+# Durable audit trail (event chain persisted to the streaming blockchain's
+# timing subvolume). Must be on Btrfs — op-grpc-bridge creates subvolumes here
+# at startup and replays the trail back into the in-memory event chain, so the
+# accountability history survives an `sv restart`. Commented out: the built-in
+# default below is what the host already uses.
+#OPDBUS_BLOCKCHAIN_PATH=/var/lib/opdbus/blockchain
+
 # gRPC — consolidated op-grpc-bridge (HTTP/gRPC-Web + native gRPC)
 # Prefer loopback on the host; containers use shared UDS container.sock.
 OP_DBUS_GRPC_ADDR=http://127.0.0.1:8090
