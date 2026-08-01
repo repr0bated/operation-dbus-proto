@@ -547,7 +547,7 @@ async fn cmd_identity() -> Result<()> {
         }
         None => {
             eprintln!("No valid identity found.");
-            eprintln!("Check that /dev/shm/opdbus/projections/identity_sled.json exists");
+            eprintln!("Check that /dev/shm/opdbus/state/identity_sled.json exists");
             eprintln!("and contains an active sled with a non-empty footprint.");
             bail!("Identity not available");
         }

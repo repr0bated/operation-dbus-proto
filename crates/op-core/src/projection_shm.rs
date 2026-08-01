@@ -1,32 +1,32 @@
 //! Shared-memory projection layer for the projected plugin tree.
 //!
-//! The projected plugin tree lives in tmpfs (`/dev/shm/opdbus/projections/`).
+//! The projected plugin tree lives in tmpfs (`/dev/shm/opdbus/state/`).
 //! The MutationEngine writes one file per plugin on every mutation (atomic
-//! temp+rename). The projection D-Bus server reads 1:1 from these files on
-//! every property access — zero-copy, memory-speed, no held cache.
+//! temp+rename). Readers (the `schema_router` D-Bus surface and op-web's
+//! `state_tree`) read 1:1 from these files — zero-copy, memory-speed,
+//! no held cache, no polling.
 //!
 //! This module is the shared contract between the **writer** (op-grpc-bridge
-//! MutationEngine, the single write door) and the **reader** (op-projection
-//! D-Bus server). Both depend on op-core, so the path constants and I/O
-//! helpers live here.
+//! MutationEngine, the single write door) and the **readers**. The old
+//! op-projection D-Bus server is deleted; `/dev/shm/opdbus/projections/` is
+//! kept only as a legacy read fallback for one deploy cycle.
 
 use simd_json::prelude::*;
 use std::fs;
 use std::io::Write;
 
-/// Directory for per-plugin projection files (one JSON file per plugin).
-pub const SHM_PROJECTION_DIR: &str = "/dev/shm/opdbus/projections";
-/// Legacy/current present-state directory produced by the projection server.
-///
-/// Readers prefer `SHM_PROJECTION_DIR` because that is the mutation projection
-/// contract. Until every producer writes there, this fallback keeps the D-Bus
-/// tree derived from the live tmpfs state instead of exposing schema roots only.
+/// Canonical directory for per-plugin present-state files (one JSON file per
+/// plugin). This is the static tree that `write_projection` maintains and all
+/// consumers read.
 pub const SHM_STATE_DIR: &str = "/dev/shm/opdbus/state";
+/// Legacy directory written before the projection layer was removed. Read
+/// fallback only — never written.
+pub const SHM_PROJECTION_DIR: &str = "/dev/shm/opdbus/projections";
 
 /// Manifest carrying the monotonic `generation` counter. Written LAST as the
 /// atomic commit point after each projection write. Consumers read it to
 /// detect staleness (compare generation before/after a read).
-pub const SHM_PROJECTION_MANIFEST: &str = "/dev/shm/opdbus/projections/.manifest.json";
+pub const SHM_PROJECTION_MANIFEST: &str = "/dev/shm/opdbus/state/.manifest.json";
 
 /// Atomically publish `bytes` to a `/dev/shm` path via a sibling temp file +
 /// rename, so readers see either the old or new content, never a torn write.
@@ -59,13 +59,14 @@ fn safe_filename(plugin_id: &str) -> String {
         .collect()
 }
 
-/// File path for a specific plugin's projection.
+/// File path for a specific plugin's projection (`<state_dir>/<plugin>.json`).
 pub fn projection_file_path(plugin_id: &str) -> String {
-    format!("{}/{}.json", SHM_PROJECTION_DIR, safe_filename(plugin_id))
+    format!("{}/{}.json", SHM_STATE_DIR, safe_filename(plugin_id))
 }
 
-fn state_file_path(plugin_id: &str) -> String {
-    format!("{}/{}.json", SHM_STATE_DIR, safe_filename(plugin_id))
+/// Pre-removal location under `/dev/shm/opdbus/projections/`. Read fallback only.
+fn legacy_projection_file_path(plugin_id: &str) -> String {
+    format!("{}/{}.json", SHM_PROJECTION_DIR, safe_filename(plugin_id))
 }
 
 /// Write a plugin's full projected state to shm and bump the manifest
@@ -75,8 +76,8 @@ fn state_file_path(plugin_id: &str) -> String {
 /// state. `json_bytes` is the JSON serialization of the plugin's current state
 /// (the mutation fold from `state_cache`).
 pub fn write_projection(plugin_id: &str, json_bytes: &[u8]) -> anyhow::Result<()> {
-    fs::create_dir_all(SHM_PROJECTION_DIR).map_err(|e| {
-        anyhow::anyhow!("Cannot create projection dir {}: {}", SHM_PROJECTION_DIR, e)
+    fs::create_dir_all(SHM_STATE_DIR).map_err(|e| {
+        anyhow::anyhow!("Cannot create projection dir {}: {}", SHM_STATE_DIR, e)
     })?;
 
     let path = projection_file_path(plugin_id);
@@ -94,7 +95,7 @@ pub fn write_projection(plugin_id: &str, json_bytes: &[u8]) -> anyhow::Result<()
 /// Read the raw bytes of a plugin's projection from shm.
 pub fn read_projection_bytes(plugin_id: &str) -> Option<Vec<u8>> {
     fs::read(projection_file_path(plugin_id))
-        .or_else(|_| fs::read(state_file_path(plugin_id)))
+        .or_else(|_| fs::read(legacy_projection_file_path(plugin_id)))
         .ok()
 }
 
@@ -120,9 +121,9 @@ pub fn read_manifest_generation() -> u64 {
 /// unsanitized back to their original form (the safe-filename transform is
 /// lossless for valid plugin ids).
 pub fn list_projected_plugins() -> Vec<String> {
-    let mut plugins = list_plugin_files(SHM_PROJECTION_DIR);
+    let mut plugins = list_plugin_files(SHM_STATE_DIR);
     if plugins.is_empty() {
-        plugins = list_plugin_files(SHM_STATE_DIR);
+        plugins = list_plugin_files(SHM_PROJECTION_DIR);
     }
     plugins.sort();
     plugins
@@ -160,7 +161,7 @@ mod tests {
     fn projection_file_path_under_canonical_dir() {
         assert_eq!(
             projection_file_path("cognitive_mcp"),
-            "/dev/shm/opdbus/projections/cognitive_mcp.json"
+            "/dev/shm/opdbus/state/cognitive_mcp.json"
         );
     }
 }
