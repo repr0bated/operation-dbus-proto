@@ -151,10 +151,10 @@ sudo sv start <name>          # runsvdir picks up the symlink on its own
 ```
 
 Deployment is **btrfs send/receive** of subvolume snapshots (see
-`deploy/btrfs-layout.sh`) — never a hand-copy onto a live host. For local
-build-and-restart iteration only:
+`deploy/btrfs-layout.sh`) — never a hand-copy onto a live host. Publish a build
+to the golden subvolume and to this host with:
 ```bash
-sudo deploy/runit/recompile-and-update.sh
+sudo deploy/runit/build-golden.sh
 ```
 
 **DO NOT:**

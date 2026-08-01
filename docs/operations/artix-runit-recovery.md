@@ -94,10 +94,10 @@ Deployment is **btrfs send/receive** of subvolume snapshots — see
 `deploy/btrfs-layout.sh` for the base/modules/snapshots/staging layout. A release
 is a snapshot sent to the target, not a file copy onto a live host.
 
-For local iteration on this machine, `deploy/runit/recompile-and-update.sh`
-builds as the unprivileged owner of the source tree, installs to
-`/usr/local/bin`, and restarts the enabled services that reference it. Treat it
-as a development convenience only.
+`deploy/runit/build-golden.sh` publishes a release both ways from one build: it
+populates the golden subvolume and installs the same binaries into
+`/usr/local/bin`, restarting only the services whose binary actually changed.
+Network-critical services are reported rather than restarted.
 
 ## Third-party installers that expect systemd
 
