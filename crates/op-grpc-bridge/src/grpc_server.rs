@@ -773,6 +773,13 @@ pub async fn run_grpc_server(
     use crate::proto::runtime_mirror_server::RuntimeMirrorServer;
     use crate::proto::state_sync_server::StateSyncServer;
 
+    // Restore the durable audit trail before serving: a query issued right
+    // after a restart must see pre-restart events.
+    let replayed = mutation_engine.init_audit_durability().await;
+    if replayed > 0 {
+        info!(replayed, "audit trail restored from durable storage");
+    }
+
     match mutation_engine.seed_missing_plugin_projections().await {
         Ok(count) => info!(count, "Plugin projections seeded"),
         Err(error) => warn!(%error, "Plugin projection seeding failed"),

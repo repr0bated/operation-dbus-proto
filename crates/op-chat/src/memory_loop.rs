@@ -289,7 +289,7 @@ impl MemoryLoop {
 
         // Tool results as reference memory
         for (tool_name, args) in tool_calls.iter().filter(|(n, _)| {
-            n.starts_with("ovs_") || n.starts_with("s6_") || n.starts_with("incus_")
+            n.starts_with("ovs_") || n.starts_with("sv_") || n.starts_with("incus_")
         }) {
             let key = format!("ref-{}-{}", tool_name, Utc::now().timestamp());
             new_memories.push((

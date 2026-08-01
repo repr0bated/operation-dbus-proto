@@ -13,7 +13,7 @@ and an AI/agent layer through a single control plane: **D-Bus**.
 
 Foundational choices:
 
-- **Host:** Artix Linux with **s6** service supervision (not systemd).
+- **Host:** Artix Linux with **runit** service supervision, controlled with `sv` (not systemd, not s6).
 - **Network:** Open vSwitch fabric via native **OVSDB JSON-RPC** and pure-Rust
   **OpenFlow** — no `ovs-vsctl`/`ip` subprocesses in the control plane.
 - **Containers:** Incus; privacy services (Xray, mail) run inside containers over
@@ -79,7 +79,7 @@ flowchart TB
 
     subgraph data["Data + system layer"]
         NETWORK["op-network<br/>OVSDB / OpenFlow / rtnetlink"]
-        SERVICES["op-services / op-s6-systemctl<br/>dinit + s6 lifecycle"]
+        SERVICES["op-services / op-s6-systemctl<br/>runit (sv) lifecycle"]
         COZO["op-cozo-store<br/>CozoDB graph-vector"]
         BLOCKCHAIN["op-blockchain<br/>Btrfs footprint ledger"]
         IDENTITY["op-identity<br/>WireGuard identity, magic link"]
@@ -153,7 +153,7 @@ Descriptions are taken from each crate's `Cargo.toml` and current source.
 - **op-network** — Native networking: OpenFlow (all versions, pure Rust), OVSDB
   JSON-RPC, rtnetlink, Proxmox API, container networking.
 - **op-services** — Service metadata and lifecycle integration.
-- **op-s6-systemctl** — D-Bus service facade for the Artix s6 control plane.
+- **op-s6-systemctl** — D-Bus service facade mapping systemctl verbs onto runit/`sv`.
 - **op-xray-daemon** — D-Bus service managing the Xray proxy daemon lifecycle.
 - **op-gemma** — Gemma routing brain: maps `subid → tag → xray + OpenFlow` rules.
 - **op-cozo-store** — Embedded CozoDB graph-relational-vector database.

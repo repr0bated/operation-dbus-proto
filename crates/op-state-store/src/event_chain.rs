@@ -610,6 +610,93 @@ impl EventChain {
         self.append(event)
     }
 
+    /// Replay a persisted event back into the chain during startup rebuild.
+    ///
+    /// Unlike [`append`], this preserves the event's stored `event_id`,
+    /// `prev_hash`, and `event_hash` verbatim — the durable record is the
+    /// authority, and recomputing would break the hash linkage that makes the
+    /// trail tamper-evident. Events must be replayed in ascending `event_id`
+    /// order; out-of-order or duplicate ids are rejected so a corrupted
+    /// directory cannot silently produce a chain that fails verification.
+    ///
+    /// OSCAL subid: `src.service.event-chain.rebuild@v1`
+    pub fn replay_event(&mut self, event: ChainEvent) -> Result<(), String> {
+        if let Some(last) = self.events.last() {
+            if event.event_id <= last.event_id {
+                return Err(format!(
+                    "replay out of order: event {} follows {}",
+                    event.event_id, last.event_id
+                ));
+            }
+        }
+        self.events.push(event);
+        Ok(())
+    }
+
+    /// Replay a persisted event from its JSON representation.
+    ///
+    /// Accepts either a bare serialized [`ChainEvent`] object or a
+    /// streaming-blockchain timing record that carries one under
+    /// `data.metadata.audit_event`. Returns the replayed `event_id`.
+    ///
+    /// OSCAL subid: `src.service.event-chain.rebuild@v1`
+    pub fn replay_from_footprint(&mut self, json: &serde_json::Value) -> Result<u64, String> {
+        let candidate = json
+            .get("data")
+            .and_then(|d| d.get("metadata"))
+            .and_then(|m| m.get("audit_event"))
+            .unwrap_or(json);
+
+        let event: ChainEvent = serde_json::from_value(candidate.clone())
+            .map_err(|e| format!("not a ChainEvent record: {e}"))?;
+        let event_id = event.event_id;
+        self.replay_event(event)?;
+        Ok(event_id)
+    }
+
+    /// Verify a contiguous range of the chain.
+    ///
+    /// `from == 0` means "from genesis"; `to == 0` means "through the latest
+    /// event". Each event in range is checked for (a) its own hash integrity
+    /// and (b) correct linkage to its predecessor. Linkage for the first event
+    /// in the range is checked against the real preceding event in the chain
+    /// (or the genesis hash when the range starts at the head), so verifying a
+    /// sub-range does not report a false break at its lower bound.
+    pub fn verify_range(&self, from: u64, to: u64) -> ChainVerificationResult {
+        let mut result = ChainVerificationResult {
+            valid: true,
+            events_verified: 0,
+            batches_verified: 0,
+            errors: Vec::new(),
+        };
+
+        let mut expected_prev = self.genesis_hash.clone();
+        for event in &self.events {
+            let in_range = (from == 0 || event.event_id >= from) && (to == 0 || event.event_id <= to);
+
+            if in_range {
+                if event.prev_hash != expected_prev {
+                    result.valid = false;
+                    result.errors.push(format!(
+                        "Event {} has wrong prev_hash: expected {}, got {}",
+                        event.event_id, expected_prev, event.prev_hash
+                    ));
+                }
+                if !event.verify() {
+                    result.valid = false;
+                    result
+                        .errors
+                        .push(format!("Event {} hash verification failed", event.event_id));
+                }
+                result.events_verified += 1;
+            }
+
+            expected_prev = event.event_hash.clone();
+        }
+
+        result
+    }
+
     /// Get number of unbatched events
     fn unbatched_count(&self) -> usize {
         let last_batched = self.batches.last().map(|b| b.last_event_id).unwrap_or(0);
@@ -1016,6 +1103,76 @@ mod tests {
         assert_eq!(batch.event_count, 5);
         assert_eq!(batch.first_event_id, 1);
         assert_eq!(batch.last_event_id, 5);
+    }
+
+    #[test]
+    fn test_verify_range_subrange_and_full() {
+        let mut chain = EventChain::new(ChainConfig::default());
+        for i in 0..5 {
+            chain.record_method_call(
+                "user1".to_string(),
+                "blockchain".to_string(),
+                format!("m{i}"),
+                Some("blockchain.read".to_string()),
+                "{}",
+            );
+        }
+
+        // Full range (0,0) matches verify_chain's event count.
+        let full = chain.verify_range(0, 0);
+        assert!(full.valid, "full range must verify: {:?}", full.errors);
+        assert_eq!(full.events_verified, 5);
+
+        // A sub-range verifies without reporting a false linkage break at its
+        // lower bound.
+        let sub = chain.verify_range(3, 4);
+        assert!(sub.valid, "subrange must verify: {:?}", sub.errors);
+        assert_eq!(sub.events_verified, 2);
+    }
+
+    #[test]
+    fn test_replay_from_footprint_round_trip() {
+        let mut original = EventChain::new(ChainConfig::default());
+        for i in 0..3 {
+            original.record_method_call(
+                "actor".to_string(),
+                "cognitive_mcp".to_string(),
+                format!("get_health{i}"),
+                None,
+                "{\"a\":1}",
+            );
+        }
+
+        // Persist each event the way the durability path does, then rebuild.
+        let mut rebuilt = EventChain::new(ChainConfig::default());
+        for event in original.events() {
+            let record = serde_json::json!({
+                "data": { "metadata": { "audit_event": serde_json::to_value(event).unwrap() } }
+            });
+            let id = rebuilt.replay_from_footprint(&record).expect("replay");
+            assert_eq!(id, event.event_id);
+        }
+
+        assert_eq!(rebuilt.events().len(), 3);
+        // Hash linkage survives the round trip, so the rebuilt chain verifies.
+        let result = rebuilt.verify_range(0, 0);
+        assert!(result.valid, "rebuilt chain must verify: {:?}", result.errors);
+        // The next event continues the chain rather than restarting at 1.
+        assert_eq!(rebuilt.next_event_id(), 4);
+        assert_eq!(rebuilt.last_hash(), original.last_hash());
+    }
+
+    #[test]
+    fn test_replay_rejects_out_of_order() {
+        let mut source = EventChain::new(ChainConfig::default());
+        source.record_method_call("a".into(), "p".into(), "m1".into(), None, "{}");
+        source.record_method_call("a".into(), "p".into(), "m2".into(), None, "{}");
+        let events: Vec<ChainEvent> = source.events().to_vec();
+
+        let mut chain = EventChain::new(ChainConfig::default());
+        chain.replay_event(events[1].clone()).expect("first replay");
+        // event_id 1 after event_id 2 is a corrupted ordering — must be refused.
+        assert!(chain.replay_event(events[0].clone()).is_err());
     }
 
     #[test]

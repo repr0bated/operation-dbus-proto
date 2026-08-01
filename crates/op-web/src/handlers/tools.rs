@@ -35,7 +35,7 @@ pub async fn list_tools_handler(Extension(state): Extension<Arc<AppState>>) -> J
 fn categorize_tool(name: &str) -> &'static str {
     if name.starts_with("ovs_") {
         "ovs"
-    } else if name.starts_with("systemd_") || name.starts_with("dinit_") || name.starts_with("s6_")
+    } else if name.starts_with("systemd_") || name.starts_with("dinit_") || name.starts_with("sv_")
     {
         "service"
     } else if name.starts_with("nm_") || name.starts_with("connman.") {

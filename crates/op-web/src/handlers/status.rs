@@ -11,7 +11,7 @@ use crate::state::AppState;
 fn categorize_tool(name: &str) -> &'static str {
     if name.starts_with("ovs_") {
         "ovs"
-    } else if name.starts_with("systemd_") || name.starts_with("dinit_") || name.starts_with("s6_")
+    } else if name.starts_with("systemd_") || name.starts_with("dinit_") || name.starts_with("sv_")
     {
         "service"
     } else if name.starts_with("nm_") || name.starts_with("connman.") {
@@ -196,7 +196,7 @@ async fn get_key_services(_client: &op_grpc_bridge::RemoteOperationClient) -> Ve
     ];
 
     for name in key_services {
-        let status = if is_s6_service_running(name).await {
+        let status = if is_sv_service_running(name).await {
             "active".to_string()
         } else {
             "inactive".to_string()
@@ -210,8 +210,8 @@ async fn get_key_services(_client: &op_grpc_bridge::RemoteOperationClient) -> Ve
     services
 }
 
-async fn is_s6_service_running(name: &str) -> bool {
-    let stat_path = format!("/run/service/{}/supervise/stat", name);
+async fn is_sv_service_running(name: &str) -> bool {
+    let stat_path = op_core::runit::supervise_stat_path(name);
     if let Ok(content) = tokio::fs::read_to_string(&stat_path).await {
         content.trim() == "run"
     } else {

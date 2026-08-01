@@ -73,16 +73,18 @@ pub struct NetmakerState {
 /// Service controller interface for managing the netclient lifecycle.
 #[derive(Clone)]
 enum ServiceController {
-    /// s6 via org.opdbus.v1.S6.Systemctl
+    /// runit via org.opdbus.v1.Runit.Systemctl
     S6 { connection: Connection },
 }
 
 impl ServiceController {
     /// Detect the appropriate service controller for this system
     async fn detect() -> Result<Self> {
-        if !Path::new("/run/s6-rc").exists() && !Path::new("/run/service").exists() {
+        if !Path::new(op_core::runit::SERVICE_DIR).exists() {
             return Err(anyhow::anyhow!(
-                "s6 runtime not found; netclient is managed through org.opdbus.v1.S6.Systemctl"
+                "runit runtime not found at {}; netclient is managed through \
+                 org.opdbus.v1.Runit.Systemctl",
+                op_core::runit::SERVICE_DIR
             ));
         }
 
@@ -91,9 +93,9 @@ impl ServiceController {
             .context("Failed to connect to system D-Bus for s6")?;
         Proxy::new(
             &conn,
-            "org.opdbus.v1.S6.Systemctl",
-            "/org/opdbus/v1/plugins/s6/systemctl",
-            "org.opdbus.v1.S6.Systemctl",
+            "org.opdbus.v1.Runit.Systemctl",
+            "/org/opdbus/v1/plugins/runit/systemctl",
+            "org.opdbus.v1.Runit.Systemctl",
         )
         .await
         .context("s6-systemctl D-Bus service is unavailable")?;
@@ -107,9 +109,9 @@ impl ServiceController {
             ServiceController::S6 { connection } => {
                 let proxy = Proxy::new(
                     connection,
-                    "org.opdbus.v1.S6.Systemctl",
-                    "/org/opdbus/v1/plugins/s6/systemctl",
-                    "org.opdbus.v1.S6.Systemctl",
+                    "org.opdbus.v1.Runit.Systemctl",
+                    "/org/opdbus/v1/plugins/runit/systemctl",
+                    "org.opdbus.v1.Runit.Systemctl",
                 )
                 .await?;
 
@@ -125,9 +127,9 @@ impl ServiceController {
             ServiceController::S6 { connection } => {
                 let proxy = Proxy::new(
                     connection,
-                    "org.opdbus.v1.S6.Systemctl",
-                    "/org/opdbus/v1/plugins/s6/systemctl",
-                    "org.opdbus.v1.S6.Systemctl",
+                    "org.opdbus.v1.Runit.Systemctl",
+                    "/org/opdbus/v1/plugins/runit/systemctl",
+                    "org.opdbus.v1.Runit.Systemctl",
                 )
                 .await?;
 

@@ -1,23 +1,26 @@
-//! s6-systemctl D-Bus Daemon
+//! runit-systemctl D-Bus Daemon
 //!
-//! Provides a D-Bus interface that maps systemctl commands to s6/s6-rc
-//! operations for Artix Linux systems using s6 as the init system.
+//! Provides a D-Bus interface that maps systemctl commands to **runit**
+//! operations for Artix Linux. This host boots runit as PID 1 and is controlled
+//! with `sv`; s6 is not installed.
 //!
-//! D-Bus object path: /org/opdbus/v1/plugins/s6/systemctl
-//! Interface: org.opdbus.v1.S6.Systemctl
+//! D-Bus object path: /org/opdbus/v1/plugins/runit/systemctl
+//! Interface: org.opdbus.v1.Runit.Systemctl
+//!            (legacy alias org.opdbus.v1.S6.Systemctl, one release only)
 //!
 //! ## Mapping Reference
 //!
-//! | systemctl command | s6 equivalent |
-//! |-------------------|---------------|
-//! | start <svc>       | s6-rc -u change <svc> |
-//! | stop <svc>        | s6-rc -d change <svc> |
-//! | restart <svc>     | stop + start |
-//! | reload <svc>      | s6-svc -h <svc> |
-//! | enable <svc>      | s6-rc-bundle add <svc> |
-//! | disable <svc>     | s6-rc-bundle delete <svc> |
-//! | status <svc>      | s6-svstat <svc> |
-//! | list-units        | s6-rc -a list |
+//! | systemctl command | runit equivalent |
+//! |-------------------|------------------|
+//! | start <svc>       | `sv up <svc>` |
+//! | stop <svc>        | `sv down <svc>` |
+//! | restart <svc>     | `sv restart <svc>` (native, not stop + start) |
+//! | reload <svc>      | `sv hup <svc>` |
+//! | enable <svc>      | symlink into /etc/runit/runsvdir/default + remove `down` |
+//! | disable <svc>     | `sv down` + remove the symlinks |
+//! | status <svc>      | `sv status <svc>` |
+//! | list-units        | list /run/runit/service |
+//! | daemon-reload     | no-op — runit has no compiled service database |
 //!
 //! ## Architecture
 //!
@@ -58,25 +61,34 @@ async fn main() -> Result<()> {
         .await
         .context("Failed to register D-Bus object")?;
 
-    // Request the bus name
-    conn.request_name("org.opdbus.v1.S6.Systemctl")
+    // Request the bus name. The legacy `S6.Systemctl` name is also claimed for
+    // one release so already-installed clients keep working until the next
+    // `recompile-and-update.sh` run replaces them.
+    conn.request_name("org.opdbus.v1.Runit.Systemctl")
         .await
         .context("Failed to request bus name")?;
+    if let Err(error) = conn.request_name("org.opdbus.v1.S6.Systemctl").await {
+        warn!("legacy bus name org.opdbus.v1.S6.Systemctl unavailable: {error}");
+    }
 
-    info!("D-Bus service registered at /org/opdbus/v1/plugins/s6/systemctl");
-    info!("Interface: org.opdbus.v1.S6.Systemctl");
+    info!("D-Bus service registered at /org/opdbus/v1/plugins/runit/systemctl");
+    info!("Interface: org.opdbus.v1.Runit.Systemctl (legacy alias: org.opdbus.v1.S6.Systemctl)");
     info!("Daemon ready - press Ctrl+C to stop");
 
-    // Check if s6 tools are available
-    match tokio::process::Command::new("s6-svscan")
-        .arg("--help")
+    // Confirm the runit supervisor is actually running. `sv` needs a live
+    // `runsvdir` to talk to; without one every call would fail with a confusing
+    // per-service error instead of one clear startup warning.
+    match tokio::process::Command::new("pgrep")
+        .arg("-x")
+        .arg(op_core::runit::RUNSVDIR_PROC)
         .output()
         .await
     {
-        Ok(_) => info!("s6 tools detected - service operational"),
-        Err(_) => warn!(
-            "s6 tools not detected. Service will return helpful error messages. \
-             Ensure s6 is installed and in PATH."
+        Ok(out) if out.status.success() => info!("runsvdir detected - service operational"),
+        _ => warn!(
+            "runsvdir not detected. Service will return helpful error messages. \
+             Ensure runit is supervising {} and `sv` is in PATH.",
+            op_core::runit::SERVICE_DIR
         ),
     }
 

@@ -1,16 +1,42 @@
 # Agent host-service policy
 
-Agents must manage s6 services exclusively through `sudo service6 ...`.
+This host runs **runit** as PID 1. Agents must manage host services through
+`sudo sv <command> <service>` — for example `sudo sv restart op-grpc-bridge`,
+`sudo sv status op-web`. (`sv` needs root to read `supervise/ok`; an unprivileged
+`sv status` fails with "access denied".)
 
-Do not invoke raw `s6`, `s6-*`, `s6d`, their absolute paths, renamed copies,
-or a shell/interpreter used to bypass this policy. Do not edit the live s6-rc
-database or `/run/service` directly. Native s6 commands are reserved for boot,
-supervisors, and explicit human console recovery.
+Runit has no compiled service database — definitions are live:
+
+- `/etc/runit/sv/<service>/run` is the service definition.
+- A service is enabled by a symlink in `/etc/runit/runsvdir/default`
+  (`current -> default`).
+- `runsvdir -P /run/runit/service` supervises the enabled set.
+
+So the whole update path is: edit the `run` script (or install a new binary),
+then `sudo sv restart <service>`.
+
+Do not edit `/run/runit/service` directly — that is the supervisor's runtime
+view, not the source of truth. Do not invoke `runsv` or `runsvdir` by hand;
+those belong to boot and to explicit human console recovery.
+
+Deployment is **btrfs send/receive** of subvolume snapshots, not a copy script:
+the layout in `deploy/btrfs-layout.sh` defines base/modules/snapshots/staging
+subvolumes, and a release is a snapshot that is sent to the target. Do not
+hand-copy binaries onto a running host as a deployment step.
+
+For local build-and-restart iteration on this machine only,
+`deploy/runit/recompile-and-update.sh` builds, installs to `/usr/local/bin`, and
+restarts the enabled services that reference it. That is a development
+convenience, not the deployment path.
+
+s6 is legacy on this host. `service6`, `s6-rc`, `s6-*` and the `/run/service`
+tree no longer apply; treat any doc or script that still assumes them as stale.
+Do not use `systemctl` or other foreign service-manager CLIs.
 
 Container and application deployment must use D-Bus through `busctl` for
 service-manager operations. Do not deploy service lifecycle calls through
-`systemctl` or other service-manager CLIs. Host s6 services remain governed by
-the `sudo service6 ...` rule above.
+`systemctl` or other service-manager CLIs. Host services remain governed by
+the `sudo sv ...` rule above.
 
 # Xray configuration policy — mandatory
 

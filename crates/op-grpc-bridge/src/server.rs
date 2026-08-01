@@ -275,6 +275,12 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
     )));
     let ovsdb = Arc::new(op_network::rovs_proxy::OvsdbDbusClient::new());
     let mutation_engine = Arc::new(MutationEngine::new(event_chain, ovsdb));
+    // Open the durable audit sink and replay the pre-restart trail before any
+    // surface accepts traffic, so an immediate query sees prior history.
+    let replayed = mutation_engine.init_audit_durability().await;
+    if replayed > 0 {
+        tracing::info!(replayed, "audit trail restored from durable storage");
+    }
     mutation_engine.seed_missing_plugin_projections().await?;
     let mutation_engine_for_dbus = mutation_engine.clone();
     let operation_server = OperationGrpcServer::new(mutation_engine);

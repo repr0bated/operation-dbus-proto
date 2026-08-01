@@ -203,7 +203,7 @@ This documentation should be updated when:
 The following documents were consolidated from the inspect copy under `/mnt/opt-inspect/home/git/operation-dbus-proto/` and corrected against the current codebase.
 
 ### Operational runbooks
-- [Artix s6 bootdb recovery](operations/artix-s6-bootdb-recovery.md) — recovery procedure and root-cause findings from the 2026-07-02 incident
+- [Artix runit service recovery](operations/artix-runit-recovery.md) — diagnosis order, stuck `supervise/` recovery, runlevel switching, and the systemd-unit converter
 - [OVS native JSON-RPC guide](guides/ovs-native-jsonrpc.md) — using `op_network::OvsdbClient` over the D-Bus rovs service
 
 ### Architecture and design

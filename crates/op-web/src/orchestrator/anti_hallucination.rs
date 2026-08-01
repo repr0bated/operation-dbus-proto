@@ -17,16 +17,21 @@ const FORBIDDEN_PATTERNS: &[(&str, &str)] = &[
     ("ovs-dpctl", "ovs_* tools"),
     ("ovsdb-client", "ovs_* tools"),
     
-    // Service manager - use s6 tools
-    ("systemctl start", "s6_start_service"),
-    ("systemctl stop", "s6_stop_service"),
-    ("systemctl restart", "s6_stop_service + s6_start_service"),
-    ("systemctl status", "s6_service_status"),
-    ("systemctl", "s6_* tools"),
-    ("service ", "s6_* tools"),
-    ("dinitctl", "s6_* tools"),
-    ("s6-rc", "s6_* tools"),
-    ("journalctl", "s6_service_status"),
+    // Service manager — this host runs runit; use the sv_* tools.
+    ("systemctl start", "sv_start_service"),
+    ("systemctl stop", "sv_stop_service"),
+    ("systemctl restart", "sv_restart_service"),
+    ("systemctl status", "sv_service_status"),
+    ("systemctl", "sv_* tools"),
+    ("service ", "sv_* tools"),
+    ("dinitctl", "sv_* tools"),
+    ("s6-rc", "sv_* tools"),
+    ("s6-svc", "sv_* tools"),
+    ("s6-svstat", "sv_* tools"),
+    ("service6", "sv_* tools"),
+    ("runsvdir", "sv_* tools"),
+    ("runsv ", "sv_* tools"),
+    ("journalctl", "sv_service_status"),
     
     // Network - use rtnetlink/network tools
     ("ip addr", "list_network_interfaces, add_ip_address"),
@@ -200,7 +205,7 @@ mod tests {
     
     #[test]
     fn test_detects_systemctl() {
-        let content = "Try running systemctl restart nginx";
+        let content = "Try running systemctl restart gbr-xray";
         let check = check_for_forbidden_commands(content);
         assert!(!check.detected.is_empty());
         assert!(check.should_reject);

@@ -13,7 +13,7 @@
 
 ## 2. Prerequisites
 
-- Artix Linux (or a compatible host) with **s6** supervision, and access to the
+- Artix Linux (or a compatible host) with **runit** supervision (`sv`), and access to the
   system D-Bus.
 - Rust toolchain (edition 2021), Node.js + npm for the UI.
 - Chimera Linux deps: `doas apk add rust cargo nodejs npm pkgconfig openssl-dev`.
@@ -62,8 +62,8 @@ cd crates && npm run typecheck
 cargo run --release -p op-web
 ```
 
-Service definitions for s6 live under `deploy/`. The control-plane services
-(bridge, mirror, MCP gateway, plugin host) are started via s6, not by hand, in a
+Service definitions live under `deploy/runit/`. The control-plane services
+(bridge, mirror, MCP gateway, plugin host) are started via `sv`, not by hand, in a
 deployed environment.
 
 ## 6. Inspect and mutate state (D-Bus first)

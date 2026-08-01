@@ -123,10 +123,10 @@ fn install(ui: &mut egui::Ui) {
     ui.label(RichText::new("Provision a full ZeroClaw stack on this host.").color(MUTED).size(13.0));
     ui.add_space(16.0);
     for (title, body) in [
-        ("1. Prerequisites", "rustc 1.78+, cargo, s6, s6-rc, wireguard-tools, qdrant, btrfs-progs."),
+        ("1. Prerequisites", "rustc 1.78+, cargo, runit (sv), wireguard-tools, qdrant, btrfs-progs."),
         ("2. Fetch",         "git clone https://git.zeroclaw.dev/zeroclaw.git && cd zeroclaw"),
         ("3. Build",         "cargo build --release --workspace"),
-        ("4. Services",      "sudo cp -r dist/s6/sv/* /etc/s6/sv/ && sudo s6-rc-compile /etc/s6/compiled /etc/s6/sv && sudo s6-rc -u change zeroclaw"),
+        ("4. Services",      "sudo cp -r dist/runit/sv/* /etc/runit/sv/ && sudo ln -sfn /etc/runit/sv/zeroclaw /etc/runit/runsvdir/default/zeroclaw && sudo sv start zeroclaw"),
 
         ("5. Privacy Mesh",  "sudo wg-quick up zeroclaw0 && verify peer handshake"),
         ("6. Data Stores",   "btrfs subvol create /var/zeroclaw/{state,logs,vec}"),
@@ -152,7 +152,7 @@ fn install(ui: &mut egui::Ui) {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[schemars(title = "DemoPluginState", description = "Reference state struct ported from op-plugins to prove the schemars → schema_ui pipeline.")]
 struct DemoPluginState {
-    /// Plugin identifier (matches s6 service name).
+    /// Plugin identifier (matches the runit service name).
     id: String,
     /// Current lifecycle phase.
     phase: Phase,
@@ -489,7 +489,7 @@ fn grpc_explorer(
 fn description(r: Route) -> &'static str {
     match r {
         Route::Orchestration   => "Plugin lifecycle, dependency graph, restart policy.",
-        Route::Services        => "s6 service control center — start/stop/restart via s6-rc and s6-svc.",
+        Route::Services        => "runit service control center — start/stop/restart via sv.",
         Route::Sessions        => "Active client sessions and auth handles.",
         Route::Llm             => "LLM router status, provider mix, queue depth.",
         Route::Agents          => "Persona registry sourced from personas.yaml.",

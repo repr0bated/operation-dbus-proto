@@ -31,9 +31,10 @@ const PLUGIN_CATEGORY: &str = "service";
 const PLUGIN_DESCRIPTION: &str = "Cognitive MCP server — memory, gRPC CognitiveToolService. THE PLUGIN IS THE SCHEMA: every method, tool, property, and field is declared here. Downstream inherits.";
 const PLUGIN_DISPLAY_NAME: &str = "GB.CognitiveMcp";
 
-const S6_SV_PATH: &str = "/run/service/op-cognitive-mcp";
-const ENV_DIR: &str = "/etc/s6/sv/op-cognitive-mcp/env";
-const RUNTIME_ENV_DIR: &str = "/run/service/op-cognitive-mcp/env";
+/// Live supervised path (`/run/runit/service/op-cognitive-mcp`).
+const SUPERVISED_PATH: &str = "/run/runit/service/op-cognitive-mcp";
+const ENV_DIR: &str = "/etc/runit/sv/op-cognitive-mcp/env";
+const RUNTIME_ENV_DIR: &str = "/run/runit/service/op-cognitive-mcp/env";
 const DEFAULT_HTTP: &str = "100.90.37.254:3003";
 const DEFAULT_GRPC: &str = "100.90.37.254:50052";
 const DEFAULT_WG: &str = "netmaker";
@@ -96,7 +97,7 @@ impl CognitiveMcpPlugin {
     }
 
     fn service_running() -> bool {
-        let sv = std::path::Path::new(S6_SV_PATH);
+        let sv = std::path::Path::new(SUPERVISED_PATH);
         sv.exists() && !sv.join("down").exists()
     }
 
@@ -201,8 +202,7 @@ impl StatePlugin for CognitiveMcpPlugin {
     fn is_available(&self) -> bool {
         [
             "/etc/runit/sv/op-cognitive-mcp",
-            "/etc/s6/sv/op-cognitive-mcp",
-            "/run/service/op-cognitive-mcp",
+            SUPERVISED_PATH,
         ]
         .iter()
         .any(|p| std::path::Path::new(p).exists())
@@ -210,7 +210,7 @@ impl StatePlugin for CognitiveMcpPlugin {
 
     fn unavailable_reason(&self) -> String {
         "op-cognitive-mcp supervised service definition not found under \
-         /etc/runit/sv, /etc/s6/sv, or /run/service"
+         /etc/runit/sv or /run/runit/service"
             .into()
     }
 

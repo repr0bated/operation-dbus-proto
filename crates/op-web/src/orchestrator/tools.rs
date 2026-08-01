@@ -154,12 +154,11 @@ User: "List all OVS bridges"
 2. execute_tool(tool_name="ovs_list_bridges", arguments={})
 3. respond(message="Found bridges: ...")
 
-User: "Restart nginx"
-1. search_tools(query="s6 nginx")  → Find s6_stop_service and s6_start_service
-2. get_tool_schema(tool_name="s6_stop_service")  → See it needs "service" param
-3. execute_tool(tool_name="s6_stop_service", arguments={"service": "nginx"})
-4. execute_tool(tool_name="s6_start_service", arguments={"service": "nginx"})
-5. respond(message="Nginx has been restarted successfully")
+User: "Restart the xray reverse proxy"
+1. search_tools(query="restart service")  → Find sv_restart_service
+2. get_tool_schema(tool_name="sv_restart_service")  → See it needs "service" param
+3. execute_tool(tool_name="sv_restart_service", arguments={"service": "gbr-xray"})
+4. respond(message="gbr-xray has been restarted successfully")
 
 User: "What tools are available for networking?"
 1. list_tools(category="network")  → Browse network tools

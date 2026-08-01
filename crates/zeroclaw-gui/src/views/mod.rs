@@ -1,5 +1,6 @@
 //! Stub views — one per route. The Inspector, State, gRPC, and gRPC Explorer
 //! views are schema-driven via `crate::schema` + `crate::grpc::ReflectionRegistry`.
+use crate::accountability;
 use crate::chat;
 use crate::grpc::{InvokeHandle, MethodKind, ReflectionRegistry, StreamHandle};
 use crate::nav::{route_title, Route};
@@ -20,6 +21,9 @@ pub struct ExplorerState {
     pub last_validated: Option<String>,
     pub stream: StreamHandle,
     pub chat_store: crate::chat::store::ChatStore,
+    /// Audit-trail page state for `Route::Accountability`. Independent of
+    /// `chat_store` — the two views share no state.
+    pub accountability_store: crate::accountability::AccountabilityStore,
     /// Expanded-rows cache: flattens the visible tree into a `Vec<RowHandle>`
     /// per frame so that virtualized `render_array` only resolves schema +
     /// data for rows currently on screen. Rebuilt each frame from the live
@@ -48,6 +52,11 @@ pub fn render(
         Route::State => state_view(ui),
         Route::Grpc => grpc_view(ui, registry),
         Route::GrpcExplorer => grpc_explorer(ui, registry, explorer, invoke, ctx),
+        Route::Accountability => accountability::view::render_accountability(
+            ui,
+            &mut explorer.accountability_store,
+            ctx,
+        ),
         r => stub(ui, route_title(r), description(r)),
     }
 }
@@ -133,10 +142,10 @@ fn install(ui: &mut egui::Ui) {
     );
     ui.add_space(16.0);
     for (title, body) in [
-        ("1. Prerequisites", "rustc 1.78+, cargo, s6, s6-rc, wireguard-tools, qdrant, btrfs-progs."),
+        ("1. Prerequisites", "rustc 1.78+, cargo, runit (sv), wireguard-tools, qdrant, btrfs-progs."),
         ("2. Fetch",         "git clone https://git.zeroclaw.dev/zeroclaw.git && cd zeroclaw"),
         ("3. Build",         "cargo build --release --workspace"),
-        ("4. Services",      "sudo cp -r dist/s6/sv/* /etc/s6/sv/ && sudo s6-rc-compile /etc/s6/compiled /etc/s6/sv && sudo s6-rc -u change zeroclaw"),
+        ("4. Services",      "sudo cp -r dist/runit/sv/* /etc/runit/sv/ && sudo ln -sfn /etc/runit/sv/zeroclaw /etc/runit/runsvdir/default/zeroclaw && sudo sv start zeroclaw"),
 
         ("5. Privacy Mesh",  "sudo wg-quick up zeroclaw0 && verify peer handshake"),
         ("6. Data Stores",   "btrfs subvol create /var/zeroclaw/{state,logs,vec}"),
@@ -165,7 +174,7 @@ fn install(ui: &mut egui::Ui) {
     description = "Reference state struct ported from op-plugins to prove the schemars → schema_ui pipeline."
 )]
 struct DemoPluginState {
-    /// Plugin identifier (matches s6 service name).
+    /// Plugin identifier (matches the runit service name).
     id: String,
     /// Current lifecycle phase.
     phase: Phase,
@@ -676,7 +685,7 @@ fn grpc_explorer(
 fn description(r: Route) -> &'static str {
     match r {
         Route::Orchestration => "Plugin lifecycle, dependency graph, restart policy.",
-        Route::Services => "s6 service control center — start/stop/restart via s6-rc and s6-svc.",
+        Route::Services => "runit service control center — start/stop/restart via sv.",
         Route::Sessions => "Active client sessions and auth handles.",
         Route::Llm => "LLM router status, provider mix, queue depth.",
         Route::Agents => "Persona registry sourced from personas.yaml.",

@@ -1,56 +1,104 @@
-//! D-Bus Service Implementation for s6-systemctl
+//! D-Bus service for systemctl-to-runit command mapping on Artix Linux.
 //!
 //! Implements the org.opdbus.v1.S6.Systemctl interface, mapping
-//! systemctl commands to s6/s6-rc operations for Artix Linux.
+//! systemctl commands to runit operations for Artix Linux systems.
+//!
+//! ## Runit layout (Artix convention)
+//!
+//! | Path                                  | Meaning                                             |
+//! |----------------------------------------|-----------------------------------------------------|
+//! | `/etc/runit/sv/<service>`             | Service definition (`run`, optional `log/run`)      |
+//! | `/run/runit/service/<service>`        | Symlink into the live/active runlevel (runsvdir scans this) |
+//! | `/etc/runit/runsvdir/default/<service>` | Symlink for boot-persistent enablement of the `default` runlevel |
+//! | `/etc/runit/sv/<service>/down`        | Marker file: service should not auto-start when supervised |
+//!
+//! `enable` = symlink into both the persistent runlevel dir and the live dir
+//! (and remove any `down` marker). `disable` = `sv down` + remove both
+//! symlinks. There is no compiled service database (unlike s6-rc); runsvdir
+//! picks up directory changes automatically, so `daemon_reload` is a no-op.
 
 use std::process::Command;
 use tracing::{debug, error, info, warn};
 use zbus::interface;
 
-/// D-Bus service for s6-systemctl operations
+// Re-exported from `op_core::runit` so the layout is stated in exactly one
+// place; the local names are kept for readability at the call sites below.
+const RUNIT_SV_DIR: &str = op_core::runit::SV_DIR;
+const RUNIT_SERVICE_DIR: &str = op_core::runit::SERVICE_DIR;
+const RUNIT_RUNSVDIR_DEFAULT: &str = op_core::runit::RUNSVDIR_DEFAULT;
+
+/// D-Bus service for runit systemctl-compatibility operations
 pub struct S6SystemctlService {
-    /// Base directory for Artix s6 service definitions.
-    s6_svc_dir: String,
-    /// Live supervision directory for running longruns.
-    s6_runtime_dir: String,
-    /// s6-rc live directory.
-    s6_rc_dir: String,
+    /// Base directory for Artix runit service definitions.
+    sv_dir: String,
+    /// Live/active runlevel directory scanned by runsvdir.
+    runtime_dir: String,
+    /// Persistent boot-enable directory for the `default` runlevel.
+    enable_dir: String,
 }
 
 impl S6SystemctlService {
     pub fn new() -> Self {
         Self {
-            s6_svc_dir: "/etc/s6/sv".to_string(),
-            s6_runtime_dir: "/run/service".to_string(),
-            s6_rc_dir: "/run/s6-rc".to_string(),
+            sv_dir: RUNIT_SV_DIR.to_string(),
+            runtime_dir: RUNIT_SERVICE_DIR.to_string(),
+            enable_dir: RUNIT_RUNSVDIR_DEFAULT.to_string(),
         }
     }
 
-    fn enable_bundle(&self) -> String {
-        std::env::var("S6D_ENABLE_BUNDLE").unwrap_or_else(|_| "misc".to_string())
+    /// Check if runit's `sv` control tool is available.
+    fn check_runit_available(&self) -> bool {
+        Command::new("sv").output().is_ok()
     }
 
-    /// Check if s6 tools are available
-    fn check_s6_available(&self) -> bool {
-        Command::new("s6-svscan").arg("--help").output().is_ok()
+    fn def_path(&self, service: &str) -> String {
+        format!("{}/{}", self.sv_dir, service)
     }
 
-    /// Execute s6-rc command and return (success, output)
-    fn run_s6_rc(&self, args: &[&str]) -> (bool, String) {
-        if !self.check_s6_available() {
+    fn live_path(&self, service: &str) -> String {
+        format!("{}/{}", self.runtime_dir, service)
+    }
+
+    fn enable_link_path(&self, service: &str) -> String {
+        format!("{}/{}", self.enable_dir, service)
+    }
+
+    /// Symlink a service definition into a target directory if not already present.
+    fn ensure_symlink(&self, service: &str, target_dir: &str) -> Result<(), String> {
+        let def = self.def_path(service);
+        if !std::path::Path::new(&def).exists() {
+            return Err(format!("service {} not found in {}", service, self.sv_dir));
+        }
+        if let Err(e) = std::fs::create_dir_all(target_dir) {
+            return Err(format!("failed to create {}: {}", target_dir, e));
+        }
+        let link = format!("{}/{}", target_dir, service);
+        if std::path::Path::new(&link).exists() {
+            return Ok(());
+        }
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&def, &link)
+                .map_err(|e| format!("failed to symlink {} -> {}: {}", link, def, e))?;
+        }
+        Ok(())
+    }
+
+    fn remove_symlink(&self, service: &str, target_dir: &str) {
+        let link = format!("{}/{}", target_dir, service);
+        let _ = std::fs::remove_file(&link);
+    }
+
+    /// Execute `sv <args>` and return (success, output)
+    fn run_sv(&self, args: &[&str]) -> (bool, String) {
+        if !self.check_runit_available() {
             return (
                 false,
-                "s6 tools not available. Is s6 installed?".to_string(),
+                "runit tools not available. Is runit installed?".to_string(),
             );
         }
 
-        let mut cmd = Command::new("s6-rc");
-        if std::path::Path::new(&self.s6_rc_dir).exists() {
-            cmd.arg("-l").arg(&self.s6_rc_dir);
-        }
-        cmd.args(args);
-
-        match cmd.output() {
+        match Command::new("sv").args(args).output() {
             Ok(output) => {
                 let stdout = String::from_utf8_lossy(&output.stdout).to_string();
                 let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -63,157 +111,37 @@ impl S6SystemctlService {
                     (false, error.trim().to_string())
                 }
             }
-            Err(e) => (false, format!("Failed to execute s6-rc: {}", e)),
+            Err(e) => (false, format!("Failed to execute sv: {}", e)),
         }
     }
 
-    /// Execute s6-svc command and return (success, output)
-    fn run_s6_svc(&self, service: &str, signal: &str) -> (bool, String) {
-        if !self.check_s6_available() {
-            return (
-                false,
-                "s6 tools not available. Is s6 installed?".to_string(),
-            );
-        }
-
-        let service_path = format!("{}/{}", self.s6_runtime_dir, service);
-
-        let mut cmd = Command::new("s6-svc");
-        cmd.arg(signal).arg(&service_path);
-
-        match cmd.output() {
+    /// Execute `sv status <service>` and parse output
+    fn run_sv_status(&self, service: &str) -> Result<ServiceStatus, String> {
+        let path = self.live_path(service);
+        match Command::new("sv").arg("status").arg(&path).output() {
             Ok(output) => {
-                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-
-                if output.status.success() {
-                    let result = if stdout.is_empty() { stderr } else { stdout };
-                    (true, result.trim().to_string())
-                } else {
-                    let error = if stderr.is_empty() { stdout } else { stderr };
-                    (false, error.trim().to_string())
-                }
-            }
-            Err(e) => (false, format!("Failed to execute s6-svc: {}", e)),
-        }
-    }
-
-    /// Execute s6-svstat command and parse output
-    fn run_s6_svstat(&self, service: &str) -> Result<S6ServiceStatus, String> {
-        let service_path = format!("{}/{}", self.s6_runtime_dir, service);
-
-        match Command::new("s6-svstat").arg(&service_path).output() {
-            Ok(output) => {
-                if !output.status.success() {
-                    return Err(String::from_utf8_lossy(&output.stderr).to_string());
-                }
-
                 let stdout = String::from_utf8_lossy(&output.stdout);
-                Ok(S6ServiceStatus::from_svstat_output(&stdout, service))
+                Ok(ServiceStatus::from_sv_status_output(&stdout, service))
             }
-            Err(e) => Err(format!("Failed to execute s6-svstat: {}", e)),
+            Err(e) => Err(format!("Failed to execute sv status: {}", e)),
         }
     }
 
-    /// Check if service is enabled (in the active bundle)
+    /// Check if a service is enabled (symlinked into the persistent `default` runlevel)
     fn is_service_enabled(&self, service: &str) -> bool {
-        let bundle_entry = format!(
-            "{}/{}/contents.d/{}",
-            self.s6_svc_dir,
-            self.enable_bundle(),
-            service
-        );
-        if std::path::Path::new(&bundle_entry).exists() {
-            return true;
-        }
-
-        let Ok(entries) = std::fs::read_dir(&self.s6_svc_dir) else {
-            return false;
-        };
-        entries.flatten().any(|entry| {
-            let path = entry.path().join("contents.d").join(service);
-            path.exists()
-        })
-    }
-
-    fn run_artix_frontend_reload(&self) -> (bool, String) {
-        let script = std::env::var("S6D_RELOAD_SCRIPT")
-            .unwrap_or_else(|_| "/usr/local/sbin/op-s6-recompile-and-update".to_string());
-        if std::path::Path::new(&script).exists() {
-            match Command::new("sh")
-                .env("SKIP_BUILD", "1")
-                .arg(&script)
-                .output()
-            {
-                Ok(output) => {
-                    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-                    if output.status.success() {
-                        return (true, stdout);
-                    }
-                    return (false, if stderr.is_empty() { stdout } else { stderr });
-                }
-                Err(e) => return (false, format!("Failed to execute {script}: {e}")),
-            }
-        }
-
-        let repo_script = "/home/jeremy/git/operation-dbus-proto/deploy/s6/recompile-and-update.sh";
-        if std::path::Path::new(repo_script).exists() {
-            match Command::new("sh")
-                .env("SKIP_BUILD", "1")
-                .arg(repo_script)
-                .output()
-            {
-                Ok(output) => {
-                    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-                    if output.status.success() {
-                        return (true, stdout);
-                    }
-                    return (false, if stderr.is_empty() { stdout } else { stderr });
-                }
-                Err(e) => return (false, format!("Failed to execute {repo_script}: {e}")),
-            }
-        }
-
-        let steps: &[(&str, &[&str])] = &[
-            ("s6", &["repository", "sync"]),
-            ("s6", &["set", "check", "-F", "-u"]),
-            ("s6", &["set", "commit", "-f", "-D", "default"]),
-            ("s6", &["live", "install", "-b"]),
-        ];
-        let mut messages = Vec::new();
-        for (bin, args) in steps {
-            match Command::new(bin).args(*args).output() {
-                Ok(output) if output.status.success() => {
-                    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                    if !stdout.is_empty() {
-                        messages.push(stdout);
-                    }
-                }
-                Ok(output) => {
-                    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-                    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                    return (
-                        false,
-                        format!(
-                            "{} {:?} failed: {}",
-                            bin,
-                            args,
-                            if stderr.is_empty() { stdout } else { stderr }
-                        ),
-                    );
-                }
-                Err(e) => return (false, format!("Failed to run {bin}: {e}")),
-            }
-        }
-        (true, messages.join("\n"))
+        std::path::Path::new(&self.enable_link_path(service)).exists()
     }
 }
 
-/// Service status parsed from s6-svstat output
+impl Default for S6SystemctlService {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Service status parsed from `sv status` output
 #[derive(Debug, serde::Serialize)]
-struct S6ServiceStatus {
+struct ServiceStatus {
     name: String,
     active_state: String,
     sub_state: String,
@@ -222,26 +150,55 @@ struct S6ServiceStatus {
     up_time: Option<String>,
 }
 
-impl S6ServiceStatus {
-    fn from_svstat_output(output: &str, name: &str) -> Self {
-        // Parse s6-svstat output: "up (pid 1234) X seconds" or "down X seconds"
+impl ServiceStatus {
+    fn from_sv_status_output(output: &str, name: &str) -> Self {
+        // sv status output forms:
+        //   "run: <path>: (pid 1234) 56s"
+        //   "down: <path>: 12s, normally up"
+        //   "down: <path>: 12s"
+        //   "fail: <path>: unable to open supervise/ok: file does not exist"
         let output = output.trim();
+        let mut parts = output.splitn(3, ": ");
+        let state_word = parts.next().unwrap_or("");
+        let _path = parts.next();
+        let rest = parts.next().unwrap_or("");
 
-        let (active_state, sub_state, main_pid, ready) = if output.starts_with("up") {
-            let pid = output
-                .split("pid ")
-                .nth(1)
-                .and_then(|s| s.split(')').next())
-                .and_then(|p| p.parse::<u32>().ok());
-
-            ("active".to_string(), "running".to_string(), pid, true)
-        } else if output.starts_with("down") {
-            ("inactive".to_string(), "dead".to_string(), None, false)
-        } else {
-            ("unknown".to_string(), "unknown".to_string(), None, false)
+        let (active_state, sub_state, main_pid, ready, up_time) = match state_word {
+            "run" => {
+                let pid = rest
+                    .split("pid ")
+                    .nth(1)
+                    .and_then(|s| s.split(')').next())
+                    .and_then(|p| p.parse::<u32>().ok());
+                let up_time = rest
+                    .rsplit_once(')')
+                    .map(|(_, t)| t.trim().to_string())
+                    .filter(|t| !t.is_empty());
+                ("active".to_string(), "running".to_string(), pid, true, up_time)
+            }
+            "down" => {
+                let up_time = rest
+                    .split(',')
+                    .next()
+                    .map(|t| t.trim().to_string())
+                    .filter(|t| !t.is_empty());
+                ("inactive".to_string(), "dead".to_string(), None, false, up_time)
+            }
+            "fail" => (
+                "unknown".to_string(),
+                "not-found".to_string(),
+                None,
+                false,
+                None,
+            ),
+            _ => (
+                "unknown".to_string(),
+                "unknown".to_string(),
+                None,
+                false,
+                None,
+            ),
         };
-
-        let up_time = output.split(" ").last().map(|s| s.to_string());
 
         Self {
             name: name.to_string(),
@@ -266,170 +223,122 @@ impl S6ServiceStatus {
 
 #[interface(name = "org.opdbus.v1.S6.Systemctl")]
 impl S6SystemctlService {
-    /// Start a service (maps to: s6-rc -u change <service>)
+    /// Start a service (ensures live symlink, then `sv up <service>`)
     async fn start(&self, service: &str) -> (bool, String) {
         debug!("Starting service: {}", service);
-        info!("systemctl start {} -> s6-rc -u change {}", service, service);
+        info!("systemctl start {} -> sv up {}/{}", service, self.runtime_dir, service);
 
-        let result = self.run_s6_rc(&["-u", "change", service]);
+        if let Err(e) = self.ensure_symlink(service, &self.runtime_dir) {
+            error!("Failed to start service {}: {}", service, e);
+            return (false, e);
+        }
 
+        let result = self.run_sv(&["up", &self.live_path(service)]);
         if result.0 {
             info!("Service {} started successfully", service);
         } else {
             error!("Failed to start service {}: {}", service, result.1);
         }
-
         result
     }
 
-    /// Stop a service (maps to: s6-rc -d change <service>)
+    /// Stop a service (maps to: sv down <service>)
     async fn stop(&self, service: &str) -> (bool, String) {
         debug!("Stopping service: {}", service);
-        info!("systemctl stop {} -> s6-rc -d change {}", service, service);
+        info!("systemctl stop {} -> sv down {}/{}", service, self.runtime_dir, service);
 
-        let result = self.run_s6_rc(&["-d", "change", service]);
+        let live = self.live_path(service);
+        if !std::path::Path::new(&live).exists() {
+            return (true, format!("{} is not running (not in {})", service, self.runtime_dir));
+        }
 
+        let result = self.run_sv(&["down", &live]);
         if result.0 {
             info!("Service {} stopped successfully", service);
         } else {
             error!("Failed to stop service {}: {}", service, result.1);
         }
-
         result
     }
 
-    /// Restart a service (maps to: s6 process restart <service>)
+    /// Restart a service (maps to: sv restart <service>)
     async fn restart(&self, service: &str) -> (bool, String) {
         debug!("Restarting service: {}", service);
-        info!(
-            "systemctl restart {} -> s6 process restart {}",
-            service, service
-        );
+        info!("systemctl restart {} -> sv restart {}/{}", service, self.runtime_dir, service);
 
-        match Command::new("s6")
-            .args(["process", "restart", service])
-            .output()
-        {
-            Ok(output) => {
-                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-                if output.status.success() {
-                    info!("Service {} restarted successfully", service);
-                    (
-                        true,
-                        if stdout.is_empty() { stderr } else { stdout }
-                            .trim()
-                            .to_string(),
-                    )
-                } else {
-                    let msg = if stderr.is_empty() { stdout } else { stderr }
-                        .trim()
-                        .to_string();
-                    error!("Failed to restart service {}: {}", service, msg);
-                    (false, msg)
-                }
-            }
-            Err(e) => (
-                false,
-                format!("Failed to execute s6 process restart: {}", e),
-            ),
+        let live = self.live_path(service);
+        if !std::path::Path::new(&live).exists() {
+            return self.start(service).await;
         }
+
+        let result = self.run_sv(&["restart", &live]);
+        if result.0 {
+            info!("Service {} restarted successfully", service);
+        } else {
+            error!("Failed to restart service {}: {}", service, result.1);
+        }
+        result
     }
 
-    /// Reload a service (maps to: s6-svc -h <service>)
-    /// Sends SIGHUP to the service for configuration reload
+    /// Reload a service (maps to: sv hup <service>)
     async fn reload(&self, service: &str) -> (bool, String) {
         debug!("Reloading service: {}", service);
-        info!(
-            "systemctl reload {} -> s6-svc -h {}/{}",
-            service, self.s6_runtime_dir, service
-        );
+        info!("systemctl reload {} -> sv hup {}/{}", service, self.runtime_dir, service);
 
-        let result = self.run_s6_svc(service, "-h");
-
+        let result = self.run_sv(&["hup", &self.live_path(service)]);
         if result.0 {
             info!("Service {} reloaded successfully", service);
         } else {
             error!("Failed to reload service {}: {}", service, result.1);
         }
-
         result
     }
 
-    /// Enable a service (add to s6-rc bundle)
-    /// Note: This creates a symlink in the s6-rc service directory
+    /// Enable a service (symlink into the persistent `default` runlevel and the live runlevel)
     async fn enable(&self, service: &str) -> (bool, String) {
         debug!("Enabling service: {}", service);
-        let bundle = self.enable_bundle();
-        info!("systemctl enable {} -> add to {} bundle", service, bundle);
+        info!("systemctl enable {} -> symlink into {} and {}", service, self.enable_dir, self.runtime_dir);
 
-        let service_src = format!("{}/{}", self.s6_svc_dir, service);
-        if !std::path::Path::new(&service_src).exists() {
-            return (
-                false,
-                format!("Service {} not found in {}", service, self.s6_svc_dir),
-            );
+        if let Err(e) = self.ensure_symlink(service, &self.enable_dir) {
+            return (false, e);
+        }
+        if let Err(e) = self.ensure_symlink(service, &self.runtime_dir) {
+            return (false, e);
         }
 
-        let bundle_dir = format!("{}/{}/contents.d", self.s6_svc_dir, bundle);
-        if let Err(e) = std::fs::create_dir_all(&bundle_dir) {
-            return (
-                false,
-                format!("Failed to create bundle dir {bundle_dir}: {e}"),
-            );
-        }
-        let bundle_entry = format!("{}/{}", bundle_dir, service);
-        match std::fs::File::create(&bundle_entry) {
-            Ok(_) => {
-                info!("Service {} enabled in {} bundle", service, bundle);
-                (
-                    true,
-                    format!("Service {service} enabled in {bundle}; run daemon-reload"),
-                )
-            }
-            Err(e) => {
-                error!("Failed to enable service {}: {}", service, e);
-                (false, format!("Failed to enable {service}: {e}"))
-            }
-        }
+        // Remove the `down` marker (if any) so the service auto-starts.
+        let down_file = format!("{}/down", self.def_path(service));
+        let _ = std::fs::remove_file(&down_file);
+
+        info!("Service {} enabled", service);
+        (true, format!("Service {service} enabled"))
     }
 
-    /// Disable a service (remove from s6-rc bundle)
+    /// Disable a service (sv down + remove both symlinks)
     async fn disable(&self, service: &str) -> (bool, String) {
         debug!("Disabling service: {}", service);
-        let bundle = self.enable_bundle();
         info!(
-            "systemctl disable {} -> remove from {} bundle",
-            service, bundle
+            "systemctl disable {} -> sv down + remove symlinks from {} and {}",
+            service, self.runtime_dir, self.enable_dir
         );
 
-        // Stop the service first
-        let _ = self.run_s6_rc(&["-d", "change", service]);
-
-        let enabled_link = format!("{}/{}/contents.d/{}", self.s6_svc_dir, bundle, service);
-        match std::fs::remove_file(&enabled_link) {
-            Ok(_) => {
-                info!("Service {} disabled via bundle removal", service);
-                (
-                    true,
-                    format!("Service {service} disabled from {bundle}; run daemon-reload"),
-                )
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                (true, format!("Service {service} was not in {bundle}"))
-            }
-            Err(e) => {
-                error!("Failed to disable service {}: {}", service, e);
-                (false, format!("Failed to disable {service}: {e}"))
-            }
+        let live = self.live_path(service);
+        if std::path::Path::new(&live).exists() {
+            let _ = self.run_sv(&["down", &live]);
         }
+
+        self.remove_symlink(service, &self.runtime_dir);
+        self.remove_symlink(service, &self.enable_dir);
+
+        info!("Service {} disabled", service);
+        (true, format!("Service {service} disabled"))
     }
 
     /// Get detailed status of a service (JSON format)
     async fn status(&self, service: &str) -> String {
         debug!("Getting status for service: {}", service);
 
-        match self.run_s6_svstat(service) {
+        match self.run_sv_status(service) {
             Ok(status) => status.to_json(),
             Err(e) => {
                 warn!("Failed to get status for {}: {}", service, e);
@@ -443,7 +352,7 @@ impl S6SystemctlService {
 
     /// Check if a service is active (returns "active" or "inactive")
     async fn is_active(&self, service: &str) -> String {
-        match self.run_s6_svstat(service) {
+        match self.run_sv_status(service) {
             Ok(status) => {
                 if status.active_state == "active" {
                     "active".to_string()
@@ -484,7 +393,7 @@ impl S6SystemctlService {
             serde_json::json!(self.get_unit_type(service).await),
         );
 
-        match self.run_s6_svstat(service) {
+        match self.run_sv_status(service) {
             Ok(status) => {
                 properties.insert(
                     "ActiveState".to_string(),
@@ -505,70 +414,49 @@ impl S6SystemctlService {
         serde_json::Value::Object(properties).to_string()
     }
 
-    /// List all active units (JSON array)
+    /// List all active units (JSON array) — scans the live runlevel directory.
     async fn list_units(&self) -> String {
         debug!("Listing all units");
 
-        if !self.check_s6_available() {
-            return r#"{"error":"s6 tools not available"}"#.to_string();
-        }
+        let entries = match std::fs::read_dir(&self.runtime_dir) {
+            Ok(entries) => entries,
+            Err(e) => return format!("{{\"error\":\"Failed to list units: {}\"}}", e),
+        };
 
-        // Get list of running services from s6-rc
-        let mut cmd = Command::new("s6-rc");
-        if std::path::Path::new(&self.s6_rc_dir).exists() {
-            cmd.arg("-l").arg(&self.s6_rc_dir);
-        }
-        match cmd.args(["-a", "list"]).output() {
-            Ok(output) => {
-                if !output.status.success() {
-                    return format!(
-                        "{{\"error\":\"{}\"}}",
-                        String::from_utf8_lossy(&output.stderr)
-                    );
-                }
-
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let services: Vec<&str> = stdout.lines().collect();
-
-                let mut units = Vec::new();
-                for service in services {
-                    let service = service.trim();
-                    if service.is_empty() {
-                        continue;
-                    }
-
-                    match self.run_s6_svstat(service) {
-                        Ok(status) => units.push(status),
-                        Err(_) => {
-                            units.push(S6ServiceStatus {
-                                name: service.to_string(),
-                                active_state: "unknown".to_string(),
-                                sub_state: "unknown".to_string(),
-                                main_pid: None,
-                                ready: false,
-                                up_time: None,
-                            });
-                        }
-                    }
-                }
-
-                match simd_json::to_string(&units) {
-                    Ok(json) => json,
-                    Err(e) => format!("{{\"error\":\"Failed to serialize: {}\"}}", e),
+        let mut units = Vec::new();
+        for entry in entries.flatten() {
+            let Some(name) = entry.file_name().to_str().map(str::to_string) else {
+                continue;
+            };
+            if name.starts_with('.') {
+                continue;
+            }
+            match self.run_sv_status(&name) {
+                Ok(status) => units.push(status),
+                Err(_) => {
+                    units.push(ServiceStatus {
+                        name: name.clone(),
+                        active_state: "unknown".to_string(),
+                        sub_state: "unknown".to_string(),
+                        main_pid: None,
+                        ready: false,
+                        up_time: None,
+                    });
                 }
             }
-            Err(e) => {
-                error!("Failed to list units: {}", e);
-                format!("{{\"error\":\"Failed to list units: {}\"}}", e)
-            }
+        }
+
+        match simd_json::to_string(&units) {
+            Ok(json) => json,
+            Err(e) => format!("{{\"error\":\"Failed to serialize: {}\"}}", e),
         }
     }
 
-    /// List all available unit files from the s6 service directory.
+    /// List all available unit files from the runit service directory.
     async fn list_unit_files(&self) -> String {
         debug!("Listing all unit files");
 
-        let entries = match std::fs::read_dir(&self.s6_svc_dir) {
+        let entries = match std::fs::read_dir(&self.sv_dir) {
             Ok(entries) => entries,
             Err(e) => return format!("{{\"error\":\"Failed to list unit files: {}\"}}", e),
         };
@@ -604,14 +492,13 @@ impl S6SystemctlService {
         serde_json::Value::Array(units).to_string()
     }
 
-    /// Retrieve service logs using s6-logwatch when present, with tail fallback.
+    /// Retrieve service logs (svlogd `current` file) with tail fallback.
     async fn journalctl(&self, service: &str, lines: u32) -> String {
         let lines = lines.max(1).to_string();
         let log_candidates = [
             format!("/var/log/op-dbus/{service}/current"),
             format!("/var/log/{service}/current"),
-            format!("/var/log/{service}/access.log"),
-            format!("/var/log/{service}/error.log"),
+            format!("/run/log/op-dbus/{service}/current"),
         ];
         let Some(log_path) = log_candidates
             .iter()
@@ -643,43 +530,40 @@ impl S6SystemctlService {
         }
     }
 
-    /// Re-read the active s6-rc database.
+    /// Runit has no compiled service database (unlike s6-rc); runsvdir picks
+    /// up directory changes automatically, so this is a best-effort no-op.
     async fn daemon_reload(&self) -> (bool, String) {
-        self.run_artix_frontend_reload()
+        (
+            true,
+            "runit requires no database recompilation; changes take effect automatically"
+                .to_string(),
+        )
     }
 
-    /// Get daemon/s6 supervisor status
+    /// Get daemon/runit supervisor status
     async fn daemon_status(&self) -> String {
-        if self.check_s6_available() {
-            // Check if s6-svscan is actually running
-            match Command::new("pgrep").arg("-x").arg("s6-svscan").output() {
-                Ok(output) => {
-                    if output.status.success() {
-                        "running".to_string()
-                    } else {
-                        "not-available".to_string()
-                    }
-                }
-                Err(_) => {
-                    // Fallback: check /run/s6-rc exists
-                    if std::path::Path::new(&self.s6_rc_dir).exists() {
-                        "running".to_string()
-                    } else {
-                        "not-available".to_string()
-                    }
+        if !self.check_runit_available() {
+            return "not-available".to_string();
+        }
+        match Command::new("pgrep").arg("-x").arg("runsvdir").output() {
+            Ok(output) if output.status.success() => "running".to_string(),
+            _ => {
+                if std::path::Path::new(&self.runtime_dir).exists() {
+                    "running".to_string()
+                } else {
+                    "not-available".to_string()
                 }
             }
-        } else {
-            "not-available".to_string()
         }
     }
 
-    /// Return the best-known unit type from the service definition.
+    /// Return the best-known unit type from an optional `type` marker file
+    /// (a repo convention; runit itself has no unit-type metadata).
     async fn get_unit_type(&self, service: &str) -> String {
-        let type_path = format!("{}/{}/type", self.s6_svc_dir, service);
+        let type_path = format!("{}/type", self.def_path(service));
         match std::fs::read_to_string(&type_path) {
             Ok(value) => value.trim().to_string(),
-            Err(_) => "unknown".to_string(),
+            Err(_) => "longrun".to_string(),
         }
     }
 }
