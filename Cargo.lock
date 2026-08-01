@@ -5610,6 +5610,7 @@ dependencies = [
  "memmap2",
  "nix 0.28.0",
  "op-blob",
+ "op-blockchain",
  "op-cognitive-mcp",
  "op-core",
  "op-cozo-store",
@@ -5952,6 +5953,7 @@ name = "op-s6-systemctl"
 version = "1.0.0"
 dependencies = [
  "anyhow",
+ "op-core",
  "serde",
  "serde_json",
  "simd-json",
