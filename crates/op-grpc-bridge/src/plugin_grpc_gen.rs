@@ -316,14 +316,10 @@ pub fn generate_method_proto(
 pub fn generate_plugin_method_protos(plugin_id: &str, schema: &PluginSchema) -> String {
     let mut combined = String::new();
 
-    combined.push_str(&format!(
-        "// ================================================\n",
-    ));
+    combined.push_str("// ================================================\n");
     combined.push_str(&format!("// Plugin: {} (v{})\n", plugin_id, schema.version));
-    combined.push_str(&format!(
-        "// ================================================\n",
-    ));
-    combined.push_str("\n");
+    combined.push_str("// ================================================\n");
+    combined.push('\n');
 
     for (method_name, method_decl) in &schema.methods {
         combined.push_str(&generate_method_proto(plugin_id, method_name, method_decl));

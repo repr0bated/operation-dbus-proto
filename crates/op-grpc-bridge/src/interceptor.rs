@@ -215,7 +215,11 @@ pub fn registration_interceptor(req: Request<()>) -> Result<Request<()>, Status>
     }
 }
 
+// `load_capability_grants` below is public API that deliberately follows the
+// test module; moving the tests to end-of-file would churn this shared
+// surface for no behavioral gain.
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
     use tonic::metadata::MetadataValue;

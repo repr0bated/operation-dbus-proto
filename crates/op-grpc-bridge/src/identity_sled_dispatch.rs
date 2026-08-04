@@ -746,7 +746,7 @@ pub async fn dispatch_identity_sled_method(
                 .iter()
                 .filter(|e| e.session_id == session_id)
                 .collect();
-            events.sort_by(|a, b| b.seq.cmp(&a.seq));
+            events.sort_by_key(|event| std::cmp::Reverse(event.seq));
             if limit > 0 {
                 events.truncate(limit);
             }
