@@ -186,6 +186,10 @@ fn enforce_bridge_capability(
     }
 }
 
+// tonic::Status is 176 bytes; Boxing the error would ripple through the
+// shared bridge surface for zero runtime benefit, so the large Err is the
+// deliberate disposition.
+#[allow(clippy::result_large_err)]
 pub(crate) fn authorize_schema_method(
     plugin_id: &str,
     method_name: &str,
@@ -937,7 +941,7 @@ impl StateSync for OperationGrpcServer {
         };
 
         if change_type == ChangeType::MethodCall {
-            if let Some(method_name) = req.member_name.strip_prefix("method:").or_else(|| {
+            if let Some(method_name) = req.member_name.strip_prefix("method:").or({
                 if req.member_name.is_empty() {
                     None
                 } else {
