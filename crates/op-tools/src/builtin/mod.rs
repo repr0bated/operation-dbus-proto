@@ -14,7 +14,6 @@ pub mod dbus_introspection;
 pub mod file;
 pub mod gcloud_tools;
 pub mod ovs_tools;
-pub mod plugin_projection;
 pub mod rtnetlink_tools;
 pub mod sv;
 pub mod shell;
