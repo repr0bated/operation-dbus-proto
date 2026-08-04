@@ -150,6 +150,12 @@ pub enum AssertionError { Malformed, BadSignature, LifetimeTooLong, ... }
 - `ed25519-dalek = "2.2"` added to `op-identity` (new workspace dependency;
   verified resolvable from crates.io 2026-08-04). Nonce generation uses the
   workspace-consistent `rand` version.
+- `DecoyIssuer::issue` is total over strings: it does NOT validate that
+  `human_pubkey` is a well-formed key (shape validation is the registry's
+  job at `register_key`; the bridge rejects unknown keys at resolution).
+  ttl <= 0 is rejected with AssertionError::NonPositiveLifetime.
+- `from_wire` is framing-only: it does NOT verify the signature. Decode and
+  verify are separate stages — the bridge pipeline's ordering depends on it.
 - Canonical encoding: fixed field order, `u32` LE length prefixes for
   strings, 8-byte LE integers, 1-byte IP family + 4/16-byte address. No
   serde JSON anywhere in the signing path.
@@ -184,10 +190,19 @@ Methods (schema-declared, `method_decl_from_schemars_with_output`):
 | `get_principal` | Query | `human_principal.read` | `obs.service.human-principal.get@v1` |
 | `list_principals` | Query | `human_principal.read` | `obs.service.human-principal.list@v1` |
 
-Rules: `principal_id` derived, never supplied; duplicate pubkey rejected;
-duplicate non-empty alias among active principals rejected; `revoke_key`
-idempotent on already-revoked, error on unknown; no auth path resolves by
-alias (there is no `resolve_alias` method at all).
+Rules: `principal_id` derived, never supplied; `register_key` validates
+pubkey shape (base64 decoding to 32 bytes) and rejects malformed/empty keys
+with no state change — this gates the key namespace so alias/key
+substitution is impossible by construction; duplicate pubkey rejected
+(including REVOKED pubkeys: revocation is a permanent tombstone, a revoked
+key can never be re-registered); duplicate non-empty alias among active
+principals rejected (a revoked principal's alias is reusable; empty aliases
+never collide); `revoke_key` idempotent on already-revoked (the original
+`revoked_at` timestamp is preserved, never re-stamped), error on unknown;
+`set_alias` on an unknown principal errors with no state change, setting the
+own current alias is a successful no-op, clearing (empty alias) is allowed,
+`set_alias` on a revoked principal is allowed (display-only data); no auth
+path resolves by alias (there is no `resolve_alias` method at all).
 
 ### 4.3 Bridge validation (NEW module + interceptor/gate wiring)
 
@@ -237,10 +252,40 @@ impl AssertionValidator {
 validate (source IP from `ConnectInfo<SocketAddr>` in request extensions);
 success ⇒ insert `HumanPrincipalIdentity`; failure ⇒
 `Status::unauthenticated(<rejection>)`. Absent ⇒ existing footprint path,
-byte-for-byte unchanged. The validator is held in a process-wide
-`OnceLock<AssertionValidator>` mirroring the existing `ENGINE` pattern;
-registry resolution calls `dispatch_human_principal_method(engine,
-"resolve_key", …)` via `block_in_place`, exactly like `verify_per_identity`.
+byte-for-byte unchanged. **Validator state is per-server-instance, NOT
+process-global**: the interceptor is a closure capturing
+`Arc<AssertionValidator>` built for THAT server build (the existing global
+`ENGINE` `OnceLock` pattern is NOT reused for the assertion path — a
+process-wide validator makes per-test trust stores/registries impossible and
+is explicitly rejected). Registry resolution uses the serving instance's own
+`MutationEngine` via `dispatch_human_principal_method(engine, "resolve_key",
+…)` under `block_in_place`.
+
+**Pinned validator semantics** (contractual; the validation contract asserts
+each):
+
+- `validate(wire, source, now)` takes the current time as a parameter
+  (clock-injection seam for deterministic tests).
+- The replay cache is keyed by the 16-byte nonce GLOBALLY (not per
+  principal, not by wire-hash): any second presentation of a nonce within
+  its TTL is `Replay`, regardless of principal or body. Entries purge at
+  now >= expires_at + leeway, so the replay window equals the acceptance
+  window.
+- A nonce is consumed at the replay step even if a LATER step fails
+  (fail-closed: a failed validation still burns the nonce).
+- The trust store is loaded ONCE at validator construction. Rotation
+  requires constructing a new validator; there is no per-request reload.
+  ANY corruption in the trust-store file (bad JSON, wrong types, wrong key
+  length, duplicate key id) ⇒ the WHOLE store is empty (fail-closed), never
+  a partial load.
+- Multiple `x-oracle-identity-assertion-bin` metadata values on one request
+  ⇒ reject (`Malformed`); exactly one value is required when the key is
+  present.
+- `expires_at <= issued_at` ⇒ reject (`Malformed`) — the bridge never
+  delegates lifetime sanity to the issuer. The check fires immediately after
+  parse (structural sanity), before the trust step.
+- Source-IP comparison is IP-only (port ignored); IPv4-mapped-IPv6 forms
+  are NOT normalized — exact `IpAddr` equality.
 
 **ConnectInfo**: the tonic serve path gains peer-address capture
 (`into_make_service_with_connect_info::<SocketAddr>()` on the operation
