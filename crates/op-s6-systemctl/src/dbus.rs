@@ -174,7 +174,13 @@ impl ServiceStatus {
                     .rsplit_once(')')
                     .map(|(_, t)| t.trim().to_string())
                     .filter(|t| !t.is_empty());
-                ("active".to_string(), "running".to_string(), pid, true, up_time)
+                (
+                    "active".to_string(),
+                    "running".to_string(),
+                    pid,
+                    true,
+                    up_time,
+                )
             }
             "down" => {
                 let up_time = rest
@@ -182,7 +188,13 @@ impl ServiceStatus {
                     .next()
                     .map(|t| t.trim().to_string())
                     .filter(|t| !t.is_empty());
-                ("inactive".to_string(), "dead".to_string(), None, false, up_time)
+                (
+                    "inactive".to_string(),
+                    "dead".to_string(),
+                    None,
+                    false,
+                    up_time,
+                )
             }
             "fail" => (
                 "unknown".to_string(),
@@ -226,7 +238,10 @@ impl S6SystemctlService {
     /// Start a service (ensures live symlink, then `sv up <service>`)
     async fn start(&self, service: &str) -> (bool, String) {
         debug!("Starting service: {}", service);
-        info!("systemctl start {} -> sv up {}/{}", service, self.runtime_dir, service);
+        info!(
+            "systemctl start {} -> sv up {}/{}",
+            service, self.runtime_dir, service
+        );
 
         if let Err(e) = self.ensure_symlink(service, &self.runtime_dir) {
             error!("Failed to start service {}: {}", service, e);
@@ -245,11 +260,17 @@ impl S6SystemctlService {
     /// Stop a service (maps to: sv down <service>)
     async fn stop(&self, service: &str) -> (bool, String) {
         debug!("Stopping service: {}", service);
-        info!("systemctl stop {} -> sv down {}/{}", service, self.runtime_dir, service);
+        info!(
+            "systemctl stop {} -> sv down {}/{}",
+            service, self.runtime_dir, service
+        );
 
         let live = self.live_path(service);
         if !std::path::Path::new(&live).exists() {
-            return (true, format!("{} is not running (not in {})", service, self.runtime_dir));
+            return (
+                true,
+                format!("{} is not running (not in {})", service, self.runtime_dir),
+            );
         }
 
         let result = self.run_sv(&["down", &live]);
@@ -264,7 +285,10 @@ impl S6SystemctlService {
     /// Restart a service (maps to: sv restart <service>)
     async fn restart(&self, service: &str) -> (bool, String) {
         debug!("Restarting service: {}", service);
-        info!("systemctl restart {} -> sv restart {}/{}", service, self.runtime_dir, service);
+        info!(
+            "systemctl restart {} -> sv restart {}/{}",
+            service, self.runtime_dir, service
+        );
 
         let live = self.live_path(service);
         if !std::path::Path::new(&live).exists() {
@@ -283,7 +307,10 @@ impl S6SystemctlService {
     /// Reload a service (maps to: sv hup <service>)
     async fn reload(&self, service: &str) -> (bool, String) {
         debug!("Reloading service: {}", service);
-        info!("systemctl reload {} -> sv hup {}/{}", service, self.runtime_dir, service);
+        info!(
+            "systemctl reload {} -> sv hup {}/{}",
+            service, self.runtime_dir, service
+        );
 
         let result = self.run_sv(&["hup", &self.live_path(service)]);
         if result.0 {
@@ -297,7 +324,10 @@ impl S6SystemctlService {
     /// Enable a service (symlink into the persistent `default` runlevel and the live runlevel)
     async fn enable(&self, service: &str) -> (bool, String) {
         debug!("Enabling service: {}", service);
-        info!("systemctl enable {} -> symlink into {} and {}", service, self.enable_dir, self.runtime_dir);
+        info!(
+            "systemctl enable {} -> symlink into {} and {}",
+            service, self.enable_dir, self.runtime_dir
+        );
 
         if let Err(e) = self.ensure_symlink(service, &self.enable_dir) {
             return (false, e);

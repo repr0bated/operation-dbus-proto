@@ -33,11 +33,9 @@ pub async fn launch(opts: LaunchOpts) -> Result<()> {
     opts.config.command_allowed(&opts.command)?;
 
     let session = Uuid::new_v4().to_string();
-    let sock = opts.client_socket.unwrap_or_else(|| {
-        opts.config
-            .socket_dir
-            .join(format!("cli-{session}.sock"))
-    });
+    let sock = opts
+        .client_socket
+        .unwrap_or_else(|| opts.config.socket_dir.join(format!("cli-{session}.sock")));
     std::fs::create_dir_all(&opts.config.socket_dir)?;
     let _ = std::fs::remove_file(&sock);
 
@@ -123,9 +121,8 @@ pub async fn launch(opts: LaunchOpts) -> Result<()> {
         None => bail!("server closed before Ready"),
     }
 
-    let bridge = tokio::spawn(async move {
-        bridge_unix_to_channels(unix, to_unix_rx, from_unix_tx).await
-    });
+    let bridge =
+        tokio::spawn(async move { bridge_unix_to_channels(unix, to_unix_rx, from_unix_tx).await });
 
     let up = {
         let grpc_out_tx = grpc_out_tx.clone();

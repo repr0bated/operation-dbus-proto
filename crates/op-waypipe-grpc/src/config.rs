@@ -42,8 +42,8 @@ const EMBEDDED_DEFAULT_JSON: &str = include_str!("../config/default.json");
 impl TunnelConfig {
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
-        let raw = fs::read_to_string(path)
-            .with_context(|| format!("read config {}", path.display()))?;
+        let raw =
+            fs::read_to_string(path).with_context(|| format!("read config {}", path.display()))?;
         Self::from_json(&raw).with_context(|| format!("parse JSON config {}", path.display()))
     }
 

@@ -20,8 +20,8 @@
 async fn cognitive_mcp_per_method_services_are_advertised() {
     use tonic_reflection::pb::v1::{
         server_reflection_client::ServerReflectionClient,
-        server_reflection_request::MessageRequest,
-        server_reflection_response::MessageResponse, ServerReflectionRequest,
+        server_reflection_request::MessageRequest, server_reflection_response::MessageResponse,
+        ServerReflectionRequest,
     };
 
     let channel = tonic::transport::Channel::from_static("http://127.0.0.1:50051")

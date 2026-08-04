@@ -21,9 +21,7 @@ pub async fn plugin_list_handler() -> Result<Json<Value>, String> {
     }
 }
 
-pub async fn plugin_schema_handler(
-    Path(plugin_id): Path<String>,
-) -> Result<Json<Value>, String> {
+pub async fn plugin_schema_handler(Path(plugin_id): Path<String>) -> Result<Json<Value>, String> {
     match catalog::read_plugin_schema_shm(&plugin_id) {
         Some(schema) => Ok(Json(
             serde_json::to_value(schema).map_err(|e| e.to_string())?,

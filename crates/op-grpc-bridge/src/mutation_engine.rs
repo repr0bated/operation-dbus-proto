@@ -293,7 +293,11 @@ impl MutationEngine {
         }
 
         if replayed > 0 || skipped > 0 {
-            tracing::info!(replayed, skipped, "event chain rebuilt from durable audit trail");
+            tracing::info!(
+                replayed,
+                skipped,
+                "event chain rebuilt from durable audit trail"
+            );
         }
         replayed
     }
@@ -356,7 +360,10 @@ impl MutationEngine {
         let conn = match self.signal_bus.get() {
             Some(c) => c,
             None => {
-                tracing::debug!(plugin_id, "signal_bus not yet available; skipping Updated signal");
+                tracing::debug!(
+                    plugin_id,
+                    "signal_bus not yet available; skipping Updated signal"
+                );
                 return;
             }
         };
@@ -368,7 +375,10 @@ impl MutationEngine {
         {
             Ok(r) => r,
             Err(_) => {
-                tracing::debug!(plugin_id, "PluginV1 interface not registered at path; skipping signal");
+                tracing::debug!(
+                    plugin_id,
+                    "PluginV1 interface not registered at path; skipping signal"
+                );
                 return;
             }
         };
@@ -1218,10 +1228,8 @@ impl MutationEngine {
             }
             "full_system" => {
                 let args = serde_json::to_value(&parsed_value)?;
-                op_plugins::state_plugins::full_system::dispatch_full_system_method(
-                    method, &args,
-                )
-                .await?
+                op_plugins::state_plugins::full_system::dispatch_full_system_method(method, &args)
+                    .await?
             }
             "keyring" => {
                 let args = serde_json::to_value(&parsed_value)?;
@@ -2100,7 +2108,10 @@ fn map_schema_method_to_tool(
     let with_field = |key: &str, value: &str| -> serde_json::Value {
         let mut v = base.clone();
         if let Some(obj) = v.as_object_mut() {
-            obj.insert(key.to_string(), serde_json::Value::String(value.to_string()));
+            obj.insert(
+                key.to_string(),
+                serde_json::Value::String(value.to_string()),
+            );
         }
         v
     };
@@ -2113,10 +2124,7 @@ fn map_schema_method_to_tool(
             "cognitive_memory".into(),
             with_field("operation", "retrieve"),
         )),
-        "memory_delete" => Ok((
-            "cognitive_memory".into(),
-            with_field("operation", "delete"),
-        )),
+        "memory_delete" => Ok(("cognitive_memory".into(), with_field("operation", "delete"))),
         "memory_list_namespaces" => Ok((
             "cognitive_memory".into(),
             with_field("operation", "list_namespaces"),
@@ -2147,7 +2155,9 @@ fn map_schema_method_to_tool(
                 .ok_or_else(|| anyhow::anyhow!("invoke_tool: missing required field 'tool_name'"))?
                 .to_string();
             if tool_name.is_empty() {
-                return Err(anyhow::anyhow!("invoke_tool: 'tool_name' must not be empty"));
+                return Err(anyhow::anyhow!(
+                    "invoke_tool: 'tool_name' must not be empty"
+                ));
             }
             let tool_args = args
                 .get("arguments")

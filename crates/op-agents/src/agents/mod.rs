@@ -18,10 +18,10 @@
 //! - seo: SEO and content marketing agents
 //! - specialty: Niche domain agents (blockchain, gaming, finance, etc.)
 
+pub mod advise;
 pub mod aiml;
 pub mod analysis;
 pub mod architecture;
-pub mod advise;
 pub mod base;
 pub mod business;
 pub mod compliance;

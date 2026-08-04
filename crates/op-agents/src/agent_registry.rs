@@ -143,10 +143,9 @@ impl AgentHandle {
 
     pub async fn execute_task(&self, task: crate::AgentTask) -> Result<crate::TaskResult> {
         match &self.backend {
-            AgentBackend::InProcess(agent) => agent
-                .execute(task)
-                .await
-                .map_err(|e| anyhow::anyhow!(e)),
+            AgentBackend::InProcess(agent) => {
+                agent.execute(task).await.map_err(|e| anyhow::anyhow!(e))
+            }
             AgentBackend::Process(_) => Err(anyhow::anyhow!(
                 "Process-backed agents do not support in-process task execution"
             )),

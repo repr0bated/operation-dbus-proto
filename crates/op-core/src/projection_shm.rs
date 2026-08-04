@@ -76,9 +76,8 @@ fn legacy_projection_file_path(plugin_id: &str) -> String {
 /// state. `json_bytes` is the JSON serialization of the plugin's current state
 /// (the mutation fold from `state_cache`).
 pub fn write_projection(plugin_id: &str, json_bytes: &[u8]) -> anyhow::Result<()> {
-    fs::create_dir_all(SHM_STATE_DIR).map_err(|e| {
-        anyhow::anyhow!("Cannot create projection dir {}: {}", SHM_STATE_DIR, e)
-    })?;
+    fs::create_dir_all(SHM_STATE_DIR)
+        .map_err(|e| anyhow::anyhow!("Cannot create projection dir {}: {}", SHM_STATE_DIR, e))?;
 
     let path = projection_file_path(plugin_id);
     atomic_write_shm(&path, json_bytes)?;

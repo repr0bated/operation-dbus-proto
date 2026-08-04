@@ -7,10 +7,10 @@ use simd_json::json;
 use simd_json::prelude::*;
 use std::collections::HashSet;
 
-use super::base::ExecutionAgent;
 use super::super::agent_trait::{
-    UnifiedAgent, AgentCategory, AgentCapability, AgentRequest, AgentResponse
+    AgentCapability, AgentCategory, AgentRequest, AgentResponse, UnifiedAgent,
 };
+use super::base::ExecutionAgent;
 use crate::security::SecurityProfile;
 
 pub struct ShellExecutor {
@@ -32,8 +32,7 @@ impl ShellExecutor {
                 // Network info (read-only)
                 "ip", "ss", "netstat", "ping", "dig", "nslookup",
                 // Git (read operations)
-                "git",
-                // Text processing
+                "git", // Text processing
                 "sort", "uniq", "cut", "awk", "sed", "jq",
             ],
         );
@@ -49,15 +48,33 @@ impl Default for ShellExecutor {
 
 #[async_trait]
 impl UnifiedAgent for ShellExecutor {
-    fn id(&self) -> &str { self.base.id() }
-    fn name(&self) -> &str { self.base.name() }
-    fn description(&self) -> &str { self.base.description() }
-    fn category(&self) -> AgentCategory { AgentCategory::Execution }
-    fn capabilities(&self) -> Vec<AgentCapability> { self.base.capabilities() }
-    fn system_prompt(&self) -> &str { self.base.system_prompt() }
-    fn knowledge_base(&self) -> Option<&str> { self.base.knowledge_base() }
-    fn security_profile(&self) -> Option<&SecurityProfile> { self.base.security_profile() }
-    fn operations(&self) -> Vec<&str> { vec!["exec"] }
+    fn id(&self) -> &str {
+        self.base.id()
+    }
+    fn name(&self) -> &str {
+        self.base.name()
+    }
+    fn description(&self) -> &str {
+        self.base.description()
+    }
+    fn category(&self) -> AgentCategory {
+        AgentCategory::Execution
+    }
+    fn capabilities(&self) -> Vec<AgentCapability> {
+        self.base.capabilities()
+    }
+    fn system_prompt(&self) -> &str {
+        self.base.system_prompt()
+    }
+    fn knowledge_base(&self) -> Option<&str> {
+        self.base.knowledge_base()
+    }
+    fn security_profile(&self) -> Option<&SecurityProfile> {
+        self.base.security_profile()
+    }
+    fn operations(&self) -> Vec<&str> {
+        vec!["exec"]
+    }
 
     async fn execute(&self, request: AgentRequest) -> AgentResponse {
         if request.operation != "exec" {
@@ -78,25 +95,32 @@ impl UnifiedAgent for ShellExecutor {
         let program = parts[0];
         let args: Vec<&str> = parts[1..].to_vec();
 
-        let working_dir = request.args.get("cwd")
-            .and_then(|v| v.as_str());
+        let working_dir = request.args.get("cwd").and_then(|v| v.as_str());
 
-        let timeout = request.args.get("timeout")
+        let timeout = request
+            .args
+            .get("timeout")
             .and_then(|v| v.as_u64())
             .unwrap_or(30);
 
-        match self.base.execute_command(program, &args, working_dir, timeout).await {
-            Ok((stdout, stderr, code)) => {
-                AgentResponse::success(
-                    json!({
-                        "stdout": stdout,
-                        "stderr": stderr,
-                        "exit_code": code,
-                        "command": command
-                    }),
-                    if code == 0 { "Command completed" } else { "Command failed" }
-                )
-            }
+        match self
+            .base
+            .execute_command(program, &args, working_dir, timeout)
+            .await
+        {
+            Ok((stdout, stderr, code)) => AgentResponse::success(
+                json!({
+                    "stdout": stdout,
+                    "stderr": stderr,
+                    "exit_code": code,
+                    "command": command
+                }),
+                if code == 0 {
+                    "Command completed"
+                } else {
+                    "Command failed"
+                },
+            ),
             Err(e) => AgentResponse::failure(e),
         }
     }

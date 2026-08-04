@@ -7,13 +7,13 @@
 //!   free-text query; backing call for the "Vectors" context modifier
 //!   described in `.kiro/specs/unified-blob-catalog-mcp/`.
 
+use crate::cognitive_tools::field;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use op_mcp::tool_registry::{BoxedTool, Tool, ToolRegistry};
 use simd_json::prelude::ValueAsScalar;
 use simd_json::{json, OwnedValue as Value};
 use std::sync::Arc;
-use crate::cognitive_tools::field;
 
 use crate::qdrant_shuttle::QdrantSemanticShuttle;
 

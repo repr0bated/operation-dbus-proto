@@ -8,12 +8,7 @@
 //! SPA fallback answers `200 text/html`, which is otherwise indistinguishable
 //! from success in a log that only records the status.
 
-use axum::{
-    extract::Request,
-    http::header::CONTENT_TYPE,
-    middleware::Next,
-    response::Response,
-};
+use axum::{extract::Request, http::header::CONTENT_TYPE, middleware::Next, response::Response};
 use std::time::Instant;
 
 pub async fn access_log_middleware(req: Request, next: Next) -> Response {

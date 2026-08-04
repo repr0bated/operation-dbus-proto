@@ -832,7 +832,10 @@ impl SchemaBackedInterface {
     /// Subscribers can act on the signal payload alone without an additional
     /// query — this is the no-polling guarantee (REQ-1.5, REQ-7).
     #[zbus(signal)]
-    pub async fn updated(signal_emitter: &zbus::object_server::SignalEmitter<'_>, data_json: &str) -> zbus::Result<()>;
+    pub async fn updated(
+        signal_emitter: &zbus::object_server::SignalEmitter<'_>,
+        data_json: &str,
+    ) -> zbus::Result<()>;
 }
 
 #[derive(Debug, thiserror::Error)]

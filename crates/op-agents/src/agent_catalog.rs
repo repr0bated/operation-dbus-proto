@@ -3,9 +3,7 @@
 //! Builds descriptors from the unified registry via `create_agent`, including
 //! per-operation JSON Schemas.
 
-use crate::agent_schema::{
-    infer_category, schemas_for_operations, AgentOperationSchema,
-};
+use crate::agent_schema::{infer_category, schemas_for_operations, AgentOperationSchema};
 use crate::unified::{self, AgentCategory};
 use crate::{create_agent, list_agent_types, AgentTrait};
 

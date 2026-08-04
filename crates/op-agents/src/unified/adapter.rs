@@ -20,11 +20,7 @@ pub struct UnifiedAgentAdapter {
 }
 
 impl UnifiedAgentAdapter {
-    pub fn new(
-        agent: Arc<dyn UnifiedAgent>,
-        catalog_type: String,
-        instance_id: String,
-    ) -> Self {
+    pub fn new(agent: Arc<dyn UnifiedAgent>, catalog_type: String, instance_id: String) -> Self {
         let profile = agent
             .security_profile()
             .cloned()

@@ -136,9 +136,7 @@ pub async fn chat_handler(
     };
 
     if requested_provider.is_none() {
-        if let Err(e) =
-            crate::zeroclaw_routes::ensure_model_available(&selected_model)
-        {
+        if let Err(e) = crate::zeroclaw_routes::ensure_model_available(&selected_model) {
             return Json(ChatResponse {
                 success: false,
                 message: String::new(),
@@ -183,27 +181,25 @@ pub async fn chat_handler(
             )),
             Err(_) => Err(anyhow::anyhow!("Unknown provider: {}", provider)),
         },
-        (None, Some(model)) => {
-            match crate::zeroclaw_routes::route_for_model(model) {
-                Some(route) => match ProviderType::from_str(&route.upstream_provider) {
-                    Ok(provider_type) if state.chat_manager.has_provider(&provider_type) => {
-                        state
-                            .chat_manager
-                            .chat_with(&provider_type, model, messages)
-                            .await
-                    }
-                    Ok(provider_type) => Err(anyhow::anyhow!(
-                        "Provider {} is not available",
-                        provider_type
-                    )),
-                    Err(_) => Err(anyhow::anyhow!(
-                        "Route upstream provider is unknown: {}",
-                        route.upstream_provider
-                    )),
-                },
-                None => Err(anyhow::anyhow!("Model is not routed by Zeroclaw")),
-            }
-        }
+        (None, Some(model)) => match crate::zeroclaw_routes::route_for_model(model) {
+            Some(route) => match ProviderType::from_str(&route.upstream_provider) {
+                Ok(provider_type) if state.chat_manager.has_provider(&provider_type) => {
+                    state
+                        .chat_manager
+                        .chat_with(&provider_type, model, messages)
+                        .await
+                }
+                Ok(provider_type) => Err(anyhow::anyhow!(
+                    "Provider {} is not available",
+                    provider_type
+                )),
+                Err(_) => Err(anyhow::anyhow!(
+                    "Route upstream provider is unknown: {}",
+                    route.upstream_provider
+                )),
+            },
+            None => Err(anyhow::anyhow!("Model is not routed by Zeroclaw")),
+        },
         _ => state.chat_manager.chat(messages).await,
     };
 

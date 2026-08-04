@@ -73,17 +73,19 @@ pub fn render_accountability(
 
     if let Some(error) = store.error.clone() {
         card(ui, |ui| {
-            ui.label(RichText::new("Query failed").color(DANGER).size(13.0).strong());
+            ui.label(
+                RichText::new("Query failed")
+                    .color(DANGER)
+                    .size(13.0)
+                    .strong(),
+            );
             ui.add_space(4.0);
             ui.label(RichText::new(error).color(MUTED).size(12.0));
             ui.add_space(6.0);
             ui.label(
-                RichText::new(format!(
-                    "Endpoint: {}",
-                    AccountabilityTransport::endpoint()
-                ))
-                .color(MUTED)
-                .size(11.0),
+                RichText::new(format!("Endpoint: {}", AccountabilityTransport::endpoint()))
+                    .color(MUTED)
+                    .size(11.0),
             );
         });
         ui.add_space(12.0);
@@ -94,13 +96,13 @@ pub fn render_accountability(
     if visible.is_empty() {
         card(ui, |ui| {
             if store.loading {
-                ui.label(RichText::new("Loading audit trail…").color(MUTED).size(13.0));
-            } else if store.error.is_some() {
                 ui.label(
-                    RichText::new("No events to show.")
+                    RichText::new("Loading audit trail…")
                         .color(MUTED)
                         .size(13.0),
                 );
+            } else if store.error.is_some() {
+                ui.label(RichText::new("No events to show.").color(MUTED).size(13.0));
             } else {
                 ui.label(RichText::new("No events yet.").color(FG).size(13.0));
                 ui.add_space(4.0);
@@ -269,14 +271,13 @@ fn detail_rows(ui: &mut egui::Ui, event: &AuditEvent) {
             ];
             for (name, value) in fields {
                 ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new(name)
-                            .color(MUTED)
-                            .size(11.0)
-                            .monospace(),
-                    );
+                    ui.label(RichText::new(name).color(MUTED).size(11.0).monospace());
                     ui.add_space(8.0);
-                    let shown = if value.is_empty() { "—" } else { value.as_str() };
+                    let shown = if value.is_empty() {
+                        "—"
+                    } else {
+                        value.as_str()
+                    };
                     ui.label(RichText::new(shown).color(FG).size(11.0).monospace());
                 });
             }
@@ -302,13 +303,19 @@ fn pagination_bar(ui: &mut egui::Ui, store: &mut AccountabilityStore, shown: usi
     ui.horizontal(|ui| {
         let can_page_back = store.events.first().map(|e| e.event_id).unwrap_or(0) > 1;
         if ui
-            .add_enabled(can_page_back && !store.loading, egui::Button::new("◀ Older"))
+            .add_enabled(
+                can_page_back && !store.loading,
+                egui::Button::new("◀ Older"),
+            )
             .clicked()
         {
             store.page_back();
         }
         if ui
-            .add_enabled(store.has_more && !store.loading, egui::Button::new("Newer ▶"))
+            .add_enabled(
+                store.has_more && !store.loading,
+                egui::Button::new("Newer ▶"),
+            )
             .clicked()
         {
             store.page_forward();
