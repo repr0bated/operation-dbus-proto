@@ -19,7 +19,6 @@ use super::plugin_scaffold_helpers::{
 /// The single active-schema catalog in shared memory. Every plugin reads its
 /// own slice by name from this one file — there is no per-plugin shm file and
 /// no diff loop. The schema's declared state IS the desired state.
-
 fn default_protocol() -> String {
     "grpc".to_string()
 }
