@@ -74,8 +74,8 @@ pub async fn connect(socket_path: &str) -> Result<Channel> {
     let path = socket_path.to_string();
     // Dummy URI — the connector below ignores it; tonic just needs a
     // syntactically valid absolute URI to populate the HTTP/2 :authority.
-    let endpoint = Endpoint::try_from("http://xray-commander.invalid")
-        .context("building dummy endpoint")?;
+    let endpoint =
+        Endpoint::try_from("http://xray-commander.invalid").context("building dummy endpoint")?;
 
     endpoint
         .connect_with_connector(service_fn(move |_: Uri| {

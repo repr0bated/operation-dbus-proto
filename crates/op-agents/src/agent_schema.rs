@@ -169,7 +169,11 @@ pub fn infer_category(agent_type: &str, operations: &[String]) -> AgentCategory 
     if agent_type.contains("orchestr")
         || matches!(
             agent_type,
-            "memory" | "context-manager" | "sequential-thinking" | "dx-optimizer" | "tdd-orchestrator"
+            "memory"
+                | "context-manager"
+                | "sequential-thinking"
+                | "dx-optimizer"
+                | "tdd-orchestrator"
         )
     {
         return AgentCategory::Orchestration;

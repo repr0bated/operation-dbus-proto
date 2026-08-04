@@ -5,11 +5,11 @@ use std::process::Stdio;
 use tokio::process::Command;
 use tokio::time::{timeout, Duration};
 
-use crate::security::SecurityProfile;
 use super::super::agent_trait::{
-    UnifiedAgent, AgentCategory, AgentCapability, AgentRequest, AgentResponse
+    AgentCapability, AgentCategory, AgentRequest, AgentResponse, UnifiedAgent,
 };
 use super::super::prompts::templates::EXECUTION_AGENT;
+use crate::security::SecurityProfile;
 
 /// Base implementation for execution agents
 pub struct ExecutionAgent {
@@ -68,13 +68,14 @@ impl ExecutionAgent {
     ) -> Result<(String, String, i32), String> {
         // Validate command is allowed
         if !self.security_profile.is_command_allowed(command) {
-            return Err(format!("Command '{}' not allowed by security profile", command));
+            return Err(format!(
+                "Command '{}' not allowed by security profile",
+                command
+            ));
         }
 
         let mut cmd = Command::new(command);
-        cmd.args(args)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+        cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
 
         if let Some(dir) = working_dir {
             // Validate path
@@ -86,10 +87,7 @@ impl ExecutionAgent {
         }
 
         // Execute with timeout
-        let result = timeout(
-            Duration::from_secs(timeout_secs),
-            cmd.output()
-        ).await;
+        let result = timeout(Duration::from_secs(timeout_secs), cmd.output()).await;
 
         match result {
             Ok(Ok(output)) => {

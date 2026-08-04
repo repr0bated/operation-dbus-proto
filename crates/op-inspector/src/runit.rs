@@ -123,7 +123,8 @@ impl RunitParser {
         let mut in_commands = false;
         let mut pending: Option<(Vec<String>, Vec<String>)> = None;
 
-        let flush = |pending: &mut Option<(Vec<String>, Vec<String>)>, out: &mut Vec<RunitCommand>| {
+        let flush = |pending: &mut Option<(Vec<String>, Vec<String>)>,
+                     out: &mut Vec<RunitCommand>| {
             let Some((names, body)) = pending.take() else {
                 return;
             };
@@ -273,8 +274,13 @@ mod tests {
         let names: Vec<&str> = schema.commands.iter().map(|c| c.name.as_str()).collect();
 
         // The lifecycle commands the control plane actually issues.
-        for expected in ["status", "up", "down", "once", "start", "stop", "restart", "check"] {
-            assert!(names.contains(&expected), "missing `{expected}` in {names:?}");
+        for expected in [
+            "status", "up", "down", "once", "start", "stop", "restart", "check",
+        ] {
+            assert!(
+                names.contains(&expected),
+                "missing `{expected}` in {names:?}"
+            );
         }
         // force-restart matters specifically: plain `restart` does not cycle a
         // logger, because svlogd blocks on the still-open pipe.
@@ -294,8 +300,12 @@ mod tests {
             .map(|c| (c.name.as_str(), c))
             .collect();
 
-        for (cmd, signal) in [("pause", "STOP"), ("cont", "CONT"), ("hup", "HUP"), ("term", "TERM")]
-        {
+        for (cmd, signal) in [
+            ("pause", "STOP"),
+            ("cont", "CONT"),
+            ("hup", "HUP"),
+            ("term", "TERM"),
+        ] {
             let got = by_name
                 .get(cmd)
                 .unwrap_or_else(|| panic!("`{cmd}` not parsed"));
@@ -326,8 +336,16 @@ mod tests {
         let schema = RunitParser::new().introspect_source(&root).unwrap();
         let up = schema.commands.iter().find(|c| c.name == "up").unwrap();
         assert!(up.description.contains("start"), "got: {}", up.description);
-        assert!(!up.description.contains(".TP"), "roff leaked: {}", up.description);
-        assert!(!up.description.contains('\\'), "escape leaked: {}", up.description);
+        assert!(
+            !up.description.contains(".TP"),
+            "roff leaked: {}",
+            up.description
+        );
+        assert!(
+            !up.description.contains('\\'),
+            "escape leaked: {}",
+            up.description
+        );
     }
 }
 
@@ -368,9 +386,21 @@ mod regression_tests {
         let Some(s) = schema() else { return };
         let by: std::collections::BTreeMap<_, _> =
             s.commands.iter().map(|c| (c.name.as_str(), c)).collect();
-        assert!(by["start"].description.contains("Same as up"), "{}", by["start"].description);
-        assert!(by["stop"].description.contains("Same as down"), "{}", by["stop"].description);
-        assert!(by["reload"].description.contains("hup"), "{}", by["reload"].description);
+        assert!(
+            by["start"].description.contains("Same as up"),
+            "{}",
+            by["start"].description
+        );
+        assert!(
+            by["stop"].description.contains("Same as down"),
+            "{}",
+            by["stop"].description
+        );
+        assert!(
+            by["reload"].description.contains("hup"),
+            "{}",
+            by["reload"].description
+        );
     }
 
     #[test]

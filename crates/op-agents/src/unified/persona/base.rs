@@ -341,8 +341,8 @@ impl UnifiedAgent for PersonaAgent {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::super::agent_trait::UnifiedAgent;
+    use super::*;
 
     fn sample_agent() -> PersonaAgent {
         PersonaAgent::new(
@@ -419,7 +419,11 @@ mod tests {
             resp.data.get("agent").and_then(|v| v.as_str()),
             Some("k8s-expert")
         );
-        let answer = resp.data.get("answer").and_then(|v| v.as_str()).unwrap_or("");
+        let answer = resp
+            .data
+            .get("answer")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         assert!(answer.contains("not an LLM completion"));
         assert!(answer.contains("resource") || answer.contains("Best Practices"));
         let recs = resp.data.get("recommendations");
@@ -439,7 +443,13 @@ mod tests {
             })
             .await;
         assert!(resp.success, "{}", resp.message);
-        let answer = resp.data.get("answer").and_then(|v| v.as_str()).unwrap_or("");
-        assert!(answer.contains("Canary") || answer.contains("Patterns") || answer.contains("canary"));
+        let answer = resp
+            .data
+            .get("answer")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        assert!(
+            answer.contains("Canary") || answer.contains("Patterns") || answer.contains("canary")
+        );
     }
 }

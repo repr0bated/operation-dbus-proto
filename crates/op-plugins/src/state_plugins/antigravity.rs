@@ -1758,7 +1758,10 @@ pub(crate) fn antigravity_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "get_auth_status".to_string(),
-        method_decl_from_schemars_with_output::<super::plugin_scaffold_helpers::EmptyInput, GetAuthStatusOutput>(
+        method_decl_from_schemars_with_output::<
+            super::plugin_scaffold_helpers::EmptyInput,
+            GetAuthStatusOutput,
+        >(
             "get_auth_status",
             SideEffect::Read,
             true,

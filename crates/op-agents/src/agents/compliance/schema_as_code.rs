@@ -75,15 +75,17 @@ impl SchemaAsCodeAgent {
         Ok(Self::validate_prose(raw))
     }
 
-    fn run_jsonschema(schema_v: &Value, instance_v: &Value, raw_input: &str) -> Result<Value, String> {
-        let schema_sj: serde_json::Value = serde_json::from_str(
-            &simd_json::to_string(schema_v).map_err(|e| e.to_string())?,
-        )
-        .map_err(|e| format!("schema not JSON-compatible: {e}"))?;
-        let instance_sj: serde_json::Value = serde_json::from_str(
-            &simd_json::to_string(instance_v).map_err(|e| e.to_string())?,
-        )
-        .map_err(|e| format!("instance not JSON-compatible: {e}"))?;
+    fn run_jsonschema(
+        schema_v: &Value,
+        instance_v: &Value,
+        raw_input: &str,
+    ) -> Result<Value, String> {
+        let schema_sj: serde_json::Value =
+            serde_json::from_str(&simd_json::to_string(schema_v).map_err(|e| e.to_string())?)
+                .map_err(|e| format!("schema not JSON-compatible: {e}"))?;
+        let instance_sj: serde_json::Value =
+            serde_json::from_str(&simd_json::to_string(instance_v).map_err(|e| e.to_string())?)
+                .map_err(|e| format!("instance not JSON-compatible: {e}"))?;
 
         let validator = jsonschema::validator_for(&schema_sj)
             .map_err(|e| format!("schema compilation failed: {e}"))?;
@@ -124,9 +126,7 @@ impl SchemaAsCodeAgent {
         let obj = doc.as_object();
 
         if let Some(o) = obj {
-            if o.get("$schema").and_then(|v| v.as_str()).is_none()
-                && o.get("openapi").is_none()
-            {
+            if o.get("$schema").and_then(|v| v.as_str()).is_none() && o.get("openapi").is_none() {
                 findings.push(json!({
                     "severity": "warning",
                     "message": "Missing $schema (JSON Schema) or openapi version field"
@@ -150,7 +150,10 @@ impl SchemaAsCodeAgent {
                     }));
                 }
                 for (name, prop) in props.iter() {
-                    if prop.as_object().map(|p| p.get("type").is_none()).unwrap_or(true)
+                    if prop
+                        .as_object()
+                        .map(|p| p.get("type").is_none())
+                        .unwrap_or(true)
                         && prop.get("$ref").is_none()
                     {
                         findings.push(json!({
@@ -217,18 +220,18 @@ impl SchemaAsCodeAgent {
 
     fn validate_prose(raw: &str) -> Value {
         let lower = raw.to_lowercase();
-        let detected = if lower.contains("openapi") || lower.ends_with(".yaml") || lower.ends_with(".yml")
-        {
-            "openapi"
-        } else if lower.contains("proto") || lower.ends_with(".proto") {
-            "protobuf"
-        } else if lower.contains("oscal") {
-            "oscal"
-        } else if lower.contains("asyncapi") {
-            "asyncapi"
-        } else {
-            "json_schema"
-        };
+        let detected =
+            if lower.contains("openapi") || lower.ends_with(".yaml") || lower.ends_with(".yml") {
+                "openapi"
+            } else if lower.contains("proto") || lower.ends_with(".proto") {
+                "protobuf"
+            } else if lower.contains("oscal") {
+                "oscal"
+            } else if lower.contains("asyncapi") {
+                "asyncapi"
+            } else {
+                "json_schema"
+            };
 
         let mut findings = vec![json!({
             "severity": "info",
@@ -425,7 +428,11 @@ mod tests {
         assert_eq!(v.get("valid").and_then(|x| x.as_bool()), Some(false));
         assert_eq!(v.get("mode").and_then(|x| x.as_str()), Some("jsonschema"));
         assert!(v.get("error_count").and_then(|x| x.as_u64()).unwrap_or(0) >= 1);
-        assert!(v.get("input").and_then(|x| x.as_str()).unwrap().contains("nope"));
+        assert!(v
+            .get("input")
+            .and_then(|x| x.as_str())
+            .unwrap()
+            .contains("nope"));
     }
 
     #[test]
@@ -438,7 +445,8 @@ mod tests {
 
     #[test]
     fn validate_prose_inputs_differ() {
-        let a = SchemaAsCodeAgent::validate_payload(Some("validate THIS_UNIQUE_AAA_schema.json")).unwrap();
+        let a = SchemaAsCodeAgent::validate_payload(Some("validate THIS_UNIQUE_AAA_schema.json"))
+            .unwrap();
         let b = SchemaAsCodeAgent::validate_payload(Some(
             "validate THAT_UNIQUE_BBB.yaml completely different",
         ))
@@ -447,8 +455,16 @@ mod tests {
             simd_json::to_string(&a).unwrap(),
             simd_json::to_string(&b).unwrap()
         );
-        assert!(a.get("input").and_then(|x| x.as_str()).unwrap().contains("AAA"));
-        assert!(b.get("input").and_then(|x| x.as_str()).unwrap().contains("BBB"));
+        assert!(a
+            .get("input")
+            .and_then(|x| x.as_str())
+            .unwrap()
+            .contains("AAA"));
+        assert!(b
+            .get("input")
+            .and_then(|x| x.as_str())
+            .unwrap()
+            .contains("BBB"));
     }
 
     #[test]

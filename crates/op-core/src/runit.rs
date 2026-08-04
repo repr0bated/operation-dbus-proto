@@ -69,10 +69,7 @@ mod tests {
     fn paths_match_the_verified_host_layout() {
         assert_eq!(definition_path("op-web"), "/etc/runit/sv/op-web");
         assert_eq!(live_path("op-web"), "/run/runit/service/op-web");
-        assert_eq!(
-            enabled_path("op-web"),
-            "/etc/runit/runsvdir/default/op-web"
-        );
+        assert_eq!(enabled_path("op-web"), "/etc/runit/runsvdir/default/op-web");
         assert_eq!(
             supervise_stat_path("op-web"),
             "/run/runit/service/op-web/supervise/stat"

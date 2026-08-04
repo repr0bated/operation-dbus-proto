@@ -7,11 +7,11 @@ use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
 use std::collections::HashSet;
 
-use super::base::ExecutionAgent;
 use super::super::agent_trait::{
-    UnifiedAgent, AgentCategory, AgentCapability, AgentRequest, AgentResponse
+    AgentCapability, AgentCategory, AgentRequest, AgentResponse, UnifiedAgent,
 };
 use super::super::prompts::languages::PYTHON;
+use super::base::ExecutionAgent;
 use crate::security::SecurityProfile;
 
 pub struct PythonExecutor {
@@ -25,7 +25,10 @@ impl PythonExecutor {
             "Python Executor",
             "Executes Python code with sandboxing. Supports pytest, ruff, mypy, and uv.",
             "python",
-            vec!["python", "python3", "pip", "pip3", "uv", "ruff", "pytest", "mypy", "black", "isort"],
+            vec![
+                "python", "python3", "pip", "pip3", "uv", "ruff", "pytest", "mypy", "black",
+                "isort",
+            ],
         );
         base.knowledge = PYTHON.to_string();
         base.operations = vec![
@@ -49,12 +52,16 @@ impl PythonExecutor {
         let mut cmd_args = vec![temp_file];
         cmd_args.extend(args);
 
-        match self.base.execute_command("python3", &cmd_args, None, 60).await {
+        match self
+            .base
+            .execute_command("python3", &cmd_args, None, 60)
+            .await
+        {
             Ok((stdout, stderr, code)) => {
                 if code == 0 {
                     AgentResponse::success(
                         json!({ "stdout": stdout, "stderr": stderr, "exit_code": code }),
-                        "Python code executed successfully"
+                        "Python code executed successfully",
                     )
                 } else {
                     AgentResponse::failure(format!("Python exited with code {}: {}", code, stderr))
@@ -68,18 +75,24 @@ impl PythonExecutor {
         let mut cmd_args = vec!["-m", "pytest", path, "-v"];
         cmd_args.extend(args);
 
-        match self.base.execute_command("python3", &cmd_args, None, 300).await {
-            Ok((stdout, stderr, code)) => {
-                AgentResponse::success(
-                    json!({
-                        "stdout": stdout,
-                        "stderr": stderr,
-                        "exit_code": code,
-                        "passed": code == 0
-                    }),
-                    if code == 0 { "All tests passed" } else { "Some tests failed" }
-                )
-            }
+        match self
+            .base
+            .execute_command("python3", &cmd_args, None, 300)
+            .await
+        {
+            Ok((stdout, stderr, code)) => AgentResponse::success(
+                json!({
+                    "stdout": stdout,
+                    "stderr": stderr,
+                    "exit_code": code,
+                    "passed": code == 0
+                }),
+                if code == 0 {
+                    "All tests passed"
+                } else {
+                    "Some tests failed"
+                },
+            ),
             Err(e) => AgentResponse::failure(e),
         }
     }
@@ -91,34 +104,42 @@ impl PythonExecutor {
         }
 
         match self.base.execute_command("ruff", &args, None, 60).await {
-            Ok((stdout, stderr, code)) => {
-                AgentResponse::success(
-                    json!({
-                        "output": stdout,
-                        "errors": stderr,
-                        "exit_code": code,
-                        "clean": code == 0
-                    }),
-                    if code == 0 { "No linting issues" } else { "Linting issues found" }
-                )
-            }
+            Ok((stdout, stderr, code)) => AgentResponse::success(
+                json!({
+                    "output": stdout,
+                    "errors": stderr,
+                    "exit_code": code,
+                    "clean": code == 0
+                }),
+                if code == 0 {
+                    "No linting issues"
+                } else {
+                    "Linting issues found"
+                },
+            ),
             Err(e) => AgentResponse::failure(e),
         }
     }
 
     async fn run_mypy(&self, path: &str) -> AgentResponse {
-        match self.base.execute_command("mypy", &[path, "--strict"], None, 120).await {
-            Ok((stdout, stderr, code)) => {
-                AgentResponse::success(
-                    json!({
-                        "output": stdout,
-                        "errors": stderr,
-                        "exit_code": code,
-                        "type_safe": code == 0
-                    }),
-                    if code == 0 { "No type errors" } else { "Type errors found" }
-                )
-            }
+        match self
+            .base
+            .execute_command("mypy", &[path, "--strict"], None, 120)
+            .await
+        {
+            Ok((stdout, stderr, code)) => AgentResponse::success(
+                json!({
+                    "output": stdout,
+                    "errors": stderr,
+                    "exit_code": code,
+                    "type_safe": code == 0
+                }),
+                if code == 0 {
+                    "No type errors"
+                } else {
+                    "Type errors found"
+                },
+            ),
             Err(e) => AgentResponse::failure(e),
         }
     }
@@ -171,75 +192,97 @@ impl UnifiedAgent for PythonExecutor {
     async fn execute(&self, request: AgentRequest) -> AgentResponse {
         match request.operation.as_str() {
             "run" => {
-                let code = request.args.get("code")
+                let code = request
+                    .args
+                    .get("code")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
-                let args: Vec<&str> = request.args.get("args")
+                let args: Vec<&str> = request
+                    .args
+                    .get("args")
                     .and_then(|v| v.as_array())
                     .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
                     .unwrap_or_default();
                 self.run_python(code, &args).await
             }
             "test" => {
-                let path = request.args.get("path")
+                let path = request
+                    .args
+                    .get("path")
                     .and_then(|v| v.as_str())
                     .unwrap_or(".");
-                let args: Vec<&str> = request.args.get("args")
+                let args: Vec<&str> = request
+                    .args
+                    .get("args")
                     .and_then(|v| v.as_array())
                     .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
                     .unwrap_or_default();
                 self.run_pytest(path, &args).await
             }
             "lint" => {
-                let path = request.args.get("path")
+                let path = request
+                    .args
+                    .get("path")
                     .and_then(|v| v.as_str())
                     .unwrap_or(".");
-                let fix = request.args.get("fix")
+                let fix = request
+                    .args
+                    .get("fix")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
                 self.run_ruff(path, fix).await
             }
             "typecheck" => {
-                let path = request.args.get("path")
+                let path = request
+                    .args
+                    .get("path")
                     .and_then(|v| v.as_str())
                     .unwrap_or(".");
                 self.run_mypy(path).await
             }
             "format" => {
-                let path = request.args.get("path")
+                let path = request
+                    .args
+                    .get("path")
                     .and_then(|v| v.as_str())
                     .unwrap_or(".");
                 // Run both black and isort
-                match self.base.execute_command("ruff", &["format", path], None, 60).await {
-                    Ok((stdout, _, code)) => {
-                        AgentResponse::success(
-                            json!({ "output": stdout, "exit_code": code }),
-                            "Code formatted"
-                        )
-                    }
+                match self
+                    .base
+                    .execute_command("ruff", &["format", path], None, 60)
+                    .await
+                {
+                    Ok((stdout, _, code)) => AgentResponse::success(
+                        json!({ "output": stdout, "exit_code": code }),
+                        "Code formatted",
+                    ),
                     Err(e) => AgentResponse::failure(e),
                 }
             }
             "install" => {
-                let packages: Vec<&str> = request.args.get("packages")
+                let packages: Vec<&str> = request
+                    .args
+                    .get("packages")
                     .and_then(|v| v.as_array())
                     .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
                     .unwrap_or_default();
-                
+
                 if packages.is_empty() {
                     return AgentResponse::failure("No packages specified");
                 }
 
                 let mut args = vec!["pip", "install"];
                 args.extend(packages.iter());
-                
+
                 match self.base.execute_command("uv", &args, None, 300).await {
-                    Ok((stdout, stderr, code)) => {
-                        AgentResponse::success(
-                            json!({ "output": stdout, "errors": stderr, "exit_code": code }),
-                            if code == 0 { "Packages installed" } else { "Installation failed" }
-                        )
-                    }
+                    Ok((stdout, stderr, code)) => AgentResponse::success(
+                        json!({ "output": stdout, "errors": stderr, "exit_code": code }),
+                        if code == 0 {
+                            "Packages installed"
+                        } else {
+                            "Installation failed"
+                        },
+                    ),
                     Err(e) => AgentResponse::failure(e),
                 }
             }

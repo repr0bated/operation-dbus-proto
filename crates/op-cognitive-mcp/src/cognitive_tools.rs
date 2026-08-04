@@ -343,7 +343,10 @@ impl MemoryTool {
                     &namespace,
                     "_identity",
                     identity_link_value(input, identity.as_deref()),
-                    scoped_tags(vec!["identity".to_string()], field(input, "container_id").as_str()),
+                    scoped_tags(
+                        vec!["identity".to_string()],
+                        field(input, "container_id").as_str(),
+                    ),
                     None,
                 )
                 .await?;
@@ -576,7 +579,9 @@ fn optional_memory_namespace(input: &Value) -> Result<Option<String>> {
     if let Some(namespace) = field(input, "namespace").as_str() {
         return Ok(Some(namespace.to_string()));
     }
-    Ok(field(input, "container_id").as_str().map(container_namespace))
+    Ok(field(input, "container_id")
+        .as_str()
+        .map(container_namespace))
 }
 
 fn container_namespace(container_id: &str) -> String {

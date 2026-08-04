@@ -78,16 +78,21 @@ impl Tool for BlobCatalogTool {
 
     async fn execute(&self, input: simd_json::OwnedValue) -> Result<simd_json::OwnedValue> {
         let input: Value = serde_json::to_value(&input).context("simd_json input -> serde_json")?;
-        let mode = input.get("mode")
+        let mode = input
+            .get("mode")
             .and_then(|v| v.as_str())
             .unwrap_or("summary");
-        
-        let plugin_ids_filter: Option<Vec<String>> = input.get("plugin_ids")
-            .and_then(|v| v.as_array())
-            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect());
 
-        let category_filter = input.get("category")
-            .and_then(|v| v.as_str());
+        let plugin_ids_filter: Option<Vec<String>> = input
+            .get("plugin_ids")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            });
+
+        let category_filter = input.get("category").and_then(|v| v.as_str());
 
         let ids = op_blob::catalog::read_manifest_plugin_ids_shm()
             .context("failed to read plugin blob manifest from SHM catalog")?;
@@ -98,7 +103,8 @@ impl Tool for BlobCatalogTool {
                 "plugin_count": ids.len(),
                 "plugin_ids": ids,
             });
-            return simd_json::serde::to_owned_value(&result).context("serde_json result -> simd_json");
+            return simd_json::serde::to_owned_value(&result)
+                .context("serde_json result -> simd_json");
         }
 
         let mut plugins = serde_json::Map::new();
@@ -137,21 +143,34 @@ impl Tool for BlobCatalogTool {
                         .with_context(|| format!("failed to serialize schema for '{id}'"))?;
 
                     let mut summary = serde_json::Map::new();
-                    summary.insert("name".to_string(),
-                        schema_value.get("name").cloned().unwrap_or(Value::Null));
-                    summary.insert("description".to_string(),
-                        schema_value.get("description").cloned().unwrap_or(Value::Null));
-                    summary.insert("category".to_string(),
-                        schema_value.get("category").cloned().unwrap_or(Value::Null));
-                    summary.insert("version".to_string(),
-                        schema_value.get("version").cloned().unwrap_or(Value::Null));
+                    summary.insert(
+                        "name".to_string(),
+                        schema_value.get("name").cloned().unwrap_or(Value::Null),
+                    );
+                    summary.insert(
+                        "description".to_string(),
+                        schema_value
+                            .get("description")
+                            .cloned()
+                            .unwrap_or(Value::Null),
+                    );
+                    summary.insert(
+                        "category".to_string(),
+                        schema_value.get("category").cloned().unwrap_or(Value::Null),
+                    );
+                    summary.insert(
+                        "version".to_string(),
+                        schema_value.get("version").cloned().unwrap_or(Value::Null),
+                    );
 
                     // Count methods and signals
-                    let method_count = schema_value.get("methods")
+                    let method_count = schema_value
+                        .get("methods")
                         .and_then(|m| m.as_object())
                         .map(|m| m.len())
                         .unwrap_or(0);
-                    let signal_count = schema_value.get("signals")
+                    let signal_count = schema_value
+                        .get("signals")
                         .and_then(|s| s.as_array())
                         .map(|s| s.len())
                         .unwrap_or(0);

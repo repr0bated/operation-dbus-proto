@@ -2,15 +2,15 @@
 //!
 //! Single registry for all agent types with lazy loading.
 
-use std::collections::HashMap;
-use simd_json::prelude::*;
-use std::sync::{Arc, LazyLock};
 use parking_lot::RwLock;
+use simd_json::prelude::*;
+use std::collections::HashMap;
+use std::sync::{Arc, LazyLock};
 
-use super::agent_trait::{UnifiedAgent, AgentCategory, AgentMetadata};
+use super::agent_trait::{AgentCategory, AgentMetadata, UnifiedAgent};
 use super::execution::EXECUTION_AGENTS;
-use super::persona::PERSONA_AGENTS;
 use super::orchestration::ORCHESTRATION_AGENTS;
+use super::persona::PERSONA_AGENTS;
 
 /// Unified registry for all agents
 pub struct UnifiedAgentRegistry {
@@ -24,17 +24,17 @@ impl UnifiedAgentRegistry {
     /// Create a new registry with all default agents
     pub fn new() -> Self {
         let mut factories: HashMap<&'static str, fn() -> Box<dyn UnifiedAgent>> = HashMap::new();
-        
+
         // Register all execution agents
         for (id, factory) in EXECUTION_AGENTS.iter() {
             factories.insert(*id, *factory);
         }
-        
+
         // Register all persona agents
         for (id, factory) in PERSONA_AGENTS.iter() {
             factories.insert(*id, *factory);
         }
-        
+
         // Register all orchestration agents
         for (id, factory) in ORCHESTRATION_AGENTS.iter() {
             factories.insert(*id, *factory);
@@ -91,7 +91,8 @@ impl UnifiedAgentRegistry {
 
     /// List agents by category
     pub fn list_by_category(&self, category: AgentCategory) -> Vec<&str> {
-        self.factories.keys()
+        self.factories
+            .keys()
             .filter(|id| {
                 if let Some(agent) = self.get(id) {
                     agent.category() == category
@@ -105,10 +106,9 @@ impl UnifiedAgentRegistry {
 
     /// Get metadata for all agents
     pub fn all_metadata(&self) -> Vec<simd_json::OwnedValue> {
-        self.factories.keys()
-            .filter_map(|id| {
-                self.get(id).map(|agent| agent.metadata())
-            })
+        self.factories
+            .keys()
+            .filter_map(|id| self.get(id).map(|agent| agent.metadata()))
             .collect()
     }
 

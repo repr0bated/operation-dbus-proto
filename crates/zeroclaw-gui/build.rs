@@ -44,7 +44,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         proto_files.push(OPERATION_PROTO.to_string());
         include_dirs.push(OPERATION_PROTO_DIR.to_string());
     } else {
-        eprintln!("cargo:warning={OPERATION_PROTO} not found; EventChainService client not generated");
+        eprintln!(
+            "cargo:warning={OPERATION_PROTO} not found; EventChainService client not generated"
+        );
     }
 
     if proto_files.is_empty() {

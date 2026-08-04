@@ -80,11 +80,7 @@ fn generate_code() -> String {
 }
 
 fn generate_token() -> String {
-    format!(
-        "{}{}",
-        Uuid::new_v4().simple(),
-        Uuid::new_v4().simple()
-    )
+    format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
 }
 
 fn purge_expired(state: &mut PairState) {
@@ -227,10 +223,7 @@ pub async fn pair_handler(
         Ok(v) => v,
         Err(e) => {
             warn!(error = %e, "pair failed: no live identity");
-            return json_response(
-                StatusCode::SERVICE_UNAVAILABLE,
-                json!({ "error": e }),
-            );
+            return json_response(StatusCode::SERVICE_UNAVAILABLE, json!({ "error": e }));
         }
     };
 

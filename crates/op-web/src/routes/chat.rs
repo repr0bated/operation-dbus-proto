@@ -70,9 +70,7 @@ pub async fn chat_message(
         Some(model) => model,
         None => state.chat_manager.current_model().await,
     };
-    if let Err(e) =
-        crate::zeroclaw_routes::ensure_model_available(&selected_model)
-    {
+    if let Err(e) = crate::zeroclaw_routes::ensure_model_available(&selected_model) {
         return (
             StatusCode::CONFLICT,
             Json(ChatResponse {
@@ -104,9 +102,7 @@ pub async fn chat_message(
             .chat_with(pt, &selected_model, messages)
             .await
     } else if req.model.is_some() {
-        let Some(route) =
-            crate::zeroclaw_routes::route_for_model(&selected_model)
-        else {
+        let Some(route) = crate::zeroclaw_routes::route_for_model(&selected_model) else {
             return (
                 StatusCode::CONFLICT,
                 Json(ChatResponse {

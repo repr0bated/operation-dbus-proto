@@ -52,11 +52,9 @@ pub fn render(
         Route::State => state_view(ui),
         Route::Grpc => grpc_view(ui, registry),
         Route::GrpcExplorer => grpc_explorer(ui, registry, explorer, invoke, ctx),
-        Route::Accountability => accountability::view::render_accountability(
-            ui,
-            &mut explorer.accountability_store,
-            ctx,
-        ),
+        Route::Accountability => {
+            accountability::view::render_accountability(ui, &mut explorer.accountability_store, ctx)
+        }
         r => stub(ui, route_title(r), description(r)),
     }
 }

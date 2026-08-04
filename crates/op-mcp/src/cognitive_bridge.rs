@@ -113,7 +113,10 @@ impl BridgeToolExecutor {
         let tools: Vec<ToolInfo> = entries
             .iter()
             .filter_map(|entry| {
-                let name = entry.get("name").and_then(|v: &Value| v.as_str())?.to_string();
+                let name = entry
+                    .get("name")
+                    .and_then(|v: &Value| v.as_str())?
+                    .to_string();
                 Some(ToolInfo {
                     name,
                     description: entry
