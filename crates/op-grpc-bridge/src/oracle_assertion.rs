@@ -245,6 +245,19 @@ impl AssertionValidator {
         source: Option<SocketAddr>,
         now: i64,
     ) -> Result<HumanPrincipalIdentity, AssertionRejection> {
+        self.validate_with_bootstrap(wire, source, now, false)
+    }
+
+    /// Like [`validate`], but allows synthesizing identity for an unregistered
+    /// pubkey when `registration_bootstrap` is true (declared
+    /// `human_principal.write` on `register_key`).
+    pub fn validate_with_bootstrap(
+        &self,
+        wire: &[u8],
+        source: Option<SocketAddr>,
+        now: i64,
+        registration_bootstrap: bool,
+    ) -> Result<HumanPrincipalIdentity, AssertionRejection> {
         let signed = match SignedAssertion::from_wire(wire) {
             Ok(value) => value,
             Err(_) => return Err(AssertionRejection::Malformed),
@@ -294,13 +307,18 @@ impl AssertionValidator {
             });
         }
 
-        self.resolve_principal(&assertion.human_pubkey, assertion.expires_at)
+        self.resolve_principal(
+            &assertion.human_pubkey,
+            assertion.expires_at,
+            registration_bootstrap,
+        )
     }
 
     fn resolve_principal(
         &self,
         human_pubkey: &str,
         expires_at: i64,
+        registration_bootstrap: bool,
     ) -> Result<HumanPrincipalIdentity, AssertionRejection> {
         let record = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(
@@ -310,6 +328,14 @@ impl AssertionValidator {
         .map_err(|_| AssertionRejection::RegistryUnavailable)?;
 
         let Some(record) = record else {
+            if registration_bootstrap {
+                return Ok(HumanPrincipalIdentity {
+                    principal_id: derive_principal_id(human_pubkey),
+                    human_pubkey: human_pubkey.to_string(),
+                    footprint: derive_human_footprint(human_pubkey),
+                    expires_at,
+                });
+            }
             return Err(AssertionRejection::UnknownPrincipal);
         };
         if record.revoked_at != 0 {

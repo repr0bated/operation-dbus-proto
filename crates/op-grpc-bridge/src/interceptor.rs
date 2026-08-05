@@ -7,7 +7,7 @@
 // "Snowball" session. No SQL databases, no D-Bus watchers. 1:1 Direct Read only.
 
 use std::net::SocketAddr;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, RwLock};
 
 use axum::extract::ConnectInfo as AxumConnectInfo;
 use op_identity::FootprintVerifyError;
@@ -37,10 +37,12 @@ pub struct GhostbridgeIdentity {
 /// can run. Lets the interceptor do a per-identity Cozo lookup
 /// (`identity_sled_dispatch::get_identity`) without threading `Arc<MutationEngine>`
 /// through every one of the ~10 `.with_interceptor()` call sites.
-static ENGINE: OnceLock<Arc<MutationEngine>> = OnceLock::new();
+static ENGINE: RwLock<Option<Arc<MutationEngine>>> = RwLock::new(None);
 
 pub fn set_engine(engine: Arc<MutationEngine>) {
-    let _ = ENGINE.set(engine);
+    *ENGINE
+        .write()
+        .expect("engine lock poisoned") = Some(engine);
 }
 
 /// Per-serving-instance interceptor carrying its own assertion validator.
@@ -117,7 +119,8 @@ pub fn bridge_capability_identity(
     extensions.get::<GhostbridgeIdentity>().cloned()
 }
 
-fn peer_socket_addr(req: &Request<()>) -> Option<SocketAddr> {
+/// Shared peer-address reader for production serve builders and the E2E fixture.
+pub fn connect_info_peer_addr(req: &Request<()>) -> Option<SocketAddr> {
     if let Some(info) = req.extensions().get::<TcpConnectInfo>() {
         if let Some(addr) = info.remote_addr() {
             return Some(addr);
@@ -126,6 +129,10 @@ fn peer_socket_addr(req: &Request<()>) -> Option<SocketAddr> {
     req.extensions()
         .get::<AxumConnectInfo<SocketAddr>>()
         .map(|ci| ci.0)
+}
+
+fn peer_socket_addr(req: &Request<()>) -> Option<SocketAddr> {
+    connect_info_peer_addr(req)
 }
 
 fn read_assertion_wire(req: &Request<()>) -> Result<Option<Vec<u8>>, Status> {
@@ -153,8 +160,13 @@ fn ghostbridge_interceptor_with_validator(
     if let Some(wire) = read_assertion_wire(&req)? {
         let source = peer_socket_addr(&req);
         let now = chrono::Utc::now().timestamp();
+        let registration_bootstrap = req
+            .metadata()
+            .get(crate::grpc_server::DECLARED_CAPABILITY_HEADER)
+            .and_then(|v| v.to_str().ok())
+            == Some("human_principal.write");
         let identity = validator
-            .validate(&wire, source, now)
+            .validate_with_bootstrap(&wire, source, now, registration_bootstrap)
             .map_err(Status::from)?;
         req.extensions_mut().insert(identity);
         return Ok(req);
@@ -181,7 +193,10 @@ fn verify_per_identity(
     trace_id: Option<&str>,
     request_footprint: &str,
 ) -> Option<Result<String, Status>> {
-    let engine = ENGINE.get()?;
+    let engine = ENGINE
+        .read()
+        .expect("engine lock poisoned")
+        .clone()?;
     let session_id = pubkey.map(op_identity::session::derive_session_id);
     let args = match (&session_id, trace_id) {
         (Some(sid), _) => serde_json::json!({ "session_id": sid }),
