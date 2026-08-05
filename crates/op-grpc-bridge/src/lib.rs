@@ -27,6 +27,7 @@ pub mod emqx_hook_provider;
 pub mod grpc_client;
 pub mod grpc_server;
 pub mod grpc_web;
+pub mod human_principal_dispatch;
 pub mod identity_sled_dispatch;
 pub mod interceptor;
 pub mod mutation_engine;
@@ -107,4 +108,27 @@ pub mod proto {
     /// Served by tonic-reflection so clients can discover every service.
     pub const FILE_DESCRIPTOR_SET: &[u8] =
         tonic::include_file_descriptor_set!("operation_descriptor");
+}
+
+// Contract-pinned test names: the validation contract's Tool lines invoke
+// these with `--exact <name>` at the crate root, so they must live here
+// rather than inside a module (a module prefix would break the exact match).
+// Each is a thin wrapper around the real implementation in
+// `human_principal_dispatch::tests`.
+#[cfg(test)]
+#[tokio::test]
+async fn set_alias_cross_state_collision() {
+    crate::human_principal_dispatch::tests::set_alias_cross_state_collision_impl().await;
+}
+
+#[cfg(test)]
+#[tokio::test]
+async fn register_key_unwritable_cozo_fails_clean() {
+    crate::human_principal_dispatch::tests::register_key_unwritable_cozo_fails_clean_impl().await;
+}
+
+#[cfg(test)]
+#[tokio::test]
+async fn registry_mutations_are_audit_recorded() {
+    crate::human_principal_dispatch::tests::registry_mutations_are_audit_recorded_impl().await;
 }

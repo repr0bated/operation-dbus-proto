@@ -136,23 +136,36 @@ fn method_capability_from_schema(
     })
 }
 
-fn method_capability_for_plugin(
-    plugin_id: &str,
-    method_name: &str,
-    footprint: Option<&str>,
-) -> Option<SchemaMethodCapability> {
-    let schema = read_plugin_schema_json(plugin_id)?;
-    method_capability_from_schema(&schema, method_name, footprint)
-}
-
 fn enforce_bridge_capability(
     plugin_id: &str,
     method_name: &str,
     capability_id: Option<&str>,
     identity: Option<&GhostbridgeIdentity>,
 ) -> Result<(), ProtoMutationError> {
+    let schema = read_plugin_schema_json(plugin_id);
+    enforce_bridge_capability_with_schema(
+        schema.as_ref(),
+        plugin_id,
+        method_name,
+        capability_id,
+        identity,
+    )
+}
+
+/// The decision half of [`enforce_bridge_capability`], split out so tests can
+/// drive the gate against an explicit schema document; the production half
+/// reads the sealed schema from the SHM blob catalog. Behavior is identical:
+/// `None` schema means the plugin is not sealed and the gate stays open.
+pub(crate) fn enforce_bridge_capability_with_schema(
+    schema: Option<&JsonValue>,
+    plugin_id: &str,
+    method_name: &str,
+    capability_id: Option<&str>,
+    identity: Option<&GhostbridgeIdentity>,
+) -> Result<(), ProtoMutationError> {
     let footprint = identity.map(|ctx| ctx.footprint.as_str());
-    let Some(method_capability) = method_capability_for_plugin(plugin_id, method_name, footprint)
+    let Some(method_capability) =
+        schema.and_then(|schema| method_capability_from_schema(schema, method_name, footprint))
     else {
         return Ok(());
     };

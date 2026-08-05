@@ -695,6 +695,21 @@ impl SchemaBackedInterface {
     }
 }
 
+/// Test-only access to the zbus `call` dispatcher: the interface method is
+/// private to the macro-generated impl, and bridge-internal tests outside
+/// this module drive the real D-Bus-surface validation pipeline (method
+/// lookup → arg validation → capability gate → dispatch) through this door.
+#[cfg(test)]
+impl SchemaBackedInterface {
+    pub(crate) async fn call_in_test(
+        &self,
+        method: String,
+        json_args: String,
+    ) -> zbus::fdo::Result<String> {
+        self.call(method, json_args).await
+    }
+}
+
 #[zbus::interface(name = "org.opdbus.v1.PluginV1")]
 impl SchemaBackedInterface {
     /// Generic method call dispatcher.
