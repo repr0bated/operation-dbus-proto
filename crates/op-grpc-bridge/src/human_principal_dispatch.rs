@@ -66,6 +66,21 @@ fn store() -> Option<CozoGraphShuttle> {
     }
 }
 
+/// Registry lookup for the assertion validator. Unlike the degraded read
+/// path used by ordinary `resolve_key` dispatch, store unavailability is an
+/// error (VAL-BRIDGE-017).
+pub async fn resolve_key_for_assertion(
+    pubkey: &str,
+) -> Result<Option<HumanPrincipalRecord>, RegistryUnavailable> {
+    get_by_pubkey_strict(pubkey)
+        .await
+        .map_err(|_| RegistryUnavailable)
+}
+
+/// Cozo store unavailable for strict assertion resolution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RegistryUnavailable;
+
 /// Dispatch one human_principal schema method. Unknown method names are an
 /// error (the schema declares exactly six).
 pub async fn dispatch_human_principal_method(
