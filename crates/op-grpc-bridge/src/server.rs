@@ -447,7 +447,7 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
         let listener = tokio::net::TcpListener::from_std(listener)?;
         info!(addr = %bind_addr, "zeroclaw gRPC/gRPC-Web listening on TCP");
         let app = build_axum_app(loader.clone(), operation_server.clone());
-        let server = axum::serve(listener, app.into_make_service());
+        let server = axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>());
         tcp_tasks.push(tokio::spawn(async move { server.await }));
     }
 

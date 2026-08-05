@@ -117,19 +117,19 @@ pub mod proto {
 // Each is a thin wrapper around the real implementation in
 // `human_principal_dispatch::tests`.
 #[cfg(test)]
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn set_alias_cross_state_collision() {
     crate::human_principal_dispatch::tests::set_alias_cross_state_collision_impl().await;
 }
 
 #[cfg(test)]
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn register_key_unwritable_cozo_fails_clean() {
     crate::human_principal_dispatch::tests::register_key_unwritable_cozo_fails_clean_impl().await;
 }
 
 #[cfg(test)]
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn registry_mutations_are_audit_recorded() {
     crate::human_principal_dispatch::tests::registry_mutations_are_audit_recorded_impl().await;
 }
@@ -137,69 +137,138 @@ async fn registry_mutations_are_audit_recorded() {
 // Contract-pinned oracle_assertion test names at the crate root.
 #[cfg(test)]
 mod oracle_assertion_crate_tests {
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn rejection_variants_map_to_unauthenticated_tags() {
         crate::oracle_assertion::tests::rejection_variants_map_to_unauthenticated_tags_impl().await;
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn replay_cache_keyed_by_nonce_not_wire_bytes() {
         crate::oracle_assertion::tests::replay_cache_keyed_by_nonce_not_wire_bytes_impl().await;
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn nonce_consumed_even_when_later_step_fails() {
         crate::oracle_assertion::tests::nonce_consumed_even_when_later_step_fails_impl().await;
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn corrupted_store_rejects_unknown_decoy_key_at_validate() {
         crate::oracle_assertion::tests::corrupted_store_rejects_unknown_decoy_key_at_validate_impl().await;
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn validate_rejects_inverted_lifetime() {
         crate::oracle_assertion::tests::validate_rejects_inverted_lifetime_impl().await;
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn leeway_equality_edges_are_exact() {
         crate::oracle_assertion::tests::leeway_equality_edges_are_exact_impl().await;
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn inverted_lifetime_fires_at_parse_step() {
         crate::oracle_assertion::tests::inverted_lifetime_fires_at_parse_step_impl().await;
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn empty_trust_store_rejects_all() {
         crate::oracle_assertion::tests::empty_trust_store_rejects_all_impl().await;
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn replay_purge_edge_equals_acceptance_edge() {
         crate::oracle_assertion::tests::replay_purge_edge_equals_acceptance_edge_impl().await;
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn cross_principal_assertion_ip_swap_matrix() {
         crate::oracle_assertion::tests::cross_principal_assertion_ip_swap_matrix_impl().await;
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn replay_cache_keyed_globally_by_nonce() {
         crate::oracle_assertion::tests::replay_cache_keyed_globally_by_nonce_impl().await;
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn trust_store_rotation_is_load_once() {
         crate::oracle_assertion::tests::trust_store_rotation_is_load_once_impl().await;
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn validator_state_is_per_serving_instance() {
         crate::oracle_assertion::tests::validator_state_is_per_serving_instance_impl().await;
+    }
+}
+
+// Contract-pinned interceptor + gate wiring tests at the crate root.
+#[cfg(test)]
+mod interceptor_crate_tests {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn assertion_present_valid_inserts_human_principal_identity() {
+        crate::interceptor::tests::assertion_present_valid_inserts_human_principal_identity_impl().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn assertion_present_invalid_returns_unauthenticated() {
+        crate::interceptor::tests::assertion_present_invalid_returns_unauthenticated_impl().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn assertion_present_footprint_headers_not_consulted() {
+        crate::interceptor::tests::assertion_present_footprint_headers_not_consulted_impl().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn assertion_absent_ghostbridge_path_unchanged() {
+        crate::interceptor::tests::assertion_absent_ghostbridge_path_unchanged_impl().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn duplicate_assertion_metadata_values_reject_malformed() {
+        crate::interceptor::tests::duplicate_assertion_metadata_values_reject_malformed_impl().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn assertion_without_connect_info_rejects_missing_connect_info() {
+        crate::interceptor::tests::assertion_without_connect_info_rejects_missing_connect_info_impl().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn human_footprint_grant_allows_capability_gate() {
+        crate::interceptor::tests::human_footprint_grant_allows_capability_gate_impl().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn human_footprint_missing_grant_denies_capability_gate() {
+        crate::interceptor::tests::human_footprint_missing_grant_denies_capability_gate_impl().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn human_identity_shadows_ghostbridge_for_capability_gate() {
+        crate::interceptor::tests::human_identity_shadows_ghostbridge_for_capability_gate_impl().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn registration_interceptor_factory_respects_bootstrap() {
+        crate::interceptor::tests::registration_interceptor_factory_respects_bootstrap_impl().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn validator_per_instance_interceptor_isolation() {
+        crate::interceptor::tests::validator_per_instance_interceptor_isolation_impl().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn bridge_capability_identity_prefers_human() {
+        crate::interceptor::tests::bridge_capability_identity_prefers_human_impl().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn assertion_bad_signature_does_not_insert_ghostbridge() {
+        crate::interceptor::tests::assertion_bad_signature_does_not_insert_ghostbridge_impl().await;
     }
 }
 
