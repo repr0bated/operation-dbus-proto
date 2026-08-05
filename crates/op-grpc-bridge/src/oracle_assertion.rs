@@ -413,19 +413,19 @@ pub mod tests {
     const TEST_KEY_BYTES: [u8; 32] = [7u8; 32];
     const SAMPLE_PUBKEY_LOCAL: &str = "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=";
 
-    fn test_signing_key() -> SigningKey {
+    pub(crate) fn test_signing_key() -> SigningKey {
         SigningKey::from_bytes(&TEST_KEY_BYTES)
     }
 
-    fn test_issuer() -> DecoyIssuer {
+    pub(crate) fn test_issuer() -> DecoyIssuer {
         DecoyIssuer::new(test_signing_key(), "decoy-key-1", Duration::from_secs(900))
     }
 
-    fn test_ip() -> IpAddr {
+    pub(crate) fn test_ip() -> IpAddr {
         IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))
     }
 
-    fn trust_store_for_issuer(issuer: &DecoyIssuer) -> DecoyTrustStore {
+    pub(crate) fn trust_store_for_issuer(issuer: &DecoyIssuer) -> DecoyTrustStore {
         let mut keys = HashMap::new();
         keys.insert(issuer.key_id().to_string(), *issuer.verifying_key());
         DecoyTrustStore::from_decoy_keys(keys)
@@ -445,7 +445,7 @@ pub mod tests {
         path
     }
 
-    fn signed_with_fields(
+    pub(crate) fn signed_with_fields(
         issuer: &DecoyIssuer,
         human_pubkey: &str,
         inner_ip: IpAddr,
@@ -471,21 +471,24 @@ pub mod tests {
         }
     }
 
-    async fn validator_with_registered(
+    pub(crate) async fn validator_with_registered(
         issuer: &DecoyIssuer,
         pubkey: &str,
-    ) -> AssertionValidator {
-        let _cozo = temp_cozo();
+    ) -> (tempfile::TempDir, AssertionValidator) {
+        let cozo = temp_cozo();
         register(pubkey, "test").await.expect("register");
-        AssertionValidator::new(trust_store_for_issuer(issuer))
+        (
+            cozo,
+            AssertionValidator::new(trust_store_for_issuer(issuer)),
+        )
     }
 
-    fn source_at(ip: IpAddr) -> SocketAddr {
+    pub(crate) fn source_at(ip: IpAddr) -> SocketAddr {
         SocketAddr::new(ip, 12345)
     }
 
     /// VAL-BRIDGE-001
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn trust_store_loads_valid_json() {
         let issuer = test_issuer();
         let dir = tempfile::tempdir().expect("tempdir");
@@ -493,7 +496,7 @@ pub mod tests {
         let store = DecoyTrustStore::load_from_path(&path);
         assert!(store.contains_key(issuer.key_id()));
 
-        let signed = signed_with_fields(
+        let mut signed = signed_with_fields(
             &issuer,
             SAMPLE_PUBKEY_LOCAL,
             test_ip(),
@@ -517,7 +520,7 @@ pub mod tests {
     }
 
     /// VAL-BRIDGE-002
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn trust_store_missing_file_fails_closed() {
         let dir = tempfile::tempdir().expect("tempdir");
         let missing = dir.path().join("missing.json");
@@ -541,39 +544,33 @@ pub mod tests {
     }
 
     /// VAL-BRIDGE-003
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn trust_store_malformed_json_fails_closed() {
         let issuer = test_issuer();
         let good_b64 = base64::engine::general_purpose::STANDARD
             .encode(issuer.verifying_key().to_bytes());
         let dir = tempfile::tempdir().expect("tempdir");
-        let variants: Vec<(&str, &[u8])> = vec![
-            ("empty", b""),
-            ("invalid json", b"{not json"),
-            ("wrong type array", br#"{"decoy_keys": []}"#),
-            ("wrong type string", br#"{"decoy_keys": "x"}"#),
-            (
-                "wrong length key",
-                format!(
-                    "{{\"decoy_keys\": {{\"decoy-key-1\": \"{}\"}}}}",
-                    base64::engine::general_purpose::STANDARD.encode([1u8; 16])
-                )
-                .as_bytes(),
-            ),
+        let wrong_len = format!(
+            "{{\"decoy_keys\": {{\"decoy-key-1\": \"{}\"}}}}",
+            base64::engine::general_purpose::STANDARD.encode([1u8; 16])
+        );
+        let duplicate = format!(
+            "{{\"decoy_keys\": {{\"decoy-key-1\": \"{}\", \"decoy-key-1\": \"{}\"}}}}",
+            good_b64, good_b64
+        );
+        let variants: Vec<(&str, Vec<u8>)> = vec![
+            ("empty", b"".to_vec()),
+            ("invalid json", b"{not json".to_vec()),
+            ("wrong type array", br#"{"decoy_keys": []}"#.to_vec()),
+            ("wrong type string", br#"{"decoy_keys": "x"}"#.to_vec()),
+            ("wrong length key", wrong_len.into_bytes()),
             (
                 "bad base64",
-                br#"{"decoy_keys": {"decoy-key-1": "!!!"}}"#,
+                br#"{"decoy_keys": {"decoy-key-1": "!!!"}}"#.to_vec(),
             ),
-            (
-                "duplicate key id",
-                format!(
-                    "{{\"decoy_keys\": {{\"decoy-key-1\": \"{}\", \"decoy-key-1\": \"{}\"}}}}",
-                    good_b64, good_b64
-                )
-                .as_bytes(),
-            ),
+            ("duplicate key id", duplicate.into_bytes()),
         ];
-        for (label, bytes) in variants {
+        for (label, bytes) in &variants {
             let path = dir.path().join(format!("bad-{label}.json"));
             std::fs::write(&path, bytes).expect("write variant");
             let store = DecoyTrustStore::load_from_path(&path);
@@ -582,11 +579,11 @@ pub mod tests {
     }
 
     /// VAL-BRIDGE-004
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn validate_accepts_fully_valid_assertion() {
         let issuer = test_issuer();
         let pubkey = pk(1);
-        let validator = validator_with_registered(&issuer, &pubkey).await;
+        let (_cozo, validator) = validator_with_registered(&issuer, &pubkey).await;
         let signed = signed_with_fields(
             &issuer,
             &pubkey,
@@ -608,7 +605,7 @@ pub mod tests {
     }
 
     /// VAL-BRIDGE-005
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn validate_rejects_malformed_envelope() {
         let issuer = test_issuer();
         let validator = AssertionValidator::new(trust_store_for_issuer(&issuer));
@@ -617,7 +614,7 @@ pub mod tests {
             .unwrap()
             .to_wire();
         let mut bad_magic = valid.clone();
-        bad_magic[0] = bX;
+        bad_magic[0] = b'X';
         let mut truncated = valid.clone();
         truncated.truncate(valid.len() - 10);
         let mut trailing = valid.clone();
@@ -633,7 +630,7 @@ pub mod tests {
     }
 
     /// VAL-BRIDGE-006
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn validate_rejects_unknown_decoy_key() {
         let issuer = test_issuer();
         let validator = AssertionValidator::new(trust_store_for_issuer(&issuer));
@@ -657,7 +654,7 @@ pub mod tests {
     }
 
     /// VAL-BRIDGE-007
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn validate_rejects_bad_signature() {
         let issuer = test_issuer();
         let validator = AssertionValidator::new(trust_store_for_issuer(&issuer));
@@ -702,11 +699,11 @@ pub mod tests {
     }
 
     /// VAL-BRIDGE-008
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn validate_expiry_leeway_boundary() {
         let issuer = test_issuer();
         let pubkey = pk(2);
-        let validator = validator_with_registered(&issuer, &pubkey).await;
+        let (_cozo, validator) = validator_with_registered(&issuer, &pubkey).await;
         let issued = 1_700_000_000i64;
         let expires = issued + 300;
         let signed = signed_with_fields(&issuer, &pubkey, test_ip(), issued, expires, [0x05; 16], None);
@@ -721,11 +718,11 @@ pub mod tests {
     }
 
     /// VAL-BRIDGE-009
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn validate_rejects_future_issued_at_beyond_leeway() {
         let issuer = test_issuer();
         let pubkey = pk(3);
-        let validator = validator_with_registered(&issuer, &pubkey).await;
+        let (_cozo, validator) = validator_with_registered(&issuer, &pubkey).await;
         let now = 1_700_000_000i64;
         let signed = signed_with_fields(
             &issuer,
@@ -754,11 +751,11 @@ pub mod tests {
     }
 
     /// VAL-BRIDGE-010
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn validate_rejects_lifetime_over_900s() {
         let issuer = test_issuer();
         let pubkey = pk(4);
-        let validator = validator_with_registered(&issuer, &pubkey).await;
+        let (_cozo, validator) = validator_with_registered(&issuer, &pubkey).await;
         let issued = 1_700_000_000i64;
         let over = signed_with_fields(
             &issuer,
@@ -792,11 +789,11 @@ pub mod tests {
     }
 
     /// VAL-BRIDGE-011
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn validate_rejects_replayed_nonce() {
         let issuer = test_issuer();
         let pubkey = pk(5);
-        let validator = validator_with_registered(&issuer, &pubkey).await;
+        let (_cozo, validator) = validator_with_registered(&issuer, &pubkey).await;
         let signed = signed_with_fields(
             &issuer,
             &pubkey,
@@ -818,7 +815,7 @@ pub mod tests {
     }
 
     /// VAL-BRIDGE-012
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn replay_cache_lazy_purge_no_background_task() {
         let cache = AssertionReplayCache::new(CLOCK_LEEWAY_SECS);
         let nonce = [0xBB; 16];
@@ -834,11 +831,11 @@ pub mod tests {
     }
 
     /// VAL-BRIDGE-013
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn validate_rejects_source_ip_mismatch() {
         let issuer = test_issuer();
         let pubkey = pk(6);
-        let validator = validator_with_registered(&issuer, &pubkey).await;
+        let (_cozo, validator) = validator_with_registered(&issuer, &pubkey).await;
         let signed = signed_with_fields(
             &issuer,
             &pubkey,
@@ -848,36 +845,53 @@ pub mod tests {
             [0x0B; 16],
             None,
         );
-        let wire = signed.to_wire();
         let now = 1_700_000_100;
         let wrong = source_at(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)));
         assert_eq!(
-            validator.validate(&wire, Some(wrong), now),
+            validator.validate(&signed.to_wire(), Some(wrong), now),
             Err(AssertionRejection::SourceIpMismatch {
                 expected: test_ip(),
                 actual: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
             })
         );
+        let signed_mapped = signed_with_fields(
+            &issuer,
+            &pubkey,
+            test_ip(),
+            1_700_000_000,
+            1_700_000_300,
+            [0x1B; 16],
+            None,
+        );
         let mapped = source_at(IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0xffff, 0x7f00, 1)));
         assert_eq!(
-            validator.validate(&wire, Some(mapped), now),
+            validator.validate(&signed_mapped.to_wire(), Some(mapped), now),
             Err(AssertionRejection::SourceIpMismatch {
                 expected: test_ip(),
                 actual: IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0xffff, 0x7f00, 1)),
             })
         );
+        let signed_port = signed_with_fields(
+            &issuer,
+            &pubkey,
+            test_ip(),
+            1_700_000_000,
+            1_700_000_300,
+            [0x2B; 16],
+            None,
+        );
         let different_port = SocketAddr::new(test_ip(), 9999);
         validator
-            .validate(&wire, Some(different_port), now)
+            .validate(&signed_port.to_wire(), Some(different_port), now)
             .expect("port ignored");
     }
 
     /// VAL-BRIDGE-014
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn validate_rejects_missing_connect_info() {
         let issuer = test_issuer();
         let pubkey = pk(7);
-        let validator = validator_with_registered(&issuer, &pubkey).await;
+        let (_cozo, validator) = validator_with_registered(&issuer, &pubkey).await;
         let signed = signed_with_fields(
             &issuer,
             &pubkey,
@@ -894,7 +908,7 @@ pub mod tests {
     }
 
     /// VAL-BRIDGE-015
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn validate_rejects_unknown_principal() {
         let _cozo = temp_cozo();
         let issuer = test_issuer();
@@ -919,11 +933,11 @@ pub mod tests {
     }
 
     /// VAL-BRIDGE-016
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn validate_rejects_revoked_principal() {
         let issuer = test_issuer();
         let pubkey = pk(9);
-        let validator = validator_with_registered(&issuer, &pubkey).await;
+        let (_cozo, validator) = validator_with_registered(&issuer, &pubkey).await;
         let signed = signed_with_fields(
             &issuer,
             &pubkey,
@@ -933,19 +947,27 @@ pub mod tests {
             [0x0E; 16],
             None,
         );
-        let wire = signed.to_wire();
         validator
-            .validate(&wire, Some(source_at(test_ip())), 1_700_000_100)
+            .validate(&signed.to_wire(), Some(source_at(test_ip())), 1_700_000_100)
             .expect("active passes");
         revoke(&pubkey).await.expect("revoke");
+        let signed2 = signed_with_fields(
+            &issuer,
+            &pubkey,
+            test_ip(),
+            1_700_000_000,
+            1_700_000_300,
+            [0x0F; 16],
+            None,
+        );
         assert_eq!(
-            validator.validate(&wire, Some(source_at(test_ip())), 1_700_000_100),
+            validator.validate(&signed2.to_wire(), Some(source_at(test_ip())), 1_700_000_100),
             Err(AssertionRejection::RevokedPrincipal)
         );
     }
 
     /// VAL-BRIDGE-017
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn validate_rejects_when_registry_unavailable() {
         let blocker = tempfile::NamedTempFile::new().expect("blocker");
         std::env::set_var(
@@ -974,7 +996,7 @@ pub mod tests {
     }
 
     /// VAL-BRIDGE-018
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn ordering_signature_before_expiry() {
         let issuer = test_issuer();
         let validator = AssertionValidator::new(trust_store_for_issuer(&issuer));
@@ -1017,7 +1039,7 @@ pub mod tests {
     }
 
     /// VAL-BRIDGE-019
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn ordering_full_pipeline_multifault() {
         let issuer = test_issuer();
         let store = trust_store_for_issuer(&issuer);
@@ -1140,11 +1162,11 @@ pub mod tests {
     }
 
     /// VAL-BRIDGE-020
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn identity_fields_derived_with_correct_contexts() {
         let issuer = test_issuer();
         let pubkey = pk(13);
-        let validator = validator_with_registered(&issuer, &pubkey).await;
+        let (_cozo, validator) = validator_with_registered(&issuer, &pubkey).await;
         let expires = 1_700_000_300i64;
         let signed = signed_with_fields(
             &issuer,
@@ -1203,7 +1225,7 @@ pub mod tests {
     pub async fn replay_cache_keyed_by_nonce_not_wire_bytes_impl() {
         let issuer = test_issuer();
         let pubkey = pk(20);
-        let validator = validator_with_registered(&issuer, &pubkey).await;
+        let (_cozo, validator) = validator_with_registered(&issuer, &pubkey).await;
         let nonce = [0x21; 16];
         let first = signed_with_fields(
             &issuer,
@@ -1338,7 +1360,7 @@ pub mod tests {
     pub async fn leeway_equality_edges_are_exact_impl() {
         let issuer = test_issuer();
         let pubkey = pk(22);
-        let validator = validator_with_registered(&issuer, &pubkey).await;
+        let (_cozo, validator) = validator_with_registered(&issuer, &pubkey).await;
         let issued = 1_700_000_000i64;
         let expires = issued + 300;
         let base = signed_with_fields(&issuer, &pubkey, test_ip(), issued, expires, [0x25; 16], None);
@@ -1456,7 +1478,7 @@ pub mod tests {
     pub async fn replay_purge_edge_equals_acceptance_edge_impl() {
         let issuer = test_issuer();
         let pubkey = pk(23);
-        let validator = validator_with_registered(&issuer, &pubkey).await;
+        let (_cozo, validator) = validator_with_registered(&issuer, &pubkey).await;
         let issued = 1_700_000_000i64;
         let expires = issued + 300;
         let signed = signed_with_fields(&issuer, &pubkey, test_ip(), issued, expires, [0x2B; 16], None);
@@ -1512,9 +1534,18 @@ pub mod tests {
                 1_700_000_100,
             )
             .expect("B from B");
+        let assertion_a_swap = signed_with_fields(
+            &issuer,
+            &pubkey_a,
+            ip_a,
+            1_700_000_000,
+            1_700_000_300,
+            [0x32; 16],
+            None,
+        );
         assert_eq!(
             validator.validate(
-                &assertion_a.to_wire(),
+                &assertion_a_swap.to_wire(),
                 Some(source_at(ip_b)),
                 1_700_000_100
             ),
@@ -1523,9 +1554,18 @@ pub mod tests {
                 actual: ip_b,
             })
         );
+        let assertion_b_swap = signed_with_fields(
+            &issuer,
+            &pubkey_b,
+            ip_b,
+            1_700_000_000,
+            1_700_000_300,
+            [0x33; 16],
+            None,
+        );
         assert_eq!(
             validator.validate(
-                &assertion_b.to_wire(),
+                &assertion_b_swap.to_wire(),
                 Some(source_at(ip_a)),
                 1_700_000_100
             ),
@@ -1590,8 +1630,7 @@ pub mod tests {
         let issuer = test_issuer();
         let other = SigningKey::from_bytes(&[8u8; 32]);
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("rotate.json");
-        write_trust_store(&dir, &issuer);
+        let path = write_trust_store(&dir, &issuer);
         let store_v1 = DecoyTrustStore::load_from_path(&path);
         let validator_v1 = AssertionValidator::new(store_v1);
         let signed_v1 = signed_with_fields(
@@ -1685,7 +1724,8 @@ pub mod tests {
             format!("{{\"decoy_keys\": {{\"{}\": \"{}\"}}}}", issuer2.key_id(), b64),
         )
         .expect("write2");
-        let v1 = AssertionValidator::new(DecoyTrustStore::load_from_path(dir1.path().join("decoy-trust.json")));
+        let path1 = dir1.path().join("decoy-trust.json");
+        let v1 = AssertionValidator::new(DecoyTrustStore::load_from_path(&path1));
         let v2 = AssertionValidator::new(DecoyTrustStore::load_from_path(&path2));
         assert!(v1.trust_store().contains_key("decoy-key-1"));
         assert!(!v1.trust_store().contains_key("decoy-key-2"));

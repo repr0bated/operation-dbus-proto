@@ -26,6 +26,7 @@ use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::interceptor::{self, GhostbridgeIdentity};
+use crate::oracle_assertion::{AssertionValidator, DecoyTrustStore};
 
 use crate::dynamic_reflection::{ActiveReflectionCatalog, DynamicReflectionService};
 use crate::mutation_engine::{ChangeType, MutationEngine};
@@ -549,7 +550,7 @@ impl OperationGrpcServer {
         Req: prost::Message + Default,
         Res: prost::Message + Default,
     {
-        let identity = request.extensions().get::<GhostbridgeIdentity>().cloned();
+        let identity = interceptor::bridge_capability_identity(request.extensions());
 
         // The caller declares which capability it is exercising, and the bridge
         // verifies that declaration against the method's `required_capability`.
@@ -714,40 +715,42 @@ pub fn build_operation_routes(server: OperationGrpcServer) -> tonic::service::Ro
 
     let reflection_v1 = DynamicReflectionService::new(server.active_reflection()).into_v1_server();
 
-    let intercept = interceptor::ghostbridge_interceptor;
+    let validator = Arc::new(AssertionValidator::new(DecoyTrustStore::load()));
+    let intercept = interceptor::make_ghostbridge_interceptor(validator.clone());
+    let registration_intercept = interceptor::make_registration_interceptor(validator);
 
     let routes = tonic::service::Routes::new(crate::grpc_web::enable(
-        StateSyncServer::with_interceptor(server.clone(), intercept),
+        StateSyncServer::with_interceptor(server.clone(), intercept.clone()),
     ))
     .add_service(crate::grpc_web::enable(
-        PluginServiceServer::with_interceptor(server.clone(), intercept),
+        PluginServiceServer::with_interceptor(server.clone(), intercept.clone()),
     ))
     .add_service(crate::grpc_web::enable(
-        EventChainServiceServer::with_interceptor(server.clone(), intercept),
+        EventChainServiceServer::with_interceptor(server.clone(), intercept.clone()),
     ))
     .add_service(crate::grpc_web::enable(
-        OvsdbMirrorServer::with_interceptor(server.clone(), intercept),
+        OvsdbMirrorServer::with_interceptor(server.clone(), intercept.clone()),
     ))
     .add_service(crate::grpc_web::enable(
-        RuntimeMirrorServer::with_interceptor(server.clone(), intercept),
+        RuntimeMirrorServer::with_interceptor(server.clone(), intercept.clone()),
     ))
     .add_service(crate::grpc_web::enable(
-        ComponentRegistryServer::with_interceptor(server.clone(), intercept),
+        ComponentRegistryServer::with_interceptor(server.clone(), intercept.clone()),
     ))
     .add_service(crate::grpc_web::enable(
-        MailServiceServer::with_interceptor(server.clone(), intercept),
+        MailServiceServer::with_interceptor(server.clone(), intercept.clone()),
     ))
     .add_service(crate::grpc_web::enable(
-        PrivacyNetworkServiceServer::with_interceptor(server.clone(), intercept),
+        PrivacyNetworkServiceServer::with_interceptor(server.clone(), intercept.clone()),
     ))
     .add_service(crate::grpc_web::enable(
         RegistrationServiceServer::with_interceptor(
             server.clone(),
-            interceptor::registration_interceptor,
+            registration_intercept,
         ),
     ))
     .add_service(crate::grpc_web::enable(
-        DbusPassthroughServer::with_interceptor(server.clone(), intercept),
+        DbusPassthroughServer::with_interceptor(server.clone(), intercept.clone()),
     ))
     .add_service(crate::grpc_web::enable(
         crate::proto::chat::chat_service_server::ChatServiceServer::with_interceptor(
@@ -938,7 +941,7 @@ impl StateSync for OperationGrpcServer {
         &self,
         request: Request<MutateRequest>,
     ) -> Result<Response<MutateResponse>, Status> {
-        let identity = request.extensions().get::<GhostbridgeIdentity>().cloned();
+        let identity = interceptor::bridge_capability_identity(request.extensions());
         let req = request.into_inner();
         let value = prost_value_to_simd(&req.value.unwrap_or_else(|| ProstValue::from(0)));
         let change_type = match req.operation {
@@ -1107,7 +1110,7 @@ impl PluginService for OperationGrpcServer {
         &self,
         request: Request<CallMethodRequest>,
     ) -> Result<Response<CallMethodResponse>, Status> {
-        let identity = request.extensions().get::<GhostbridgeIdentity>().cloned();
+        let identity = interceptor::bridge_capability_identity(request.extensions());
         let req = request.into_inner();
         let capability_id = if req.capability_id.is_empty() {
             None
@@ -5002,7 +5005,7 @@ impl crate::proto::dbus_passthrough_server::DbusPassthrough for OperationGrpcSer
         &self,
         request: Request<crate::proto::DbusCallRequest>,
     ) -> Result<Response<crate::proto::DbusCallResponse>, Status> {
-        let identity = request.extensions().get::<GhostbridgeIdentity>().cloned();
+        let identity = interceptor::bridge_capability_identity(request.extensions());
         let req = request.into_inner();
         if let Some(plugin_id) = plugin_id_from_dbus_path(&req.path) {
             if let Err(error) =
@@ -5091,7 +5094,7 @@ impl crate::proto::dbus_passthrough_server::DbusPassthrough for OperationGrpcSer
         &self,
         request: Request<crate::proto::DbusSetPropertyRequest>,
     ) -> Result<Response<crate::proto::DbusSetPropertyResponse>, Status> {
-        let identity = request.extensions().get::<GhostbridgeIdentity>().cloned();
+        let identity = interceptor::bridge_capability_identity(request.extensions());
         let req = request.into_inner();
         if let Some(plugin_id) = plugin_id_from_dbus_path(&req.path) {
             let setter = format!("set_{}", req.property);
