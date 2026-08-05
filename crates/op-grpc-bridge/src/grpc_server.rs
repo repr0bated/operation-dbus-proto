@@ -25,7 +25,7 @@ use tower_http::cors::{Any, CorsLayer};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
-use crate::interceptor::{self, GhostbridgeIdentity};
+use crate::interceptor::{self, load_capability_grants, GhostbridgeIdentity};
 use crate::oracle_assertion::{AssertionValidator, DecoyTrustStore};
 
 use crate::dynamic_reflection::{ActiveReflectionCatalog, DynamicReflectionService};
@@ -82,7 +82,21 @@ struct SchemaMethodCapability {
 }
 
 fn read_plugin_schema_json(plugin_id: &str) -> Option<JsonValue> {
-    let schema = op_blob::catalog::read_plugin_schema_shm(plugin_id)?;
+    if let Some(schema) = op_blob::catalog::read_plugin_schema_shm(plugin_id) {
+        return serde_json::to_value(&schema).ok();
+    }
+    inventory_plugin_schema_json(plugin_id)
+}
+
+fn inventory_plugin_schema_json(plugin_id: &str) -> Option<JsonValue> {
+    use op_state::StatePlugin;
+    let schema = match plugin_id {
+        "human_principal" => op_plugins::state_plugins::human_principal::HumanPrincipalPlugin::new()
+            .schema()?,
+        "identity_sled" => op_plugins::state_plugins::identity_sled::IdentitySledPlugin::new()
+            .schema()?,
+        _ => return None,
+    };
     serde_json::to_value(&schema).ok()
 }
 
@@ -128,6 +142,9 @@ fn method_capability_from_schema(
                 .and_then(JsonValue::as_array)
                 .is_some_and(|caps| caps.iter().any(|cap| cap.as_str() == Some(capability)));
         }
+    } else if let Some(footprint) = footprint {
+        grants_declared = true;
+        granted_by_footprint = load_capability_grants(footprint).contains(capability);
     }
 
     Some(SchemaMethodCapability {
@@ -692,6 +709,14 @@ include!(concat!(env!("OUT_DIR"), "/plugin_method_routes.rs"));
 /// Adding a new domain service: add one `.add_service(...)` here and it appears on
 /// BOTH endpoints at once.
 pub fn build_operation_routes(server: OperationGrpcServer) -> tonic::service::Routes {
+    let validator = Arc::new(AssertionValidator::new(DecoyTrustStore::load()));
+    build_operation_routes_with_validator(server, validator)
+}
+
+pub fn build_operation_routes_with_validator(
+    server: OperationGrpcServer,
+    validator: Arc<AssertionValidator>,
+) -> tonic::service::Routes {
     use crate::proto::dbus_passthrough_server::DbusPassthroughServer;
     use crate::proto::event_chain_service_server::EventChainServiceServer;
     use crate::proto::mail::mail_service_server::MailServiceServer;
@@ -715,7 +740,6 @@ pub fn build_operation_routes(server: OperationGrpcServer) -> tonic::service::Ro
 
     let reflection_v1 = DynamicReflectionService::new(server.active_reflection()).into_v1_server();
 
-    let validator = Arc::new(AssertionValidator::new(DecoyTrustStore::load()));
     let intercept = interceptor::make_ghostbridge_interceptor(validator.clone());
     let registration_intercept = interceptor::make_registration_interceptor(validator);
 

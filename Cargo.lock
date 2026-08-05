@@ -5632,6 +5632,7 @@ dependencies = [
  "ed25519-dalek",
  "futures",
  "hex",
+ "http 1.4.2",
  "jsonschema 0.29.1",
  "memmap2",
  "nix 0.28.0",

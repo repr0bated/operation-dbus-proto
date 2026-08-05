@@ -93,6 +93,7 @@ serde_json = { workspace = true }
 simd-json = { workspace = true }
 
 [dev-dependencies]
+http = "1"
 tokio-test = "0.4"
 tempfile = { workspace = true }
 serde_json = { workspace = true }
@@ -109,3 +110,7 @@ path = "tests/tonic_tls_reflection.rs"
 [[test]]
 name = "negative_topology_gates"
 path = "tests/negative_topology_gates.rs"
+
+[[test]]
+name = "oracle_assertion_e2e"
+path = "tests/oracle_assertion_e2e.rs"
