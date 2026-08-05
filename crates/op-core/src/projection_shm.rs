@@ -28,6 +28,18 @@ pub const SHM_PROJECTION_DIR: &str = "/dev/shm/opdbus/projections";
 /// detect staleness (compare generation before/after a read).
 pub const SHM_PROJECTION_MANIFEST: &str = "/dev/shm/opdbus/state/.manifest.json";
 
+/// The state tree root: the canonical [`SHM_STATE_DIR`] in production.
+/// `OP_SHM_STATE_DIR` overrides it so tests that drive the MutationEngine
+/// never write the live projection tree.
+pub fn shm_state_dir() -> String {
+    std::env::var("OP_SHM_STATE_DIR").unwrap_or_else(|_| SHM_STATE_DIR.to_string())
+}
+
+/// Manifest path inside the (possibly overridden) state dir.
+fn manifest_path() -> String {
+    format!("{}/.manifest.json", shm_state_dir())
+}
+
 /// Atomically publish `bytes` to a `/dev/shm` path via a sibling temp file +
 /// rename, so readers see either the old or new content, never a torn write.
 pub fn atomic_write_shm(path: &str, bytes: &[u8]) -> anyhow::Result<()> {
@@ -61,7 +73,7 @@ fn safe_filename(plugin_id: &str) -> String {
 
 /// File path for a specific plugin's projection (`<state_dir>/<plugin>.json`).
 pub fn projection_file_path(plugin_id: &str) -> String {
-    format!("{}/{}.json", SHM_STATE_DIR, safe_filename(plugin_id))
+    format!("{}/{}.json", shm_state_dir(), safe_filename(plugin_id))
 }
 
 /// Pre-removal location under `/dev/shm/opdbus/projections/`. Read fallback only.
@@ -76,8 +88,9 @@ fn legacy_projection_file_path(plugin_id: &str) -> String {
 /// state. `json_bytes` is the JSON serialization of the plugin's current state
 /// (the mutation fold from `state_cache`).
 pub fn write_projection(plugin_id: &str, json_bytes: &[u8]) -> anyhow::Result<()> {
-    fs::create_dir_all(SHM_STATE_DIR)
-        .map_err(|e| anyhow::anyhow!("Cannot create projection dir {}: {}", SHM_STATE_DIR, e))?;
+    let state_dir = shm_state_dir();
+    fs::create_dir_all(&state_dir)
+        .map_err(|e| anyhow::anyhow!("Cannot create projection dir {}: {}", state_dir, e))?;
 
     let path = projection_file_path(plugin_id);
     atomic_write_shm(&path, json_bytes)?;
@@ -85,7 +98,7 @@ pub fn write_projection(plugin_id: &str, json_bytes: &[u8]) -> anyhow::Result<()
     // Bump manifest generation (atomic commit point, written last).
     let generation = read_manifest_generation().wrapping_add(1);
     let manifest = format!("{{\"generation\":{}}}", generation);
-    atomic_write_shm(SHM_PROJECTION_MANIFEST, manifest.as_bytes())?;
+    atomic_write_shm(&manifest_path(), manifest.as_bytes())?;
 
     tracing::debug!(plugin_id, generation, "Projection written to shm");
     Ok(())
@@ -100,7 +113,7 @@ pub fn read_projection_bytes(plugin_id: &str) -> Option<Vec<u8>> {
 
 /// Read the current manifest `generation`, or 0 if no manifest exists yet.
 pub fn read_manifest_generation() -> u64 {
-    let mut bytes = match fs::read(SHM_PROJECTION_MANIFEST) {
+    let mut bytes = match fs::read(manifest_path()) {
         Ok(b) => b,
         Err(_) => return 0,
     };
