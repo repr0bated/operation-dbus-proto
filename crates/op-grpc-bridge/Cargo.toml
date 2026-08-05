@@ -60,6 +60,7 @@ memmap2 = { workspace = true }
 hex = { workspace = true }
 sha2 = { workspace = true }
 blake3 = { workspace = true }
+ed25519-dalek = "2.2"
 
 # Utilities
 tracing = { workspace = true }
@@ -104,3 +105,7 @@ path = "tests/zeroclaw_integration.rs"
 [[test]]
 name = "tonic_tls_reflection"
 path = "tests/tonic_tls_reflection.rs"
+
+[[test]]
+name = "negative_topology_gates"
+path = "tests/negative_topology_gates.rs"

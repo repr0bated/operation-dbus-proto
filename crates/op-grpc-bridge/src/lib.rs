@@ -31,6 +31,7 @@ pub mod human_principal_dispatch;
 pub mod identity_sled_dispatch;
 pub mod interceptor;
 pub mod mutation_engine;
+pub mod oracle_assertion;
 pub mod per_plugin_reflection;
 pub mod plugin_grpc_gen;
 pub mod plugin_object_blob;
@@ -132,3 +133,73 @@ async fn register_key_unwritable_cozo_fails_clean() {
 async fn registry_mutations_are_audit_recorded() {
     crate::human_principal_dispatch::tests::registry_mutations_are_audit_recorded_impl().await;
 }
+
+// Contract-pinned oracle_assertion test names at the crate root.
+#[cfg(test)]
+mod oracle_assertion_crate_tests {
+    #[tokio::test]
+    async fn rejection_variants_map_to_unauthenticated_tags() {
+        crate::oracle_assertion::tests::rejection_variants_map_to_unauthenticated_tags_impl().await;
+    }
+
+    #[tokio::test]
+    async fn replay_cache_keyed_by_nonce_not_wire_bytes() {
+        crate::oracle_assertion::tests::replay_cache_keyed_by_nonce_not_wire_bytes_impl().await;
+    }
+
+    #[tokio::test]
+    async fn nonce_consumed_even_when_later_step_fails() {
+        crate::oracle_assertion::tests::nonce_consumed_even_when_later_step_fails_impl().await;
+    }
+
+    #[tokio::test]
+    async fn corrupted_store_rejects_unknown_decoy_key_at_validate() {
+        crate::oracle_assertion::tests::corrupted_store_rejects_unknown_decoy_key_at_validate_impl().await;
+    }
+
+    #[tokio::test]
+    async fn validate_rejects_inverted_lifetime() {
+        crate::oracle_assertion::tests::validate_rejects_inverted_lifetime_impl().await;
+    }
+
+    #[tokio::test]
+    async fn leeway_equality_edges_are_exact() {
+        crate::oracle_assertion::tests::leeway_equality_edges_are_exact_impl().await;
+    }
+
+    #[tokio::test]
+    async fn inverted_lifetime_fires_at_parse_step() {
+        crate::oracle_assertion::tests::inverted_lifetime_fires_at_parse_step_impl().await;
+    }
+
+    #[tokio::test]
+    async fn empty_trust_store_rejects_all() {
+        crate::oracle_assertion::tests::empty_trust_store_rejects_all_impl().await;
+    }
+
+    #[tokio::test]
+    async fn replay_purge_edge_equals_acceptance_edge() {
+        crate::oracle_assertion::tests::replay_purge_edge_equals_acceptance_edge_impl().await;
+    }
+
+    #[tokio::test]
+    async fn cross_principal_assertion_ip_swap_matrix() {
+        crate::oracle_assertion::tests::cross_principal_assertion_ip_swap_matrix_impl().await;
+    }
+
+    #[tokio::test]
+    async fn replay_cache_keyed_globally_by_nonce() {
+        crate::oracle_assertion::tests::replay_cache_keyed_globally_by_nonce_impl().await;
+    }
+
+    #[tokio::test]
+    async fn trust_store_rotation_is_load_once() {
+        crate::oracle_assertion::tests::trust_store_rotation_is_load_once_impl().await;
+    }
+
+    #[tokio::test]
+    async fn validator_state_is_per_serving_instance() {
+        crate::oracle_assertion::tests::validator_state_is_per_serving_instance_impl().await;
+    }
+}
+
