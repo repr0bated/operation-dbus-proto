@@ -1271,6 +1271,35 @@ async fn registration_bootstrap_requires_grant() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn registration_bootstrap_cannot_register_another_humans_key() {
+    let (srv, env) = start_server(false).await;
+    let ch = tls_channel(srv.addr, &srv.ca_pem).await;
+    let attacker = pk(61);
+    let victim = pk(62);
+    env.grant_human(&attacker, &["human_principal.write"]);
+
+    assert_permission_denied(
+        call_method(
+            ch,
+            CallOpts {
+                plugin_id: "human_principal",
+                method: "register_key",
+                capability: "human_principal.write",
+                args: prost_struct(BTreeMap::from([
+                    ("human_pubkey".to_string(), prost_str(&victim)),
+                    ("display_alias".to_string(), prost_str("stolen")),
+                ])),
+                assertion: Some(fresh_signed(&env.issuer, &attacker, [0x61; 16])),
+                ghostbridge: None,
+                wireguard_pubkey: None,
+                extra_assertion: None,
+            },
+        )
+        .await,
+    );
+}
+
 // ?? VAL-E2E-022 ?????????????????????????????????????????????????????????????
 
 #[tokio::test(flavor = "multi_thread")]
