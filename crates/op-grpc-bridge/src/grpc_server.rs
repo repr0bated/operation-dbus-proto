@@ -806,46 +806,51 @@ pub fn build_operation_routes_with_validator(
 
     let reflection_v1 = DynamicReflectionService::new(server.active_reflection()).into_v1_server();
 
-    let intercept = interceptor::make_ghostbridge_interceptor(validator.clone());
-    let registration_intercept = interceptor::make_registration_interceptor(validator);
+    // Human assertions are accepted only by PluginService, whose CallMethod
+    // handler enforces the schema-declared capability. Domain services expose
+    // legacy RPCs without per-method capability declarations, so widening
+    // their interceptor to human assertions would turn authentication into
+    // authorization (for example, OvsdbMirror.Transact).
+    let assertion_intercept = interceptor::make_ghostbridge_interceptor(validator);
+    let legacy_intercept = interceptor::GhostbridgeInterceptor;
 
     let routes = tonic::service::Routes::new(crate::grpc_web::enable(
-        StateSyncServer::with_interceptor(server.clone(), intercept.clone()),
+        StateSyncServer::with_interceptor(server.clone(), legacy_intercept.clone()),
     ))
     .add_service(crate::grpc_web::enable(
-        PluginServiceServer::with_interceptor(server.clone(), intercept.clone()),
+        PluginServiceServer::with_interceptor(server.clone(), assertion_intercept),
     ))
     .add_service(crate::grpc_web::enable(
-        EventChainServiceServer::with_interceptor(server.clone(), intercept.clone()),
+        EventChainServiceServer::with_interceptor(server.clone(), legacy_intercept.clone()),
     ))
     .add_service(crate::grpc_web::enable(
-        OvsdbMirrorServer::with_interceptor(server.clone(), intercept.clone()),
+        OvsdbMirrorServer::with_interceptor(server.clone(), legacy_intercept.clone()),
     ))
     .add_service(crate::grpc_web::enable(
-        RuntimeMirrorServer::with_interceptor(server.clone(), intercept.clone()),
+        RuntimeMirrorServer::with_interceptor(server.clone(), legacy_intercept.clone()),
     ))
     .add_service(crate::grpc_web::enable(
-        ComponentRegistryServer::with_interceptor(server.clone(), intercept.clone()),
+        ComponentRegistryServer::with_interceptor(server.clone(), legacy_intercept.clone()),
     ))
     .add_service(crate::grpc_web::enable(
-        MailServiceServer::with_interceptor(server.clone(), intercept.clone()),
+        MailServiceServer::with_interceptor(server.clone(), legacy_intercept.clone()),
     ))
     .add_service(crate::grpc_web::enable(
-        PrivacyNetworkServiceServer::with_interceptor(server.clone(), intercept.clone()),
+        PrivacyNetworkServiceServer::with_interceptor(server.clone(), legacy_intercept.clone()),
     ))
     .add_service(crate::grpc_web::enable(
         RegistrationServiceServer::with_interceptor(
             server.clone(),
-            registration_intercept,
+            interceptor::registration_interceptor,
         ),
     ))
     .add_service(crate::grpc_web::enable(
-        DbusPassthroughServer::with_interceptor(server.clone(), intercept.clone()),
+        DbusPassthroughServer::with_interceptor(server.clone(), legacy_intercept.clone()),
     ))
     .add_service(crate::grpc_web::enable(
         crate::proto::chat::chat_service_server::ChatServiceServer::with_interceptor(
             crate::chat_service::ChatServiceImpl::new(server.mutation_engine.clone()),
-            intercept,
+            legacy_intercept,
         ),
     ))
     // EMQX is the gRPC client and does not carry Ghostbridge identity headers.
@@ -1361,6 +1366,15 @@ impl PluginService for OperationGrpcServer {
         &self,
         request: Request<SetPropertyRequest>,
     ) -> Result<Response<SetPropertyResponse>, Status> {
+        if request
+            .extensions()
+            .get::<crate::oracle_assertion::HumanPrincipalIdentity>()
+            .is_some()
+        {
+            return Err(Status::permission_denied(
+                "human assertions may mutate only through capability-gated plugin methods",
+            ));
+        }
         let req = request.into_inner();
         let value = prost_value_to_simd(&req.value.unwrap_or_else(|| ProstValue::from(0)));
 
