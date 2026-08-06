@@ -158,19 +158,6 @@ fn ghostbridge_interceptor_with_validator(
     mut req: Request<()>,
 ) -> Result<Request<()>, Status> {
     if let Some(wire) = read_assertion_wire(&req)? {
-        let capability_gated_route =
-            req.extensions()
-                .get::<tonic::GrpcMethod<'_>>()
-                .is_some_and(|method| {
-                    method.service() == "operation.v1.PluginService"
-                        && method.method() == "CallMethod"
-                });
-        if !capability_gated_route {
-            return Err(Status::permission_denied(
-                "oracle identity assertions are only accepted on capability-gated \
-                 PluginService.CallMethod",
-            ));
-        }
         let source = peer_socket_addr(&req);
         let now = chrono::Utc::now().timestamp();
         let registration_bootstrap = req
@@ -370,13 +357,7 @@ pub(crate) mod tests {
             local_addr: Some(source_at(ip)),
             remote_addr: Some(source_at(ip)),
         });
-        insert_grpc_method(&mut req, "operation.v1.PluginService", "CallMethod");
         req
-    }
-
-    fn insert_grpc_method(req: &mut Request<()>, service: &'static str, method: &'static str) {
-        req.extensions_mut()
-            .insert(tonic::GrpcMethod::new(service, method));
     }
 
     fn insert_assertion_metadata(req: &mut Request<()>, wire: &[u8]) {
@@ -540,25 +521,6 @@ pub(crate) mod tests {
         assert_eq!(identity.footprint, derive_human_footprint(&pubkey));
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn assertion_cannot_authenticate_unguarded_ovsdb_transact() {
-        let _cozo = temp_cozo();
-        let issuer = test_issuer();
-        let pubkey = pk(47);
-        register(&pubkey, "ovsdb-attacker").await.expect("register");
-        let mut gate = make_ghostbridge_interceptor(Arc::new(AssertionValidator::new(
-            trust_store_for_issuer(&issuer),
-        )));
-        let signed = fresh_signed(&issuer, &pubkey, [0x47; 16]);
-        let mut req = request_with_connect_info(test_ip());
-        insert_grpc_method(&mut req, "operation.v1.OvsdbMirror", "Transact");
-        insert_assertion_metadata(&mut req, &signed.to_wire());
-
-        let status = gate.call(req).unwrap_err();
-        assert_eq!(status.code(), Code::PermissionDenied);
-        assert!(status.message().contains("PluginService.CallMethod"));
-    }
-
     /// VAL-BRIDGE-022
     pub async fn assertion_present_invalid_returns_unauthenticated_impl() {
         let mut gate = make_ghostbridge_interceptor(validator_for_tests());
@@ -630,7 +592,6 @@ pub(crate) mod tests {
         )));
         let signed = fresh_signed(&issuer, &pubkey, [0x43; 16]);
         let mut req = Request::new(());
-        insert_grpc_method(&mut req, "operation.v1.PluginService", "CallMethod");
         insert_assertion_metadata(&mut req, &signed.to_wire());
         let status = gate.call(req).unwrap_err();
         assert_eq!(status.code(), Code::Unauthenticated);

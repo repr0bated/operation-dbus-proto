@@ -17,8 +17,11 @@ use op_grpc_bridge::grpc_server::{
 use op_grpc_bridge::interceptor::{connect_info_peer_addr, ASSERTION_METADATA_KEY};
 use op_grpc_bridge::mutation_engine::MutationEngine;
 use op_grpc_bridge::oracle_assertion::{derive_human_footprint, AssertionValidator, DecoyTrustStore};
+use op_grpc_bridge::proto::ovsdb_mirror_client::OvsdbMirrorClient;
 use op_grpc_bridge::proto::plugin_service_client::PluginServiceClient;
-use op_grpc_bridge::proto::{CallMethodRequest, ErrorCode as ProtoErrorCode};
+use op_grpc_bridge::proto::{
+    CallMethodRequest, ErrorCode as ProtoErrorCode, OvsdbTransactRequest,
+};
 use op_identity::oracle_assertion::{
     verify_signature, DecoyIssuer, OracleIdentityAssertion, SignedAssertion,
 };
@@ -666,6 +669,29 @@ async fn happy_path_registered_human_gated_call_over_tls() {
     )
     .await;
     assert_unauthenticated(no_meta, "Missing Ghostbridge Identity Sled");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn oracle_assertion_cannot_authenticate_unguarded_ovsdb_transact() {
+    let (srv, env) = start_server(false).await;
+    let ch = tls_channel(srv.addr, &srv.ca_pem).await;
+    let pubkey = pk(61);
+    register_human(ch.clone(), &env, &pubkey, "ovsdb-attacker", [0x61; 16]).await;
+
+    let mut client = OvsdbMirrorClient::new(ch);
+    let mut request = Request::new(OvsdbTransactRequest {
+        database: "Open_vSwitch".to_string(),
+        operations_json: "[]".to_string(),
+        actor_id: "ungranted-human".to_string(),
+    });
+    attach_assertion(
+        request.metadata_mut(),
+        &fresh_signed(&env.issuer, &pubkey, [0x62; 16]).to_wire(),
+    );
+
+    let status = client.transact(request).await.unwrap_err();
+    assert_eq!(status.code(), Code::Unauthenticated);
+    assert!(status.message().contains("Missing Ghostbridge Identity Sled"));
 }
 
 // ?? VAL-E2E-002 ?????????????????????????????????????????????????????????????
