@@ -158,6 +158,19 @@ fn ghostbridge_interceptor_with_validator(
     mut req: Request<()>,
 ) -> Result<Request<()>, Status> {
     if let Some(wire) = read_assertion_wire(&req)? {
+        let capability_gated_route = req
+            .extensions()
+            .get::<tonic::GrpcMethod<'_>>()
+            .is_some_and(|method| {
+                method.service() == "operation.v1.PluginService"
+                    && method.method() == "CallMethod"
+            });
+        if !capability_gated_route {
+            return Err(Status::permission_denied(
+                "oracle identity assertions are only accepted on capability-gated \
+                 PluginService.CallMethod",
+            ));
+        }
         let source = peer_socket_addr(&req);
         let now = chrono::Utc::now().timestamp();
         let registration_bootstrap = req
