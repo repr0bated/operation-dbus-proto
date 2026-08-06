@@ -136,6 +136,11 @@ pub async fn fallback_present(bridge: &str) -> Result<bool> {
     let cookie_hex = format!("{FALLBACK_COOKIE:x}");
     Ok(dump.lines().any(|l| {
         let lower = l.to_ascii_lowercase();
+        lower.contains("priority=0")
+            && lower.contains("actions=normal")
+            && lower.contains(&cookie_hex)
+    }))
+        let lower = l.to_ascii_lowercase();
         lower.contains("priority=0") && lower.contains("actions=normal")
     }))
 }
