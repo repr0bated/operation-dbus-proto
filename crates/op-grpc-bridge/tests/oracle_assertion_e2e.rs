@@ -20,7 +20,7 @@ use op_grpc_bridge::oracle_assertion::{derive_human_footprint, AssertionValidato
 use op_grpc_bridge::proto::ovsdb_mirror_client::OvsdbMirrorClient;
 use op_grpc_bridge::proto::plugin_service_client::PluginServiceClient;
 use op_grpc_bridge::proto::{
-    CallMethodRequest, ErrorCode as ProtoErrorCode, OvsdbTransactRequest,
+    CallMethodRequest, ErrorCode as ProtoErrorCode, OvsdbTransactRequest, SetPropertyRequest,
 };
 use op_identity::oracle_assertion::{
     verify_signature, DecoyIssuer, OracleIdentityAssertion, SignedAssertion,
@@ -692,6 +692,33 @@ async fn oracle_assertion_cannot_authenticate_unguarded_ovsdb_transact() {
     let status = client.transact(request).await.unwrap_err();
     assert_eq!(status.code(), Code::Unauthenticated);
     assert!(status.message().contains("Missing Ghostbridge Identity Sled"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn oracle_assertion_cannot_bypass_capabilities_via_set_property() {
+    let (srv, env) = start_server(false).await;
+    let ch = tls_channel(srv.addr, &srv.ca_pem).await;
+    let pubkey = pk(63);
+    register_human(ch.clone(), &env, &pubkey, "property-attacker", [0x63; 16]).await;
+
+    let mut client = PluginServiceClient::new(ch);
+    let mut request = Request::new(SetPropertyRequest {
+        plugin_id: "human_principal".to_string(),
+        object_path: "/org/opdbus/v1/plugins/human_principal".to_string(),
+        interface_name: "org.opdbus.v1.PluginV1".to_string(),
+        property_name: "principals".to_string(),
+        value: Some(prost_str("corrupt")),
+        actor_id: "ungranted-human".to_string(),
+        capability_id: String::new(),
+    });
+    attach_assertion(
+        request.metadata_mut(),
+        &fresh_signed(&env.issuer, &pubkey, [0x64; 16]).to_wire(),
+    );
+
+    let status = client.set_property(request).await.unwrap_err();
+    assert_eq!(status.code(), Code::PermissionDenied);
+    assert!(status.message().contains("capability-gated plugin methods"));
 }
 
 // ?? VAL-E2E-002 ?????????????????????????????????????????????????????????????
