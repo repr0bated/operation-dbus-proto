@@ -158,13 +158,13 @@ fn ghostbridge_interceptor_with_validator(
     mut req: Request<()>,
 ) -> Result<Request<()>, Status> {
     if let Some(wire) = read_assertion_wire(&req)? {
-        let capability_gated_route = req
-            .extensions()
-            .get::<tonic::GrpcMethod<'_>>()
-            .is_some_and(|method| {
-                method.service() == "operation.v1.PluginService"
-                    && method.method() == "CallMethod"
-            });
+        let capability_gated_route =
+            req.extensions()
+                .get::<tonic::GrpcMethod<'_>>()
+                .is_some_and(|method| {
+                    method.service() == "operation.v1.PluginService"
+                        && method.method() == "CallMethod"
+                });
         if !capability_gated_route {
             return Err(Status::permission_denied(
                 "oracle identity assertions are only accepted on capability-gated \
@@ -545,9 +545,7 @@ pub(crate) mod tests {
         let _cozo = temp_cozo();
         let issuer = test_issuer();
         let pubkey = pk(47);
-        register(&pubkey, "ovsdb-attacker")
-            .await
-            .expect("register");
+        register(&pubkey, "ovsdb-attacker").await.expect("register");
         let mut gate = make_ghostbridge_interceptor(Arc::new(AssertionValidator::new(
             trust_store_for_issuer(&issuer),
         )));
