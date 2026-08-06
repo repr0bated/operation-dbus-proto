@@ -235,6 +235,52 @@ pub(crate) fn authorize_schema_method(
         .map_err(|error| Status::permission_denied(error.message))
 }
 
+fn enforce_human_principal_self_service(
+    plugin_id: &str,
+    method_name: &str,
+    args: &JsonValue,
+    identity: Option<&crate::oracle_assertion::HumanPrincipalIdentity>,
+) -> Result<(), ProtoMutationError> {
+    if plugin_id != "human_principal" {
+        return Ok(());
+    }
+    let Some(identity) = identity else {
+        return Ok(());
+    };
+    let args = args
+        .as_array()
+        .and_then(|items| items.first())
+        .unwrap_or(args);
+    let authorized = match method_name {
+        "register_key" | "revoke_key" => args
+            .get("human_pubkey")
+            .and_then(JsonValue::as_str)
+            .is_none_or(|pubkey| pubkey == identity.human_pubkey),
+        "set_alias" => args
+            .get("principal_id")
+            .and_then(JsonValue::as_str)
+            .is_none_or(|principal_id| principal_id == identity.principal_id),
+        _ => true,
+    };
+    if authorized {
+        return Ok(());
+    }
+    Err(ProtoMutationError {
+        code: ProtoErrorCode::PermissionDenied as i32,
+        message: format!(
+            "AccessDenied: human assertion may only mutate its own principal via \
+             human_principal.{method_name}"
+        ),
+        deny_reason: Some(ProtoDenyReason {
+            reason: Some(crate::proto::deny_reason::Reason::CapabilityMissing(
+                ProtoCapabilityMissing {
+                    capability: "human_principal.write:self".to_string(),
+                },
+            )),
+        }),
+    })
+}
+
 fn plugin_id_from_dbus_path(path: &str) -> Option<String> {
     let prefix = "/org/opdbus/v1/plugins/";
     path.strip_prefix(prefix)
@@ -571,6 +617,10 @@ impl OperationGrpcServer {
         Req: prost::Message + Default,
         Res: prost::Message + Default,
     {
+        let human_identity = request
+            .extensions()
+            .get::<crate::oracle_assertion::HumanPrincipalIdentity>()
+            .cloned();
         let identity = interceptor::bridge_capability_identity(request.extensions());
 
         // The caller declares which capability it is exercising, and the bridge
@@ -623,6 +673,18 @@ impl OperationGrpcServer {
                 "failed to serialize typed request for {plugin_id}.{method_name}: {error}"
             ))
         })?;
+        let args_value: JsonValue = serde_json::from_str(&json_args).map_err(|error| {
+            Status::internal(format!(
+                "failed to inspect typed request for {plugin_id}.{method_name}: {error}"
+            ))
+        })?;
+        enforce_human_principal_self_service(
+            plugin_id,
+            method_name,
+            &args_value,
+            human_identity.as_ref(),
+        )
+        .map_err(|error| Status::permission_denied(error.message))?;
 
         let result = self
             .mutation_engine
@@ -969,6 +1031,10 @@ impl StateSync for OperationGrpcServer {
         &self,
         request: Request<MutateRequest>,
     ) -> Result<Response<MutateResponse>, Status> {
+        let human_identity = request
+            .extensions()
+            .get::<crate::oracle_assertion::HumanPrincipalIdentity>()
+            .cloned();
         let identity = interceptor::bridge_capability_identity(request.extensions());
         let req = request.into_inner();
         let value = prost_value_to_simd(&req.value.unwrap_or_else(|| ProstValue::from(0)));
@@ -1007,6 +1073,25 @@ impl StateSync for OperationGrpcServer {
                         effective_hash: String::new(),
                     }));
                 }
+            }
+            let args_value = serde_json::to_value(&value)
+                .map_err(|error| Status::invalid_argument(error.to_string()))?;
+            if let Err(error) = enforce_human_principal_self_service(
+                &req.plugin_id,
+                req.member_name
+                    .strip_prefix("method:")
+                    .unwrap_or(&req.member_name),
+                &args_value,
+                human_identity.as_ref(),
+            ) {
+                return Ok(Response::new(MutateResponse {
+                    success: false,
+                    event_id: 0,
+                    event_hash: String::new(),
+                    result: None,
+                    error: Some(error),
+                    effective_hash: String::new(),
+                }));
             }
         }
 
@@ -1138,6 +1223,10 @@ impl PluginService for OperationGrpcServer {
         &self,
         request: Request<CallMethodRequest>,
     ) -> Result<Response<CallMethodResponse>, Status> {
+        let human_identity = request
+            .extensions()
+            .get::<crate::oracle_assertion::HumanPrincipalIdentity>()
+            .cloned();
         let identity = interceptor::bridge_capability_identity(request.extensions());
         let req = request.into_inner();
         let capability_id = if req.capability_id.is_empty() {
@@ -1172,6 +1261,22 @@ impl PluginService for OperationGrpcServer {
 
         let json_args = simd_json::to_string(&args)
             .map_err(|error| Status::invalid_argument(error.to_string()))?;
+        let args_value: JsonValue = serde_json::from_str(&json_args)
+            .map_err(|error| Status::invalid_argument(error.to_string()))?;
+        if let Err(error) = enforce_human_principal_self_service(
+            &req.plugin_id,
+            &req.method_name,
+            &args_value,
+            human_identity.as_ref(),
+        ) {
+            return Ok(Response::new(CallMethodResponse {
+                success: false,
+                result: None,
+                event_id: 0,
+                event_hash: String::new(),
+                error: Some(error),
+            }));
+        }
 
         // Route through the same schema dispatcher as PluginV1.Call. That
         // dispatcher records the method event before returning its audited
