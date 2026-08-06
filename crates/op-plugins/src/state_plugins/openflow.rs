@@ -33,6 +33,12 @@ trait OpenFlowController {
     async fn send_flow(&self, flow_json: &str) -> zbus::Result<String>;
     async fn delete_flow(&self, flow_json: &str) -> zbus::Result<String>;
     async fn dump_flows(&self) -> zbus::Result<Vec<String>>;
+    async fn ensure_fallback_normal(&self, bridge: &str) -> zbus::Result<String>;
+    async fn set_fail_mode(&self, bridge: &str, mode: &str) -> zbus::Result<String>;
+    async fn del_controller(&self, bridge: &str) -> zbus::Result<String>;
+    async fn set_controller(&self, bridge: &str, endpoint: &str) -> zbus::Result<String>;
+    async fn get_datapath_health(&self, bridge: &str) -> zbus::Result<String>;
+    async fn attach_controller_safe(&self, bridge: &str, endpoint: &str) -> zbus::Result<String>;
 }
 
 /// OpenFlow controller configuration - Policy-based, not interface-based
@@ -1560,7 +1566,149 @@ pub(crate) fn openflow_schema() -> PluginSchema {
         ),
     );
 
+
+    schema.methods.insert(
+        "ensure_fallback_normal".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+            EnsureFallbackNormalInput,
+            super::plugin_scaffold_helpers::AckOutput,
+        >(
+            "EnsureFallbackNormal",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "openflow.write",
+            "mut.network.openflow.datapath.ensure_fallback_normal@v1",
+        ),
+    );
+    schema.methods.insert(
+        "set_fail_mode".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+            SetFailModeInput,
+            super::plugin_scaffold_helpers::AckOutput,
+        >(
+            "SetFailMode",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "openflow.write",
+            "mut.network.openflow.datapath.set_fail_mode@v1",
+        ),
+    );
+    schema.methods.insert(
+        "del_controller".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+            DelControllerInput,
+            super::plugin_scaffold_helpers::AckOutput,
+        >(
+            "DelController",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "openflow.write",
+            "mut.network.openflow.datapath.del_controller@v1",
+        ),
+    );
+    schema.methods.insert(
+        "set_controller".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+            SetControllerInput,
+            super::plugin_scaffold_helpers::AckOutput,
+        >(
+            "SetController",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "openflow.write",
+            "mut.network.openflow.datapath.set_controller@v1",
+        ),
+    );
+    schema.methods.insert(
+        "get_datapath_health".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+            GetDatapathHealthInput,
+            DatapathHealthOutput,
+        >(
+            "GetDatapathHealth",
+            op_state_store::SideEffect::Read,
+            false,
+            "openflow.read",
+            "mut.network.openflow.datapath.get_health@v1",
+        ),
+    );
+    schema.methods.insert(
+        "attach_controller_safe".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+            AttachControllerSafeInput,
+            DatapathHealthOutput,
+        >(
+            "AttachControllerSafe",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "openflow.write",
+            "mut.network.openflow.datapath.attach_controller_safe@v1",
+        ),
+    );
+
     schema
+}
+
+
+/// Input for EnsureFallbackNormal — cookied priority=0 actions=NORMAL.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct EnsureFallbackNormalInput {
+    /// Bridge name (e.g. ovsbr0)
+    pub bridge: String,
+}
+
+/// Input for SetFailMode.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SetFailModeInput {
+    /// Bridge name
+    pub bridge: String,
+    /// `standalone` or `secure`
+    pub mode: String,
+}
+
+/// Input for DelController.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct DelControllerInput {
+    /// Bridge name
+    pub bridge: String,
+}
+
+/// Input for SetController (requires fallback first).
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SetControllerInput {
+    /// Bridge name
+    pub bridge: String,
+    /// Controller endpoint, e.g. `tcp:10.200.0.1:6653`
+    pub endpoint: String,
+}
+
+/// Input for GetDatapathHealth.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct GetDatapathHealthInput {
+    /// Bridge name
+    pub bridge: String,
+}
+
+/// Output for GetDatapathHealth / AttachControllerSafe.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct DatapathHealthOutput {
+    pub bridge: String,
+    pub fail_mode: String,
+    pub controllers: Vec<String>,
+    pub fallback_normal: bool,
+    pub fallback_priority: u16,
+    pub fallback_cookie: String,
+    pub connection_mode: String,
+    pub disable_in_band: bool,
+}
+
+/// Input for AttachControllerSafe (orchestrated attach + rollback).
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AttachControllerSafeInput {
+    /// Bridge name
+    pub bridge: String,
+    /// Controller endpoint, e.g. `tcp:10.200.0.1:6653`
+    pub endpoint: String,
 }
 
 /// Input struct for AddFlow method
@@ -1607,6 +1755,77 @@ pub struct ModifyFlowInput {
     pub actions: Vec<FlowAction>,
     /// Update priority
     pub priority: Option<u16>,
+}
+
+
+/// Dispatch an `openflow` schema method. Called from `op-grpc-bridge`'s
+/// `MutationEngine::dispatch_method_call`. JSON args validated against
+/// MethodDecl Input schemas before this runs.
+pub async fn dispatch_openflow_method(
+    method: &str,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value> {
+    match method {
+        "ensure_fallback_normal" => {
+            let input: EnsureFallbackNormalInput = serde_json::from_value(args.clone())
+                .context("invalid EnsureFallbackNormal arguments")?;
+            op_network::ensure_fallback_normal(&input.bridge).await?;
+            Ok(serde_json::json!({ "success": true }))
+        }
+        "set_fail_mode" => {
+            let input: SetFailModeInput = serde_json::from_value(args.clone())
+                .context("invalid SetFailMode arguments")?;
+            op_network::set_fail_mode(&input.bridge, &input.mode).await?;
+            Ok(serde_json::json!({ "success": true }))
+        }
+        "del_controller" => {
+            let input: DelControllerInput = serde_json::from_value(args.clone())
+                .context("invalid DelController arguments")?;
+            op_network::del_controller(&input.bridge).await?;
+            Ok(serde_json::json!({ "success": true }))
+        }
+        "set_controller" => {
+            let input: SetControllerInput = serde_json::from_value(args.clone())
+                .context("invalid SetController arguments")?;
+            op_network::set_controller(&input.bridge, &input.endpoint).await?;
+            Ok(serde_json::json!({ "success": true }))
+        }
+        "get_datapath_health" => {
+            let input: GetDatapathHealthInput = serde_json::from_value(args.clone())
+                .context("invalid GetDatapathHealth arguments")?;
+            let h = op_network::get_datapath_health(&input.bridge).await?;
+            Ok(serde_json::to_value(DatapathHealthOutput {
+                bridge: h.bridge,
+                fail_mode: h.fail_mode,
+                controllers: h.controllers,
+                fallback_normal: h.fallback_normal,
+                fallback_priority: h.fallback_priority,
+                fallback_cookie: h.fallback_cookie,
+                connection_mode: h.connection_mode,
+                disable_in_band: h.disable_in_band,
+            })?)
+        }
+        "attach_controller_safe" => {
+            let input: AttachControllerSafeInput = serde_json::from_value(args.clone())
+                .context("invalid AttachControllerSafe arguments")?;
+            let h = op_network::attach_controller_safe(&input.bridge, &input.endpoint).await?;
+            Ok(serde_json::to_value(DatapathHealthOutput {
+                bridge: h.bridge,
+                fail_mode: h.fail_mode,
+                controllers: h.controllers,
+                fallback_normal: h.fallback_normal,
+                fallback_priority: h.fallback_priority,
+                fallback_cookie: h.fallback_cookie,
+                connection_mode: h.connection_mode,
+                disable_in_band: h.disable_in_band,
+            })?)
+        }
+        "add_flow" | "delete_flow" | "modify_flow" => Err(anyhow!(
+            "openflow.{} is declared for schema/Call validation; use StatePlugin apply or SendFlow on org.opdbus.v1.plugins.openflow",
+            method
+        )),
+        other => Err(anyhow!("unknown openflow method: {}", other)),
+    }
 }
 
 // Self-registration: the plugin registry discovers this via inventory
