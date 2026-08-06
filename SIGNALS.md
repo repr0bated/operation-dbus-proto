@@ -44,6 +44,7 @@ Append a row under the right type. Keep it one entry per signal.
 | 2026-06-13 | Opus 4.8 | Graph store for the learning graph: start with Qdrant payload edges (one store, runs now), promote to a dedicated graph DB only when you need real traversal. | OD-23 | open |
 | 2026-06-13 | Opus 4.8 | Fire the vectorization export on a **git hook** for `WISHLIST.md`/`SIGNALS.md` changes rather than a daily cron — event-driven matches the rest of the system. | OD-23 | open |
 | 2026-06-13 | Opus 4.8 | A.N.N.A. = `authorizing-official` + `content-approver` (real-time check/approve), not a one-time gateway notary. Re-map the analogy so she IS the interceptor at every door. | OD-09 | open |
+| 2026-08-06 | Fable 5 | SUGGESTION: Split-horizon DNS is now live (dnsmasq: nm.internal -> CoreDNS 100.69.0.1; everything else -> dnscrypt-proxy 127.0.0.1:5354 -> NextDNS DoH identity Ghostbridge-Incus; /etc/resolv.conf pinned + immutable so netclient cannot re-hijack). POSSIBLE IMPROVEMENT: resolve owned subdomains to per-service internal IP:ports so east-west/mesh traffic addresses backends directly and drops SNI-based demux for them, shrinking the xray reality serverNames to only externally-fronted services. Does NOT replace SNI for (a) services still sharing the public 188.68.58.237:443 (one socket still needs SNI/ALPN/path to demux) or (b) reality decoy camouflage + TLS cert selection for external clients (addressing-independent). Prereq: distinct internal IP:port + A record per owned service. Left for now (not implemented). | | open |
 
 ## ✔️ Resolved Decisions
 

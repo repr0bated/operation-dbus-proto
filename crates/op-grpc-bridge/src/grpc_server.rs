@@ -46,7 +46,11 @@ use crate::proto::{
     MutationError as ProtoMutationError, NumaNode as ProtoNumaNode,
     OperationType as ProtoOperationType, OvsdbBridge as ProtoOvsdbBridge, OvsdbDumpDbRequest,
     OvsdbDumpDbResponse, OvsdbEchoRequest, OvsdbEchoResponse, OvsdbGetBridgeStateRequest,
-    OvsdbGetBridgeStateResponse, OvsdbGetSchemaRequest, OvsdbGetSchemaResponse,
+    OvsdbGetBridgeStateResponse, OvsdbGetDatapathHealthRequest, OvsdbGetDatapathHealthResponse,
+    OvsdbAttachControllerSafeRequest, OvsdbAttachControllerSafeResponse,
+    OvsdbEnsureFallbackNormalRequest, OvsdbEnsureFallbackNormalResponse,
+    OvsdbDelControllerRequest, OvsdbDelControllerResponse,
+    OvsdbGetSchemaRequest, OvsdbGetSchemaResponse,
     OvsdbInterface as ProtoOvsdbInterface, OvsdbListDbsResponse, OvsdbMonitorRequest,
     OvsdbPort as ProtoOvsdbPort, OvsdbTransactRequest, OvsdbTransactResponse, OvsdbUpdate,
     PluginInfo, ProveTagImmutabilityRequest, ProveTagImmutabilityResponse,
@@ -2050,6 +2054,113 @@ impl OvsdbMirror for OperationGrpcServer {
 
         Ok(Response::new(OvsdbGetBridgeStateResponse { bridges }))
     }
+
+    async fn get_datapath_health(
+        &self,
+        request: Request<OvsdbGetDatapathHealthRequest>,
+    ) -> Result<Response<OvsdbGetDatapathHealthResponse>, Status> {
+        let bridge = request.into_inner().bridge_name;
+        let bridge = if bridge.is_empty() {
+            "ovsbr0".to_string()
+        } else {
+            bridge
+        };
+        let h = op_network::get_datapath_health(&bridge)
+            .await
+            .map_err(|e| Status::internal(format!("get_datapath_health: {e:#}")))?;
+        let detail_json = serde_json::to_string(&h).unwrap_or_default();
+        Ok(Response::new(OvsdbGetDatapathHealthResponse {
+            bridge: h.bridge,
+            fail_mode: h.fail_mode,
+            controllers: h.controllers,
+            fallback_normal: h.fallback_normal,
+            fallback_priority: h.fallback_priority as u32,
+            detail_json,
+        }))
+    }
+
+    async fn attach_controller_safe(
+        &self,
+        request: Request<OvsdbAttachControllerSafeRequest>,
+    ) -> Result<Response<OvsdbAttachControllerSafeResponse>, Status> {
+        let req = request.into_inner();
+        let bridge = if req.bridge_name.is_empty() {
+            "ovsbr0".to_string()
+        } else {
+            req.bridge_name
+        };
+        let endpoint = if req.endpoint.is_empty() {
+            "tcp:10.200.0.1:6653".to_string()
+        } else {
+            req.endpoint
+        };
+        match op_network::attach_controller_safe(&bridge, &endpoint).await {
+            Ok(h) => {
+                let detail_json = serde_json::to_string(&h).unwrap_or_default();
+                Ok(Response::new(OvsdbAttachControllerSafeResponse {
+                    ok: true,
+                    message: format!("AttachControllerSafe ok bridge={bridge}"),
+                    health: Some(OvsdbGetDatapathHealthResponse {
+                        bridge: h.bridge,
+                        fail_mode: h.fail_mode,
+                        controllers: h.controllers,
+                        fallback_normal: h.fallback_normal,
+                        fallback_priority: h.fallback_priority as u32,
+                        detail_json,
+                    }),
+                }))
+            }
+            Err(e) => Ok(Response::new(OvsdbAttachControllerSafeResponse {
+                ok: false,
+                message: format!("{e:#}"),
+                health: None,
+            })),
+        }
+    }
+
+    async fn ensure_fallback_normal(
+        &self,
+        request: Request<OvsdbEnsureFallbackNormalRequest>,
+    ) -> Result<Response<OvsdbEnsureFallbackNormalResponse>, Status> {
+        let bridge = request.into_inner().bridge_name;
+        let bridge = if bridge.is_empty() {
+            "ovsbr0".to_string()
+        } else {
+            bridge
+        };
+        match op_network::ensure_fallback_normal(&bridge).await {
+            Ok(()) => Ok(Response::new(OvsdbEnsureFallbackNormalResponse {
+                ok: true,
+                message: format!("EnsureFallbackNormal ok bridge={bridge}"),
+            })),
+            Err(e) => Ok(Response::new(OvsdbEnsureFallbackNormalResponse {
+                ok: false,
+                message: format!("{e:#}"),
+            })),
+        }
+    }
+
+    async fn del_controller(
+        &self,
+        request: Request<OvsdbDelControllerRequest>,
+    ) -> Result<Response<OvsdbDelControllerResponse>, Status> {
+        let bridge = request.into_inner().bridge_name;
+        let bridge = if bridge.is_empty() {
+            "ovsbr0".to_string()
+        } else {
+            bridge
+        };
+        match op_network::del_controller(&bridge).await {
+            Ok(()) => Ok(Response::new(OvsdbDelControllerResponse {
+                ok: true,
+                message: format!("DelController ok bridge={bridge}"),
+            })),
+            Err(e) => Ok(Response::new(OvsdbDelControllerResponse {
+                ok: false,
+                message: format!("{e:#}"),
+            })),
+        }
+    }
 }
 
 impl OperationGrpcServer {
@@ -2217,6 +2328,8 @@ impl OperationGrpcServer {
                 mcast_snooping_enable,
                 other_config: self.extract_map(row.get("other_config")),
                 ports,
+                fallback_normal: false,
+                controllers: vec![],
             });
         }
 

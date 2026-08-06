@@ -503,6 +503,13 @@ service OvsdbMirror {
 
   // Get the full Bridge→Port→Interface hierarchy (reconciled mirror view)
   rpc GetBridgeState(OvsdbGetBridgeStateRequest) returns (OvsdbGetBridgeStateResponse);
+  // Safe datapath health: fail_mode + controller list + fallback NORMAL present
+  rpc GetDatapathHealth(OvsdbGetDatapathHealthRequest) returns (OvsdbGetDatapathHealthResponse);
+  // Plugin-first attach: never bare set-controller (rollback on unhealthy)
+  rpc AttachControllerSafe(OvsdbAttachControllerSafeRequest) returns (OvsdbAttachControllerSafeResponse);
+  rpc EnsureFallbackNormal(OvsdbEnsureFallbackNormalRequest) returns (OvsdbEnsureFallbackNormalResponse);
+  rpc DelController(OvsdbDelControllerRequest) returns (OvsdbDelControllerResponse);
+
 }
 
 // --- OVSDB Mirror Messages ---
@@ -584,6 +591,45 @@ message OvsdbGetBridgeStateResponse {
   repeated OvsdbBridge bridges = 1;
 }
 
+message OvsdbGetDatapathHealthRequest {
+  string bridge_name = 1;
+}
+message OvsdbGetDatapathHealthResponse {
+  string bridge = 1;
+  string fail_mode = 2;
+  repeated string controllers = 3;
+  bool fallback_normal = 4;
+  uint32 fallback_priority = 5;
+  string detail_json = 6;
+}
+
+message OvsdbAttachControllerSafeRequest {
+  string bridge_name = 1;
+  string endpoint = 2; // e.g. tcp:10.200.0.1:6653
+}
+message OvsdbAttachControllerSafeResponse {
+  bool ok = 1;
+  string message = 2;
+  OvsdbGetDatapathHealthResponse health = 3;
+}
+
+message OvsdbEnsureFallbackNormalRequest {
+  string bridge_name = 1;
+}
+message OvsdbEnsureFallbackNormalResponse {
+  bool ok = 1;
+  string message = 2;
+}
+
+message OvsdbDelControllerRequest {
+  string bridge_name = 1;
+}
+message OvsdbDelControllerResponse {
+  bool ok = 1;
+  string message = 2;
+}
+
+
 // RFC 7047 Bridge table — hierarchical view
 message OvsdbBridge {
   string name = 1;
@@ -593,6 +639,10 @@ message OvsdbBridge {
   bool mcast_snooping_enable = 5;
   map<string, string> other_config = 6;
   repeated OvsdbPort ports = 7;
+  // OVS design: priority=0 NORMAL must remain while controller is attached
+  // (async PACKET_IN / in-band control). See docs.openvswitch.org topics/design.
+  bool fallback_normal = 8;
+  repeated string controllers = 9;
 }
 
 // RFC 7047 Port table

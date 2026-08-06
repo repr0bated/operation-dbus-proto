@@ -1,8 +1,19 @@
 //! OpenFlow 1.3 controller server (passive mode)
 //!
 //! Listens for OVS to connect (passive mode), performs the OF1.3 handshake,
-//! discovers port numbers by name via a PortDesc multipart request, clears all
-//! existing flows, and installs the configured forwarding rules.
+//! enables async delivery (`OFPT_SET_CONFIG` miss_send_len=128), discovers
+//! ports, clears flows, immediately re-installs priority=0 NORMAL, then
+//! installs configured forwarding rules.
+//!
+//! Design constraints (OVS design doc):
+//! <https://docs.openvswitch.org/en/latest/topics/design/>
+//! - Async: service controllers get no PACKET_IN until miss_send_len > 0;
+//!   table-miss PACKET_IN uses controller ID 0; never rely on PACKET_IN for
+//!   host L3 survival — NORMAL fallback is mandatory after every wipe.
+//! - FLOW_MOD: each mod is atomic; delete-all + add-NORMAL is two mods (race).
+//!   Minimize the gap; `AttachControllerSafe` pre-seeds NORMAL via ofctl.
+//! - In-band principle: essential traffic must forward without the controller.
+//! - Echo: reply to OFPT_ECHO_REQUEST; prefer echo for session liveness.
 //!
 //! Wire-protocol encoding is delegated to `rovs_openflow` types wherever
 //! possible; the TCP listener and passive handshake are implemented here
@@ -20,6 +31,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot};
 
+use crate::datapath_safe::{FALLBACK_COOKIE, MANAGED_COOKIE};
 use crate::openflow_translate::{json_flow_to_add, json_flow_to_delete};
 
 /// A request to install or delete a schema-driven flow on the currently
@@ -55,6 +67,19 @@ fn build_features_request(xid: u32) -> Vec<u8> {
     build_raw_msg(MessageType::FeaturesRequest, xid, &[])
 }
 
+/// OF1.3 `OFPT_SET_CONFIG`: flags=0, miss_send_len=`OFP_DEFAULT_MISS_SEND_LEN` (128).
+///
+/// Required so a **service** controller can receive async messages (PACKET_IN).
+/// Primary controllers already get OFPR_NO_MATCH by default, but setting this
+/// explicitly documents intent and matches OVS design guidance.
+fn build_set_config(xid: u32) -> Vec<u8> {
+    // struct ofp_switch_config { uint16_t flags; uint16_t miss_send_len; }
+    let mut body = [0u8; 4];
+    body[0..2].copy_from_slice(&0u16.to_be_bytes()); // flags
+    body[2..4].copy_from_slice(&128u16.to_be_bytes()); // miss_send_len
+    build_raw_msg(MessageType::SetConfig, xid, &body)
+}
+
 /// Build an OF1.3 PortDesc multipart request.
 ///
 /// Body: type(2) + flags(2) + pad(4) = 8 bytes.
@@ -69,7 +94,21 @@ fn build_echo_reply(xid: u32, payload: &[u8]) -> Vec<u8> {
     build_raw_msg(MessageType::EchoReply, xid, payload)
 }
 
-/// Build an OF1.3 FlowMod DELETE ALL (wildcard match, all tables).
+/// Build an OF1.3 EchoRequest (design: detect hung OF sessions faster than TCP).
+fn build_echo_request(xid: u32) -> Vec<u8> {
+    build_raw_msg(MessageType::EchoRequest, xid, &[])
+}
+
+/// Delete only controller-managed flows (MANAGED_COOKIE), preserving NORMAL fallback.
+fn build_flow_mod_delete_managed(xid: u32) -> Vec<u8> {
+    let mut flow = Flow::delete();
+    flow.cookie = MANAGED_COOKIE;
+    flow.cookie_mask = u64::MAX; // match this cookie exactly
+    let msg = flow.to_message(Version::Of13, xid);
+    msg.encode().to_vec()
+}
+
+/// Legacy wipe of all tables (avoid on live host bridges).
 fn build_flow_mod_delete_all(xid: u32) -> Vec<u8> {
     let flow = Flow::delete();
     let msg = flow.to_message(Version::Of13, xid);
@@ -82,8 +121,28 @@ pub fn build_flow_mod_add(in_port: u32, out_port: u32, priority: u16, xid: u32) 
     let actions = ActionList::new().output(OutputPort::Port(out_port));
     let flow = Flow::add()
         .priority(priority)
+        .cookie(MANAGED_COOKIE)
         .match_fields(match_fields)
         .actions(actions);
+    let msg = flow.to_message(Version::Of13, xid);
+    msg.encode().to_vec()
+}
+
+/// Build an OF1.3 FlowMod ADD: table-miss style fallback `actions=NORMAL`.
+///
+/// Must be re-installed after any delete-all so unmatched host traffic does not
+/// depend solely on async packet_in → controller flow install.
+pub fn build_flow_mod_normal(priority: u16, xid: u32) -> Vec<u8> {
+    let match_fields = Match::new();
+    let actions = ActionList::new().normal();
+    let mut flow = Flow::add()
+        .priority(priority)
+        .cookie(FALLBACK_COOKIE)
+        .match_fields(match_fields)
+        .actions(actions);
+    // Host-safety fallback: skip per-flow counters (OF1.3 OFPFF_NO_*).
+    flow.flags.no_pkt_counts = true;
+    flow.flags.no_byte_counts = true;
     let msg = flow.to_message(Version::Of13, xid);
     msg.encode().to_vec()
 }
@@ -189,6 +248,7 @@ async fn discover_ports(stream: &mut TcpStream, xid: u32) -> Result<HashMap<Stri
 async fn handle_connection(
     mut stream: TcpStream,
     flows: Arc<Vec<(String, String, u16)>>,
+    static_flows: Arc<Vec<String>>,
     active_conn: Arc<Mutex<Option<mpsc::UnboundedSender<FlowRequest>>>>,
 ) -> Result<()> {
     let mut xid: u32 = 1;
@@ -218,6 +278,11 @@ async fn handle_connection(
         }
     }
 
+    // 3b. Enable async delivery (service-controller miss_send_len gate).
+    send_msg(&mut stream, &build_set_config(xid)).await?;
+    xid += 1;
+    log::info!("OF controller: SET_CONFIG miss_send_len=128 (async PACKET_IN enabled)");
+
     // 4. Discover ports via PortDesc multipart.
     let port_map = discover_ports(&mut stream, xid).await?;
     xid += 1;
@@ -228,8 +293,17 @@ async fn handle_connection(
         port_map.keys().collect::<Vec<_>>()
     );
 
-    // 5. Delete all existing flows.
-    send_msg(&mut stream, &build_flow_mod_delete_all(xid)).await?;
+    // 5. Install cookied NORMAL FIRST (in-band principle), then delete only
+    // MANAGED_COOKIE flows — never delete-all (avoids empty-table race).
+    send_msg(&mut stream, &build_flow_mod_normal(0, xid)).await?;
+    xid += 1;
+    log::info!("OF controller: ensured cookie={FALLBACK_COOKIE:#x} priority=0 NORMAL");
+
+    send_msg(&mut stream, &build_flow_mod_delete_managed(xid)).await?;
+    xid += 1;
+
+    // Re-assert NORMAL after managed delete (idempotent ADD).
+    send_msg(&mut stream, &build_flow_mod_normal(0, xid)).await?;
     xid += 1;
 
     // 6. Install configured flows.
@@ -267,6 +341,21 @@ async fn handle_connection(
         }
     }
 
+    // 6b. Install durable static flows (rich match) — reinstalled every
+    // reconnect, after delete_managed so the fallback/managed set is clean.
+    let mut static_installed = 0u32;
+    for flow_json in static_flows.iter() {
+        match push_flow_add(&mut stream, flow_json, &port_map, &mut xid).await {
+            Ok(_) => static_installed += 1,
+            Err(e) => log::warn!(
+                "OF controller: static flow install failed ({e:#}): {flow_json}"
+            ),
+        }
+    }
+    if static_installed > 0 {
+        log::info!("OF controller: {static_installed} static flow(s) installed");
+    }
+
     log::info!(
         "OF controller: {} flows installed; entering keepalive loop",
         installed
@@ -279,14 +368,34 @@ async fn handle_connection(
     let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<FlowRequest>();
     *active_conn.lock().unwrap() = Some(cmd_tx);
 
+    let mut echo_tick = tokio::time::interval(Duration::from_secs(5));
+    echo_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let result = loop {
         tokio::select! {
+            _ = echo_tick.tick() => {
+                // Proactive echo (design: do not rely on kernel TCP RTO alone).
+                if let Err(e) = send_msg(&mut stream, &build_echo_request(xid)).await {
+                    break Err(e);
+                }
+                xid = xid.wrapping_add(1);
+            }
             msg = recv_msg(&mut stream) => {
                 match msg {
                     Ok(msg) if msg.msg_type == 2 /* EchoRequest */ => {
                         if let Err(e) = send_msg(&mut stream, &build_echo_reply(msg.xid, &msg.payload)).await {
                             break Err(e);
                         }
+                    }
+                    Ok(msg) if msg.msg_type == 3 /* EchoReply */ => {
+                        log::trace!("OF controller: echo reply xid={}", msg.xid);
+                    }
+                    Ok(msg) if msg.msg_type == 10 /* PacketIn */ => {
+                        // Reactive path optional; host L3 must already hit NORMAL.
+                        log::debug!(
+                            "OF controller: PACKET_IN xid={} len={} (not required for host L3)",
+                            msg.xid,
+                            msg.payload.len()
+                        );
                     }
                     Ok(_) => {}
                     Err(e) => break Err(e),
@@ -340,10 +449,14 @@ async fn push_flow_delete(
 /// OpenFlow 1.3 controller — accepts connections from OVS and installs flows.
 ///
 /// OVS connects *to* the controller (not the other way around).
-/// Configure OVS with: `ovs-vsctl set-controller ovsbr0 tcp:<listen_addr>`
+/// Configure OVS with: `attach-controller-safe ovsbr0 tcp:<listen_addr>`
+/// (or D-Bus `AttachControllerSafe`) — never bare `ovs-vsctl set-controller`.
 pub struct OpenFlowController {
     listen_addr: SocketAddr,
     flows: Vec<(String, String, u16)>,
+    /// Durable schema-driven flows (JSON FlowEntry), reinstalled on every
+    /// OVS reconnect via the same translator as SendFlow.
+    static_flows: Vec<String>,
     active_conn: Arc<Mutex<Option<mpsc::UnboundedSender<FlowRequest>>>>,
     installed_flows: Arc<Mutex<Vec<serde_json::Value>>>,
 }
@@ -354,6 +467,7 @@ impl OpenFlowController {
         Self {
             listen_addr,
             flows: Vec::new(),
+            static_flows: Vec::new(),
             active_conn: Arc::new(Mutex::new(None)),
             installed_flows: Arc::new(Mutex::new(Vec::new())),
         }
@@ -384,6 +498,14 @@ impl OpenFlowController {
         self
     }
 
+    /// Add a durable static flow (JSON ) reinstalled on every OVS
+    /// reconnect. Unlike , this carries the full match/action
+    /// set (e.g. /) via the same translator as .
+    pub fn add_static_flow(mut self, flow_json: &str) -> Self {
+        self.static_flows.push(flow_json.to_string());
+        self
+    }
+
     /// Run the controller — listens for OVS connections and re-programs flows on each reconnect.
     ///
     /// Each spawned connection handler maintains its own `Reconnect` state machine so
@@ -397,11 +519,13 @@ impl OpenFlowController {
         log::info!("OpenFlow controller listening on {}", self.listen_addr);
 
         let flows = Arc::new(self.flows);
+        let static_flows = Arc::new(self.static_flows);
         let active_conn = self.active_conn;
 
         loop {
             let (stream, peer) = listener.accept().await?;
             let flows = flows.clone();
+            let static_flows = static_flows.clone();
             let active_conn = active_conn.clone();
             log::info!("OpenFlow controller: OVS connected from {}", peer);
 
@@ -413,7 +537,7 @@ impl OpenFlowController {
                 reconnect.set_max_backoff(Duration::from_secs(30));
                 reconnect.connecting();
 
-                match handle_connection(stream, flows, active_conn).await {
+                match handle_connection(stream, flows, static_flows, active_conn).await {
                     Ok(()) => {
                         // Clean close — mark disconnected so next accept starts fresh.
                         reconnect.disconnected();
