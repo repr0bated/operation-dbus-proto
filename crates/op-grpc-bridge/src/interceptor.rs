@@ -1,4 +1,4 @@
-// ?? ??? The Tonic gRPC Gatekeeper (Middleware Interceptor)
+// 🟢 🛡️ The Tonic gRPC Gatekeeper (Middleware Interceptor)
 // Sits on the primary gRPC ingress at port 8090. Intercepts Xray-injected headers,
 // performs a zero-copy check against the IdentitySled in shared memory, and either
 // allows the gRPC payload through or drops the connection instantly.
