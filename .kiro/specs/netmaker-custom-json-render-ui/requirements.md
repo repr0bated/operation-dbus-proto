@@ -5,6 +5,11 @@
 Custom `json-render` Schema UI renderer in OP-DBUS (`crates/op-web` / `crates/zeroclaw-gui`) that exposes the complete gRPC and socket networking surface area of the control plane. The renderer integrates with the sealed SHM blob catalog (`OPBLOB01`) to derive schemas, drive dynamic gRPC execution, visualize socket/network topology, and expand the `json-render` component catalog with networking-specific DSL components.
 
 ---
+> **Alignment note (2026-08-06):** gRPC UI access is mesh-private per
+> `.kiro/specs/3tched-ghostbridge-control-plane/` (REQ-MESH-004) and identity
+> handoff `.kiro/specs/netmaker-xray-identity-handoff/`. Do not expose op-grpc-bridge
+> on the public VPS IP.
+
 
 ## REQ-1: SHM Blob Schema & Proto Extraction
 
@@ -37,10 +42,12 @@ Custom `json-render` Schema UI renderer in OP-DBUS (`crates/op-web` / `crates/ze
   - Client-streaming: batch message composer with send controls.
   - Bidirectional: combined send/receive panes.
 - **REQ-2.3**: gRPC reflection tree navigation using `tonic-reflection` v1 and v1alpha descriptors exposed by `PerMethodGrpcServices`.
-- **REQ-2.4**: Support connections to all configured gRPC endpoints:
+- **REQ-2.4**: Support connections to mesh-private / local gRPC endpoints only:
   - Native Unix Socket: `/run/ghostbridge/grpc.sock` (owned by `op-grpc-bridge`).
-  - gRPC-Web TCP backend: `127.0.0.1:8090`.
-  - External Xray listener/proxy: `188.68.58.237:8090` / `127.0.0.1:10809`.
+  - Mesh TCP: `10.0.0.2:8090` (op-grpc-bridge; mesh-private — NOT on public VPS edge).
+  - Optional local loopback for host tooling: `127.0.0.1:8090` when the bridge is bound locally for debug.
+  - **MUST NOT** require or document a public `188.68.58.237:8090` happy path (conflicts with `.kiro/specs/3tched-ghostbridge-control-plane/` mesh privacy).
+  - REALITY/xray is optional hostile-underlay camouflage for mesh entry; it is not a public browser/gRPC-Web port for owned services.
 - **REQ-2.5**: Dynamic method resolution from `FileDescriptorSet` (Section 3 of blob) — no compile-time codegen dependency for UI rendering.
 
 ### Non-Functional Requirements

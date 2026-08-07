@@ -26,7 +26,7 @@
 (`X-Ghostbridge-Footprint` / `X-WireGuard-Pubkey`); "that header is meant to be
 the only gate".
 
-### 1.2 Actual code state (verified 2026-08-04 at bf7a9090)
+### 1.2 Actual code state (baseline before implementation — 2026-08-04 at bf7a9090)
 
 | Component | Claimed | Actual |
 |---|---|---|
@@ -152,20 +152,23 @@ resolve round-trips through the real `PluginService` surface; state survives
   versioned wire encoding of a `SignedAssertion`.
 - Validation pipeline, in this exact order, each step fail-closed:
   1. **Parse** — malformed envelope ⇒ reject.
-  2. **Trusted decoy key** — `decoy_key_id` must resolve in the trust store
+  2. **Structural lifetime** — `expires_at <= issued_at` ⇒ reject
+     (`Malformed`) immediately after parse, before trust. The bridge never
+     delegates lifetime sanity to the issuer.
+  3. **Trusted decoy key** — `decoy_key_id` must resolve in the trust store
      (JSON: `{ "decoy_keys": { "<key_id>": "<base64 verifying key>" } }`,
      path from `OP_DECOY_TRUST_STORE`, default `/etc/opdbus/decoy-trust.json`;
      missing/unreadable store = empty = reject everything).
-  3. **Signature** — Ed25519 verify over canonical bytes ⇒ reject on failure.
-  4. **Expiry** — `now > expires_at + leeway` ⇒ reject; `issued_at` in the
+  4. **Signature** — Ed25519 verify over canonical bytes ⇒ reject on failure.
+  5. **Expiry** — `now > expires_at + leeway` ⇒ reject; `issued_at` in the
      future beyond leeway ⇒ reject; `expires_at - issued_at > 900 s` ⇒ reject.
      Leeway 30 s.
-  5. **Replay cache** — nonce seen before (within TTL = `expires_at + leeway`)
+  6. **Replay cache** — nonce seen before (within TTL = `expires_at + leeway`)
      ⇒ reject. In-process cache, lazy purge on access; NO background task.
-  6. **Source-IP binding** — peer address from tonic `ConnectInfo<SocketAddr>`
+  7. **Source-IP binding** — peer address from tonic `ConnectInfo<SocketAddr>`
      must equal `netmaker_inner_ip` ⇒ reject on mismatch; missing ConnectInfo
      when an assertion is presented ⇒ reject.
-  7. **HumanPrincipal resolution** — `resolve_key(human_pubkey)` via the
+  8. **HumanPrincipal resolution** — `resolve_key(human_pubkey)` via the
      registry plugin; unknown ⇒ reject; `revoked_at` set ⇒ reject.
 - On success the request extensions gain `HumanPrincipalIdentity {
   principal_id, human_pubkey, footprint, expires_at }` where `footprint =
@@ -174,9 +177,17 @@ resolve round-trips through the real `PluginService` surface; state survives
   governs (footprint headers are neither required nor consulted). If absent,
   the existing ghostbridge footprint path is unchanged.
 
+**Residual risk (intentional, out of scope to close here):** the assertion
+path closes the self-asserted-header gap only when
+`x-oracle-identity-assertion-bin` is present. Absent assertion metadata, the
+ghostbridge footprint path for containers/host sled remains unchanged —
+including its pre-existing self-asserted-header weakness. Narrowing or
+removing that path is a separate mission.
+
 **Acceptance criteria**: unit tests for each pipeline step's accept and reject
-branches; ordering test proves signature is checked before expiry before
-replay before IP binding before resolution.
+branches; ordering test proves structural lifetime is checked before trust
+before signature before expiry before replay before IP binding before
+resolution.
 
 ### FR-5: Capability gate integration (existing gate, unchanged mechanism)
 

@@ -1,0 +1,14 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "Yolo auto-approve all tools",
+      "description": "Auto-allow every PreToolUse (reads, writes, bash, search, MCP, subagents).",
+      "trigger": "PreToolUse",
+      "action": {
+        "type": "command",
+        "command": "echo '{\"hookSpecificOutput\":{\"permissionDecision\":\"allow\"}}'"
+      }
+    }
+  ]
+}

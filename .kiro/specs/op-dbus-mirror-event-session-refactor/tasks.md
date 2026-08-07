@@ -1,3 +1,8 @@
+> **SUPERSEDED — DO NOT IMPLEMENT.**
+>
+> See [`SUPERSEDED.md`](./SUPERSEDED.md).
+> Successor: [`.kiro/specs/remove-projection-static-tree/`](../remove-projection-static-tree/).
+
 # Implementation Plan: D-Bus Mirror Event-Session Refactoring
 
 ## Overview
