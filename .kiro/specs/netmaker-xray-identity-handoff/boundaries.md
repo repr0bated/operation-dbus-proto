@@ -17,9 +17,10 @@ mission documents but does not deploy.
    (`x-oracle-identity-assertion-bin`) inside the existing TLS channel.
    Xray is a passthrough and never sees plaintext identity state.
 4. **`op-grpc-bridge` is the sole validator and the application
-   authorization boundary.** Validation order: parse → trusted decoy key →
-   signature → expiry → replay cache → source-IP binding → HumanPrincipal
-   resolution → existing capability gate. Every step fail-closed.
+   authorization boundary.** Validation order: parse → structural lifetime
+   (`expires_at <= issued_at`) → trusted decoy key → signature → expiry →
+   replay cache → source-IP binding → HumanPrincipal resolution → existing
+   capability gate. Every step fail-closed.
 5. **Human identity, WireGuard key, login session, workspace container, and
    display alias are separate concepts.** A workspace container is not the
    human. System containers are never users. The display alias is
@@ -64,10 +65,14 @@ stand-ins.
 ### 3.1 Oracle decoy (EXTERNAL)
 
 - Terminates the human's WireGuard tunnel; the kernel verifies the peer.
-- Maps the authenticated peer pubkey to a registered `HumanPrincipal` (via
-  `resolve_key` on the generated gRPC surface).
 - Issues the signed assertion (decoy Ed25519 key identified by
-  `decoy_key_id`) with TTL ≤ 900 s.
+  `decoy_key_id`) with TTL ≤ 900 s for the **WG-authenticated peer pubkey**.
+- **Enrollment is out-of-band, not at connect time.** Humans are
+  pre-registered via `human_principal.register_key` (ops/admin through the
+  generated gRPC/`PluginService` surface) before they are expected to
+  authenticate. The decoy does **not** call live `resolve_key` on the bridge
+  as a prerequisite to issuance; unknown/revoked keys are rejected at the
+  bridge's resolve step when the assertion is presented.
 - The decoy's verifying keys are provisioned to the bridge's trust store
   (`OP_DECOY_TRUST_STORE`, default `/etc/opdbus/decoy-trust.json`) by an
   operational process outside this mission.
@@ -91,7 +96,23 @@ stand-ins.
 - Live config only at `/etc/xray/xray_config.json` inside the container;
   models never write or reload xray.
 
-## 4 · Mission safety boundaries (workers NEVER violate)
+## 4 · Adjacent ops spec (documented, not implemented here)
+
+**Cross-reference:** `.kiro/specs/3tched-ghostbridge-control-plane/`
+
+| Concern | Owner |
+|---|---|
+| Public CF surface, mail half-and-half, REALITY camouflage ops | control-plane spec |
+| Thin email enroll *channel* (not assertion crypto) | control-plane spec |
+| Human WG terminates at Oracle decoy; no host `wg-lan` | BOTH (this mission enforces in code gates) |
+| NetMaker = transport only, not identity authority | BOTH |
+| `OracleIdentityAssertion` / HumanPrincipal / bridge validator | THIS mission |
+| OpenFlow IP:port demux (non-identity) | control-plane / existing OVS work |
+
+Do not reintroduce CF tunnels/live streams as identity transport. Assertion
+carriage remains INNER gRPC metadata after decoy WG auth.
+
+## 5 · Mission safety boundaries (workers NEVER violate)
 
 - No deploy, no sudo, no `/etc` edits, no service restarts, no live-host
   mutation. Cargo tests only.

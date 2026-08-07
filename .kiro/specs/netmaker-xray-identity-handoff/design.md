@@ -22,8 +22,9 @@ multiplied trusted containers, and never achieved a cryptographic binding.
    `OracleIdentityAssertion` rides as gRPC metadata inside the existing TLS
    channel through passthrough xray. Xray never sees or touches it.
 3. **D-3 — `op-grpc-bridge` is the SOLE validator.** Pipeline: parse →
-   trusted decoy key → signature → expiry → replay cache → source-IP binding
-   → HumanPrincipal resolution → existing capability gate.
+   structural lifetime (`expires_at <= issued_at`) → trusted decoy key →
+   signature → expiry → replay cache → source-IP binding → HumanPrincipal
+   resolution → existing capability gate.
 4. **D-4 — "IdentitySled BECOMES the provisioned container" is reused
    as-is** (`identity_sled.rs`, `identity_sled_dispatch.rs`). Containers stay
    containers; humans are a NEW, separate concept (D-5).
@@ -85,9 +86,9 @@ human device ──WG──► Oracle decoy ──signs──► OracleIdentityA
                         │  TLS (terminated at bridge, not xray)
                         ▼
                 op-grpc-bridge  ── SOLE VALIDATOR ──
-                  interceptor: parse → trust store → signature →
-                    expiry → replay cache → ConnectInfo source-IP
-                    binding → HumanPrincipal.resolve_key
+                  interceptor: parse → structural lifetime → trust store →
+                    signature → expiry → replay cache → ConnectInfo
+                    source-IP binding → HumanPrincipal.resolve_key
                   extensions += HumanPrincipalIdentity{principal_id,
                     human_pubkey, footprint, expires_at}
                   enforce_bridge_capability (UNCHANGED mechanism,
@@ -240,8 +241,8 @@ pub enum AssertionRejection {
 
 pub struct AssertionValidator { /* trust_store, replay_cache, engine, leeway, max_lifetime */ }
 impl AssertionValidator {
-    /// Pipeline order is contractual: parse → trust → signature → expiry →
-    /// replay → source-IP → resolve. Each step fail-closed.
+    /// Pipeline order is contractual: parse → structural lifetime → trust →
+    /// signature → expiry → replay → source-IP → resolve. Each step fail-closed.
     pub fn validate(&self, wire: &[u8], source: Option<SocketAddr>)
         -> Result<HumanPrincipalIdentity, AssertionRejection>;
 }
@@ -348,7 +349,15 @@ contains no `identity|session_id|assertion` references. Includes a self-test
 | Key unknown / revoked | `unauthenticated(UnknownPrincipal / RevokedPrincipal)` |
 | Registry (Cozo) unavailable during resolve | `unauthenticated(RegistryUnavailable)` — never allow |
 | Valid assertion, capability not granted | `PermissionDenied` at the existing gate |
-| Bridge restart | Replay cache empties; safety preserved because expired assertions stay rejected and TTLs are short |
+| Bridge restart | In-process replay cache empties. Still-valid TTLs can be replayed until expiry — accepted residual risk for phase 1 (short TTL ≤ 900 s); durable/cross-restart replay is deferred. Expired assertions stay rejected. |
+
+### 6.1 Residual risks (documented, not closed by this mission)
+
+| Risk | Disposition |
+|---|---|
+| Ghostbridge footprint path remains when assertion metadata is absent | Intentional: containers/host sled keep working. Assertion path is additive/opt-in per request. Closing the self-asserted-header path for non-assertion clients is a separate mission. |
+| Source-IP binding depends on NetMaker inner-IP preservation (no NAT) | External assumption (`boundaries.md` §3.2); if a deployment NATs, re-specify before enabling assertions there. |
+| Replay cache is in-process only | Bridge restart opens a short replay window for live TTLs; phase-1 acceptance (see failure table). |
 
 ## 7 · Verification Model
 
@@ -373,7 +382,9 @@ contains no `identity|session_id|assertion` references. Includes a self-test
 4. E2E simulator battery.
 5. Boundary docs + negative topology gates.
 
-## 9 · Verified System Facts (2026-08-04, HEAD bf7a9090)
+## 9 · Verified System Facts
+
+### 9.1 Baseline before implementation (2026-08-04, HEAD bf7a9090)
 
 | Claim | Status | Evidence |
 |---|---|---|
@@ -384,9 +395,20 @@ contains no `identity|session_id|assertion` references. Includes a self-test
 | New-plugin pattern: `inventory::submit!` only (no `default_registry.rs` edit); methods need BOTH a `dispatch_method_call` arm and a `mutate` else-if branch | VERIFIED | netmaker / identity_sled walk-through |
 | Cozo per-plugin persistence via `CozoGraphShuttle::new_persistent`, own DB path, `spawn_blocking` | VERIFIED | `op-cozo-store/src/lib.rs`, identity_sled template |
 | TLS at bridge: `ZEROCLAW_TLS_CERT/KEY` or rcgen self-signed; ephemeral TLS test fixture exists | VERIFIED | `server.rs:111`, `tests/tonic_tls_reflection.rs` |
-| No ed25519 dependency or signing code anywhere in the workspace | VERIFIED | grep over all `Cargo.toml` |
+| No ed25519 dependency or signing code anywhere in the workspace | VERIFIED **at baseline** | grep over all `Cargo.toml` |
 | `op-xray-daemon` is lifecycle-only | VERIFIED | grep: no identity/session/footprint refs |
 | Baseline tests: op-identity 27/27, op-plugins 139/139, op-grpc-bridge 69/69 serial (1 parallel flake), op-cozo-store needs `CXXFLAGS="-include cstdint"` | VERIFIED | `/tmp/odbus-baseline-m02.log` |
+
+### 9.2 Post-implementation (branch `droid/netmaker-xray-identity-handoff`)
+
+| Claim | Status | Evidence |
+|---|---|---|
+| `op-identity::oracle_assertion` (OIA1) + `derive_principal_id` present | LANDED | `e31cfa8c` |
+| `human_principal` plugin + Cozo `HumanPrincipalRecord` | LANDED | `7ad8a374` |
+| `human_principal` dispatch through MutationEngine | LANDED | `4b8c8e3a` |
+| Assertion validator + interceptor wiring + negative topology gates | LANDED | `842ace37`, `6af1f480` |
+| Oracle assertion E2E battery over real TLS | LANDED | `14151507` |
+| ed25519 signing via `ed25519-dalek` in `op-identity` | PRESENT (was absent at baseline) | `crates/op-identity/Cargo.toml`, `src/oracle_assertion.rs` |
 
 ## 10 · Backlog / Future Work (deferred, one-line reasons)
 
