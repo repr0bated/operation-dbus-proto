@@ -28,6 +28,7 @@
 pub mod chat_store;
 pub mod email;
 pub mod groups_admin;
+pub mod grpc_proxy;
 pub mod handlers;
 pub mod mcp;
 pub mod mcp_agents;

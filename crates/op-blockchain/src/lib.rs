@@ -11,15 +11,19 @@
 #![deny(rustdoc::broken_intra_doc_links)]
 
 pub mod blockchain;
+pub mod btrfs_delta;
 pub mod btrfs_numa_integration;
 pub mod footprint;
 pub mod plugin_footprint;
 pub mod retention;
 pub mod snapshot;
-pub mod streaming_blockchain;
 
 // Re-export main types
-pub use blockchain::StreamingBlockchain;
+pub use blockchain::{
+    decode_vector, encode_vector, parse_block_number, parse_vector_block_number, ChainBlockRef,
+    ReplicationReport, StreamingBlockchain, SNAPSHOT_LABELS,
+};
+pub use btrfs_delta::{find_new_since, generation, received_uuid, FindNewDelta};
 pub use footprint::{BlockEvent, PluginFootprint};
 pub use retention::RetentionPolicy;
 pub use snapshot::SnapshotInterval;

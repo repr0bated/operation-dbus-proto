@@ -1273,6 +1273,10 @@ impl MutationEngine {
                 let args = serde_json::to_value(&parsed_value)?;
                 op_plugins::state_plugins::openflow::dispatch_openflow_method(method, &args).await?
             }
+            "procfs" => {
+                let args = serde_json::to_value(&parsed_value)?;
+                op_plugins::state_plugins::procfs::dispatch_procfs_method(method, &args).await?
+            }
             "privacy_routes" => {
                 let args = serde_json::to_value(&parsed_value)?;
                 op_plugins::state_plugins::privacy_routes::dispatch_privacy_routes_method(

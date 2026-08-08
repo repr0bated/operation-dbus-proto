@@ -11,7 +11,7 @@
 //! - Unified snapshot management
 //! - Shared compression and deduplication
 
-use crate::streaming_blockchain::StreamingBlockchain;
+use crate::blockchain::StreamingBlockchain;
 use crate::PluginFootprint;
 use anyhow::{Context, Result};
 use op_cache::{BtrfsCache, NumaTopology};
