@@ -42,21 +42,6 @@ pub struct Auth {
     pub scopes: Vec<String>,
 }
 
-/// Declared Gemini model entry.
-#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
-#[schemars(extend("x-oscal-subid" = "sch.software.antigravity-chat.model.schema@v1"))]
-pub struct Model {
-    #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "exp.software.antigravity-chat.model-id@v1"))]
-    pub id: String,
-    #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "exp.software.antigravity-chat.model-name@v1"))]
-    pub name: String,
-    #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "obs.software.antigravity-chat.model-available@v1"))]
-    pub available: bool,
-}
-
 /// Headless IDE and runtime configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "sch.software.antigravity-chat.config.schema@v1"))]
@@ -81,7 +66,19 @@ pub struct ChatConfig {
     pub code_assist: bool,
 }
 
+fn default_llm_plugin() -> String {
+    "large_language_model".to_string()
+}
+
+fn default_provider_route() -> String {
+    "gemini".to_string()
+}
+
 /// Top-level Antigravity Chat state.
+///
+/// Gemini model catalog is **not** owned here — resolve via `llm_plugin` +
+/// `provider_route` (default `large_language_model` / `gemini`). This plugin
+/// only holds the OAuth bridge, auth, IDE config, and a selected model id.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "sch.software.plugin.antigravity-chat.schema@v1"))]
 #[schemars(extend("x-oscal-category" = "llm"))]
@@ -95,9 +92,29 @@ pub struct AntigravityChatState {
     #[serde(default)]
     #[schemars(extend("x-oscal-subid" = "mut.software.antigravity-chat.auth@v1"))]
     pub auth: Auth,
+    /// Plugin that owns the model catalog (default large_language_model).
+    #[serde(default = "default_llm_plugin")]
+    #[schemars(
+        description = "Generation/catalog plugin Antigravity delegates to for models (default large_language_model). Catalog lives there; this plugin holds no Gemini model list.",
+        example = &"large_language_model",
+        extend("x-oscal-subid" = "mut.software.antigravity-chat.llm-plugin@v1")
+    )]
+    pub llm_plugin: String,
+    /// Provider route inside `llm_plugin` (default gemini).
+    #[serde(default = "default_provider_route")]
+    #[schemars(
+        description = "Provider route on llm_plugin for the Gemini catalog (default gemini).",
+        example = &"gemini",
+        extend("x-oscal-subid" = "mut.software.antigravity-chat.provider-route@v1")
+    )]
+    pub provider_route: String,
+    /// Session-selected model id from the delegated catalog; empty = provider default.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "exp.software.antigravity-chat.models@v1"))]
-    pub models: Vec<Model>,
+    #[schemars(
+        description = "Selected model id from the delegated catalog. Empty falls back to the provider default. Not a local catalog entry.",
+        extend("x-oscal-subid" = "mut.software.antigravity-chat.selected-model@v1")
+    )]
+    pub selected_model: String,
     #[serde(default)]
     #[schemars(extend("x-oscal-subid" = "sch.software.antigravity-chat.config@v1"))]
     pub config: ChatConfig,
@@ -132,23 +149,9 @@ impl AntigravityChatPlugin {
                 token_valid: false,
                 scopes: vec!["https://www.googleapis.com/auth/cloud-platform".to_string()],
             },
-            models: vec![
-                Model {
-                    id: "gemini-2.0-flash".to_string(),
-                    name: "Gemini 2.0 Flash".to_string(),
-                    available: false,
-                },
-                Model {
-                    id: "gemini-1.5-pro".to_string(),
-                    name: "Gemini 1.5 Pro".to_string(),
-                    available: false,
-                },
-                Model {
-                    id: "gemini-1.5-flash".to_string(),
-                    name: "Gemini 1.5 Flash".to_string(),
-                    available: false,
-                },
-            ],
+            llm_plugin: default_llm_plugin(),
+            provider_route: default_provider_route(),
+            selected_model: String::new(),
             config: ChatConfig {
                 headless: true,
                 display_service: "antigravity-display".to_string(),
@@ -166,7 +169,7 @@ impl StatePlugin for AntigravityChatPlugin {
         "antigravity_chat"
     }
     fn version(&self) -> &str {
-        "1.0.0"
+        "1.1.0"
     }
     fn schema(&self) -> Option<PluginSchema> {
         let mut schema = antigravity_chat_schema();
@@ -222,8 +225,8 @@ pub(crate) fn antigravity_chat_schema() -> PluginSchema {
         .expect("schemars schema serializes to JSON");
     let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "antigravity_chat",
-        "1.0.0",
-        "Antigravity Chat — OAuth bridge, Gemini models, headless IDE",
+        "1.1.0",
+        "Antigravity Chat — OAuth bridge and headless IDE; Gemini models via large_language_model/gemini",
         &root,
     );
 
@@ -233,10 +236,6 @@ pub(crate) fn antigravity_chat_schema() -> PluginSchema {
     #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
     pub struct GetBridgeStatusOutput {
         pub bridge: Bridge,
-    }
-    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-    pub struct ListModelsOutput {
-        pub models: Vec<Model>,
     }
     #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
     pub struct RefreshTokenOutput {
@@ -252,18 +251,19 @@ pub(crate) fn antigravity_chat_schema() -> PluginSchema {
         pub vnc_port: Option<u16>,
         #[serde(default)]
         pub code_assist: Option<bool>,
+        #[serde(default)]
+        pub selected_model: Option<String>,
     }
     #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
     pub struct ConfigureOutput {
         pub config: ChatConfig,
+        pub selected_model: String,
     }
 
-    // Backend note: this plugin's headless-IDE bridge has no live implementation
-    // yet (bridge.status stays "offline", models stay unavailable by default —
-    // see current_state()). Methods are declared so the UI can render controls
-    // and callers get a real "unknown method" vs "not implemented" distinction
-    // once dispatch is wired, matching the xray precedent for undispatched
-    // schema-declared methods.
+    // Backend note: headless-IDE bridge has no live implementation yet
+    // (bridge.status stays "offline" — see current_state()). Model catalog is
+    // owned by llm_plugin/provider_route; do not list models here. Methods are
+    // declared so the UI can render controls.
     schema.methods.insert(
         "get_bridge_status".to_string(),
         method_decl_from_schemars_with_output::<EmptyInput, GetBridgeStatusOutput>(
@@ -272,16 +272,6 @@ pub(crate) fn antigravity_chat_schema() -> PluginSchema {
             true,
             "antigravity_chat.read",
             "obs.software.antigravity-chat.bridge.status.get@v1",
-        ),
-    );
-    schema.methods.insert(
-        "list_models".to_string(),
-        method_decl_from_schemars_with_output::<EmptyInput, ListModelsOutput>(
-            "list_models",
-            SideEffect::Read,
-            true,
-            "antigravity_chat.read",
-            "obs.software.antigravity-chat.models.list@v1",
         ),
     );
     schema.methods.insert(
@@ -318,12 +308,16 @@ mod tests {
     fn schema_is_schemars_seeded_and_typed() {
         let schema = antigravity_chat_schema();
         assert_eq!(schema.name, "antigravity_chat");
-        assert_eq!(schema.version, "1.0.0");
+        assert_eq!(schema.version, "1.1.0");
         assert!(schema.fields.contains_key("status"));
         assert!(schema.fields.contains_key("bridge"));
         assert!(schema.fields.contains_key("auth"));
-        assert!(schema.fields.contains_key("models"));
+        assert!(schema.fields.contains_key("llm_plugin"));
+        assert!(schema.fields.contains_key("provider_route"));
+        assert!(schema.fields.contains_key("selected_model"));
         assert!(schema.fields.contains_key("config"));
+        assert!(!schema.fields.contains_key("models"));
+        assert!(!schema.methods.contains_key("list_models"));
     }
 
     #[test]

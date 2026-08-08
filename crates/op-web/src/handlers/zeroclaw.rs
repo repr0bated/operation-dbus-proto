@@ -174,10 +174,9 @@ pub async fn zeroclaw_chat_handler(
         .get("finish_reason")
         .and_then(serde_json::Value::as_str)
         .unwrap_or("stop");
-    let usage = result
-        .get("usage")
-        .cloned()
-        .unwrap_or(serde_json::Value::Null);
+    // Salad (and some other providers) emit usage counts as floats (e.g. 30.0).
+    // OpenAI-compatible clients like ZeroClaw deserialize them as u64 — coerce.
+    let usage = normalize_openai_usage(result.get("usage"));
 
     Json(serde_json::json!({
         "id": format!("chatcmpl-{}", uuid::Uuid::new_v4()),
@@ -196,6 +195,28 @@ pub async fn zeroclaw_chat_handler(
         "usage": usage,
     }))
     .into_response()
+}
+
+fn normalize_openai_usage(usage: Option<&serde_json::Value>) -> serde_json::Value {
+    let Some(serde_json::Value::Object(map)) = usage else {
+        return serde_json::Value::Null;
+    };
+    let mut out = serde_json::Map::new();
+    for key in ["prompt_tokens", "completion_tokens", "total_tokens"] {
+        if let Some(v) = map.get(key) {
+            let n = v
+                .as_u64()
+                .or_else(|| v.as_i64().map(|i| i.max(0) as u64))
+                .or_else(|| v.as_f64().map(|f| f.max(0.0).round() as u64))
+                .unwrap_or(0);
+            out.insert(key.to_string(), serde_json::json!(n));
+        }
+    }
+    // Preserve any other usage fields untouched.
+    for (k, v) in map {
+        out.entry(k.clone()).or_insert_with(|| v.clone());
+    }
+    serde_json::Value::Object(out)
 }
 
 /// Streaming belongs to the bridge's gRPC ChatService, not a second HTTP
