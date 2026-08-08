@@ -1,12 +1,13 @@
 //! Antigravity SDK provider plugin.
 //!
-//! Publishes the full Antigravity (Google Cloud / Vertex AI / Gemini) SDK
-//! surface through PluginSchema so the UI can render provider configuration,
-//! model selection, safety settings, generation controls, structured output
-//! schemas, MCP tools, and usage tracking from the D-Bus projection.
+//! Publishes Antigravity product surface (OAuth/Vertex auth, project, safety,
+//! generation defaults, endpoints, usage) through PluginSchema. Gemini model
+//! catalog ownership lives on the delegated `llm_plugin` (default
+//! `large_language_model`) — this plugin only holds `llm_plugin` /
+//! `provider_route` / `selected_model` references.
 
 use super::common::llm_projection::{
-    ConfigSchema, LlmProjection, LlmTool, ModelRoute, Provider, Router, StructuredOutput, UiSurface,
+    ConfigSchema, LlmProjection, LlmTool, Provider, Router, StructuredOutput, UiSurface,
 };
 use anyhow::Result;
 use async_trait::async_trait;
@@ -187,78 +188,6 @@ pub struct Project {
     #[serde(default)]
     #[schemars(extend("x-oscal-subid" = "mut.service.antigravity.project.labels@v1"))]
     pub labels: HashMap<String, String>,
-}
-
-/// A single model entry in the Antigravity catalog.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
-#[schemars(extend("x-oscal-subid" = "sch.software.antigravity.model-entry.schema@v1"))]
-pub struct ModelEntry {
-    /// Model identifier.
-    #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "exp.software.antigravity.model-entry.id@v1"))]
-    pub id: String,
-    /// Human-readable model name.
-    #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "exp.software.antigravity.model-entry.name@v1"))]
-    pub name: String,
-    /// Model family (gemini, gemma, embedding).
-    #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "obs.software.antigravity.model-entry.family@v1"))]
-    pub family: String,
-    /// Generation number.
-    #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "obs.software.antigravity.model-entry.generation@v1"))]
-    pub generation: Option<f64>,
-    /// Capability tags.
-    #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "exp.service.antigravity.model-entry.capabilities@v1"))]
-    pub capabilities: Vec<String>,
-    /// Context window size in tokens.
-    #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "obs.software.antigravity.model-entry.context-window@v1"))]
-    pub context_window: Option<i64>,
-    /// Maximum output tokens.
-    #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "obs.software.antigravity.model-entry.max-output-tokens@v1"))]
-    pub max_output_tokens: Option<i64>,
-    /// Supported input modalities.
-    #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "exp.service.antigravity.model-entry.modalities@v1"))]
-    pub supported_modalities: Vec<String>,
-    /// Whether the model supports an extended thinking mode.
-    #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "obs.software.antigravity.model-entry.thinking-mode@v1"))]
-    pub thinking_mode: bool,
-    /// Rate limit in requests per minute, null when unlimited.
-    #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "obs.software.antigravity.model-entry.rate-limit-rpm@v1"))]
-    pub rate_limit_rpm: Option<i64>,
-    /// Embedding dimensions, for embedding models.
-    #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "obs.software.antigravity.model-entry.dimensions@v1"))]
-    pub dimensions: Option<i64>,
-    /// Maximum input tokens, for embedding models.
-    #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "obs.software.antigravity.model-entry.max-input-tokens@v1"))]
-    pub max_input_tokens: Option<i64>,
-}
-
-/// Antigravity model catalog.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
-#[schemars(extend("x-oscal-subid" = "sch.software.antigravity.model-catalog.schema@v1"))]
-pub struct ModelCatalog {
-    /// Available models.
-    #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "exp.service.antigravity.model-catalog.entries@v1"))]
-    pub catalog: Vec<ModelEntry>,
-    /// Default model for general chat.
-    #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "exp.service.antigravity.model-catalog.default-model@v1"))]
-    pub default_model: String,
-    /// Default model for fast/low-latency chat.
-    #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "exp.service.antigravity.model-catalog.default-fast-model@v1"))]
-    pub default_fast_model: String,
 }
 
 /// Thinking mode configuration.
@@ -581,10 +510,6 @@ pub struct GenerativeLanguageEndpoints {
     #[serde(default)]
     #[schemars(extend("x-oscal-subid" = "mut.service.antigravity.generative-language-endpoints.count-tokens@v1"))]
     pub count_tokens: String,
-    /// Models list URL.
-    #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "mut.service.antigravity.generative-language-endpoints.models-list@v1"))]
-    pub models_list: String,
 }
 
 /// MCP compact endpoint reference.
@@ -675,7 +600,19 @@ pub struct Endpoints {
     pub gemma_api: GemmaEndpoints,
 }
 
+fn default_llm_plugin() -> String {
+    "large_language_model".to_string()
+}
+
+fn default_provider_route() -> String {
+    "gemini".to_string()
+}
+
 /// Top-level Antigravity state.
+///
+/// Gemini model catalog is not owned here — resolve via `llm_plugin` +
+/// `provider_route`. This plugin holds auth, project, safety, generation
+/// defaults, endpoints, usage, and a selected model id.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "sch.software.plugin.antigravity.schema@v1"))]
 #[schemars(extend("x-oscal-category" = "llm"))]
@@ -692,10 +629,29 @@ pub struct AntigravityState {
     #[serde(default)]
     #[schemars(extend("x-oscal-subid" = "exp.service.antigravity.project@v1"))]
     pub project: Project,
-    /// Model catalog.
+    /// Plugin that owns the model catalog (default large_language_model).
+    #[serde(default = "default_llm_plugin")]
+    #[schemars(
+        description = "Catalog plugin Antigravity delegates to for Gemini models (default large_language_model).",
+        example = &"large_language_model",
+        extend("x-oscal-subid" = "mut.software.antigravity.llm-plugin@v1")
+    )]
+    pub llm_plugin: String,
+    /// Provider route inside `llm_plugin` (default gemini).
+    #[serde(default = "default_provider_route")]
+    #[schemars(
+        description = "Provider route on llm_plugin for the Gemini catalog (default gemini).",
+        example = &"gemini",
+        extend("x-oscal-subid" = "mut.software.antigravity.provider-route@v1")
+    )]
+    pub provider_route: String,
+    /// Session-selected model id from the delegated catalog; empty = provider default.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "exp.service.antigravity.models@v1"))]
-    pub models: ModelCatalog,
+    #[schemars(
+        description = "Selected model id from the delegated catalog. Empty falls back to the provider default.",
+        extend("x-oscal-subid" = "mut.software.antigravity.selected-model@v1")
+    )]
+    pub selected_model: String,
     /// Generation configuration.
     #[serde(default)]
     #[schemars(extend("x-oscal-subid" = "sch.software.antigravity.generation-config@v1"))]
@@ -809,6 +765,9 @@ impl AntigravityPlugin {
                     m
                 },
             },
+            llm_plugin: default_llm_plugin(),
+            provider_route: default_provider_route(),
+            selected_model: String::new(),
             projection: LlmProjection {
                 providers: vec![
                     Provider {
@@ -824,243 +783,33 @@ impl AntigravityPlugin {
                         auth: "oauth".to_string(),
                         sdk: "google.antigravity".to_string(),
                         oscal_source: "/opdbus/v1/plugins/oscal_subid_registry".to_string(),
-                        ..Default::default()
-                    },
-                    Provider {
-                        id: "google".to_string(),
-                        route: "gemini".to_string(),
-                        kind: "provider".to_string(),
-                        aliases: vec![
-                            "gemini".to_string(),
-                            "google-gemini".to_string(),
-                            "vertex".to_string(),
-                        ],
-                        endpoint: format!("https://{}-aiplatform.googleapis.com/v1", location),
-                        auth: "oauth".to_string(),
-                        sdk: "google-cloud-aiplatform".to_string(),
-                        ..Default::default()
-                    },
-                    Provider {
-                        id: "gemma-virtual".to_string(),
-                        route: "antigravity:gemma".to_string(),
-                        kind: "virtual".to_string(),
-                        aliases: vec!["gemma4".to_string(), "gemma-online".to_string()],
-                        endpoint: "https://gemma.googleapis.com/v1".to_string(),
-                        auth: "api_key".to_string(),
-                        sdk: "google.gemma".to_string(),
-                        description: "Gemma models accessible through Antigravity virtual provider".to_string(),
-                        ..Default::default()
-                    },
-                    Provider {
-                        id: "factory".to_string(),
-                        route: "factory".to_string(),
-                        kind: "orchestrator".to_string(),
-                        aliases: vec![
-                            "default".to_string(),
-                            "auto".to_string(),
-                            "droid".to_string(),
-                        ],
-                        endpoint: "https://api.factory.ai/api/v0".to_string(),
-                        auth: "bearer".to_string(),
-                        ..Default::default()
-                    },
-                    Provider {
-                        id: "ollama".to_string(),
-                        route: "ollama".to_string(),
-                        kind: "local".to_string(),
-                        aliases: vec!["gemma".to_string(), "gemma4".to_string()],
-                        endpoint: "http://localhost:11434".to_string(),
-                        auth: "none".to_string(),
-                        ..Default::default()
-                    },
-                    Provider {
-                        id: "oscal".to_string(),
-                        route: "oscal".to_string(),
-                        kind: "policy".to_string(),
-                        aliases: vec![
-                            "compliance".to_string(),
-                            "subid".to_string(),
-                            "nist".to_string(),
-                        ],
-                        source: "/opdbus/v1/plugins/oscal_subid_registry".to_string(),
+                        description: "Antigravity OAuth/SDK front-door; Gemini catalog via llm_plugin/provider_route".to_string(),
                         ..Default::default()
                     },
                 ],
-                model_routes: vec![
-                    ModelRoute {
-                        hint: "best".to_string(),
-                        provider: "antigravity".to_string(),
-                        model: "gemini-3-pro-preview".to_string(),
-                        kind: "chat".to_string(),
-                        available: true,
-                        status: "active".to_string(),
-                        status_reason: "Gemini 3 Pro - primary Antigravity model".to_string(),
-                        ..Default::default()
-                    },
-                    ModelRoute {
-                        hint: "code".to_string(),
-                        provider: "antigravity".to_string(),
-                        model: "gemini-3-pro-preview".to_string(),
-                        kind: "chat".to_string(),
-                        available: true,
-                        status: "active".to_string(),
-                        status_reason: "Gemini 3 Pro for code generation tasks".to_string(),
-                        ..Default::default()
-                    },
-                    ModelRoute {
-                        hint: "fast".to_string(),
-                        provider: "antigravity".to_string(),
-                        model: "gemini-3.5-flash".to_string(),
-                        kind: "chat".to_string(),
-                        available: true,
-                        status: "active".to_string(),
-                        status_reason: "Gemini 3.5 Flash for low-latency inference".to_string(),
-                        ..Default::default()
-                    },
-                    ModelRoute {
-                        hint: "reasoning".to_string(),
-                        provider: "antigravity".to_string(),
-                        model: "gemini-3-pro-preview".to_string(),
-                        kind: "chat".to_string(),
-                        available: true,
-                        status: "active".to_string(),
-                        status_reason: "Gemini 3 Pro with thinking mode for complex reasoning".to_string(),
-                        ..Default::default()
-                    },
-                    ModelRoute {
-                        hint: "vision".to_string(),
-                        provider: "antigravity".to_string(),
-                        model: "gemini-2.5-pro-vision".to_string(),
-                        kind: "multimodal".to_string(),
-                        available: true,
-                        status: "active".to_string(),
-                        status_reason: "Gemini 2.5 Pro Vision for image/video understanding".to_string(),
-                        ..Default::default()
-                    },
-                    ModelRoute {
-                        hint: "embedding".to_string(),
-                        provider: "antigravity".to_string(),
-                        model: "text-embedding-005".to_string(),
-                        kind: "embedding".to_string(),
-                        available: true,
-                        status: "active".to_string(),
-                        status_reason: "Vertex AI text embeddings for RAG and semantic search".to_string(),
-                        ..Default::default()
-                    },
-                    ModelRoute {
-                        hint: "code".to_string(),
-                        provider: "antigravity".to_string(),
-                        model: "gemini-2.5-pro".to_string(),
-                        kind: "chat".to_string(),
-                        available: true,
-                        status: "active".to_string(),
-                        status_reason: "Gemini 2.5 Pro - stable code generation".to_string(),
-                        ..Default::default()
-                    },
-                    ModelRoute {
-                        hint: "fast".to_string(),
-                        provider: "antigravity".to_string(),
-                        model: "gemini-2.5-flash".to_string(),
-                        kind: "chat".to_string(),
-                        available: true,
-                        status: "active".to_string(),
-                        status_reason: "Gemini 2.5 Flash for quick tasks".to_string(),
-                        ..Default::default()
-                    },
-                    ModelRoute {
-                        hint: "audio".to_string(),
-                        provider: "antigravity".to_string(),
-                        model: "gemini-2.5-flash-audio".to_string(),
-                        kind: "multimodal".to_string(),
-                        available: true,
-                        status: "active".to_string(),
-                        status_reason: "Gemini 2.5 Flash with native audio input".to_string(),
-                        ..Default::default()
-                    },
-                    ModelRoute {
-                        hint: "code".to_string(),
-                        provider: "google".to_string(),
-                        model: "gemini-2.5-pro".to_string(),
-                        kind: "chat".to_string(),
-                        available: true,
-                        status: "active".to_string(),
-                        status_reason: "Direct Vertex AI access to Gemini 2.5 Pro".to_string(),
-                        ..Default::default()
-                    },
-                    ModelRoute {
-                        hint: "fast".to_string(),
-                        provider: "google".to_string(),
-                        model: "gemini-2.5-flash".to_string(),
-                        kind: "chat".to_string(),
-                        available: true,
-                        status: "active".to_string(),
-                        status_reason: "Direct Vertex AI access to Gemini 2.5 Flash".to_string(),
-                        ..Default::default()
-                    },
-                    ModelRoute {
-                        hint: "compliance".to_string(),
-                        provider: "oscal".to_string(),
-                        model: "NIST_SP_800-53_Rev5".to_string(),
-                        kind: "policy".to_string(),
-                        available: false,
-                        status: "declared".to_string(),
-                        status_reason: "OSCAL policy provider; requires oscal_subid_registry projection".to_string(),
-                        source: "/opdbus/v1/plugins/oscal_subid_registry".to_string(),
-                        ..Default::default()
-                    },
-                ],
+                // Model catalog + routes owned by llm_plugin/provider_route.
+                model_routes: vec![],
                 router: Router {
-                    provider: "ollama".to_string(),
-                    model: "gemma4".to_string(),
-                    endpoint: "http://localhost:11434".to_string(),
-                    scope: "all".to_string(),
-                    role: "classifier".to_string(),
+                    provider: "large_language_model".to_string(),
+                    model: String::new(),
+                    endpoint: String::new(),
+                    scope: "delegated".to_string(),
+                    role: "catalog_ref".to_string(),
                     emits: vec![
-                        "provider".to_string(),
-                        "model".to_string(),
-                        "hint".to_string(),
-                        "candidate_subids".to_string(),
-                        "confidence".to_string(),
+                        "llm_plugin".to_string(),
+                        "provider_route".to_string(),
+                        "selected_model".to_string(),
                     ],
-                    oscal_source: "/opdbus/v1/plugins/oscal_subid_registry".to_string(),
+                    oscal_source: "/opdbus/v1/plugins/large_language_model".to_string(),
                     classification_rules: serde_json::json!({
-                        "code_task": {"hint": "code", "provider": "antigravity", "model": "gemini-3-pro-preview"},
-                        "fast_task": {"hint": "fast", "provider": "antigravity", "model": "gemini-3.5-flash"},
-                        "reasoning_task": {"hint": "reasoning", "provider": "antigravity", "model": "gemini-3-pro-preview"},
-                        "vision_task": {"hint": "vision", "provider": "antigravity", "model": "gemini-2.5-pro-vision"},
-                        "compliance_task": {"hint": "compliance", "provider": "oscal", "model": "NIST_SP_800-53_Rev5"}
+                        "catalog": {
+                            "llm_plugin": "large_language_model",
+                            "provider_route": "gemini",
+                            "methods": ["list_models", "list_providers"]
+                        }
                     }),
                 },
                 tools: vec![
-                    LlmTool {
-                        name: "antigravity.chat".to_string(),
-                        description: "Send a chat turn to Antigravity/Gemini and return the response with optional structured output.".to_string(),
-                        parameters: serde_json::json!({
-                            "type": "object",
-                            "properties": {
-                                "message": {"type": "string", "description": "User message content"},
-                                "model": {"type": "string", "enum": ["gemini-3-pro-preview", "gemini-3.5-flash", "gemini-2.5-pro", "gemini-2.5-flash"], "default": "gemini-3-pro-preview"},
-                                "temperature": {"type": "number", "minimum": 0.0, "maximum": 2.0},
-                                "response_schema": {"type": "object", "description": "Pydantic BaseModel to coerce structured output"},
-                                "thinking_config": {"type": "object", "properties": {"include_thoughts": {"type": "boolean"}, "thinking_budget": {"type": "integer"}}}
-                            },
-                            "required": ["message"]
-                        }),
-                        ..Default::default()
-                    },
-                    LlmTool {
-                        name: "antigravity.models.list".to_string(),
-                        description: "List available Gemini models with capabilities and status.".to_string(),
-                        parameters: serde_json::json!({
-                            "type": "object",
-                            "properties": {
-                                "family": {"type": "string", "enum": ["gemini", "gemma", "embedding"]},
-                                "capabilities": {"type": "array", "items": {"type": "string"}}
-                            },
-                            "required": []
-                        }),
-                        ..Default::default()
-                    },
                     LlmTool {
                         name: "antigravity.auth.status".to_string(),
                         description: "Check OAuth token validity, Vertex AI config, and service account status.".to_string(),
@@ -1086,15 +835,15 @@ impl AntigravityPlugin {
                     },
                     LlmTool {
                         name: "antigravity.safety.configure".to_string(),
-                        description: "Update Gemini safety filter thresholds per category.".to_string(),
+                        description: "Update safety filter thresholds per category.".to_string(),
                         parameters: serde_json::json!({
                             "type": "object",
                             "properties": {
-                                "harassment": {"type": "string", "enum": ["BLOCK_NONE", "BLOCK_ONLY_HIGH", "BLOCK_MEDIUM_AND_ABOVE", "BLOCK_LOW_AND_ABOVE", "HARM_BLOCK_THRESHOLD_UNSPECIFIED"]},
-                                "hate_speech": {"type": "string", "enum": ["BLOCK_NONE", "BLOCK_ONLY_HIGH", "BLOCK_MEDIUM_AND_ABOVE", "BLOCK_LOW_AND_ABOVE", "HARM_BLOCK_THRESHOLD_UNSPECIFIED"]},
-                                "sexually_explicit": {"type": "string", "enum": ["BLOCK_NONE", "BLOCK_ONLY_HIGH", "BLOCK_MEDIUM_AND_ABOVE", "BLOCK_LOW_AND_ABOVE", "HARM_BLOCK_THRESHOLD_UNSPECIFIED"]},
-                                "dangerous": {"type": "string", "enum": ["BLOCK_NONE", "BLOCK_ONLY_HIGH", "BLOCK_MEDIUM_AND_ABOVE", "BLOCK_LOW_AND_ABOVE", "HARM_BLOCK_THRESHOLD_UNSPECIFIED"]},
-                                "civic_integrity": {"type": "string", "enum": ["BLOCK_NONE", "BLOCK_ONLY_HIGH", "BLOCK_MEDIUM_AND_ABOVE", "BLOCK_LOW_AND_ABOVE", "HARM_BLOCK_THRESHOLD_UNSPECIFIED"]}
+                                "harassment": {"type": "string"},
+                                "hate_speech": {"type": "string"},
+                                "sexually_explicit": {"type": "string"},
+                                "dangerous": {"type": "string"},
+                                "civic_integrity": {"type": "string"}
                             },
                             "required": []
                         }),
@@ -1124,11 +873,6 @@ impl AntigravityPlugin {
                         schema: "antigravity".to_string(),
                     },
                     UiSurface {
-                        path: "/antigravity/models".to_string(),
-                        name: "Gemini Models".to_string(),
-                        schema: "antigravity.models".to_string(),
-                    },
-                    UiSurface {
                         path: "/antigravity/safety".to_string(),
                         name: "Safety Settings".to_string(),
                         schema: "antigravity.safety".to_string(),
@@ -1142,11 +886,6 @@ impl AntigravityPlugin {
                         path: "/antigravity/auth".to_string(),
                         name: "Authentication".to_string(),
                         schema: "antigravity.auth".to_string(),
-                    },
-                    UiSurface {
-                        path: "/antigravity/tools".to_string(),
-                        name: "MCP Tools".to_string(),
-                        schema: "antigravity.tools".to_string(),
                     },
                 ],
                 structured_output: StructuredOutput {
@@ -1171,188 +910,6 @@ impl AntigravityPlugin {
                     refusals_as_none: true,
                     required: true,
                 },
-            },
-            models: ModelCatalog {
-                catalog: vec![
-                    ModelEntry {
-                        id: "gemini-3-pro-preview".to_string(),
-                        name: "Gemini 3 Pro Preview".to_string(),
-                        family: "gemini".to_string(),
-                        generation: Some(3.0),
-                        capabilities: vec![
-                            "chat".to_string(),
-                            "code".to_string(),
-                            "reasoning".to_string(),
-                            "vision".to_string(),
-                            "tools".to_string(),
-                            "structured_output".to_string(),
-                            "function_calling".to_string(),
-                        ],
-                        context_window: Some(2097152),
-                        max_output_tokens: Some(65536),
-                        supported_modalities: vec![
-                            "text".to_string(),
-                            "image".to_string(),
-                            "video".to_string(),
-                            "audio".to_string(),
-                        ],
-                        thinking_mode: true,
-                        rate_limit_rpm: Some(360),
-                        ..Default::default()
-                    },
-                    ModelEntry {
-                        id: "gemini-3.5-flash".to_string(),
-                        name: "Gemini 3.5 Flash".to_string(),
-                        family: "gemini".to_string(),
-                        generation: Some(3.5),
-                        capabilities: vec![
-                            "chat".to_string(),
-                            "fast".to_string(),
-                            "reasoning".to_string(),
-                            "vision".to_string(),
-                            "tools".to_string(),
-                            "structured_output".to_string(),
-                        ],
-                        context_window: Some(1048576),
-                        max_output_tokens: Some(32768),
-                        supported_modalities: vec![
-                            "text".to_string(),
-                            "image".to_string(),
-                            "video".to_string(),
-                        ],
-                        thinking_mode: true,
-                        rate_limit_rpm: Some(2000),
-                        ..Default::default()
-                    },
-                    ModelEntry {
-                        id: "gemini-2.5-pro".to_string(),
-                        name: "Gemini 2.5 Pro".to_string(),
-                        family: "gemini".to_string(),
-                        generation: Some(2.5),
-                        capabilities: vec![
-                            "chat".to_string(),
-                            "code".to_string(),
-                            "reasoning".to_string(),
-                            "vision".to_string(),
-                            "tools".to_string(),
-                            "structured_output".to_string(),
-                            "function_calling".to_string(),
-                        ],
-                        context_window: Some(2097152),
-                        max_output_tokens: Some(65536),
-                        supported_modalities: vec![
-                            "text".to_string(),
-                            "image".to_string(),
-                            "video".to_string(),
-                            "audio".to_string(),
-                        ],
-                        thinking_mode: true,
-                        rate_limit_rpm: Some(360),
-                        ..Default::default()
-                    },
-                    ModelEntry {
-                        id: "gemini-2.5-flash".to_string(),
-                        name: "Gemini 2.5 Flash".to_string(),
-                        family: "gemini".to_string(),
-                        generation: Some(2.5),
-                        capabilities: vec![
-                            "chat".to_string(),
-                            "fast".to_string(),
-                            "code".to_string(),
-                            "tools".to_string(),
-                            "structured_output".to_string(),
-                        ],
-                        context_window: Some(1048576),
-                        max_output_tokens: Some(32768),
-                        supported_modalities: vec![
-                            "text".to_string(),
-                            "image".to_string(),
-                        ],
-                        thinking_mode: false,
-                        rate_limit_rpm: Some(2000),
-                        ..Default::default()
-                    },
-                    ModelEntry {
-                        id: "gemini-2.5-pro-vision".to_string(),
-                        name: "Gemini 2.5 Pro Vision".to_string(),
-                        family: "gemini".to_string(),
-                        generation: Some(2.5),
-                        capabilities: vec![
-                            "vision".to_string(),
-                            "image_understanding".to_string(),
-                            "video_understanding".to_string(),
-                            "multimodal".to_string(),
-                        ],
-                        context_window: Some(1048576),
-                        max_output_tokens: Some(32768),
-                        supported_modalities: vec![
-                            "text".to_string(),
-                            "image".to_string(),
-                            "video".to_string(),
-                        ],
-                        thinking_mode: false,
-                        rate_limit_rpm: Some(360),
-                        ..Default::default()
-                    },
-                    ModelEntry {
-                        id: "gemini-2.5-flash-audio".to_string(),
-                        name: "Gemini 2.5 Flash Audio".to_string(),
-                        family: "gemini".to_string(),
-                        generation: Some(2.5),
-                        capabilities: vec![
-                            "audio".to_string(),
-                            "transcription".to_string(),
-                            "multimodal".to_string(),
-                        ],
-                        context_window: Some(1048576),
-                        max_output_tokens: Some(32768),
-                        supported_modalities: vec![
-                            "text".to_string(),
-                            "audio".to_string(),
-                        ],
-                        thinking_mode: false,
-                        rate_limit_rpm: Some(1000),
-                        ..Default::default()
-                    },
-                    ModelEntry {
-                        id: "text-embedding-005".to_string(),
-                        name: "Text Embedding 005".to_string(),
-                        family: "embedding".to_string(),
-                        generation: Some(5.0),
-                        capabilities: vec![
-                            "embedding".to_string(),
-                            "semantic_search".to_string(),
-                            "rag".to_string(),
-                        ],
-                        context_window: None,
-                        max_output_tokens: None,
-                        supported_modalities: vec!["text".to_string()],
-                        thinking_mode: false,
-                        rate_limit_rpm: Some(1500),
-                        dimensions: Some(768),
-                        max_input_tokens: Some(2048),
-                    },
-                    ModelEntry {
-                        id: "gemma4".to_string(),
-                        name: "Gemma 4".to_string(),
-                        family: "gemma".to_string(),
-                        generation: None,
-                        capabilities: vec![
-                            "chat".to_string(),
-                            "code".to_string(),
-                            "router".to_string(),
-                            "classifier".to_string(),
-                        ],
-                        context_window: Some(32768),
-                        max_output_tokens: Some(8192),
-                        supported_modalities: vec!["text".to_string()],
-                        thinking_mode: false,
-                        rate_limit_rpm: None,
-                        ..Default::default()
-                    },
-                ],
-                default_model: "gemini-3-pro-preview".to_string(),
-                default_fast_model: "gemini-3.5-flash".to_string(),
             },
             generation_config: GenerationConfig {
                 temperature: 0.7,
@@ -1582,7 +1139,6 @@ impl AntigravityPlugin {
                     generate_content: "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent".to_string(),
                     stream_generate_content: "https://generativelanguage.googleapis.com/v1beta/models/{}:streamGenerateContent".to_string(),
                     count_tokens: "https://generativelanguage.googleapis.com/v1beta/models/{}:countTokens".to_string(),
-                    models_list: "https://generativelanguage.googleapis.com/v1beta/models".to_string(),
                 },
                 mcp_compact: McpCompactEndpoint {
                     url: "http://127.0.0.1:8080/mcp/compact".to_string(),
@@ -1613,7 +1169,7 @@ impl StatePlugin for AntigravityPlugin {
     }
 
     fn version(&self) -> &str {
-        "1.0.0"
+        "1.1.0"
     }
 
     fn schema(&self) -> Option<PluginSchema> {
@@ -1681,8 +1237,8 @@ pub(crate) fn antigravity_schema() -> PluginSchema {
         .expect("schemars schema serializes to JSON");
     let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "antigravity",
-        "1.0.0",
-        "Google Antigravity SDK provider — Vertex AI Gemini models, OAuth auth, structured output, OSCAL compliance routing",
+        "1.1.0",
+        "Google Antigravity SDK — OAuth/Vertex auth, safety, generation defaults; Gemini catalog via large_language_model/gemini",
         &root,
     );
     if let Ok(state) = simd_json::serde::to_owned_value(AntigravityPlugin::current_state()) {
@@ -1693,21 +1249,6 @@ pub(crate) fn antigravity_schema() -> PluginSchema {
     use super::plugin_scaffold_helpers::method_decl_from_schemars_with_output;
     use op_state_store::SideEffect;
 
-    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-    pub struct ListModelsInput {
-        /// Filter by model family (gemini, gemma, embedding). Empty = all.
-        #[serde(default)]
-        pub family: String,
-        /// Filter by required capability tags (e.g. "vision", "tools"). Empty = no filter.
-        #[serde(default)]
-        pub capabilities: Vec<String>,
-    }
-    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-    pub struct ListModelsOutput {
-        pub models: Vec<ModelEntry>,
-        pub default_model: String,
-        pub default_fast_model: String,
-    }
     #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
     pub struct GetAuthStatusOutput {
         pub auth: Auth,
@@ -1743,19 +1284,8 @@ pub(crate) fn antigravity_schema() -> PluginSchema {
         pub safety_settings: Vec<SafetySetting>,
     }
 
-    // NOTE: no `chat` method here by design — `zeroclaw.Chat` is the sole chat
-    // entrypoint (one routing authority); a provider-specific chat method here
-    // would hardcode callers to Gemini/Vertex AI and bypass zeroclaw's routing.
-    schema.methods.insert(
-        "list_models".to_string(),
-        method_decl_from_schemars_with_output::<ListModelsInput, ListModelsOutput>(
-            "list_models",
-            SideEffect::Read,
-            true,
-            "antigravity.read",
-            "obs.software.antigravity.models.list@v1",
-        ),
-    );
+    // NOTE: no `chat` / `list_models` here by design — catalog and chat live on
+    // llm_plugin (default large_language_model) via provider_route.
     schema.methods.insert(
         "get_auth_status".to_string(),
         method_decl_from_schemars_with_output::<
@@ -1835,10 +1365,14 @@ mod tests {
     fn schema_is_schemars_seeded_and_typed() {
         let schema = antigravity_schema();
         assert_eq!(schema.name, "antigravity");
-        assert_eq!(schema.version, "1.0.0");
+        assert_eq!(schema.version, "1.1.0");
         assert!(schema.fields.contains_key("auth"));
         assert!(schema.fields.contains_key("project"));
-        assert!(schema.fields.contains_key("models"));
+        assert!(schema.fields.contains_key("llm_plugin"));
+        assert!(schema.fields.contains_key("provider_route"));
+        assert!(schema.fields.contains_key("selected_model"));
+        assert!(!schema.fields.contains_key("models"));
+        assert!(!schema.methods.contains_key("list_models"));
     }
 
     #[test]

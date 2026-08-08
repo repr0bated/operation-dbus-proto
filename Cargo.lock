@@ -5940,6 +5940,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "op-plugin-lint"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "regex",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "syn 2.0.119",
+ "thiserror 1.0.69",
+ "toml",
+]
+
+[[package]]
 name = "op-plugins"
 version = "1.0.0"
 dependencies = [
