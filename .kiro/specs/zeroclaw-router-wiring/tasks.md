@@ -6,19 +6,19 @@ Do not paste secrets from this repo. Obtain identity material from ops on the ho
 
 ## Gates (must be green before Task 4+)
 
-- [ ] **G1** From router: `wget -q -O- http://10.0.0.2:8080/v1/models` without
+- [x] **G1** From router: `wget -q -O- http://10.0.0.2:8080/v1/models` without
   identity returns 401/403 (op-web reachable + fail-closed).
-- [ ] **G2** Machine footprint minted/known on host; grants allow required
+- [x] **G2** Machine footprint minted/known on host; grants allow required
   zeroclaw capabilities for that footprint.
-- [ ] **G3** Binary `/fast/zeroclaw/bin/zeroclaw` and init `/etc/init.d/zeroclaw`
+- [x] **G3** Binary `/fast/zeroclaw/bin/zeroclaw` and init `/etc/init.d/zeroclaw`
   present and sane.
 
 ## Prerequisites
 
 - [x] Router SSH via LAN `192.168.1.1` (prior claim; re-check)
 - [x] Router reaches `10.0.0.2:8090` (ping / bridge `/` — prior claim)
-- [ ] Router reaches `10.0.0.2:8080` (OpenAI surface) — **G1**
-- [ ] Ops-provisioned Ghostbridge headers available on implementer machine — **G2**
+- [x] Router reaches `10.0.0.2:8080` (OpenAI surface) — **G1**
+- [x] Ops-provisioned Ghostbridge headers available on implementer machine — **G2**
 
 ## Tasks
 
@@ -48,7 +48,7 @@ cat /etc/init.d/zeroclaw
 ```
 
 Confirm `ZEROCLAW_CONFIG_DIR`, `HOME` state dir, and
-`zeroclaw gateway start --port 42617`. Update from `design.md` if needed;
+`zeroclaw daemon --port 42617` (writes `daemon_state.json` for doctor). Update from `design.md` if needed;
 `chmod +x`.
 
 ### Task 4: Enable and start
@@ -89,18 +89,22 @@ document’s secrets.
 
 ## Success criteria
 
-- [ ] Process up; `:42617` on configured bind only
-- [ ] Unauthorized op-web `/v1` rejected
-- [ ] Authorized gateway `/v1/models` succeeds via op-web → bridge
-- [ ] No live footprints/trace-ids in git
-- [ ] URI targets `:8080/v1`, not `:8090/v1`
+- [x] Process up; `:42617` on configured bind only
+- [x] Unauthorized op-web `/v1` rejected
+- [x] Authorized provider catalog fetch succeeds via op-web → bridge
+  (`zeroclaw models refresh` / doctor: `openai.odbus` → 47 models).
+  Note: ZeroClaw 0.8.4 gateway does **not** proxy inbound OpenAI `/v1/*`;
+  those paths are the dashboard SPA. The wired path is the outbound
+  `providers.models.openai.odbus` provider with Ghostbridge `extra_headers`.
+- [x] No live footprints/trace-ids in git
+- [x] URI targets `:8080/v1`, not `:8090/v1`
 
 ## Troubleshooting
 
 ```bash
 /fast/zeroclaw/bin/zeroclaw --version
 ZEROCLAW_CONFIG_DIR=/fast/zeroclaw/config HOME=/fast/zeroclaw/state \
-  /fast/zeroclaw/bin/zeroclaw gateway start --port 42617
+  /fast/zeroclaw/bin/zeroclaw daemon --port 42617
 
 wg show netmaker
 wget -q -O- http://10.0.0.2:8080/ 2>&1

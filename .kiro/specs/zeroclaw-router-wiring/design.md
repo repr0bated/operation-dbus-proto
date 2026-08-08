@@ -117,9 +117,12 @@ ZEROCLAW_CONFIG="/fast/zeroclaw/config"
 ZEROCLAW_STATE="/fast/zeroclaw/state"
 
 start_service() {
+    mkdir -p "$ZEROCLAW_CONFIG/state" "$ZEROCLAW_STATE" "$ZEROCLAW_CONFIG/data"
     procd_open_instance
-    procd_set_param command "$ZEROCLAW_BIN" gateway start --port 42617
-    procd_set_param env HOME="$ZEROCLAW_STATE" ZEROCLAW_CONFIG_DIR="$ZEROCLAW_CONFIG"
+    # `daemon` (not bare `gateway start`) writes config/state/daemon_state.json
+    # that `zeroclaw doctor` checks, and runs gateway + scheduler/heartbeat.
+    procd_set_param command "$ZEROCLAW_BIN" daemon --port 42617
+    procd_set_param env HOME="$ZEROCLAW_STATE" ZEROCLAW_CONFIG_DIR="$ZEROCLAW_CONFIG" SHELL=/bin/ash PATH=/usr/sbin:/usr/bin:/sbin:/bin
     procd_set_param respawn
     procd_set_param stdout 1
     procd_set_param stderr 1
