@@ -49,6 +49,7 @@ Client DNS (NextDNS) → Oracle decoy → WireGuard mesh → host `fwd-8444` →
 
 - **Do** check `sudo incus config device show <name>` before assuming UDS-only or proxy-only.
 - **Do** keep mesh routes on `3tched`; strip accidental `100.69.0.0/16` via `ovsbr0`.
+- **Do** treat the [Netmaker ACL helper](host-socket-topology-live.md#break-glass-netmaker-acl-recovery) as break-glass recovery; it enables wildcard all-node traffic and bypasses the normal D-Bus path.
 - **Do not** put `10.200.0.1` on the host.
 - **Do not** point live xray at `/etc/xray/config.json`.
 - **Do not** expose Prometheus/Grafana from the netmaker container until the live topology doc is current and the path (mesh vs SNI vs loopback) is chosen.
