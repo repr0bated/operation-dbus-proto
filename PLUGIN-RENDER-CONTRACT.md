@@ -300,10 +300,12 @@ cargo run -p op-plugin-lint -- \
   --surface-out /tmp/zeroclaw.cli.surface.json
 ```
 
-With no plugin input, `--introspect` is a surface-capture mode and requires
-either `--surface-out` or `--output`. With a plugin input, `--surface-out`
-preserves the full discovered catalog while the selected report contains the
-comparison.
+Only catalog-producing targets—Repomix packs, saved binary-surface JSON, and
+local or remote CLI binaries—support `--introspect` with no plugin input. That
+surface-capture mode requires either `--surface-out` or `--output`. With a
+plugin input, `--surface-out` is likewise written only for those target types.
+The `gcloud` and plugin-id resolvers produce comparison coverage but no binary
+surface: they require a plugin input and do not write `--surface-out`.
 
 `--surface-out` writes the discovery catalog. Path vocabularies differ from
 schemars fields (`struct.zeroclaw_config.V1Config.default_model` vs
@@ -318,12 +320,17 @@ layer exists. Use the surface JSON as the authoritative catalog.
 - This is a static source audit. It parses Rust syntax and source patterns; it
   does not compile the plugin, execute `schema()`, or prove what is currently
   sealed in SHM.
-- Subid format is checked, but canonical registry membership and cross-plugin
-  uniqueness are not. The currently accepted `--registry` argument is not read;
-  keep the registry tests/CI checks in the verification path.
+- Struct and field `x-oscal-subid` values are format-checked. Method and other
+  string literals are checked only when they already begin with a recognized
+  category and meet the linter's minimum dotted shape, so malformed method
+  subids can escape this audit. Canonical registry membership and cross-plugin
+  uniqueness are also not checked. The currently accepted `--registry`
+  argument is not read; keep the registry tests/CI checks in the verification
+  path.
 - Introspection coverage is approximate name/path matching. Treat gaps as
   review leads, not proof of semantic equivalence. The complete report caps its
-  missing-path sample at 500; `--surface-out` retains the full catalog.
+  missing-path sample at 500; for targets that produce one, `--surface-out`
+  retains the full catalog.
 
 ## Cross-plugin model catalogs (Antigravity)
 
