@@ -19,6 +19,7 @@ members = [
     "crates/op-inspector",
     "crates/op-agents",
     "crates/op-plugins",
+    "crates/op-plugin-lint",
     "crates/op-workflows",
     # "crates/op-ml",  # Disabled: ort API compatibility issues (see #ml-fixme)
     "crates/op-blockchain",
