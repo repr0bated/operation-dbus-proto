@@ -174,10 +174,9 @@ pub async fn zeroclaw_chat_handler(
         .get("finish_reason")
         .and_then(serde_json::Value::as_str)
         .unwrap_or("stop");
-    let usage = result
-        .get("usage")
-        .cloned()
-        .unwrap_or(serde_json::Value::Null);
+    // Salad (and some other providers) emit usage counts as floats (e.g. 30.0).
+    // OpenAI-compatible clients like ZeroClaw deserialize them as u64 — coerce.
+    let usage = normalize_openai_usage(result.get("usage"));
 
     Json(serde_json::json!({
         "id": format!("chatcmpl-{}", uuid::Uuid::new_v4()),
@@ -196,6 +195,28 @@ pub async fn zeroclaw_chat_handler(
         "usage": usage,
     }))
     .into_response()
+}
+
+fn normalize_openai_usage(usage: Option<&serde_json::Value>) -> serde_json::Value {
+    let Some(serde_json::Value::Object(map)) = usage else {
+        return serde_json::Value::Null;
+    };
+    let mut out = serde_json::Map::new();
+    for key in ["prompt_tokens", "completion_tokens", "total_tokens"] {
+        if let Some(v) = map.get(key) {
+            let n = v
+                .as_u64()
+                .or_else(|| v.as_i64().map(|i| i.max(0) as u64))
+                .or_else(|| v.as_f64().map(|f| f.max(0.0).round() as u64))
+                .unwrap_or(0);
+            out.insert(key.to_string(), serde_json::json!(n));
+        }
+    }
+    // Preserve any other usage fields untouched.
+    for (k, v) in map {
+        out.entry(k.clone()).or_insert_with(|| v.clone());
+    }
+    serde_json::Value::Object(out)
 }
 
 /// Streaming belongs to the bridge's gRPC ChatService, not a second HTTP
@@ -398,25 +419,26 @@ pub async fn zeroclaw_schema_handler(Extension(_state): Extension<Arc<AppState>>
     // Read zeroclaw state directly from the SHM state tree. Fall back to the
     // sealed PluginSchema blob so the schema surface still renders when no
     // mutation has populated SHM yet.
-    let (zeroclaw, zeroclaw_schema) = match crate::state_tree::read_plugin("zeroclaw") {
-        Some(v) => {
-            info!("Using zeroclaw from SHM state tree (live provider/model catalog)");
-            (v, read_zeroclaw_schema_shm())
-        }
-        None => match read_zeroclaw_schema_shm() {
-            Some(schema) => {
-                warn!("Zeroclaw SHM state unavailable; using PluginSchema only");
-                (schema.clone(), Some(schema))
+    let (zeroclaw, zeroclaw_schema) =
+        match crate::state_tree::read_plugin("zeroclaw") {
+            Some(v) => {
+                info!("Using zeroclaw from SHM state tree (live provider/model catalog)");
+                (v, read_zeroclaw_schema_shm())
             }
-            None => {
-                error!("Zeroclaw not available from SHM state tree or PluginSchema");
-                return json_error_response(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "Zeroclaw projection not available",
-                );
-            }
-        },
-    };
+            None => match read_zeroclaw_schema_shm() {
+                Some(schema) => {
+                    warn!("Zeroclaw SHM state unavailable; using PluginSchema only");
+                    (schema.clone(), Some(schema))
+                }
+                None => {
+                    error!("Zeroclaw not available from SHM state tree or PluginSchema");
+                    return json_error_response(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "Zeroclaw projection not available",
+                    );
+                }
+            },
+        };
 
     // Providers + model_routes live under `projection` in the live state.
     let projection = zeroclaw.get("projection").and_then(|v| v.as_object());

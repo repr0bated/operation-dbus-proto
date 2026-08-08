@@ -140,9 +140,6 @@ pub async fn fallback_present(bridge: &str) -> Result<bool> {
             && lower.contains("actions=normal")
             && lower.contains(&cookie_hex)
     }))
-        let lower = l.to_ascii_lowercase();
-        lower.contains("priority=0") && lower.contains("actions=normal")
-    }))
 }
 
 pub async fn set_fail_mode(bridge: &str, mode: &str) -> Result<()> {
