@@ -308,24 +308,29 @@ Gating: chatbot=read-only (`mcp.read`); local agents=execute (`mcp.invoke`); adm
 
 ---
 
-## antigravity  (Google Antigravity / Gemini; 5 declared LlmTools + count_tokens)
+## antigravity  (Google Antigravity auth, usage, and safety surface)
 | method | I/O | side | idem | cap | subid |
 |---|---|---|---|---|---|
-| Chat | ChatInput→ChatOutput | M | n | antigravity.chat | mut.service.antigravity.chat.send@v1 |
-| ListModels | ListModelsInput→ListModelsOutput | R | y | antigravity.read | obs.service.antigravity.models.list@v1 |
-| AuthStatus | ()→AuthStatusOutput | R | y | antigravity.read | obs.service.antigravity.auth.status@v1 |
-| UsageReport | {project_id,model}→UsageReportOutput | R | y | antigravity.read | obs.service.antigravity.usage.report@v1 |
-| ConfigureSafety | {thresholds...}→Ack | M | y | antigravity.configure | mut.service.antigravity.safety.configure@v1 |
-| CountTokens | {message,model}→CountTokensOutput | R | y | antigravity.read | obs.service.antigravity.tokens.count@v1 |
+| `get_auth_status` | ()→{auth} | R | y | antigravity.read | obs.software.antigravity.auth.status@v1 |
+| `get_usage_report` | {project_id,model}→{usage} | R | y | antigravity.read | obs.software.antigravity.usage.report@v1 |
+| `configure_safety` | {harassment?,hate_speech?,sexually_explicit?,dangerous?,civic_integrity?}→{safety_settings} | M | n | antigravity.write | mut.software.antigravity.safety.configure@v1 |
 
 ## antigravity_chat  (OAuth bridge + headless IDE)
 | method | I/O | side | idem | cap | subid |
 |---|---|---|---|---|---|
-| BridgeStatus | ()→BridgeStatusOutput | R | y | antigravity_chat.read | obs.service.antigravity-chat.bridge.status@v1 |
-| RefreshToken | {force}→RefreshTokenOutput | M | n | antigravity_chat.auth | mut.service.antigravity-chat.token.refresh@v1 |
-| ListModels | {available_only}→ListModelsOutput | R | y | antigravity_chat.read | obs.service.antigravity-chat.models.list@v1 |
-| SendMessage | SendMessageInput→SendMessageOutput | M | n | antigravity_chat.chat | mut.service.antigravity-chat.message.send@v1 |
-| RestartBridge | ()→Ack | M | y | antigravity_chat.admin | mut.service.antigravity-chat.bridge.restart@v1 |
+| `get_bridge_status` | ()→{bridge} | R | y | antigravity_chat.read | obs.software.antigravity-chat.bridge.status.get@v1 |
+| `refresh_token` | ()→{auth} | M | n | antigravity_chat.write | mut.software.antigravity-chat.auth.token.refresh@v1 |
+| `configure` | {headless?,display_service?,vnc_port?,code_assist?,selected_model?}→{config,selected_model} | M | n | antigravity_chat.write | mut.software.antigravity-chat.config.set@v1 |
+
+Both plugins reference their model catalog instead of owning one:
+`llm_plugin="large_language_model"`, `provider_route="gemini"`, and an empty
+`selected_model` means the provider default. Resolve model pickers by calling
+`list_models` / `list_providers` on `large_language_model`; neither Antigravity
+plugin declares `list_models`. `provider_route` is currently a schema/render
+routing hint—the catalog plugin does not consume that field directly.
+
+The `antigravity_chat` bridge currently reports `offline`; its methods are
+schema-declared UI controls without a live headless-IDE bridge implementation.
 
 ## ctl_plane_chatbot  (read/query/confront only — NO execute power, AGENTS.md §4b)
 | method | I/O | side | idem | cap | subid |
