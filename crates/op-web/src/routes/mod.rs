@@ -2,6 +2,7 @@
 
 use axum::{
     extract::Extension,
+    response::IntoResponse,
     routing::{delete, get, post},
     Router,
 };
@@ -325,14 +326,37 @@ pub fn create_router(state: Arc<AppState>) -> Router {
 
     // Serve the pinned Lovable dashboard while keeping `/api`, `/mcp`, and
     // websocket routes on this same origin. Client-side routes fall back to
-    // index.html.
+    // index.html. gRPC-Web calls (see `grpc_proxy::is_grpc_request` — routed
+    // by Content-Type, not a path allowlist) are forwarded to loopback-only
+    // op-grpc-bridge instead, so the dashboard's gRPC client can resolve
+    // same-origin (whatever interface this request arrived on — localhost,
+    // svc0/NetMaker, or the public domain) with no hardcoded upstream host
+    // baked into the frontend build.
     let static_dir = std::env::var("OP_WEB_STATIC_DIR")
         .unwrap_or_else(|_| "/usr/local/share/op-dbus/dashboard".to_string());
     let spa =
         ServeDir::new(&static_dir).fallback(ServeFile::new(format!("{static_dir}/index.html")));
 
+    let spa_or_grpc = move |req: axum::extract::Request| {
+        let spa = spa.clone();
+        async move {
+            if crate::grpc_proxy::is_grpc_request(&req) {
+                crate::grpc_proxy::proxy(req).await
+            } else {
+                use tower::ServiceExt;
+                match spa.oneshot(req).await {
+                    Ok(resp) => resp.into_response(),
+                    Err(err) => {
+                        tracing::error!(?err, "spa serve error");
+                        axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response()
+                    }
+                }
+            }
+        }
+    };
+
     router
-        .fallback_service(spa)
+        .fallback(spa_or_grpc)
         .layer(Extension(state))
         .layer(axum::middleware::from_fn(security::ip_security_middleware))
         .layer(axum::middleware::from_fn(

@@ -2559,24 +2559,135 @@ impl RuntimeMirror for OperationGrpcServer {
 
         let stream = stream! {
             let mut ticker = tokio::time::interval(std::time::Duration::from_secs(interval));
+            // CPU and network are rate metrics — both need a prior sample to
+            // compute a delta, so the first tick after connect seeds state
+            // without yielding those two (memory/disk are point-in-time, no
+            // seed needed).
+            let mut prev_cpu: Option<(u64, u64)> = None; // (idle+iowait, total)
+            let mut prev_net: Option<(u64, u64, tokio::time::Instant)> = None; // (rx, tx, at)
+
             loop {
                 ticker.tick().await;
+                let now = Some(ProstTimestamp {
+                    seconds: chrono::Utc::now().timestamp(),
+                    nanos: 0,
+                });
 
-                // Read /proc/meminfo
+                // Memory — used percent of total (dashboard gauge unit).
                 if let Ok(meminfo) = tokio::fs::read_to_string("/proc/meminfo").await {
                     let total = OperationGrpcServer::parse_meminfo_kb(&meminfo, "MemTotal") * 1024;
                     let available = OperationGrpcServer::parse_meminfo_kb(&meminfo, "MemAvailable") * 1024;
-                    yield Ok(RuntimeMetricUpdate {
-                        category: "memory".to_string(),
-                        name: "used_bytes".to_string(),
-                        value: (total - available) as f64,
-                        unit: "bytes".to_string(),
-                        labels: Default::default(),
-                        timestamp: Some(ProstTimestamp {
-                            seconds: chrono::Utc::now().timestamp(),
-                            nanos: 0,
-                        }),
-                    });
+                    if total > 0 {
+                        let used_percent =
+                            total.saturating_sub(available) as f64 / total as f64 * 100.0;
+                        yield Ok(RuntimeMetricUpdate {
+                            category: "memory".to_string(),
+                            name: "used_percent".to_string(),
+                            value: used_percent,
+                            unit: "percent".to_string(),
+                            labels: Default::default(),
+                            timestamp: now.clone(),
+                        });
+                    }
+                }
+
+                // CPU — aggregate usage percent from the first "cpu" line of
+                // /proc/stat, computed as a delta between ticks (the raw
+                // counters are cumulative since boot, not instantaneous).
+                if let Ok(stat) = tokio::fs::read_to_string("/proc/stat").await {
+                    if let Some(fields) = stat
+                        .lines()
+                        .next()
+                        .filter(|l| l.starts_with("cpu "))
+                        .map(|l| {
+                            l.split_whitespace()
+                                .skip(1)
+                                .filter_map(|f| f.parse::<u64>().ok())
+                                .collect::<Vec<_>>()
+                        })
+                    {
+                        // user nice system idle iowait irq softirq [steal guest guest_nice]
+                        if fields.len() >= 4 {
+                            let idle = fields[3] + fields.get(4).copied().unwrap_or(0);
+                            let total: u64 = fields.iter().sum();
+                            if let Some((prev_idle, prev_total)) = prev_cpu {
+                                let delta_total = total.saturating_sub(prev_total);
+                                let delta_idle = idle.saturating_sub(prev_idle);
+                                if delta_total > 0 {
+                                    let used_percent = delta_total.saturating_sub(delta_idle) as f64
+                                        / delta_total as f64
+                                        * 100.0;
+                                    yield Ok(RuntimeMetricUpdate {
+                                        category: "cpu".to_string(),
+                                        name: "used_percent".to_string(),
+                                        value: used_percent,
+                                        unit: "percent".to_string(),
+                                        labels: Default::default(),
+                                        timestamp: now.clone(),
+                                    });
+                                }
+                            }
+                            prev_cpu = Some((idle, total));
+                        }
+                    }
+                }
+
+                // Disk — used percent of the root filesystem.
+                if let Ok(vfs) = nix::sys::statvfs::statvfs("/") {
+                    let total_bytes = vfs.blocks() as u64 * vfs.fragment_size() as u64;
+                    let free_bytes = vfs.blocks_available() as u64 * vfs.fragment_size() as u64;
+                    if total_bytes > 0 {
+                        let used_percent =
+                            total_bytes.saturating_sub(free_bytes) as f64 / total_bytes as f64 * 100.0;
+                        yield Ok(RuntimeMetricUpdate {
+                            category: "disk".to_string(),
+                            name: "used_percent".to_string(),
+                            value: used_percent,
+                            unit: "percent".to_string(),
+                            labels: Default::default(),
+                            timestamp: now.clone(),
+                        });
+                    }
+                }
+
+                // Network — combined rx+tx throughput across all interfaces
+                // except loopback, computed as a byte-delta over wall-clock
+                // elapsed time (not the tick interval, in case of scheduling
+                // jitter) and reported in Mbps.
+                if let Ok(net) = tokio::fs::read_to_string("/proc/net/dev").await {
+                    let mut rx_total = 0u64;
+                    let mut tx_total = 0u64;
+                    for line in net.lines().skip(2) {
+                        if let Some((iface, stats)) = line.split_once(':') {
+                            if iface.trim() == "lo" {
+                                continue;
+                            }
+                            let vals: Vec<u64> = stats
+                                .split_whitespace()
+                                .map(|v| v.parse::<u64>().unwrap_or(0))
+                                .collect();
+                            if vals.len() >= 9 {
+                                rx_total += vals[0];
+                                tx_total += vals[8];
+                            }
+                        }
+                    }
+                    let sampled_at = tokio::time::Instant::now();
+                    if let Some((prev_rx, prev_tx, prev_at)) = prev_net {
+                        let elapsed_secs = sampled_at.duration_since(prev_at).as_secs_f64().max(0.001);
+                        let rx_rate = rx_total.saturating_sub(prev_rx) as f64 / elapsed_secs;
+                        let tx_rate = tx_total.saturating_sub(prev_tx) as f64 / elapsed_secs;
+                        let mbps = (rx_rate + tx_rate) * 8.0 / 1_000_000.0;
+                        yield Ok(RuntimeMetricUpdate {
+                            category: "network".to_string(),
+                            name: "throughput_mbps".to_string(),
+                            value: mbps,
+                            unit: "mbps".to_string(),
+                            labels: Default::default(),
+                            timestamp: now.clone(),
+                        });
+                    }
+                    prev_net = Some((rx_total, tx_total, sampled_at));
                 }
             }
         };

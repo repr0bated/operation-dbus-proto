@@ -633,6 +633,67 @@ pub struct OvsdbGetBridgeStateResponse {
     #[prost(message, repeated, tag = "1")]
     pub bridges: ::prost::alloc::vec::Vec<OvsdbBridge>,
 }
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OvsdbGetDatapathHealthRequest {
+    #[prost(string, tag = "1")]
+    pub bridge_name: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OvsdbGetDatapathHealthResponse {
+    #[prost(string, tag = "1")]
+    pub bridge: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub fail_mode: ::prost::alloc::string::String,
+    #[prost(string, repeated, tag = "3")]
+    pub controllers: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(bool, tag = "4")]
+    pub fallback_normal: bool,
+    #[prost(uint32, tag = "5")]
+    pub fallback_priority: u32,
+    #[prost(string, tag = "6")]
+    pub detail_json: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OvsdbAttachControllerSafeRequest {
+    #[prost(string, tag = "1")]
+    pub bridge_name: ::prost::alloc::string::String,
+    /// e.g. tcp:10.200.0.1:6653
+    #[prost(string, tag = "2")]
+    pub endpoint: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OvsdbAttachControllerSafeResponse {
+    #[prost(bool, tag = "1")]
+    pub ok: bool,
+    #[prost(string, tag = "2")]
+    pub message: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "3")]
+    pub health: ::core::option::Option<OvsdbGetDatapathHealthResponse>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OvsdbEnsureFallbackNormalRequest {
+    #[prost(string, tag = "1")]
+    pub bridge_name: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OvsdbEnsureFallbackNormalResponse {
+    #[prost(bool, tag = "1")]
+    pub ok: bool,
+    #[prost(string, tag = "2")]
+    pub message: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OvsdbDelControllerRequest {
+    #[prost(string, tag = "1")]
+    pub bridge_name: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OvsdbDelControllerResponse {
+    #[prost(bool, tag = "1")]
+    pub ok: bool,
+    #[prost(string, tag = "2")]
+    pub message: ::prost::alloc::string::String,
+}
 /// RFC 7047 Bridge table — hierarchical view
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct OvsdbBridge {
@@ -653,6 +714,12 @@ pub struct OvsdbBridge {
     >,
     #[prost(message, repeated, tag = "7")]
     pub ports: ::prost::alloc::vec::Vec<OvsdbPort>,
+    /// OVS design: priority=0 NORMAL must remain while controller is attached
+    /// (async PACKET_IN / in-band control). See docs.openvswitch.org topics/design.
+    #[prost(bool, tag = "8")]
+    pub fallback_normal: bool,
+    #[prost(string, repeated, tag = "9")]
+    pub controllers: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 /// RFC 7047 Port table
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -2133,6 +2200,110 @@ pub mod ovsdb_mirror_client {
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(GrpcMethod::new("operation.v1.OvsdbMirror", "GetBridgeState"));
+            self.inner.unary(req, path, codec).await
+        }
+        /// Safe datapath health: fail_mode + controller list + fallback NORMAL present
+        pub async fn get_datapath_health(
+            &mut self,
+            request: impl tonic::IntoRequest<super::OvsdbGetDatapathHealthRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::OvsdbGetDatapathHealthResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/operation.v1.OvsdbMirror/GetDatapathHealth",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("operation.v1.OvsdbMirror", "GetDatapathHealth"),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        /// Plugin-first attach: never bare set-controller (rollback on unhealthy)
+        pub async fn attach_controller_safe(
+            &mut self,
+            request: impl tonic::IntoRequest<super::OvsdbAttachControllerSafeRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::OvsdbAttachControllerSafeResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/operation.v1.OvsdbMirror/AttachControllerSafe",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("operation.v1.OvsdbMirror", "AttachControllerSafe"),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn ensure_fallback_normal(
+            &mut self,
+            request: impl tonic::IntoRequest<super::OvsdbEnsureFallbackNormalRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::OvsdbEnsureFallbackNormalResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/operation.v1.OvsdbMirror/EnsureFallbackNormal",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("operation.v1.OvsdbMirror", "EnsureFallbackNormal"),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn del_controller(
+            &mut self,
+            request: impl tonic::IntoRequest<super::OvsdbDelControllerRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::OvsdbDelControllerResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/operation.v1.OvsdbMirror/DelController",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("operation.v1.OvsdbMirror", "DelController"));
             self.inner.unary(req, path, codec).await
         }
     }

@@ -15,6 +15,7 @@ pub mod activity_filter;
 pub mod agent_tools;
 pub mod blob_catalog_tool;
 pub mod blob_vectors_tool;
+pub mod chain_vectors;
 pub mod client_config;
 pub mod code_tools;
 pub mod cognitive_tools;
@@ -41,6 +42,7 @@ pub use activity_filter::{
     derive_significance, is_pii, ActivityEvent, ActivityFilter, FilterDecision, FilterTunables,
     OpKind, Significance, SuppressReason,
 };
+pub use chain_vectors::{ChainVectorIndex, IngestSummary, ProjectionSummary};
 pub use client_config::{
     CacheConfig, CircuitBreakerConfig, ClientConfig, ClientStats, ClientType, CognitiveMcpClient,
     CognitiveMcpClientFactory, PoolConfig, RetryConfig, COGNITIVE_MCP_DEFAULT_ENDPOINT,

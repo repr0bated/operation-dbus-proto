@@ -11,6 +11,8 @@ Quick status map. Prefer the **Active (locked topology)** pair for mesh / identi
 
 **Topology lock:** human WG terminates at Oracle decoy only; NetMaker = transport; no host `wg-lan`; no SNI front on public `:443`; no CF tunnels into CP; gRPC at `10.0.0.2:8090` mesh-private.
 
+| [`subscriber-registration-flow/`](./subscriber-registration-flow/) | Anonymous voucher-based purchase → WG config delivery via CF Pages. No user email. Payment–WG separation via bearer voucher. |
+
 ## Active (code / product missions)
 
 | Spec | Notes |
